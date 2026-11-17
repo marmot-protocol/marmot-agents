@@ -30,6 +30,7 @@ repository (`integrations/`, `crates/agent-connector`,
 | See how T3 Code, Buzz and ACP solve this | `docs/reference/prior-art.md` |
 | See what Codex and Claude Code really send | `docs/reference/harness-messages.md`, then `fixtures/recordings/` |
 | Record a new session or scenario | `tools/record/README.md` |
+| Try the event model against the recordings | `tools/prototype/README.md` |
 | Change a diagram | `docs/images/generate.py` |
 
 ## The shape, in brief
@@ -147,7 +148,11 @@ For a change to the recordings or the recording tools:
 ```sh
 python3 tools/record/inventory.py fixtures/recordings/codex --kinds    # every file must parse
 python3 tools/record/inventory.py fixtures/recordings/claude --kinds
+python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude
 ```
+
+The last command must end with "native messages with no translation: none". If you change the event model,
+change `tools/prototype/translate.py` to match and run it again.
 
 Before relying on a claim in `docs/reference/harness-messages.md`, find it in a recording. Each recording is
 one harness version on one day.

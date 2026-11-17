@@ -18,8 +18,9 @@
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { createWriteStream } from "node:fs";
-import { resolve } from "node:path";
+import { createWriteStream, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 type Msg = Record<string, any>;
 type Permission = { behavior: "allow"; updatedInput?: Msg } | { behavior: "deny"; message: string };
@@ -46,9 +47,9 @@ class Inbox {
   }
 }
 
-const userMessage = (text: string, priority?: "now" | "next" | "later"): Msg => ({
+const userMessage = (content: string | Msg[], priority?: "now" | "next" | "later"): Msg => ({
   type: "user",
-  message: { role: "user", content: text },
+  message: { role: "user", content },
   parent_tool_use_id: null,
   ...(priority ? { priority } : {}),
 });
@@ -60,13 +61,20 @@ type Ctx = {
   state: Record<string, any>;
 };
 
+type Prompt = string | ((project: string) => Msg[]);
+
 type Scenario = {
   doc: string;
-  prompts: string[];
+  prompts: Prompt[];
   options?: Msg;
   onPermission?: (tool: string, input: Msg) => Permission;
   onMessage?: (m: Msg, ctx: Ctx) => void | Promise<void>;
+  /** A second query() that resumes the session of the first one. */
+  resumeWith?: Prompt[];
 };
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const DEMO_MCP_SERVER = join(HERE, "..", "demo_mcp_server.py");
 
 const allowAll = { permissionMode: "bypassPermissions", allowDangerouslySkipPermissions: true };
 
@@ -180,6 +188,82 @@ const SCENARIOS: Record<string, Scenario> = {
     prompts: ["Use your Agent tool to have a subagent read greet.py and report the name of the function in it. Then tell me the name."],
     options: allowAll,
   },
+  resume: {
+    doc: "A session is resumed by a second query(). Leaves one session in the Claude Code history.",
+    prompts: ["Remember the word 'marmot'. Reply with: Noted."],
+    resumeWith: ["What word did I ask you to remember? Reply with just the word."],
+    options: allowAll,
+  },
+  plan_mode: {
+    doc: "Plan mode: the agent proposes a plan and asks to leave plan mode.",
+    prompts: ["I want a farewell() function added to greet.py that returns 'Goodbye, ' plus the name. Give me your plan."],
+    options: { permissionMode: "plan" },
+    onPermission: (_tool, input) => ({ behavior: "allow", updatedInput: input }),
+  },
+  compact: {
+    doc: "The user runs /compact between two turns.",
+    prompts: ["Remember the word 'marmot'. Reply with: Noted.", "/compact", "What word did I ask you to remember? Reply with just the word."],
+    options: allowAll,
+  },
+  slash_command: {
+    doc: "The client lists the slash commands, then the user runs one.",
+    prompts: ["/context"],
+    options: allowAll,
+    onMessage: async (m, ctx) => {
+      if (m.type === "system" && m.subtype === "init" && !ctx.state.listed) {
+        ctx.state.listed = true;
+        ctx.record("out", "call", { method: "supportedCommands" });
+        const commands = await ctx.q.supportedCommands();
+        ctx.record("in", "call", { method: "supportedCommands", response: commands });
+      }
+    },
+  },
+  model_switch: {
+    doc: "The client switches model between two turns.",
+    prompts: ["Reply with exactly: first.", "Reply with exactly: second."],
+    options: allowAll,
+    onMessage: async (m, ctx) => {
+      if (m.type === "result" && !ctx.state.switched) {
+        ctx.state.switched = true;
+        ctx.record("out", "call", { method: "setModel", model: "sonnet" });
+        await ctx.q.setModel("sonnet");
+        ctx.record("in", "call", { method: "setModel", response: null });
+      }
+    },
+  },
+  web_search: {
+    doc: "The agent searches the web.",
+    prompts: ["Search the web for the latest stable release of the Rust programming language and tell me its version number."],
+    options: allowAll,
+  },
+  image: {
+    doc: "The user attaches an image.",
+    prompts: [
+      (project) => [
+        { type: "image", source: { type: "base64", media_type: "image/png", data: readFileSync(join(project, "red.png")).toString("base64") } },
+        { type: "text", text: "What colour is the attached image? Answer with one word." },
+      ],
+    ],
+    options: allowAll,
+  },
+  mcp_tool: {
+    doc: "The agent calls a tool on an MCP server.",
+    prompts: ["Use the define_word tool from the demo MCP server to define 'marmot', then tell me the definition."],
+    options: { ...allowAll, mcpServers: { demo: { type: "stdio", command: "python3", args: [DEMO_MCP_SERVER] } } },
+  },
+  reasoning: {
+    doc: "A turn with summarised thinking switched on. Without the option, thinking blocks arrive empty.",
+    prompts: [
+      "Without running any commands: how many times does the letter r appear in 'strawberry marmot burrow'? " +
+        "Work it out carefully, then give the number.",
+    ],
+    options: { ...allowAll, thinking: { type: "adaptive", display: "summarized" } },
+  },
+  bad_model: {
+    doc: "A session is started with a model that does not exist.",
+    prompts: ["Reply with exactly: hello."],
+    options: { ...allowAll, model: "no-such-model" },
+  },
 };
 
 async function main() {
@@ -199,55 +283,64 @@ async function main() {
   const record = (dir: "in" | "out", via: string, msg: Msg) =>
     file.write(JSON.stringify({ t: Math.round(performance.now() - t0), dir, via, msg }) + "\n");
 
-  const inbox = new Inbox();
-  const prompts = [...scenario.prompts];
-  const pushNext = () => {
-    const text = prompts.shift();
-    if (text === undefined) return false;
-    const msg = userMessage(text);
-    record("out", "prompt", msg);
-    inbox.push(msg);
-    return true;
-  };
-
-  const options: Msg = {
-    cwd: resolve(project),
-    model: "haiku",
-    settingSources: [],
-    ...scenario.options,
-    canUseTool: async (toolName: string, input: Msg, opts: Msg) => {
-      const { signal: _signal, ...rest } = opts ?? {};
-      record("in", "callback", { kind: "can_use_tool", toolName, input, options: rest });
-      const answer = scenario.onPermission?.(toolName, input) ?? { behavior: "allow", updatedInput: input };
-      record("out", "callback", { kind: "permission_result", toolName, result: answer });
-      return answer;
-    },
-  };
-  const { canUseTool: _c, ...loggedOptions } = options;
-  record("out", "call", { method: "query", options: loggedOptions });
-
-  const q: any = query({ prompt: inbox as any, options: options as any });
-  const ctx: Ctx = { q, inbox, record, state: {} };
-  pushNext();
-
-  const timer = setTimeout(() => {
-    record("out", "call", { method: "timeout" });
-    inbox.close();
-    q.interrupt?.().catch(() => {});
-  }, 240_000);
-
+  let sessionId: string | undefined;
   let status = "ok";
-  try {
-    for await (const m of q) {
-      record("in", "message", m as Msg);
-      if (scenario.onMessage) await scenario.onMessage(m as Msg, ctx);
-      if ((m as Msg).type === "result" && !pushNext()) inbox.close();
+
+  const runQuery = async (promptList: Prompt[], extra: Msg) => {
+    const inbox = new Inbox();
+    const prompts = [...promptList];
+    const pushNext = () => {
+      const next = prompts.shift();
+      if (next === undefined) return false;
+      const msg = userMessage(typeof next === "string" ? next : next(resolve(project)));
+      record("out", "prompt", msg);
+      inbox.push(msg);
+      return true;
+    };
+
+    const options: Msg = {
+      cwd: resolve(project),
+      model: "haiku",
+      settingSources: [],
+      ...scenario.options,
+      ...extra,
+      canUseTool: async (toolName: string, input: Msg, opts: Msg) => {
+        const { signal: _signal, ...rest } = opts ?? {};
+        record("in", "callback", { kind: "can_use_tool", toolName, input, options: rest });
+        const answer = scenario.onPermission?.(toolName, input) ?? { behavior: "allow", updatedInput: input };
+        record("out", "callback", { kind: "permission_result", toolName, result: answer });
+        return answer;
+      },
+    };
+    const { canUseTool: _c, ...loggedOptions } = options;
+    record("out", "call", { method: "query", options: loggedOptions });
+
+    const q: any = query({ prompt: inbox as any, options: options as any });
+    const ctx: Ctx = { q, inbox, record, state: {} };
+    pushNext();
+
+    const timer = setTimeout(() => {
+      record("out", "call", { method: "timeout" });
+      inbox.close();
+      q.interrupt?.().catch(() => {});
+    }, 240_000);
+
+    try {
+      for await (const m of q) {
+        record("in", "message", m as Msg);
+        if ((m as Msg).session_id) sessionId = (m as Msg).session_id;
+        if (scenario.onMessage) await scenario.onMessage(m as Msg, ctx);
+        if ((m as Msg).type === "result" && !pushNext()) inbox.close();
+      }
+    } catch (e: any) {
+      status = `ended with an error: ${e?.message}`;
+      record("in", "call", { method: "query", error: String(e?.message ?? e) });
     }
-  } catch (e: any) {
-    status = `FAILED: ${e?.name}: ${e?.message}`;
-    record("in", "call", { method: "query", error: String(e?.message ?? e) });
-  }
-  clearTimeout(timer);
+    clearTimeout(timer);
+  };
+
+  await runQuery(scenario.prompts, {});
+  if (scenario.resumeWith) await runQuery(scenario.resumeWith, { resume: sessionId });
   await new Promise((r) => file.end(r));
   console.log(`${name}: ${status}`);
 }

@@ -9,9 +9,11 @@ The first three block the most other work.
 
 ### Q-01 What exactly is in an agent event?
 
-[`design/event-model.md`](design/event-model.md) proposes an envelope and a list of item types, and has been
-checked once against real Codex and Claude Code sessions. Still to settle: the exact item types, the fields of
-each, the event kind numbers, and the size limits. The plan item has not been seen in a recording yet.
+[`design/event-model.md`](design/event-model.md) is now a concrete draft: ten item types, the fields of each,
+and ten rules for drivers. A prototype applies it to 46 recorded Codex and Claude Code sessions with nothing
+left over. It is still a proposal. To settle: whether these are the right types and fields, how an event is
+carried (the kind, the tags, and whether an update repeats the whole item), and the size limits. A to-do list
+that changes during a turn has not been seen in a recording.
 
 ### Q-02 What happens to large output?
 
@@ -99,6 +101,13 @@ Everything the agent does is visible to every member and stays in their history 
 secrets from the owner's machine. Whether the owner gets a per-chat detail setting, and what the default is, is
 open.
 
+### Q-21 What happens to a secret answer?
+
+A Codex question can be marked secret, for something like a password. Everything in a group is visible to every
+member ([D-009](decisions.md#d-009-groups-are-first-class-and-every-member-sees-agent-activity)), so the answer
+cannot travel as an ordinary event. Options are to refuse secret questions in a group, to allow them only when
+the group is the owner alone, or to give them a separate path. Not decided.
+
 ### Q-12 How many events is too many?
 
 A busy turn can produce hundreds of tool events. Each durable one is an encrypted group message. Whether some
@@ -136,8 +145,9 @@ the harness name. The exact flags are open.
 
 The current thinking is to record real sessions and replay them through the driver, as T3 Code does. Not decided.
 
-The recorders and a first set of recordings exist: [`tools/record`](../tools/record/README.md) and
-[`fixtures/recordings`](../fixtures/recordings/README.md). There is no driver to replay them through yet.
+The recorders and 46 recordings exist: [`tools/record`](../tools/record/README.md) and
+[`fixtures/recordings`](../fixtures/recordings/README.md). A prototype replays them through the proposed event
+model ([`tools/prototype`](../tools/prototype/README.md)). There is no driver to replay them through yet.
 
 ## The repository and the move from MDK
 

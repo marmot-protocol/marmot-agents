@@ -34,6 +34,9 @@ class AppServer:
         self.responses: dict[int, dict] = {}
         self.next_id = 1
         self.request_handler = None  # callable(msg) -> result dict, or None to leave unanswered
+        self._spawn()
+
+    def _spawn(self):
         self.proc = subprocess.Popen(
             ["codex", "app-server", "--disable", "hooks"],
             stdin=subprocess.PIPE,
@@ -42,7 +45,19 @@ class AppServer:
             text=True,
             bufsize=1,
         )
-        threading.Thread(target=self._read, daemon=True).start()
+        threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
+
+    def restart(self):
+        """Stop the app server and start a fresh one, writing to the same recording."""
+        self._record("out", {"_recorder": "the app server process was stopped and a new one started"})
+        try:
+            self.proc.stdin.close()
+            self.proc.wait(timeout=10)
+        except Exception:
+            self.proc.kill()
+        with self.cond:
+            self.responses.clear()
+        self._spawn()
 
     # -- wire ---------------------------------------------------------------
 
@@ -58,8 +73,8 @@ class AppServer:
         self.proc.stdin.write(json.dumps(msg) + "\n")
         self.proc.stdin.flush()
 
-    def _read(self):
-        for line in self.proc.stdout:
+    def _read(self, proc):
+        for line in proc.stdout:
             line = line.strip()
             if not line:
                 continue
@@ -138,18 +153,19 @@ class AppServer:
         )
         self.notify("initialized")
 
-    def start_thread(self, cwd: str, approval="never", sandbox="workspace-write", ephemeral=True) -> str:
+    def start_thread(self, cwd: str, approval="never", sandbox="workspace-write", ephemeral=True, **extra) -> str:
         r = self.request(
             "thread/start",
-            {"cwd": cwd, "approvalPolicy": approval, "sandbox": sandbox, "ephemeral": ephemeral},
+            {"cwd": cwd, "approvalPolicy": approval, "sandbox": sandbox, "ephemeral": ephemeral, **extra},
         )
+        self.model = r["result"].get("model")
         return r["result"]["thread"]["id"]
 
-    def start_turn(self, thread_id: str, text: str, **extra) -> tuple[str, int]:
+    def start_turn(self, thread_id: str, text: str, inputs: list | None = None, **extra) -> tuple[str, int]:
         mark = len(self.inbox)
         r = self.request(
             "turn/start",
-            {"threadId": thread_id, "effort": "low", "input": [text_input(text)], **extra},
+            {"threadId": thread_id, "effort": "low", "input": [*(inputs or []), text_input(text)], **extra},
         )
         if "error" in r:
             return "", mark
@@ -159,8 +175,10 @@ class AppServer:
         _, msg = self.wait_for(lambda m: m.get("method") == "turn/completed", timeout=timeout, start=mark)
         return msg
 
-    def turn(self, thread_id: str, text: str, **extra) -> dict:
-        _, mark = self.start_turn(thread_id, text, **extra)
+    def turn(self, thread_id: str, text: str, **extra) -> dict | None:
+        turn_id, mark = self.start_turn(thread_id, text, **extra)
+        if not turn_id:
+            return None  # the request itself was refused; the error response is in the recording
         return self.finish_turn(mark)
 
 
@@ -186,6 +204,8 @@ def answer_with(decision: str):
                 label = options[0].get("label") if options else "yes"
                 answers[q.get("id", "q")] = {"answers": [label]}
             return {"answers": answers}
+        if method == "mcpServer/elicitation/request":
+            return {"action": "accept", "content": {}}
         return None
 
     return handler
@@ -301,6 +321,120 @@ def two_turns(s: AppServer, cwd: str):
     s.turn(t, "What word did I ask you to remember? Reply with just the word.")
 
 
+def resume(s: AppServer, cwd: str):
+    """A session is resumed after the app server restarts. Leaves one thread in the Codex history."""
+    s.initialize()
+    t = s.start_thread(cwd, ephemeral=False)
+    s.turn(t, "Remember the word 'marmot'. Reply with: Noted.")
+    s.restart()
+    s.initialize()
+    s.request("thread/resume", {"threadId": t, "cwd": cwd})
+    s.turn(t, "What word did I ask you to remember? Reply with just the word.")
+
+
+def plan_tool(s: AppServer, cwd: str):
+    """The agent is told to call its plan tool."""
+    s.initialize()
+    t = s.start_thread(cwd)
+    s.turn(
+        t,
+        "First call the update_plan tool with exactly three steps: read greet.py, read test_greet.py, report. "
+        "Then do each step, calling update_plan again to mark it completed. Finish with one sentence.",
+        effort="medium",
+    )
+
+
+def plan_mode(s: AppServer, cwd: str):
+    """Plan mode: the agent may ask questions and proposes a plan instead of acting."""
+    s.request_handler = answer_with("accept")
+    s.initialize()
+    t = s.start_thread(cwd)
+    mode = {"mode": "plan", "settings": {"model": s.model, "reasoning_effort": "low", "developer_instructions": None}}
+    s.turn(
+        t,
+        "I want a farewell() function added to greet.py. Ask me which farewell word to use, offering "
+        "'Goodbye' and 'Bye', then give me your plan. Do not edit any files.",
+        collaborationMode=mode,
+    )
+
+
+def reasoning(s: AppServer, cwd: str):
+    """A turn at high effort with detailed reasoning summaries."""
+    s.initialize()
+    t = s.start_thread(cwd)
+    s.turn(
+        t,
+        "Without running any commands: how many times does the letter r appear in 'strawberry marmot burrow'? "
+        "Work it out carefully, then give the number.",
+        effort="high",
+        summary="detailed",
+    )
+
+
+def web_search(s: AppServer, cwd: str):
+    """The agent searches the web."""
+    s.initialize()
+    t = s.start_thread(cwd)
+    s.turn(t, "Search the web for the latest stable release of the Rust programming language and tell me its version number.")
+
+
+def image(s: AppServer, cwd: str):
+    """The user attaches an image."""
+    s.initialize()
+    t = s.start_thread(cwd)
+    s.turn(
+        t,
+        "What colour is the attached image? Answer with one word.",
+        inputs=[{"type": "localImage", "path": str(Path(cwd) / "red.png")}],
+    )
+
+
+def mcp_tool(s: AppServer, cwd: str):
+    """The agent calls a tool on an MCP server."""
+    s.request_handler = answer_with("accept")
+    server = str(Path(__file__).resolve().parent / "demo_mcp_server.py")
+    s.initialize()
+    # With approval policy "never", Codex refuses the call outright: an MCP tool call needs approval.
+    t = s.start_thread(cwd, approval="untrusted", config={"mcp_servers": {"demo": {"command": "python3", "args": [server]}}})
+    s.turn(t, "Use the define_word tool from the demo MCP server to define 'marmot', then tell me the definition.")
+
+
+def compact(s: AppServer, cwd: str):
+    """The client asks for the conversation to be compacted between two turns."""
+    s.initialize()
+    t = s.start_thread(cwd)
+    s.turn(t, "Remember the word 'marmot'. Reply with: Noted.")
+    mark = len(s.inbox)
+    s.request("thread/compact/start", {"threadId": t})
+    try:
+        s.wait_for(lambda m: m.get("method") in ("thread/compacted", "turn/completed"), timeout=120, start=mark)
+    except TimeoutError:
+        pass
+    time.sleep(2)
+    s.turn(t, "What word did I ask you to remember? Reply with just the word.")
+
+
+def model_switch(s: AppServer, cwd: str):
+    """The client lists the models and runs the second turn on a different one."""
+    s.initialize()
+    models = s.request("model/list", {}).get("result", {}).get("data", [])
+    t = s.start_thread(cwd)
+    s.turn(t, "Reply with exactly: first.")
+    other = next((m.get("model") or m.get("id") for m in models if (m.get("model") or m.get("id")) != s.model), None)
+    s.turn(t, "Reply with exactly: second.", **({"model": other} if other else {}))
+
+
+def bad_model(s: AppServer, cwd: str):
+    """A turn is started with a model that does not exist."""
+    s.initialize()
+    t = s.start_thread(cwd)
+    _, mark = s.start_turn(t, "Reply with exactly: hello.", model="no-such-model")
+    try:
+        s.finish_turn(mark, timeout=60)
+    except TimeoutError:
+        pass
+
+
 SCENARIOS = {
     f.__name__: f
     for f in [
@@ -316,6 +450,16 @@ SCENARIOS = {
         steer,
         failing_command,
         two_turns,
+        resume,
+        plan_tool,
+        plan_mode,
+        reasoning,
+        web_search,
+        image,
+        mcp_tool,
+        compact,
+        model_switch,
+        bad_model,
     ]
 }
 

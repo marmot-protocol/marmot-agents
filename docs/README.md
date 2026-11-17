@@ -93,6 +93,7 @@ Details and reasons are in [`design/drivers.md`](design/drivers.md).
 | What interface does each harness offer? | [`reference/harness-interfaces.md`](reference/harness-interfaces.md) |
 | What do Codex and Claude Code actually send? | [`reference/harness-messages.md`](reference/harness-messages.md) |
 | Where are the recorded sessions, and how do I record more? | [`../fixtures/recordings`](../fixtures/recordings/README.md), [`../tools/record`](../tools/record/README.md) |
+| Does the event model survive real sessions? | [`../tools/prototype`](../tools/prototype/README.md) |
 
 The `design/` documents are meant to be read by people. The `reference/` documents are long and detailed; they
 exist so that nobody, human or agent, has to redo the research behind a decision.
@@ -110,6 +111,7 @@ place.
 | `docs/` | Design, decisions and reference |
 | `fixtures/recordings/` | Real harness sessions, recorded message by message |
 | `tools/record/` | The recorders, the scrubber and the structure inventory |
+| `tools/prototype/` | A prototype that turns recordings into the proposed agent events |
 
 ## Diagrams
 

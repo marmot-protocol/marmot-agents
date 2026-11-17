@@ -113,6 +113,10 @@ SUSPECT = re.compile(
 )
 
 
+# Public, generic addresses that harnesses mention in their own text.
+ALLOWED = {"noreply@anthropic.com"}
+
+
 def strings(v):
     if isinstance(v, dict):
         for x in v.values():
@@ -150,7 +154,7 @@ def main() -> int:
                         if old in text:
                             problems += 1
                             print(f"LEFT BEHIND in {harness}/{src.name}: a mapped path", file=sys.stderr)
-                    m = SUSPECT.search(text)
+                    m = next((x for x in SUSPECT.finditer(text) if x.group(0) not in ALLOWED), None)
                     if m:
                         problems += 1
                         print(f"LEFT BEHIND in {harness}/{src.name}: {m.group(0)[:60]}", file=sys.stderr)

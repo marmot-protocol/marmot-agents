@@ -11,6 +11,7 @@ what the harness actually sends. The recordings they produced are in
 | `scrub.py` | Removes paths and account details from raw recordings |
 | `inventory.py` | Lists every kind of message in a set of recordings, with field names and types |
 | `demo/` | The small project every scenario runs in |
+| `demo_mcp_server.py` | A minimal MCP server with one tool, for the `mcp_tool` scenario |
 
 ## Before you start
 
@@ -70,7 +71,10 @@ say so there: what a harness does instead is the useful part.
 ## Notes
 
 - The Codex recorder starts the app server with `--disable hooks`, so your own Codex hooks do not run. Threads
-  are started as ephemeral, so nothing is added to your Codex history.
+  are started as ephemeral, so nothing is added to your Codex history. The `resume` scenario is the exception:
+  it has to keep its thread.
+- Claude Code keeps every session. Each Claude recording adds a small session to your Claude Code history,
+  under a project named after the demo directory.
 - The Claude recorder passes `settingSources: []`, so your own Claude Code settings are not loaded, and uses the
   `haiku` model to keep the cost down.
 - The pinned SDK version in `claude/package.json` is a few days behind the newest on purpose: some package

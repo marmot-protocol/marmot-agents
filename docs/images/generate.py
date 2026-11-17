@@ -278,7 +278,7 @@ def event(theme) -> Svg:
 
     # The Marmot event.
     s.frame(350, 30, 320, 270, "One Marmot agent event")
-    s.box(366, 64, 288, 64, "Item type: command run", ["from the shared vocabulary"], kind="shared")
+    s.box(366, 64, 288, 64, "Item type: tool, a command", ["from the shared vocabulary"], kind="shared")
     s.box(366, 140, 288, 64, "Plain rendering", ["“Ran cargo test · finished · exit 0”"], kind="shared")
     s.box(366, 216, 288, 64, "Native payload", ["the harness's event, untouched"], kind="specific")
 
