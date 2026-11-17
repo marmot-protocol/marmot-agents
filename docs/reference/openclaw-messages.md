@@ -114,7 +114,9 @@ The payload is an object, not a string. Fields seen:
 | `channelData` | The two questions: the question id and the option values |
 | `audioAsVoice`, `replyToTag`, `replyToCurrent` | Set to false on replies |
 
-For a `block`, `info` also carries `assistantMessageIndex`, the position of the model message it came from.
+For a `block`, and for the one `final` that is an agent answer, `info` also carries `assistantMessageIndex`,
+the position of the model message it came from. None of the eight `final` deliveries that OpenClaw wrote
+itself carries it.
 
 ## Tool activity is structured
 
@@ -255,8 +257,10 @@ OpenClaw's configuration to forward approvals to the chat they came from. The pl
 The text says `Reply with: /approve <id> allow-once|allow-always|deny`, and that it expires in 30 minutes.
 
 **It can be answered as a chat message.** In `approval_allowed` and `approval_denied` Alice sent
-`/approve <id> allow-once` or `deny`. OpenClaw replied `✅ Approval allow-once submitted for <id>.` and sent a
-second message, `✅ Exec approval allowed once. Resolved by Chat approval (recorder:alice).`
+`/approve <id> allow-once` or `deny`. Within a tenth of a second OpenClaw sent `✅ Exec approval allowed once.
+Resolved by Chat approval (recorder:alice).` Its reply to the command itself, `✅ Approval allow-once submitted
+for <id>.`, came last: 12 to 13 ms after the waiting turn had ended, in all three recordings that use
+`/approve`.
 
 **Or by a press, if the plugin claims an approval capability.** In `approval_cards_allowed` and
 `approval_cards_denied` the plugin claims one. OpenClaw then:
@@ -309,7 +313,7 @@ succeeded. The rejection arrived like any failed tool.
 | Control | What happened |
 | --- | --- |
 | A message during a turn (`mid_turn_message`) | Held, with no notice to the chat and no call on the plugin, until the running turn ended 36 seconds later. Then it ran as a turn of its own |
-| `/stop` (`stop`) | `⚙️ Agent was aborted.`, kind `final`, within a tenth of a second. The stopped run reported no outcome |
+| `/stop` (`stop`) | `⚙️ Agent was aborted.`, kind `final`, within a tenth of a second. The stopped run reported no outcome: no `onAgentRunTerminalOutcome`. The `inbound.run` call for the stopped message did return, 38 ms before the notice |
 | `/help`, `/status` (`commands`) | Answered by OpenClaw itself in under a second, kind `final`, with no model call |
 | `/approve` | As above |
 
@@ -368,6 +372,166 @@ without it counts as the reply is inferred from these two runs.
 | Model failure | Reported as success | Reported as `failed`, with `isError` |
 | Telling runtime text from agent text | A metadata hint on some messages | `info.kind`, `isError` and `channelData` |
 | Typing calls | Four fifths of all calls | One in seven |
+
+## Through the prototype translator
+
+The prototype that turns recordings into the proposed agent events
+([`tools/prototype`](../../tools/prototype/README.md)) was extended to OpenClaw on 2026-11-17. The question
+was whether OpenClaw fits the ten item types and six states of
+[the event model](../design/event-model.md), and what does not fit. The prototype is a design tool, not
+connector code. This section reports what it showed. It decides nothing.
+
+| | |
+| --- | --- |
+| Recorded lines: calls in both directions, their results, scripted messages, presses and recorder notes | 3,655 |
+| Of those, calls from OpenClaw | 1,655 |
+| Agent events produced | 150 |
+| Items those events describe | 95 |
+| Lines with no rule | 0 |
+| Items left open at the end of a recording | 0 |
+
+The events by type: 63 `turn`, 34 `tool`, 29 `message`, 10 `approval`, 6 `notice`, 4 `question`, 3 `error`,
+1 `reasoning`. There is no `plan` and no `task`, because no scenario produced one.
+
+Not checked: anything the recordings do not hold (the list is under [Sources](#sources)), a second run of any
+scenario, another OpenClaw version, and a chat with two turns running at once.
+
+### What became an event, and what did not
+
+Of the 1,655 calls from OpenClaw, 1,505 are not sent and 150 went into 145 events. The other five events
+came from what OpenClaw returned to the plugin's own calls.
+
+| Not sent | Calls |
+| --- | --- |
+| The receive-path log | 304 |
+| Delivery bookkeeping | 285 |
+| The typing signal | 258 |
+| Address tidying | 177 |
+| Questions OpenClaw asks the plugin: what the channel can do, whether a group needs a mention, who may approve | 109 |
+| The other two copies of tool activity: `onToolResult`, and `tool` deliveries that repeat an item | 92 |
+| Text, thinking and command output so far | 61 |
+| `onAssistantMessageStart`, before a message has text | 48 |
+| `onModelSelected`. The model is kept and put on the turn | 35 |
+| Calls that only repeat or prepare another: the start of a tool before its arguments, the second copy of a wrapped call, a command's end before its output, an update with nothing new | 55 |
+| The account starting and stopping | 51 |
+| The rest: thinking that ended with no text, approval prompts and outcomes that arrived a second time, the calls around a tool call that became a question or a message | 30 |
+
+### What fit
+
+| Item type | Built from | Items | Events |
+| --- | --- | --- | --- |
+| `turn` | `onPreparedAgentRunStart` and `onAgentRunTerminalOutcome` | 32 | 63 |
+| `tool` | `onToolStart` for the start and the arguments; `onCommandOutput` for the end of a command, with output, exit code, duration and directory; `onItemEvent` for the end of any other tool | 17 | 34 |
+| `message` | 26 `block` deliveries, 1 `final` delivery, 2 uses of the message tool | 29 | 29 |
+| `approval` | The forwarded message, or the approval capability's calls | 5 | 10 |
+| `question` | The `tool` delivery that carries `channelData.askUser`, with the questions and options taken from the tool call's arguments | 2 | 4 |
+| `notice` | `final` deliveries that answer a slash command | 6 | 6 |
+| `error` | 2 `final` deliveries marked `isError`, and 1 refused press | 3 | 3 |
+| `reasoning` | The last `onReasoningStream` text, sent when `onReasoningEnd` arrives | 1 | 1 |
+
+- **No new item type or state was needed**, and none was added.
+- **Tool calls are items.** Of the 17, 9 are commands, 3 are file edits and 5 are other tools. Hermes had none.
+- **An approval is one item in both forms.** Where the plugin claims the approval capability the item is built
+  from the structured request, and the forwarded message is not sent again.
+- **A question is one item**, though it arrives as a tool call, twice, and then as a delivery. The answer by
+  press closes it through `questionGatewayRuntime.resolveOption`.
+- **The translator closes what OpenClaw leaves open.** On the reply to `/stop` it cancels the running command
+  and the turn. In `approval_not_forwarded` the run had reported no outcome when the account stopped, and the
+  turn is closed there.
+
+### What did not fit
+
+**1. The agent's message tool.** Five calls in two recordings. This is the clearest case.
+
+| Action | Calls | What the prototype made of it | What that leaves |
+| --- | --- | --- | --- |
+| `send` | 2 | A `message` item, not a tool call | It is text the agent says to the chat. In `message_actions` it was the agent's only reply |
+| `react` | 1 | A `tool` item of kind `other`, with the chat and the message reacted to in its body | No item type says the agent acted on somebody's message. A client that draws tool calls shows "used a tool" for a thumbs-up |
+| `delete` | 1 | A `tool` item of kind `other`, whose `subject` is the `message` item that was deleted | The deleted message's own item stays `done`. An item changes only by being sent again, and none of the six states means "withdrawn" |
+| `edit` | 1 | A `tool` item, `failed` | OpenClaw refused the edit before asking the plugin. An edit that goes through was not recorded, so it was not mapped |
+
+**2. Replies to slash commands belong to no turn.** OpenClaw answers `/help`, `/status` and `/approve` itself,
+with no run. Five of the six notices have an empty `turn`. The three replies to `/approve` arrive just after
+the turn they unblocked has ended. Only the reply to `/stop` falls inside a turn.
+
+**3. A turn carries little.**
+
+- A run ends with one word, `completed` or `failed`. The `turn` item has no duration and no usage.
+- Every turn is `started_by: user`. A message held behind a running turn starts its run later with no sign of
+  the wait.
+- In `model_refused` the second run reported `failed` and had never reported a start. Its turn is one event,
+  `failed`, that was never `running`.
+- With no callbacks registered (`tool_call_plain`) the first sign of a turn is the answer itself. The
+  translator opens the turn there and closes it when `inbound.run` returns, 19 ms later.
+
+**4. A denied command is first a failed command.** `onItemEvent` and `onCommandOutput` report `failed`.
+`onApprovalEvent` says `denied` one call later. In the two recordings where `/approve` denied the command, the
+`tool` item is sent as `failed` and then again as `declined`, and the `approval` item closes after both. In
+the recording where a press denied it, the outcome arrives first and names the tool call, so the item goes
+straight to `declined`.
+
+**5. An approval that never reached the chat has no item.** In `approval_not_forwarded` the command is a
+`tool` item that runs for 61 seconds and fails. Nothing was asked of anyone, so there is no `approval` item
+and nothing `waiting`. `onApprovalEvent` reports `failed`; the translator does not send it, because the tool
+item already failed with that text.
+
+**6. A question that nobody answered closes as `cancelled`.** In `question_text_answer` the question expired
+after fifteen minutes. There is no state for "expired". The callback reports the tool as `completed`.
+
+**7. An error is text only.** The two model failures carry no code and nothing about what was being attempted.
+Each arrives after its turn has already ended as `failed`.
+
+**8. Smaller gaps.**
+
+| Gap | Count |
+| --- | --- |
+| A `message` with no `phase`. A `block` delivery does not say whether it is commentary or the answer | 27 of 29 |
+| A `tool` item whose result is the formatted line, not fields | 8 of 17 |
+| A file edit with a path and the tool's arguments, and no diff | 3 |
+
+**Produced nothing, because OpenClaw said nothing:** the three messages it did not admit, and the two it held
+behind a running turn.
+
+### Where the translator goes by order, and what only the wording holds
+
+The translator reads fields: `info.kind`, `isError`, `assistantMessageIndex`, `channelData`, tool names and
+ids. It matches none of OpenClaw's wording. It does go by the order of calls in five places.
+
+| The translator assumes | Times | Would a plugin know? |
+| --- | --- | --- |
+| A `final` delivery with no message index answers the oldest slash command still waiting | 6 | Yes. Each `inbound.run` is given its own callbacks, so a plugin knows which message a delivery answers (read in the recorder's source). The recording does not write that down |
+| The `tool` delivery straight after the end of a tool that is not a command is that tool's result | 8 | No. Neither `onToolResult` nor the delivery carries a tool id |
+| A question delivery belongs to the `ask_user` call in progress | 2 | No. The delivery carries a question id, not a tool call id |
+| An approval forwarded as a message is about the one command that is running | 3 | No, without the approval capability. `channelData.execApproval` names no tool call |
+| The decision on an approval answered with `/approve` is the one the client sent | 3 | No. The message that says `resolved` does not say which way |
+
+What only the wording holds, and the translator therefore does not have:
+
+- Which way an approval went, when the plugin did not carry the answer. Not seen. The translator would
+  report it as a line with no rule.
+- Why a question closed with no answer through the plugin. The result line says `no_answer`.
+- Why a tool that is not a command failed. The result line says, for example, that the arguments were
+  invalid.
+- The command an approval is about, when the plugin does not claim the capability. It is in the prompt text,
+  and the item's text is the whole prompt.
+
+### Details found while writing the rules
+
+- **`assistantMessageIndex` separates the agent's words from OpenClaw's.** All 27 deliveries of agent text
+  carry it, `block` or `final`. None of the 8 `final` deliveries that OpenClaw wrote does. `info.kind` alone
+  does not separate them.
+- **A wrapped call can be told from its copy.** `onItemEvent` names both `ask_user`; only `onToolStart` says
+  `dispatch_action`. The copy's id is `tool_call:<first id>:ask_user:<n>`. The status `blocked` was seen only
+  on the copy; the first call said `failed`. The first call's end can arrive twice, the second time with
+  `hideFromChannelProgress`.
+- **`onCommandOutput` reports the end twice**: once with only the status, then with the output, exit code,
+  duration and directory. Of 18 calls, 2 are output so far, 8 are the bare end and 8 the full end.
+- **Starts and outcomes do not pair up.** 30 starts and 29 outcomes hide two runs with no outcome (`stop`,
+  `approval_not_forwarded`) and one outcome with no start (`model_refused`).
+- **The order of a denial differs.** After `/approve <id> deny` the tool fails first and the `resolved`
+  message follows. After a press, the result of the press comes first.
+- **A message-tool action can be tied to its tool call.** The `idempotencyKey` handed to
+  `actions.handleAction` ends with the tool call id.
 
 ## What this means for the design
 

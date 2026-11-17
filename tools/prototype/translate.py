@@ -822,12 +822,547 @@ class Hermes(Translator):
                                    {"answer_via": "request", "reason": prompt.get("description"), "choices": choices}, method, prompt)
 
 
+# ---------------------------------------------------------------------------- OpenClaw
+
+
+class OpenClaw(Translator):
+    """OpenClaw hands a channel plugin structured callbacks about tools, and two formatted copies
+    of the same activity. Tool items are built from the structured callbacks. The copies are not
+    sent, except where a copy holds something the callbacks lack: a question, and the result of a
+    tool that is not a command.
+
+    A recording is flat: it does not say which inbound.run a callback belongs to. A plugin knows,
+    because each run is given its own callbacks. Where that matters, the translator goes by order,
+    and says so in a comment."""
+
+    harness = "openclaw"
+    NOT_SENT = {
+        "dispatcher.onReplyStart": "typing signal",
+        "onTypingController": "typing signal",
+        "inbound.log": "receive-path log",
+        "dispatcher.onDeliverySettled": "delivery bookkeeping",
+        "dispatcher.onIdle": "delivery bookkeeping",
+        "dispatcher.onSettled": "delivery bookkeeping",
+        "dispatcher.onCleanup": "delivery bookkeeping",
+        "onObservedReplyDelivery": "delivery bookkeeping",
+        "onBlockReplyQueued": "delivery bookkeeping",
+        "messaging.normalizeTarget": "address tidying",
+        "messaging.targetResolver.looksLikeId": "address tidying",
+        "messaging.targetResolver.resolveTarget": "address tidying",
+        "messaging.inferTargetChatType": "address tidying",
+        "groups.resolveRequireMention": "question to the plugin about the channel",
+        "actions.describeMessageTool": "question to the plugin about the channel",
+        "actions.supportsAction": "question to the plugin about the channel",
+        "agentPrompt.messageToolHints": "question to the plugin about the channel",
+        "approvalCapability.getActionAvailabilityState": "question to the plugin about approvals",
+        "approvalCapability.authorizeActorAction": "question to the plugin about approvals",
+        "gateway.startAccount": "the account started",
+        "onAssistantMessageStart": "start of a message, before it has text",
+        "onPartialReply": "partial text",
+        "onToolResult": "formatted line about a tool, a copy of the tool delivery",
+    }
+    # Only the tool names seen in the recordings. A command is known by commandBearing, not by name.
+    TOOL_KINDS = {"write": "edit", "edit": "edit"}
+    DECISIONS = {"allow-once": "Allow once", "allow-always": "Always allow", "deny": "Deny"}
+    BY_DRIVER = "(none: closed by the driver)"
+
+    def __init__(self):
+        super().__init__()
+        self.turn_n = 0
+        self.turn_body: dict = {}
+        self.driver_turn = False  # the open turn was opened by the driver, not reported by OpenClaw
+        self.failed_turn = None  # the last turn, if it failed: its error text arrives after it
+        self.route_session = None
+        self.model = None
+        self.thinking = ""  # the model's thinking so far
+        self.tools: dict[str, dict] = {}  # toolCallId -> what is known about the call
+        self.ending = None  # a tool that has ended and is held for one call, for its result line
+        self.asking = None  # the ask_user call in progress
+        self.inbound_text: dict[str, str] = {}  # message id -> what the person sent
+        self.commands: list[str] = []  # slash commands handed to OpenClaw and not yet answered
+        self.decisions: dict[str, str] = {}  # approval id -> the decision the client sent
+        self.last_press = None
+        self.sent: dict[str, dict] = {}  # the plugin's id for a posted message -> the event it became
+        self.posting = None  # (method, event) of the call whose result will name the posted message
+        self.denied: set[str] = set()  # tool calls whose approval was denied
+
+    def feed(self, rec):
+        m, via, out = rec["msg"], rec.get("via"), rec["dir"] == "out"
+        if via == "note":
+            return self.skip("recorder note")
+        method = m.get("method")
+        if via == "result":
+            return self.result(method, m)
+        # A tool that is not a command reports its end, and its result arrives as text in the tool
+        # delivery that follows. Any other call means no result line is coming.
+        if self.ending and not (via == "hook" and method in ("onToolResult", "deliver")):
+            self.finish_tool()
+        if via == "inbound":
+            return self.inbound(m)
+        if via == "press":
+            return self.press(m)
+        if via == "call":
+            return self.call_out(method, m) if out else self.call_in(method, m)
+        p = m.get("params")
+        if method in self.NOT_SENT:
+            return self.skip(f"{self.NOT_SENT[method]} ({method})")
+        handler = {
+            "onModelSelected": self.model_selected,
+            "onPreparedAgentRunStart": self.run_start,
+            "onAgentRunTerminalOutcome": self.run_end,
+            "gateway.abort": self.account_stopped,
+            "onItemEvent": self.item_event,
+            "onToolStart": self.tool_start,
+            "onCommandOutput": self.command_output,
+            "onApprovalEvent": self.approval_event,
+            "onReasoningStream": self.reasoning_stream,
+            "onReasoningEnd": self.reasoning_end,
+            "deliver": self.deliver,
+            "message.send.payload": self.send_payload,
+            "approvalCapability.render.exec.buildPendingPayload": self.approval_card,
+            "approvalCapability.render.exec.buildResolvedPayload": self.approval_card_resolved,
+            "actions.handleAction": self.handle_action,
+        }.get(method)
+        if handler is None:
+            return self.unknown(str(method))
+        handler(method, p)
+
+    # -- what the plugin sends, and what its own calls return
+
+    def inbound(self, m):
+        text = str(m.get("text") or "").strip()
+        self.inbound_text[m.get("message_id")] = text
+        if text.split(" ")[0] == "/approve":
+            return self.skip("client: answer to an approval, as a slash command")
+        self.skip("client: slash command" if text.startswith("/") else "client: chat message")
+
+    def press(self, m):
+        if "approvalId" in m:
+            self.last_press = m.get("approvalId")
+            return self.skip("client: button press on an approval")
+        self.skip("client: button press on a question")
+
+    def call_out(self, method, m):
+        if method == "inbound.run":
+            # Only a message that is run can be answered. A command is answered by OpenClaw itself.
+            text = self.inbound_text.get((m.get("params") or {}).get("messageId"), "")
+            if text.startswith("/"):
+                self.commands.append(text)
+                parts = text.split()
+                if parts[0] == "/approve" and len(parts) >= 3:
+                    self.decisions[parts[1]] = parts[2]
+        self.skip(f"client: {method}")
+
+    def call_in(self, method, m):
+        result = m.get("result") or {}
+        if method == "routing.resolveAgentRoute":
+            self.route_session = result.get("sessionKey")
+            if self.turn is None:
+                self.session = self.route_session
+        elif method == "inbound.run" and self.driver_turn:
+            # With no run callbacks registered, the return of inbound.run is the only end there is.
+            return self.close_turn("done", "result of inbound.run", result)
+        elif method == "resolveApprovalOverGateway":
+            if "error" in m:
+                err = m["error"] or {}
+                return self.emit(f"error:{self.seq + 1}", "error", "failed", "OpenClaw refused an answer", err.get("message", ""),
+                                 {"request": method, "subject": f"approval:{self.last_press}"}, f"error result of {method}", err)
+            approval = result.get("approval") or {}
+            if not result.get("applied"):
+                return self.unknown(f"{method} result that was not applied")
+            return self.approval_resolved(approval.get("id"), f"result of {method}", result, approval.get("decision"))
+        elif method == "questionGatewayRuntime.resolveOption":
+            return self.question_answered(method, result)
+        self.skip(f"result of {method}")
+
+    def result(self, method, m):
+        """What the plugin returned to OpenClaw. For a posted message that is the plugin's id for it."""
+        res = m.get("result")
+        if self.posting and self.posting[0] == method and isinstance(res, dict):
+            mid = (res.get("messageId") or (res.get("details") or {}).get("messageId")
+                   or (res.get("receipt") or {}).get("primaryPlatformMessageId"))
+            if mid:
+                self.sent[mid] = self.posting[1]
+            self.posting = None
+        self.skip(f"result of {method}")
+
+    # -- turns
+
+    def model_selected(self, method, p):
+        self.model = f"{p.get('provider')}/{p.get('model')}"
+        self.skip("onModelSelected, kept for the turn")
+
+    def open_turn(self, turn=None):
+        self.turn_n += 1
+        self.turn = turn or f"{self.session}:{self.turn_n}"
+        self.failed_turn = None
+        self.turn_body = {"started_by": "user"}
+        if self.model:
+            self.turn_body["model"] = self.model
+
+    def run_start(self, method, p):
+        if self.turn is not None:
+            return self.unknown("onPreparedAgentRunStart while a turn is open")
+        self.session = (p.get("transcriptStart") or {}).get("sessionKey") or self.session
+        self.open_turn(p.get("runId"))
+        self.emit(f"turn:{self.turn}", "turn", "running", "Working", body=self.turn_body, native_kind=method, native=p)
+
+    def ensure_turn(self):
+        """The agent spoke and no run was reported. The plugin registered no run callbacks, so the
+        driver opens the turn itself."""
+        if self.turn is None:
+            self.open_turn()
+            self.driver_turn = True
+            self.emit(f"turn:{self.turn}", "turn", "running", "Working", body=self.turn_body,
+                      native_kind="(none: opened by the driver)", native={"reason": "the agent spoke and no run was reported"})
+
+    def run_end(self, method, p):
+        state = {"completed": "done", "failed": "failed"}.get(p)
+        if state is None:
+            return self.unknown(f"onAgentRunTerminalOutcome [{p}]")
+        if self.turn is None:
+            if state != "failed":
+                return self.unknown("onAgentRunTerminalOutcome with no turn open")
+            self.open_turn()  # the run failed before OpenClaw reported it as started
+        self.close_turn(state, method, p)
+
+    def close_turn(self, state, native_kind, native, text=""):
+        if self.thinking.strip():  # thinking that never reported its end
+            self.emit(f"reasoning:{self.seq + 1}", "reasoning", "done", "Thinking", self.thinking, {}, self.BY_DRIVER,
+                      {"reason": "the turn ended"})
+        self.thinking = ""
+        self.close_open_items(f"the turn ended: {state}")
+        title = {"done": "Finished", "failed": "Failed", "cancelled": "Interrupted"}[state]
+        self.emit(f"turn:{self.turn}", "turn", state, title, text, self.turn_body, native_kind, native)
+        self.failed_turn = self.turn if state == "failed" else None
+        self.turn, self.driver_turn, self.asking = None, False, None
+        self.session = self.route_session or self.session
+
+    def account_stopped(self, method, p):
+        """OpenClaw asked the account to stop. Nothing in progress will report again."""
+        if not [e for e in self.open.values() if e["type"] != "task"]:
+            return self.skip(method)
+        if self.turn is not None:
+            return self.close_turn("cancelled", method, p, "The account stopped before the turn finished.")
+        self.close_open_items("the account stopped")
+
+    # -- tools
+
+    def is_inner(self, tid):
+        """A call made through dispatch_action arrives twice: under the model's id, and again
+        under an id built from it. The second is the copy."""
+        parts = str(tid).split(":")
+        return len(parts) > 1 and parts[0] == "tool_call" and parts[1] in self.tools
+
+    @staticmethod
+    def tool_title(kind, state):
+        if kind == "command":
+            return {"running": "Running a command", "done": "Ran a command", "failed": "Command failed",
+                    "declined": "Command not allowed"}[state]
+        return Claude.tool_title(kind, state)
+
+    def item_event(self, method, p):
+        tid, phase, status = p.get("toolCallId"), p.get("phase"), p.get("status")
+        if self.is_inner(tid):
+            return self.skip("inner copy of a call made through dispatch_action")
+        if phase == "start":
+            self.tools[tid] = {"name": p.get("name"), "title": p.get("title"), "command": bool(p.get("commandBearing")), "mode": "tool"}
+            return self.skip("onItemEvent start, kept until onToolStart gives the arguments")
+        t = self.tools.get(tid)
+        if t is None or "body" not in t:
+            return self.unknown("onItemEvent for a tool call that never started")
+        if phase == "update":
+            return self.skip("onItemEvent update with nothing new")
+        if phase != "end":
+            return self.unknown(f"onItemEvent [{phase}]")
+        if t.get("ended"):
+            return self.skip("onItemEvent end, repeated")
+        t["ended"] = True
+        state = {"completed": "done", "failed": "failed", "blocked": "failed"}.get(status)
+        if state is None:
+            return self.unknown(f"onItemEvent end [{status}]")
+        if t["mode"] == "question" and t.get("question"):
+            if t["question"] not in self.open:
+                return self.skip("end of a tool call that is really a question (ask_user)")
+            # The tool ended and no answer went through the plugin. The result line says why, in
+            # words; the callback does not.
+            prev = self.open[t["question"]]
+            return self.emit(prev["item"], "question", "cancelled", prev["title"], "Closed with no answer from the chat",
+                             prev["body"], "onItemEvent [end of ask_user]", p)
+        if t["mode"] == "send" and t.get("message"):
+            if state == "done":
+                return self.skip("end of a tool call that is really a message (message send)")
+            prev = t["message"]
+            return self.emit(prev["item"], "message", "failed", prev["title"], prev["text"], prev["body"], "onItemEvent [end of message send]", p)
+        if t["command"]:
+            return self.skip("onItemEvent end of a command, which closes on onCommandOutput")
+        self.ending = {"tid": tid, "state": state, "native": p}  # sent by finish_tool, with the next call
+
+    def tool_start(self, method, p):
+        tid, phase = p.get("toolCallId"), p.get("phase")
+        if self.is_inner(tid):
+            return self.skip("inner copy of a call made through dispatch_action")
+        if phase == "update":
+            return self.skip("onToolStart update with no arguments")
+        if phase != "start":
+            return self.unknown(f"onToolStart [{phase}]")
+        t = self.tools.setdefault(tid, {"name": p.get("name"), "title": None, "command": False, "mode": "tool"})
+        name, args, wrapper = t["name"] or p.get("name"), p.get("args") or {}, None
+        if p.get("name") == "dispatch_action":  # a wrapper: the real tool and its arguments are inside
+            name, args, wrapper = args.get("id") or name, args.get("args") or {}, "dispatch_action"
+        kind = "command" if t["command"] else self.TOOL_KINDS.get(name, "other")
+        body = {"kind": kind, "name": name}
+        if wrapper:
+            body["called_through"] = wrapper
+        if kind == "command":
+            body["command"] = args.get("command")
+        else:
+            if kind == "edit":
+                body["path"] = args.get("path")
+            body["input"] = clip_native(args)
+        t.update(name=name, args=args, body=body, text=body.get("command") or body.get("path") or t.get("title") or name)
+        if name == "ask_user":
+            # A question dressed as a tool call. It becomes a question when it reaches the chat. If
+            # OpenClaw rejects the call first, it never does, and is sent as a failed tool.
+            t["mode"], self.asking = "question", tid
+            return self.skip("tool call that is really a question (ask_user)")
+        if name == "message" and args.get("action") == "send":
+            t["mode"] = "send"
+            return self.skip("tool call that is really a message (message send)")
+        self.emit(tid, "tool", "running", self.tool_title(kind, "running"), t["text"], body, f"{method} [{name}]", p)
+
+    def command_output(self, method, p):
+        tid, phase = p.get("toolCallId"), p.get("phase")
+        if phase == "delta":
+            return self.skip("partial output (onCommandOutput delta)")
+        if phase != "end":
+            return self.unknown(f"onCommandOutput [{phase}]")
+        if "itemId" not in p:
+            return self.skip("onCommandOutput end with no fields; a second call carries them")
+        t = self.tools.get(tid)
+        state = {"completed": "done", "failed": "failed"}.get(p.get("status"))
+        if t is None or tid not in self.open or state is None:
+            return self.unknown("onCommandOutput end for a command that is not open")
+        if state == "failed" and tid in self.denied:
+            state = "declined"
+        t["body"] = {**t["body"], "cwd": p.get("cwd"), "exit_code": p.get("exitCode"), "duration_ms": p.get("durationMs"),
+                     "output": clip(p.get("output"), 2000)}
+        self.emit(tid, "tool", state, self.tool_title("command", state), t["text"], t["body"], f"{method} [end]", p)
+
+    def finish_tool(self, output=None, delivery=None):
+        """Close a tool that is not a command. Its result exists only as a formatted line."""
+        e, self.ending = self.ending, None
+        t = self.tools[e["tid"]]
+        if output is not None:
+            t["body"] = {**t["body"], "output": clip(output, 2000)}
+        native = {"onItemEvent": e["native"], "deliver": delivery} if delivery is not None else e["native"]
+        self.emit(e["tid"], "tool", e["state"], self.tool_title(t["body"]["kind"], e["state"]), t["text"], t["body"],
+                  "onItemEvent [end]" + (" and its tool delivery" if delivery is not None else ""), native)
+
+    def approval_event(self, method, p):
+        tid, status = p.get("toolCallId"), p.get("status")
+        t = self.tools.get(tid)
+        if status == "failed":
+            return self.skip("onApprovalEvent: the approval request failed, and the tool item already failed")
+        if status != "denied" or t is None or "body" not in t:
+            return self.unknown(f"onApprovalEvent [{status}]")
+        prev = self.events_for(tid)
+        if prev and prev["state"] == "declined":
+            return self.skip("onApprovalEvent: the denial is already known from the approval")
+        # The command was reported as failed one call ago. Only this call says a person said no.
+        self.emit(tid, "tool", "declined", self.tool_title(t["body"]["kind"], "declined"), t["text"], t["body"], f"{method} [denied]", p)
+
+    def events_for(self, item):
+        return next((e for e in reversed(self.events) if e["item"] == item), None)
+
+    # -- the agent's message tool
+
+    def handle_action(self, method, p):
+        """OpenClaw asks the plugin to carry out an action of the agent's message tool."""
+        action, params = p.get("action"), p.get("params") or {}
+        key = str(params.get("idempotencyKey") or "")
+        tid = next((i for i in self.tools if key.endswith(f":{i}")), None)
+        t = self.tools.get(tid)
+        if t is None or "body" not in t:
+            return self.unknown("actions.handleAction with no tool call")
+        if action == "send" and t["mode"] == "send":
+            body = {"sent_with": "message tool"}
+            if t["args"].get("final") is not None:
+                body["phase"] = "final" if t["args"]["final"] else "commentary"
+            t["message"] = self.emit(f"message:{tid}", "message", "done", "Message", params.get("message"), body, f"{method} [send]", p)
+            self.posting = (method, t["message"])
+            return
+        # react and delete. No item type says "the agent acted on the chat", so the call stays a
+        # tool item. What it acted on is only here: the tool arguments name no message for a react.
+        target = params.get("messageId") or (p.get("toolContext") or {}).get("currentMessageId")
+        t["body"] = {**t["body"], "action": action, "target": {"chat": params.get("to"), "message": target}}
+        if target in self.sent:
+            t["body"]["subject"] = self.sent[target]["item"]
+        self.skip("actions.handleAction: the plugin carries out an action that the tool item shows")
+
+    # -- thinking
+
+    def reasoning_stream(self, method, p):
+        self.thinking = str(p.get("text") or "")
+        self.skip("partial thinking (onReasoningStream)")
+
+    def reasoning_end(self, method, p):
+        text, self.thinking = self.thinking, ""
+        if not text.strip():
+            return self.skip("onReasoningEnd with no thinking text")
+        self.emit(f"reasoning:{self.seq + 1}", "reasoning", "done", "Thinking", text, {},
+                  f"{method}, with the last onReasoningStream", {"text": text})
+
+    # -- everything that arrives through deliver
+
+    def deliver(self, method, p):
+        payload, info = p[0] or {}, p[1] or {}
+        kind, text = info.get("kind"), payload.get("text")
+        self.posting = None
+        if kind == "tool":
+            if (payload.get("channelData") or {}).get("askUser"):
+                return self.question_asked(payload, p)
+            if self.ending:
+                return self.finish_tool(output=text, delivery=p)
+            return self.skip("deliver [tool]: formatted line about a tool that is already an item")
+        if self.ending:
+            self.finish_tool()
+        if payload.get("isError"):
+            # A failed run reports its outcome first and its error text after.
+            turn, self.turn = self.turn, self.turn or self.failed_turn
+            self.emit(f"error:{self.seq + 1}", "error", "failed", "Error", text, {}, f"{method} [{kind}, isError]", p)
+            self.turn = turn
+            return
+        if "assistantMessageIndex" in info:  # only the agent's own words carry a message index
+            self.ensure_turn()
+            ev = self.emit(f"message:{self.seq + 1}", "message", "done", "Message", text,
+                           {"phase": "final"} if kind == "final" else {}, f"{method} [{kind}]", p)
+            self.posting = (method, ev)
+            return
+        if kind == "final":
+            return self.own_reply(method, text, p)
+        self.unknown(f"deliver [{kind}] with no message index")
+
+    def own_reply(self, method, text, p):
+        """OpenClaw answers a slash command itself. The reply carries no mark of which command it
+        answers, so it is taken as the answer to the oldest one still waiting."""
+        if not self.commands:
+            return self.unknown("deliver [final] that is not the agent's, with no command waiting")
+        command = self.commands.pop(0).split()[0]
+        if command != "/stop":
+            ev = self.emit(f"notice:{self.seq + 1}", "notice", "done", "Command output", text,
+                           {"kind": "command_output", "command": command}, f"{method} [final, reply to {command}]", p)
+            self.posting = (method, ev)
+            return
+        ev = self.emit(f"notice:{self.seq + 1}", "notice", "done", "Stopped", text, {"kind": "stopped", "command": command},
+                       f"{method} [final, reply to {command}]", p)
+        self.posting = (method, ev)
+        if self.turn is not None:  # a stopped run reports no outcome
+            self.close_turn("cancelled", self.BY_DRIVER, {"reason": "the run was stopped and reports no outcome"})
+
+    # -- questions
+
+    def question_asked(self, payload, p):
+        ask = payload["channelData"]["askUser"]
+        # The delivery names the question, not the tool call. It is taken to belong to the one
+        # ask_user call in progress, whose arguments hold the question in full.
+        t = self.tools.get(self.asking) or {}
+        buttons = [b for blk in (payload.get("presentation") or {}).get("blocks") or [] if blk.get("type") == "buttons"
+                   for b in blk.get("buttons") or []]
+        allow_text = any((b.get("action") or {}).get("intent") == "custom-input" for b in buttons)
+        qs = []
+        for q in (t.get("args") or {}).get("questions") or []:
+            options = [o if isinstance(o, dict) else {"label": o} for o in q.get("options") or []]
+            qs.append({"id": q.get("id"), "header": q.get("header"), "text": q.get("question"), "multiple": bool(q.get("multiSelect")),
+                       "allow_text": allow_text,
+                       "options": [{"id": f"o{k}", "label": o.get("label"), "description": o.get("description"),
+                                    "native": o.get("value", o.get("label"))} for k, o in enumerate(options)]})
+        if not qs:
+            qs = [{"id": "q0", "text": payload.get("text"), "multiple": False, "allow_text": allow_text,
+                   "options": [{"id": f"o{k}", "label": v, "native": v} for k, v in enumerate(ask.get("optionValues") or [])]}]
+        item = f"question:{ask.get('questionId')}"
+        t["question"] = item
+        self.emit(item, "question", "waiting", "Question", qs[0]["text"],
+                  {"answer_via": "request", "subject": self.asking, "questions": qs}, "deliver [tool, channelData.askUser]", p)
+
+    def question_answered(self, method, result):
+        item = (self.tools.get(self.asking) or {}).get("question")
+        prev = self.open.get(item) if item else None
+        if prev is None or result.get("status") != "answered":
+            return self.unknown(f"{method} result [{result.get('status')}]")
+        answer = {}
+        for q in prev["body"]["questions"]:
+            if q["id"] == result.get("questionId"):
+                answer[q["id"]] = [o["id"] for o in q["options"] if o["native"] == result.get("optionValue")] or result.get("optionValue")
+        self.emit(item, "question", "done", prev["title"], "Answered", {**prev["body"], "answer": answer}, f"result of {method}", result)
+
+    # -- approvals
+
+    def choices(self, allowed):
+        return [{"id": f"c{n}", "label": self.DECISIONS.get(d, d), "effect": "deny" if d == "deny" else "allow", "native": d}
+                for n, d in enumerate(allowed or [])]
+
+    def approval_card(self, method, p):
+        """The plugin claims the approval capability, so the request arrives with its fields."""
+        req = p.get("request") or {}
+        inner = req.get("request") or {}
+        self.emit(f"approval:{req.get('id')}", "approval", "waiting", "Allow this command?", inner.get("command"),
+                  {"answer_via": "request", "subject": inner.get("toolCallId"), "choices": self.choices(inner.get("allowedDecisions")),
+                   "expires_at_ms": req.get("expiresAtMs")}, method, p)
+
+    def approval_card_resolved(self, method, p):
+        resolved = p.get("resolved") or {}
+        self.approval_resolved(resolved.get("id"), method, p, resolved.get("decision"))
+
+    def send_payload(self, method, p):
+        """A message OpenClaw sends outside a reply. In the recordings every one is an approval."""
+        payload = p.get("payload") or {}
+        approval = (payload.get("channelData") or {}).get("execApproval")
+        if not approval:
+            return self.unknown("message.send.payload that is not an approval")
+        aid, state = approval.get("approvalId"), approval.get("state")
+        if state == "resolved":
+            return self.approval_resolved(aid, f"{method} [execApproval resolved]", p)
+        if state != "pending":
+            return self.unknown(f"message.send.payload [execApproval {state}]")
+        if f"approval:{aid}" in self.open:
+            return self.skip("message.send.payload: an approval prompt as text, already an item")
+        # Without the approval capability the prompt names no tool call. If exactly one command is
+        # running, the approval is taken to be about it.
+        running = [i for i, e in self.open.items() if e["type"] == "tool" and e["body"].get("kind") == "command"]
+        body = {"answer_via": "message", "subject": running[0] if len(running) == 1 else None,
+                "choices": self.choices(approval.get("allowedDecisions"))}
+        if body["subject"]:
+            body["subject_inferred"] = True
+        ev = self.emit(f"approval:{aid}", "approval", "waiting", "Allow this command?", payload.get("text"), body,
+                       f"{method} [execApproval pending]", p)
+        self.posting = (method, ev)
+
+    def approval_resolved(self, aid, native_kind, native, decision=None):
+        """An approval can report its outcome three times. The first closes the item."""
+        prev = self.open.get(f"approval:{aid}")
+        if prev is None:
+            return self.skip(f"{native_kind.split(' [')[0]}: an approval outcome that is already known")
+        # The resolved message does not say which way. The decision is the one the client sent.
+        decision = decision or self.decisions.get(aid)
+        chosen = next((c for c in prev["body"]["choices"] if c["native"] == decision), None)
+        if chosen is None:
+            return self.unknown("an approval resolved, and which way is only in the wording")
+        allow = chosen["effect"] == "allow"
+        self.emit(prev["item"], "approval", "done" if allow else "declined", prev["title"], f"Answered: {chosen['label']}",
+                  {**prev["body"], "answer": {"choice": chosen["id"]}}, native_kind, native)
+        if not allow and prev["body"].get("subject"):
+            self.denied.add(prev["body"]["subject"])
+
+
 # ---------------------------------------------------------------------------- driver
 
 
 def translate(path: Path) -> Translator:
     recs = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    if any(r.get("via") == "hook" for r in recs):
+    if any(r.get("via") == "hook" and r["msg"].get("method") == "gateway.startAccount" for r in recs):
+        t = OpenClaw()  # Hermes and OpenClaw are both recorded as hooks; only OpenClaw starts an account
+    elif any(r.get("via") == "hook" for r in recs):
         t = Hermes()
     elif any("via" in r for r in recs):
         t = Claude()
@@ -854,7 +1389,7 @@ def check(dirs: list[Path]) -> int:
             still = [e for e in t.open.values() if e["type"] != "task"]
             if still:
                 left_open.append((path.name, [f"{e['type']}:{e['state']}" for e in still]))
-            print(f"{t.harness:6s} {path.stem:18s} {n:4d} native messages -> {len(t.events):3d} agent events")
+            print(f"{t.harness:8s} {path.stem:18s} {n:4d} native messages -> {len(t.events):3d} agent events")
     print(f"\n{total_native} native messages -> {total_events} agent events")
     print("\nagent events by type:")
     for k, v in types.most_common():

@@ -3,9 +3,9 @@
 Status: draft 0. The principles are decided
 ([D-007](../decisions.md#d-007-one-shared-event-vocabulary),
 [D-008](../decisions.md#d-008-pass-everything-through)). Everything else on this page is a proposal: the item
-types, the fields and the rules. It is no longer a guess, though. A prototype applies it to 64 recorded sessions
-with Codex, Claude Code and Hermes, and every native message either becomes an agent event or is deliberately
-not sent.
+types, the fields and the rules. It is no longer a guess, though. A prototype applies it to 90 recorded sessions
+with Codex, Claude Code, Hermes and OpenClaw, and every native message either becomes an agent event or is
+deliberately not sent.
 See [Checked against real sessions](#checked-against-real-sessions). The open points are
 [Q-01 to Q-04](../open-questions.md#the-event-model).
 
@@ -169,14 +169,14 @@ driver code.
 
 | | |
 | --- | --- |
-| Recordings | 64: 24 Codex, 26 Claude Code, 14 Hermes |
-| Native messages | 4,775 |
-| Agent events produced | 519 |
+| Recordings | 90: 24 Codex, 26 Claude Code, 14 Hermes, 26 OpenClaw |
+| Native messages | 8,430 |
+| Agent events produced | 669 |
 | Native messages with no rule | 0 |
 | Items left open at the end of a recording | 0 |
 
-The events by type: 170 `turn`, 124 `tool`, 97 `message`, 64 `notice`, 44 `approval`, 8 `question`, 8 `task`,
-2 `plan`, 1 `error`, 1 `reasoning`.
+The events by type: 233 `turn`, 158 `tool`, 126 `message`, 70 `notice`, 54 `approval`, 12 `question`, 8 `task`,
+4 `error`, 2 `plan`, 2 `reasoning`.
 
 **A gateway fits, with less to say.** Hermes was added after the two coding harnesses, as a check that the ten
 types are not shaped around them. Its 2,618 native calls became 120 events with no new type needed. But it uses
@@ -184,6 +184,22 @@ only five of the ten: `turn`, `message`, `notice`, `approval` and `question`. It
 because Hermes gives a platform a formatted line of text about a tool, not the tool call. Those lines can only
 become notices, and 51 of its 120 events are notices. See
 [`../reference/hermes-messages.md`](../reference/hermes-messages.md).
+
+**A second gateway fits, and four things sat badly.** OpenClaw was added last. Its 3,655 recorded lines became
+150 events, with no new type and no new state. It uses eight of the ten types; no `plan` and no `task` was
+seen. Unlike Hermes it reports a tool call as a tool call, so 34 of its events are `tool` and none of its tool
+activity had to become a notice. The translator goes by fields and by the order of calls, never by OpenClaw's
+wording. What sat badly:
+
+| Seen in OpenClaw | What the prototype did |
+| --- | --- |
+| The agent reacts to a message, or deletes one it sent, through its message tool | Left both as `tool` items of kind `other`. No item type says the agent acted on the chat, and nothing says an earlier item is gone |
+| OpenClaw answers a slash command itself, with no run | A `notice` with an empty `turn`. Five of the six notices belong to no turn |
+| A run ends with one word, `completed` or `failed` | A `turn` with no duration and no usage. One run failed before it was reported as started, so its turn is `failed` and was never `running` |
+| A denied command is reported as failed, and as denied one call later | The `tool` item is sent as `failed`, then again as `declined`, in two recordings of three |
+
+A question that nobody answered in time closes as `cancelled`; there is no state for "expired". Detail and
+counts: [`../reference/openclaw-messages.md`](../reference/openclaw-messages.md#through-the-prototype-translator).
 
 **What changed since the first proposal**
 
@@ -201,13 +217,13 @@ Detail and evidence for each: [`../reference/harness-messages.md`](../reference/
 
 **What is still unchecked**
 
-- A to-do list that changes during a turn. Neither harness produced one, so `plan` with `entries` is untested.
-- Reasoning, beyond a single recording.
+- A to-do list that changes during a turn. No harness produced one, so `plan` with `entries` is untested.
+- Reasoning, beyond two recordings.
 - Failures other than a bad model: a rate limit, an expired sign-in, a crash.
 - Volume. In one developer's real use a turn averaged about 12 tool calls, 7 reasoning blocks and 3.5 pieces of
   text. With each tool call sent twice that is roughly 35 events per turn
   ([Q-12](../open-questions.md#q-12-how-many-events-is-too-many)).
-- The other five harnesses.
+- The other four harnesses.
 
 ## What is deliberately not in the model
 
