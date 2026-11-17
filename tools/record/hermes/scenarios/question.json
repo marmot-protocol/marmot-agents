@@ -1,0 +1,31 @@
+{
+  "name": "question",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Before anything else, use your clarify tool to ask me one multiple-choice question: which greeting should we use, 'Hello' or 'Hi'? Then tell me which I chose.",
+      "wait": false
+    },
+    {
+      "wait_for": "send_clarify",
+      "timeout": 600
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Hello"
+    },
+    {
+      "sleep": 5
+    }
+  ]
+}

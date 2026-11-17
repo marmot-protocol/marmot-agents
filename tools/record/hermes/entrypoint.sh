@@ -5,6 +5,7 @@
 #   /run/secrets/model_key   the model provider's API key (a mounted file, never an image layer)
 #   MODEL_BASE_URL           an OpenAI-compatible endpoint
 #   MODEL_NAME               the model to use
+#   REASONING_EFFORT         optional; the reasoning effort Hermes asks for (default: high)
 set -eu
 
 : "${MODEL_BASE_URL:?set MODEL_BASE_URL}"
@@ -27,6 +28,8 @@ config = f"""model:
   provider: custom
   base_url: {q(os.environ["MODEL_BASE_URL"])}
   api_key: {q(key)}
+agent:
+  reasoning_effort: {q(os.environ.get("REASONING_EFFORT", "high"))}
 platforms:
   recorder:
     enabled: true

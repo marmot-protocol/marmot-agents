@@ -1,0 +1,25 @@
+{
+  "name": "reply",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "The password for the party is 'burrow'. Reply with: Noted.",
+      "message_id": "alice-1"
+    },
+    {
+      "chat": "family",
+      "user": "bob",
+      "user_name": "Bob",
+      "text": "What was the password in the message I am replying to? One word.",
+      "reply_to": "alice-1"
+    }
+  ]
+}

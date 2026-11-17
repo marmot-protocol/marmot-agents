@@ -1,0 +1,17 @@
+{
+  "name": "tool_call",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Use your terminal tool to run `echo marmot-$((6*7))` and tell me exactly what it printed."
+    }
+  ]
+}
