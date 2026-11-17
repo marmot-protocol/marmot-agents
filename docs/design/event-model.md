@@ -130,6 +130,8 @@ Proposed rules, which come from the earlier approvals design
 - Ordinary text such as "yes" or "go ahead" is never treated as an answer to an approval.
 - Answers and controls go to the core and the driver. They are never passed to the model as a prompt.
 - An item can be answered once. Later answers are ignored.
+- The core never answers for anyone. Whether a harness asks at all, and what it does when nobody answers, is
+  the harness's own permission mode ([D-021](../decisions.md#d-021-approval-behaviour-belongs-to-the-harness)).
 
 One exception is forced by the evidence. A question whose `answer_via` is `message` has nothing to answer: the
 harness simply waits for the person's next message. For such a question the reply is an ordinary prompt.
