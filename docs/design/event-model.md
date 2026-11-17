@@ -1,9 +1,12 @@
 # The event model
 
-Status: draft. The principles are decided
+Status: draft 0. The principles are decided
 ([D-007](../decisions.md#d-007-one-shared-event-vocabulary),
-[D-008](../decisions.md#d-008-pass-everything-through)). The item list, the fields and every number on this page
-are proposals. The open points are [Q-01 to Q-04](../open-questions.md#the-event-model).
+[D-008](../decisions.md#d-008-pass-everything-through)). Everything else on this page is a proposal: the item
+types, the fields and the rules. It is no longer a guess, though. A prototype applies it to 46 recorded Codex
+and Claude Code sessions, and every native message either becomes an agent event or is deliberately not sent.
+See [Checked against real sessions](#checked-against-real-sessions). The open points are
+[Q-01 to Q-04](../open-questions.md#the-event-model).
 
 This is the most important design in the project. Every driver produces these events and every client draws
 them.
@@ -20,64 +23,102 @@ three parts.
 
 | Part | What it is | Who uses it |
 | --- | --- | --- |
-| Item type | One of a small shared list: message, tool call, plan and so on | Clients, to choose how to draw it |
-| Plain rendering | A title, some text and a status | Any client, including one that does not know the item type |
+| Item type | One of a small shared list | Clients, to choose how to draw it |
+| Plain rendering | A title and some text | Any client, including one that does not know the item type |
 | Native payload | The harness's own event, unchanged | Clients that want to show more for a harness they know |
 
 Marmot chat already works this way for ordinary messages: people send unsigned Nostr-shaped events of kinds that
 clients know how to render. Agent events extend that set.
 
-## Proposed item types
+## The ten item types
 
-Two independent projects arrive at nearly the same list: the Agent Client Protocol, and T3 Code's internal event
-model. That agreement is the best evidence available of what is common to all harnesses. See
-[`../reference/prior-art.md`](../reference/prior-art.md).
-
-| Item | What it shows |
+| Type | What it shows |
 | --- | --- |
-| Message | Text the agent says to the people in the chat |
-| Reasoning | The agent's thinking |
-| Plan | The agent's plan or to-do list, with the state of each entry |
-| Tool call | A tool the agent used, its input, its state and its result |
-| Command run | A shell command, its output and exit code |
-| File change | An edit, with its diff |
-| Search | A web or file search and what it found |
-| Approval request | The agent wants permission for one action, with the choices offered |
-| Question | The agent asks the person something, with any choices offered |
-| Subagent | Work the agent handed to another agent |
-| Notice | Compaction, a mode or model change, a warning |
-| Error | Something failed |
-| Turn | A turn started or ended, with how it ended and any usage figures |
+| `turn` | A turn started or ended, who or what started it, how it ended, and what it used |
+| `message` | Text the agent says to the people in the chat |
+| `reasoning` | The agent's thinking, when the harness provides it |
+| `tool` | A tool the agent used. Its `kind` says which sort: `command`, `edit`, `read`, `search`, `fetch`, `mcp`, `subagent` or `other` |
+| `approval` | The agent wants permission for one action, with the choices offered |
+| `question` | The agent asks the person something |
+| `plan` | The agent's plan or to-do list |
+| `task` | Work that runs beside a turn or outlives it: a subagent, a background job |
+| `notice` | Compaction, the agent waiting, a retry, a warning, a model change, the output of a command |
+| `error` | Something failed outside any one item |
 
-Command run, file change and search are kinds of tool call that are common enough to draw specially. A tool that
-fits none of them is a plain tool call.
+A command, a file edit and a web search are all the `tool` type, told apart by `kind`. One harness reports them
+as separate things and the other as one generic tool call; a single type with a kind fits both.
 
-An item can change over time: a tool call starts, then finishes. The proposal is that a later event for the same
-item replaces the earlier one, so a client always draws the latest state.
+## An agent event
 
-## Proposed envelope
-
-Every agent event carries the same surrounding fields, whatever its item type.
-
-| Field | Purpose |
+| Field | Meaning |
 | --- | --- |
-| Harness name and version | Lets a client pick a richer view for a harness it knows |
-| Session | Which harness session this belongs to |
-| Turn | Which turn within the session |
-| Item id | Stable for the life of the item, so updates replace earlier states |
-| Parent | The message that started the turn, or the item this one belongs to |
-| Sequence | Order within the turn |
-| Item type | From the list above |
-| Plain rendering | Title, text, status |
-| Native payload | The harness's event, unchanged, within a size limit |
+| `harness` | Which harness produced it |
+| `session` | The harness's session |
+| `turn` | The turn it belongs to |
+| `item` | The item's id. It stays the same for the life of the item |
+| `seq` | Order within the session |
+| `type` | One of the ten item types |
+| `state` | `running`, `waiting`, `done`, `failed`, `declined` or `cancelled` |
+| `title` | A few words: "Running a command", "Allow this command?" |
+| `text` | The plain rendering, readable on its own |
+| `body` | Fields that depend on the item type |
+| `native` | The harness's own message: its kind and its payload |
+
+**An item changes by being sent again.** A tool call is sent when it starts, with state `running`, and again when
+it finishes, with state `done` and its output. The second event has the same `item` and replaces the first. A
+client always draws the latest one.
+
+**`waiting` means a person is needed.** An approval or a question is `waiting` until someone answers.
+
+## One turn, as events
+
+This is a real recording, [`codex/approval_allowed`](../../fixtures/recordings/codex/approval_allowed.jsonl),
+translated by the prototype. Sixty-one native messages become eight events. Ids, native payloads, repeated
+fields and the shell wrapper around the command are left out.
+
+| # | Type | State | Title | Text |
+| --- | --- | --- | --- | --- |
+| 1 | `turn` | `running` | Working | |
+| 2 | `message` | `done` | Message | I'll run `python3 greet.py` and report its output. |
+| 3 | `tool` | `running` | Running a command | `python3 greet.py` |
+| 4 | `approval` | `waiting` | Allow this command? | `python3 greet.py` |
+| 5 | `approval` | `done` | Allow this command? | Answered: Allow once |
+| 6 | `tool` | `done` | Ran a command | `python3 greet.py` |
+| 7 | `message` | `done` | Message | It printed: Hello, world |
+| 8 | `turn` | `done` | Finished | |
+
+Events 4 and 5 are the same item, and so are 3 and 6. A chat therefore shows six things for this turn, two of
+which changed while the person watched.
+
+To see any recording this way:
+
+```sh
+python3 tools/prototype/translate.py fixtures/recordings/claude/question.jsonl --brief
+```
+
+## What each type carries
+
+Only the fields in `body` differ.
+
+| Type | Body |
+| --- | --- |
+| `turn` | `started_by`: `user`, `agent` or `control`. On ending: `duration_ms`, `usage` |
+| `message` | `phase`: `commentary` or `final`, when the harness says. `parent`, for a subagent's message |
+| `reasoning` | Nothing beyond the text |
+| `tool` | `kind`, `name`. For a command: `command`, `cwd`, then `exit_code`, `duration_ms`, `output`. For an edit: `changes`, each with a path and a diff. For a search: `query`. Otherwise `input` and `output` |
+| `approval` | `subject`: the item awaiting permission. `choices`: each with an `id`, a `label` and an `effect` of `allow` or `deny`. Once answered: `answer` |
+| `question` | `answer_via`: `request` or `message`. `questions`: each with an `id`, the `text`, `options`, whether `multiple` selections are allowed, whether free text is allowed, and whether the answer is `secret`. Once answered: `answer` |
+| `plan` | `text`, or `entries` each with a text and a state |
+| `task` | `kind`, `description`, `subject`, and `usage` once known |
+| `notice` | `kind`: `compaction`, `waiting`, `retry`, `warning`, `model_changed`, `command_output` |
+| `error` | What was being attempted, and the harness's error code |
 
 ## Answers and controls
 
 People act on the agent in two ways.
 
-**Answers** respond to something the agent asked: an approval request or a question. An answer is a message that
-names the exact request it answers and the choice made. The choice is an opaque id that the harness supplied; the
-client does not need to know what it means.
+**Answers** respond to something the agent asked: an `approval` or a `question`. An answer names the item it
+answers and the choice or choices made, by id.
 
 **Controls** are things a person does unprompted: interrupt, steer, start or resume a session, switch model or
 mode, run a slash command.
@@ -85,15 +126,90 @@ mode, run a slash command.
 Proposed rules, which come from the earlier approvals design
 ([Q-04](../open-questions.md#q-04-what-carries-over-from-the-earlier-approvals-design)):
 
-- An answer counts only if it names the exact request and comes from someone allowed to approve.
-- Ordinary text such as "yes" or "go ahead" is never treated as an answer.
+- An answer counts only if it names the exact item and comes from someone allowed to approve.
+- Ordinary text such as "yes" or "go ahead" is never treated as an answer to an approval.
 - Answers and controls go to the core and the driver. They are never passed to the model as a prompt.
-- A request can be answered once. Later answers are ignored.
+- An item can be answered once. Later answers are ignored.
+
+One exception is forced by the evidence. A question whose `answer_via` is `message` has nothing to answer: the
+harness simply waits for the person's next message. For such a question the reply is an ordinary prompt.
+
+## What a driver has to do
+
+The recordings turned several vague intentions into rules. A driver that skips one of these produces events that
+look right and are wrong.
+
+1. **Give every choice its own id, and keep the harness's value.** A Codex decision can be an object. The id on
+   the wire is never the native value.
+2. **Offer the choices the harness accepts, not only the ones it lists.** Codex accepts "decline" without
+   listing it, and lists nothing at all for a file change.
+3. **Close open items when a turn ends.** An interrupted Codex command never reports that it stopped.
+4. **Recognise questions and plans that arrive as tool calls.** Claude Code asks questions and proposes plans
+   through tools. They become one `question` or `plan`, not a tool call as well.
+5. **Decide the kind of a tool call.** Claude Code gives only a tool name.
+6. **Say what started a turn.** A turn can follow a person's message, the agent's own background work, or a
+   control such as compaction.
+7. **Read failure from the right place.** Claude Code reports a failed turn with a subtype of `success` and an
+   error flag.
+8. **Ask for reasoning.** Claude Code sends empty thinking blocks unless summarised thinking is switched on.
+   Codex sent none in any recording.
+9. **Never show a secret answer to the group.** A Codex question can be marked secret.
+10. **State what is never sent.** About half of all native traffic is partial text, and a quarter more is
+    bookkeeping. Each driver lists the native messages it drops.
+
+## Checked against real sessions
+
+The prototype is [`tools/prototype/translate.py`](../../tools/prototype/translate.py). It is a design tool, not
+driver code.
+
+| | |
+| --- | --- |
+| Recordings | 46: 22 Codex, 24 Claude Code |
+| Native messages | 1,972 |
+| Agent events produced | 363 |
+| Native messages with no rule | 0 |
+| Items left open at the end of a recording | 0 |
+
+The events by type: 116 `turn`, 114 `tool`, 74 `message`, 30 `approval`, 13 `notice`, 6 `question`, 6 `task`,
+2 `plan`, 1 `error`, 1 `reasoning`.
+
+**What changed since the first proposal**
+
+| Finding | Change |
+| --- | --- |
+| Commands, edits and searches are separate items in one harness and one generic tool call in the other | One `tool` type with a `kind` |
+| Background tasks are common in real use and had no item | The `task` type, which also covers subagents |
+| Codex offers an object as a decision, and accepts decisions it did not list | Driver-assigned choice ids, and rule 2 above |
+| A Codex question can be a field on an ordinary message | `answer_via` on a question |
+| A question can hold several questions, allow several selections, or be secret | `questions` is a list; `multiple` and `secret` on each |
+| Compaction is a turn of its own in Codex; background work starts a turn in Claude Code | `started_by` on a turn |
+| Steering stays in the turn for Codex and ends it for Claude Code | "Steer" is a request the core makes; the driver reports what happened to the turn |
+
+Detail and evidence for each: [`../reference/harness-messages.md`](../reference/harness-messages.md).
+
+**What is still unchecked**
+
+- A to-do list that changes during a turn. Neither harness produced one, so `plan` with `entries` is untested.
+- Reasoning, beyond a single recording.
+- Failures other than a bad model: a rate limit, an expired sign-in, a crash.
+- Volume. In one developer's real use a turn averaged about 12 tool calls, 7 reasoning blocks and 3.5 pieces of
+  text. With each tool call sent twice that is roughly 35 events per turn
+  ([Q-12](../open-questions.md#q-12-how-many-events-is-too-many)).
+- The other five harnesses.
 
 ## What is deliberately not in the model
 
-- **The meaning of a choice.** "Allow once" and "Allow for this session" are the harness's concepts. The event
-  carries the harness's choices as given.
+- **The meaning of a choice.** "Allow once" and "Allow for this session" are the harness's concepts. A choice
+  carries a label and whether it allows or denies; nothing more.
 - **Guarantees about what the harness did.** An answer was delivered to the harness. What happened next arrives
   as the harness's own later events.
 - **Layout.** There are no cards, columns or styling instructions. Clients decide how each item looks.
+
+## Not designed yet
+
+- **How an event is carried.** The event kind, the tags, and whether an update repeats the whole item or only
+  what changed ([Q-01](../open-questions.md#q-01-what-exactly-is-in-an-agent-event),
+  [Q-03](../open-questions.md#q-03-where-are-the-event-kinds-specified)).
+- **Size limits**, and what happens to output that exceeds them
+  ([Q-02](../open-questions.md#q-02-what-happens-to-large-output)).
+- **The exact form of an answer and of each control.**

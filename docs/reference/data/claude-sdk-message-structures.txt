@@ -1,0 +1,673 @@
+Structure of Claude Agent SDK messages, from real use
+=====================================================
+
+Source: the provider log that T3 Code keeps of every Claude Agent SDK message, on one
+developer's machine. 100 log files, 96 sessions, 13 to 17 November 2026.
+
+This file contains structure only: the kinds of message, how many of each, and each field's
+name and type. It contains no values, except the values of enumeration fields (type, subtype,
+status, stop_reason, role, priority). Free-form objects such as tool inputs are not expanded.
+A field marked "?" is absent from some messages of that kind.
+
+"incoming" is from the SDK to the application. "outgoing" is what T3 Code sent, in T3 Code's
+own terms (query.open, prompt.offer and so on), not SDK messages.
+
+
+### incoming stream_event  (92893)
+  abandoned_blocks?: object
+    api_message_id: string
+    from_block_index: number
+  api_message_id: string
+  event: object
+    content_block?: object
+      caller?: object
+        type: string = direct
+      id?: string
+      input?: object (free-form; not expanded)
+      name?: string
+      signature?: string
+      text?: string
+      thinking?: string
+      type: string = tool_use, thinking, text
+    context_management?: null|object
+      applied_edits?: array
+    delta?: object
+      container: null
+      stop_details: null
+      stop_reason: null|string = tool_use, end_turn
+      stop_sequence: null
+    index?: number
+    message?: object
+      container: null
+      content: array
+      context_management: null
+      diagnostics: null|object
+        cache_miss_reason?: object
+      id: string
+      input_transformations: array
+      model: string
+      role: string = assistant
+      stop_details: null
+      stop_reason: null
+      stop_sequence: null
+      type: string = message
+      usage: object
+        cache_creation: object
+        cache_creation_input_tokens: number
+        cache_read_input_tokens: number
+        inference_geo: string
+        input_tokens: number
+        output_tokens: number
+        service_tier: string
+        speed: string
+    type: string = content_block_start, content_block_stop, message_start, message_stop, message_delta
+    usage?: object
+      cache_creation_input_tokens: number
+      cache_read_input_tokens: number
+      fallback_credit?: null
+      input_tokens: number
+      iterations: array
+      output_tokens: number
+      output_tokens_details: object
+        thinking_tokens: number
+      server_tool_use?: object
+        web_fetch_requests: number
+        web_search_requests: number
+  owed_rows?: array
+  parent_tool_use_id: null
+  session_id: string
+  thinking_display?: string
+  ttft_ms?: number
+  type: string = stream_event
+  user_message_uuid?: string
+  user_message_uuids?: array
+  uuid: string
+
+### incoming assistant  (30325)
+  agent_id?: string
+  api_error_origin?: string
+  api_error_status?: number
+  error?: string
+  is_api_error_message?: boolean
+  message: object
+    container: null
+    content: array
+      []: object
+        caller?: object
+        id?: string
+        input?: object (free-form; not expanded)
+        name?: string
+        signature?: string
+        text?: string
+        thinking?: string
+        type: string = tool_use, thinking, text
+    context_management: null
+    diagnostics: null|object
+      cache_miss_reason?: object
+        type: string = previous_message_not_found
+    id: string
+    input_transformations?: array
+      []: object
+        path: string
+        reason: string
+        type: string = thinking_dropped
+    model: string
+    role: string = assistant
+    stop_details: null
+    stop_reason: null|string = stop_sequence
+    stop_sequence: null|string
+    type: string = message
+    usage: object
+      cache_creation: object
+        ephemeral_1h_input_tokens: number
+        ephemeral_5m_input_tokens: number
+      cache_creation_input_tokens: number
+      cache_read_input_tokens: number
+      fallback_credit?: null
+      inference_geo: null|string
+      input_tokens: number
+      iterations?: null
+      output_tokens: number
+      output_tokens_details?: null
+      server_tool_use?: object
+        web_fetch_requests: number
+        web_search_requests: number
+      service_tier: null|string
+      speed: null|string
+  narration_block_indexes?: array
+  parent_tool_use_id: null|string
+  request_id?: string
+  session_id: string
+  subagent_type?: string
+  task_description?: string
+  thinking_display?: string
+  thinking_duration_ms?: number
+  timestamp: string
+  tool_use_meta?: array
+    []: object
+      display_name: string
+      icon_url?: string
+      id: string
+      server_display_name: string
+      tool_name?: string
+  type: string = assistant
+  user_message_uuid?: string
+  user_message_uuids?: array
+  uuid: string
+  wire_ingest_context?: object (free-form; not expanded)
+  wire_tool_inputs?: object (free-form; not expanded)
+
+### incoming user  (16165)
+  agent_id?: string
+  isReplay?: boolean
+  isSynthetic?: boolean
+  message: object
+    content: array|object|string
+      itemCount?: number
+      []: object
+        content?: array|string
+        is_error?: boolean
+        text?: string
+        tool_use_id?: string
+        type: string = tool_result, text
+    role?: string = user
+    truncated?: boolean
+  parent_tool_use_id?: null|string
+  session_id: string
+  subagent_type?: string
+  task_description?: string
+  timestamp?: string
+  tool_result_meta?: array
+    []: object
+      id: string
+      non_execution_kind?: string
+      permission_decision: object
+        decision: string
+        reason_type?: string
+        source: string
+  tool_use_result?: object|string (free-form; not expanded)
+  truncated?: boolean
+  type: string = user
+  uuid?: string
+
+### incoming system / status  (13660)
+  compact_result?: string
+  session_id: string
+  status: null|string = requesting, compacting
+  subtype: string = status
+  type: string = system
+  user_message_uuids?: array
+  uuid: string
+
+### incoming tool_progress  (5510)
+  elapsed_time_seconds: number
+  heartbeat?: boolean
+  parent_tool_use_id: string
+  session_id: string
+  subagent_retry?: object
+    agent_id: string
+    attempt: number
+    error_category: string
+    error_status: number
+    max_retries: number
+    retry_delay_ms: number
+  subagent_type?: string
+  tool_name: string
+  tool_use_id: string
+  type: string = tool_progress
+  uuid: string
+
+### incoming system / task_started  (3012)
+  ambient?: boolean
+  description: string
+  is_backgrounded: boolean
+  owned_by_subagent?: boolean
+  parent_task_id?: string
+  prompt?: string
+  run_id: string
+  session_id: string
+  skip_transcript?: boolean
+  spawn_depth?: number
+  subagent_type?: string
+  subtype: string = task_started
+  task_id: string
+  task_type: string
+  tool_use_id: string
+  type: string = system
+  uuid: string
+
+### incoming system / task_notification  (3010)
+  ambient?: boolean
+  output_file: string
+  run_id?: string
+  session_id: string
+  skip_transcript?: boolean
+  status: string = completed, failed, stopped
+  subtype: string = task_notification
+  summary: string
+  task_id: string
+  tool_use_id: string
+  type: string = system
+  usage?: object
+    duration_ms: number
+    tool_uses: number
+    total_tokens: number
+  uuid: string
+
+### incoming system / task_progress  (2787)
+  description: string
+  last_tool_name: string
+  run_id: string
+  session_id: string
+  subagent_type: string
+  subtype: string = task_progress
+  task_id: string
+  tool_use_id?: string
+  type: string = system
+  usage: object
+    duration_ms: number
+    tool_uses: number
+    total_tokens: number
+  uuid: string
+
+### incoming command_lifecycle  (2582)
+  command_uuid: string
+  session_id: string
+  state: string
+  type: string = command_lifecycle
+  uuid: string
+
+### incoming system / background_tasks_changed  (1582)
+  session_id: string
+  subtype: string = background_tasks_changed
+  tasks: array
+    []: object
+      description: string
+      parent_task_id?: string
+      run_id: string
+      subagent_type?: string
+      task_id: string
+      task_type: string
+  type: string = system
+  uuid: string
+
+### incoming system / init  (1341)
+  additional_directories?: array
+  agents: array (free-form; not expanded)
+  analytics_disabled: boolean
+  apiKeySource: string
+  capabilities: array
+  claude_code_version: string
+  cwd: string
+  fast_mode_disabled_reason: string
+  fast_mode_state: string
+  mcp_servers: array (free-form; not expanded)
+  memory_paths: object
+    auto: string
+  messaging_socket_path: string
+  model: string
+  original_cwd?: string
+  output_style: string
+  per_turn_effort_active: boolean
+  permissionMode: string
+  plugins: array (free-form; not expanded)
+  product_feedback_disabled: boolean
+  scratchpad_path: string
+  session_id: string
+  skills: array (free-form; not expanded)
+  slash_commands: array (free-form; not expanded)
+  subtype: string = init
+  terminal_slash_commands: array
+  tools: array (free-form; not expanded)
+  type: string = system
+  ultrathink_available?: boolean
+  ultrathink_typed_raises?: boolean
+  user_message_uuids?: array
+  uuid: string
+  view_mode: string
+
+### incoming result / success  (1338)
+  api_error_origin?: string
+  api_error_status?: null|number
+  credential_expires_at?: string
+  duration_api_ms: number
+  duration_ms: number
+  fast_mode_disabled_reason: string
+  fast_mode_state: string
+  first_content_frame_ms?: number
+  first_request_cache_read_input_tokens?: number
+  first_request_input_tokens?: number
+  is_error: boolean
+  local_command?: string
+  modelUsage: object
+    claude-fable-5-2?: object
+      cacheCreationEphemeral1hInputTokens: number
+      cacheCreationEphemeral5mInputTokens: number
+      cacheCreationInputTokens: number
+      cacheReadInputTokens: number
+      canonicalModel: string
+      contextWindow: number
+      costBasis: string
+      costUSD: number
+      inputTokens: number
+      maxOutputTokens: number
+      outputTokens: number
+      provider: string
+      thinkingTokens: number
+      webSearchRequests: number
+    claude-haiku-5-5?: object
+      cacheCreationEphemeral1hInputTokens?: number
+      cacheCreationEphemeral5mInputTokens?: number
+      cacheCreationInputTokens: number
+      cacheReadInputTokens: number
+      canonicalModel?: string
+      contextWindow: number
+      costBasis?: string
+      costUSD: number
+      inputTokens: number
+      maxOutputTokens: number
+      outputTokens: number
+      provider?: string
+      thinkingTokens: number
+      webSearchRequests: number
+    claude-opus-5-5?: object
+      cacheCreationEphemeral1hInputTokens?: number
+      cacheCreationEphemeral5mInputTokens?: number
+      cacheCreationInputTokens: number
+      cacheReadInputTokens: number
+      canonicalModel?: string
+      contextWindow: number
+      costBasis?: string
+      costUSD: number
+      inputTokens: number
+      maxOutputTokens: number
+      outputTokens: number
+      provider?: string
+      thinkingTokens: number
+      webSearchRequests: number
+  model_usage_since_last_result?: object
+    claude-fable-5-2?: object
+      cacheCreationEphemeral1hInputTokens: number
+      cacheCreationEphemeral5mInputTokens: number
+      cacheCreationInputTokens: number
+      cacheReadInputTokens: number
+      canonicalModel: string
+      contextWindow: number
+      costBasis: string
+      costUSD: number
+      inputTokens: number
+      maxOutputTokens: number
+      outputTokens: number
+      provider: string
+      thinkingTokens: number
+      webSearchRequests: number
+    claude-haiku-5-5?: object
+      cacheCreationEphemeral1hInputTokens: number
+      cacheCreationEphemeral5mInputTokens: number
+      cacheCreationInputTokens: number
+      cacheReadInputTokens: number
+      canonicalModel: string
+      contextWindow: number
+      costBasis: string
+      costUSD: number
+      inputTokens: number
+      maxOutputTokens: number
+      outputTokens: number
+      provider: string
+      thinkingTokens: number
+      webSearchRequests: number
+    claude-opus-5-5?: object
+      cacheCreationEphemeral1hInputTokens: number
+      cacheCreationEphemeral5mInputTokens: number
+      cacheCreationInputTokens: number
+      cacheReadInputTokens: number
+      canonicalModel: string
+      contextWindow: number
+      costBasis: string
+      costUSD: number
+      inputTokens: number
+      maxOutputTokens: number
+      outputTokens: number
+      provider: string
+      thinkingTokens: number
+      webSearchRequests: number
+  num_turns: number
+  origin?: object
+    kind: string
+    producer?: string
+    runId?: string
+  permission_denials: array
+    []: object
+      tool_input: object
+        command: string
+        description?: string
+        run_in_background?: boolean
+        timeout?: number
+      tool_name: string
+      tool_use_id: string
+  queued_turn_count: number
+  request_sent_wall_ms?: number
+  result: string
+  result_index: number
+  safety_stops: number
+  session_id: string
+  stop_reason: null|string = end_turn, tool_use, stop_sequence
+  subagent_stats: object
+    by_type: object
+      Explore?: number
+      general-purpose?: number
+      web-fetch?: number
+    completed: number
+    failed: number
+    killed: object
+      parent: number
+      system: number
+      user: number
+    max_depth: number
+    refused: object
+      budget: number
+      concurrency_limit: number
+      depth_limit: number
+    requested: object
+      background: number
+      foreground: number
+      unset: number
+    spawned: number
+    spawned_by_subagents: number
+    started_in_background: number
+  subtype: string = success
+  terminal_reason?: string
+  time_to_request_ms?: number
+  total_cost_usd: number
+  ttft_ms?: number
+  ttft_stream_ms?: number
+  type: string = result
+  usage: object
+    cache_creation: object
+      ephemeral_1h_input_tokens: number
+      ephemeral_5m_input_tokens: number
+    cache_creation_input_tokens: number
+    cache_read_input_tokens: number
+    fallback_credit: null
+    inference_geo: string
+    input_tokens: number
+    iterations: array
+      []: object
+        cache_creation: object
+        cache_creation_input_tokens: number
+        cache_read_input_tokens: number
+        input_tokens: number
+        output_tokens: number
+        type: string = message
+    output_tokens: number
+    output_tokens_details: object
+      thinking_tokens: number
+    server_tool_use: object
+      web_fetch_requests: number
+      web_search_requests: number
+    service_tier: string
+    speed: string
+  user_message_uuid?: string
+  user_message_uuids?: array
+  uuid: string
+
+### outgoing prompt.offer  (888)
+  message: object
+    message: object
+      content: array|string
+      role: string = user
+    parent_tool_use_id: null
+    priority?: string = now
+    type: string = user
+    uuid?: string
+  type: string = prompt.offer
+
+### incoming system / task_updated  (861)
+  patch: object
+    end_time?: number
+    error?: string
+    is_backgrounded?: boolean
+    status?: string = completed, killed, failed
+  run_id: string
+  session_id: string
+  subtype: string = task_updated
+  task_id: string
+  type: string = system
+  uuid: string
+
+### incoming rate_limit_event  (479)
+  rate_limit_info: object
+    isUsingOverage: boolean
+    overageDisabledReason: string
+    overageEnabled?: boolean
+    overageStatus: string
+    rateLimitType: string
+    resetsAt: number
+    status: string = allowed, allowed_warning
+    surpassedThreshold?: number
+    unifiedWindows: object
+      five_hour?: object
+        resetsAt: number
+        utilization: number
+      seven_day: object
+        resetsAt: number
+        status?: string = allowed, allowed_warning
+        surpassedThreshold?: number
+        utilization: number
+      seven_day_overage_included?: object
+        resetsAt: number
+        status: string = allowed
+        utilization: number
+    utilization?: number
+  session_id: string
+  type: string = rate_limit_event
+  uuid: string
+
+### incoming system / session_title_changed  (313)
+  session_id: string
+  subtype: string = session_title_changed
+  title: string
+  type: string = system
+  uuid: string
+
+### incoming system / vcs_state_changed  (247)
+  branch?: string
+  cwd: string
+  kind: string
+  session_id: string
+  subtype: string = vcs_state_changed
+  type: string = system
+  uuid: string
+
+### incoming system / code_change_published  (196)
+  action: string
+  branch?: string
+  identifier: string
+  provider: string
+  repo: string
+  session_id: string
+  subtype: string = code_change_published
+  type: string = system
+  url: string
+  uuid: string
+
+### outgoing query.open  (186)
+  options: object
+    allowDangerouslySkipPermissions: boolean
+    allowedTools: array
+    cwd: string
+    effort: string
+    hasCanUseTool: boolean
+    hasEnvironment: boolean
+    hasExtraArgs: boolean
+    hasMcpServers: boolean
+    includePartialMessages: boolean
+    model: string
+    pathToClaudeCodeExecutable: string
+    permissionMode: string
+    resume?: string
+    sessionId?: string
+    settingKeys: array
+    tools: object (free-form; not expanded)
+  type: string = query.open
+
+### outgoing query.close  (181)
+  type: string = query.close
+
+### incoming system / compact_boundary  (17)
+  compact_metadata: object
+    cumulative_dropped_tokens: number
+    duration_ms: number
+    post_tokens: number
+    pre_compact_discovered_tools: array
+    pre_tokens: number
+    preserved_messages: object
+      all_uuids: array
+      anchor_uuid: string
+      uuids: array
+    preserved_segment: object
+      anchor_uuid: string
+      head_uuid: string
+      tail_uuid: string
+    trigger: string
+  logical_parent_uuid: string
+  session_id: string
+  subtype: string = compact_boundary
+  type: string = system
+  uuid: string
+
+### incoming system / api_retry  (14)
+  attempt: number
+  error: string
+  error_status: null|number
+  max_retries: number
+  retry_delay_ms: number
+  session_id: string
+  subtype: string = api_retry
+  type: string = system
+  uuid: string
+
+### incoming system / commands_changed  (4)
+  commands: array
+    []: object
+      aliases?: array
+      argumentHint: string
+      builtin?: boolean
+      description: string
+      name: string
+  session_id: string
+  subtype: string = commands_changed
+  type: string = system
+  uuid: string
+
+### outgoing subagent.lookup  (3)
+  agentId: string
+  sessionId: string
+  type: string = subagent.lookup
+
+### incoming subagent.found  (3)
+  toolUseId: null
+  type: string = subagent.found
+
+### outgoing query.interrupt  (1)
+  type: string = query.interrupt
