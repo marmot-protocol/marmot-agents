@@ -235,3 +235,79 @@ disagree. The harness already has the setting, and people already know it from u
 Decided 2026-11-17, in response to [issue 7](https://github.com/marmot-protocol/marmot-agents/issues/7), which
 proposed a per-chat approval mode in the core.
 
+
+## D-022 The agent's words are ordinary chat messages
+
+**Decision.** What an agent says to the people in a chat is sent as a normal chat message, kind 9, the same as
+a person's message. It carries one extra tag naming the turn it belongs to. Everything else an agent produces
+is an agent item ([D-023](#d-023-one-kind-carries-every-agent-item)).
+
+**Why.** Every Marmot client already shows chat messages, so the agent's answer is readable everywhere, and
+replies, reactions, search and alerts work with no extra work. Putting the words in a new kind would hide them
+from any client that does not know it. See [`design/event-carrier.md`](design/event-carrier.md).
+
+Decided 2026-11-17.
+
+## D-023 One kind carries every agent item
+
+**Decision.** Turns, tool calls, approvals, questions, plans, tasks, notices, errors and reasoning are all sent
+as one kind of event, kind 1201. The item's type is a tag inside the event. Kind 1202 stays reserved.
+
+This holds while the item types share one shape. Today they do: each carries the same parts and differs only in
+its own fields. A type whose shape is really different gets its own kind.
+
+**Why.** One kind keeps the rules for updating, ordering and size in one place, and gives a client that does not
+support agents one thing to ignore.
+
+Decided 2026-11-17. The kind's definition belongs in the Marmot specification
+([Q-03](open-questions.md#q-03-where-are-the-event-kinds-specified)).
+
+## D-024 Who an agent event alerts
+
+**Decision.** An agent event alerts people in three cases: the agent's final answer, an approval or a question
+that is waiting for someone, and a turn that failed. Nothing else alerts: not tool calls, reasoning, plans,
+tasks, notices, or a turn starting or finishing normally.
+
+**Why.** A phone should buzz when a person is needed or the work is finished, and stay quiet while the agent
+works. A waiting approval matters most, because Codex and Claude Code wait for an answer with no time limit.
+
+A failed turn arrives as an edit of the turn item ([D-025](#d-025-an-agent-item-is-updated-with-an-edit)). That
+edit alerts. No other edit does.
+
+Decided 2026-11-17. Whether the agent's remarks during a turn alert is still open.
+
+## D-025 An agent item is updated with an edit
+
+**Decision.** An item's first event is a kind 1201 event. To change the item, the agent sends an edit, kind
+1009, that points at that first event and carries the whole item again. The item is identified by the id of its
+first event. There is no separate item id.
+
+Edits get three additions for this, in the Marmot specification:
+
+1. An edit may target an agent item, and then its tags replace the item's tags as well as its text.
+2. An edit of an agent item carries a version number, and the highest version wins.
+3. A client holds an edit whose item has not arrived yet, instead of dropping it.
+
+**Why.** Marmot already has a way to change an event, and a second one would have to be specified, built and
+tested beside it. Apps that have not been updated also behave better: they show each item once, not once per
+update. The version number is needed because edits are ordered by a timestamp in whole seconds, and a tool can
+start and finish within one second.
+
+The cost: an edit means nothing without the event it points at, so someone added to a group in the middle of a
+turn sees nothing of the items that began before they joined. See
+[`design/event-carrier.md`](design/event-carrier.md#an-item-is-updated-with-an-edit).
+
+Decided 2026-11-17.
+
+## D-026 An agent item is at most 64 KB
+
+**Decision.** An agent item is at most 64 KB. When one would be larger, the driver first leaves out the native
+message, then cuts the output, keeping the start and the end, and says in the event what it did.
+
+**Why.** 64 KB carried every one of 16,841 tool outputs measured in real use; 16 KB would have cut one in 70.
+Storage is not a constraint at these sizes. The only constraint is relays that accept small events: an item
+near the limit is about 86 KB by the time it reaches a relay. We accept that. 64 KB is not large, and we want
+relays to accept more.
+
+Decided 2026-11-17. How the full output is fetched when it was cut is still open
+([Q-02](open-questions.md#q-02-what-happens-to-large-output)).

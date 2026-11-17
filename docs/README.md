@@ -86,6 +86,7 @@ Details and reasons are in [`design/drivers.md`](design/drivers.md).
 | What is still undecided? | [`open-questions.md`](open-questions.md) |
 | How do the parts work together, step by step? | [`design/architecture.md`](design/architecture.md) |
 | What does an agent event contain? | [`design/event-model.md`](design/event-model.md) |
+| How does an agent event travel, and how is an item updated? | [`design/event-carrier.md`](design/event-carrier.md) |
 | What travels over the socket? | [`design/socket-protocol.md`](design/socket-protocol.md) |
 | How is each harness driven, and how do I add one? | [`design/drivers.md`](design/drivers.md) |
 | What do today's connectors in MDK do? | [`reference/current-connectors.md`](reference/current-connectors.md) |
@@ -93,6 +94,7 @@ Details and reasons are in [`design/drivers.md`](design/drivers.md).
 | What interface does each harness offer? | [`reference/harness-interfaces.md`](reference/harness-interfaces.md) |
 | What do Codex and Claude Code actually send? | [`reference/harness-messages.md`](reference/harness-messages.md) |
 | What does Hermes hand a platform? | [`reference/hermes-messages.md`](reference/hermes-messages.md) |
+| Can one program hold several agent identities? | [`reference/mdk-multiple-identities.md`](reference/mdk-multiple-identities.md) |
 | Where are the recorded sessions, and how do I record more? | [`../fixtures/recordings`](../fixtures/recordings/README.md), [`../tools/record`](../tools/record/README.md) |
 | Does the event model survive real sessions? | [`../tools/prototype`](../tools/prototype/README.md) |
 

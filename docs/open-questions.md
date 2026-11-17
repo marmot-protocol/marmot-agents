@@ -10,17 +10,25 @@ The first three block the most other work.
 ### Q-01 What exactly is in an agent event?
 
 [`design/event-model.md`](design/event-model.md) is now a concrete draft: ten item types, the fields of each,
-and ten rules for drivers. A prototype applies it to 46 recorded Codex and Claude Code sessions with nothing
-left over. It is still a proposal. To settle: whether these are the right types and fields, how an event is
-carried (the kind, the tags, and whether an update repeats the whole item), and the size limits. A to-do list
+and ten rules for drivers. A prototype applies it to 64 recorded sessions with Codex, Claude Code and
+Hermes, with nothing left over. It is still a proposal. To settle: whether these are the right types and fields, and the exact
+tags. How an event is carried is decided ([D-022](decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)
+to [D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb)). A to-do list
 that changes during a turn has not been seen in a recording.
 
 ### Q-02 What happens to large output?
+
+The limit is decided: an agent item is at most 64 KB ([D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb)).
+What is still open is how the full output is fetched when it was cut.
 
 A tool result can be megabytes. Relays limit event size, and every durable event is stored on every member's
 devices. Options are to cut output off with a marker, to send it as an encrypted attachment, or both.
 
 ### Q-03 Where are the event kinds specified?
+
+The carrier page ([`design/event-carrier.md`](design/event-carrier.md)) lists what the Marmot specification
+and MDK would each need. Kind 1201 carries every agent item ([D-023](decisions.md#d-023-one-kind-carries-every-agent-item)); kind 1202
+stays reserved.
 
 The kinds are Marmot events, so their definition probably belongs in the
 [Marmot specification](https://github.com/marmot-protocol/marmot), with MDK exposing them to the apps. The
@@ -120,7 +128,14 @@ Still to work out:
 
 - **One program or several.** One program on the machine could hold every identity, which is easier to run and
   to set up, provided each identity's keys and storage are kept apart. Or each identity could have its own
-  program, as today. Leaning to one program; not explored yet.
+  program, as today. Leaning to one program.
+
+  MDK supports both today ([`reference/mdk-multiple-identities.md`](reference/mdk-multiple-identities.md)). One
+  process can run several accounts, each with its own encrypted databases, its own key and its own relay
+  connections. But that separation is of files and data, not a security boundary: every running agent's key is
+  in the same process memory, so a break-in to the program exposes all of them. With today's default store, each
+  key is also a plain file beside the data it protects. So the choice is between easier running and stronger
+  isolation, and where keys are kept matters more if one program holds them all.
 - **How an agent knows another member is an agent**, so that it does not answer it, when no owner link is
   required. The proposal is a flag in the agent's own profile: a Nostr profile (kind 0) keeps its fields in its
   content, so a true-or-false "this is an agent" field can simply be added. Nostr already has a profile field
@@ -152,8 +167,13 @@ How is open. The simple version: after a restart the chat shows the turn as inte
 the session and runs a "continuation turn" that tells the agent to check what already happened. That means the
 connector sends the model a prompt nobody wrote, which sits badly with staying true to the harness, so it is
 parked as a possible later option. It also depends on things not designed yet: whether a harness even stops when
-the core restarts depends on whether its driver is built in or a separate program. No recording of a restart
-mid-turn exists yet.
+the core restarts depends on whether its driver is built in or a separate program.
+
+Recordings now show what the two coding harnesses do
+([`reference/harness-messages.md`](reference/harness-messages.md)). Stopped mid-turn and resumed, both keep the
+session and neither reruns anything. Codex shows the earlier turn as interrupted, with the running command
+missing from its history. Neither sends any message to say the turn ended, so the driver has to close it. That
+supports the simple version.
 
 ### Q-09 Who owns the queue when a message arrives mid-turn?
 
@@ -272,7 +292,7 @@ the harness name. The exact flags are open.
 
 The current thinking is to record real sessions and replay them through the driver, as T3 Code does. Not decided.
 
-The recorders and 46 recordings exist: [`tools/record`](../tools/record/README.md) and
+The recorders and 50 recordings of coding harnesses exist: [`tools/record`](../tools/record/README.md) and
 [`fixtures/recordings`](../fixtures/recordings/README.md). A prototype replays them through the proposed event
 model ([`tools/prototype`](../tools/prototype/README.md)). There is no driver to replay them through yet.
 

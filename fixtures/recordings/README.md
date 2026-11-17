@@ -22,7 +22,7 @@ The prompts are scripted and are in the recorder sources.
 
 ## Scenarios
 
-46 recordings of coding harnesses: 22 with Codex and 24 with Claude Code. Hermes has 14 more, described
+50 recordings of coding harnesses: 24 with Codex and 26 with Claude Code. Hermes has 14 more, described
 [below](#hermes).
 
 | Scenario | What it exercises | Codex | Claude |
@@ -51,6 +51,8 @@ The prompts are scripted and are in the recorder sources.
 | `web_search` | A web search | yes | yes |
 | `image` | The user attaches an image | yes | yes |
 | `bad_model` | A model that does not exist | yes | yes |
+| `approval_unanswered` | An approval nobody answers for six minutes, then an interrupt | yes | yes |
+| `restart_mid_turn` | The harness is stopped while a command runs, then the session is resumed | yes | yes |
 
 Things that did not go as scripted, and are useful for that reason:
 
@@ -72,6 +74,13 @@ Things that did not go as scripted, and are useful for that reason:
 - **Codex `mcp_tool`.** The approval arrives as an MCP elicitation request. With approvals switched off, Codex
   refuses the call.
 - **Codex `compact`.** Compaction runs as a turn of its own.
+- **`approval_unanswered`.** Neither harness gave up. Both waited the full six minutes for an answer, in
+  silence, until the recorder interrupted the turn.
+- **Codex `restart_mid_turn`.** After the app server was killed, resuming the thread showed the earlier turn as
+  interrupted, and the running command was missing from its history.
+- **Claude `restart_mid_turn`.** The stop arrived just after the turn had finished and handed the command to the
+  background. So the recording shows a background task cut short, not a reply cut short. On resume, Claude Code
+  first reported the stopped task and an empty turn, and then answered.
 - **Codex `resume`.** The recording has a marker line, `{"_recorder": ...}`, where the app server was stopped
   and started again.
 
@@ -164,8 +173,7 @@ again after any new recording, and read the result before committing.
 
 - A to-do list that changes during a turn
 - A rate limit, an expired sign-in, and a harness crash
-- An approval that nobody answers, in Codex and Claude Code
-- A harness that is stopped and restarted in the middle of a turn
+- Claude Code stopped while it is in the middle of writing a reply
 - A file attachment other than an image
 - A subagent in Codex
 - OpenCode, Pi, Goose and OpenClaw

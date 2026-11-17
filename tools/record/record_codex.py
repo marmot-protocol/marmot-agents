@@ -47,11 +47,18 @@ class AppServer:
         )
         threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
 
-    def restart(self):
-        """Stop the app server and start a fresh one, writing to the same recording."""
-        self._record("out", {"_recorder": "the app server process was stopped and a new one started"})
+    def restart(self, hard: bool = False):
+        """Stop the app server and start a fresh one, writing to the same recording.
+
+        A hard restart kills the process without warning, as a crash would.
+        """
+        how = "killed" if hard else "stopped"
+        self._record("out", {"_recorder": f"the app server process was {how} and a new one started"})
         try:
-            self.proc.stdin.close()
+            if hard:
+                self.proc.kill()
+            else:
+                self.proc.stdin.close()
             self.proc.wait(timeout=10)
         except Exception:
             self.proc.kill()
@@ -435,6 +442,38 @@ def bad_model(s: AppServer, cwd: str):
         pass
 
 
+def approval_unanswered(s: AppServer, cwd: str):
+    """A command needs approval and nobody answers. After six minutes the client interrupts."""
+    s.request_handler = lambda msg: None  # leave every request from the harness unanswered
+    s.initialize()
+    t = s.start_thread(cwd, approval="untrusted", sandbox="read-only")
+    turn_id, mark = s.start_turn(t, "Run `python3 greet.py` and tell me what it printed.")
+    s.wait_for(lambda m: str(m.get("method", "")).endswith("/requestApproval"), timeout=180, start=mark)
+    try:
+        s.finish_turn(mark, timeout=360)  # does the harness give up on its own?
+        return
+    except TimeoutError:
+        pass
+    s._record("out", {"_recorder": "six minutes passed with the approval unanswered; the client interrupts"})
+    s.request("turn/interrupt", {"threadId": t, "turnId": turn_id})
+    s.finish_turn(mark, timeout=60)
+
+
+def restart_mid_turn(s: AppServer, cwd: str):
+    """The app server is killed while a command is running, then the thread is resumed.
+    Leaves one thread in the Codex history."""
+    s.initialize()
+    t = s.start_thread(cwd, ephemeral=False)
+    _, mark = s.start_turn(t, "Run `sleep 45 && echo finished` and then tell me what it printed.")
+    s.wait_for(lambda m: is_item(m, "item/started", "commandExecution"), timeout=120, start=mark)
+    time.sleep(3)
+    s.restart(hard=True)
+    s.initialize()
+    s.request("thread/resume", {"threadId": t, "cwd": cwd})
+    time.sleep(5)
+    s.turn(t, "You were stopped and restarted. What happened to the command you were running? Answer in one sentence.")
+
+
 SCENARIOS = {
     f.__name__: f
     for f in [
@@ -460,6 +499,8 @@ SCENARIOS = {
         compact,
         model_switch,
         bad_model,
+        approval_unanswered,
+        restart_mid_turn,
     ]
 }
 

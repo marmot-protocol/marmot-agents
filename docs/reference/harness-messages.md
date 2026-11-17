@@ -7,7 +7,7 @@ real sessions, and how each message relates to the proposed [event model](../des
 
 | Source | What it is | How it was used |
 | --- | --- | --- |
-| [`fixtures/recordings`](../../fixtures/recordings/README.md) | 46 scripted sessions, 22 with Codex and 24 with Claude Code, recorded on 2026-11-17 | Read in full. Every claim on this page about order, fields and behaviour comes from these |
+| [`fixtures/recordings`](../../fixtures/recordings/README.md) | 50 scripted sessions, 24 with Codex and 26 with Claude Code, recorded on 2026-11-17 | Read in full. Every claim on this page about order, fields and behaviour comes from these |
 | [`data/claude-sdk-message-structures.txt`](data/claude-sdk-message-structures.txt) | The structure of 176,652 Claude Agent SDK messages from four days of real use on one developer's machine | Counts and field names only. No content was read or kept |
 | Codex's generated protocol schema | `codex app-server generate-json-schema`, codex-cli 0.169.0 | The list of methods |
 | [`tools/prototype/translate.py`](../../tools/prototype/translate.py) | A prototype that turns every recording into proposed agent events | To check that nothing is left without a home |
@@ -38,16 +38,16 @@ notifications and a few requests of its own to answer.
 
 ### What appeared in the recordings
 
-1,608 messages in 22 sessions.
+1,750 messages in 24 sessions.
 
 | Group | Messages | Share |
 | --- | --- | --- |
-| Text and output deltas | 776 | 48% |
-| Bookkeeping: thread status, token usage, rate limits, moderation metadata, MCP start-up, account, settings | 385 | 24% |
-| Items starting and completing | 197 | 12% |
-| Client requests and all responses | 181 | 11% |
-| Turns starting and completing, diff updates | 60 | 4% |
-| Requests to the client: approvals and questions | 6 | under 1% |
+| Text and output deltas | 833 | 48% |
+| Bookkeeping: thread status, token usage, rate limits, moderation metadata, MCP start-up, account, settings | 425 | 24% |
+| Items starting and completing | 211 | 12% |
+| Client requests and all responses | 204 | 12% |
+| Turns starting and completing, diff updates | 65 | 4% |
+| Requests to the client: approvals and questions | 7 | under 1% |
 
 ### Items
 
@@ -124,6 +124,21 @@ From `approval_allowed`, bookkeeping left out:
 | List models | `model/list` returned eight models, each with a display name, a description and the reasoning efforts it supports |
 | Switch model | `model` on the next `turn/start`; the thread's settings then showed the new model |
 | Plan mode | `collaborationMode: {mode: "plan", ...}` on `turn/start`. The agent asked its question, then produced a `plan` item and edited nothing |
+
+### An approval nobody answers
+
+In `approval_unanswered` the client did not answer a command approval. Codex set the thread's status to
+`active` with the flag `waitingOnApproval`, and then sent nothing at all for six minutes. It did not time out,
+remind or give up. When the client interrupted, the turn completed as `interrupted` and the request was marked
+resolved.
+
+### Killed in the middle of a turn
+
+In `restart_mid_turn` the app server was killed while a command was running, and a new one was started.
+`thread/resume` returned the thread as idle, with the earlier turn marked `interrupted`. That turn's history held
+the user's message and the agent's first message. **The command that was running was not in it.** Nothing was
+run again. Asked what had happened, the agent said the command had been running when it was stopped and that it
+could not tell whether it finished.
 
 ### Failures
 
@@ -239,6 +254,19 @@ From `approval_denied`:
 | Switch model | `setModel("sonnet")`. A `user` message wrapped in `<local-command-stdout>` confirmed it, and the next reply came from the new model |
 | Plan mode | `permissionMode: "plan"` |
 
+### An approval nobody answers
+
+In `approval_unanswered` the `canUseTool` callback was left unanswered. Claude Code sent nothing for six
+minutes. It did not time out or withdraw the request. When the client interrupted, the tool call was reported
+as rejected and the turn ended with an error result.
+
+### Stopped in the middle of a turn
+
+In `restart_mid_turn` the harness process was stopped and the session resumed with a second `query()`. Claude
+Code had already moved the command to the background and ended its turn, so what was cut short was a background
+task. On resume it sent a `task_notification` saying the task had been stopped, then an empty turn (`init`
+followed at once by a result), and then answered the new prompt. Nothing was run again.
+
 ### Failures
 
 A session started with a model that does not exist produced an `assistant` text block from the model
@@ -271,6 +299,8 @@ In real use, background-task messages are about 7 per turn.
 | Reasoning text | Not available | Available when asked for |
 | Steering | Stays inside the running turn | Ends the turn and starts another |
 | Interrupt | The turn completes as `interrupted`; open items are left open | The turn ends with an error result |
+| An approval nobody answers | Waits, with no limit seen in six minutes | Waits, with no limit seen in six minutes |
+| Stopped mid-turn, then resumed | The turn shows as `interrupted`; the running command is gone from its history | A stopped background task is reported; nothing is rerun |
 | Work after the turn ends | Not seen | Yes: background tasks and subagents |
 | Compaction | A turn of its own, started by the client | Part of the turn that ran `/compact` |
 | End of turn | `turn/completed` with a status | `result`; failure is in `is_error`, not the subtype |
@@ -280,7 +310,7 @@ In real use, background-task messages are about 7 per turn.
 
 ## How the messages map to the proposed items
 
-The prototype translator applies this table to every recording: 1,972 native messages become 363 agent events,
+The prototype translator applies this table to every recording: 2,157 native messages become 399 agent events,
 and no native message is left without a rule. "Not sent" means the driver uses it or drops it.
 
 | Proposed item | Codex | Claude Code |
@@ -330,3 +360,9 @@ These are findings. The proposals that follow from them are in
     for what is never sent.
 14. **Real turns are large.** About 12 tool calls and 7 reasoning blocks per turn in one developer's use.
 15. **Claude Code does not say what kind of tool a call is.** The driver decides from the tool's name.
+16. **Codex and Claude Code wait for an approval without limit.** Hermes expires one after five minutes. So
+    under [D-021](../decisions.md#d-021-approval-behaviour-belongs-to-the-harness), an unanswered request in a
+    coding harness holds its turn until someone answers or interrupts. The chat has to show plainly that the
+    agent is waiting.
+17. **A harness that stops mid-turn leaves the turn for the driver to close.** No message says the turn ended.
+    Both harnesses resume the session afterwards without rerunning anything.

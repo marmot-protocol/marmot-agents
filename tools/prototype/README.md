@@ -15,7 +15,7 @@ python3 tools/prototype/translate.py fixtures/recordings/codex/approval_allowed.
 python3 tools/prototype/translate.py fixtures/recordings/claude/question.jsonl
 
 # Every recording: how many events, what was not sent, and anything with no rule
-python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude
+python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude fixtures/recordings/hermes
 ```
 
 `--check` exits with an error if any native message has no rule. Run it after adding a recording. A new kind of

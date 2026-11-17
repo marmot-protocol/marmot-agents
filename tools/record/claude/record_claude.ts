@@ -56,6 +56,7 @@ const userMessage = (content: string | Msg[], priority?: "now" | "next" | "later
 
 type Ctx = {
   q: any;
+  abort: AbortController;
   inbox: Inbox;
   record: (dir: "in" | "out", via: string, msg: Msg) => void;
   state: Record<string, any>;
@@ -71,7 +72,13 @@ type Scenario = {
   onMessage?: (m: Msg, ctx: Ctx) => void | Promise<void>;
   /** A second query() that resumes the session of the first one. */
   resumeWith?: Prompt[];
+  /** Leave permission requests unanswered for this long, then interrupt the turn. */
+  holdPermissionMs?: number;
+  /** How long one query() may run before the recorder gives up. */
+  timeoutMs?: number;
 };
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEMO_MCP_SERVER = join(HERE, "..", "demo_mcp_server.py");
@@ -259,6 +266,27 @@ const SCENARIOS: Record<string, Scenario> = {
     ],
     options: { ...allowAll, thinking: { type: "adaptive", display: "summarized" } },
   },
+  approval_unanswered: {
+    doc: "A command needs approval and nobody answers. After six minutes the client interrupts.",
+    prompts: ["Run `python3 greet.py` and tell me what it printed."],
+    options: { permissionMode: "default" },
+    holdPermissionMs: 360_000,
+    timeoutMs: 480_000,
+  },
+  restart_mid_turn: {
+    doc: "The harness is stopped while a command is running, then the session is resumed. Leaves one session in the Claude Code history.",
+    prompts: ["Run `sleep 45 && echo finished` and then tell me what it printed."],
+    resumeWith: ["You were stopped and restarted. What happened to the command you were running? Answer in one sentence."],
+    options: allowAll,
+    onMessage: async (m, ctx) => {
+      if (usesTool(m, "Bash") && !ctx.state.stopped) {
+        ctx.state.stopped = true;
+        await sleep(3000);
+        ctx.record("out", "call", { method: "abort", note: "the harness process is stopped in the middle of the turn" });
+        ctx.abort.abort();
+      }
+    },
+  },
   bad_model: {
     doc: "A session is started with a model that does not exist.",
     prompts: ["Reply with exactly: hello."],
@@ -305,25 +333,41 @@ async function main() {
       ...scenario.options,
       ...extra,
       canUseTool: async (toolName: string, input: Msg, opts: Msg) => {
-        const { signal: _signal, ...rest } = opts ?? {};
+        const { signal, ...rest } = opts ?? {};
         record("in", "callback", { kind: "can_use_tool", toolName, input, options: rest });
+        if (scenario.holdPermissionMs) {
+          // Nobody answers. See whether the harness gives up by itself, then interrupt.
+          const gaveUp = await Promise.race([
+            sleep(scenario.holdPermissionMs).then(() => false),
+            new Promise<boolean>((r) => signal?.addEventListener("abort", () => r(true))),
+          ]);
+          record("out", "note", gaveUp
+            ? { note: "the harness withdrew the permission request before the hold ended" }
+            : { note: `${scenario.holdPermissionMs / 1000} seconds passed with the request unanswered; the client interrupts` });
+          if (!gaveUp) {
+            record("out", "call", { method: "interrupt" });
+            q.interrupt?.().then((r: any) => record("in", "call", { method: "interrupt", response: r ?? null })).catch(() => {});
+          }
+          return { behavior: "deny", message: "Nobody answered this request." };
+        }
         const answer = scenario.onPermission?.(toolName, input) ?? { behavior: "allow", updatedInput: input };
         record("out", "callback", { kind: "permission_result", toolName, result: answer });
         return answer;
       },
     };
+    const abort = new AbortController();
     const { canUseTool: _c, ...loggedOptions } = options;
     record("out", "call", { method: "query", options: loggedOptions });
 
-    const q: any = query({ prompt: inbox as any, options: options as any });
-    const ctx: Ctx = { q, inbox, record, state: {} };
+    const q: any = query({ prompt: inbox as any, options: { ...options, abortController: abort } as any });
+    const ctx: Ctx = { q, abort, inbox, record, state: {} };
     pushNext();
 
     const timer = setTimeout(() => {
       record("out", "call", { method: "timeout" });
       inbox.close();
       q.interrupt?.().catch(() => {});
-    }, 240_000);
+    }, scenario.timeoutMs ?? 240_000);
 
     try {
       for await (const m of q) {
