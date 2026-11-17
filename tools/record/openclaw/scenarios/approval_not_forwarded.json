@@ -1,0 +1,28 @@
+{
+  "name": "approval_not_forwarded",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "EXEC_MODE": "ask"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Use your exec tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir",
+      "wait": false
+    },
+    {
+      "wait_for": "onToolStart",
+      "timeout": 600
+    },
+    {
+      "sleep": 60
+    }
+  ]
+}

@@ -13,6 +13,7 @@ what the harness actually sends. The recordings they produced are in
 | `demo/` | The small project every scenario runs in |
 | `demo_mcp_server.py` | A minimal MCP server with one tool, for the `mcp_tool` scenario |
 | `hermes/` | A container and a plugin that record the Hermes gateway; see [Hermes](#hermes) |
+| `openclaw/` | A container and a plugin that record the OpenClaw gateway; see [OpenClaw](#openclaw) |
 
 ## Before you start
 
@@ -85,6 +86,39 @@ tools/record/hermes/record.sh tools/record/hermes/scenarios/simple.json out/simp
   not offer. The container sets `high`; override it with `REASONING_EFFORT`.
 
 Scrub the output like any other recording, with the files in a folder named `hermes`.
+
+## OpenClaw
+
+OpenClaw is recorded the same way as Hermes: in a container, with a plugin that plays the chat.
+
+```sh
+tools/record/openclaw/record.sh tools/record/openclaw/scenarios/simple.json out/simple.jsonl <model-key-file> [model]
+```
+
+- **What it needs.** Docker, and a file holding an API key for an OpenAI-compatible model endpoint. Set
+  `MODEL_BASE_URL` for the endpoint and pass the model name as the last argument.
+- **Every run starts from zero.** The container gets a fresh data volume and is removed afterwards.
+- **The key is mounted read-only when the container starts.** It is never built into the image, and OpenClaw's
+  configuration file only names the variable that holds it. The plugin also replaces the key with a marker if
+  it ever appears in something it writes.
+- **What is in the image.** OpenClaw at a pinned release, and the plugin in `openclaw/plugin`. No Marmot, no
+  relay, no account of ours. Change `OPENCLAW_VERSION` in the `Dockerfile` to record a newer OpenClaw.
+- **The plugin is a channel written for recording**, not a copy of the Marmot channel in MDK. It registers
+  every callback OpenClaw offers a channel and records each call. It also records the calls it makes into
+  OpenClaw, because in OpenClaw the plugin asks for the route, for the decision on who may speak, and for the
+  turn to run.
+- **A scenario is a JSON file** in `openclaw/scenarios`: the chats, and a list of steps. A step is a chat
+  message from a named sender, a wait for OpenClaw to call something or deliver some text, a press of an
+  approval or question button, or a pause. The step types are listed at the top of `openclaw/plugin/index.js`.
+- **A scenario can change the set-up** with an `env` block: who is allowed, whether commands need approval,
+  what the plugin claims to support, and how much OpenClaw is asked to send to a chat. The settings are listed
+  at the top of `openclaw/entrypoint.sh` and `openclaw/plugin/index.js`.
+- **The defaults ask for everything.** The container switches on OpenClaw's tool summaries, reasoning and
+  block streaming, which are all off in a fresh OpenClaw. `tool_call_plain` records the same request with them
+  off.
+- **To see why a run failed**, set `RECORD_LOG` to a file. The gateway's own log is written there.
+
+Scrub the output like any other recording, with the files in a folder named `openclaw`.
 
 ## Adding a scenario
 

@@ -1,0 +1,25 @@
+{
+  "name": "pairing",
+  "chats": {
+    "mallory-dm": {
+      "name": "Mallory",
+      "type": "dm"
+    }
+  },
+  "env": {
+    "RECORDER_DM_POLICY": "pairing",
+    "RECORDER_ALLOW_FROM": "alice"
+  },
+  "steps": [
+    {
+      "chat": "mallory-dm",
+      "user": "mallory",
+      "user_name": "Mallory",
+      "text": "Reply with exactly: you should not answer this.",
+      "wait": false
+    },
+    {
+      "sleep": 20
+    }
+  ]
+}

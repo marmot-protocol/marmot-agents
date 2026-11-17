@@ -101,8 +101,23 @@ Hermes has its own allow-list, its own sessions (one per sender, even in a group
 drops a disallowed sender without a word. The core has the owner's settings
 ([D-010](decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)) and must tell a disallowed
 person so. The current thinking is that the core checks first and Hermes is configured to allow whatever the
-core lets through. Not decided, and OpenClaw has not been looked at yet. See
-[`reference/hermes-messages.md`](reference/hermes-messages.md).
+core lets through. Not decided. See [`reference/hermes-messages.md`](reference/hermes-messages.md).
+
+OpenClaw was recorded on 2026-11-17, and differs on each point. This is evidence, not a decision. See
+[`reference/openclaw-messages.md`](reference/openclaw-messages.md).
+
+- **Who may speak.** OpenClaw does not drop anyone by itself. The plugin asks it for a verdict, supplying the
+  policy and the allow-lists, and gets back "run", "drop", "skip" or "pairing required" with a reason. Acting
+  on the verdict is the plugin's job, so the plugin could tell a disallowed person. The plugin could equally
+  hand OpenClaw an open policy and let the core decide first.
+- **Who may approve.** When the plugin claims OpenClaw's approval capability, OpenClaw asks the plugin whether
+  a given sender may approve. That is a place to ask the core.
+- **Sessions.** A group is one session shared by everyone in it. All direct chats share one session unless
+  the plugin or the owner arranges otherwise.
+- **Notices.** OpenClaw also speaks for itself, but marks what it says: by kind of delivery, by an error flag,
+  and by structured data on approvals and questions.
+- **What the owner must set.** An approval reaches the chat only if the owner has switched approval
+  forwarding on in OpenClaw. Left off, the command waits unseen.
 
 ### Q-08 Is each harness install its own identity?
 
@@ -183,6 +198,10 @@ each driver says what it supports.
 Recordings show the difference is larger than supported or not: Codex folds a mid-turn message into the running
 turn, and Claude Code ends the turn and starts a new one. See
 [`reference/harness-messages.md`](reference/harness-messages.md#side-by-side).
+
+The gateways differ too: Hermes folds the message into the running turn and says so, and OpenClaw held it
+without a word and ran it as a turn of its own afterwards. See
+[`reference/openclaw-messages.md`](reference/openclaw-messages.md#controls-are-chat-messages).
 
 ### Q-10 How are permissions changed from the chat?
 

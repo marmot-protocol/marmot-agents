@@ -22,8 +22,8 @@ The prompts are scripted and are in the recorder sources.
 
 ## Scenarios
 
-50 recordings of coding harnesses: 24 with Codex and 26 with Claude Code. Hermes has 14 more, described
-[below](#hermes).
+50 recordings of coding harnesses: 24 with Codex and 26 with Claude Code. Hermes has 14 more and OpenClaw 26,
+described below: [Hermes](#hermes), [OpenClaw](#openclaw).
 
 | Scenario | What it exercises | Codex | Claude |
 | --- | --- | --- | --- |
@@ -125,6 +125,80 @@ In these files `via` is one of:
 About four fifths of the lines are `send_typing` calls. The container held no account, key or relay of ours, so
 only paths needed scrubbing.
 
+## OpenClaw
+
+OpenClaw is a gateway too, and is recorded the same way: a plugin plays the part of a chat network. In
+OpenClaw the plugin also asks for things: which session a chat belongs to, whether a sender may speak, and for
+the turn to run. Those calls and their answers are recorded as well.
+What the recordings show is in [`docs/reference/openclaw-messages.md`](../../docs/reference/openclaw-messages.md).
+
+| | |
+| --- | --- |
+| Runtime | OpenClaw 2026.11.5 (build `e13cf15`), the newest stable release on the day, in a container |
+| Model | `z-ai/glm-5.3-flash:free` through an OpenAI-compatible endpoint |
+| Recorded on | 2026-11-17 |
+| Recorder | [`tools/record/openclaw`](../../tools/record/README.md#openclaw) |
+
+| Scenario | What it exercises |
+| --- | --- |
+| `simple` | One message in a group, one reply |
+| `direct_message` | One message in a direct chat |
+| `two_senders` | Two people in one group; the second asks about what the first said |
+| `two_direct_messages` | Two people in separate direct chats; the second asks about the first |
+| `reply`, `reply_quoted` | A reply to an earlier message, given by its id only, and given with the quoted text |
+| `tool_call` | The agent runs a command |
+| `tool_call_plain` | The same, with no progress callbacks and OpenClaw's own defaults |
+| `reasoning` | The model's thinking, with reasoning set to stream |
+| `approval_not_forwarded` | A command needs approval, with OpenClaw's defaults |
+| `approval_allowed`, `approval_denied` | The approval forwarded to the chat as a message, answered with `/approve` |
+| `approval_cards_allowed`, `approval_cards_denied` | The same, with the plugin claiming an approval capability, answered by a press |
+| `approval_press_unclaimed` | A press without that capability, then `/approve` |
+| `question`, `question_text_answer` | A question with choices, answered by a press, and by a chat message |
+| `mid_turn_message` | A second message while the agent is working |
+| `stop` | `/stop` during a turn |
+| `commands` | `/help` and `/status` |
+| `not_allowed` | A message from someone who is not on the group's allow-list, then one from someone who is |
+| `pairing` | A direct message from a stranger, under OpenClaw's pairing policy |
+| `not_mentioned` | A group that requires a mention: a message without one, then one with |
+| `message_actions`, `message_edit_delete` | The agent uses its message tool to react, send, edit and delete |
+| `model_refused` | The model provider refuses the request, twice |
+
+Things that did not go as scripted, and are useful for that reason:
+
+- **`approval_not_forwarded`.** No prompt reached the chat. The command waited until the recording ended.
+  An approval reaches a chat only when the owner switches forwarding on, which the other approval scenarios do.
+- **`approval_press_unclaimed`.** The press was refused with `approval not found`.
+- **`question_text_answer`.** The chat message was not taken as the answer. It waited fifteen minutes until
+  the question expired, and then ran as a turn of its own.
+- **`question` and `question_text_answer`.** The model's first call of the question tool had the wrong
+  arguments and was rejected. The second worked.
+- **`mid_turn_message`.** The second message was not folded into the running turn. It waited and ran afterwards.
+- **`two_direct_messages`.** Both people were given the same session. The agent declined to repeat what the
+  first had said.
+- **`message_actions`.** The turn ended after the agent's `send`, before it tried to edit or delete.
+- **`message_edit_delete`.** OpenClaw refused the edit before it reached the plugin. The delete went through.
+- **`reply`.** Asked to remember three codes, the agent also wrote them to a file, so the recording holds file
+  tools as well.
+- **`reasoning`.** Thinking text arrived here. In the other scenarios, with reasoning merely on, none did.
+- **`approval_denied`.** Recorded twice. The first time the model declined to run the command at all, so
+  nothing needed approval; that run was discarded.
+
+In these files `via` is one of:
+
+| `via` | With `dir` | Meaning |
+| --- | --- | --- |
+| `inbound` | `out` | A scripted chat message handed to OpenClaw |
+| `hook` | `in` | OpenClaw called the plugin: an adapter method or a callback |
+| `result` | `out` | What that method returned to OpenClaw |
+| `call` | `out` | The plugin called OpenClaw: for a route, a decision on the sender, the message context, or to run the turn |
+| `call` | `in` | What that call returned |
+| `press` | `out` | A scripted press of an approval or question button |
+| `note` | `out` | A marker written by the recorder |
+
+A third of the lines are the typing signal and the receive path's own progress log. The container held no
+account, key or relay of ours. The recorder never writes OpenClaw's configuration, which is where the model
+key is named; it appears as `<config>`. The scrubber replaces the machine's uptime in the output of `/status`.
+
 ## File format
 
 One JSON object per line.
@@ -176,5 +250,6 @@ again after any new recording, and read the result before committing.
 - Claude Code stopped while it is in the middle of writing a reply
 - A file attachment other than an image
 - A subagent in Codex
-- OpenCode, Pi, Goose and OpenClaw
+- OpenCode, Pi and Goose
 - Hermes with media, reactions, scheduled jobs and its message tools
+- OpenClaw with media, polls, threads, scheduled jobs, subagents, plugin approvals and the pairing code exchange
