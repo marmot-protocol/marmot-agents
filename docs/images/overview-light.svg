@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 560" width="1024" height="560" role="img" aria-label="People in a Marmot group reach agent harnesses through one core program. Codex, Pi and ACP harnesses use drivers built into the core. Claude Code, Cursor, Hermes and OpenClaw connect as separate programs over a local socket.">
+<title>People in a Marmot group reach agent harnesses through one core program. Codex, Pi and ACP harnesses use drivers built into the core. Claude Code, Cursor, Hermes and OpenClaw connect as separate programs over a local socket.</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#6e7781"/></marker></defs>
+<rect width="1024" height="560" fill="#ffffff"/>
+<rect x="20" y="170" width="196" height="230" rx="12" fill="none" stroke="#afb8c1" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="34" y="192" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#59636e" text-anchor="start">Marmot group chat</text>
+<rect x="36" y="206" width="164" height="54" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="118.0" y="230.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#1f2328" text-anchor="middle">You</text>
+<text x="118.0" y="245.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#59636e" text-anchor="middle">the agent's owner</text>
+<rect x="36" y="274" width="164" height="54" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="118.0" y="298.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#1f2328" text-anchor="middle">Other members</text>
+<text x="118.0" y="313.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#59636e" text-anchor="middle">see all agent activity</text>
+<text x="118" y="364" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#59636e" text-anchor="middle">end-to-end encrypted</text>
+<text x="118" y="380" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#59636e" text-anchor="middle">White Noise apps</text>
+<rect x="250" y="257" width="112" height="56" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="306.0" y="282.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#1f2328" text-anchor="middle">Nostr relays</text>
+<text x="306.0" y="297.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#59636e" text-anchor="middle">ciphertext only</text>
+<polyline points="216,285 250,285" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<polyline points="362,285 412,285" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<rect x="392" y="30" width="616" height="510" rx="12" fill="none" stroke="#afb8c1" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="406" y="52" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#59636e" text-anchor="start">Agent host: the machine your agents run on</text>
+<rect x="412" y="150" width="226" height="270" rx="10" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/>
+<text x="525" y="176" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#1f2328" text-anchor="middle">marmot-agents core</text>
+<text x="525" y="193" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#59636e" text-anchor="middle">one Rust program</text>
+<rect x="426" y="208" width="198" height="88" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="525.0" y="234.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#1f2328" text-anchor="middle">Marmot side</text>
+<text x="525.0" y="249.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#59636e" text-anchor="middle">MDK as a library:</text>
+<text x="525.0" y="264.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#59636e" text-anchor="middle">account, encryption,</text>
+<text x="525.0" y="279.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#59636e" text-anchor="middle">relays, storage</text>
+<rect x="426" y="310" width="198" height="96" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="525.0" y="340.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#1f2328" text-anchor="middle">Conversation handling</text>
+<text x="525.0" y="355.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#59636e" text-anchor="middle">who may prompt or approve,</text>
+<text x="525.0" y="370.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#59636e" text-anchor="middle">which session a chat maps to,</text>
+<text x="525.0" y="385.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#59636e" text-anchor="middle">turn order</text>
+<text x="690" y="90" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#59636e" text-anchor="start">Built into the core · Rust · one driver trait</text>
+<text x="690" y="282" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#59636e" text-anchor="start">Separate programs · over the local socket</text>
+<rect x="690" y="104" width="156" height="40" rx="8" fill="#fff8c5" stroke="#9a6700" stroke-width="1.5"/>
+<text x="768.0" y="121.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f2328" text-anchor="middle">Codex driver</text>
+<text x="768.0" y="135.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="400" fill="#59636e" text-anchor="middle">app-server JSON-RPC</text>
+<rect x="868" y="104" width="128" height="40" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="932.0" y="128.2" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f2328" text-anchor="middle">Codex</text>
+<polyline points="846,124 868,124" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<rect x="690" y="152" width="156" height="40" rx="8" fill="#fff8c5" stroke="#9a6700" stroke-width="1.5"/>
+<text x="768.0" y="169.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f2328" text-anchor="middle">Pi driver</text>
+<text x="768.0" y="183.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="400" fill="#59636e" text-anchor="middle">RPC mode</text>
+<rect x="868" y="152" width="128" height="40" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="932.0" y="176.2" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f2328" text-anchor="middle">Pi</text>
+<polyline points="846,172 868,172" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<rect x="690" y="200" width="156" height="40" rx="8" fill="#fff8c5" stroke="#9a6700" stroke-width="1.5"/>
+<text x="768.0" y="217.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f2328" text-anchor="middle">ACP driver</text>
+<text x="768.0" y="231.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="400" fill="#59636e" text-anchor="middle">Agent Client Protocol</text>
+<rect x="868" y="200" width="128" height="40" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="932.0" y="217.2" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#1f2328" text-anchor="middle">Goose, OpenCode</text>
+<text x="932.0" y="230.8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="9.5" font-weight="400" fill="#59636e" text-anchor="middle">and other ACP agents</text>
+<polyline points="846,220 868,220" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<polyline points="638,172 664,172" fill="none" stroke="#6e7781" stroke-width="1.5" marker-start="url(#arrow)"/>
+<polyline points="664,124 664,220" fill="none" stroke="#6e7781" stroke-width="1.5"/>
+<polyline points="664,124 690,124" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)"/>
+<polyline points="664,172 690,172" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)"/>
+<polyline points="664,220 690,220" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="690" y="296" width="156" height="40" rx="8" fill="#fff8c5" stroke="#9a6700" stroke-width="1.5"/>
+<text x="768.0" y="313.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f2328" text-anchor="middle">Claude driver</text>
+<text x="768.0" y="327.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="400" fill="#59636e" text-anchor="middle">TypeScript · official SDK</text>
+<rect x="868" y="296" width="128" height="40" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="932.0" y="320.2" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f2328" text-anchor="middle">Claude Code</text>
+<polyline points="846,316 868,316" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<rect x="690" y="344" width="156" height="40" rx="8" fill="#fff8c5" stroke="#9a6700" stroke-width="1.5"/>
+<text x="768.0" y="361.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f2328" text-anchor="middle">Cursor driver</text>
+<text x="768.0" y="375.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="400" fill="#59636e" text-anchor="middle">TypeScript · official SDK</text>
+<rect x="868" y="344" width="128" height="40" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="932.0" y="368.2" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f2328" text-anchor="middle">Cursor</text>
+<polyline points="846,364 868,364" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<rect x="690" y="392" width="156" height="40" rx="8" fill="#fff8c5" stroke="#9a6700" stroke-width="1.5"/>
+<text x="768.0" y="409.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f2328" text-anchor="middle">Hermes plugin</text>
+<text x="768.0" y="423.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="400" fill="#59636e" text-anchor="middle">Python · runs inside Hermes</text>
+<rect x="868" y="392" width="128" height="40" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="932.0" y="416.2" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f2328" text-anchor="middle">Hermes</text>
+<polyline points="846,412 868,412" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<rect x="690" y="440" width="156" height="40" rx="8" fill="#fff8c5" stroke="#9a6700" stroke-width="1.5"/>
+<text x="768.0" y="457.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f2328" text-anchor="middle">OpenClaw plugin</text>
+<text x="768.0" y="471.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="10.5" font-weight="400" fill="#59636e" text-anchor="middle">TypeScript · runs inside it</text>
+<rect x="868" y="440" width="128" height="40" rx="8" fill="#f6f8fa" stroke="#d0d7de" stroke-width="1.5"/>
+<text x="932.0" y="464.2" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#1f2328" text-anchor="middle">OpenClaw</text>
+<polyline points="846,460 868,460" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<polyline points="638,388 664,388" fill="none" stroke="#6e7781" stroke-width="1.5" marker-start="url(#arrow)"/>
+<polyline points="664,316 664,460" fill="none" stroke="#6e7781" stroke-width="1.5"/>
+<polyline points="664,316 690,316" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)"/>
+<polyline points="664,364 690,364" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)"/>
+<polyline points="664,412 690,412" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)"/>
+<polyline points="664,460 690,460" fill="none" stroke="#6e7781" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="412" y="506" width="14" height="14" rx="3" fill="#ddf4ff" stroke="#0969da" stroke-width="1.5"/>
+<text x="434" y="517.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#59636e" text-anchor="start">written once</text>
+<rect x="530" y="506" width="14" height="14" rx="3" fill="#fff8c5" stroke="#9a6700" stroke-width="1.5"/>
+<text x="552" y="517.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#59636e" text-anchor="start">one per harness</text>
+</svg>
