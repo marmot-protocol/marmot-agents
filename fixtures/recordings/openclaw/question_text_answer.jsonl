@@ -1,0 +1,533 @@
+{"t": 1408, "dir": "in", "via": "hook", "msg": {"method": "gateway.startAccount", "params": {"accountId": "default", "account": {"accountId": "default", "dmPolicy": "open", "groupPolicy": "open", "allowFrom": ["*"], "groupAllowFrom": ["*"], "requireMention": false}, "has": ["cfg", "accountId", "account", "abortSignal", "scheduler", "runtime", "log", "getStatus", "setStatus", "invalidateDirectoryCache", "channelRuntime"]}}}
+{"t": 4409, "dir": "out", "via": "note", "msg": {"scenario": "question_text_answer", "steps": 5}}
+{"t": 4409, "dir": "out", "via": "inbound", "msg": {"message_id": "in-1", "chat": "family", "user": "alice", "user_name": "Alice", "text": "Use your ask_user tool to ask me which greeting we should use, with the options Hello and Hi. Then reply with only the greeting I chose.", "wait": false}}
+{"t": 4409, "dir": "out", "via": "call", "msg": {"method": "routing.resolveAgentRoute", "params": {"channel": "recorder", "accountId": "default", "peer": {"kind": "group", "id": "family"}}}}
+{"t": 4410, "dir": "in", "via": "call", "msg": {"method": "routing.resolveAgentRoute", "result": {"agentId": "main", "channel": "recorder", "accountId": "default", "dmScope": "main", "groupScope": "per-group", "sessionKey": "agent:main:recorder:group:family", "mainSessionKey": "agent:main:main", "lastRoutePolicy": "session", "matchedBy": "default"}}}
+{"t": 4411, "dir": "out", "via": "call", "msg": {"method": "inbound.ingress.resolveStable", "params": {"channelId": "recorder", "accountId": "default", "subject": {"stableId": "alice"}, "conversation": {"kind": "group", "id": "family"}, "contextBinding": {"agentId": "main", "sessionKey": "agent:main:recorder:group:family", "messageId": "in-1", "inboundEventKind": "user_request"}, "event": {"kind": "message", "authMode": "inbound", "mayPair": false}, "dmPolicy": "open", "groupPolicy": "open", "policy": {"groupAllowFromFallbackToAllowFrom": true, "activation": {"requireMention": false, "allowTextCommands": true}}, "allowFrom": ["*"], "groupAllowFrom": ["*"], "mentionFacts": {"canDetectMention": true, "wasMentioned": true}, "command": {"allowTextCommands": true, "hasControlCommand": false}}}}
+{"t": 4414, "dir": "in", "via": "call", "msg": {"method": "inbound.ingress.resolveStable", "result": {"state": {"channelId": "recorder", "accountId": "default", "conversationKind": "group", "event": {"kind": "message", "authMode": "inbound", "mayPair": false, "hasOriginSubject": false, "originSubjectMatched": false}, "mentionFacts": {"canDetectMention": true, "wasMentioned": true}, "routeFacts": [], "allowlists": {"dm": {"rawEntryCount": 1, "normalizedEntries": [{"opaqueEntryId": "entry-1:wildcard", "kind": "stable-id", "wildcard": true, "authentication": "asserted"}], "invalidEntries": [], "disabledEntries": [], "matchedEntryIds": ["entry-1:wildcard"], "hasConfiguredEntries": true, "hasMatchableEntries": true, "hasWildcard": true, "accessGroups": {"referenced": [], "matched": [], "missing": [], "unsupported": [], "failed": []}, "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"], "matchedPairs": [{"opaqueEntryId": "entry-1:wildcard", "opaqueSubjectId": "stableId", "subjectAuthentication": "asserted"}]}}, "pairingStore": {"rawEntryCount": 0, "normalizedEntries": [], "invalidEntries": [], "disabledEntries": [], "matchedEntryIds": [], "hasConfiguredEntries": false, "hasMatchableEntries": false, "hasWildcard": false, "accessGroups": {"referenced": [], "matched": [], "missing": [], "unsupported": [], "failed": []}, "match": {"matched": false, "matchedEntryIds": []}}, "group": {"rawEntryCount": 1, "normalizedEntries": [{"opaqueEntryId": "entry-1:wildcard", "kind": "stable-id", "wildcard": true, "authentication": "asserted"}], "invalidEntries": [], "disabledEntries": [], "matchedEntryIds": ["entry-1:wildcard"], "hasConfiguredEntries": true, "hasMatchableEntries": true, "hasWildcard": true, "accessGroups": {"referenced": [], "matched": [], "missing": [], "unsupported": [], "failed": []}, "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"], "matchedPairs": [{"opaqueEntryId": "entry-1:wildcard", "opaqueSubjectId": "stableId", "subjectAuthentication": "asserted"}]}}, "commandOwner": {"rawEntryCount": 1, "normalizedEntries": [{"opaqueEntryId": "entry-1:wildcard", "kind": "stable-id", "wildcard": true, "authentication": "asserted"}], "invalidEntries": [], "disabledEntries": [], "matchedEntryIds": ["entry-1:wildcard"], "hasConfiguredEntries": true, "hasMatchableEntries": true, "hasWildcard": true, "accessGroups": {"referenced": [], "matched": [], "missing": [], "unsupported": [], "failed": []}, "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"], "matchedPairs": [{"opaqueEntryId": "entry-1:wildcard", "opaqueSubjectId": "stableId", "subjectAuthentication": "asserted"}]}}, "commandGroup": {"rawEntryCount": 1, "normalizedEntries": [{"opaqueEntryId": "entry-1:wildcard", "kind": "stable-id", "wildcard": true, "authentication": "asserted"}], "invalidEntries": [], "disabledEntries": [], "matchedEntryIds": ["entry-1:wildcard"], "hasConfiguredEntries": true, "hasMatchableEntries": true, "hasWildcard": true, "accessGroups": {"referenced": [], "matched": [], "missing": [], "unsupported": [], "failed": []}, "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"], "matchedPairs": [{"opaqueEntryId": "entry-1:wildcard", "opaqueSubjectId": "stableId", "subjectAuthentication": "asserted"}]}}}}, "ingress": {"admission": "dispatch", "decision": "allow", "decisiveGateId": "activation", "reasonCode": "activation_allowed", "graph": {"gates": [{"id": "sender:group", "phase": "sender", "kind": "groupSender", "effect": "allow", "allowed": true, "reasonCode": "group_policy_open", "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"], "matchedPairs": [{"opaqueEntryId": "entry-1:wildcard", "opaqueSubjectId": "stableId", "subjectAuthentication": "asserted"}]}, "sender": {"policy": "open"}, "allowlist": {"configured": true, "matched": true, "reasonCode": "group_policy_open", "matchedEntryIds": ["entry-1:wildcard"], "invalidEntryCount": 0, "disabledEntryCount": 0, "accessGroups": {"referenced": [], "matched": [], "missing": [], "unsupported": [], "failed": []}}, "identifierAuthentication": {"evaluated": true, "affectedMatch": false}}, {"id": "command", "phase": "command", "kind": "command", "effect": "allow", "allowed": true, "reasonCode": "command_authorized", "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"]}, "identifierAuthentication": {"evaluated": true, "affectedMatch": false}, "command": {"useAccessGroups": true, "allowTextCommands": true, "shouldBlockControlCommand": false}}, {"id": "event", "phase": "event", "kind": "event", "effect": "allow", "allowed": true, "reasonCode": "event_authorized", "event": {"kind": "message", "authMode": "inbound", "mayPair": false, "hasOriginSubject": false, "originSubjectMatched": false}}, {"id": "activation", "phase": "activation", "kind": "mention", "effect": "allow", "allowed": true, "reasonCode": "activation_allowed", "activation": {"hasMentionFacts": true, "requireMention": false, "allowTextCommands": true, "shouldSkip": false, "canDetectMention": true, "wasMentioned": true, "effectiveWasMentioned": true, "shouldBypassMention": false}}]}}, "senderAccess": {"allowed": true, "decision": "allow", "reasonCode": "group_policy_open", "gate": {"id": "sender:group", "phase": "sender", "kind": "groupSender", "effect": "allow", "allowed": true, "reasonCode": "group_policy_open", "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"], "matchedPairs": [{"opaqueEntryId": "entry-1:wildcard", "opaqueSubjectId": "stableId", "subjectAuthentication": "asserted"}]}, "sender": {"policy": "open"}, "allowlist": {"configured": true, "matched": true, "reasonCode": "group_policy_open", "matchedEntryIds": ["entry-1:wildcard"], "invalidEntryCount": 0, "disabledEntryCount": 0, "accessGroups": {"referenced": [], "matched": [], "missing": [], "unsupported": [], "failed": []}}, "identifierAuthentication": {"evaluated": true, "affectedMatch": false}}, "effectiveAllowFrom": ["*"], "effectiveGroupAllowFrom": ["*"], "providerMissingFallbackApplied": false}, "routeAccess": {"allowed": true}, "commandAccess": {"requested": true, "authorized": true, "shouldBlockControlCommand": false, "reasonCode": "command_authorized", "gate": {"id": "command", "phase": "command", "kind": "command", "effect": "allow", "allowed": true, "reasonCode": "command_authorized", "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"]}, "identifierAuthentication": {"evaluated": true, "affectedMatch": false}, "command": {"useAccessGroups": true, "allowTextCommands": true, "shouldBlockControlCommand": false}}}, "activationAccess": {"ran": true, "allowed": true, "shouldSkip": false, "reasonCode": "activation_allowed", "effectiveWasMentioned": true, "shouldBypassMention": false, "gate": {"id": "activation", "phase": "activation", "kind": "mention", "effect": "allow", "allowed": true, "reasonCode": "activation_allowed", "activation": {"hasMentionFacts": true, "requireMention": false, "allowTextCommands": true, "shouldSkip": false, "canDetectMention": true, "wasMentioned": true, "effectiveWasMentioned": true, "shouldBypassMention": false}}}}}}
+{"t": 4415, "dir": "out", "via": "call", "msg": {"method": "inbound.buildContext", "params": {"channel": "recorder", "accountId": "default", "messageId": "in-1", "timestamp": 1794928395242, "from": "recorder:group:family", "sender": {"id": "alice", "name": "Alice"}, "conversation": {"kind": "group", "id": "family", "label": "Family"}, "route": {"agentId": "main", "accountId": "default", "routeSessionKey": "agent:main:recorder:group:family"}, "reply": {"to": "family"}, "message": {"rawBody": "Use your ask_user tool to ask me which greeting we should use, with the options Hello and Hi. Then reply with only the greeting I chose.", "bodyForAgent": "Use your ask_user tool to ask me which greeting we should use, with the options Hello and Hi. Then reply with only the greeting I chose."}, "access": {"commands": {"authorized": true}, "mentions": {"canDetectMention": true, "wasMentioned": true, "requireMention": false}}}}}
+{"t": 4416, "dir": "in", "via": "call", "msg": {"method": "inbound.buildContext", "result": {"Body": "Use your ask_user tool to ask me which greeting we should use, with the options Hello and Hi. Then reply with only the greeting I chose.", "InboundEventKind": "user_request", "BodyForAgent": "Use your ask_user tool to ask me which greeting we should use, with the options Hello and Hi. Then reply with only the greeting I chose.", "RawBody": "Use your ask_user tool to ask me which greeting we should use, with the options Hello and Hi. Then reply with only the greeting I chose.", "CommandBody": "Use your ask_user tool to ask me which greeting we should use, with the options Hello and Hi. Then reply with only the greeting I chose.", "BodyForCommands": "Use your ask_user tool to ask me which greeting we should use, with the options Hello and Hi. Then reply with only the greeting I chose.", "From": "recorder:group:family", "To": "family", "SessionKey": "agent:main:recorder:group:family", "AgentId": "main", "AccountId": "default", "MessageSid": "in-1", "ChatType": "group", "ChatId": "family", "ConversationLabel": "Family", "GroupSubject": "Family", "SenderName": "Alice", "SenderId": "alice", "Timestamp": 1794928395242, "Provider": "recorder", "Surface": "recorder", "WasMentioned": true, "GroupRequireMention": false, "CommandAuthorized": true, "CommandTurn": {"kind": "normal", "source": "message", "authorized": false, "body": "Use your ask_user tool to ask me which greeting we should use, with the options Hello and Hi. Then reply with only the greeting I chose."}, "OriginatingChannel": "recorder", "OriginatingTo": "family", "InboundAccessAuthorized": true, "media": [], "commandText": "Use your ask_user tool to ask me which greeting we should use, with the options Hello and Hi. Then reply with only the greeting I chose.", "agentText": "Use your ask_user tool to ask me which greeting we should use, with the options Hello and Hi. Then reply with only the greeting I chose.", "rawText": "Use your ask_user tool to ask me which greeting we should use, with the options Hello and Hi. Then reply with only the greeting I chose."}}}
+{"t": 4416, "dir": "out", "via": "call", "msg": {"method": "inbound.run", "params": {"messageId": "in-1"}}}
+{"t": 4424, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "stage": "ingest", "event": "start"}}}
+{"t": 4424, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 4424, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "stage": "ingest", "event": "done", "messageId": "in-1"}}}
+{"t": 4424, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 4425, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "stage": "assemble", "event": "done", "messageId": "in-1", "sessionKey": "agent:main:recorder:group:family", "admission": "dispatch"}}}
+{"t": 4425, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 4426, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "messageId": "in-1", "sessionKey": "agent:main:recorder:group:family", "admission": "dispatch", "stage": "record", "event": "start"}}}
+{"t": 4426, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 4592, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "messageId": "in-1", "sessionKey": "agent:main:recorder:group:family", "admission": "dispatch", "stage": "record", "event": "done"}}}
+{"t": 4592, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 4594, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "messageId": "in-1", "sessionKey": "agent:main:recorder:group:family", "admission": "dispatch", "stage": "dispatch", "event": "start"}}}
+{"t": 4594, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 4613, "dir": "in", "via": "hook", "msg": {"method": "messaging.normalizeTarget", "params": "family"}}
+{"t": 4613, "dir": "out", "via": "result", "msg": {"method": "messaging.normalizeTarget", "result": "family"}}
+{"t": 4645, "dir": "in", "via": "hook", "msg": {"method": "messaging.normalizeTarget", "params": "family"}}
+{"t": 4645, "dir": "out", "via": "result", "msg": {"method": "messaging.normalizeTarget", "result": "family"}}
+{"t": 4680, "dir": "in", "via": "hook", "msg": {"method": "onTypingController", "params": {"methods": ["onReplyStart", "startTypingLoop", "startTypingOnText", "refreshTypingTtl", "isActive", "markRunComplete", "markDispatchIdle", "cleanup"]}}}
+{"t": 4696, "dir": "in", "via": "hook", "msg": {"method": "messaging.normalizeTarget", "params": "family"}}
+{"t": 4696, "dir": "out", "via": "result", "msg": {"method": "messaging.normalizeTarget", "result": "family"}}
+{"t": 4877, "dir": "in", "via": "hook", "msg": {"method": "groups.resolveRequireMention", "params": {"cfg": "<config>", "groupId": "family", "groupChannel": "Family", "accountId": "default"}}}
+{"t": 4877, "dir": "out", "via": "result", "msg": {"method": "groups.resolveRequireMention", "result": false}}
+{"t": 5033, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 5034, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 5721, "dir": "in", "via": "hook", "msg": {"method": "onModelSelected", "params": {"provider": "recorded", "model": "z-ai/glm-5.3-flash:free", "thinkLevel": "low"}}}
+{"t": 5721, "dir": "out", "via": "result", "msg": {"method": "onModelSelected"}}
+{"t": 6042, "dir": "in", "via": "hook", "msg": {"method": "actions.describeMessageTool", "params": {"cfg": "<config>", "chatType": "group", "currentChannelId": "family", "currentChannelProvider": "recorder", "accountId": "default", "sessionKey": "agent:main:recorder:group:family", "sessionId": "fb3a4255-b80d-41e1-b9f4-f8afa117daaf", "agentId": "main"}}}
+{"t": 6042, "dir": "out", "via": "result", "msg": {"method": "actions.describeMessageTool", "result": {"actions": ["send", "react", "edit", "delete"]}}}
+{"t": 6126, "dir": "in", "via": "hook", "msg": {"method": "agentPrompt.messageToolHints", "params": {"cfg": "<config>", "accountId": "default"}}}
+{"t": 6126, "dir": "out", "via": "result", "msg": {"method": "agentPrompt.messageToolHints", "result": ["- This is a test chat network. A chat is addressed by its name, and a message by its id."]}}
+{"t": 6319, "dir": "in", "via": "hook", "msg": {"method": "onPreparedAgentRunStart", "params": {"runId": "41f5a39d-8757-40a3-908b-6caace861440", "transcriptStart": {"agentId": "main", "sessionId": "fb3a4255-b80d-41e1-b9f4-f8afa117daaf", "sessionKey": "agent:main:recorder:group:family", "storePath": "/data/openclaw-home/.openclaw/agents/main/sessions/sessions.json", "generation": "f30513689c25436f956cc6cc1401bd1c", "maxSeq": 3}}}}
+{"t": 6319, "dir": "out", "via": "result", "msg": {"method": "onPreparedAgentRunStart"}}
+{"t": 10011, "dir": "in", "via": "hook", "msg": {"method": "onAssistantMessageStart", "params": []}}
+{"t": 10011, "dir": "out", "via": "result", "msg": {"method": "onAssistantMessageStart"}}
+{"t": 10065, "dir": "in", "via": "hook", "msg": {"method": "onItemEvent", "params": {"itemId": "tool:258aa99d-0a3c-4020-8d7e-182154d338e0", "kind": "tool", "title": "Ask User Which greeting should we use?", "phase": "start", "status": "running", "toolCallId": "258aa99d-0a3c-4020-8d7e-182154d338e0", "name": "ask_user", "meta": "Which greeting should we use?", "commandBearing": false}}}
+{"t": 10065, "dir": "out", "via": "result", "msg": {"method": "onItemEvent"}}
+{"t": 10067, "dir": "in", "via": "hook", "msg": {"method": "onToolResult", "params": {"text": "Tool Call: `Which greeting should we use?`"}}}
+{"t": 10067, "dir": "out", "via": "result", "msg": {"method": "onToolResult"}}
+{"t": 10069, "dir": "in", "via": "hook", "msg": {"method": "onToolStart", "params": {"toolCallId": "258aa99d-0a3c-4020-8d7e-182154d338e0", "name": "dispatch_action", "phase": "start", "args": {"args": {"questions": [{"options": ["Hello", "Hi"], "question": "Which greeting should we use?"}]}, "id": "ask_user"}}}}
+{"t": 10069, "dir": "out", "via": "result", "msg": {"method": "onToolStart"}}
+{"t": 10075, "dir": "in", "via": "hook", "msg": {"method": "deliver", "params": [{"text": "Tool Call: `Which greeting should we use?`"}, {"kind": "tool"}]}}
+{"t": 10077, "dir": "out", "via": "result", "msg": {"method": "deliver", "result": {"messageId": "out-1"}}}
+{"t": 10078, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onDeliverySettled", "params": {"kind": "tool"}}}
+{"t": 10078, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onDeliverySettled"}}
+{"t": 10078, "dir": "in", "via": "hook", "msg": {"method": "onItemEvent", "params": {"itemId": "tool:tool_call:258aa99d-0a3c-4020-8d7e-182154d338e0:ask_user:1", "kind": "tool", "title": "Ask User Which greeting should we use?", "phase": "start", "status": "running", "toolCallId": "tool_call:258aa99d-0a3c-4020-8d7e-182154d338e0:ask_user:1", "name": "ask_user", "meta": "Which greeting should we use?", "commandBearing": false}}}
+{"t": 10078, "dir": "out", "via": "result", "msg": {"method": "onItemEvent"}}
+{"t": 10078, "dir": "in", "via": "hook", "msg": {"method": "onToolResult", "params": {"text": "Ask User: `Which greeting should we use?`"}}}
+{"t": 10078, "dir": "out", "via": "result", "msg": {"method": "onToolResult"}}
+{"t": 10078, "dir": "in", "via": "hook", "msg": {"method": "onToolStart", "params": {"toolCallId": "tool_call:258aa99d-0a3c-4020-8d7e-182154d338e0:ask_user:1", "name": "ask_user", "phase": "start", "args": {"questions": [{"options": ["Hello", "Hi"], "question": "Which greeting should we use?"}]}}}}
+{"t": 10078, "dir": "out", "via": "result", "msg": {"method": "onToolStart"}}
+{"t": 10078, "dir": "in", "via": "hook", "msg": {"method": "deliver", "params": [{"text": "Ask User: `Which greeting should we use?`"}, {"kind": "tool"}]}}
+{"t": 10078, "dir": "out", "via": "result", "msg": {"method": "deliver", "result": {"messageId": "out-2"}}}
+{"t": 10078, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onDeliverySettled", "params": {"kind": "tool"}}}
+{"t": 10078, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onDeliverySettled"}}
+{"t": 10099, "dir": "in", "via": "hook", "msg": {"method": "onItemEvent", "params": {"itemId": "tool:tool_call:258aa99d-0a3c-4020-8d7e-182154d338e0:ask_user:1", "kind": "tool", "title": "Ask User Which greeting should we use?", "phase": "end", "status": "blocked", "toolCallId": "tool_call:258aa99d-0a3c-4020-8d7e-182154d338e0:ask_user:1", "name": "ask_user", "meta": "Which greeting should we use?", "commandBearing": false}}}
+{"t": 10099, "dir": "out", "via": "result", "msg": {"method": "onItemEvent"}}
+{"t": 10099, "dir": "in", "via": "hook", "msg": {"method": "onToolResult", "params": {"text": "Ask User: `Which greeting should we use?`\n```txt\nInvalid arguments for tool \"openclaw:core:ask_user\": questions.0.id: must have required property 'id'; received undefined (undefined); questions.0.header: must have required property 'header'; received undefined (undefined); questions.0.options.0: expected object; received [redacted] (string); questions.0.options.1: expected object; received [redacted] (string). Expected input: { questions: Array<{ header: string; id: string; options: Array<{ label: unknown; description?: unknown; preview?: unknown; resourceUri?: unknown; thumbnail?: unknown; value?: unknown }>; question: string; multiSelect?: boolean }>; timeoutSeconds?: number /* integer */ }.\n```"}}}
+{"t": 10099, "dir": "out", "via": "result", "msg": {"method": "onToolResult"}}
+{"t": 10102, "dir": "in", "via": "hook", "msg": {"method": "deliver", "params": [{"text": "Ask User: `Which greeting should we use?`\n```txt\nInvalid arguments for tool \"openclaw:core:ask_user\": questions.0.id: must have required property 'id'; received undefined (undefined); questions.0.header: must have required property 'header'; received undefined (undefined); questions.0.options.0: expected object; received [redacted] (string); questions.0.options.1: expected object; received [redacted] (string). Expected input: { questions: Array<{ header: string; id: string; options: Array<{ label: unknown; description?: unknown; preview?: unknown; resourceUri?: unknown; thumbnail?: unknown; value?: unknown }>; question: string; multiSelect?: boolean }>; timeoutSeconds?: number /* integer */ }.\n```"}, {"kind": "tool"}]}}
+{"t": 10102, "dir": "out", "via": "result", "msg": {"method": "deliver", "result": {"messageId": "out-3"}}}
+{"t": 10102, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onDeliverySettled", "params": {"kind": "tool"}}}
+{"t": 10102, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onDeliverySettled"}}
+{"t": 10112, "dir": "in", "via": "hook", "msg": {"method": "onItemEvent", "params": {"itemId": "tool:258aa99d-0a3c-4020-8d7e-182154d338e0", "kind": "tool", "title": "Ask User Which greeting should we use?", "phase": "end", "status": "failed", "toolCallId": "258aa99d-0a3c-4020-8d7e-182154d338e0", "name": "ask_user", "meta": "Which greeting should we use?", "commandBearing": false}}}
+{"t": 10112, "dir": "out", "via": "result", "msg": {"method": "onItemEvent"}}
+{"t": 10113, "dir": "in", "via": "hook", "msg": {"method": "onToolResult", "params": {"text": "Tool Call: `Which greeting should we use?`\n```txt\n{\n  \"status\": \"error\",\n  \"tool\": \"dispatch_action\",\n  \"error\": \"Invalid arguments for tool \\\"openclaw:core:ask_user\\\": questions.0.id: must have required property 'id'; received undefined (undefined); questions.0.header: must have required property 'header'; received undefined (undefined); questions.0.options.0: expected object; received [redacted] (string); questions.0.options.1: expected object; received [redacted] (string). Expected input: { questions: Array<{ header: string; id: string; options: Array<{ label: unknown; description?: unknown; preview?: unknown; resourceUri?: unknown; thumbnail?: unknown; value?: unknown }>; question: string; multiSelect?: boolean }>; timeoutSeconds?: number /* integer */ }.\"\n}\n```"}}}
+{"t": 10113, "dir": "out", "via": "result", "msg": {"method": "onToolResult"}}
+{"t": 10115, "dir": "in", "via": "hook", "msg": {"method": "deliver", "params": [{"text": "Tool Call: `Which greeting should we use?`\n```txt\n{\n  \"status\": \"error\",\n  \"tool\": \"dispatch_action\",\n  \"error\": \"Invalid arguments for tool \\\"openclaw:core:ask_user\\\": questions.0.id: must have required property 'id'; received undefined (undefined); questions.0.header: must have required property 'header'; received undefined (undefined); questions.0.options.0: expected object; received [redacted] (string); questions.0.options.1: expected object; received [redacted] (string). Expected input: { questions: Array<{ header: string; id: string; options: Array<{ label: unknown; description?: unknown; preview?: unknown; resourceUri?: unknown; thumbnail?: unknown; value?: unknown }>; question: string; multiSelect?: boolean }>; timeoutSeconds?: number /* integer */ }.\"\n}\n```"}, {"kind": "tool"}]}}
+{"t": 10115, "dir": "out", "via": "result", "msg": {"method": "deliver", "result": {"messageId": "out-4"}}}
+{"t": 10115, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onDeliverySettled", "params": {"kind": "tool"}}}
+{"t": 10115, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onDeliverySettled"}}
+{"t": 11034, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 11034, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 12481, "dir": "in", "via": "hook", "msg": {"method": "onAssistantMessageStart", "params": []}}
+{"t": 12481, "dir": "out", "via": "result", "msg": {"method": "onAssistantMessageStart"}}
+{"t": 12526, "dir": "in", "via": "hook", "msg": {"method": "onItemEvent", "params": {"itemId": "tool:2c7c7f47-73e2-483b-8b40-9e616ae2fbc5", "kind": "tool", "title": "Ask User Which greeting should we use?", "phase": "start", "status": "running", "toolCallId": "2c7c7f47-73e2-483b-8b40-9e616ae2fbc5", "name": "ask_user", "meta": "Which greeting should we use?", "commandBearing": false}}}
+{"t": 12526, "dir": "out", "via": "result", "msg": {"method": "onItemEvent"}}
+{"t": 12527, "dir": "in", "via": "hook", "msg": {"method": "onToolResult", "params": {"text": "Tool Call: `Which greeting should we use?`"}}}
+{"t": 12527, "dir": "out", "via": "result", "msg": {"method": "onToolResult"}}
+{"t": 12528, "dir": "in", "via": "hook", "msg": {"method": "onToolStart", "params": {"toolCallId": "2c7c7f47-73e2-483b-8b40-9e616ae2fbc5", "name": "dispatch_action", "phase": "start", "args": {"args": {"questions": [{"header": "Greeting", "id": "greeting", "options": [{"label": "Hello", "value": "Hello"}, {"label": "Hi", "value": "Hi"}], "question": "Which greeting should we use?"}]}, "id": "ask_user"}}}}
+{"t": 12528, "dir": "out", "via": "result", "msg": {"method": "onToolStart"}}
+{"t": 12534, "dir": "in", "via": "hook", "msg": {"method": "deliver", "params": [{"text": "Tool Call: `Which greeting should we use?`"}, {"kind": "tool"}]}}
+{"t": 12539, "dir": "out", "via": "result", "msg": {"method": "deliver", "result": {"messageId": "out-5"}}}
+{"t": 12541, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onDeliverySettled", "params": {"kind": "tool"}}}
+{"t": 12541, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onDeliverySettled"}}
+{"t": 12541, "dir": "in", "via": "hook", "msg": {"method": "onItemEvent", "params": {"itemId": "tool:tool_call:2c7c7f47-73e2-483b-8b40-9e616ae2fbc5:ask_user:2", "kind": "tool", "title": "Ask User Which greeting should we use?", "phase": "start", "status": "running", "toolCallId": "tool_call:2c7c7f47-73e2-483b-8b40-9e616ae2fbc5:ask_user:2", "name": "ask_user", "meta": "Which greeting should we use?", "commandBearing": false}}}
+{"t": 12541, "dir": "out", "via": "result", "msg": {"method": "onItemEvent"}}
+{"t": 12541, "dir": "in", "via": "hook", "msg": {"method": "onToolResult", "params": {"text": "Ask User: `Which greeting should we use?`"}}}
+{"t": 12541, "dir": "out", "via": "result", "msg": {"method": "onToolResult"}}
+{"t": 12542, "dir": "in", "via": "hook", "msg": {"method": "onToolStart", "params": {"toolCallId": "tool_call:2c7c7f47-73e2-483b-8b40-9e616ae2fbc5:ask_user:2", "name": "ask_user", "phase": "start", "args": {"questions": [{"header": "Greeting", "id": "greeting", "options": [{"label": "Hello", "value": "Hello"}, {"label": "Hi", "value": "Hi"}], "question": "Which greeting should we use?"}]}}}}
+{"t": 12542, "dir": "out", "via": "result", "msg": {"method": "onToolStart"}}
+{"t": 12545, "dir": "in", "via": "hook", "msg": {"method": "deliver", "params": [{"text": "Ask User: `Which greeting should we use?`"}, {"kind": "tool"}]}}
+{"t": 12545, "dir": "out", "via": "result", "msg": {"method": "deliver", "result": {"messageId": "out-6"}}}
+{"t": 12545, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onDeliverySettled", "params": {"kind": "tool"}}}
+{"t": 12545, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onDeliverySettled"}}
+{"t": 12632, "dir": "in", "via": "hook", "msg": {"method": "onToolResult", "params": {"text": "Question for you:\n\nGreeting\nWhich greeting should we use?\n1. Hello\n2. Hi\nOther: reply with your own answer.\n\nReply with the number, the option text, or your own answer.", "presentation": {"blocks": [{"type": "text", "text": "Which greeting should we use?"}, {"type": "text", "text": "- Hello\n- Hi\n\nReply with the number, the option text, or your own answer."}, {"type": "buttons", "buttons": [{"label": "Hello", "action": {"type": "question", "questionId": "ask_a0d20ff874ed17132a3eb8a306853170", "optionValue": "Hello"}}, {"label": "Hi", "action": {"type": "question", "questionId": "ask_a0d20ff874ed17132a3eb8a306853170", "optionValue": "Hi"}}, {"label": "Other…", "action": {"type": "question", "questionId": "ask_a0d20ff874ed17132a3eb8a306853170", "intent": "custom-input"}}]}]}, "presentationTextMode": "fallback", "channelData": {"askUser": {"questionId": "ask_a0d20ff874ed17132a3eb8a306853170", "optionValues": ["Hello", "Hi"]}}}}}
+{"t": 12632, "dir": "out", "via": "result", "msg": {"method": "onToolResult"}}
+{"t": 12632, "dir": "out", "via": "note", "msg": {"wait_for_text": "Reply with the number", "seen": true}}
+{"t": 12634, "dir": "in", "via": "hook", "msg": {"method": "deliver", "params": [{"text": "Question for you:\n\nGreeting\nWhich greeting should we use?\n1. Hello\n2. Hi\nOther: reply with your own answer.\n\nReply with the number, the option text, or your own answer.", "presentation": {"blocks": [{"type": "text", "text": "Which greeting should we use?"}, {"type": "text", "text": "- Hello\n- Hi\n\nReply with the number, the option text, or your own answer."}, {"type": "buttons", "buttons": [{"label": "Hello", "action": {"type": "question", "questionId": "ask_a0d20ff874ed17132a3eb8a306853170", "optionValue": "Hello"}}, {"label": "Hi", "action": {"type": "question", "questionId": "ask_a0d20ff874ed17132a3eb8a306853170", "optionValue": "Hi"}}, {"label": "Other…", "action": {"type": "question", "questionId": "ask_a0d20ff874ed17132a3eb8a306853170", "intent": "custom-input"}}]}]}, "presentationTextMode": "fallback", "channelData": {"askUser": {"questionId": "ask_a0d20ff874ed17132a3eb8a306853170", "optionValues": ["Hello", "Hi"]}}}, {"kind": "tool"}]}}
+{"t": 12634, "dir": "out", "via": "result", "msg": {"method": "deliver", "result": {"messageId": "out-7"}}}
+{"t": 12634, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onDeliverySettled", "params": {"kind": "tool"}}}
+{"t": 12634, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onDeliverySettled"}}
+{"t": 15635, "dir": "out", "via": "inbound", "msg": {"message_id": "in-2", "chat": "family", "user": "alice", "user_name": "Alice", "text": "Hello", "wait": false}}
+{"t": 15635, "dir": "out", "via": "call", "msg": {"method": "routing.resolveAgentRoute", "params": {"channel": "recorder", "accountId": "default", "peer": {"kind": "group", "id": "family"}}}}
+{"t": 15636, "dir": "in", "via": "call", "msg": {"method": "routing.resolveAgentRoute", "result": {"agentId": "main", "channel": "recorder", "accountId": "default", "dmScope": "main", "groupScope": "per-group", "sessionKey": "agent:main:recorder:group:family", "mainSessionKey": "agent:main:main", "lastRoutePolicy": "session", "matchedBy": "default"}}}
+{"t": 15636, "dir": "out", "via": "call", "msg": {"method": "inbound.ingress.resolveStable", "params": {"channelId": "recorder", "accountId": "default", "subject": {"stableId": "alice"}, "conversation": {"kind": "group", "id": "family"}, "contextBinding": {"agentId": "main", "sessionKey": "agent:main:recorder:group:family", "messageId": "in-2", "inboundEventKind": "user_request"}, "event": {"kind": "message", "authMode": "inbound", "mayPair": false}, "dmPolicy": "open", "groupPolicy": "open", "policy": {"groupAllowFromFallbackToAllowFrom": true, "activation": {"requireMention": false, "allowTextCommands": true}}, "allowFrom": ["*"], "groupAllowFrom": ["*"], "mentionFacts": {"canDetectMention": true, "wasMentioned": true}, "command": {"allowTextCommands": true, "hasControlCommand": false}}}}
+{"t": 15640, "dir": "in", "via": "call", "msg": {"method": "inbound.ingress.resolveStable", "result": {"state": {"channelId": "recorder", "accountId": "default", "conversationKind": "group", "event": {"kind": "message", "authMode": "inbound", "mayPair": false, "hasOriginSubject": false, "originSubjectMatched": false}, "mentionFacts": {"canDetectMention": true, "wasMentioned": true}, "routeFacts": [], "allowlists": {"dm": {"rawEntryCount": 1, "normalizedEntries": [{"opaqueEntryId": "entry-1:wildcard", "kind": "stable-id", "wildcard": true, "authentication": "asserted"}], "invalidEntries": [], "disabledEntries": [], "matchedEntryIds": ["entry-1:wildcard"], "hasConfiguredEntries": true, "hasMatchableEntries": true, "hasWildcard": true, "accessGroups": {"referenced": [], "matched": [], "missing": [], "unsupported": [], "failed": []}, "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"], "matchedPairs": [{"opaqueEntryId": "entry-1:wildcard", "opaqueSubjectId": "stableId", "subjectAuthentication": "asserted"}]}}, "pairingStore": {"rawEntryCount": 0, "normalizedEntries": [], "invalidEntries": [], "disabledEntries": [], "matchedEntryIds": [], "hasConfiguredEntries": false, "hasMatchableEntries": false, "hasWildcard": false, "accessGroups": {"referenced": [], "matched": [], "missing": [], "unsupported": [], "failed": []}, "match": {"matched": false, "matchedEntryIds": []}}, "group": {"rawEntryCount": 1, "normalizedEntries": [{"opaqueEntryId": "entry-1:wildcard", "kind": "stable-id", "wildcard": true, "authentication": "asserted"}], "invalidEntries": [], "disabledEntries": [], "matchedEntryIds": ["entry-1:wildcard"], "hasConfiguredEntries": true, "hasMatchableEntries": true, "hasWildcard": true, "accessGroups": {"referenced": [], "matched": [], "missing": [], "unsupported": [], "failed": []}, "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"], "matchedPairs": [{"opaqueEntryId": "entry-1:wildcard", "opaqueSubjectId": "stableId", "subjectAuthentication": "asserted"}]}}, "commandOwner": {"rawEntryCount": 1, "normalizedEntries": [{"opaqueEntryId": "entry-1:wildcard", "kind": "stable-id", "wildcard": true, "authentication": "asserted"}], "invalidEntries": [], "disabledEntries": [], "matchedEntryIds": ["entry-1:wildcard"], "hasConfiguredEntries": true, "hasMatchableEntries": true, "hasWildcard": true, "accessGroups": {"referenced": [], "matched": [], "missing": [], "unsupported": [], "failed": []}, "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"], "matchedPairs": [{"opaqueEntryId": "entry-1:wildcard", "opaqueSubjectId": "stableId", "subjectAuthentication": "asserted"}]}}, "commandGroup": {"rawEntryCount": 1, "normalizedEntries": [{"opaqueEntryId": "entry-1:wildcard", "kind": "stable-id", "wildcard": true, "authentication": "asserted"}], "invalidEntries": [], "disabledEntries": [], "matchedEntryIds": ["entry-1:wildcard"], "hasConfiguredEntries": true, "hasMatchableEntries": true, "hasWildcard": true, "accessGroups": {"referenced": [], "matched": [], "missing": [], "unsupported": [], "failed": []}, "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"], "matchedPairs": [{"opaqueEntryId": "entry-1:wildcard", "opaqueSubjectId": "stableId", "subjectAuthentication": "asserted"}]}}}}, "ingress": {"admission": "dispatch", "decision": "allow", "decisiveGateId": "activation", "reasonCode": "activation_allowed", "graph": {"gates": [{"id": "sender:group", "phase": "sender", "kind": "groupSender", "effect": "allow", "allowed": true, "reasonCode": "group_policy_open", "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"], "matchedPairs": [{"opaqueEntryId": "entry-1:wildcard", "opaqueSubjectId": "stableId", "subjectAuthentication": "asserted"}]}, "sender": {"policy": "open"}, "allowlist": {"configured": true, "matched": true, "reasonCode": "group_policy_open", "matchedEntryIds": ["entry-1:wildcard"], "invalidEntryCount": 0, "disabledEntryCount": 0, "accessGroups": {"referenced": [], "matched": [], "missing": [], "unsupported": [], "failed": []}}, "identifierAuthentication": {"evaluated": true, "affectedMatch": false}}, {"id": "command", "phase": "command", "kind": "command", "effect": "allow", "allowed": true, "reasonCode": "command_authorized", "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"]}, "identifierAuthentication": {"evaluated": true, "affectedMatch": false}, "command": {"useAccessGroups": true, "allowTextCommands": true, "shouldBlockControlCommand": false}}, {"id": "event", "phase": "event", "kind": "event", "effect": "allow", "allowed": true, "reasonCode": "event_authorized", "event": {"kind": "message", "authMode": "inbound", "mayPair": false, "hasOriginSubject": false, "originSubjectMatched": false}}, {"id": "activation", "phase": "activation", "kind": "mention", "effect": "allow", "allowed": true, "reasonCode": "activation_allowed", "activation": {"hasMentionFacts": true, "requireMention": false, "allowTextCommands": true, "shouldSkip": false, "canDetectMention": true, "wasMentioned": true, "effectiveWasMentioned": true, "shouldBypassMention": false}}]}}, "senderAccess": {"allowed": true, "decision": "allow", "reasonCode": "group_policy_open", "gate": {"id": "sender:group", "phase": "sender", "kind": "groupSender", "effect": "allow", "allowed": true, "reasonCode": "group_policy_open", "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"], "matchedPairs": [{"opaqueEntryId": "entry-1:wildcard", "opaqueSubjectId": "stableId", "subjectAuthentication": "asserted"}]}, "sender": {"policy": "open"}, "allowlist": {"configured": true, "matched": true, "reasonCode": "group_policy_open", "matchedEntryIds": ["entry-1:wildcard"], "invalidEntryCount": 0, "disabledEntryCount": 0, "accessGroups": {"referenced": [], "matched": [], "missing": [], "unsupported": [], "failed": []}}, "identifierAuthentication": {"evaluated": true, "affectedMatch": false}}, "effectiveAllowFrom": ["*"], "effectiveGroupAllowFrom": ["*"], "providerMissingFallbackApplied": false}, "routeAccess": {"allowed": true}, "commandAccess": {"requested": true, "authorized": true, "shouldBlockControlCommand": false, "reasonCode": "command_authorized", "gate": {"id": "command", "phase": "command", "kind": "command", "effect": "allow", "allowed": true, "reasonCode": "command_authorized", "match": {"matched": true, "matchedEntryIds": ["entry-1:wildcard"]}, "identifierAuthentication": {"evaluated": true, "affectedMatch": false}, "command": {"useAccessGroups": true, "allowTextCommands": true, "shouldBlockControlCommand": false}}}, "activationAccess": {"ran": true, "allowed": true, "shouldSkip": false, "reasonCode": "activation_allowed", "effectiveWasMentioned": true, "shouldBypassMention": false, "gate": {"id": "activation", "phase": "activation", "kind": "mention", "effect": "allow", "allowed": true, "reasonCode": "activation_allowed", "activation": {"hasMentionFacts": true, "requireMention": false, "allowTextCommands": true, "shouldSkip": false, "canDetectMention": true, "wasMentioned": true, "effectiveWasMentioned": true, "shouldBypassMention": false}}}}}}
+{"t": 15641, "dir": "out", "via": "call", "msg": {"method": "inbound.buildContext", "params": {"channel": "recorder", "accountId": "default", "messageId": "in-2", "timestamp": 1794928406468, "from": "recorder:group:family", "sender": {"id": "alice", "name": "Alice"}, "conversation": {"kind": "group", "id": "family", "label": "Family"}, "route": {"agentId": "main", "accountId": "default", "routeSessionKey": "agent:main:recorder:group:family"}, "reply": {"to": "family"}, "message": {"rawBody": "Hello", "bodyForAgent": "Hello"}, "access": {"commands": {"authorized": true}, "mentions": {"canDetectMention": true, "wasMentioned": true, "requireMention": false}}}}}
+{"t": 15641, "dir": "in", "via": "call", "msg": {"method": "inbound.buildContext", "result": {"Body": "Hello", "InboundEventKind": "user_request", "BodyForAgent": "Hello", "RawBody": "Hello", "CommandBody": "Hello", "BodyForCommands": "Hello", "From": "recorder:group:family", "To": "family", "SessionKey": "agent:main:recorder:group:family", "AgentId": "main", "AccountId": "default", "MessageSid": "in-2", "ChatType": "group", "ChatId": "family", "ConversationLabel": "Family", "GroupSubject": "Family", "SenderName": "Alice", "SenderId": "alice", "Timestamp": 1794928406468, "Provider": "recorder", "Surface": "recorder", "WasMentioned": true, "GroupRequireMention": false, "CommandAuthorized": true, "CommandTurn": {"kind": "normal", "source": "message", "authorized": false, "body": "Hello"}, "OriginatingChannel": "recorder", "OriginatingTo": "family", "InboundAccessAuthorized": true, "media": [], "commandText": "Hello", "agentText": "Hello", "rawText": "Hello"}}}
+{"t": 15641, "dir": "out", "via": "call", "msg": {"method": "inbound.run", "params": {"messageId": "in-2"}}}
+{"t": 15641, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "stage": "ingest", "event": "start"}}}
+{"t": 15641, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 15642, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "stage": "ingest", "event": "done", "messageId": "in-2"}}}
+{"t": 15642, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 15642, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "stage": "assemble", "event": "done", "messageId": "in-2", "sessionKey": "agent:main:recorder:group:family", "admission": "dispatch"}}}
+{"t": 15642, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 15642, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "messageId": "in-2", "sessionKey": "agent:main:recorder:group:family", "admission": "dispatch", "stage": "record", "event": "start"}}}
+{"t": 15642, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 15644, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "messageId": "in-2", "sessionKey": "agent:main:recorder:group:family", "admission": "dispatch", "stage": "record", "event": "done"}}}
+{"t": 15644, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 15644, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "messageId": "in-2", "sessionKey": "agent:main:recorder:group:family", "admission": "dispatch", "stage": "dispatch", "event": "start"}}}
+{"t": 15644, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 15645, "dir": "in", "via": "hook", "msg": {"method": "messaging.normalizeTarget", "params": "family"}}
+{"t": 15645, "dir": "out", "via": "result", "msg": {"method": "messaging.normalizeTarget", "result": "family"}}
+{"t": 15647, "dir": "in", "via": "hook", "msg": {"method": "messaging.normalizeTarget", "params": "family"}}
+{"t": 15647, "dir": "out", "via": "result", "msg": {"method": "messaging.normalizeTarget", "result": "family"}}
+{"t": 17035, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 17035, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 23035, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 23035, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 29036, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 29036, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 35035, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 35035, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 41035, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 41035, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 47035, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 47035, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 53035, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 53035, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 59035, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 59035, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 65035, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 65035, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 71035, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 71035, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 77035, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 77036, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 83035, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 83036, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 89035, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 89036, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 95035, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 95035, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 101036, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 101036, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 107036, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 107036, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 113037, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 113037, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 119037, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 119037, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 125038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 125038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 131037, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 131037, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 137037, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 137037, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 143038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 143038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 149037, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 149037, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 155038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 155038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 161038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 161038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 167038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 167038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 173038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 173038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 179038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 179038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 185038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 185039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 191039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 191039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 197039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 197039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 203038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 203038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 209039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 209039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 215038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 215038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 221039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 221039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 227039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 227039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 233038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 233039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 239038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 239039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 245039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 245039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 251038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 251038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 257038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 257038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 263038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 263039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 269038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 269038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 275039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 275039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 281038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 281038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 287038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 287039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 293039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 293039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 299038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 299038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 305038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 305038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 311038, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 311038, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 317039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 317039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 323039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 323039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 329039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 329043, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 335040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 335040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 341039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 341039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 347039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 347039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 353039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 353039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 359039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 359039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 365040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 365040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 371039, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 371039, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 377040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 377040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 383041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 383041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 389040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 389040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 395040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 395040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 401040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 401040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 407040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 407040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 413040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 413040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 419040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 419040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 425041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 425041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 431040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 431040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 437041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 437041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 443040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 443040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 449040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 449041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 455040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 455040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 461041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 461041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 467040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 467040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 473041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 473041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 479041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 479041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 485040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 485040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 491040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 491041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 497041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 497041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 503040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 503040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 509040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 509040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 515040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 515040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 521040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 521040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 527040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 527040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 533040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 533040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 539040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 539040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 545041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 545041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 551040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 551040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 557040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 557040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 563040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 563040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 569040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 569040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 575040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 575040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 581040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 581040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 587040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 587041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 593041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 593041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 599041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 599041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 605041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 605041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 611040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 611040, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 617040, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 617043, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 623041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 623041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 629041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 629041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 635041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 635041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 641041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 641041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 647041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 647041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 653041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 653041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 659041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 659041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 665041, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 665041, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 671042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 671042, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 677042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 677042, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 683042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 683043, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 689042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 689042, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 695042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 695042, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 701042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 701042, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 707043, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 707043, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 713042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 713043, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 719043, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 719043, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 725042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 725042, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 731042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 731042, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 737042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 737042, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 743042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 743042, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 749042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 749042, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 755043, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 755043, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 761043, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 761043, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 767042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 767042, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 773042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 773043, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 779042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 779042, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 785042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 785043, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 791042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 791043, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 797042, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 797042, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 803043, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 803043, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 809043, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 809043, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 815043, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 815043, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 821043, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 821044, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 827043, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 827043, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 833044, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 833044, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 839045, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 839045, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 845044, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 845044, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 851044, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 851044, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 857044, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 857044, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 863044, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 863044, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 869044, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 869044, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 875044, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 875044, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 881045, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 881045, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 887044, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 887044, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 893045, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 893045, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 899046, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 899046, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 905045, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 905045, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 911045, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 911045, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 912599, "dir": "in", "via": "hook", "msg": {"method": "onItemEvent", "params": {"itemId": "tool:tool_call:2c7c7f47-73e2-483b-8b40-9e616ae2fbc5:ask_user:2", "kind": "tool", "title": "Ask User Which greeting should we use?", "phase": "end", "status": "completed", "toolCallId": "tool_call:2c7c7f47-73e2-483b-8b40-9e616ae2fbc5:ask_user:2", "name": "ask_user", "meta": "Which greeting should we use?", "commandBearing": false}}}
+{"t": 912599, "dir": "out", "via": "result", "msg": {"method": "onItemEvent"}}
+{"t": 912599, "dir": "in", "via": "hook", "msg": {"method": "onToolResult", "params": {"text": "Ask User: `Which greeting should we use?`\n```txt\nNo answer arrived; proceed with best judgment.\n\n{\n  \"status\": \"no_answer\"\n}\n```"}}}
+{"t": 912599, "dir": "out", "via": "result", "msg": {"method": "onToolResult"}}
+{"t": 912600, "dir": "in", "via": "hook", "msg": {"method": "deliver", "params": [{"text": "Ask User: `Which greeting should we use?`\n```txt\nNo answer arrived; proceed with best judgment.\n\n{\n  \"status\": \"no_answer\"\n}\n```"}, {"kind": "tool"}]}}
+{"t": 912600, "dir": "out", "via": "result", "msg": {"method": "deliver", "result": {"messageId": "out-8"}}}
+{"t": 912600, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onDeliverySettled", "params": {"kind": "tool"}}}
+{"t": 912600, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onDeliverySettled"}}
+{"t": 912601, "dir": "in", "via": "hook", "msg": {"method": "onItemEvent", "params": {"itemId": "tool:2c7c7f47-73e2-483b-8b40-9e616ae2fbc5", "kind": "tool", "title": "Ask User Which greeting should we use?", "phase": "end", "status": "completed", "toolCallId": "2c7c7f47-73e2-483b-8b40-9e616ae2fbc5", "name": "ask_user", "meta": "Which greeting should we use?", "commandBearing": false}}}
+{"t": 912601, "dir": "out", "via": "result", "msg": {"method": "onItemEvent"}}
+{"t": 912601, "dir": "in", "via": "hook", "msg": {"method": "onToolResult", "params": {"text": "Tool Call: `Which greeting should we use?`\n```txt\n{\"tool\":{\"id\":\"openclaw:core:ask_user\",\"name\":\"ask_user\",\"source\":\"openclaw\"},\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"No answer arrived; proceed with best judgment.\\n\\n{\\n  \\\"status\\\": \\\"no_answer\\\"\\n}\"}]}}\n```"}}}
+{"t": 912601, "dir": "out", "via": "result", "msg": {"method": "onToolResult"}}
+{"t": 912603, "dir": "in", "via": "hook", "msg": {"method": "deliver", "params": [{"text": "Tool Call: `Which greeting should we use?`\n```txt\n{\"tool\":{\"id\":\"openclaw:core:ask_user\",\"name\":\"ask_user\",\"source\":\"openclaw\"},\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"No answer arrived; proceed with best judgment.\\n\\n{\\n  \\\"status\\\": \\\"no_answer\\\"\\n}\"}]}}\n```"}, {"kind": "tool"}]}}
+{"t": 912603, "dir": "out", "via": "result", "msg": {"method": "deliver", "result": {"messageId": "out-9"}}}
+{"t": 912603, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onDeliverySettled", "params": {"kind": "tool"}}}
+{"t": 912603, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onDeliverySettled"}}
+{"t": 915947, "dir": "in", "via": "hook", "msg": {"method": "onAssistantMessageStart", "params": []}}
+{"t": 915947, "dir": "out", "via": "result", "msg": {"method": "onAssistantMessageStart"}}
+{"t": 917045, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 917045, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 917771, "dir": "in", "via": "hook", "msg": {"method": "onPartialReply", "params": {"text": "Hell"}}}
+{"t": 917771, "dir": "out", "via": "result", "msg": {"method": "onPartialReply"}}
+{"t": 917998, "dir": "in", "via": "hook", "msg": {"method": "onPartialReply", "params": {"text": "Hello"}}}
+{"t": 917998, "dir": "out", "via": "result", "msg": {"method": "onPartialReply"}}
+{"t": 918075, "dir": "in", "via": "hook", "msg": {"method": "onReasoningEnd", "params": []}}
+{"t": 918075, "dir": "out", "via": "result", "msg": {"method": "onReasoningEnd"}}
+{"t": 918088, "dir": "in", "via": "hook", "msg": {"method": "deliver", "params": [{"text": "Hello", "audioAsVoice": false, "replyToTag": false}, {"kind": "block", "assistantMessageIndex": 3}]}}
+{"t": 918088, "dir": "out", "via": "result", "msg": {"method": "deliver", "result": {"messageId": "out-10"}}}
+{"t": 918088, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onDeliverySettled", "params": {"kind": "block", "assistantMessageIndex": 3}}}
+{"t": 918088, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onDeliverySettled"}}
+{"t": 918088, "dir": "in", "via": "hook", "msg": {"method": "onBlockReplyQueued", "params": [{"text": "Hello", "audioAsVoice": false, "replyToTag": false}, {"abortSignal": {"_abort_signal": false}, "timeoutMs": 15000, "assistantMessageIndex": 3}]}}
+{"t": 918088, "dir": "out", "via": "result", "msg": {"method": "onBlockReplyQueued"}}
+{"t": 918089, "dir": "in", "via": "hook", "msg": {"method": "onItemEvent", "params": {"itemId": "tool:2c7c7f47-73e2-483b-8b40-9e616ae2fbc5", "kind": "tool", "title": "Ask User Which greeting should we use?", "phase": "end", "status": "completed", "hideFromChannelProgress": true, "toolCallId": "2c7c7f47-73e2-483b-8b40-9e616ae2fbc5", "name": "ask_user", "meta": "Which greeting should we use?", "commandBearing": false}}}
+{"t": 918089, "dir": "out", "via": "result", "msg": {"method": "onItemEvent"}}
+{"t": 918210, "dir": "in", "via": "hook", "msg": {"method": "onObservedReplyDelivery", "params": []}}
+{"t": 918210, "dir": "out", "via": "result", "msg": {"method": "onObservedReplyDelivery"}}
+{"t": 918231, "dir": "in", "via": "hook", "msg": {"method": "onAgentRunTerminalOutcome", "params": "completed"}}
+{"t": 918232, "dir": "out", "via": "result", "msg": {"method": "onAgentRunTerminalOutcome"}}
+{"t": 918233, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onCleanup", "params": []}}
+{"t": 918233, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onCleanup"}}
+{"t": 918250, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onIdle", "params": []}}
+{"t": 918250, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onIdle"}}
+{"t": 918250, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onSettled", "params": []}}
+{"t": 918251, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onSettled"}}
+{"t": 918252, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onIdle", "params": []}}
+{"t": 918252, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onIdle"}}
+{"t": 918252, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "messageId": "in-1", "sessionKey": "agent:main:recorder:group:family", "admission": "dispatch", "stage": "dispatch", "event": "done"}}}
+{"t": 918252, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 918253, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "stage": "finalize", "messageId": "in-1", "sessionKey": "agent:main:recorder:group:family", "admission": "dispatch", "event": "done"}}}
+{"t": 918253, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 918253, "dir": "in", "via": "call", "msg": {"method": "inbound.run", "result": {"admission": {"kind": "dispatch"}, "dispatched": true, "dispatchResult": {"queuedFinal": false, "counts": {"tool": 9, "block": 1, "final": 0}, "observedReplyDelivery": true, "settledReceipt": {"counts": {"tool": {"delivered": 9, "deliveredNotVisible": 0, "cancelled": 0, "failedBeforeSend": 0, "failedAfterSend": 0}, "block": {"delivered": 1, "deliveredNotVisible": 0, "cancelled": 0, "failedBeforeSend": 0, "failedAfterSend": 0}, "final": {"delivered": 0, "deliveredNotVisible": 0, "cancelled": 0, "failedBeforeSend": 0, "failedAfterSend": 0}}, "anyVisibleDelivered": true}}}}}
+{"t": 918259, "dir": "in", "via": "hook", "msg": {"method": "onTypingController", "params": {"methods": ["onReplyStart", "startTypingLoop", "startTypingOnText", "refreshTypingTtl", "isActive", "markRunComplete", "markDispatchIdle", "cleanup"]}}}
+{"t": 918261, "dir": "in", "via": "hook", "msg": {"method": "messaging.normalizeTarget", "params": "family"}}
+{"t": 918261, "dir": "out", "via": "result", "msg": {"method": "messaging.normalizeTarget", "result": "family"}}
+{"t": 918280, "dir": "in", "via": "hook", "msg": {"method": "groups.resolveRequireMention", "params": {"cfg": "<config>", "groupId": "family", "groupChannel": "Family", "accountId": "default"}}}
+{"t": 918280, "dir": "out", "via": "result", "msg": {"method": "groups.resolveRequireMention", "result": false}}
+{"t": 918973, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 918973, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 918991, "dir": "in", "via": "hook", "msg": {"method": "onModelSelected", "params": {"provider": "recorded", "model": "z-ai/glm-5.3-flash:free", "thinkLevel": "low"}}}
+{"t": 918991, "dir": "out", "via": "result", "msg": {"method": "onModelSelected"}}
+{"t": 919559, "dir": "in", "via": "hook", "msg": {"method": "actions.describeMessageTool", "params": {"cfg": "<config>", "chatType": "group", "currentChannelId": "family", "currentChannelProvider": "recorder", "accountId": "default", "sessionKey": "agent:main:recorder:group:family", "sessionId": "fb3a4255-b80d-41e1-b9f4-f8afa117daaf", "agentId": "main"}}}
+{"t": 919559, "dir": "out", "via": "result", "msg": {"method": "actions.describeMessageTool", "result": {"actions": ["send", "react", "edit", "delete"]}}}
+{"t": 919580, "dir": "in", "via": "hook", "msg": {"method": "agentPrompt.messageToolHints", "params": {"cfg": "<config>", "accountId": "default"}}}
+{"t": 919580, "dir": "out", "via": "result", "msg": {"method": "agentPrompt.messageToolHints", "result": ["- This is a test chat network. A chat is addressed by its name, and a message by its id."]}}
+{"t": 920690, "dir": "in", "via": "hook", "msg": {"method": "onPreparedAgentRunStart", "params": {"runId": "26472e57-b480-40e3-bee1-24544ea510df", "transcriptStart": {"agentId": "main", "sessionId": "fb3a4255-b80d-41e1-b9f4-f8afa117daaf", "sessionKey": "agent:main:recorder:group:family", "storePath": "/data/openclaw-home/.openclaw/agents/main/sessions/sessions.json", "generation": "f30513689c25436f956cc6cc1401bd1c", "maxSeq": 15}}}}
+{"t": 920690, "dir": "out", "via": "result", "msg": {"method": "onPreparedAgentRunStart"}}
+{"t": 924972, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onReplyStart", "params": []}}
+{"t": 924972, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onReplyStart"}}
+{"t": 925827, "dir": "in", "via": "hook", "msg": {"method": "onAssistantMessageStart", "params": []}}
+{"t": 925827, "dir": "out", "via": "result", "msg": {"method": "onAssistantMessageStart"}}
+{"t": 925828, "dir": "in", "via": "hook", "msg": {"method": "onPartialReply", "params": {"text": "Hi"}}}
+{"t": 925828, "dir": "out", "via": "result", "msg": {"method": "onPartialReply"}}
+{"t": 925835, "dir": "in", "via": "hook", "msg": {"method": "onPartialReply", "params": {"text": "Hi Alice! 👋"}}}
+{"t": 925835, "dir": "out", "via": "result", "msg": {"method": "onPartialReply"}}
+{"t": 925842, "dir": "in", "via": "hook", "msg": {"method": "deliver", "params": [{"text": "Hi Alice! 👋", "audioAsVoice": false, "replyToTag": false}, {"kind": "block", "assistantMessageIndex": 1}]}}
+{"t": 925842, "dir": "out", "via": "result", "msg": {"method": "deliver", "result": {"messageId": "out-11"}}}
+{"t": 925842, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onDeliverySettled", "params": {"kind": "block", "assistantMessageIndex": 1}}}
+{"t": 925842, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onDeliverySettled"}}
+{"t": 925843, "dir": "in", "via": "hook", "msg": {"method": "onBlockReplyQueued", "params": [{"text": "Hi Alice! 👋", "audioAsVoice": false, "replyToTag": false}, {"abortSignal": {"_abort_signal": false}, "timeoutMs": 15000, "assistantMessageIndex": 1}]}}
+{"t": 925843, "dir": "out", "via": "result", "msg": {"method": "onBlockReplyQueued"}}
+{"t": 925869, "dir": "in", "via": "hook", "msg": {"method": "onObservedReplyDelivery", "params": []}}
+{"t": 925869, "dir": "out", "via": "result", "msg": {"method": "onObservedReplyDelivery"}}
+{"t": 925876, "dir": "in", "via": "hook", "msg": {"method": "onAgentRunTerminalOutcome", "params": "completed"}}
+{"t": 925876, "dir": "out", "via": "result", "msg": {"method": "onAgentRunTerminalOutcome"}}
+{"t": 925876, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onCleanup", "params": []}}
+{"t": 925876, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onCleanup"}}
+{"t": 925879, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onIdle", "params": []}}
+{"t": 925879, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onIdle"}}
+{"t": 925882, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onSettled", "params": []}}
+{"t": 925882, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onSettled"}}
+{"t": 925886, "dir": "in", "via": "hook", "msg": {"method": "dispatcher.onIdle", "params": []}}
+{"t": 925886, "dir": "out", "via": "result", "msg": {"method": "dispatcher.onIdle"}}
+{"t": 925886, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "messageId": "in-2", "sessionKey": "agent:main:recorder:group:family", "admission": "dispatch", "stage": "dispatch", "event": "done"}}}
+{"t": 925886, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 925886, "dir": "in", "via": "hook", "msg": {"method": "inbound.log", "params": {"channel": "recorder", "accountId": "default", "stage": "finalize", "messageId": "in-2", "sessionKey": "agent:main:recorder:group:family", "admission": "dispatch", "event": "done"}}}
+{"t": 925886, "dir": "out", "via": "result", "msg": {"method": "inbound.log"}}
+{"t": 925886, "dir": "in", "via": "call", "msg": {"method": "inbound.run", "result": {"admission": {"kind": "dispatch"}, "dispatched": true, "dispatchResult": {"queuedFinal": false, "counts": {"tool": 0, "block": 1, "final": 0}, "observedReplyDelivery": true, "settledReceipt": {"counts": {"tool": {"delivered": 0, "deliveredNotVisible": 0, "cancelled": 0, "failedBeforeSend": 0, "failedAfterSend": 0}, "block": {"delivered": 1, "deliveredNotVisible": 0, "cancelled": 0, "failedBeforeSend": 0, "failedAfterSend": 0}, "final": {"delivered": 0, "deliveredNotVisible": 0, "cancelled": 0, "failedBeforeSend": 0, "failedAfterSend": 0}}, "anyVisibleDelivered": true}}}}}
+{"t": 929887, "dir": "out", "via": "note", "msg": {"finished": "ok"}}
+{"t": 929935, "dir": "in", "via": "hook", "msg": {"method": "gateway.abort", "params": {"accountId": "default"}}}

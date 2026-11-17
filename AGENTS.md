@@ -31,6 +31,7 @@ repository (`integrations/`, `crates/agent-connector`,
 | See what Codex and Claude Code really send | `docs/reference/harness-messages.md`, then `fixtures/recordings/` |
 | See what Hermes hands a platform plugin | `docs/reference/hermes-messages.md` |
 | See what MDK supports for several identities in one program | `docs/reference/mdk-multiple-identities.md` |
+| See what OpenClaw hands a channel plugin | `docs/reference/openclaw-messages.md` |
 | Record a new session or scenario | `tools/record/README.md` |
 | Try the event model against the recordings | `tools/prototype/README.md` |
 | Change a diagram | `docs/images/generate.py` |
