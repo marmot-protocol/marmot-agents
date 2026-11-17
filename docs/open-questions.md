@@ -34,6 +34,13 @@ The current thinking is to keep its rules about authentication (an answer is bou
 permitted people count, a bare "yes" never counts, answers never reach the model) and to drop its lifecycle
 guarantees. Not yet decided.
 
+### Q-23 How does an agent send a file to the chat?
+
+The event model has no item for a file the agent produces: a report, a patch, an image. Today's Codex connector
+can already send files back, so leaving this out would be a step backwards. To settle: the item itself, where
+the file is stored, size limits, and the rule that keeps an agent from sending files it should not read. Raised
+in [issue 4](https://github.com/marmot-protocol/marmot-agents/issues/4).
+
 ## The socket protocol
 
 ### Q-05 How is the agent administered?
@@ -75,6 +82,11 @@ What the credential is, and how a connector's rights differ from an administrato
 One session per chat, per thread, or chosen by the user? How are sessions started, resumed and listed from the
 chat? What happens when one host runs several harnesses, or one group contains several agents?
 
+The current direction, not decided: for a coding harness, each chat has one saved session with each agent in
+it, kept across restarts. A gateway such as Hermes decides its own sessions; it keeps one per sender. Several
+agents in one group are handled by identity, in [Q-08](#q-08-is-each-harness-install-its-own-identity). Raised
+in [issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8).
+
 ### Q-22 Whose rules govern a gateway?
 
 Hermes has its own allow-list, its own sessions (one per sender, even in a group) and its own notices, and it
@@ -84,9 +96,64 @@ person so. The current thinking is that the core checks first and Hermes is conf
 core lets through. Not decided, and OpenClaw has not been looked at yet. See
 [`reference/hermes-messages.md`](reference/hermes-messages.md).
 
-### Q-08 Does each agent keep its own Marmot identity?
+### Q-08 Is each harness install its own identity?
 
-Today each installed connector has its own account and identity. Keeping that is assumed but not decided.
+The current direction, which needs much more product work before it is decided: **each harness install is its
+own Marmot identity, and so its own contact.** Hermes might be one contact, Codex another and Claude Code a
+third, each with its own key, all running on one machine. Linking to a harness is linking to a contact.
+
+This is how today's connectors already work. [Issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8)
+proposed the opposite for groups: one identity that answers for several harnesses, with a `/agent` command to
+switch between them. Separate identities make the switch unnecessary, because you address the one you want.
+
+The rough shape:
+
+- **Who answers.** In a one-to-one chat the agent always answers. In a group it answers only when it is
+  mentioned or replied to. A message addressed to nobody gets no answer. The project owner has said this
+  behaviour is the right one.
+- **No loops.** Agents must not answer each other, and several must not answer at once.
+- **The owner is not a required link.** Nothing forces an agent to state whose it is. An owner who wants to can
+  say so in the agent's profile, for example "Max's Codex" in its name or description.
+- **Sessions.** One saved session per chat for each agent ([Q-07](#q-07-how-does-a-chat-map-to-a-harness-session)).
+
+Still to work out:
+
+- **One program or several.** One program on the machine could hold every identity, which is easier to run and
+  to set up, provided each identity's keys and storage are kept apart. Or each identity could have its own
+  program, as today. Leaning to one program; not explored yet.
+- **How an agent knows another member is an agent**, so that it does not answer it, when no owner link is
+  required. The proposal is a flag in the agent's own profile: a Nostr profile (kind 0) keeps its fields in its
+  content, so a true-or-false "this is an agent" field can simply be added. Nostr already has a profile field
+  named `bot` for automated accounts, which may be the one to use. A limit on back-and-forth replies would be a
+  backstop either way.
+- **Every agent in a group reads everything.** A member receives every message, mentioned or not. Five agents
+  in a group means five harness installs holding that chat.
+- **Names.** The identity is per install, so Claude Code on a laptop and on a server are two contacts.
+- **Setup.** Each identity has to be created, named and invited. It should take one step, not five.
+
+### Q-26 How are the core's commands told apart from the harness's?
+
+A harness has its own slash commands; Claude Code alone advertises 59. If the core has commands of its own, a
+typed message could mean either. Options: the apps send core controls as buttons, not typed text, leaving typed
+slash commands for the harness; or the core reserves some names and offers a way to send a message to the
+harness exactly as typed. Raised in [issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8).
+
+### Q-27 What happens to a turn when the core or a driver restarts?
+
+People restart connectors for updates without waiting for a turn to finish, and programs crash. Whatever the
+mechanism, a restart during a turn must not:
+
+- lose the chat's saved session;
+- run a prompt twice;
+- leave the chat showing a turn that never ends.
+
+How is open. The simple version: after a restart the chat shows the turn as interrupted, and a person says
+"carry on". [Issue 9](https://github.com/marmot-protocol/marmot-agents/issues/9) proposes more: the core resumes
+the session and runs a "continuation turn" that tells the agent to check what already happened. That means the
+connector sends the model a prompt nobody wrote, which sits badly with staying true to the harness, so it is
+parked as a possible later option. It also depends on things not designed yet: whether a harness even stops when
+the core restarts depends on whether its driver is built in or a separate program. No recording of a restart
+mid-turn exists yet.
 
 ### Q-09 Who owns the queue when a message arrives mid-turn?
 
@@ -101,6 +168,31 @@ turn, and Claude Code ends the turn and starts a new one. See
 
 D-010 wants this later. The mechanism is open, and so is how a client learns who may prompt, so that it can show
 this before someone tries.
+
+### Q-24 What may an agent do in the chat on its own?
+
+A coding agent could act in Marmot during a turn, beyond producing output: rename the chat, create a new group,
+react to a message. Hermes and OpenClaw agents already have tools of this kind. Whether coding agents should,
+which actions, who may allow them, and how the harness asks the core for one are all open. This overlaps with
+administration ([Q-05](#q-05-how-is-the-agent-administered)), which waits until drivers are being built against
+real harnesses. Parked until the Hermes and OpenClaw recordings are in. Raised in
+[issue 4](https://github.com/marmot-protocol/marmot-agents/issues/4).
+
+### Q-25 Can something outside the chat and the harness start a turn?
+
+The draft event model already records what started a turn: a person's message, the agent itself after
+background work, or a control such as compaction. [Issue 6](https://github.com/marmot-protocol/marmot-agents/issues/6)
+asks for one more: a tool on the owner's machine, such as a watcher for finished CI checks or a scheduled
+check-in, that delivers a prompt into a chat's session.
+
+It is not clear this is new. An agent that is building a feature can watch its own CI run as background work
+and start a turn when it finishes, which the model already covers. The issue's author has been asked for a case
+that the harness cannot handle itself.
+
+If there is one, it is a new way in: whatever can submit a prompt gets the agent to act with the owner's
+authority, without the checks on who may prompt
+([D-010](decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)). It would have to be the owner's
+alone, which makes it part of administration ([Q-05](#q-05-how-is-the-agent-administered)). Parked.
 
 ## Privacy and volume
 
@@ -125,6 +217,32 @@ activity should be combined, summarised, or sent as short-lived events is open.
 One real number: in four days of one developer's use of Claude Code, a turn averaged about 12 tool calls,
 7 reasoning blocks and 3.5 pieces of text, which is roughly 35 events if each tool call is sent twice. Those
 were long, autonomous coding sessions; a short question would be far smaller.
+
+### A proposal for Q-11 and Q-12, not decided
+
+One filter could answer both: a setting the owner controls, per chat, for how much agent activity is sent.
+[Issue 5](https://github.com/marmot-protocol/marmot-agents/issues/5) proposes three levels:
+
+| Level | What is sent |
+| --- | --- |
+| Full | Everything. The default, as [D-008](decisions.md#d-008-pass-everything-through) says |
+| Summary | Messages, approvals, questions, errors and turn results, plus one summary line per turn that is updated in place as the agent works |
+| Final | Messages, approvals, questions and errors only |
+
+The summary line is the strongest part. One item that keeps replacing itself ("ran 12 commands, edited 3 files")
+would cut the volume a great deal, and it fits how items already replace their earlier state.
+
+This needs more product thinking before anything is decided, and it does not change D-008. Points to work out:
+
+- **Can the detail be seen, or recovered later?** That matters to people. If a lower level means the detail is
+  never sent, nobody can open it up afterwards, the owner included. The alternatives are to send it where only
+  the owner sees it, which sits badly with
+  [D-009](decisions.md#d-009-groups-are-first-class-and-every-member-sees-agent-activity), or to keep it on the
+  agent's machine to be fetched on request.
+- **Are three fixed levels the right shape?** It could equally be a choice per kind of item.
+- **Gateways already have their own setting.** Hermes and OpenClaw each decide how much tool activity they send.
+  A filter in the core would sit on top of theirs, and the two should not fight.
+- **It depends on how events are carried**, which is not designed yet.
 
 ### Q-13 What may be logged?
 
@@ -168,6 +286,32 @@ The name of the core program is not chosen. Today's daemon is `wn-agent`.
 
 Account homes, identities, allow-lists, services and installers exist for every current connector. The cutover
 plan, and when the old code leaves MDK, are open.
+
+The leading requirement, from [issue 10](https://github.com/marmot-protocol/marmot-agents/issues/10): an install
+that moves over keeps its identity, its keys, its encryption state and every group it is in. Nobody has to
+invite an agent again. This fits the identity direction in
+[Q-08](#q-08-is-each-harness-install-its-own-identity): each existing account home is one identity, with nothing
+to merge or split.
+
+One caution about going back. Keeping the old service installed but stopped is cheap insurance, but it only
+works until the new core first opens the store. MDK's storage upgrades run forward only: once a newer version
+has upgraded a database, older programs refuse it. So a way back after that point needs a backup taken before
+the first open, not just the old program.
+
+A second caution applies to any backup and restore of an agent, not only to going back. Once a core has
+processed group messages, sent anything or started a turn, restoring an older copy of its store could reuse
+encryption keys or run a prompt twice. A restore is safe only if nothing of that kind happened in between.
+Raised in [issue 12](https://github.com/marmot-protocol/marmot-agents/issues/12).
+
+What an importer carries over, and whether each identity gets its own program, wait until cutover is planned.
+
+### Q-28 How does someone know a release is genuine?
+
+Today's agent releases in MDK are published with a checksum file beside each download. A checksum catches a
+broken download, not a replaced one: whoever can replace a release file can replace its checksum too. The
+releases carry no signature or attestation. Signing them will be needed eventually, both for MDK's current
+agent releases and for whatever this repository ships, and it must come before any kind of automatic update.
+Not scheduled. Raised in [issue 12](https://github.com/marmot-protocol/marmot-agents/issues/12).
 
 ### Q-20 What do the apps need?
 

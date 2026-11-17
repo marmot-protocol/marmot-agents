@@ -102,7 +102,7 @@ Only the fields in `body` differ.
 
 | Type | Body |
 | --- | --- |
-| `turn` | `started_by`: `user`, `agent` or `control`. On ending: `duration_ms`, `usage` |
+| `turn` | `started_by`: `user`, `agent` or `control`. On ending: `duration_ms`, `usage`. Whether there is a fourth source, something on the owner's machine outside the harness, is [Q-25](../open-questions.md#q-25-can-something-outside-the-chat-and-the-harness-start-a-turn) |
 | `message` | `phase`: `commentary` or `final`, when the harness says. `parent`, for a subagent's message |
 | `reasoning` | Nothing beyond the text |
 | `tool` | `kind`, `name`. For a command: `command`, `cwd`, then `exit_code`, `duration_ms`, `output`. For an edit: `changes`, each with a path and a diff. For a search: `query`. Otherwise `input` and `output` |
@@ -130,6 +130,8 @@ Proposed rules, which come from the earlier approvals design
 - Ordinary text such as "yes" or "go ahead" is never treated as an answer to an approval.
 - Answers and controls go to the core and the driver. They are never passed to the model as a prompt.
 - An item can be answered once. Later answers are ignored.
+- The core never answers for anyone. Whether a harness asks at all, and what it does when nobody answers, is
+  the harness's own permission mode ([D-021](../decisions.md#d-021-approval-behaviour-belongs-to-the-harness)).
 
 One exception is forced by the evidence. A question whose `answer_via` is `message` has nothing to answer: the
 harness simply waits for the person's next message. For such a question the reply is an ordinary prompt.
@@ -207,6 +209,8 @@ Detail and evidence for each: [`../reference/harness-messages.md`](../reference/
 
 ## Not designed yet
 
+- **A file the agent sends to the chat.** There is no item for it. This is a known gap
+  ([Q-23](../open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)).
 - **How an event is carried.** The event kind, the tags, and whether an update repeats the whole item or only
   what changed ([Q-01](../open-questions.md#q-01-what-exactly-is-in-an-agent-event),
   [Q-03](../open-questions.md#q-03-where-are-the-event-kinds-specified)).

@@ -216,3 +216,22 @@ that shape. See [`reference/current-connectors.md`](reference/current-connectors
 Decided 2026-11-17. How administration is done is still open
 ([Q-05](open-questions.md#q-05-how-is-the-agent-administered)).
 
+## D-021 Approval behaviour belongs to the harness
+
+**Decision.** Every harness has its own permission mode: ask about everything, ask about some things, or never
+ask. That mode is set up on the harness. The core does not add approval modes of its own on top, per chat or
+otherwise, and it does not answer an approval request itself. It passes requests to the chat and answers back.
+
+What the chat gets is a control that changes the harness's own setting, as part of
+[D-011](#d-011-full-control-from-the-phone). Who may use that control is covered by
+[D-010](#d-010-the-owner-sets-who-may-prompt-and-who-may-approve).
+
+What happens to a request that nobody answers is the harness's behaviour too. Hermes, for one, expires it after
+five minutes and does not run the command.
+
+**Why.** A second layer of permissions in the core would have to mimic each harness's own, and the two could
+disagree. The harness already has the setting, and people already know it from using the harness directly.
+
+Decided 2026-11-17, in response to [issue 7](https://github.com/marmot-protocol/marmot-agents/issues/7), which
+proposed a per-chat approval mode in the core.
+

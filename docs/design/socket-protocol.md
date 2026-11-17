@@ -36,6 +36,10 @@ A connection opens with one exchange. The connector states the protocol version 
 which capabilities its harness supports, and it authenticates. The core refuses a version it does not support
 with a clear error.
 
+Proposed, from [issue 11](https://github.com/marmot-protocol/marmot-agents/issues/11): the connector also states
+its own release version, and a refusal names the driver and the version the core needs. Drivers that run as
+separate programs can fall behind the core, and this makes that easy to see.
+
 ### The driver section
 
 This is the [event model](event-model.md) and the driver trait, as messages.
@@ -67,7 +71,10 @@ Some agents act in the chat on their own initiative, outside a turn: Hermes and 
 message tools. The chat section lets a connector send, edit and delete ordinary messages, add and remove
 reactions, send media, and read history.
 
-The built-in drivers do not need this section. A coding harness only ever speaks through its turn.
+The built-in drivers do not use this section in the current proposal: a coding harness speaks through its
+turn. That may be too narrow. A coding agent may need to send a file
+([Q-23](../open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)), and whether it may do more in the
+chat on its own is open ([Q-24](../open-questions.md#q-24-what-may-an-agent-do-in-the-chat-on-its-own)).
 
 ## What it replaces
 

@@ -164,6 +164,8 @@ again after any new recording, and read the result before committing.
 
 - A to-do list that changes during a turn
 - A rate limit, an expired sign-in, and a harness crash
+- An approval that nobody answers, in Codex and Claude Code
+- A harness that is stopped and restarted in the middle of a turn
 - A file attachment other than an image
 - A subagent in Codex
 - OpenCode, Pi, Goose and OpenClaw
