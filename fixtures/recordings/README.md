@@ -22,7 +22,8 @@ The prompts are scripted and are in the recorder sources.
 
 ## Scenarios
 
-46 recordings: 22 with Codex and 24 with Claude Code.
+46 recordings of coding harnesses: 22 with Codex and 24 with Claude Code. Hermes has 14 more, described
+[below](#hermes).
 
 | Scenario | What it exercises | Codex | Claude |
 | --- | --- | --- | --- |
@@ -74,6 +75,47 @@ Things that did not go as scripted, and are useful for that reason:
 - **Codex `resume`.** The recording has a marker line, `{"_recorder": ...}`, where the app server was stopped
   and started again.
 
+## Hermes
+
+Hermes is a gateway, not a coding harness, so it is recorded differently. A plugin plays the part of a chat
+network: it feeds Hermes scripted messages from named senders, and records every call Hermes makes back.
+What the recordings show is in [`docs/reference/hermes-messages.md`](../../docs/reference/hermes-messages.md).
+
+| | |
+| --- | --- |
+| Runtime | Hermes Agent, commit `40d1e95f` (the canary release of 2026-11-17, v0.23.2), in a container |
+| Model | `z-ai/glm-5.3-flash` through an OpenAI-compatible endpoint |
+| Recorded on | 2026-11-17 |
+| Recorder | [`tools/record/hermes`](../../tools/record/README.md#hermes) |
+
+| Scenario | What it exercises |
+| --- | --- |
+| `simple` | One message in a group, one reply |
+| `direct_message` | One message in a direct chat |
+| `two_senders` | Two people in one group; the second asks about what the first said |
+| `reply` | A reply to another person's earlier message |
+| `tool_call` | The agent runs a command |
+| `approval_allowed`, `approval_denied` | An approval sent as text, answered with `/approve` and `/deny` |
+| `approval_buttons_allowed`, `approval_buttons_denied` | The same, with the platform claiming buttons, answered by a press |
+| `question` | A question with choices, answered by a chat message |
+| `mid_turn_message` | A second message while the agent is working. Also holds an approval that timed out |
+| `stop` | `/stop` during a turn |
+| `commands` | `/help` and `/status` |
+| `not_allowed` | A message from someone who is not on the allow-list, then one from someone who is |
+
+In these files `via` is one of:
+
+| `via` | With `dir` | Meaning |
+| --- | --- | --- |
+| `inbound` | `out` | A scripted chat message handed to Hermes |
+| `hook` | `in` | Hermes called a method on the platform adapter |
+| `result` | `out` | What that method returned to Hermes |
+| `press` | `out` | A scripted press of an approval button |
+| `note` | `out` | A marker written by the recorder |
+
+About four fifths of the lines are `send_typing` calls. The container held no account, key or relay of ours, so
+only paths needed scrubbing.
+
 ## File format
 
 One JSON object per line.
@@ -124,4 +166,5 @@ again after any new recording, and read the result before committing.
 - A rate limit, an expired sign-in, and a harness crash
 - A file attachment other than an image
 - A subagent in Codex
-- OpenCode, Pi, Goose, Hermes and OpenClaw
+- OpenCode, Pi, Goose and OpenClaw
+- Hermes with media, reactions, scheduled jobs and its message tools

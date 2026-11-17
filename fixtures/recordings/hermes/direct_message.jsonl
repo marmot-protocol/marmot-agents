@@ -1,0 +1,90 @@
+{"t": 14, "dir": "in", "via": "hook", "msg": {"method": "connect", "params": {"is_reconnect": false}}}
+{"t": 3016, "dir": "out", "via": "note", "msg": {"scenario": "direct_message", "steps": 1}}
+{"t": 3016, "dir": "out", "via": "inbound", "msg": {"message_id": "in-1", "chat": "alice-dm", "user": "alice", "user_name": "Alice", "text": "Reply with exactly: Hello in private.", "chat_type": "dm"}}
+{"t": 3020, "dir": "in", "via": "hook", "msg": {"method": "on_processing_start", "params": {"event": {"_type": "MessageEvent", "text": "Reply with exactly: Hello in private.", "message_type": "text", "user_id": null, "user_name": null, "source": {"_type": "SessionSource", "platform": "recorder", "chat_id": "alice-dm", "chat_name": "Alice", "chat_type": "dm", "user_id": "alice", "user_name": "Alice", "thread_id": null, "chat_topic": null, "user_id_alt": null, "chat_id_alt": null, "is_bot": false, "scope_id": null, "guild_id": null, "parent_chat_id": null, "message_id": "in-1", "role_authorized": false, "profile": null, "profile_route_rejected": false, "auto_thread_created": false, "auto_thread_initial_name": null, "prospective_thread_id": null, "shared_session": false, "delivered_via_upstream_relay": false, "detached_route": null}, "raw_message": {"chat": "alice-dm", "user": "alice", "user_name": "Alice", "text": "Reply with exactly: Hello in private.", "chat_type": "dm"}, "message_id": "in-1", "ledger_message_id": null, "reply_anchor_override": null, "platform_update_id": null, "media_urls": [], "media_types": [], "media_text_inlined": [], "reply_to_message_id": null, "reply_to_text": null, "reply_to_author_id": null, "reply_to_author_name": null, "reply_to_is_own_message": false, "prompt_response": null, "auto_skill": null, "channel_prompt": null, "channel_context": null, "internal": false, "metadata": {}, "timestamp": "2026-11-17T12:57:28.730324+00:00", "allow_gateway_control": true, "reply_expected": null, "inherit_channel_pin": false, "edit_revision": null, "media_filenames": [], "_gateway_accepted": true, "_admitted_before_drain": false, "_notification_reply_muted": null}}}}
+{"t": 3020, "dir": "out", "via": "result", "msg": {"method": "on_processing_start", "result": null}}
+{"t": 3021, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 3021, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 3472, "dir": "in", "via": "hook", "msg": {"method": "send", "params": {"chat_id": "alice-dm", "content": "📬 No home channel is set for Recorder. A home channel is where Hermes delivers cron job results and cross-platform messages.\n\nType /sethome to make this chat your home channel, or ignore to skip.", "reply_to": null, "metadata": null}}}
+{"t": 3472, "dir": "out", "via": "result", "msg": {"method": "send", "result": {"_type": "SendResult", "success": true, "message_id": "out-2", "error": null, "raw_response": null, "retryable": false, "retry_after": null, "continuation_message_ids": [], "error_kind": null}}}
+{"t": 5021, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 5021, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 7022, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 7022, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 9024, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 9024, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 11025, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 11025, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 13026, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 13026, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 15027, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 15027, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 17028, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 17028, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 19029, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 19029, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 21029, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 21029, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 23030, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 23030, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 25031, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 25031, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 27032, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 27032, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 29032, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 29032, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 31032, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 31032, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 33033, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 33033, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 35034, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 35034, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 37034, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 37034, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 39037, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 39037, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 41039, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 41039, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 43040, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 43040, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 45041, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 45041, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 47041, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 47041, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 49041, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 49041, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 51042, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 51042, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 53043, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 53043, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 55044, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 55044, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 57046, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 57046, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 59047, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 59047, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 61048, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 61048, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 63048, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 63048, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 65050, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 65050, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 67051, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "alice-dm", "metadata": null}}}
+{"t": 67051, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 68200, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "alice-dm"}}}
+{"t": 68200, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 68227, "dir": "in", "via": "hook", "msg": {"method": "send_final_ledgered", "params": {"event": {"_type": "MessageEvent", "text": "Reply with exactly: Hello in private.", "message_type": "text", "user_id": null, "user_name": null, "source": {"_type": "SessionSource", "platform": "recorder", "chat_id": "alice-dm", "chat_name": "Alice", "chat_type": "dm", "user_id": "alice", "user_name": "Alice", "thread_id": null, "chat_topic": null, "user_id_alt": null, "chat_id_alt": null, "is_bot": false, "scope_id": null, "guild_id": null, "parent_chat_id": null, "message_id": "in-1", "role_authorized": false, "profile": null, "profile_route_rejected": false, "auto_thread_created": false, "auto_thread_initial_name": null, "prospective_thread_id": null, "shared_session": false, "delivered_via_upstream_relay": false, "detached_route": null}, "raw_message": {"chat": "alice-dm", "user": "alice", "user_name": "Alice", "text": "Reply with exactly: Hello in private.", "chat_type": "dm"}, "message_id": "in-1", "ledger_message_id": null, "reply_anchor_override": null, "platform_update_id": null, "media_urls": [], "media_types": [], "media_text_inlined": [], "reply_to_message_id": null, "reply_to_text": null, "reply_to_author_id": null, "reply_to_author_name": null, "reply_to_is_own_message": false, "prompt_response": null, "auto_skill": null, "channel_prompt": null, "channel_context": null, "internal": false, "metadata": {}, "timestamp": "2026-11-17T12:57:28.730324+00:00", "allow_gateway_control": true, "reply_expected": null, "inherit_channel_pin": false, "edit_revision": null, "media_filenames": [], "_gateway_accepted": true, "_admitted_before_drain": false, "_notification_reply_muted": null}, "session_key": "agent:main:recorder:dm:alice-dm", "text_content": "Hello in private.", "metadata": {"notify": true}, "reply_to": "in-1", "is_ephemeral_response": false}}}
+{"t": 68238, "dir": "in", "via": "hook", "msg": {"method": "send", "params": {"chat_id": "alice-dm", "content": "Hello in private.", "reply_to": "in-1", "metadata": {"notify": true}}}}
+{"t": 68238, "dir": "out", "via": "result", "msg": {"method": "send", "result": {"_type": "SendResult", "success": true, "message_id": "out-3", "error": null, "raw_response": null, "retryable": false, "retry_after": null, "continuation_message_ids": [], "error_kind": null}}}
+{"t": 68245, "dir": "out", "via": "result", "msg": {"method": "send_final_ledgered", "result": [{"_type": "SendResult", "success": true, "message_id": "out-3", "error": null, "raw_response": null, "retryable": false, "retry_after": null, "continuation_message_ids": [], "error_kind": null}, "<RecorderAdapter>"]}}
+{"t": 68245, "dir": "in", "via": "hook", "msg": {"method": "on_processing_complete", "params": {"message_id": "in-1", "outcome": "success"}}}
+{"t": 68245, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "alice-dm"}}}
+{"t": 68245, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 68245, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "alice-dm"}}}
+{"t": 68245, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 68245, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "alice-dm"}}}
+{"t": 68245, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 68245, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "alice-dm"}}}
+{"t": 68245, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 72245, "dir": "out", "via": "note", "msg": {"finished": "ok"}}
+{"t": 72427, "dir": "in", "via": "hook", "msg": {"method": "disconnect", "params": {}}}

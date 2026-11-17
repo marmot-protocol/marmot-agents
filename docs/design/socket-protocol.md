@@ -54,6 +54,13 @@ This is the [event model](event-model.md) and the driver trait, as messages.
 Hermes and OpenClaw decide for themselves how to route a prompt inside their runtime, so they need the sender
 and the chat on every prompt. That is why those fields are part of the protocol and not an afterthought.
 
+Recordings of Hermes confirm this and add to it
+([`../reference/hermes-messages.md`](../reference/hermes-messages.md)):
+
+- Hermes keeps one session per sender, even inside a group, so the sender decides which session a prompt joins.
+- For a reply, Hermes needs the quoted text and its author on the prompt. It cannot look the message up.
+- For Hermes, a control is a chat message that starts with a slash. Its connector turns "interrupt" into `/stop`.
+
 ### The chat section
 
 Some agents act in the chat on their own initiative, outside a turn: Hermes and OpenClaw give their agents

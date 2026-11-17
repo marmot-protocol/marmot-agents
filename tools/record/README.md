@@ -12,6 +12,7 @@ what the harness actually sends. The recordings they produced are in
 | `inventory.py` | Lists every kind of message in a set of recordings, with field names and types |
 | `demo/` | The small project every scenario runs in |
 | `demo_mcp_server.py` | A minimal MCP server with one tool, for the `mcp_tool` scenario |
+| `hermes/` | A container and a plugin that record the Hermes gateway; see [Hermes](#hermes) |
 
 ## Before you start
 
@@ -60,6 +61,30 @@ its output. A clean exit is necessary, not sufficient: read the diff before you 
 python3 tools/record/inventory.py fixtures/recordings/codex --kinds   # kinds of message and counts
 python3 tools/record/inventory.py fixtures/recordings/claude          # with every field and its type
 ```
+
+## Hermes
+
+Hermes is recorded in a container, with a plugin that plays the chat.
+
+```sh
+tools/record/hermes/record.sh tools/record/hermes/scenarios/simple.json out/simple.jsonl <model-key-file> [model]
+```
+
+- **What it needs.** Docker, and a file holding an API key for an OpenAI-compatible model endpoint. Set
+  `MODEL_BASE_URL` for the endpoint and pass the model name as the last argument.
+- **Every run starts from zero.** The container gets a fresh data volume and is removed afterwards. To reuse a
+  configured Hermes across runs, run the image yourself with a named volume on `/data`.
+- **The key is mounted read-only when the container starts.** It is never built into the image or written to
+  the output.
+- **What is in the image.** Hermes at a pinned commit, and the plugin in `hermes/plugin`. No Marmot, no relay,
+  no account of ours. Change `HERMES_AGENT_REF` in the `Dockerfile` to record a newer Hermes.
+- **A scenario is a JSON file** in `hermes/scenarios`: the chats, and a list of steps. A step is a chat message
+  from a named sender, a wait for Hermes to call a method or send some text, a press of an approval button, or
+  a pause. The step types are listed at the top of `hermes/plugin/__init__.py`.
+- **Reasoning effort.** Hermes asks the model for `medium` by default, and some endpoints refuse values they do
+  not offer. The container sets `high`; override it with `REASONING_EFFORT`.
+
+Scrub the output like any other recording, with the files in a folder named `hermes`.
 
 ## Adding a scenario
 

@@ -56,6 +56,14 @@ users, channels and routing. ACP models one editor user per session, so it has n
 or which group it came from. Their own plugin interfaces do. Each plugin runs inside its runtime and connects to
 the core over [the socket](socket-protocol.md).
 
+### What Hermes can and cannot report
+
+Recordings show that Hermes hands a platform formatted text, not tool events: a line such as "Running a
+command" arrives through the same call as a reply. Only approvals and questions arrive in a structured form. So
+the Hermes connector can report messages, notices, approvals and questions, and cannot report tool calls as
+items without a change on the Hermes side. See
+[`../reference/hermes-messages.md`](../reference/hermes-messages.md).
+
 ## Proposed: the driver trait
 
 Every Rust driver implements one trait. In outline it needs to:
