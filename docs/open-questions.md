@@ -82,6 +82,11 @@ What the credential is, and how a connector's rights differ from an administrato
 One session per chat, per thread, or chosen by the user? How are sessions started, resumed and listed from the
 chat? What happens when one host runs several harnesses, or one group contains several agents?
 
+The current direction, not decided: for a coding harness, each chat has one saved session with each agent in
+it, kept across restarts. A gateway such as Hermes decides its own sessions; it keeps one per sender. Several
+agents in one group are handled by identity, in [Q-08](#q-08-is-each-harness-install-its-own-identity). Raised
+in [issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8).
+
 ### Q-22 Whose rules govern a gateway?
 
 Hermes has its own allow-list, its own sessions (one per sender, even in a group) and its own notices, and it
@@ -91,9 +96,45 @@ person so. The current thinking is that the core checks first and Hermes is conf
 core lets through. Not decided, and OpenClaw has not been looked at yet. See
 [`reference/hermes-messages.md`](reference/hermes-messages.md).
 
-### Q-08 Does each agent keep its own Marmot identity?
+### Q-08 Is each harness install its own identity?
 
-Today each installed connector has its own account and identity. Keeping that is assumed but not decided.
+The current direction, which needs much more product work before it is decided: **each harness install is its
+own Marmot identity, and so its own contact.** Hermes might be one contact, Codex another and Claude Code a
+third, each with its own key, all running on one machine. Linking to a harness is linking to a contact.
+
+This is how today's connectors already work. [Issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8)
+proposed the opposite for groups: one identity that answers for several harnesses, with a `/agent` command to
+switch between them. Separate identities make the switch unnecessary, because you address the one you want.
+
+The rough shape:
+
+- **Who answers.** In a one-to-one chat the agent always answers. In a group it answers only when it is
+  mentioned or replied to. A message addressed to nobody gets no answer. The project owner has said this
+  behaviour is the right one.
+- **No loops.** Agents must not answer each other, and several must not answer at once.
+- **The owner is not a required link.** Nothing forces an agent to state whose it is. An owner who wants to can
+  say so in the agent's profile, for example "Max's Codex" in its name or description.
+- **Sessions.** One saved session per chat for each agent ([Q-07](#q-07-how-does-a-chat-map-to-a-harness-session)).
+
+Still to work out:
+
+- **One program or several.** One program on the machine could hold every identity, which is easier to run and
+  to set up, provided each identity's keys and storage are kept apart. Or each identity could have its own
+  program, as today. Leaning to one program; not explored yet.
+- **How an agent knows another member is an agent**, so that it does not answer it, when no owner link is
+  required. An agent could mark itself as one in its profile. A limit on back-and-forth replies would be a
+  backstop either way.
+- **Every agent in a group reads everything.** A member receives every message, mentioned or not. Five agents
+  in a group means five harness installs holding that chat.
+- **Names.** The identity is per install, so Claude Code on a laptop and on a server are two contacts.
+- **Setup.** Each identity has to be created, named and invited. It should take one step, not five.
+
+### Q-26 How are the core's commands told apart from the harness's?
+
+A harness has its own slash commands; Claude Code alone advertises 59. If the core has commands of its own, a
+typed message could mean either. Options: the apps send core controls as buttons, not typed text, leaving typed
+slash commands for the harness; or the core reserves some names and offers a way to send a message to the
+harness exactly as typed. Raised in [issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8).
 
 ### Q-09 Who owns the queue when a message arrives mid-turn?
 
