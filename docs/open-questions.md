@@ -75,6 +75,15 @@ What the credential is, and how a connector's rights differ from an administrato
 One session per chat, per thread, or chosen by the user? How are sessions started, resumed and listed from the
 chat? What happens when one host runs several harnesses, or one group contains several agents?
 
+### Q-22 Whose rules govern a gateway?
+
+Hermes has its own allow-list, its own sessions (one per sender, even in a group) and its own notices, and it
+drops a disallowed sender without a word. The core has the owner's settings
+([D-010](decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)) and must tell a disallowed
+person so. The current thinking is that the core checks first and Hermes is configured to allow whatever the
+core lets through. Not decided, and OpenClaw has not been looked at yet. See
+[`reference/hermes-messages.md`](reference/hermes-messages.md).
+
 ### Q-08 Does each agent keep its own Marmot identity?
 
 Today each installed connector has its own account and identity. Keeping that is assumed but not decided.

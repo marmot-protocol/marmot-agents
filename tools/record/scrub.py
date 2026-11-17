@@ -4,8 +4,8 @@
 Usage:
     scrub.py <raw-dir> <out-dir> --map <local-path>=<replacement> [--map ...]
 
-`<raw-dir>` holds `codex/*.jsonl` and `claude/*.jsonl` as written by the recorders. The same
-tree is written to `<out-dir>`. The script then scans its own output and exits with an error
+`<raw-dir>` holds one folder per harness (`codex`, `claude`, `hermes`), each with `*.jsonl`
+files as written by the recorders. The same tree is written to `<out-dir>`. The script then scans its own output and exits with an error
 if anything that looks private is left.
 
 What it does:
@@ -91,6 +91,10 @@ class Scrubber:
             msg = {**msg, "params": neutralise(msg["params"])}
         return self.walk(msg)
 
+    def hermes(self, msg: dict) -> dict:
+        # The Hermes container holds no account of ours, so only paths and names need replacing.
+        return self.walk(msg)
+
     def claude(self, msg: dict) -> dict:
         if msg.get("type") in NEUTRALISE_CLAUDE_TYPES:
             keep = {k: msg[k] for k in ("type", "uuid", "session_id") if k in msg}
@@ -137,7 +141,9 @@ def main() -> int:
     maps = [tuple(m.split("=", 1)) for m in args.map]
     s = Scrubber(maps)
     problems = 0
-    for harness in ("codex", "claude"):
+    for harness in ("codex", "claude", "hermes"):
+        if not (args.raw / harness).is_dir():
+            continue
         (args.out / harness).mkdir(parents=True, exist_ok=True)
         for src in sorted((args.raw / harness).glob("*.jsonl")):
             lines = []

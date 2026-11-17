@@ -29,6 +29,7 @@ repository (`integrations/`, `crates/agent-connector`,
 | Check what today's MDK connectors do | `docs/reference/current-connectors.md` |
 | See how T3 Code, Buzz and ACP solve this | `docs/reference/prior-art.md` |
 | See what Codex and Claude Code really send | `docs/reference/harness-messages.md`, then `fixtures/recordings/` |
+| See what Hermes hands a platform plugin | `docs/reference/hermes-messages.md` |
 | Record a new session or scenario | `tools/record/README.md` |
 | Try the event model against the recordings | `tools/prototype/README.md` |
 | Change a diagram | `docs/images/generate.py` |
