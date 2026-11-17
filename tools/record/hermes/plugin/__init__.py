@@ -16,7 +16,12 @@ Environment:
                           {"chat", "user", "text", ...}   a chat message; waits for the turn to end
                                                           unless "wait" is false
                           {"wait_for": "<method>"}        wait until Hermes calls that adapter method
+                          {"wait_for_text": "<words>"}    wait until Hermes sends a message containing them
+                          {"press": "<choice>", "user"}   press a button on the last approval card
+                          {"wait_turn": true}             wait for the running turn to end
                           {"sleep": <seconds>}
+    RECORDER_APPROVAL_BUTTONS  set to 1 to claim native approval buttons, so that Hermes hands over
+                          a structured approval card where it would otherwise send text
     RECORDER_OUT        path of the .jsonl file to write
     RECORDER_TURN_TIMEOUT  seconds to wait for Hermes to finish a turn (default 900)
 """
@@ -84,6 +89,7 @@ class Recording:
         self.file = self.path.open("w", encoding="utf-8")
         self.t0 = time.monotonic()
         self.calls: dict[str, int] = {}
+        self.sent: list[str] = []
         self.changed = asyncio.Event()
 
     def write(self, direction: str, via: str, msg: dict):
@@ -91,12 +97,13 @@ class Recording:
         self.file.flush()
         if via == "hook":
             self.calls[msg.get("method", "")] = self.calls.get(msg.get("method", ""), 0) + 1
+            if msg.get("method") == "send":
+                self.sent.append(str((msg.get("params") or {}).get("content") or ""))
             self.changed.set()
 
-    async def wait_for(self, method: str, count: int, timeout: float) -> bool:
-        """Wait until Hermes has called `method` more than `count` times."""
+    async def wait_until(self, condition, timeout: float) -> bool:
         deadline = time.monotonic() + timeout
-        while self.calls.get(method, 0) <= count:
+        while not condition():
             left = deadline - time.monotonic()
             if left <= 0:
                 return False
@@ -106,6 +113,10 @@ class Recording:
             except asyncio.TimeoutError:
                 return False
         return True
+
+    async def wait_for(self, method: str, count: int, timeout: float) -> bool:
+        """Wait until Hermes has called `method` more than `count` times."""
+        return await self.wait_until(lambda: self.calls.get(method, 0) > count, timeout)
 
 
 def recorded(name, base_fn):
@@ -150,6 +161,7 @@ class RecorderAdapter(BasePlatformAdapter):
         self.turn_done = asyncio.Event()
         self.runner = None
         self.n = 0
+        self.last_prompt = None
 
     # -- what a platform must implement
 
@@ -184,6 +196,24 @@ class RecorderAdapter(BasePlatformAdapter):
             "message_id": getattr(event, "message_id", None), "outcome": jsonable(outcome)}})
         self.turn_done.set()
 
+    async def wait_turn(self, settle: float) -> bool:
+        """Wait for the running turn to end. Hermes can report a turn complete and then start it
+        again a moment later, so wait until nothing is still in progress."""
+        deadline = time.monotonic() + self.turn_timeout
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return False
+            try:
+                await asyncio.wait_for(self.turn_done.wait(), timeout=left)
+            except asyncio.TimeoutError:
+                return False
+            await asyncio.sleep(settle)
+            calls = self.recording.calls
+            if calls.get("on_processing_start", 0) <= calls.get("on_processing_complete", 0):
+                return True
+            self.turn_done.clear()
+
     # -- the scripted chat
 
     async def run_scenario(self):
@@ -194,6 +224,28 @@ class RecorderAdapter(BasePlatformAdapter):
             for step in self.scenario["steps"]:
                 if "sleep" in step:
                     await asyncio.sleep(float(step["sleep"]))
+                    continue
+                if "wait_for_text" in step:
+                    words = step["wait_for_text"]
+                    seen = await self.recording.wait_until(lambda: any(words in t for t in self.recording.sent),
+                                                           float(step.get("timeout", self.turn_timeout)))
+                    self.recording.write("out", "note", {"wait_for_text": words, "seen": seen})
+                    if not seen:
+                        status = f"Hermes never sent a message containing {words!r}"
+                        break
+                    await asyncio.sleep(float(step.get("settle", 1)))
+                    continue
+                if "press" in step:
+                    from tools.approval import resolve_gateway_approval_card
+                    prompt = self.last_prompt
+                    resolved = resolve_gateway_approval_card(prompt.session_key, step["press"], prompt.request_id, actor_id=step.get("user"))
+                    self.recording.write("out", "press", {"choice": step["press"], "user": step.get("user"),
+                                                          "request_id": prompt.request_id, "resolved": resolved})
+                    continue
+                if step.get("wait_turn"):
+                    if not await self.wait_turn(float(step.get("settle", 4))):
+                        status = "timed out waiting for a turn to finish"
+                        break
                     continue
                 if "wait_for" in step:
                     method = step["wait_for"]
@@ -222,17 +274,27 @@ class RecorderAdapter(BasePlatformAdapter):
                 self.turn_done.clear()
                 await self.handle_message(event)
                 if step.get("wait", True):
-                    try:
-                        await asyncio.wait_for(self.turn_done.wait(), timeout=self.turn_timeout)
-                    except asyncio.TimeoutError:
+                    if not await self.wait_turn(float(step.get("settle", 4))):
                         status = "timed out waiting for a turn to finish"
                         self.recording.write("out", "note", {"timeout": message_id})
                         break
-                    await asyncio.sleep(float(step.get("settle", 2)))
         except Exception as exc:
             status = f"failed: {type(exc).__name__}: {exc}"
         self.recording.write("out", "note", {"finished": status})
         os.kill(os.getpid(), signal.SIGTERM)
+
+
+class RecorderAdapterWithButtons(RecorderAdapter):
+    """Claims native approval buttons. Hermes checks for this override, and then hands over a
+    structured approval card where it would otherwise send the approval as text."""
+
+    async def _send_exec_approval_prompt(self, prompt):
+        self.last_prompt = prompt
+        self.recording.write("in", "hook", {"method": "_send_exec_approval_prompt", "params": {"prompt": jsonable(prompt)}})
+        self.n += 1
+        result = SendResult(success=True, message_id=f"out-{self.n}")
+        self.recording.write("out", "result", {"method": "_send_exec_approval_prompt", "result": jsonable(result)})
+        return result
 
 
 for _name in dir(BasePlatformAdapter):
@@ -248,7 +310,7 @@ def register(ctx):
     ctx.register_platform(
         name=PLATFORM,
         label="Recorder",
-        adapter_factory=lambda config: RecorderAdapter(config),
+        adapter_factory=lambda config: (RecorderAdapterWithButtons if os.environ.get("RECORDER_APPROVAL_BUTTONS") == "1" else RecorderAdapter)(config),
         check_fn=lambda: True,
         is_connected=lambda config: True,
         validate_config=lambda config: True,

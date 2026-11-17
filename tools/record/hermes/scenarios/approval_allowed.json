@@ -15,7 +15,7 @@
       "wait": false
     },
     {
-      "wait_for": "send_exec_approval",
+      "wait_for_text": "/approve",
       "timeout": 600
     },
     {
@@ -23,9 +23,6 @@
       "user": "alice",
       "user_name": "Alice",
       "text": "/approve"
-    },
-    {
-      "sleep": 5
     }
   ]
 }
