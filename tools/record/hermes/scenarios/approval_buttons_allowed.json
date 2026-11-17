@@ -1,0 +1,32 @@
+{
+  "name": "approval_buttons_allowed",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_APPROVAL_BUTTONS": "1"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir",
+      "wait": false
+    },
+    {
+      "wait_for": "_send_exec_approval_prompt",
+      "timeout": 600
+    },
+    {
+      "press": "once",
+      "user": "alice"
+    },
+    {
+      "wait_turn": true
+    }
+  ]
+}

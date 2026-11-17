@@ -1,0 +1,31 @@
+{
+  "name": "not_allowed",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_ALLOW_ALL_USERS": "false",
+    "RECORDER_ALLOWED_USERS": "alice"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "mallory",
+      "user_name": "Mallory",
+      "text": "Reply with exactly: you should not answer this.",
+      "wait": false
+    },
+    {
+      "sleep": 20
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Reply with exactly: Hello Alice."
+    }
+  ]
+}

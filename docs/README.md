@@ -92,6 +92,7 @@ Details and reasons are in [`design/drivers.md`](design/drivers.md).
 | What did we learn from other projects? | [`reference/prior-art.md`](reference/prior-art.md) |
 | What interface does each harness offer? | [`reference/harness-interfaces.md`](reference/harness-interfaces.md) |
 | What do Codex and Claude Code actually send? | [`reference/harness-messages.md`](reference/harness-messages.md) |
+| What does Hermes hand a platform? | [`reference/hermes-messages.md`](reference/hermes-messages.md) |
 | Where are the recorded sessions, and how do I record more? | [`../fixtures/recordings`](../fixtures/recordings/README.md), [`../tools/record`](../tools/record/README.md) |
 | Does the event model survive real sessions? | [`../tools/prototype`](../tools/prototype/README.md) |
 

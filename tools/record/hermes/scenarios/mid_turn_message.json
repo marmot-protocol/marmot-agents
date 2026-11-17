@@ -1,0 +1,30 @@
+{
+  "name": "mid_turn_message",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Use your terminal tool to run `sleep 20 && echo done`, then tell me what it printed.",
+      "wait": false
+    },
+    {
+      "sleep": 75
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Also tell me what 6 times 7 is."
+    },
+    {
+      "sleep": 5
+    }
+  ]
+}

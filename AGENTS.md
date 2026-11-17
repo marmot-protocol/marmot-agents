@@ -29,6 +29,7 @@ repository (`integrations/`, `crates/agent-connector`,
 | Check what today's MDK connectors do | `docs/reference/current-connectors.md` |
 | See how T3 Code, Buzz and ACP solve this | `docs/reference/prior-art.md` |
 | See what Codex and Claude Code really send | `docs/reference/harness-messages.md`, then `fixtures/recordings/` |
+| See what Hermes hands a platform plugin | `docs/reference/hermes-messages.md` |
 | Record a new session or scenario | `tools/record/README.md` |
 | Try the event model against the recordings | `tools/prototype/README.md` |
 | Change a diagram | `docs/images/generate.py` |
@@ -86,6 +87,10 @@ Those are things to preserve, not rules to copy.
   line true.
 - **Work items are GitHub issues**, not files. The wiki is not used
   ([D-016](docs/decisions.md#d-016-decisions-and-design-live-in-this-repository-work-items-live-in-issues)).
+- **An issue is a proposal, whoever opened it.** It settles nothing, even when it is titled after an open
+  question or written as if the matter were closed. Read it as input. A point is decided only when the project
+  owner accepts it and it is recorded in `docs/decisions.md`. Do not design or build around an issue that has
+  not been accepted.
 
 ## Writing documents
 
