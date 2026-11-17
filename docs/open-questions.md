@@ -287,6 +287,19 @@ The name of the core program is not chosen. Today's daemon is `wn-agent`.
 Account homes, identities, allow-lists, services and installers exist for every current connector. The cutover
 plan, and when the old code leaves MDK, are open.
 
+The leading requirement, from [issue 10](https://github.com/marmot-protocol/marmot-agents/issues/10): an install
+that moves over keeps its identity, its keys, its encryption state and every group it is in. Nobody has to
+invite an agent again. This fits the identity direction in
+[Q-08](#q-08-is-each-harness-install-its-own-identity): each existing account home is one identity, with nothing
+to merge or split.
+
+One caution about going back. Keeping the old service installed but stopped is cheap insurance, but it only
+works until the new core first opens the store. MDK's storage upgrades run forward only: once a newer version
+has upgraded a database, older programs refuse it. So a way back after that point needs a backup taken before
+the first open, not just the old program.
+
+What an importer carries over, and whether each identity gets its own program, wait until cutover is planned.
+
 ### Q-20 What do the apps need?
 
 Rich rendering needs work in the White Noise apps. Which item types come first, and who does that work, is open.
