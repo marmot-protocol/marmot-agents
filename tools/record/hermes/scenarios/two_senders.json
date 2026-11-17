@@ -1,0 +1,23 @@
+{
+  "name": "two_senders",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "My favourite animal is the marmot. Reply with: Noted."
+    },
+    {
+      "chat": "family",
+      "user": "bob",
+      "user_name": "Bob",
+      "text": "What is Alice's favourite animal? Answer in one word."
+    }
+  ]
+}

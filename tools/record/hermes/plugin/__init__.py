@@ -12,7 +12,11 @@ Each output line is {"t": <ms>, "dir": "in"|"out", "via": ..., "msg": ...}:
     dir "out", via "note"      a marker written by the recorder itself
 
 Environment:
-    RECORDER_SCENARIO   path to a JSON file: {"steps": [{"chat", "chat_type", "user", "user_name", "text", ...}]}
+    RECORDER_SCENARIO   path to a JSON file: {"steps": [...]}. A step is one of:
+                          {"chat", "user", "text", ...}   a chat message; waits for the turn to end
+                                                          unless "wait" is false
+                          {"wait_for": "<method>"}        wait until Hermes calls that adapter method
+                          {"sleep": <seconds>}
     RECORDER_OUT        path of the .jsonl file to write
     RECORDER_TURN_TIMEOUT  seconds to wait for Hermes to finish a turn (default 900)
 """
@@ -79,10 +83,29 @@ class Recording:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.file = self.path.open("w", encoding="utf-8")
         self.t0 = time.monotonic()
+        self.calls: dict[str, int] = {}
+        self.changed = asyncio.Event()
 
     def write(self, direction: str, via: str, msg: dict):
         self.file.write(json.dumps({"t": int((time.monotonic() - self.t0) * 1000), "dir": direction, "via": via, "msg": msg}, ensure_ascii=False) + "\n")
         self.file.flush()
+        if via == "hook":
+            self.calls[msg.get("method", "")] = self.calls.get(msg.get("method", ""), 0) + 1
+            self.changed.set()
+
+    async def wait_for(self, method: str, count: int, timeout: float) -> bool:
+        """Wait until Hermes has called `method` more than `count` times."""
+        deadline = time.monotonic() + timeout
+        while self.calls.get(method, 0) <= count:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return False
+            self.changed.clear()
+            try:
+                await asyncio.wait_for(self.changed.wait(), timeout=left)
+            except asyncio.TimeoutError:
+                return False
+        return True
 
 
 def recorded(name, base_fn):
@@ -171,6 +194,15 @@ class RecorderAdapter(BasePlatformAdapter):
             for step in self.scenario["steps"]:
                 if "sleep" in step:
                     await asyncio.sleep(float(step["sleep"]))
+                    continue
+                if "wait_for" in step:
+                    method = step["wait_for"]
+                    seen = await self.recording.wait_for(method, step.get("after", 0), float(step.get("timeout", self.turn_timeout)))
+                    self.recording.write("out", "note", {"wait_for": method, "seen": seen})
+                    if not seen and step.get("required", True):
+                        status = f"Hermes never called {method}"
+                        break
+                    await asyncio.sleep(float(step.get("settle", 1)))
                     continue
                 self.n += 1
                 message_id = step.get("message_id") or f"in-{self.n}"
