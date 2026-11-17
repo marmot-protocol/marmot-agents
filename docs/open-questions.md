@@ -33,16 +33,37 @@ guarantees. Not yet decided.
 
 ## The socket protocol
 
-### Q-05 What is the relationship to the existing socket protocol?
+### Q-05 How is the agent administered?
 
-MDK's `wn-agent` speaks `marmot.agent-control.v2`. The new protocol could be a new version of it or a fresh
-design. Existing custom clients are built on v2 (see MDK's `integrations/custom-client.md`); what happens to them
-is open.
+Administration means setting up the account, publishing its profile and relay lists, choosing who may invite and
+prompt it, and checking its health. In v2 any connected client can do all of this.
+
+The core is the only process that can open the account, so even a command-line tool has to ask the running core.
+Administration therefore needs messages on a socket. The question is who may send them.
+
+The current thinking:
+
+- **Standing settings live in a configuration file** that the core reads: who may prompt and approve
+  ([D-010](decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)), who may invite, relays and
+  profile.
+- **Actions and status go through the core's own command line**, which talks to the running core using an
+  administration section of v3.
+- **Connectors cannot use that section.** A harness that could change who may prompt it could be talked into
+  widening its own access.
+- **Later, the owner can administer from the chat.**
+
+Open within this: whether administration gets its own socket or a separate credential on the same one, and
+whether creating a group counts as administration or as an ordinary chat action.
+
+The project owner agreed with this direction on 2026-11-17 and chose not to fix its shape yet. It is to be
+decided when drivers are being built against real harnesses, not before.
 
 ### Q-06 How does a program prove it may connect?
 
-Today the socket relies on file permissions, the same user id, or a bearer token. Whether that is enough for
-drivers that run as separate programs is open.
+Today the socket relies on file permissions, the same user id, or a bearer token that grants everything. v3
+authenticates once in the hello ([D-020](decisions.md#d-020-the-socket-speaks-agent-control-v3-with-a-clean-cutover)).
+What the credential is, and how a connector's rights differ from an administrator's
+([Q-05](#q-05-how-is-the-agent-administered)), is open.
 
 ## Conversation handling
 
