@@ -1,0 +1,9 @@
+manifest_version: 1
+name: recorder
+label: Recorder
+kind: platform
+version: 0.0.1
+description: A platform that plays scripted chats into Hermes and records everything Hermes hands back
+author: marmot-protocol
+requires_env: []
+optional_env: []
