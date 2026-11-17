@@ -7,8 +7,9 @@ duplicate it here.
 
 Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) into Marmot group chats.
 
-**Status: planning.** There is no code yet. The work so far is design and decisions under `docs/`. The
-connectors that ship today are in the MDK repository (`integrations/`, `crates/agent-connector`,
+**Status: planning.** There is no connector code yet. The work so far is design and decisions under `docs/`,
+plus recorded harness sessions and the tools that made them. The connectors that ship today are in the MDK
+repository (`integrations/`, `crates/agent-connector`,
 `crates/agent-control`); they are being replaced by what is designed here, not extended.
 
 ## Read these first
@@ -27,6 +28,8 @@ connectors that ship today are in the MDK repository (`integrations/`, `crates/a
 | Add or change a harness driver | `docs/design/drivers.md`, then `docs/reference/harness-interfaces.md` |
 | Check what today's MDK connectors do | `docs/reference/current-connectors.md` |
 | See how T3 Code, Buzz and ACP solve this | `docs/reference/prior-art.md` |
+| See what Codex and Claude Code really send | `docs/reference/harness-messages.md`, then `fixtures/recordings/` |
+| Record a new session or scenario | `tools/record/README.md` |
 | Change a diagram | `docs/images/generate.py` |
 
 ## The shape, in brief
@@ -107,9 +110,18 @@ Other rules:
 ## Privacy
 
 This is a private messenger. Do not put real keys, account or group identifiers, relay addresses, message text,
-prompts or model output into documents, fixtures, tests or logs. A recorded harness session used as a test
-fixture must be scrubbed first. The detailed logging rules are not written yet
+prompts or model output into documents, fixtures, tests or logs. The detailed logging rules are not written yet
 ([Q-13](docs/open-questions.md#q-13-what-may-be-logged)).
+
+Recorded sessions have their own rules:
+
+- **Record only scripted scenarios in a throwaway copy of `tools/record/demo`.** Never commit a recording of
+  real work, even scrubbed.
+- **Keep raw recordings outside the repository.** They contain local paths and account details.
+- **Run `tools/record/scrub.py` and read its output before committing.** It fails if it finds a path, e-mail
+  address, host name or user name, but a clean exit is not proof. Check the diff yourself.
+- **Real sessions may be analysed locally for structure only**: message kinds, field names, types and counts,
+  as in `docs/reference/data/`. Never values.
 
 ## Related repositories
 
@@ -121,7 +133,7 @@ fixture must be scrubbed first. The detailed logging rules are not written yet
 
 ## Verification
 
-There is no code to build or test yet. For a documentation change:
+There is no connector code to build or test yet. For a documentation change:
 
 ```sh
 python3 docs/images/generate.py   # only if you changed a diagram; commit the regenerated files
@@ -129,3 +141,13 @@ git diff --stat                   # the SVG files must not change unless generat
 ```
 
 Check that every relative link you added resolves.
+
+For a change to the recordings or the recording tools:
+
+```sh
+python3 tools/record/inventory.py fixtures/recordings/codex --kinds    # every file must parse
+python3 tools/record/inventory.py fixtures/recordings/claude --kinds
+```
+
+Before relying on a claim in `docs/reference/harness-messages.md`, find it in a recording. Each recording is
+one harness version on one day.

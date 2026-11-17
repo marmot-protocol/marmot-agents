@@ -3,7 +3,9 @@
 Status: draft. The principles are decided
 ([D-007](../decisions.md#d-007-one-shared-event-vocabulary),
 [D-008](../decisions.md#d-008-pass-everything-through)). The item list, the fields and every number on this page
-are proposals. The open points are [Q-01 to Q-04](../open-questions.md#the-event-model).
+are proposals. They have been checked once against real Codex and Claude Code sessions; see
+[Checked against real sessions](#checked-against-real-sessions). The open points are
+[Q-01 to Q-04](../open-questions.md#the-event-model).
 
 This is the most important design in the project. Every driver produces these events and every client draws
 them.
@@ -45,7 +47,8 @@ model. That agreement is the best evidence available of what is common to all ha
 | Approval request | The agent wants permission for one action, with the choices offered |
 | Question | The agent asks the person something, with any choices offered |
 | Subagent | Work the agent handed to another agent |
-| Notice | Compaction, a mode or model change, a warning |
+| Background task | Work that keeps running after the turn that started it, with its progress and outcome |
+| Notice | Compaction, a mode or model change, a warning, the agent waiting |
 | Error | Something failed |
 | Turn | A turn started or ended, with how it ended and any usage figures |
 
@@ -89,6 +92,47 @@ Proposed rules, which come from the earlier approvals design
 - Ordinary text such as "yes" or "go ahead" is never treated as an answer.
 - Answers and controls go to the core and the driver. They are never passed to the model as a prompt.
 - A request can be answered once. Later answers are ignored.
+
+## Checked against real sessions
+
+The proposals above were compared with 26 recorded sessions and with the structure of 176,652 messages from
+real use. The detail is in [`../reference/harness-messages.md`](../reference/harness-messages.md); the
+recordings are in [`fixtures/recordings`](../../fixtures/recordings/README.md).
+
+**What held up**
+
+- **Items with stable ids.** Both harnesses give each piece of work an id and report it when it starts and when
+  it finishes. An event that replaces the earlier state of the same item fits both.
+- **Almost every item on the list.** Messages, reasoning, commands, file changes, tool calls, approval requests,
+  questions, subagents, errors and turns all appear, in one form or another, in both.
+- **Choices supplied by the harness.** Codex sends a list of decisions with each approval request.
+
+**What has to change**
+
+| Finding | Change to the proposal |
+| --- | --- |
+| Background tasks are common in real use and had no item | A background task item is added to the list above |
+| Codex offers an object, not a string, as one of its decisions | The driver gives every choice its own id and keeps the native value. A choice id on the wire is never the native value |
+| Codex accepted a decision that was not in its own list | The driver may add choices the harness accepts but did not list, such as "decline" |
+| Codex can ask a question as a field on an ordinary message, with nothing to answer | A question says how it is answered: by an answer to the request, or by the person's next message |
+| Claude Code's question can hold several questions and allow several selections | A question item holds a list of questions, each single or multiple choice |
+| Steering stays in the turn for Codex and ends the turn for Claude Code | "Steer" is a request the core makes; what happens to the turn is the driver's to report |
+| Claude Code produced a whole turn after a background task finished, with no prompt | A turn records what started it: a person's message, or the agent itself |
+| An interrupted Codex command never reported finishing | When a turn ends, the driver closes every item still open |
+| Half of all traffic is partial text, and much of the rest is bookkeeping | Each driver states which native messages are never sent |
+| Claude Code does not say whether a tool call is a command, an edit or a search | The driver decides from the tool's name; an unknown tool is a plain tool call |
+
+**What is still unchecked**
+
+Neither harness produced a plan in these sessions, so the plan item is untested. Resuming a session, Codex's
+question request, compaction, attachments and failures have not been recorded yet. The list is at the end of
+[`fixtures/recordings/README.md`](../../fixtures/recordings/README.md#not-recorded-yet).
+
+**A number for volume**
+
+In one developer's real use, a turn averaged about 12 tool calls, 7 reasoning blocks and 3.5 pieces of text.
+If each tool call is sent when it starts and again when it finishes, that is roughly 35 events per turn. See
+[Q-12](../open-questions.md#q-12-how-many-events-is-too-many).
 
 ## What is deliberately not in the model
 
