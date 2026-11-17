@@ -1,0 +1,26 @@
+{
+  "id": "recorder",
+  "name": "Recorder",
+  "description": "Plays scripted chats into OpenClaw and records everything it hands back.",
+  "activation": { "onStartup": true, "onChannels": ["recorder"] },
+  "channels": ["recorder"],
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} },
+  "channelConfigs": {
+    "recorder": {
+      "label": "Recorder",
+      "description": "A pretend chat network for recording.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "dmPolicy": { "type": "string", "enum": ["open", "allowlist", "pairing", "disabled"] },
+          "groupPolicy": { "type": "string", "enum": ["open", "allowlist", "disabled"] },
+          "allowFrom": { "type": "array", "items": { "type": "string" } },
+          "groupAllowFrom": { "type": "array", "items": { "type": "string" } },
+          "requireMention": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

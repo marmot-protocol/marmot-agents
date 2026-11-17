@@ -1,0 +1,39 @@
+{
+  "name": "reply",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Remember this: the door code is 4812. Reply with exactly: Noted.",
+      "message_id": "msg-door"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Remember this: the gate code is 7730. Reply with exactly: Noted.",
+      "message_id": "msg-gate"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Remember this: the shed code is 2954. Reply with exactly: Noted.",
+      "message_id": "msg-shed"
+    },
+    {
+      "chat": "family",
+      "user": "bob",
+      "user_name": "Bob",
+      "text": "Which code is in the message I am replying to? Answer with the number only.",
+      "reply_to": "msg-gate"
+    }
+  ]
+}

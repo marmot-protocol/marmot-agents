@@ -1,0 +1,34 @@
+{
+  "name": "mid_turn_message",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Use your exec tool to run `sleep 30 && echo done`, then tell me what it printed.",
+      "wait": false
+    },
+    {
+      "wait_for": "onToolStart",
+      "timeout": 600
+    },
+    {
+      "sleep": 5
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Also tell me what 6 times 7 is."
+    },
+    {
+      "wait_turn": true
+    }
+  ]
+}

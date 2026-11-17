@@ -1,0 +1,26 @@
+{
+  "name": "model_refused",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "OPENCLAW_CONFIG_PATCH": "{\"agents\":{\"defaults\":{\"model\":{\"primary\":\"recorded/z-ai/glm-5.3-flash\"}}},\"models\":{\"providers\":{\"recorded\":{\"models\":[{\"id\":\"z-ai/glm-5.3-flash\",\"name\":\"z-ai/glm-5.3-flash\",\"reasoning\":true,\"input\":[\"text\"],\"cost\":{\"input\":0,\"output\":0,\"cacheRead\":0,\"cacheWrite\":0},\"contextWindow\":128000,\"maxTokens\":8192}]}}}}"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Reply with exactly: Hello from the recording."
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Reply with exactly: Hello again."
+    }
+  ]
+}

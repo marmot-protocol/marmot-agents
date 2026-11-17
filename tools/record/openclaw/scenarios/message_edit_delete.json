@@ -1,0 +1,18 @@
+{
+  "name": "message_edit_delete",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "message_id": "msg-ask",
+      "text": "Use your message tool to send the text 'draft' to this chat, with final set to false so that you can keep working. Then use the message tool to edit that message so it says 'final', and then to delete it. Then reply with exactly: done."
+    }
+  ]
+}

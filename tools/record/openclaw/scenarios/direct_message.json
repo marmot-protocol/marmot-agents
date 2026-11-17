@@ -1,0 +1,17 @@
+{
+  "name": "direct_message",
+  "chats": {
+    "alice-dm": {
+      "name": "Alice",
+      "type": "dm"
+    }
+  },
+  "steps": [
+    {
+      "chat": "alice-dm",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Reply with exactly: Hello in private."
+    }
+  ]
+}

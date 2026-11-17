@@ -1,0 +1,24 @@
+{
+  "name": "tool_call_plain",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_CALLBACKS": "none",
+    "RECORDER_BLOCK_STREAMING": "off",
+    "VERBOSE": "off",
+    "REASONING": "off",
+    "BLOCK_STREAMING": "off"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Use your exec tool to run exactly this command and tell me what it printed: echo recorder-demo"
+    }
+  ]
+}

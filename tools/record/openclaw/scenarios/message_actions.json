@@ -1,0 +1,18 @@
+{
+  "name": "message_actions",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Do these four things with your message tool, in order: react to this message with a thumbs-up emoji; send the text 'draft' to this chat; edit the message you just sent so it says 'final'; delete that message. Then reply with exactly: done.",
+      "message_id": "msg-ask"
+    }
+  ]
+}

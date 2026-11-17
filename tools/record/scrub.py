@@ -4,7 +4,7 @@
 Usage:
     scrub.py <raw-dir> <out-dir> --map <local-path>=<replacement> [--map ...]
 
-`<raw-dir>` holds one folder per harness (`codex`, `claude`, `hermes`), each with `*.jsonl`
+`<raw-dir>` holds one folder per harness (`codex`, `claude`, `hermes`, `openclaw`), each with `*.jsonl`
 files as written by the recorders. The same tree is written to `<out-dir>`. The script then scans its own output and exits with an error
 if anything that looks private is left.
 
@@ -95,6 +95,18 @@ class Scrubber:
         # The Hermes container holds no account of ours, so only paths and names need replacing.
         return self.walk(msg)
 
+    def openclaw(self, msg: dict) -> dict:
+        # The OpenClaw container holds no account of ours. Its status command reports how long
+        # the machine has been up, which describes the machine and not the session.
+        def uptime(v):
+            if isinstance(v, dict):
+                return {k: uptime(x) for k, x in v.items()}
+            if isinstance(v, list):
+                return [uptime(x) for x in v]
+            return MACHINE_UPTIME.sub("system 0h", v) if isinstance(v, str) else v
+
+        return uptime(self.walk(msg))
+
     def claude(self, msg: dict) -> dict:
         if msg.get("type") in NEUTRALISE_CLAUDE_TYPES:
             keep = {k: msg[k] for k in ("type", "uuid", "session_id") if k in msg}
@@ -107,6 +119,8 @@ class Scrubber:
                 msg["apiKeySource"] = "redacted"
         return self.walk(msg)
 
+
+MACHINE_UPTIME = re.compile(r"system \d+[dhms](?: \d+[dhms])*")
 
 SUSPECT = re.compile(
     r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}"  # an e-mail address
@@ -141,7 +155,7 @@ def main() -> int:
     maps = [tuple(m.split("=", 1)) for m in args.map]
     s = Scrubber(maps)
     problems = 0
-    for harness in ("codex", "claude", "hermes"):
+    for harness in ("codex", "claude", "hermes", "openclaw"):
         if not (args.raw / harness).is_dir():
             continue
         (args.out / harness).mkdir(parents=True, exist_ok=True)

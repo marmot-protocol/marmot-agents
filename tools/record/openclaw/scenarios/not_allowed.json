@@ -1,0 +1,33 @@
+{
+  "name": "not_allowed",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_GROUP_POLICY": "allowlist",
+    "RECORDER_GROUP_ALLOW_FROM": "alice",
+    "RECORDER_ALLOW_FROM": "alice",
+    "RECORDER_DM_POLICY": "allowlist"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "mallory",
+      "user_name": "Mallory",
+      "text": "Reply with exactly: you should not answer this.",
+      "wait": false
+    },
+    {
+      "sleep": 20
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Reply with exactly: Hello Alice."
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "simple",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Reply with exactly: Hello from the recording."
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "name": "question",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_QUESTION_BUTTONS": "1"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Use your ask_user tool to ask me which greeting we should use, with the options Hello and Hi. Then reply with only the greeting I chose.",
+      "wait": false
+    },
+    {
+      "wait_for_text": "Reply with the number",
+      "timeout": 600
+    },
+    {
+      "sleep": 2
+    },
+    {
+      "answer": "Hello",
+      "user": "alice"
+    },
+    {
+      "wait_turn": true
+    }
+  ]
+}

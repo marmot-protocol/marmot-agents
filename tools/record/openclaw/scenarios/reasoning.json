@@ -1,0 +1,21 @@
+{
+  "name": "reasoning",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "REASONING": "stream",
+    "THINKING": "high"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "What is 17 times 23? Think it through, then answer with the number only."
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "name": "openclaw-recorder",
+  "version": "0.0.1",
+  "description": "A channel that plays scripted chats into OpenClaw and records everything it hands back",
+  "type": "module",
+  "private": true,
+  "openclaw": {
+    "extensions": ["./index.js"],
+    "channel": {
+      "id": "recorder",
+      "label": "Recorder",
+      "blurb": "Plays scripted chats into OpenClaw and records everything it hands back."
+    },
+    "install": { "minHostVersion": ">=2026.10.10" },
+    "compat": { "pluginApi": ">=2026.10.10" }
+  },
+  "files": ["index.js", "openclaw.plugin.json"],
+  "peerDependencies": { "openclaw": ">=2026.10.10" },
+  "peerDependenciesMeta": { "openclaw": { "optional": true } }
+}

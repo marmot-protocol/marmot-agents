@@ -1,0 +1,32 @@
+{
+  "name": "not_mentioned",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_REQUIRE_MENTION": "true"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Reply with exactly: you should not answer this.",
+      "mentioned": false,
+      "wait": false
+    },
+    {
+      "sleep": 20
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Reply with exactly: Hello Alice.",
+      "mentioned": true
+    }
+  ]
+}

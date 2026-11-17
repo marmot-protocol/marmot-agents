@@ -1,0 +1,27 @@
+{
+  "name": "two_direct_messages",
+  "chats": {
+    "alice-dm": {
+      "name": "Alice",
+      "type": "dm"
+    },
+    "bob-dm": {
+      "name": "Bob",
+      "type": "dm"
+    }
+  },
+  "steps": [
+    {
+      "chat": "alice-dm",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "My favourite animal is the marmot. Reply with exactly: Noted."
+    },
+    {
+      "chat": "bob-dm",
+      "user": "bob",
+      "user_name": "Bob",
+      "text": "What did the last person who wrote to you say their favourite animal is? Answer in one short sentence."
+    }
+  ]
+}
