@@ -122,7 +122,9 @@ Still to work out:
   to set up, provided each identity's keys and storage are kept apart. Or each identity could have its own
   program, as today. Leaning to one program; not explored yet.
 - **How an agent knows another member is an agent**, so that it does not answer it, when no owner link is
-  required. An agent could mark itself as one in its profile. A limit on back-and-forth replies would be a
+  required. The proposal is a flag in the agent's own profile: a Nostr profile (kind 0) keeps its fields in its
+  content, so a true-or-false "this is an agent" field can simply be added. Nostr already has a profile field
+  named `bot` for automated accounts, which may be the one to use. A limit on back-and-forth replies would be a
   backstop either way.
 - **Every agent in a group reads everything.** A member receives every message, mentioned or not. Five agents
   in a group means five harness installs holding that chat.
@@ -135,6 +137,23 @@ A harness has its own slash commands; Claude Code alone advertises 59. If the co
 typed message could mean either. Options: the apps send core controls as buttons, not typed text, leaving typed
 slash commands for the harness; or the core reserves some names and offers a way to send a message to the
 harness exactly as typed. Raised in [issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8).
+
+### Q-27 What happens to a turn when the core or a driver restarts?
+
+People restart connectors for updates without waiting for a turn to finish, and programs crash. Whatever the
+mechanism, a restart during a turn must not:
+
+- lose the chat's saved session;
+- run a prompt twice;
+- leave the chat showing a turn that never ends.
+
+How is open. The simple version: after a restart the chat shows the turn as interrupted, and a person says
+"carry on". [Issue 9](https://github.com/marmot-protocol/marmot-agents/issues/9) proposes more: the core resumes
+the session and runs a "continuation turn" that tells the agent to check what already happened. That means the
+connector sends the model a prompt nobody wrote, which sits badly with staying true to the harness, so it is
+parked as a possible later option. It also depends on things not designed yet: whether a harness even stops when
+the core restarts depends on whether its driver is built in or a separate program. No recording of a restart
+mid-turn exists yet.
 
 ### Q-09 Who owns the queue when a message arrives mid-turn?
 
