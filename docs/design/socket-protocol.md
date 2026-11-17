@@ -36,6 +36,10 @@ A connection opens with one exchange. The connector states the protocol version 
 which capabilities its harness supports, and it authenticates. The core refuses a version it does not support
 with a clear error.
 
+Proposed, from [issue 11](https://github.com/marmot-protocol/marmot-agents/issues/11): the connector also states
+its own release version, and a refusal names the driver and the version the core needs. Drivers that run as
+separate programs can fall behind the core, and this makes that easy to see.
+
 ### The driver section
 
 This is the [event model](event-model.md) and the driver trait, as messages.
