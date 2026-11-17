@@ -121,21 +121,12 @@ People act on the agent in two ways.
 **Answers** respond to something the agent asked: an `approval` or a `question`. An answer names the item it
 answers and the choice or choices made, by id.
 
-**Controls** are things a person does unprompted: interrupt, steer, start or resume a session, switch model or
-mode, run a slash command.
+**Controls** are things a person does unprompted: interrupt, start a new session, change a setting such as the
+model.
 
-Proposed rules, which come from the earlier approvals design
-([Q-04](../open-questions.md#q-04-what-carries-over-from-the-earlier-approvals-design)):
-
-- An answer counts only if it names the exact item and comes from someone allowed to approve.
-- Ordinary text such as "yes" or "go ahead" is never treated as an answer to an approval.
-- Answers and controls go to the core and the driver. They are never passed to the model as a prompt.
-- An item can be answered once. Later answers are ignored.
-- The core never answers for anyone. Whether a harness asks at all, and what it does when nobody answers, is
-  the harness's own permission mode ([D-021](../decisions.md#d-021-approval-behaviour-belongs-to-the-harness)).
-
-One exception is forced by the evidence. A question whose `answer_via` is `message` has nothing to answer: the
-harness simply waits for the person's next message. For such a question the reply is an ordinary prompt.
+How they are carried, what the rules are and who may send which is a proposal of its own:
+[`answers-and-controls.md`](answers-and-controls.md). It also proposes an eleventh item type, `session`, which
+tells an app what a harness lets it set and do.
 
 ## What a driver has to do
 

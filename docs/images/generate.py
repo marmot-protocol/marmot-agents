@@ -322,7 +322,86 @@ def carrier(theme) -> Svg:
     return s
 
 
-DIAGRAMS = {"overview": overview, "layers": layers, "event": event, "carrier": carrier}
+# -- diagram 5: an answer, and the agent's reply ---------------------------------
+
+
+def answer(theme) -> Svg:
+    s = Svg(
+        1000,
+        316,
+        theme,
+        "A person presses Allow once. Their app sends an answer that points at the approval item. "
+        "The agent checks it, passes it to the harness, and edits the approval item to say who answered. "
+        "The edit is what every member's app shows.",
+    )
+    s.box(16, 112, 196, 76, "Alice presses Allow once", ["her app sends an answer"])
+    s.line([(212, 150), (300, 150)])
+    s.text(256, 128, "answer", size=11.5, color="muted", anchor="middle")
+    s.text(256, 142, "kind 1202", size=11.5, color="muted", anchor="middle")
+    s.text(256, 170, "points at", size=11.5, color="muted", anchor="middle")
+    s.text(256, 184, "the item", size=11.5, color="muted", anchor="middle")
+
+    s.frame(300, 30, 420, 250, "The agent's machine")
+    s.box(316, 112, 170, 76, "Core", ["checks that Alice", "may approve"], kind="shared")
+    s.box(506, 64, 198, 76, "Driver and harness", ["the harness gets its", "own kind of answer"], kind="specific")
+    s.box(506, 184, 198, 76, "Edit of the approval item", ["Answered: Allow once,", "by Alice"], kind="shared")
+    s.line([(486, 132), (506, 112)])
+    s.line([(605, 140), (605, 184)])
+
+    s.line([(704, 222), (752, 222), (752, 150), (790, 150)])
+    s.text(760, 240, "edit", size=11.5, color="muted")
+    s.text(760, 254, "kind 1009", size=11.5, color="muted")
+    s.box(790, 104, 194, 92, "Every member's chat", ["the approval row reads", "Allowed once by Alice"])
+    s.text(500, 304, "The press changes nothing by itself. The agent's edit is what counts.", size=11.5, color="muted", anchor="middle")
+    return s
+
+
+# -- diagram 6: the socket, and what travels each way ----------------------------
+
+
+def socket(theme) -> Svg:
+    s = Svg(
+        1000,
+        320,
+        theme,
+        "A connector and the core exchange messages over a local socket. The core sends prompts, answers "
+        "and controls. The connector sends agent events and, for agents that act in the chat, chat requests. "
+        "Keys, relays and group state stay in the core.",
+    )
+    s.frame(16, 30, 300, 270, "A connector, its own program")
+    s.box(32, 70, 268, 70, "The harness", ["Claude Code, Cursor, Hermes, OpenClaw"], kind="specific")
+    s.box(32, 170, 268, 100, "Connector code", ["turns native messages into agent events,", "and answers into the harness's own calls"], kind="specific")
+    s.line([(166, 140), (166, 170)], start_arrow=True)
+
+    s.frame(684, 30, 300, 270, "The core")
+    s.box(700, 70, 268, 70, "Conversation handling", ["who may prompt and approve, sessions"], kind="shared")
+    s.box(700, 170, 268, 100, "The Marmot side", ["keys, groups, relays, storage"], kind="shared")
+    s.line([(834, 140), (834, 170)], start_arrow=True)
+
+    rows = [
+        (84, "prompts, answers, controls", False),
+        (144, "agent events, and the result of each request", True),
+        (204, "chat requests: send, react, read history", True),
+    ]
+    for y, label, to_core in rows:
+        if to_core:
+            s.line([(316, y), (684, y)])
+        else:
+            s.line([(684, y), (316, y)])
+        s.text(500, y - 9, label, size=12, anchor="middle")
+    s.text(500, 250, "One JSON message per line, on a socket", size=11.5, color="muted", anchor="middle")
+    s.text(500, 266, "that only this user can open.", size=11.5, color="muted", anchor="middle")
+    return s
+
+
+DIAGRAMS = {
+    "overview": overview,
+    "layers": layers,
+    "event": event,
+    "carrier": carrier,
+    "answer": answer,
+    "socket": socket,
+}
 
 
 def main() -> None:

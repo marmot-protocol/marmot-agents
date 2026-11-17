@@ -40,7 +40,8 @@ MDK issue 858 and Marmot pull request 503 design approvals and single-choice que
 a durable lifecycle. It covers only two-person chats and requires an acknowledgement that harnesses do not give.
 The current thinking is to keep its rules about authentication (an answer is bound to the exact request, only
 permitted people count, a bare "yes" never counts, answers never reach the model) and to drop its lifecycle
-guarantees. Not yet decided.
+guarantees. Not yet decided. [`design/answers-and-controls.md`](design/answers-and-controls.md) is a proposal
+built on this: answers and controls as one kind of event, resolved by the agent's own reply.
 
 ### Q-23 How does an agent send a file to the chat?
 
@@ -81,7 +82,9 @@ decided when drivers are being built against real harnesses, not before.
 Today the socket relies on file permissions, the same user id, or a bearer token that grants everything. v3
 authenticates once in the hello ([D-020](decisions.md#d-020-the-socket-speaks-agent-control-v3-with-a-clean-cutover)).
 What the credential is, and how a connector's rights differ from an administrator's
-([Q-05](#q-05-how-is-the-agent-administered)), is open.
+([Q-05](#q-05-how-is-the-agent-administered)), is open. There is a proposal in
+[`design/socket-protocol.md`](design/socket-protocol.md#who-may-connect): a token per connector, with its limit
+stated. It does not stop a program running as the same user.
 
 ## Conversation handling
 
@@ -167,6 +170,10 @@ A harness has its own slash commands; Claude Code alone advertises 59. If the co
 typed message could mean either. Options: the apps send core controls as buttons, not typed text, leaving typed
 slash commands for the harness; or the core reserves some names and offers a way to send a message to the
 harness exactly as typed. Raised in [issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8).
+
+[`design/answers-and-controls.md`](design/answers-and-controls.md#7-a-slash-command-is-a-message) proposes the
+first option: a typed slash command always goes to the harness, and the core's controls are never text. Not
+decided.
 
 ### Q-27 What happens to a turn when the core or a driver restarts?
 

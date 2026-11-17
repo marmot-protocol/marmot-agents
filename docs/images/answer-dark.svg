@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 316" width="1000" height="316" role="img" aria-label="A person presses Allow once. Their app sends an answer that points at the approval item. The agent checks it, passes it to the harness, and edits the approval item to say who answered. The edit is what every member's app shows.">
+<title>A person presses Allow once. Their app sends an answer that points at the approval item. The agent checks it, passes it to the harness, and edits the approval item to say who answered. The edit is what every member's app shows.</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8b949e"/></marker></defs>
+<rect width="1000" height="316" fill="#0d1117"/>
+<rect x="16" y="112" width="196" height="76" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+<text x="114.0" y="147.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Alice presses Allow once</text>
+<text x="114.0" y="162.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">her app sends an answer</text>
+<polyline points="212,150 300,150" fill="none" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="256" y="128" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="middle">answer</text>
+<text x="256" y="142" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="middle">kind 1202</text>
+<text x="256" y="170" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="middle">points at</text>
+<text x="256" y="184" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="middle">the item</text>
+<rect x="300" y="30" width="420" height="250" rx="12" fill="none" stroke="#484f58" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="314" y="52" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#9198a1" text-anchor="start">The agent's machine</text>
+<rect x="316" y="112" width="170" height="76" rx="8" fill="#121d2f" stroke="#4493f8" stroke-width="1.5"/>
+<text x="401.0" y="139.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Core</text>
+<text x="401.0" y="154.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">checks that Alice</text>
+<text x="401.0" y="169.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">may approve</text>
+<rect x="506" y="64" width="198" height="76" rx="8" fill="#272115" stroke="#d29922" stroke-width="1.5"/>
+<text x="605.0" y="91.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Driver and harness</text>
+<text x="605.0" y="106.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">the harness gets its</text>
+<text x="605.0" y="121.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">own kind of answer</text>
+<rect x="506" y="184" width="198" height="76" rx="8" fill="#121d2f" stroke="#4493f8" stroke-width="1.5"/>
+<text x="605.0" y="211.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Edit of the approval item</text>
+<text x="605.0" y="226.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">Answered: Allow once,</text>
+<text x="605.0" y="241.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">by Alice</text>
+<polyline points="486,132 506,112" fill="none" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrow)"/>
+<polyline points="605,140 605,184" fill="none" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrow)"/>
+<polyline points="704,222 752,222 752,150 790,150" fill="none" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="760" y="240" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="start">edit</text>
+<text x="760" y="254" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="start">kind 1009</text>
+<rect x="790" y="104" width="194" height="92" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+<text x="887.0" y="139.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Every member's chat</text>
+<text x="887.0" y="154.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">the approval row reads</text>
+<text x="887.0" y="169.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">Allowed once by Alice</text>
+<text x="500" y="304" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="middle">The press changes nothing by itself. The agent's edit is what counts.</text>
+</svg>
