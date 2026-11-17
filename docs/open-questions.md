@@ -55,6 +55,9 @@ The current thinking:
 Open within this: whether administration gets its own socket or a separate credential on the same one, and
 whether creating a group counts as administration or as an ordinary chat action.
 
+The project owner agreed with this direction on 2026-11-17 and chose not to fix its shape yet. It is to be
+decided when drivers are being built against real harnesses, not before.
+
 ### Q-06 How does a program prove it may connect?
 
 Today the socket relies on file permissions, the same user id, or a bearer token that grants everything. v3
