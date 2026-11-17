@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 330" width="1000" height="330" role="img" aria-label="A native harness event becomes one Marmot agent event with three parts: an item type from the shared vocabulary, a plain rendering any client can show, and the untouched native payload.">
+<title>A native harness event becomes one Marmot agent event with three parts: an item type from the shared vocabulary, a plain rendering any client can show, and the untouched native payload.</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#8b949e"/></marker></defs>
+<rect width="1000" height="330" fill="#0d1117"/>
+<rect x="16" y="62" width="250" height="206" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+<text x="141" y="46" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" fill="#e6edf3" text-anchor="middle">What the harness sends</text>
+<text x="30" y="92" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="11.5" font-weight="400" fill="#e6edf3" text-anchor="start">{</text>
+<text x="44" y="113" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="11.5" font-weight="400" fill="#e6edf3" text-anchor="start">"type": "commandExecution",</text>
+<text x="44" y="134" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="11.5" font-weight="400" fill="#e6edf3" text-anchor="start">"command": "cargo test",</text>
+<text x="44" y="155" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="11.5" font-weight="400" fill="#e6edf3" text-anchor="start">"status": "completed",</text>
+<text x="44" y="176" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="11.5" font-weight="400" fill="#e6edf3" text-anchor="start">"exitCode": 0,</text>
+<text x="44" y="197" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="11.5" font-weight="400" fill="#e6edf3" text-anchor="start">"durationMs": 8412,</text>
+<text x="44" y="218" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="11.5" font-weight="400" fill="#e6edf3" text-anchor="start">"aggregatedOutput": "..."</text>
+<text x="30" y="239" font-family="ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace" font-size="11.5" font-weight="400" fill="#e6edf3" text-anchor="start">}</text>
+<text x="141" y="290" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">an illustrative Codex event</text>
+<polyline points="266,165 350,165" fill="none" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="308" y="155" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#9198a1" text-anchor="middle">translate</text>
+<rect x="350" y="30" width="320" height="270" rx="12" fill="none" stroke="#484f58" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="364" y="52" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="12" font-weight="600" fill="#9198a1" text-anchor="start">One Marmot agent event</text>
+<rect x="366" y="64" width="288" height="64" rx="8" fill="#121d2f" stroke="#4493f8" stroke-width="1.5"/>
+<text x="510.0" y="93.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Item type: command run</text>
+<text x="510.0" y="108.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">from the shared vocabulary</text>
+<rect x="366" y="140" width="288" height="64" rx="8" fill="#121d2f" stroke="#4493f8" stroke-width="1.5"/>
+<text x="510.0" y="169.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Plain rendering</text>
+<text x="510.0" y="184.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">“Ran cargo test · finished · exit 0”</text>
+<rect x="366" y="216" width="288" height="64" rx="8" fill="#272115" stroke="#d29922" stroke-width="1.5"/>
+<text x="510.0" y="245.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Native payload</text>
+<text x="510.0" y="260.0" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">the harness's event, untouched</text>
+<rect x="744" y="66" width="244" height="84" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+<text x="866.0" y="97.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">A client that knows this item</text>
+<text x="866.0" y="112.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">draws a rich command card,</text>
+<text x="866.0" y="127.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">using the native payload</text>
+<rect x="744" y="190" width="244" height="84" rx="8" fill="#161b22" stroke="#30363d" stroke-width="1.5"/>
+<text x="866.0" y="221.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#e6edf3" text-anchor="middle">Any other client</text>
+<text x="866.0" y="236.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">shows the plain rendering,</text>
+<text x="866.0" y="251.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="11" font-weight="400" fill="#9198a1" text-anchor="middle">so nothing is unreadable</text>
+<polyline points="670,108 744,108" fill="none" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrow)"/>
+<polyline points="670,232 744,232" fill="none" stroke="#8b949e" stroke-width="1.5" marker-end="url(#arrow)"/>
+</svg>
