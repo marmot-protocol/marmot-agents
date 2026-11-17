@@ -44,6 +44,29 @@ reply reference (lines 444 to 460, checked). The apps receive timeline updates f
 (`crates/marmot-uniffi/src/conversions/timeline.rs`). Only the Hermes plugin sends it, and only with status
 "started".
 
+### Which requests each client uses
+
+Counted on 2026-11-17 by searching each client's source for every request type's name, tests excluded.
+
+| Client | Request types used, of 54 |
+| --- | --- |
+| Hermes plugin | 31 |
+| OpenClaw plugin | 26 |
+| Terminal harness | 15 |
+| The custom-client guide | 4: `subscribe_inbound`, `send_final`, `account_list`, `group_create` |
+| None of the above | 17 |
+
+- **Used by both plugins:** inbound subscription, history, send, edit, delete, reactions, media, the seven
+  preview-stream requests, account list, profile publish and lookup, group info and profile update, and the
+  invite allow-list.
+- **Used by Hermes only:** relay-list reads and edits, agent activity, diagnostics.
+- **Used by the terminal harness only:** group creation, maintenance status and run, a debug request.
+- **Used by none:** account creation, KeyPackage publication, group system events, group creation with admins,
+  leave, group admin changes, six maintenance requests, invite-policy get and set, debug injection, and three
+  attachment requests.
+
+According to the project owner, every client of v2 in use today is one of the project's own.
+
 ## Terminal harnesses
 
 All five work the same way.

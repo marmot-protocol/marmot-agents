@@ -8,7 +8,8 @@ This is the record of what has been decided and why. It exists so that settled p
 - A point that is not here is not decided. Proposals live in the `design/` documents and in
   [`open-questions.md`](open-questions.md).
 
-All entries so far were decided by the project owner in the planning discussion of 2026-11-17.
+All entries were decided by the project owner. Entries without a date were decided in the planning
+discussion of 2026-11-17.
 
 ## D-001 Connectors live in this repository
 
@@ -191,3 +192,27 @@ holder, and the repository is public.
 
 **Why.** It matches MDK and the rest of the organisation's repositories, and the design is meant to be read and
 built on by others ([D-014](#d-014-outside-developers-can-write-connectors-later)).
+
+## D-020 The socket speaks agent-control v3, with a clean cutover
+
+**Decision.**
+
+- The socket protocol is `marmot.agent-control.v3`. It keeps the conventions of v2: a Unix socket and one JSON
+  message per line.
+- The core does not speak v2 and there is no compatibility layer. The connectors move to v3 in one cutover.
+- A connection opens with a hello: the connector states its protocol version, what it is and what it supports,
+  and authenticates once.
+- v3 has a **driver section**, which mirrors the driver trait, so a program on the socket is a remote driver.
+- v3 has a **chat section** for ordinary messages: send, edit, delete, react, send media and read history.
+  Hermes and OpenClaw need it because their agents use message tools on their own initiative.
+- v3 has no live preview stream. That waits for the streaming question
+  ([Q-14](open-questions.md#q-14-what-happens-to-the-quic-preview-stack)).
+
+**Why.** Every existing client of v2 is ours and is being rewritten for the new design anyway, so compatibility
+would protect nobody. v2 is built around chat messages and administration; of its 54 request types, 17 are used
+by none of our clients and 7 belong to the preview stream. Starting clean keeps the new core from inheriting
+that shape. See [`reference/current-connectors.md`](reference/current-connectors.md#which-requests-each-client-uses).
+
+Decided 2026-11-17. How administration is done is still open
+([Q-05](open-questions.md#q-05-how-is-the-agent-administered)).
+
