@@ -3,8 +3,9 @@
 Status: draft 0. The principles are decided
 ([D-007](../decisions.md#d-007-one-shared-event-vocabulary),
 [D-008](../decisions.md#d-008-pass-everything-through)). Everything else on this page is a proposal: the item
-types, the fields and the rules. It is no longer a guess, though. A prototype applies it to 50 recorded Codex
-and Claude Code sessions, and every native message either becomes an agent event or is deliberately not sent.
+types, the fields and the rules. It is no longer a guess, though. A prototype applies it to 64 recorded sessions
+with Codex, Claude Code and Hermes, and every native message either becomes an agent event or is deliberately
+not sent.
 See [Checked against real sessions](#checked-against-real-sessions). The open points are
 [Q-01 to Q-04](../open-questions.md#the-event-model).
 
@@ -147,8 +148,9 @@ look right and are wrong.
    listing it, and lists nothing at all for a file change.
 3. **Close open items when a turn ends, and close the turn when the harness stops.** An interrupted Codex
    command never reports that it stopped, and a harness that is killed mid-turn sends nothing at all.
-4. **Recognise questions and plans that arrive as tool calls.** Claude Code asks questions and proposes plans
-   through tools. They become one `question` or `plan`, not a tool call as well.
+4. **Recognise questions and plans that arrive as tool calls, or twice.** Claude Code asks questions and proposes
+   plans through tools. Hermes sends a question in a structured form and again as text. Each becomes one
+   `question` or `plan`, not two things.
 5. **Decide the kind of a tool call.** Claude Code gives only a tool name.
 6. **Say what started a turn.** A turn can follow a person's message, the agent's own background work, or a
    control such as compaction.
@@ -167,14 +169,21 @@ driver code.
 
 | | |
 | --- | --- |
-| Recordings | 50: 24 Codex, 26 Claude Code |
-| Native messages | 2,157 |
-| Agent events produced | 399 |
+| Recordings | 64: 24 Codex, 26 Claude Code, 14 Hermes |
+| Native messages | 4,775 |
+| Agent events produced | 519 |
 | Native messages with no rule | 0 |
 | Items left open at the end of a recording | 0 |
 
-The events by type: 130 `turn`, 124 `tool`, 80 `message`, 34 `approval`, 13 `notice`, 8 `task`, 6 `question`,
+The events by type: 170 `turn`, 124 `tool`, 97 `message`, 64 `notice`, 44 `approval`, 8 `question`, 8 `task`,
 2 `plan`, 1 `error`, 1 `reasoning`.
+
+**A gateway fits, with less to say.** Hermes was added after the two coding harnesses, as a check that the ten
+types are not shaped around them. Its 2,618 native calls became 120 events with no new type needed. But it uses
+only five of the ten: `turn`, `message`, `notice`, `approval` and `question`. It produces no `tool` items at all,
+because Hermes gives a platform a formatted line of text about a tool, not the tool call. Those lines can only
+become notices, and 51 of its 120 events are notices. See
+[`../reference/hermes-messages.md`](../reference/hermes-messages.md).
 
 **What changed since the first proposal**
 
@@ -212,9 +221,6 @@ Detail and evidence for each: [`../reference/harness-messages.md`](../reference/
 
 - **A file the agent sends to the chat.** There is no item for it. This is a known gap
   ([Q-23](../open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)).
-- **How an event is carried.** The event kind, the tags, and whether an update repeats the whole item or only
-  what changed ([Q-01](../open-questions.md#q-01-what-exactly-is-in-an-agent-event),
-  [Q-03](../open-questions.md#q-03-where-are-the-event-kinds-specified)).
-- **Size limits**, and what happens to output that exceeds them
-  ([Q-02](../open-questions.md#q-02-what-happens-to-large-output)).
+- **How an event is carried, and size limits.** There is a proposal: [`event-carrier.md`](event-carrier.md). It
+  covers the event kind, how an item is updated, a size limit and who gets alerted. Not decided.
 - **The exact form of an answer and of each control.**

@@ -290,7 +290,39 @@ def event(theme) -> Svg:
     return s
 
 
-DIAGRAMS = {"overview": overview, "layers": layers, "event": event}
+# -- diagram 4: one item, sent again and again ---------------------------------
+
+
+def carrier(theme) -> Svg:
+    s = Svg(
+        1000,
+        300,
+        theme,
+        "An agent sends the same item three times, each with a higher version. "
+        "The chat shows one row, in place, holding the latest version.",
+    )
+    s.text(180, 40, "What the agent sends, over time", size=12.5, weight=600, anchor="middle")
+    rows = [
+        (60, "Item turn-42 · version 1", "Working"),
+        (136, "Item turn-42 · version 2", "Working · ran 3 commands"),
+        (212, "Item turn-42 · version 3", "Finished · ran 12 commands, edited 3 files"),
+    ]
+    for y, title, sub in rows:
+        s.box(16, y, 328, 58, title, [sub], kind="specific" if y == 212 else "box")
+    s.line([(344, 241), (430, 241), (430, 179), (580, 179)])
+    s.text(452, 232, "same item,", size=11.5, color="muted")
+    s.text(452, 247, "higher version", size=11.5, color="muted")
+    s.text(452, 262, "replaces", size=11.5, color="muted")
+
+    s.frame(560, 50, 424, 220, "What the chat shows")
+    s.box(580, 96, 384, 44, "Alice: run the tests and fix what fails", [], title_size=12)
+    s.box(580, 150, 384, 58, "One row, updated in place", ["Finished · ran 12 commands, edited 3 files"], kind="shared")
+    s.text(772, 236, "Versions 1 and 2 are no longer shown.", size=11.5, color="muted", anchor="middle")
+    s.text(772, 252, "The row stays where version 1 first appeared.", size=11.5, color="muted", anchor="middle")
+    return s
+
+
+DIAGRAMS = {"overview": overview, "layers": layers, "event": event, "carrier": carrier}
 
 
 def main() -> None:

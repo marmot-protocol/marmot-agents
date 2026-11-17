@@ -194,6 +194,31 @@ normally.
   `on_processing_complete` sometimes arrived within a second, followed by a second `on_processing_start`. A
   platform cannot treat the first "complete" as the end of the turn.
 
+## Through the prototype translator
+
+The prototype that turns recordings into the proposed agent events
+([`tools/prototype`](../../tools/prototype/README.md)) was extended to Hermes, as a check that the event model
+is not shaped around coding harnesses.
+
+| | |
+| --- | --- |
+| Native calls and scripted messages | 2,618 |
+| Agent events produced | 120 |
+| Calls with no rule | 0 |
+
+The events by type: 51 `notice`, 40 `turn`, 17 `message`, 10 `approval`, 2 `question`.
+
+- **No new item type was needed.** Hermes fits the ten.
+- **It uses five of them.** There is no `tool`, `reasoning`, `plan`, `task` or `error`, because Hermes does not
+  hand those to a platform as such.
+- **Notices carry what tools would have.** The 18 tool progress lines became notices of kind `activity`, and
+  Hermes's own messages became notices of kinds `runtime`, `progress`, `steered`, `stopped` and
+  `command_output`.
+- **The translator tells them apart by their first character.** A line is taken as tool activity because it
+  starts with one of ten emoji, and as a runtime notice because it starts with another. That is fragile: it
+  depends on Hermes's wording. The `metadata` hint is firmer but covers less.
+- **The question was sent twice**, once structured and once as text. The translator keeps the structured one.
+
 ## What this means for the design
 
 1. **The Hermes connector cannot report tool calls as items.** Hermes gives a platform formatted lines, not

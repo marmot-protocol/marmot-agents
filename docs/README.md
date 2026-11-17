@@ -86,6 +86,7 @@ Details and reasons are in [`design/drivers.md`](design/drivers.md).
 | What is still undecided? | [`open-questions.md`](open-questions.md) |
 | How do the parts work together, step by step? | [`design/architecture.md`](design/architecture.md) |
 | What does an agent event contain? | [`design/event-model.md`](design/event-model.md) |
+| How does an agent event travel, and how is an item updated? | [`design/event-carrier.md`](design/event-carrier.md) |
 | What travels over the socket? | [`design/socket-protocol.md`](design/socket-protocol.md) |
 | How is each harness driven, and how do I add one? | [`design/drivers.md`](design/drivers.md) |
 | What do today's connectors in MDK do? | [`reference/current-connectors.md`](reference/current-connectors.md) |

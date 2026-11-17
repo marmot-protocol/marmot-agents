@@ -10,17 +10,24 @@ The first three block the most other work.
 ### Q-01 What exactly is in an agent event?
 
 [`design/event-model.md`](design/event-model.md) is now a concrete draft: ten item types, the fields of each,
-and ten rules for drivers. A prototype applies it to 50 recorded Codex and Claude Code sessions with nothing
-left over. It is still a proposal. To settle: whether these are the right types and fields, how an event is
+and ten rules for drivers. A prototype applies it to 64 recorded sessions with Codex, Claude Code and
+Hermes, with nothing left over. It is still a proposal. To settle: whether these are the right types and fields, how an event is
 carried (the kind, the tags, and whether an update repeats the whole item), and the size limits. A to-do list
 that changes during a turn has not been seen in a recording.
 
 ### Q-02 What happens to large output?
 
+There is a proposal in [`design/event-carrier.md`](design/event-carrier.md#size): an agent item is at most
+16 KB, which carried about 98.6% of tool outputs whole in one developer's real use. Not decided. How the full
+output is fetched afterwards is still open.
+
 A tool result can be megabytes. Relays limit event size, and every durable event is stored on every member's
 devices. Options are to cut output off with a marker, to send it as an encrypted attachment, or both.
 
 ### Q-03 Where are the event kinds specified?
+
+The carrier proposal ([`design/event-carrier.md`](design/event-carrier.md)) lists what the Marmot specification
+and MDK would each need. Kinds 1201 and 1202 are already reserved for agent events, with no definition yet.
 
 The kinds are Marmot events, so their definition probably belongs in the
 [Marmot specification](https://github.com/marmot-protocol/marmot), with MDK exposing them to the apps. The

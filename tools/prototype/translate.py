@@ -660,12 +660,179 @@ class Claude(Translator):
         self.unknown(f"system / {st}")
 
 
+# ---------------------------------------------------------------------------- Hermes
+
+
+class Hermes(Translator):
+    """Hermes hands a platform formatted text, not tool events. So most of what it sends can only
+    become a message or a notice. Approvals and questions are the exception."""
+
+    harness = "hermes"
+    NOT_SENT = {"send_typing", "stop_typing", "connect", "disconnect", "get_chat_info", "format_tool_preview",
+                "format_tool_event", "send_final_ledgered", "send_exec_approval", "render_message_event"}
+    # A line Hermes writes about a tool it is running. There is no structured form of this.
+    TOOL_LINE = ("💻", "🔍", "🔎", "⚙️", "🐍", "📄", "🌐", "🧠", "✏️", "📝")
+    NOTICES = [
+        ("📬", "runtime"), ("⏳", "progress"), ("↪", "steered"), ("⚡", "stopped"),
+        ("📖", "command_output"), ("📊", "command_output"), ("⚠️ Your message was interrupted", "runtime"),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.sent: dict[str, dict] = {}  # Hermes's id for a message it sent -> the event it became
+        self.last_send = None
+        self.approval = None  # the open approval item, if any
+        self.question = None  # the open question item, if any
+        self.final_next = False
+
+    def feed(self, rec):
+        m, via = rec["msg"], rec.get("via")
+        if via == "note":
+            return self.skip("recorder note")
+        if via == "inbound":
+            return self.inbound(m)
+        if via == "press":
+            return self.press(m)
+        method = m.get("method")
+        if via == "result":
+            if method in ("send", "_send_exec_approval_prompt") and self.last_send is not None:
+                mid = (m.get("result") or {}).get("message_id")
+                if mid:
+                    self.sent[mid] = self.last_send
+            return self.skip(f"result of {method}")
+        p = m.get("params") or {}
+        if method in self.NOT_SENT:
+            if method == "send_final_ledgered":
+                self.final_next = True
+            return self.skip(method)
+        handler = {
+            "on_processing_start": self.turn_start, "on_processing_complete": self.turn_end, "send": self.send,
+            "edit_message": self.edit, "send_clarify": self.clarify, "_send_exec_approval_prompt": self.approval_card,
+        }.get(method)
+        if handler is None:
+            return self.unknown(str(method))
+        handler(method, p)
+
+    # -- what people send
+
+    def inbound(self, m):
+        text = str(m.get("text") or "").strip()
+        if self.approval and text.split(" ")[0] in ("/approve", "/deny"):
+            return self.skip("client: answer to an approval, as a slash command")
+        if self.question and self.question in self.open:
+            prev = self.open[self.question]
+            self.emit(self.question, "question", "done", prev["title"], "Answered",
+                      {**prev["body"], "answer": text}, "inbound message, taken as the answer", m)
+            self.question = None
+            return
+        self.skip("client: chat message")
+
+    def press(self, m):
+        item = self.approval
+        prev = self.open.get(item) if item else None
+        if prev is None:
+            return self.skip("client: button press")
+        chosen = next((c for c in prev["body"]["choices"] if c.get("native") == m.get("choice")), None)
+        allow = bool(chosen and chosen["effect"] == "allow")
+        self.emit(item, "approval", "done" if allow else "declined", prev["title"],
+                  "Answered: " + (chosen["label"] if chosen else str(m.get("choice"))),
+                  {**prev["body"], "answer": {"choice": chosen["id"] if chosen else None}}, "button press", m)
+        self.approval = None
+
+    # -- turns
+
+    def turn_start(self, method, p):
+        ev = p.get("event") or {}
+        src = ev.get("source") or {}
+        self.session = f"{src.get('chat_type')}:{src.get('chat_id')}:{src.get('user_id')}"
+        self.turn = ev.get("message_id")
+        # Hermes can report a turn complete and start it again a moment later. The same item id
+        # means the second start simply replaces the first "done".
+        self.emit(f"turn:{self.turn}", "turn", "running", "Working", body={"started_by": "user"}, native_kind=method, native=ev)
+
+    def turn_end(self, method, p):
+        if self.turn is None:
+            return self.skip("on_processing_complete with no turn open")
+        outcome = p.get("outcome")
+        state = {"success": "done", "failure": "failed", "cancelled": "cancelled"}.get(outcome, "done")
+        still = [i for i, e in self.open.items() if e["type"] not in ("turn", "task")]
+        if state != "done" or not still:
+            self.close_open_items(f"the turn ended with outcome {outcome}")
+        title = {"done": "Finished", "failed": "Failed", "cancelled": "Interrupted"}[state]
+        self.emit(f"turn:{self.turn}", "turn", state, title, body={"started_by": "user"}, native_kind=method, native=p)
+
+    # -- everything that arrives as text
+
+    def send(self, method, p):
+        content = str(p.get("content") or "")
+        meta = p.get("metadata") or {}
+        self.seq_hint = None
+        item = f"sent:{self.seq + 1}"
+        final, self.final_next = self.final_next, False
+        if meta.get("is_approval_prompt") or content.startswith("⚠️ **Hermes wants"):
+            choices = [{"id": "c0", "label": "Allow once", "effect": "allow", "native": "/approve"},
+                       {"id": "c1", "label": "Allow for this session", "effect": "allow", "native": "/approve session"},
+                       {"id": "c2", "label": "Always allow", "effect": "allow", "native": "/approve always"},
+                       {"id": "c3", "label": "Deny", "effect": "deny", "native": "/deny"}]
+            self.approval = item
+            self.last_send = self.emit(item, "approval", "waiting", "Allow this command?", content,
+                                       {"answer_via": "message", "choices": choices}, "send [approval prompt as text]", p)
+            return
+        if content.startswith(("✅ Command approved", "❌ Command denied", "⌛ Approval timed out")) and self.approval in self.open:
+            prev = self.open[self.approval]
+            state = "done" if content.startswith("✅") else "declined" if content.startswith("❌") else "cancelled"
+            self.last_send = self.emit(self.approval, "approval", state, prev["title"], content, prev["body"],
+                                       "send [approval outcome as text]", p)
+            self.approval = None
+            return
+        if content.startswith("❓") and self.question in self.open:
+            self.last_send = None
+            return self.skip("send: a question as text, already sent in structured form")
+        for prefix, kind in self.NOTICES:
+            if content.startswith(prefix):
+                self.last_send = self.emit(item, "notice", "done", "Notice", content, {"kind": kind}, f"send [{kind} notice]", p)
+                return
+        if content.startswith(self.TOOL_LINE):
+            self.last_send = self.emit(item, "notice", "done", "Activity", content, {"kind": "activity"}, "send [tool progress line]", p)
+            return
+        phase = "final" if (final or meta.get("notify")) else "commentary"
+        self.last_send = self.emit(item, "message", "done", "Message", content, {"phase": phase}, f"send [{phase} text]", p)
+
+    def edit(self, method, p):
+        prev = self.sent.get(p.get("message_id"))
+        if prev is None:
+            return self.unknown("edit_message for a message that was not sent")
+        self.emit(prev["item"], prev["type"], prev["state"], prev["title"], p.get("content"), prev["body"], method, p)
+
+    # -- the two structured calls
+
+    def clarify(self, method, p):
+        qs = [{"id": "q0", "text": p.get("question"), "multiple": False, "allow_text": True,
+               "options": [{"id": f"o{k}", "label": c} for k, c in enumerate(p.get("choices") or [])]}]
+        self.question = f"question:{p.get('clarify_id')}"
+        self.emit(self.question, "question", "waiting", "Question", p.get("question"),
+                  {"answer_via": "message", "questions": qs}, method, p)
+
+    def approval_card(self, method, p):
+        prompt = p.get("prompt") or {}
+        choices = [{"id": f"c{n}", "label": label, "effect": "deny" if choice == "deny" else "allow", "native": choice}
+                   for n, (label, choice, _style) in enumerate(prompt.get("actions") or [])]
+        self.approval = f"approval:{prompt.get('request_id')}"
+        self.last_send = self.emit(self.approval, "approval", "waiting", "Allow this command?", prompt.get("command"),
+                                   {"answer_via": "request", "reason": prompt.get("description"), "choices": choices}, method, prompt)
+
+
 # ---------------------------------------------------------------------------- driver
 
 
 def translate(path: Path) -> Translator:
     recs = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    t = Claude() if any("via" in r for r in recs) else Codex()
+    if any(r.get("via") == "hook" for r in recs):
+        t = Hermes()
+    elif any("via" in r for r in recs):
+        t = Claude()
+    else:
+        t = Codex()
     for r in recs:
         t.feed(r)
     return t

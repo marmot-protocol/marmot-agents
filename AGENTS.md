@@ -23,7 +23,7 @@ repository (`integrations/`, `crates/agent-connector`,
 | Task | Start here |
 | --- | --- |
 | Understand how the parts fit | `docs/design/architecture.md` |
-| Work on what agents send to the chat | `docs/design/event-model.md` |
+| Work on what agents send to the chat | `docs/design/event-model.md`, then `docs/design/event-carrier.md` |
 | Work on the boundary to TypeScript and Python programs | `docs/design/socket-protocol.md` |
 | Add or change a harness driver | `docs/design/drivers.md`, then `docs/reference/harness-interfaces.md` |
 | Check what today's MDK connectors do | `docs/reference/current-connectors.md` |
@@ -154,7 +154,7 @@ For a change to the recordings or the recording tools:
 ```sh
 python3 tools/record/inventory.py fixtures/recordings/codex --kinds    # every file must parse
 python3 tools/record/inventory.py fixtures/recordings/claude --kinds
-python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude
+python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude fixtures/recordings/hermes
 ```
 
 The last command must end with "native messages with no translation: none". If you change the event model,
