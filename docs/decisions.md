@@ -235,3 +235,40 @@ disagree. The harness already has the setting, and people already know it from u
 Decided 2026-11-17, in response to [issue 7](https://github.com/marmot-protocol/marmot-agents/issues/7), which
 proposed a per-chat approval mode in the core.
 
+
+## D-022 The agent's words are ordinary chat messages
+
+**Decision.** What an agent says to the people in a chat is sent as a normal chat message, kind 9, the same as
+a person's message. It carries one extra tag naming the turn it belongs to. Everything else an agent produces
+is an agent item ([D-023](#d-023-one-kind-carries-every-agent-item)).
+
+**Why.** Every Marmot client already shows chat messages, so the agent's answer is readable everywhere, and
+replies, reactions, search and alerts work with no extra work. Putting the words in a new kind would hide them
+from any client that does not know it. See [`design/event-carrier.md`](design/event-carrier.md).
+
+Decided 2026-11-17.
+
+## D-023 One kind carries every agent item
+
+**Decision.** Turns, tool calls, approvals, questions, plans, tasks, notices, errors and reasoning are all sent
+as one kind of event, kind 1201. The item's type is a tag inside the event. Kind 1202 stays reserved.
+
+This holds while the item types share one shape. Today they do: each carries the same parts and differs only in
+its own fields. A type whose shape is really different gets its own kind.
+
+**Why.** One kind keeps the rules for updating, ordering and size in one place, and gives a client that does not
+support agents one thing to ignore.
+
+Decided 2026-11-17. The kind's definition belongs in the Marmot specification
+([Q-03](open-questions.md#q-03-where-are-the-event-kinds-specified)).
+
+## D-024 Who an agent event alerts
+
+**Decision.** An agent event alerts people in three cases: the agent's final answer, an approval or a question
+that is waiting for someone, and a turn that failed. Nothing else alerts: not tool calls, reasoning, plans,
+tasks, notices, or a turn starting or finishing normally.
+
+**Why.** A phone should buzz when a person is needed or the work is finished, and stay quiet while the agent
+works. A waiting approval matters most, because Codex and Claude Code wait for an answer with no time limit.
+
+Decided 2026-11-17. Whether the agent's remarks during a turn alert is still open.
