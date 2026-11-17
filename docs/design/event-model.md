@@ -3,7 +3,7 @@
 Status: draft 0. The principles are decided
 ([D-007](../decisions.md#d-007-one-shared-event-vocabulary),
 [D-008](../decisions.md#d-008-pass-everything-through)). Everything else on this page is a proposal: the item
-types, the fields and the rules. It is no longer a guess, though. A prototype applies it to 46 recorded Codex
+types, the fields and the rules. It is no longer a guess, though. A prototype applies it to 50 recorded Codex
 and Claude Code sessions, and every native message either becomes an agent event or is deliberately not sent.
 See [Checked against real sessions](#checked-against-real-sessions). The open points are
 [Q-01 to Q-04](../open-questions.md#the-event-model).
@@ -145,7 +145,8 @@ look right and are wrong.
    the wire is never the native value.
 2. **Offer the choices the harness accepts, not only the ones it lists.** Codex accepts "decline" without
    listing it, and lists nothing at all for a file change.
-3. **Close open items when a turn ends.** An interrupted Codex command never reports that it stopped.
+3. **Close open items when a turn ends, and close the turn when the harness stops.** An interrupted Codex
+   command never reports that it stopped, and a harness that is killed mid-turn sends nothing at all.
 4. **Recognise questions and plans that arrive as tool calls.** Claude Code asks questions and proposes plans
    through tools. They become one `question` or `plan`, not a tool call as well.
 5. **Decide the kind of a tool call.** Claude Code gives only a tool name.
@@ -166,13 +167,13 @@ driver code.
 
 | | |
 | --- | --- |
-| Recordings | 46: 22 Codex, 24 Claude Code |
-| Native messages | 1,972 |
-| Agent events produced | 363 |
+| Recordings | 50: 24 Codex, 26 Claude Code |
+| Native messages | 2,157 |
+| Agent events produced | 399 |
 | Native messages with no rule | 0 |
 | Items left open at the end of a recording | 0 |
 
-The events by type: 116 `turn`, 114 `tool`, 74 `message`, 30 `approval`, 13 `notice`, 6 `question`, 6 `task`,
+The events by type: 130 `turn`, 124 `tool`, 80 `message`, 34 `approval`, 13 `notice`, 8 `task`, 6 `question`,
 2 `plan`, 1 `error`, 1 `reasoning`.
 
 **What changed since the first proposal**

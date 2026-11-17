@@ -10,7 +10,7 @@ The first three block the most other work.
 ### Q-01 What exactly is in an agent event?
 
 [`design/event-model.md`](design/event-model.md) is now a concrete draft: ten item types, the fields of each,
-and ten rules for drivers. A prototype applies it to 46 recorded Codex and Claude Code sessions with nothing
+and ten rules for drivers. A prototype applies it to 50 recorded Codex and Claude Code sessions with nothing
 left over. It is still a proposal. To settle: whether these are the right types and fields, how an event is
 carried (the kind, the tags, and whether an update repeats the whole item), and the size limits. A to-do list
 that changes during a turn has not been seen in a recording.
@@ -159,8 +159,13 @@ How is open. The simple version: after a restart the chat shows the turn as inte
 the session and runs a "continuation turn" that tells the agent to check what already happened. That means the
 connector sends the model a prompt nobody wrote, which sits badly with staying true to the harness, so it is
 parked as a possible later option. It also depends on things not designed yet: whether a harness even stops when
-the core restarts depends on whether its driver is built in or a separate program. No recording of a restart
-mid-turn exists yet.
+the core restarts depends on whether its driver is built in or a separate program.
+
+Recordings now show what the two coding harnesses do
+([`reference/harness-messages.md`](reference/harness-messages.md)). Stopped mid-turn and resumed, both keep the
+session and neither reruns anything. Codex shows the earlier turn as interrupted, with the running command
+missing from its history. Neither sends any message to say the turn ended, so the driver has to close it. That
+supports the simple version.
 
 ### Q-09 Who owns the queue when a message arrives mid-turn?
 
@@ -279,7 +284,7 @@ the harness name. The exact flags are open.
 
 The current thinking is to record real sessions and replay them through the driver, as T3 Code does. Not decided.
 
-The recorders and 46 recordings exist: [`tools/record`](../tools/record/README.md) and
+The recorders and 50 recordings of coding harnesses exist: [`tools/record`](../tools/record/README.md) and
 [`fixtures/recordings`](../fixtures/recordings/README.md). A prototype replays them through the proposed event
 model ([`tools/prototype`](../tools/prototype/README.md)). There is no driver to replay them through yet.
 

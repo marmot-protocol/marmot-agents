@@ -145,6 +145,8 @@ class Codex(Translator):
     def feed(self, rec):
         m, out = rec["msg"], rec["dir"] == "out"
         if "_recorder" in m:
+            if "new one started" in m["_recorder"]:
+                self.harness_stopped()
             return
         method = m.get("method")
         if out:
@@ -186,6 +188,17 @@ class Codex(Translator):
         if handler is None:
             return self.unknown(method)
         handler(method, m, p)
+
+    def harness_stopped(self):
+        """The harness process ended. Nothing it was doing will ever report again, so the driver
+        closes the open items and the open turn itself."""
+        self.close_open_items("the harness process ended")
+        turn_item = f"turn:{self.turn}"
+        if turn_item in self.open:
+            prev = self.open[turn_item]
+            self.emit(turn_item, "turn", "cancelled", "Interrupted", "The harness stopped before the turn finished.",
+                      prev["body"], native_kind="(none: closed by the driver)", native={"reason": "the harness process ended"})
+        self.pending.clear()
 
     # -- turns
 
@@ -413,6 +426,8 @@ class Claude(Translator):
 
     def feed(self, rec):
         m, via, out = rec["msg"], rec.get("via"), rec["dir"] == "out"
+        if via == "note":
+            return self.skip("recorder note")
         if via == "prompt":
             self.prompted = True
             return self.skip("client: user message" + (" (steer)" if m.get("priority") else ""))
