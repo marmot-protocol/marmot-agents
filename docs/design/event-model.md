@@ -102,7 +102,7 @@ Only the fields in `body` differ.
 
 | Type | Body |
 | --- | --- |
-| `turn` | `started_by`: `user`, `agent` or `control`. On ending: `duration_ms`, `usage` |
+| `turn` | `started_by`: `user`, `agent` or `control`. On ending: `duration_ms`, `usage`. Whether there is a fourth source, something on the owner's machine outside the harness, is [Q-25](../open-questions.md#q-25-can-something-outside-the-chat-and-the-harness-start-a-turn) |
 | `message` | `phase`: `commentary` or `final`, when the harness says. `parent`, for a subagent's message |
 | `reasoning` | Nothing beyond the text |
 | `tool` | `kind`, `name`. For a command: `command`, `cwd`, then `exit_code`, `duration_ms`, `output`. For an edit: `changes`, each with a path and a diff. For a search: `query`. Otherwise `input` and `output` |

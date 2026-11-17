@@ -118,6 +118,22 @@ administration ([Q-05](#q-05-how-is-the-agent-administered)), which waits until 
 real harnesses. Parked until the Hermes and OpenClaw recordings are in. Raised in
 [issue 4](https://github.com/marmot-protocol/marmot-agents/issues/4).
 
+### Q-25 Can something outside the chat and the harness start a turn?
+
+The draft event model already records what started a turn: a person's message, the agent itself after
+background work, or a control such as compaction. [Issue 6](https://github.com/marmot-protocol/marmot-agents/issues/6)
+asks for one more: a tool on the owner's machine, such as a watcher for finished CI checks or a scheduled
+check-in, that delivers a prompt into a chat's session.
+
+It is not clear this is new. An agent that is building a feature can watch its own CI run as background work
+and start a turn when it finishes, which the model already covers. The issue's author has been asked for a case
+that the harness cannot handle itself.
+
+If there is one, it is a new way in: whatever can submit a prompt gets the agent to act with the owner's
+authority, without the checks on who may prompt
+([D-010](decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)). It would have to be the owner's
+alone, which makes it part of administration ([Q-05](#q-05-how-is-the-agent-administered)). Parked.
+
 ## Privacy and volume
 
 ### Q-11 What keeps sensitive output from spreading?
