@@ -142,6 +142,32 @@ One real number: in four days of one developer's use of Claude Code, a turn aver
 7 reasoning blocks and 3.5 pieces of text, which is roughly 35 events if each tool call is sent twice. Those
 were long, autonomous coding sessions; a short question would be far smaller.
 
+### A proposal for Q-11 and Q-12, not decided
+
+One filter could answer both: a setting the owner controls, per chat, for how much agent activity is sent.
+[Issue 5](https://github.com/marmot-protocol/marmot-agents/issues/5) proposes three levels:
+
+| Level | What is sent |
+| --- | --- |
+| Full | Everything. The default, as [D-008](decisions.md#d-008-pass-everything-through) says |
+| Summary | Messages, approvals, questions, errors and turn results, plus one summary line per turn that is updated in place as the agent works |
+| Final | Messages, approvals, questions and errors only |
+
+The summary line is the strongest part. One item that keeps replacing itself ("ran 12 commands, edited 3 files")
+would cut the volume a great deal, and it fits how items already replace their earlier state.
+
+This needs more product thinking before anything is decided, and it does not change D-008. Points to work out:
+
+- **Can the detail be seen, or recovered later?** That matters to people. If a lower level means the detail is
+  never sent, nobody can open it up afterwards, the owner included. The alternatives are to send it where only
+  the owner sees it, which sits badly with
+  [D-009](decisions.md#d-009-groups-are-first-class-and-every-member-sees-agent-activity), or to keep it on the
+  agent's machine to be fetched on request.
+- **Are three fixed levels the right shape?** It could equally be a choice per kind of item.
+- **Gateways already have their own setting.** Hermes and OpenClaw each decide how much tool activity they send.
+  A filter in the core would sit on top of theirs, and the two should not fight.
+- **It depends on how events are carried**, which is not designed yet.
+
 ### Q-13 What may be logged?
 
 This is a private messenger. The starting assumption is that logs never contain message text, prompts, model
