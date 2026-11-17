@@ -108,10 +108,9 @@ The current thinking is to record real sessions and replay them through the driv
 
 ## The repository and the move from MDK
 
-### Q-18 Licence, visibility and names
+### Q-18 What is the core program called?
 
-The repository is private and has no licence yet. MDK is MIT. The name of the core program is not chosen; today's
-daemon is `wn-agent`.
+The name of the core program is not chosen. Today's daemon is `wn-agent`.
 
 ### Q-19 How do existing installs move over?
 

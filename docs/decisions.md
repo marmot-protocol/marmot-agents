@@ -183,3 +183,11 @@ from a design overview that can be understood in three minutes. Agents may get l
 Diagrams are generated from a script, not drawn by hand.
 
 **Why.** People need to step into the design gradually. Agents need exact detail. One page cannot do both well.
+
+## D-019 MIT licence, public repository
+
+**Decision.** The project is licensed under the MIT licence, with the Internet Privacy Foundation as copyright
+holder, and the repository is public.
+
+**Why.** It matches MDK and the rest of the organisation's repositories, and the design is meant to be read and
+built on by others ([D-014](#d-014-outside-developers-can-write-connectors-later)).
