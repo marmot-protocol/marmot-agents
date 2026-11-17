@@ -120,7 +120,14 @@ Still to work out:
 
 - **One program or several.** One program on the machine could hold every identity, which is easier to run and
   to set up, provided each identity's keys and storage are kept apart. Or each identity could have its own
-  program, as today. Leaning to one program; not explored yet.
+  program, as today. Leaning to one program.
+
+  MDK supports both today ([`reference/mdk-multiple-identities.md`](reference/mdk-multiple-identities.md)). One
+  process can run several accounts, each with its own encrypted databases, its own key and its own relay
+  connections. But that separation is of files and data, not a security boundary: every running agent's key is
+  in the same process memory, so a break-in to the program exposes all of them. With today's default store, each
+  key is also a plain file beside the data it protects. So the choice is between easier running and stronger
+  isolation, and where keys are kept matters more if one program holds them all.
 - **How an agent knows another member is an agent**, so that it does not answer it, when no owner link is
   required. The proposal is a flag in the agent's own profile: a Nostr profile (kind 0) keeps its fields in its
   content, so a true-or-false "this is an agent" field can simply be added. Nostr already has a profile field
