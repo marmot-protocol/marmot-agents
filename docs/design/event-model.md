@@ -207,6 +207,8 @@ Detail and evidence for each: [`../reference/harness-messages.md`](../reference/
 
 ## Not designed yet
 
+- **A file the agent sends to the chat.** There is no item for it. This is a known gap
+  ([Q-23](../open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)).
 - **How an event is carried.** The event kind, the tags, and whether an update repeats the whole item or only
   what changed ([Q-01](../open-questions.md#q-01-what-exactly-is-in-an-agent-event),
   [Q-03](../open-questions.md#q-03-where-are-the-event-kinds-specified)).

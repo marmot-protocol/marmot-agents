@@ -34,6 +34,13 @@ The current thinking is to keep its rules about authentication (an answer is bou
 permitted people count, a bare "yes" never counts, answers never reach the model) and to drop its lifecycle
 guarantees. Not yet decided.
 
+### Q-23 How does an agent send a file to the chat?
+
+The event model has no item for a file the agent produces: a report, a patch, an image. Today's Codex connector
+can already send files back, so leaving this out would be a step backwards. To settle: the item itself, where
+the file is stored, size limits, and the rule that keeps an agent from sending files it should not read. Raised
+in [issue 4](https://github.com/marmot-protocol/marmot-agents/issues/4).
+
 ## The socket protocol
 
 ### Q-05 How is the agent administered?
@@ -101,6 +108,15 @@ turn, and Claude Code ends the turn and starts a new one. See
 
 D-010 wants this later. The mechanism is open, and so is how a client learns who may prompt, so that it can show
 this before someone tries.
+
+### Q-24 What may an agent do in the chat on its own?
+
+A coding agent could act in Marmot during a turn, beyond producing output: rename the chat, create a new group,
+react to a message. Hermes and OpenClaw agents already have tools of this kind. Whether coding agents should,
+which actions, who may allow them, and how the harness asks the core for one are all open. This overlaps with
+administration ([Q-05](#q-05-how-is-the-agent-administered)), which waits until drivers are being built against
+real harnesses. Parked until the Hermes and OpenClaw recordings are in. Raised in
+[issue 4](https://github.com/marmot-protocol/marmot-agents/issues/4).
 
 ## Privacy and volume
 
