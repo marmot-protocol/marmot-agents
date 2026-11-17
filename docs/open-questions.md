@@ -298,7 +298,20 @@ works until the new core first opens the store. MDK's storage upgrades run forwa
 has upgraded a database, older programs refuse it. So a way back after that point needs a backup taken before
 the first open, not just the old program.
 
+A second caution applies to any backup and restore of an agent, not only to going back. Once a core has
+processed group messages, sent anything or started a turn, restoring an older copy of its store could reuse
+encryption keys or run a prompt twice. A restore is safe only if nothing of that kind happened in between.
+Raised in [issue 12](https://github.com/marmot-protocol/marmot-agents/issues/12).
+
 What an importer carries over, and whether each identity gets its own program, wait until cutover is planned.
+
+### Q-28 How does someone know a release is genuine?
+
+Today's agent releases in MDK are published with a checksum file beside each download. A checksum catches a
+broken download, not a replaced one: whoever can replace a release file can replace its checksum too. The
+releases carry no signature or attestation. Signing them will be needed eventually, both for MDK's current
+agent releases and for whatever this repository ships, and it must come before any kind of automatic update.
+Not scheduled. Raised in [issue 12](https://github.com/marmot-protocol/marmot-agents/issues/12).
 
 ### Q-20 What do the apps need?
 
