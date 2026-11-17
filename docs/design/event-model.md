@@ -221,7 +221,6 @@ Detail and evidence for each: [`../reference/harness-messages.md`](../reference/
 
 - **A file the agent sends to the chat.** There is no item for it. This is a known gap
   ([Q-23](../open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)).
-- **How an event is carried, and size limits.** See [`event-carrier.md`](event-carrier.md). The kind,
-  the place of the agent's words and who gets alerted are decided. How an item is updated and the size limit
-  are still proposals.
+- **How an event is carried, and size limits.** Decided; see [`event-carrier.md`](event-carrier.md). The
+  exact tags are not fixed.
 - **The exact form of an answer and of each control.**

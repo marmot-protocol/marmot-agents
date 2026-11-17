@@ -1,11 +1,9 @@
 # How an agent event is carried
 
-Status: partly decided. Three parts are settled and recorded as
-[D-022](../decisions.md#d-022-the-agents-words-are-ordinary-chat-messages),
-[D-023](../decisions.md#d-023-one-kind-carries-every-agent-item) and
-[D-024](../decisions.md#d-024-who-an-agent-event-alerts). Two are still proposals: how an item is updated, and
-the size limit. They are listed [at the end](#still-to-decide). All of it needs agreement in the Marmot
-specification ([Q-03](../open-questions.md#q-03-where-are-the-event-kinds-specified)).
+Status: decided on 2026-11-17, as [D-022](../decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)
+to [D-026](../decisions.md#d-026-an-agent-item-is-at-most-64-kb). None of it is in the Marmot specification
+yet, and all of it has to be agreed there
+([Q-03](../open-questions.md#q-03-where-are-the-event-kinds-specified)). The exact tags are not fixed.
 
 [The event model](event-model.md) says what an agent event means: ten item types, each with a state. This page
 says how one travels through a Marmot group: what kind of event it is, what it contains, and how an item that
@@ -38,9 +36,7 @@ Read from the Marmot specification at commit `162c61b` and MDK at `a2d3486ac`, b
 | Nothing is short-lived except live previews over the separate QUIC channel | Every agent event sent is kept as history |
 | The spec sets no size limit on an app event | We have to choose one |
 
-## Decided
-
-### The agent's words are ordinary chat messages
+## The agent's words are ordinary chat messages
 
 What the agent says to people is sent as a normal chat message, kind 9, exactly as a person's message is. It
 carries one extra tag that names the turn it belongs to
@@ -49,7 +45,7 @@ carries one extra tag that names the turn it belongs to
 Every client already shows these, and replies, reactions, search and alerts work without anyone doing anything.
 An app that knows about agents can use the tag to group the message with the rest of its turn.
 
-### Everything else is one kind: an agent item, kind 1201
+## Everything else is one kind: an agent item, kind 1201
 
 Turns, tool calls, approvals, questions, plans, tasks, notices, errors and reasoning are all sent as kind 1201.
 The item's type is a tag inside it, not a different kind
@@ -62,7 +58,7 @@ type's own fields. If a later type needs a different shape, it gets its own kind
 Kind 1202 stays reserved. It is a candidate for what a person's app sends back, the answers and controls, when
 that piece is designed.
 
-### Who gets alerted
+## Who gets alerted
 
 The agent decides, per event, whether it should alert people
 ([D-024](../decisions.md#d-024-who-an-agent-event-alerts)):
@@ -78,13 +74,12 @@ MDK already treats 1201 and 1202 as their own class of event that triggers no al
 behaviour. The waiting approval is the case that needs adding. It matters because Codex and Claude Code wait for
 an answer with no time limit.
 
-Two details are open:
+A failed turn arrives as an edit of the turn item. Edits are otherwise silent, so this is the one edit that
+alerts.
 
-- Whether the agent's remarks during a turn ("I'll run the tests now") should alert like a final answer.
-- A failed turn arrives as an edit of the turn item, and edits are silent today. Either that one edit is allowed
-  to alert, or the driver also sends a separate `error` item, which alerts as a new event.
+Whether the agent's remarks during a turn ("I'll run the tests now") should alert like a final answer is open.
 
-## Proposed: an item is updated with an edit
+## An item is updated with an edit
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/carrier-dark.svg">
@@ -92,7 +87,8 @@ Two details are open:
 </picture>
 
 The first event of an item is a kind 1201 event. To change the item, the agent sends an edit, kind 1009, that
-points at that first event. This is the mechanism Marmot already has for changing a message.
+points at that first event. This is the mechanism Marmot already has for changing a message
+([D-025](../decisions.md#d-025-an-agent-item-is-updated-with-an-edit)).
 
 - **The item is identified by the id of its first event.** No separate item id is needed. An answer to an
   approval points at it with an `e` tag, the way a reply points at a message.
@@ -117,7 +113,7 @@ An edit means nothing without the event it points at. Someone added to the group
 read the item's first event, so they see nothing of that item, however many edits follow. They see the agent's
 answer, because that is a chat message, and every item that starts after they joined.
 
-### The earlier proposal, and why this replaces it
+### The earlier draft, and why this replaced it
 
 The first draft gave every item its own id and a version, and updated an item by sending a whole new 1201 event
 with the same id. That is an edit under another name, with a second mechanism to specify, build and test. Edits
@@ -150,7 +146,7 @@ Each agent item carries its position within its turn: 1, 2, 3. Clients order a t
 Without it, order is undefined. `created_at` counts whole seconds, and an agent often produces several items in
 one second. MDK would then fall back to ordering by event id, which is effectively random.
 
-## Proposed: a size limit of 32 KB
+## The size limit is 64 KB
 
 Tool output is the part that can be large. These are sizes from four days of one developer's real use of Claude
 Code; lengths only were measured, never content.
@@ -171,7 +167,7 @@ How many of 16,841 tool outputs each limit would cut:
 | 48 KB | 1 in 10,000 |
 | 64 KB | None |
 
-Nothing in Marmot forces a small limit. What sets the ceiling is the relay:
+Nothing in Marmot forces a small limit. The only thing that limits size is the relay:
 
 - White Noise's own relays accept events up to 2 MB (read in MDK's deployment settings).
 - Other relays accept less. 64 KB is a common default (from memory, not re-checked for this page).
@@ -179,13 +175,15 @@ Nothing in Marmot forces a small limit. What sets the ceiling is the relay:
 - MDK does not send an event to a relay whose limit it would exceed. If it fits no relay of the group, the send
   fails.
 
-So an item of 32 KB reaches a relay as about 43 KB and fits one that accepts 64 KB. An item of 48 KB does not.
+Storage is not a constraint. Large outputs are rare enough that a limit of 64 KB instead of 16 KB adds
+a few megabytes over days of heavy use.
 
-Storage is not the constraint. Large outputs are rare enough that raising the limit from 16 KB to 64 KB adds a
-few megabytes over days of heavy use.
+**An agent item is at most 64 KB** ([D-026](../decisions.md#d-026-an-agent-item-is-at-most-64-kb)). That
+carried every tool output measured.
 
-Proposed rule: **an agent item is at most 32 KB.** It cuts one output in a thousand and still fits a relay that
-accepts 64 KB. If only White Noise's relays mattered, 64 KB would carry every output measured.
+The consequence is accepted on purpose: an item near the limit reaches a relay as about 86 KB, so a relay that
+accepts only 64 KB will not take it. If a group uses only such relays, that item is not delivered. 64 KB is
+not large, and relays should accept more.
 
 When an item would be larger, the driver drops parts in this order and says so in the event:
 
@@ -193,7 +191,7 @@ When an item would be larger, the driver drops parts in this order and says so i
 2. the output is cut, keeping the start and the end, with the full length noted.
 
 The native message usually repeats the output, so an item with both is about twice the size of its output. The
-first step is therefore the common one.
+first step is therefore the common one: it applies to an output over about 30 KB, which is one in a thousand.
 
 Getting the full output afterwards is a separate problem: fetch it from the agent on request, or attach it as a
 file. Attachments exist only for chat messages today, so that needs work in the spec. It is the same question as
@@ -227,6 +225,7 @@ agent's words and little else until they add support.
 | Give each item its own id and version, and resend the whole item as a new event of the same kind | A second way to change an event, beside edits. Older apps would show every version as its own row |
 | Send only what changed in each update | Smaller, but a client that misses one update shows the wrong thing from then on. Whole items are safe to miss |
 | A separate kind for each item type | The types share one shape, so ten kinds would repeat the same rules ten times |
+| A limit of 16 KB or 32 KB | It would fit a relay that accepts only 64 KB, but cut one output in 70, or one in 1,000 |
 | Leave the agent's words in the new kind too | Clients that do not know the kind would show nothing of what the agent said |
 
 ## What it needs from the spec and from MDK
@@ -252,8 +251,3 @@ This is the part of the design that MDK keeps
 
 **Answers and controls.** What a person's app sends back, such as "allow once" or "interrupt", is the next piece.
 It will point at an item with an `e` tag.
-
-## Still to decide
-
-1. Is an item updated with an edit, given the three additions edits need?
-2. Is 32 KB the limit, or 64 KB?

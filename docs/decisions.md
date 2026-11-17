@@ -271,4 +271,43 @@ tasks, notices, or a turn starting or finishing normally.
 **Why.** A phone should buzz when a person is needed or the work is finished, and stay quiet while the agent
 works. A waiting approval matters most, because Codex and Claude Code wait for an answer with no time limit.
 
+A failed turn arrives as an edit of the turn item ([D-025](#d-025-an-agent-item-is-updated-with-an-edit)). That
+edit alerts. No other edit does.
+
 Decided 2026-11-17. Whether the agent's remarks during a turn alert is still open.
+
+## D-025 An agent item is updated with an edit
+
+**Decision.** An item's first event is a kind 1201 event. To change the item, the agent sends an edit, kind
+1009, that points at that first event and carries the whole item again. The item is identified by the id of its
+first event. There is no separate item id.
+
+Edits get three additions for this, in the Marmot specification:
+
+1. An edit may target an agent item, and then its tags replace the item's tags as well as its text.
+2. An edit of an agent item carries a version number, and the highest version wins.
+3. A client holds an edit whose item has not arrived yet, instead of dropping it.
+
+**Why.** Marmot already has a way to change an event, and a second one would have to be specified, built and
+tested beside it. Apps that have not been updated also behave better: they show each item once, not once per
+update. The version number is needed because edits are ordered by a timestamp in whole seconds, and a tool can
+start and finish within one second.
+
+The cost: an edit means nothing without the event it points at, so someone added to a group in the middle of a
+turn sees nothing of the items that began before they joined. See
+[`design/event-carrier.md`](design/event-carrier.md#an-item-is-updated-with-an-edit).
+
+Decided 2026-11-17.
+
+## D-026 An agent item is at most 64 KB
+
+**Decision.** An agent item is at most 64 KB. When one would be larger, the driver first leaves out the native
+message, then cuts the output, keeping the start and the end, and says in the event what it did.
+
+**Why.** 64 KB carried every one of 16,841 tool outputs measured in real use; 16 KB would have cut one in 70.
+Storage is not a constraint at these sizes. The only constraint is relays that accept small events: an item
+near the limit is about 86 KB by the time it reaches a relay. We accept that. 64 KB is not large, and we want
+relays to accept more.
+
+Decided 2026-11-17. How the full output is fetched when it was cut is still open
+([Q-02](open-questions.md#q-02-what-happens-to-large-output)).
