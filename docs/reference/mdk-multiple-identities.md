@@ -2,7 +2,7 @@
 
 This page is detailed on purpose. It records what MDK supports today for running more than one Marmot account in
 one process, so that the choice between "one program for all of an owner's agents" and "one program per agent"
-([Q-08](../open-questions.md#q-08-is-each-harness-install-its-own-identity)) can be made on facts.
+([Q-08](../open-questions.md#q-08-how-do-several-agent-identities-run-together)) can be made on facts.
 
 - **Read at:** MDK commit `a2d3486ac`, on 2026-11-17.
 - **How:** a research agent read the code and reported with file and line references. The points marked

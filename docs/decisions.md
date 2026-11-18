@@ -117,6 +117,8 @@ group sees the agent's activity and its details.
 **Why.** Seeing and controlling are different. An owner may want others to watch an agent work without being able
 to direct it or approve what it does on the owner's machine.
 
+How each action maps onto the two rights is in [D-032](#d-032-every-action-needs-one-of-two-rights).
+
 ## D-011 Full control from the phone
 
 **Decision.** The aim is as much control from the chat as the harness gives at the terminal: interrupt, steer
@@ -262,6 +264,10 @@ support agents one thing to ignore.
 Decided 2026-11-17. The kind's definition belongs in the Marmot specification
 ([Q-03](open-questions.md#q-03-where-are-the-event-kinds-specified)).
 
+Kind 1202 is no longer reserved: it carries answers and controls
+([D-027](#d-027-answers-and-controls-are-one-kind-of-event-kind-1202)). An eleventh type, `session`, was added by
+[D-030](#d-030-a-session-is-an-item-the-eleventh-type).
+
 ## D-024 Who an agent event alerts
 
 **Decision.** An agent event alerts people in three cases: the agent's final answer, an approval or a question
@@ -311,3 +317,226 @@ relays to accept more.
 
 Decided 2026-11-17. How the full output is fetched when it was cut is still open
 ([Q-02](open-questions.md#q-02-what-happens-to-large-output)).
+
+## D-027 Answers and controls are one kind of event, kind 1202
+
+**Decision.** What a person's app sends back to an agent is an event of kind 1202. That covers an answer to an
+approval or a question, and a control such as "interrupt". The event carries:
+
+- the agent it is for, in a `p` tag;
+- what it acts on, in an `e` tag that points at the item's first event;
+- the action, in a tag: `answer`, `interrupt`, `new_session` or `set`;
+- the action's details, as JSON in a tag;
+- a plain rendering, such as "Allow once", in `content`.
+
+An agent ignores one that does not name it. An answer or a control is not a row in the chat, alerts nobody and
+does not count as unread.
+
+**Why.** Answers and controls have one shape, so one kind is enough. Sent as chat messages they would alert
+people, show as chat in every client, and could reach the model as a prompt by mistake.
+
+Decided 2026-11-18. This replaces the line in [D-023](#d-023-one-kind-carries-every-agent-item) that kept kind
+1202 reserved. The exact tags are not fixed, and the kind's definition belongs in the Marmot specification
+([Q-03](open-questions.md#q-03-where-are-the-event-kinds-specified)). See
+[`design/answers-and-controls.md`](design/answers-and-controls.md).
+
+## D-028 An answer or a control is a request, and the agent's reply settles it
+
+**Decision.** Sending an answer or a control changes nothing by itself. The agent resolves each one with exactly
+one event that points back at it:
+
+- the edit that shows its effect, if it had one: "Answered: Allow once, by Alice";
+- a notice that says why, if it had none: not allowed, not supported, nothing to act on, already answered, or
+  failed.
+
+An app shows a press as pending until that reply arrives.
+
+The rules for answers:
+
+- An answer counts only if it points at the exact item and comes from someone allowed to give it.
+- Ordinary text is never an answer to an approval. "Yes" in the chat is a prompt.
+- An answer never reaches the model as a prompt. It goes to the harness's own answer call.
+- An item is answered once. The first valid answer the agent receives wins.
+- An answer names choices by the ids the item offered.
+- An answer for an item that is no longer waiting has no effect.
+
+Two exceptions: a question that the harness expects to be answered by the person's next message, and a gateway
+that takes an approval as a typed command ([D-032](#d-032-every-action-needs-one-of-two-rights)).
+
+Late and repeated events:
+
+- One that points at an item acts only if that item is still live.
+- One that points at nothing, such as "new session", is dropped if it is more than five minutes old.
+- Each acts at most once.
+
+**Why.** Two people can answer at the same moment, and only the agent knows which answer the harness took. So
+the agent's own items are the one place to look for what happened. The earlier approvals design (MDK issue 858,
+Marmot pull request 503) required an acknowledgement that harnesses do not give. This keeps its rules about who
+may answer and drops its lifecycle guarantees.
+
+Five minutes is a first value with no evidence behind it. It can change.
+
+Decided 2026-11-18.
+
+## D-029 Three shared controls, and the rest comes from the harness
+
+**Decision.** Three controls mean the same thing for every harness: `interrupt` stops the running turn,
+`new_session` ends the chat's session and starts a fresh one, and `set` changes one setting of the session.
+
+Everything else comes from the harness. Each driver publishes, per session:
+
+- its settings, each with an id, a label, the current value and the values it accepts. Model, mode and
+  permission mode are settings;
+- its own actions, such as compacting;
+- its slash commands.
+
+An app draws its controls from that list. Nothing in an app or in the core checks a harness's name.
+
+**Why.** Models, modes and commands differ for every harness and change with every release. A shared list would
+be wrong for all of them. This follows from staying true to each harness
+([D-008](#d-008-pass-everything-through)) and from full control from the phone
+([D-011](#d-011-full-control-from-the-phone)).
+
+Decided 2026-11-18.
+
+## D-030 A session is an item, the eleventh type
+
+**Decision.** The event model gets an eleventh item type, `session`. An agent sends one when a session starts in
+a chat, and edits it when a setting changes or the session ends. It carries the harness and its version, the
+session's id, and the three lists of [D-029](#d-029-three-shared-controls-and-the-rest-comes-from-the-harness):
+settings, actions and slash commands.
+
+It is sent as kind 1201, like every other item ([D-023](#d-023-one-kind-carries-every-agent-item)), and it
+alerts nobody.
+
+**Why.** An app needs the list before anyone presses anything, and needs the last known one when the agent's
+machine is off, so it has to be in the chat. It changes over time and an app has to find it by its type. A
+notice, the alternative, is a line of information for people.
+
+Decided 2026-11-18. The recordings were checked against the first ten types. The prototype does not produce
+`session` items yet.
+
+## D-031 A slash command is a message for the harness
+
+**Decision.** A message that starts with a slash is passed to the harness exactly as typed. The core has no
+typed commands of its own. Its controls are kind 1202 events, which an app sends from a button or a menu.
+
+**Why.** The two can never collide, because one is text and the other is not. Three of the four recorded
+harnesses already take their commands as messages.
+
+The cost: a Marmot client with no support for agents can prompt an agent and use its slash commands, and cannot
+approve, interrupt or change settings.
+
+Decided 2026-11-18.
+
+## D-032 Every action needs one of two rights
+
+**Decision.** [D-010](#d-010-the-owner-sets-who-may-prompt-and-who-may-approve) gives the owner two rights to
+hand out: who may prompt, and who may approve. Every action a person can take needs one of them. There is no
+third right.
+
+| Action | Right needed |
+| --- | --- |
+| Send a prompt or a slash command | Prompt |
+| Answer an approval | Approve |
+| Change the harness's permission mode | Approve |
+| Type a command that approves, or that changes the permission mode | Approve |
+
+A typed command is a message, so the core cannot know what it does. Each connector therefore lists the commands
+that need the right to approve, and the core checks a message that starts with one of them against that right.
+Hermes takes `/approve` and `/deny` as messages, and OpenClaw takes `/approve`.
+
+**Why.** Two rights are enough to separate directing an agent from letting it act on the owner's machine. The
+permission mode decides what the agent may do without asking, so changing it is a standing approval.
+
+Decided 2026-11-18. The project owner asked for the assignment to be checked carefully. Which right the other
+controls need is not settled: [Q-29](open-questions.md#q-29-which-right-does-each-control-need).
+
+## D-033 The socket's framing is JSON-RPC 2.0, one message per line
+
+**Decision.** Messages on the socket are [JSON-RPC 2.0](https://www.jsonrpc.org/specification), one message per
+line, over a Unix socket. Either side can send a request. A message is at most 4 MB.
+
+**Why.** v2 already sends one JSON message per line, which is easy to write in any language and easy to record
+for tests. JSON-RPC adds requests, responses and notifications without inventing them. Codex's app server and
+ACP use the same framing, so libraries exist in every language we need.
+
+Decided 2026-11-18. Windows has not been looked at.
+
+## D-034 The core does the shared work, and a connector speaks only in agent events
+
+**Decision.** A program on the socket sends agent events and receives prompts, answers and controls. It never
+sees a key, ciphertext, a relay, group state, an event kind or a tag. The core does everything that is the same
+for every harness:
+
+- checks who may prompt and who may approve, and tells a person who was refused;
+- decides whether a group message is for this agent;
+- turns an agent event into a chat message, an agent item or an edit;
+- numbers the items in a turn and the versions of an item;
+- applies the size limit;
+- decides who is alerted;
+- reports the result of an answer or a control to the chat;
+- closes open items when a connector goes away.
+
+**Why.** Each of these rules then exists once. A connector written in TypeScript or Python stays small, and
+cannot get the owner's rules wrong.
+
+Decided 2026-11-18. See [`design/socket-protocol.md`](design/socket-protocol.md).
+
+## D-035 Each harness install is its own identity, with its own sessions
+
+**Decision.**
+
+- Each harness install is its own Marmot identity, and so its own contact. Codex, Claude Code and Hermes on one
+  machine are three contacts.
+- An identity can have many sessions. Each chat with it has its own session, so a person can have several chats
+  with the same harness. A new session can also be started in the same chat.
+- On the socket, one connection is one agent.
+
+**Why.** A person addresses the agent they want, so no command is needed to switch between harnesses. This is
+also how today's connectors work. [Issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8) proposed
+the opposite, one identity answering for several harnesses.
+
+Decided 2026-11-18. How several identities run and behave together is still open
+([Q-08](open-questions.md#q-08-how-do-several-agent-identities-run-together)), and so is listing and resuming
+older sessions ([Q-07](open-questions.md#q-07-how-does-a-chat-map-to-a-harness-session)).
+
+## D-036 The ids a connector sees are the core's own
+
+**Decision.** The id of a chat and the id of a sender, as passed to a connector, are stable values the core
+makes up for this install. They are not the group's id or a person's public key. Names are passed as they are,
+because the model needs them.
+
+**Why.** A gateway keeps its own logs and transcripts. Nothing in them should identify a group or a person to
+anyone who reads them.
+
+Decided 2026-11-18.
+
+## D-037 A prompt is delivered at most once
+
+**Decision.** If the connection to a connector drops before a prompt was acknowledged, the core reports the
+prompt as not delivered. It never sends it again.
+
+**Why.** Running a prompt twice is worse than losing one. A person can see that a prompt was lost and send it
+again.
+
+Decided 2026-11-18. What else happens to a turn on a restart is still open
+([Q-27](open-questions.md#q-27-what-happens-to-a-turn-when-the-core-or-a-driver-restarts)).
+
+## D-038 Each connector has its own token
+
+**Decision.** The socket is in a folder only the owner's user account can open. Each connector has its own
+token, in a file only that user can read, created by the core when the owner adds the connector. The token says
+which agent the connector drives, and that it is a connector and not an administrator. Administration needs a
+different credential.
+
+This is accepted as enough for now, with its limit: it stops other users of the machine, and it does not stop a
+program running as the same user, which can read the token files and the core's own data. A harness with a
+shell runs as that user. Real separation means running the core as a different user. That is possible later
+and not planned now.
+
+**Why.** It tells connectors apart and keeps a connector from using administration by accident, at almost no
+cost in setup.
+
+Decided 2026-11-18. How administration is done is still open
+([Q-05](open-questions.md#q-05-how-is-the-agent-administered)).

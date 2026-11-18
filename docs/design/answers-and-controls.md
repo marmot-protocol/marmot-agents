@@ -1,8 +1,12 @@
 # Answers and controls
 
-Status: proposal. Nothing on this page is decided. It is the second half of
-[how an agent event is carried](event-carrier.md): that page covers what an agent sends to the chat, and this
-one covers what a person sends back. The decisions it asks for are listed [at the end](#decisions-this-asks-for).
+Status: decided on 2026-11-18, as [D-027](../decisions.md#d-027-answers-and-controls-are-one-kind-of-event-kind-1202)
+to [D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights), except which right each control needs
+([Q-29](../open-questions.md#q-29-which-right-does-each-control-need)). None of it is in the Marmot specification yet,
+and the exact tags are not fixed.
+
+This is the second half of [how an agent event is carried](event-carrier.md): that page covers what an agent
+sends to the chat, and this one covers what a person sends back.
 
 ## The two things a person sends
 
@@ -48,16 +52,15 @@ Three things follow:
 - **What can be set differs by harness.** There is no shared list of models or modes to build in.
 - **Slash commands are already messages** in the three harnesses that have them.
 
-## The proposal
+## The design
 
 ### 1. One new kind carries both, kind 1202
 
 An answer or a control is an event of kind 1202, sent by a person's app to the group. A tag says which action
-it is.
+it is ([D-027](../decisions.md#d-027-answers-and-controls-are-one-kind-of-event-kind-1202)).
 
-Kind 1202 is reserved for agent events and has no definition in the specification
-([D-023](../decisions.md#d-023-one-kind-carries-every-agent-item)). MDK today uses it for rows an agent sends
-about its own operations. That use ends with the old connectors.
+Kind 1202 is reserved for agent events and has no definition in the specification. MDK today uses it for rows
+an agent sends about its own operations. That use ends with the old connectors.
 
 ### 2. It names its agent, and what it acts on
 
@@ -82,7 +85,7 @@ The `e` tag points at an item's first event, which is how an item is identified
 </picture>
 
 Sending an answer or a control changes nothing by itself. It is a request. The agent resolves each one with
-exactly one event that points back at it:
+exactly one event that points back at it ([D-028](../decisions.md#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)):
 
 - **If it had an effect, the edit that shows the effect.** The approval item becomes "Answered: Allow once, by
   Alice". The turn becomes "Interrupted by Alice". The session's settings show the new model.
@@ -96,8 +99,8 @@ An answer or a control is not a row in the chat, does not alert anyone, and does
 
 ### 4. Rules for answers
 
-Carried over from the earlier approvals design
-([Q-04](../open-questions.md#q-04-what-carries-over-from-the-earlier-approvals-design)):
+Carried over from the earlier approvals design, MDK issue 858 and Marmot pull request 503. That design also
+required an acknowledgement that harnesses do not give, and that part is dropped.
 
 - **An answer counts only if it points at the exact item** and comes from someone allowed to give it.
 - **Ordinary text is never an answer to an approval.** "Yes" or "go ahead" in the chat is a prompt.
@@ -121,12 +124,14 @@ Two exceptions stay, because the evidence forces them.
   always. For such a question the reply is an ordinary chat message.
 - **A gateway that takes an approval as text.** Hermes accepts `/approve` and `/deny` as chat messages, and
   OpenClaw accepts `/approve` with an id. A typed message is a prompt, so without a rule, someone who may prompt
-  and may not approve could approve by typing. The rule: a connector lists the commands that approve, and the
-  core checks a message starting with one of them against the right to approve.
+  and may not approve could approve by typing. The rule: a connector lists the commands that need the right to
+  approve, and the core checks a message starting with one of them against that right
+  ([D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights)). A command that changes the permission mode
+  belongs on that list too.
 
 ### 5. Controls: a few shared ones, and whatever the harness offers
 
-Only three actions mean the same thing everywhere:
+Only three actions mean the same thing everywhere ([D-029](../decisions.md#d-029-three-shared-controls-and-the-rest-comes-from-the-harness)):
 
 | Action | What it does | Acts on |
 | --- | --- | --- |
@@ -149,26 +154,28 @@ An app draws its controls from that list. Nothing in an app or in the core check
 The list has to be in the chat, so that an app has it before anyone presses anything, and has the last known
 one when the agent's machine is off.
 
-The proposal is an eleventh item type, `session`. An agent sends one when a session starts in a chat, and edits
-it when a setting changes or the session ends. It carries the harness and its version, the session's id, and
-the three lists above.
+It is an eleventh item type, `session` ([D-030](../decisions.md#d-030-a-session-is-an-item-the-eleventh-type)). An agent
+sends one when a session starts in a chat, and edits it when a setting changes or the session ends. It carries
+the harness and its version, the session's id, and the three lists above.
 
-This is a change to [the event model](event-model.md), which has ten types. It fits the evidence: Claude Code
-opens every session with a message that lists its model, permission mode and slash commands, and Codex reports a
+This changed [the event model](event-model.md), which had ten types. It fits the evidence: Claude Code opens
+every session with a message that lists its model, permission mode and slash commands, and Codex reports a
 thread's settings.
 
-The alternative is to make it a `notice` of a new kind and keep ten types. The content is the same either way.
+The alternative was a `notice` of a new kind. A notice is a line of information for people. This list changes
+over time, and an app has to find it by its type.
 
 ### 7. A slash command is a message
 
-A message that starts with a slash is passed to the harness exactly as typed. It is the harness's command, and
-three of the four harnesses already take commands as messages.
+A message that starts with a slash is passed to the harness exactly as typed
+([D-031](../decisions.md#d-031-a-slash-command-is-a-message-for-the-harness)). It is the harness's command, and three of the four
+harnesses already take commands as messages.
 
 The core has no typed commands of its own. Its controls are events of kind 1202, which an app sends from a
 button or a menu. An app may also let someone type a control, but what it sends is still the event.
 
-This answers [Q-26](../open-questions.md#q-26-how-are-the-cores-commands-told-apart-from-the-harnesss): the two
-cannot collide, because one is text and the other is not.
+A harness has many commands of its own; Claude Code alone advertises 59. The core's controls cannot collide
+with them, because one is text and the other is not.
 
 The cost: a Marmot client with no support for agents can prompt an agent and use its slash commands, and cannot
 approve, interrupt or change settings.
@@ -184,18 +191,30 @@ settle it.
 ### 9. Who may send what
 
 [D-010](../decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve) gives the owner two rights to
-hand out: who may prompt, and who may approve. Both default to the owner alone. The proposal maps every action
-onto one of them and adds no third right.
+hand out: who may prompt, and who may approve. Both default to the owner alone. Every action needs one of them,
+and there is no third right ([D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights)).
+
+Decided:
 
 | Action | Right needed | Why |
 | --- | --- | --- |
-| Send a prompt or a slash command | Prompt | Except a command that approves, which needs the right to approve |
+| Send a prompt or a slash command | Prompt | Except a command on the connector's list, which needs the right to approve |
+| Answer an approval | Approve | |
+| Change the permission mode | Approve | It decides what the agent may do without asking, so it is a standing approval |
+
+Proposed, and not settled ([Q-29](../open-questions.md#q-29-which-right-does-each-control-need)):
+
+| Action | Right proposed | Why |
+| --- | --- | --- |
 | Answer a question | Prompt | The answer is information for the agent, like a prompt |
 | Interrupt | Prompt | Anyone who can start work can stop it |
 | Start a new session | Prompt | |
-| Change a setting, or use a harness's own action | Prompt | |
-| Answer an approval | Approve | |
-| Change the permission mode | Approve | It decides what the agent may do without asking, so it is a standing approval |
+| Change another setting, or use a harness's own action | Prompt | |
+
+D-010 as written puts "use controls" with the right to approve, so the second table would change it. The
+reason to change it: a harness's slash commands are messages, and they include commands that stop a turn, start
+a session and switch the model. Someone who may prompt can type those. A stricter rule for the button than for
+the typed command would protect nothing.
 
 Someone without the right gets the "not allowed" notice, which is the refusal D-010 asks for.
 
@@ -206,7 +225,7 @@ An answer or a control can arrive long after it was sent, for example when the a
 - **One that points at an item acts only if that item is still live.** A late "interrupt" for a turn that has
   ended does nothing. A late answer to an expired approval does nothing.
 - **One that points at nothing is dropped if it is old.** A "new session" sent an hour ago should not act when
-  the machine comes back. The proposal is a limit of five minutes.
+  the machine comes back. The limit is five minutes. That is a first value with no evidence behind it.
 - **Each event acts at most once.** The agent remembers the ids it has resolved.
 
 ## What is visible, and to whom
@@ -239,7 +258,7 @@ would appear there as a small row, such as "Allow once". An app that hides unkno
 In the Marmot specification:
 
 - kind 1202: its tags, the actions, and what a client that does not support it should do;
-- the `session` item, if it is accepted.
+- the `session` item.
 
 In MDK:
 
@@ -263,12 +282,15 @@ In the core:
 - **Changing who may prompt and approve from the chat**
   ([Q-10](../open-questions.md#q-10-how-are-permissions-changed-from-the-chat)).
 
-## Decisions this asks for
+## What was decided
 
-1. Are answers and controls one kind, 1202, pointing at the agent and at the item they act on?
-2. Is the agent's reply the only thing that counts: an edit when it had an effect, a notice when it did not?
-3. Are the shared controls just interrupt, new session and set, with everything else published by the driver?
-4. Is that list carried by a new `session` item, an eleventh type? Or by a notice?
-5. Is a slash command always a message for the harness, with no typed commands in the core?
-6. Is the mapping of actions onto the two rights correct?
-7. Is five minutes the right limit for an old control that points at nothing?
+| Point | Decision |
+| --- | --- |
+| Answers and controls are one kind, 1202, naming the agent and the item they act on | [D-027](../decisions.md#d-027-answers-and-controls-are-one-kind-of-event-kind-1202) |
+| The agent's reply settles each one. The rules for answers. Late and repeated events, with a limit of five minutes | [D-028](../decisions.md#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it) |
+| Three shared controls, and everything else published by the driver | [D-029](../decisions.md#d-029-three-shared-controls-and-the-rest-comes-from-the-harness) |
+| The list is carried by a `session` item, an eleventh type | [D-030](../decisions.md#d-030-a-session-is-an-item-the-eleventh-type) |
+| A slash command is always a message for the harness | [D-031](../decisions.md#d-031-a-slash-command-is-a-message-for-the-harness) |
+| Every action needs one of two rights | [D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights) |
+
+Still open on this page: which right each control needs ([Q-29](../open-questions.md#q-29-which-right-does-each-control-need)).

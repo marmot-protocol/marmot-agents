@@ -7,7 +7,7 @@ types, the fields and the rules. It is no longer a guess, though. A prototype ap
 with Codex, Claude Code and Hermes, and every native message either becomes an agent event or is deliberately
 not sent.
 See [Checked against real sessions](#checked-against-real-sessions). The open points are
-[Q-01 to Q-04](../open-questions.md#the-event-model).
+[here](../open-questions.md#the-event-model).
 
 This is the most important design in the project. Every driver produces these events and every client draws
 them.
@@ -31,7 +31,7 @@ three parts.
 Marmot chat already works this way for ordinary messages: people send unsigned Nostr-shaped events of kinds that
 clients know how to render. Agent events extend that set.
 
-## The ten item types
+## The eleven item types
 
 | Type | What it shows |
 | --- | --- |
@@ -45,6 +45,10 @@ clients know how to render. Agent events extend that set.
 | `task` | Work that runs beside a turn or outlives it: a subagent, a background job |
 | `notice` | Compaction, the agent waiting, a retry, a warning, a model change, the output of a command |
 | `error` | Something failed outside any one item |
+| `session` | A session with the harness: what it is, and the settings, actions and slash commands it offers |
+
+`session` is the newest, added on 2026-11-18 ([D-030](../decisions.md#d-030-a-session-is-an-item-the-eleventh-type)). The
+recordings were checked against the other ten, and the prototype does not produce it yet.
 
 A command, a file edit and a web search are all the `tool` type, told apart by `kind`. One harness reports them
 as separate things and the other as one generic tool call; a single type with a kind fits both.
@@ -58,7 +62,7 @@ as separate things and the other as one generic tool call; a single type with a 
 | `turn` | The turn it belongs to |
 | `item` | The item's id. It stays the same for the life of the item |
 | `seq` | Order within the session |
-| `type` | One of the ten item types |
+| `type` | One of the item types |
 | `state` | `running`, `waiting`, `done`, `failed`, `declined` or `cancelled` |
 | `title` | A few words: "Running a command", "Allow this command?" |
 | `text` | The plain rendering, readable on its own |
@@ -113,6 +117,7 @@ Only the fields in `body` differ.
 | `task` | `kind`, `description`, `subject`, and `usage` once known |
 | `notice` | `kind`: `compaction`, `waiting`, `retry`, `warning`, `model_changed`, `command_output` |
 | `error` | What was being attempted, and the harness's error code |
+| `session` | `settings`: each with an `id`, a `label`, its `value` and the `options` it accepts. `actions`: each with an `id`, a `label` and a `description`. `commands`: each with a `name`, a `description` and a `hint` |
 
 ## Answers and controls
 
@@ -124,9 +129,9 @@ answers and the choice or choices made, by id.
 **Controls** are things a person does unprompted: interrupt, start a new session, change a setting such as the
 model.
 
-How they are carried, what the rules are and who may send which is a proposal of its own:
-[`answers-and-controls.md`](answers-and-controls.md). It also proposes an eleventh item type, `session`, which
-tells an app what a harness lets it set and do.
+How they are carried, what the rules are and who may send which is decided:
+[`answers-and-controls.md`](answers-and-controls.md). The `session` item tells an app what a harness lets it
+set and do.
 
 ## What a driver has to do
 
@@ -214,4 +219,5 @@ Detail and evidence for each: [`../reference/harness-messages.md`](../reference/
   ([Q-23](../open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)).
 - **How an event is carried, and size limits.** Decided; see [`event-carrier.md`](event-carrier.md). The
   exact tags are not fixed.
-- **The exact form of an answer and of each control.**
+- **The exact tags of an answer and of each control.** Their shape is decided; see
+  [`answers-and-controls.md`](answers-and-controls.md).

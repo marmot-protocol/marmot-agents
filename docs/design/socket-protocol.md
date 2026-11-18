@@ -4,9 +4,14 @@ Status: draft. Decided: there is a local socket
 ([D-003](../decisions.md#d-003-the-boundary-to-other-languages-is-a-local-socket)), and it speaks
 `marmot.agent-control.v3` with a hello, a driver section and a chat section, no live preview stream, and no
 support for v2 ([D-020](../decisions.md#d-020-the-socket-speaks-agent-control-v3-with-a-clean-cutover)).
-Everything else on this page is a proposal: the framing, the messages, the capabilities and the credential.
-The decisions it asks for are listed [at the end](#decisions-this-asks-for). Administration is still open:
-[Q-05](../open-questions.md#q-05-how-is-the-agent-administered).
+Also decided, on 2026-11-18: the framing, what the core does for every connector, one connection per agent,
+the ids a connector sees, how often a prompt is delivered, and the credential
+([D-033](../decisions.md#d-033-the-sockets-framing-is-json-rpc-20-one-message-per-line) to
+[D-038](../decisions.md#d-038-each-connector-has-its-own-token)). They are listed [at the end](#what-was-decided).
+
+Still a draft: the exact fields of each message, and the list of capabilities. Not designed: the individual
+requests of the chat section, and administration
+([Q-05](../open-questions.md#q-05-how-is-the-agent-administered)).
 
 ## What it is for
 
@@ -38,6 +43,8 @@ events.
 
 ## What the core does, so that no connector has to
 
+Decided as [D-034](../decisions.md#d-034-the-core-does-the-shared-work-and-a-connector-speaks-only-in-agent-events).
+
 | Job | Why it belongs in the core |
 | --- | --- |
 | Check who may prompt and who may approve | One place for the owner's rules ([D-010](../decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)). Everything a connector receives is already allowed |
@@ -52,7 +59,8 @@ events.
 
 ## Framing
 
-Proposed: [JSON-RPC 2.0](https://www.jsonrpc.org/specification), one message per line, over a Unix socket.
+[JSON-RPC 2.0](https://www.jsonrpc.org/specification), one message per line, over a Unix socket
+([D-033](../decisions.md#d-033-the-sockets-framing-is-json-rpc-20-one-message-per-line)).
 
 v2 already puts one JSON message per line on a Unix socket, which is easy to write from any language and easy
 to record for tests. v3 keeps that and adds JSON-RPC's three message shapes: a request with an id, a response
@@ -80,9 +88,8 @@ support, or a connector too old for it, with an error that names the version it 
 [issue 11](https://github.com/marmot-protocol/marmot-agents/issues/11): drivers that run as separate programs
 can fall behind the core, and this makes that easy to see.
 
-**One connection is one agent.** The token decides which. This assumes each harness install is its own agent,
-which is the current thinking and not yet decided
-([Q-08](../open-questions.md#q-08-is-each-harness-install-its-own-identity)).
+**One connection is one agent.** The token decides which. Each harness install is its own agent
+([D-035](../decisions.md#d-035-each-harness-install-is-its-own-identity-with-its-own-sessions)).
 
 ## The driver section
 
@@ -109,8 +116,8 @@ Why each part of a prompt is there:
   the id alone, and takes the quote when it is given.
 - **The message's id.** A gateway's own message tools act on it, for example to react to it.
 
-**Ids are the core's own.** A chat's id and a sender's id are stable values the core makes up for this
-install. They are not the group's id or the person's public key. A gateway keeps its own logs and transcripts,
+**Ids are the core's own** ([D-036](../decisions.md#d-036-the-ids-a-connector-sees-are-the-cores-own)). A chat's id and a
+sender's id are stable values the core makes up for this install. They are not the group's id or the person's public key. A gateway keeps its own logs and transcripts,
 and nothing in them should identify a group or a person to anyone else. Names are passed as they are, because
 the model needs them.
 
@@ -172,7 +179,9 @@ built.
 
 `approval_commands` exists because Hermes and OpenClaw accept an approval typed as a message. A typed message
 is a prompt, and needs only the right to prompt. So the core checks a message that starts with one of these
-commands against the right to approve.
+commands against the right to approve ([D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights)). A command
+that changes the harness's permission mode belongs on the list too. None has been recorded, so the lists above
+may be incomplete.
 
 Codex is a built-in driver and does not use the socket. It is in the table because the same capabilities apply
 to the Rust trait.
@@ -187,13 +196,14 @@ to the Rust trait.
 | An event names an unknown turn or session | Accepts it. A harness can produce work outside a turn |
 | A message is not valid | Answers with an error and keeps the connection |
 
-A prompt is delivered at most once. Running a prompt twice is worse than losing one, because the person can see
-a prompt that was lost and send it again
+A prompt is delivered at most once ([D-037](../decisions.md#d-037-a-prompt-is-delivered-at-most-once)). Running a prompt
+twice is worse than losing one, because the person can see a prompt that was lost and send it again. The rest
+of what happens on a restart is open
 ([Q-27](../open-questions.md#q-27-what-happens-to-a-turn-when-the-core-or-a-driver-restarts)).
 
 ## Who may connect
 
-Open: [Q-06](../open-questions.md#q-06-how-does-a-program-prove-it-may-connect). The proposal:
+Decided as [D-038](../decisions.md#d-038-each-connector-has-its-own-token), as enough for now:
 
 - The socket is in a folder that only the owner's user account can open.
 - Each connector has its own token, in a file only that user can read. The core creates it when the owner adds
@@ -204,7 +214,7 @@ Open: [Q-06](../open-questions.md#q-06-how-does-a-program-prove-it-may-connect).
 What this gives and does not give: it stops other users of the machine, it tells connectors apart, and it keeps
 a connector from using administration by accident. It does not stop a program running as the same user, which
 can read the token files and the core's own data. A harness with a shell runs as that user. Real separation
-needs the core to run as a different user, which is possible later and not proposed now.
+needs the core to run as a different user, which is possible later and not planned now.
 
 ## An example
 
@@ -262,12 +272,14 @@ The proposal is that the owner administers the agent through a configuration fil
 command line, and later from the chat. The command line still has to reach the running core, so v3 gets an
 administration section that only the owner's tools may use. Its messages are not designed here.
 
-## Decisions this asks for
+## What was decided
 
-1. Is the framing JSON-RPC 2.0, one message per line?
-2. Does the core do the jobs listed above, so that a connector speaks only in agent events?
-3. Is one connection one agent, chosen by the token?
-4. Are chat and sender ids the core's own, not the group's id or a public key?
-5. Is a prompt delivered at most once, and never sent again after a dropped connection?
-6. Is a typed approval command checked against the right to approve?
-7. Is a token per connector enough for now, with its limit stated?
+| Point | Decision |
+| --- | --- |
+| The framing is JSON-RPC 2.0, one message per line | [D-033](../decisions.md#d-033-the-sockets-framing-is-json-rpc-20-one-message-per-line) |
+| The core does the jobs listed above, and a connector speaks only in agent events | [D-034](../decisions.md#d-034-the-core-does-the-shared-work-and-a-connector-speaks-only-in-agent-events) |
+| One connection is one agent, chosen by the token | [D-035](../decisions.md#d-035-each-harness-install-is-its-own-identity-with-its-own-sessions) |
+| Chat and sender ids are the core's own | [D-036](../decisions.md#d-036-the-ids-a-connector-sees-are-the-cores-own) |
+| A prompt is delivered at most once | [D-037](../decisions.md#d-037-a-prompt-is-delivered-at-most-once) |
+| A typed command that approves is checked against the right to approve | [D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights) |
+| A token per connector is enough for now, with its limit stated | [D-038](../decisions.md#d-038-each-connector-has-its-own-token) |

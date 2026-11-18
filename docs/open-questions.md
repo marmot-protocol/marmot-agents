@@ -16,6 +16,9 @@ tags. How an event is carried is decided ([D-022](decisions.md#d-022-the-agents-
 to [D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb)). A to-do list
 that changes during a turn has not been seen in a recording.
 
+An eleventh type, `session`, was added on 2026-11-18
+([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)). The prototype does not produce it yet.
+
 ### Q-02 What happens to large output?
 
 The limit is decided: an agent item is at most 64 KB ([D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb)).
@@ -27,21 +30,12 @@ devices. Options are to cut output off with a marker, to send it as an encrypted
 ### Q-03 Where are the event kinds specified?
 
 The carrier page ([`design/event-carrier.md`](design/event-carrier.md)) lists what the Marmot specification
-and MDK would each need. Kind 1201 carries every agent item ([D-023](decisions.md#d-023-one-kind-carries-every-agent-item)); kind 1202
-stays reserved.
+and MDK would each need. Kind 1201 carries every agent item ([D-023](decisions.md#d-023-one-kind-carries-every-agent-item)), and kind 1202
+carries answers and controls ([D-027](decisions.md#d-027-answers-and-controls-are-one-kind-of-event-kind-1202)).
 
 The kinds are Marmot events, so their definition probably belongs in the
 [Marmot specification](https://github.com/marmot-protocol/marmot), with MDK exposing them to the apps. The
 ownership, and how much is specification versus app convention, is not settled.
-
-### Q-04 What carries over from the earlier approvals design?
-
-MDK issue 858 and Marmot pull request 503 design approvals and single-choice questions as a strict protocol with
-a durable lifecycle. It covers only two-person chats and requires an acknowledgement that harnesses do not give.
-The current thinking is to keep its rules about authentication (an answer is bound to the exact request, only
-permitted people count, a bare "yes" never counts, answers never reach the model) and to drop its lifecycle
-guarantees. Not yet decided. [`design/answers-and-controls.md`](design/answers-and-controls.md) is a proposal
-built on this: answers and controls as one kind of event, resolved by the agent's own reply.
 
 ### Q-23 How does an agent send a file to the chat?
 
@@ -77,26 +71,23 @@ whether creating a group counts as administration or as an ordinary chat action.
 The project owner agreed with this direction on 2026-11-17 and chose not to fix its shape yet. It is to be
 decided when drivers are being built against real harnesses, not before.
 
-### Q-06 How does a program prove it may connect?
-
-Today the socket relies on file permissions, the same user id, or a bearer token that grants everything. v3
-authenticates once in the hello ([D-020](decisions.md#d-020-the-socket-speaks-agent-control-v3-with-a-clean-cutover)).
-What the credential is, and how a connector's rights differ from an administrator's
-([Q-05](#q-05-how-is-the-agent-administered)), is open. There is a proposal in
-[`design/socket-protocol.md`](design/socket-protocol.md#who-may-connect): a token per connector, with its limit
-stated. It does not stop a program running as the same user.
-
 ## Conversation handling
 
 ### Q-07 How does a chat map to a harness session?
 
-One session per chat, per thread, or chosen by the user? How are sessions started, resumed and listed from the
-chat? What happens when one host runs several harnesses, or one group contains several agents?
+Decided: each chat with an agent has its own session, and a new session can be started in the same chat
+([D-035](decisions.md#d-035-each-harness-install-is-its-own-identity-with-its-own-sessions)).
 
-The current direction, not decided: for a coding harness, each chat has one saved session with each agent in
-it, kept across restarts. A gateway such as Hermes decides its own sessions; it keeps one per sender. Several
-agents in one group are handled by identity, in [Q-08](#q-08-is-each-harness-install-its-own-identity). Raised
-in [issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8).
+Still open:
+
+- **Older sessions.** How a person lists the sessions a chat has had, and goes back to one.
+- **Gateways that choose their own sessions.** Hermes keeps one session per sender, even in a group, so a
+  group chat has several. OpenClaw puts every direct chat in one session unless its plugin arranges otherwise,
+  so the plugin has to arrange one per chat. Whether the core should accept Hermes's split is part of
+  [Q-22](#q-22-whose-rules-govern-a-gateway).
+- **Threads.** Whether a thread inside a chat gets its own session.
+
+Raised in [issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8).
 
 ### Q-22 Whose rules govern a gateway?
 
@@ -122,17 +113,13 @@ OpenClaw was recorded on 2026-11-17, and differs on each point. This is evidence
 - **What the owner must set.** An approval reaches the chat only if the owner has switched approval
   forwarding on in OpenClaw. Left off, the command waits unseen.
 
-### Q-08 Is each harness install its own identity?
+### Q-08 How do several agent identities run together?
 
-The current direction, which needs much more product work before it is decided: **each harness install is its
-own Marmot identity, and so its own contact.** Hermes might be one contact, Codex another and Claude Code a
-third, each with its own key, all running on one machine. Linking to a harness is linking to a contact.
+Decided: each harness install is its own Marmot identity, and so its own contact
+([D-035](decisions.md#d-035-each-harness-install-is-its-own-identity-with-its-own-sessions)). What is open is
+how several of them run on one machine and behave in one group. This needs much more product work.
 
-This is how today's connectors already work. [Issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8)
-proposed the opposite for groups: one identity that answers for several harnesses, with a `/agent` command to
-switch between them. Separate identities make the switch unnecessary, because you address the one you want.
-
-The rough shape:
+The rough shape, not decided:
 
 - **Who answers.** In a one-to-one chat the agent always answers. In a group it answers only when it is
   mentioned or replied to. A message addressed to nobody gets no answer. The project owner has said this
@@ -140,7 +127,6 @@ The rough shape:
 - **No loops.** Agents must not answer each other, and several must not answer at once.
 - **The owner is not a required link.** Nothing forces an agent to state whose it is. An owner who wants to can
   say so in the agent's profile, for example "Max's Codex" in its name or description.
-- **Sessions.** One saved session per chat for each agent ([Q-07](#q-07-how-does-a-chat-map-to-a-harness-session)).
 
 Still to work out:
 
@@ -163,17 +149,6 @@ Still to work out:
   in a group means five harness installs holding that chat.
 - **Names.** The identity is per install, so Claude Code on a laptop and on a server are two contacts.
 - **Setup.** Each identity has to be created, named and invited. It should take one step, not five.
-
-### Q-26 How are the core's commands told apart from the harness's?
-
-A harness has its own slash commands; Claude Code alone advertises 59. If the core has commands of its own, a
-typed message could mean either. Options: the apps send core controls as buttons, not typed text, leaving typed
-slash commands for the harness; or the core reserves some names and offers a way to send a message to the
-harness exactly as typed. Raised in [issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8).
-
-[`design/answers-and-controls.md`](design/answers-and-controls.md#7-a-slash-command-is-a-message) proposes the
-first option: a typed slash command always goes to the harness, and the core's controls are never text. Not
-decided.
 
 ### Q-27 What happens to a turn when the core or a driver restarts?
 
@@ -209,6 +184,30 @@ turn, and Claude Code ends the turn and starts a new one. See
 The gateways differ too: Hermes folds the message into the running turn and says so, and OpenClaw held it
 without a word and ran it as a turn of its own afterwards. See
 [`reference/openclaw-messages.md`](reference/openclaw-messages.md#controls-are-chat-messages).
+
+### Q-29 Which right does each control need?
+
+Every action needs the right to prompt or the right to approve
+([D-032](decisions.md#d-032-every-action-needs-one-of-two-rights)). Sending a prompt needs the first. Answering
+an approval and changing the permission mode need the second. The rest is not settled:
+
+| Action | Proposed | Why |
+| --- | --- | --- |
+| Interrupt | Prompt | Anyone who can start work can stop it |
+| Start a new session | Prompt | |
+| Change a setting other than the permission mode, such as the model | Prompt | |
+| Use a harness's own action, such as compacting | Prompt | |
+| Answer a question | Prompt | The answer is information for the agent, like a prompt |
+
+[D-010](decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve) says the opposite as written: it
+puts "use controls" with the right to approve. The reason to move them is that a harness's slash commands are
+messages ([D-031](decisions.md#d-031-a-slash-command-is-a-message-for-the-harness)), and they include commands
+that stop a turn, start a session and switch the model. Someone who may prompt can type those. A stricter rule
+for the button than for the typed command would protect nothing.
+
+Also to check: that each connector's list of commands needing the right to approve is complete. A harness can
+add such a command in any release. Whether Hermes and OpenClaw have typed commands that change the permission
+mode has not been recorded.
 
 ### Q-10 How are permissions changed from the chat?
 
@@ -336,7 +335,7 @@ plan, and when the old code leaves MDK, are open.
 The leading requirement, from [issue 10](https://github.com/marmot-protocol/marmot-agents/issues/10): an install
 that moves over keeps its identity, its keys, its encryption state and every group it is in. Nobody has to
 invite an agent again. This fits the identity direction in
-[Q-08](#q-08-is-each-harness-install-its-own-identity): each existing account home is one identity, with nothing
+[Q-08](#q-08-how-do-several-agent-identities-run-together): each existing account home is one identity, with nothing
 to merge or split.
 
 One caution about going back. Keeping the old service installed but stopped is cheap insurance, but it only
