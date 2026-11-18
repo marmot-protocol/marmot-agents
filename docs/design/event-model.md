@@ -3,7 +3,7 @@
 Status: draft 0. The principles are decided
 ([D-007](../decisions.md#d-007-one-shared-event-vocabulary),
 [D-008](../decisions.md#d-008-pass-everything-through)). Everything else on this page is a proposal: the item
-types, the fields and the rules. It is no longer a guess, though. A prototype applies it to 97 recorded sessions
+types, the fields and the rules. It is no longer a guess, though. A prototype applies it to 123 recorded sessions
 with Codex, Claude Code, Hermes and OpenClaw, and every native message either becomes an agent event or is
 deliberately not sent.
 See [Checked against real sessions](#checked-against-real-sessions). The open points are
@@ -170,17 +170,17 @@ driver code.
 
 | | |
 | --- | --- |
-| Recordings | 97: 28 Codex, 29 Claude Code, 14 Hermes, 26 OpenClaw |
-| Native messages | 8,733 |
-| Agent events produced | 862 |
+| Recordings | 123: 28 Codex, 29 Claude Code, 27 Hermes, 39 OpenClaw |
+| Native messages | 15,800 |
+| Agent events produced | 1,309 |
 | Native messages with no rule | 0 |
 | Items left open at the end of a recording | 0 |
 
-The events by type: 257 `turn`, 168 `tool`, 140 `message`, 140 `session`, 70 `notice`, 58 `approval`,
-12 `question`, 8 `task`, 5 `error`, 2 `plan`, 2 `reasoning`.
+The events by type: 423 `turn`, 207 `session`, 207 `notice`, 197 `tool`, 169 `message`, 76 `approval`,
+12 `question`, 8 `task`, 6 `error`, 2 `plan`, 2 `reasoning`.
 
-The `session` type was added on 2026-11-18, with seven more recordings to test it. Its 140 events are 99
-sessions and 41 edits. See
+The `session` type was added on 2026-11-18, with 33 more recordings to test it and the controls. Its 207
+events are 128 sessions and 79 edits. The paragraphs below describe the first 90 recordings. See
 [answers and controls](answers-and-controls.md#checked-against-the-recordings).
 
 **A gateway fits, with less to say.** Hermes was added after the two coding harnesses, as a check that the ten
@@ -228,8 +228,6 @@ Detail and evidence for each: [`../reference/harness-messages.md`](../reference/
 - Volume. In one developer's real use a turn averaged about 12 tool calls, 7 reasoning blocks and 3.5 pieces of
   text. With each tool call sent twice that is roughly 35 events per turn
   ([Q-12](../open-questions.md#q-12-how-many-events-is-too-many)).
-- A session that is replaced in the same chat, for the two gateways. Codex and Claude Code are recorded: no
-  harness says a session is over, so the driver ends the item.
 - The other four harnesses.
 
 ## What is deliberately not in the model

@@ -1,0 +1,47 @@
+{
+  "name": "exec_directive_once",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "EXEC_MODE": "ask",
+    "OPENCLAW_CONFIG_PATCH": "{\"approvals\": {\"exec\": {\"enabled\": true, \"mode\": \"session\"}}}",
+    "RECORDER_PLUGIN_HOOKS": "session_start,session_end,before_reset"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/exec security=full ask=off Use your exec tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Use your exec tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir",
+      "wait": false
+    },
+    {
+      "wait_for_text": "/approve",
+      "timeout": 300,
+      "required": false
+    },
+    {
+      "sleep": 2
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/approve {approval_id} deny",
+      "wait": false
+    },
+    {
+      "wait_turn": true
+    }
+  ]
+}

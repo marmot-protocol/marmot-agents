@@ -1,0 +1,62 @@
+{
+  "name": "approvals_off",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_PLUGIN_HOOKS": "on_session_start,on_session_end,on_session_finalize,on_session_reset,on_session_open,pre_command,agent_loop_stopped,pre_approval_request,post_approval_response"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/approvals",
+      "wait": false
+    },
+    {
+      "wait_for_text": "Approval mode:",
+      "timeout": 120
+    },
+    {
+      "sleep": 2
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/approvals off",
+      "wait": false
+    },
+    {
+      "wait_for_text": "Approval mode: off",
+      "timeout": 120
+    },
+    {
+      "sleep": 2
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/approvals manual",
+      "wait": false
+    },
+    {
+      "wait_for_text": "Approval mode: manual",
+      "timeout": 120
+    },
+    {
+      "sleep": 2
+    }
+  ]
+}

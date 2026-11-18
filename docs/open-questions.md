@@ -10,7 +10,7 @@ The first three block the most other work.
 ### Q-01 What exactly is in an agent event?
 
 [`design/event-model.md`](design/event-model.md) is now a concrete draft: ten item types, the fields of each,
-and eleven rules for drivers. A prototype applies it to 97 recorded sessions with Codex, Claude Code,
+and eleven rules for drivers. A prototype applies it to 123 recorded sessions with Codex, Claude Code,
 Hermes and OpenClaw, with nothing left over. It is still a proposal. To settle: whether these are the right types and fields, and the exact
 tags. How an event is carried is decided ([D-022](decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)
 to [D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb)). A to-do list
@@ -117,6 +117,12 @@ OpenClaw was recorded on 2026-11-17, and differs on each point. This is evidence
   and by structured data on approvals and questions.
 - **What the owner must set.** An approval reaches the chat only if the owner has switched approval
   forwarding on in OpenClaw. Left off, the command waits unseen.
+- **Each gateway has its own owner, too.** Recorded on 2026-11-18: OpenClaw refuses its owner-only commands to
+  anyone else, and drops, without a word, a message with a command from someone not on its command list.
+  Hermes, given a list of administrators, refused `/yolo`, `/approvals`, `/model`, `/new` and `/stop` to anyone
+  else. Those lists are separate from the owner's settings in the core.
+- **Hermes can approve by itself.** In its default mode a second model judged a flagged command and approved
+  it, and nobody was asked.
 
 ### Q-08 How do several agent identities run together?
 
@@ -154,6 +160,34 @@ Still to work out:
   in a group means five harness installs holding that chat.
 - **Names.** The identity is per install, so Claude Code on a laptop and on a server are two contacts.
 - **Setup.** Each identity has to be created, named and invited. It should take one step, not five.
+
+### Q-31 How does the core stop a typed command that widens what an agent may do?
+
+A typed command is a message, and a message needs only the right to prompt. So each connector lists the
+commands that need the right to approve, and the core checks a message that starts with one of them
+([D-032](decisions.md#d-032-every-action-needs-one-of-two-rights)). Recordings of the two gateways on
+2026-11-18 show that rule is not enough. See
+[`design/answers-and-controls.md`](design/answers-and-controls.md#typed-commands-that-widen-what-an-agent-may-do).
+
+- **A command can sit anywhere in a message.** OpenClaw honoured `/exec security=full ask=off` at the start,
+  in the middle and at the end of a message, from an ordinary member. The command that followed ran with no
+  approval. A check of how a message starts misses two of those three.
+- **One word does two jobs.** In Hermes `/approve` answers an approval, and also confirms `/new`. Someone who
+  may prompt and may not approve could then ask for a new session and not confirm it.
+- **An approval can cover other people.** After one person answered "always", the same command from another
+  person ran with no prompt, in both gateways. In Hermes the standing approval covers the reason a command was
+  flagged, not the one command.
+- **The lists are long.** Hermes has six such commands and OpenClaw about ten, counting ones that are off by
+  default. Neither gateway marks them.
+
+Proposed, not decided:
+
+1. A connector says, for each listed command, whether it counts anywhere in a message or only at the start.
+   The core checks accordingly, and tells a person it refuses.
+2. Hermes's request to confirm a command becomes a `question` item, which needs only the right to prompt. A
+   typed `/approve` counts as an approval answer only while an approval is waiting.
+3. A standing approval ("always", "for this session") is an answer like any other and needs the right to
+   approve. That it then covers other people is the gateway's behaviour, and is shown in the approval item.
 
 ### Q-27 What happens to a turn when the core or a driver restarts?
 

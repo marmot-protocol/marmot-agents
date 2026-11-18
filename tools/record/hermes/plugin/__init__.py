@@ -9,6 +9,10 @@ Each output line is {"t": <ms>, "dir": "in"|"out", "via": ..., "msg": ...}:
     dir "out", via "inbound"   a scripted chat message this plugin handed to Hermes
     dir "in",  via "hook"      Hermes called a method on the adapter
     dir "out", via "result"    what that method returned to Hermes
+    dir "in",  via "plugin_hook"  Hermes called a plugin hook, such as on_session_reset
+    dir "out", via "call"      the plugin called Hermes: for the commands, or a session's model settings
+    dir "in",  via "call"      what that call returned
+    dir "out", via "press"     a scripted press of an approval button, or a pick from the model picker
     dir "out", via "note"      a marker written by the recorder itself
 
 Environment:
@@ -18,10 +22,18 @@ Environment:
                           {"wait_for": "<method>"}        wait until Hermes calls that adapter method
                           {"wait_for_text": "<words>"}    wait until Hermes sends a message containing them
                           {"press": "<choice>", "user"}   press a button on the last approval card
+                          {"read": "<what>", "chat", "user"}  ask Hermes for something as data: "commands"
+                                                          (its command registry), "model_settings" or
+                                                          "model_providers" (for that chat and sender)
+                          {"pick_model": "<id>", "provider": "<slug>"}  choose from the last model picker
                           {"wait_turn": true}             wait for the running turn to end
                           {"sleep": <seconds>}
     RECORDER_APPROVAL_BUTTONS  set to 1 to claim native approval buttons, so that Hermes hands over
                           a structured approval card where it would otherwise send text
+    RECORDER_MODEL_PICKER  set to 1 to claim a model picker, so that Hermes hands over the models as a
+                          list where it would otherwise send them as text
+    RECORDER_PLUGIN_HOOKS  comma-separated plugin hooks to register and record, for example
+                          "on_session_reset,pre_command". None by default
     RECORDER_OUT        path of the .jsonl file to write
     RECORDER_TURN_TIMEOUT  seconds to wait for Hermes to finish a turn (default 900)
 """
@@ -35,7 +47,9 @@ import functools
 import inspect
 import json
 import os
+import re
 import signal
+import threading
 import time
 import uuid
 from datetime import datetime, timezone
@@ -82,6 +96,15 @@ def jsonable(v, depth=0):
     return f"<{type(v).__name__}>"
 
 
+def read_secret():
+    """The model key, so that it can be kept out of the recording whatever hands it over."""
+    try:
+        secret = Path("/run/secrets/model_key").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return secret if len(secret) >= 8 else None
+
+
 class Recording:
     def __init__(self, path: str):
         self.path = Path(path)
@@ -91,10 +114,24 @@ class Recording:
         self.calls: dict[str, int] = {}
         self.sent: list[str] = []
         self.changed = asyncio.Event()
+        self.lock = threading.Lock()  # plugin hooks can run on other threads
+        self.secret = read_secret()
+        # A gateway's own reply can show the key in a masked form that keeps its last characters.
+        # Match any such form, and the bare end of the key.
+        self.masked = None
+        if self.secret and len(self.secret) >= 16:
+            tails = "|".join(re.escape(self.secret[-n:]) for n in (8, 7, 6, 5, 4))
+            self.masked = re.compile(rf"[A-Za-z0-9_-]{{0,24}}(?:\.{{2,}}|…|\*{{2,}})(?:{tails})")
 
     def write(self, direction: str, via: str, msg: dict):
-        self.file.write(json.dumps({"t": int((time.monotonic() - self.t0) * 1000), "dir": direction, "via": via, "msg": msg}, ensure_ascii=False) + "\n")
-        self.file.flush()
+        line = json.dumps({"t": int((time.monotonic() - self.t0) * 1000), "dir": direction, "via": via, "msg": msg}, ensure_ascii=False)
+        if self.secret:
+            line = line.replace(self.secret, "<model-key>")
+        if self.masked:
+            line = self.masked.sub("<model-key>", line).replace(self.secret[-8:], "<model-key>")
+        with self.lock:
+            self.file.write(line + "\n")
+            self.file.flush()
         if via == "hook":
             self.calls[msg.get("method", "")] = self.calls.get(msg.get("method", ""), 0) + 1
             if msg.get("method") == "send":
@@ -152,10 +189,31 @@ def recorded(name, base_fn):
     return wrapper
 
 
+# Plugin hooks are registered when the plugin loads, before there is an adapter to write through.
+HOOKS = {"recording": None, "early": []}
+
+
+def plugin_hook(name):
+    """A callback for one plugin hook: record what Hermes passed, and change nothing."""
+    def callback(**kwargs):
+        msg = {"hook": name, "params": {k: jsonable(v) for k, v in kwargs.items()}}
+        recording = HOOKS["recording"]
+        if recording is None:
+            HOOKS["early"].append(msg)
+        else:
+            recording.write("in", "plugin_hook", msg)
+    return callback
+
+
 class RecorderAdapter(BasePlatformAdapter):
     def __init__(self, config):
         super().__init__(config, Platform(PLATFORM))
         self.recording = Recording(os.environ.get("RECORDER_OUT", "/out/recording.jsonl"))
+        HOOKS["recording"] = self.recording
+        for msg in HOOKS["early"]:
+            self.recording.write("in", "plugin_hook", msg)
+        HOOKS["early"].clear()
+        self.model_picker = None  # the callback of the last model picker Hermes handed over
         self.scenario = json.loads(Path(os.environ["RECORDER_SCENARIO"]).read_text(encoding="utf-8"))
         self.turn_timeout = float(os.environ.get("RECORDER_TURN_TIMEOUT", "900"))
         self.turn_done = asyncio.Event()
@@ -214,6 +272,56 @@ class RecorderAdapter(BasePlatformAdapter):
                 return True
             self.turn_done.clear()
 
+    # -- asking Hermes for something as data
+
+    def source_for(self, step, message_id=None):
+        chat = (self.scenario.get("chats") or {}).get(step["chat"], {})
+        return self.build_source(
+            chat_id=step["chat"], chat_name=chat.get("name", step["chat"]),
+            chat_type=step.get("chat_type") or chat.get("type", "group"),
+            user_id=step["user"], user_name=step.get("user_name", step["user"]), message_id=message_id,
+        )
+
+    async def read(self, step):
+        """Call something Hermes offers a platform plugin that returns data, and record the answer."""
+        what = step["read"]
+        if what == "commands":
+            # Not a call on the adapter. Hermes's own platform adapters import this registry to
+            # build their command menus, and a plugin runs in the same process.
+            method, params = "hermes_cli.commands.COMMAND_REGISTRY", {}
+            def call():
+                from hermes_cli.commands import COMMAND_REGISTRY, _is_gateway_available
+                return [{**jsonable(c), "gateway_available": _is_gateway_available(c)} for c in COMMAND_REGISTRY]
+        elif what == "model_settings":
+            source = self.source_for(step)
+            method, params = "get_session_model_settings", {"source": jsonable(source)}
+            call = lambda: self.get_session_model_settings(source)
+        elif what == "model_providers":
+            source = self.source_for(step)
+            method, params = "list_session_model_picker_providers", {"source": jsonable(source)}
+            call = lambda: self.list_session_model_picker_providers(source)
+        else:
+            raise ValueError(f"unknown read step: {what}")
+        self.recording.write("out", "call", {"method": method, "params": params})
+        try:
+            result = await asyncio.to_thread(call)
+        except Exception as exc:
+            self.recording.write("in", "call", {"method": method, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        self.recording.write("in", "call", {"method": method, "result": jsonable(result)})
+
+    async def pick_model(self, step):
+        self.recording.write("out", "press", {"pick_model": step["pick_model"], "provider": step.get("provider"), "chat": step.get("chat")})
+        if self.model_picker is None:
+            self.recording.write("in", "call", {"method": "on_model_selected", "error": "no model picker was handed over"})
+            return
+        try:
+            result = await self.model_picker(step.get("chat"), step["pick_model"], step.get("provider") or "")
+        except Exception as exc:
+            self.recording.write("in", "call", {"method": "on_model_selected", "error": f"{type(exc).__name__}: {exc}"})
+            return
+        self.recording.write("in", "call", {"method": "on_model_selected", "result": jsonable(result)})
+
     # -- the scripted chat
 
     async def run_scenario(self):
@@ -224,6 +332,12 @@ class RecorderAdapter(BasePlatformAdapter):
             for step in self.scenario["steps"]:
                 if "sleep" in step:
                     await asyncio.sleep(float(step["sleep"]))
+                    continue
+                if "read" in step:
+                    await self.read(step)
+                    continue
+                if "pick_model" in step:
+                    await self.pick_model(step)
                     continue
                 if "wait_for_text" in step:
                     words = step["wait_for_text"]
@@ -258,12 +372,7 @@ class RecorderAdapter(BasePlatformAdapter):
                     continue
                 self.n += 1
                 message_id = step.get("message_id") or f"in-{self.n}"
-                chat = (self.scenario.get("chats") or {}).get(step["chat"], {})
-                source = self.build_source(
-                    chat_id=step["chat"], chat_name=chat.get("name", step["chat"]),
-                    chat_type=step.get("chat_type") or chat.get("type", "group"),
-                    user_id=step["user"], user_name=step.get("user_name", step["user"]), message_id=message_id,
-                )
+                source = self.source_for(step, message_id)
                 event = MessageEvent(
                     text=step["text"], message_type=MessageType.TEXT, source=source, raw_message=step,
                     message_id=message_id, timestamp=datetime.now(timezone.utc),
@@ -297,6 +406,30 @@ class RecorderAdapterWithButtons(RecorderAdapter):
         return result
 
 
+class ModelPicker:
+    """Claims a model picker. Hermes checks for this method, and then hands over the providers and
+    their models as a list where it would otherwise send them as text."""
+
+    async def send_model_picker(self, chat_id, providers, current_model, current_provider, session_key,
+                                on_model_selected, metadata=None):
+        self.model_picker = on_model_selected
+        self.recording.write("in", "hook", {"method": "send_model_picker", "params": {
+            "chat_id": chat_id, "providers": jsonable(providers), "current_model": current_model,
+            "current_provider": current_provider, "session_key": session_key,
+            "on_model_selected": jsonable(on_model_selected), "metadata": jsonable(metadata)}})
+        self.n += 1
+        result = SendResult(success=True, message_id=f"out-{self.n}")
+        self.recording.write("out", "result", {"method": "send_model_picker", "result": jsonable(result)})
+        return result
+
+
+def adapter_class():
+    base = RecorderAdapterWithButtons if os.environ.get("RECORDER_APPROVAL_BUTTONS") == "1" else RecorderAdapter
+    if os.environ.get("RECORDER_MODEL_PICKER") == "1":
+        return type("RecorderAdapterWithModelPicker", (ModelPicker, base), {})
+    return base
+
+
 for _name in dir(BasePlatformAdapter):
     if _name.startswith("_") or not _name.startswith(RECORDED_PREFIXES) or _name in RecorderAdapter.__dict__:
         continue
@@ -307,10 +440,12 @@ for _name in dir(BasePlatformAdapter):
 
 def register(ctx):
     """Hermes plugin entry point."""
+    for name in filter(None, (h.strip() for h in os.environ.get("RECORDER_PLUGIN_HOOKS", "").split(","))):
+        ctx.register_hook(name, plugin_hook(name))
     ctx.register_platform(
         name=PLATFORM,
         label="Recorder",
-        adapter_factory=lambda config: (RecorderAdapterWithButtons if os.environ.get("RECORDER_APPROVAL_BUTTONS") == "1" else RecorderAdapter)(config),
+        adapter_factory=lambda config: adapter_class()(config),
         check_fn=lambda: True,
         is_connected=lambda config: True,
         validate_config=lambda config: True,

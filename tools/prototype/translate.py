@@ -836,7 +836,11 @@ class Claude(Translator):
 
 class Hermes(Translator):
     """Hermes hands a platform formatted text, not tool events. So most of what it sends can only
-    become a message or a notice. Approvals and questions are the exception."""
+    become a message or a notice. Approvals and questions are the exception.
+
+    A session is the other exception, and only if the plugin asks. Hermes will say which model a
+    chat uses, and list the models and the commands, when the plugin calls for them. It reports a
+    session being replaced through a plugin hook. Everything else about a session is text."""
 
     harness = "hermes"
     NOT_SENT = {"send_typing", "stop_typing", "connect", "disconnect", "get_chat_info", "format_tool_preview",
@@ -844,9 +848,22 @@ class Hermes(Translator):
     # A line Hermes writes about a tool it is running. There is no structured form of this.
     TOOL_LINE = ("💻", "🔍", "🔎", "⚙️", "🐍", "📄", "🌐", "🧠", "✏️", "📝")
     NOTICES = [
-        ("📬", "runtime"), ("⏳", "progress"), ("↪", "steered"), ("⚡", "stopped"),
+        ("📬", "runtime"), ("⏳", "progress"), ("↪", "steered"), ("⚡ Stopped", "stopped"),
         ("📖", "command_output"), ("📊", "command_output"), ("⚠️ Your message was interrupted", "runtime"),
     ]
+    # Plugin hooks that say nothing a platform call does not already say, or nothing the model needs.
+    HOOKS_NOT_SENT = {
+        "pre_command": "names a slash command that is about to run",
+        "on_session_end": "the end of a turn, which on_processing_complete also reports",
+        "on_session_finalize": "the old session is being closed; on_session_reset follows",
+        "on_session_open": "a session was opened",
+        "agent_loop_stopped": "a turn was interrupted, which on_processing_complete also reports",
+        "pre_approval_request": "an approval is about to be asked, which the prompt also says",
+        "post_approval_response": "an approval was answered, which the outcome message also says",
+    }
+    # What a person can type to answer Hermes's request to confirm one of their own commands.
+    CONFIRM = {"/approve": "once", "/always": "always", "/cancel": "cancel"}
+    EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 
     def __init__(self):
         super().__init__()
@@ -854,7 +871,16 @@ class Hermes(Translator):
         self.last_send = None
         self.approval = None  # the open approval item, if any
         self.question = None  # the open question item, if any
+        self.confirm = None  # the open request to confirm a slash command, if any
         self.final_next = False
+        self.key = None  # the chat and sender of the turn in progress, or of the last call
+        self.turn_command = None  # the slash command that started the turn in progress, if one did
+        self.generation: dict[str, int] = {}  # chat and sender -> how many sessions they have had
+        self.settings: dict[str, dict] = {}  # session name -> setting id -> the setting
+        self.hermes_ids: dict[str, str] = {}  # Hermes's own session id -> chat and sender
+        self.commands: list[dict] = []  # Hermes's command list, if the plugin asked for it
+        self.typed: dict[str, tuple] = {}  # message id of a typed command -> the control it was counted as
+        self.reset_by_hook = False
 
     def feed(self, rec):
         m, via = rec["msg"], rec.get("via")
@@ -864,7 +890,11 @@ class Hermes(Translator):
             return self.inbound(m)
         if via == "press":
             return self.press(m)
+        if via == "plugin_hook":
+            return self.plugin_hook(m)
         method = m.get("method")
+        if via == "call":
+            return self.asked(method, m) if rec["dir"] == "in" else self.ask(method, m)
         if via == "result":
             if method in ("send", "_send_exec_approval_prompt") and self.last_send is not None:
                 mid = (m.get("result") or {}).get("message_id")
@@ -879,6 +909,7 @@ class Hermes(Translator):
         handler = {
             "on_processing_start": self.turn_start, "on_processing_complete": self.turn_end, "send": self.send,
             "edit_message": self.edit, "send_clarify": self.clarify, "_send_exec_approval_prompt": self.approval_card,
+            "send_slash_confirm": self.confirm_card, "send_model_picker": self.model_picker,
         }.get(method)
         if handler is None:
             return self.unknown(str(method))
@@ -886,15 +917,41 @@ class Hermes(Translator):
 
     # -- what people send
 
+    def typed_control(self, word, args):
+        """Which control a typed slash command is. Hermes has no other way to give one."""
+        first = args[0] if args else ""
+        if word == "/stop":
+            return "interrupt", "/stop, as a message"
+        if word in ("/new", "/reset"):
+            return "new_session", f"{word}, as a message"
+        if word == "/model" and first and not first.startswith("-"):
+            return "set model", "/model reset, as a message" if first == "reset" else "/model <id>, as a message"
+        if word == "/reasoning" and first in self.EFFORTS:
+            return "set reasoning", "/reasoning <level>, as a message"
+        # The next three change what the agent may do without asking.
+        if word == "/yolo":
+            return "set (permission) yolo", "/yolo, as a message"
+        if word == "/approvals" and first:
+            return "set (permission) approvals", "/approvals <mode>, as a message"
+        if word in ("/memory", "/skills") and first in ("approval", "mode") and len(args) > 1:
+            return "set (permission) write approval", f"{word} approval <on|off>, as a message"
+        return "(slash command, as a message)", word
+
     def inbound(self, m):
         text = str(m.get("text") or "").strip()
-        word = text.split(" ")[0]
-        if word in ("/approve", "/deny"):
-            self.control("(answer an approval, typed)", word)
-        elif word == "/stop":
-            self.control("interrupt", "/stop, as a message")
+        word, *args = text.split()
+        confirming = bool(self.confirm and self.confirm in self.open and word in self.CONFIRM)
+        if confirming:
+            self.control("(confirm a command, typed)", word)
+        elif word in ("/approve", "/deny"):
+            # "/approve session" and "/approve always" leave a standing approval behind.
+            scope = f" {args[0]}" if word == "/approve" and args and args[0] in ("session", "always") else ""
+            self.control("(answer an approval, typed)", word + scope)
         elif word.startswith("/"):
-            self.control("(slash command, as a message)", word)
+            self.typed[m.get("message_id")] = self.typed_control(word, args)
+            self.control(*self.typed[m.get("message_id")])
+        if confirming:
+            return self.skip("client: answer to a command confirmation, as a slash command")
         if self.approval and word in ("/approve", "/deny"):
             return self.skip("client: answer to an approval, as a slash command")
         if self.question and self.question in self.open:
@@ -903,9 +960,12 @@ class Hermes(Translator):
                       {**prev["body"], "answer": text}, "inbound message, taken as the answer", m)
             self.question = None
             return
-        self.skip("client: chat message")
+        self.skip("client: slash command" if word.startswith("/") else "client: chat message")
 
     def press(self, m):
+        if "pick_model" in m:
+            self.control("set model", "on_model_selected(), from the model picker")
+            return self.skip("client: a pick from the model picker")
         item = self.approval
         prev = self.open.get(item) if item else None
         if prev is None:
@@ -917,16 +977,132 @@ class Hermes(Translator):
                   {**prev["body"], "answer": {"choice": chosen["id"] if chosen else None}}, "button press", m)
         self.approval = None
 
+    # -- sessions
+
+    @staticmethod
+    def key_of(src):
+        return f"{src.get('chat_type')}:{src.get('chat_id')}:{src.get('user_id')}"
+
+    def name(self, key):
+        """Hermes hands a platform no session id. The driver names a session after the chat and the
+        sender, and counts when Hermes replaces it."""
+        n = self.generation.setdefault(key, 1)
+        return key if n == 1 else f"{key}#{n}"
+
+    def session_changed(self, key, native_kind, native):
+        """Send the session item of this chat and sender, if anything in it is new."""
+        name = self.name(key)
+        settings = list(self.settings.setdefault(name, {}).values())
+        session, self.session = self.session, name
+        self.session_item(name, settings, native_kind, native, commands=self.commands)
+        self.session = session
+
+    def put(self, key, id_, label, value, options=None, approve=False):
+        known = self.settings.setdefault(self.name(key), {})
+        if options is None and id_ in known:
+            options = known[id_]["options"]  # keep the accepted values Hermes gave earlier
+        known[id_] = self.setting(id_, label, value, options, approve)
+
+    def session_replaced(self, key, native_kind, native):
+        """Hermes ended this chat's session and started another. The session key stays the same."""
+        name = self.name(key)
+        prev = next((e for e in reversed(self.events) if e["item"] == f"session:{name}"), None)
+        if prev is not None and prev["state"] == "running":
+            turn, session, self.turn, self.session = self.turn, self.session, None, name
+            self.emit(prev["item"], "session", "done", "Session ended", prev["text"], prev["body"], native_kind, native)
+            self.turn, self.session = turn, session
+        self.generation[key] = self.generation.get(key, 1) + 1
+        self.session_changed(key, native_kind, native)
+        if self.turn is not None and self.key == key:
+            self.session = self.name(key)
+
+    def plugin_hook(self, m):
+        """Hooks a Hermes plugin may register beside its platform. None is called unless it does."""
+        hook, p = m.get("hook"), m.get("params") or {}
+        if hook == "on_session_start":
+            # The first turn of a session. It names Hermes's session id and the model, and not the
+            # chat: the driver takes it to belong to the turn in progress.
+            if self.key is None:
+                return self.skip("on_session_start with no turn in progress")
+            self.hermes_ids[p.get("session_id")] = self.key
+            self.put(self.key, "model", "Model", p.get("model"))
+            self.session_changed(self.key, hook, p)
+            return self.skip("on_session_start, kept for the session item")
+        if hook == "on_session_reset":
+            # It names the old and the new session id, and again not the chat.
+            key = self.hermes_ids.get(p.get("old_session_id")) or self.key
+            if key is None:
+                return self.unknown("on_session_reset for a chat the driver cannot name")
+            self.hermes_ids[p.get("new_session_id")] = key
+            self.reset_by_hook = True
+            return self.session_replaced(key, hook, p)
+        if hook in self.HOOKS_NOT_SENT:
+            return self.skip(f"plugin hook {hook}: {self.HOOKS_NOT_SENT[hook]}")
+        self.unknown(f"plugin hook {hook}")
+
+    def ask(self, method, m):
+        """The plugin asked Hermes for something as data."""
+        src = (m.get("params") or {}).get("source")
+        if src:
+            self.key = self.key_of(src)
+        self.skip(f"client: {method}")
+
+    def asked(self, method, m):
+        if "error" in m:
+            return self.skip(f"error result of {method}")
+        result = m.get("result")
+        if method == "hermes_cli.commands.COMMAND_REGISTRY":
+            self.commands = [{"name": f"/{c['name']}", "description": c.get("description"), "hint": c.get("args_hint") or None}
+                             for c in result or [] if c.get("gateway_available")]
+            for key in self.generation:
+                self.session_changed(key, method, {"commands": len(self.commands)})
+        elif method == "get_session_model_settings" and isinstance(result, dict):
+            self.put(self.key, "model", "Model", result.get("model"))
+            self.put(self.key, "provider", "Provider", result.get("provider"))
+            self.session_changed(self.key, method, result)
+        elif method == "list_session_model_picker_providers" and isinstance(result, list):
+            self.model_options(self.key, result, method)
+        elif method == "on_model_selected":
+            # What the picker's callback returned: text for the chat. The new model is not in it as
+            # a field; the driver asks for the model settings to learn it.
+            item = f"sent:{self.seq + 1}"
+            return self.emit(item, "notice", "done", "Command output", result, {"kind": "command_output", "command": "/model"},
+                             f"result of {method}", m)
+        self.skip(f"result of {method}")
+
+    def model_options(self, key, providers, native_kind):
+        """The models Hermes will accept, as a list. It gives one only when asked."""
+        current = next((p for p in providers if p.get("is_current")), None)
+        options = [x for p in providers for x in p.get("models") or []]
+        known = self.settings.setdefault(self.name(key), {})
+        self.put(key, "model", "Model", (known.get("model") or {}).get("value"), options)
+        if current:
+            self.put(key, "provider", "Provider", current.get("slug"), [p.get("slug") for p in providers])
+        self.session_changed(key, native_kind, {"providers": [{k: v for k, v in p.items() if k != "models"} for p in providers]})
+
+    def model_picker(self, method, p):
+        """The platform claimed a model picker, so Hermes hands over the models where it would
+        otherwise send them as text. The list goes into the session item; nothing else is sent."""
+        if self.key is not None:
+            known = self.settings.setdefault(self.name(self.key), {})
+            if p.get("current_model") and "model" not in known:
+                self.put(self.key, "model", "Model", p.get("current_model"))
+            self.model_options(self.key, p.get("providers") or [], method)
+        self.last_send = None
+        self.skip("send_model_picker: the models as a list, kept for the session item")
+
     # -- turns
 
     def turn_start(self, method, p):
         ev = p.get("event") or {}
         src = ev.get("source") or {}
-        self.session = f"{src.get('chat_type')}:{src.get('chat_id')}:{src.get('user_id')}"
-        # Hermes tells a platform nothing about a session: no id, no model, no list of commands. The
-        # driver can only name it after the chat and the sender, and has nothing to put in it.
-        self.session_item(self.session, [], "(none: made by the driver)",
-                          {"reason": "first turn seen for this chat and sender"})
+        self.key = self.key_of(src)
+        self.session = self.name(self.key)
+        text = str(ev.get("text") or "").strip()
+        self.turn_command = text.split()[0] if text.startswith("/") else None
+        # Hermes tells a platform nothing about a session unless the plugin asks: no id, no model, no
+        # list of commands. The driver names it after the chat and the sender.
+        self.session_changed(self.key, "(none: made by the driver)", {"reason": "first turn seen for this chat and sender"})
         self.turn = ev.get("message_id")
         # Hermes can report a turn complete and start it again a moment later. The same item id
         # means the second start simply replaces the first "done".
@@ -937,13 +1113,50 @@ class Hermes(Translator):
             return self.skip("on_processing_complete with no turn open")
         outcome = p.get("outcome")
         state = {"success": "done", "failure": "failed", "cancelled": "cancelled"}.get(outcome, "done")
-        still = [i for i, e in self.open.items() if e["type"] not in ("turn", "task")]
+        still = [i for i, e in self.open.items() if e["type"] not in ("turn", "task", "session")]
         if state != "done" or not still:
             self.close_open_items(f"the turn ended with outcome {outcome}")
         title = {"done": "Finished", "failed": "Failed", "cancelled": "Interrupted"}[state]
         self.emit(f"turn:{self.turn}", "turn", state, title, body={"started_by": "user"}, native_kind=method, native=p)
 
     # -- everything that arrives as text
+
+    def command_reply(self, item, content, p):
+        """Hermes's own answer to a slash command. What it says exists only as wording, so a setting
+        the answer confirms is read from the words, and from the command that was typed."""
+        command, typed = self.turn_command, self.typed.get(p.get("reply_to"))
+        body = {"kind": "command_output", "command": command}
+        if content.startswith("⛔"):
+            # Hermes refused: the sender is not on its own list of admins for slash commands.
+            body["kind"] = "refused"
+            if typed and typed[0] != "(slash command, as a message)":
+                self.controls[typed] -= 1
+                if not self.controls[typed]:
+                    del self.controls[typed]
+                self.control("(slash command, refused)", command)
+            self.last_send = self.emit(item, "notice", "done", "Not allowed", content, body, "send [refusal of a slash command]", p)
+            return
+        if content.startswith("✨"):
+            # A new session. Without the plugin hook this message is the only sign of it.
+            body["kind"] = "new_session"
+            if not self.reset_by_hook:
+                self.session_replaced(self.key, "send [reply to /new, read from its wording]", p)
+            self.reset_by_hook = False
+        elif typed and typed[0].startswith("set "):
+            words = content.split()
+            if typed[0] == "set (permission) yolo" and "YOLO" in content:
+                on = "**ON**" in content
+                self.put(self.key, "yolo", "Skip approvals", "on" if on else "off", ["on", "off"], approve=True)
+            elif typed[0] == "set (permission) approvals" and content.startswith("Approval mode:") and len(words) > 2:
+                self.put(self.key, "approvals", "Approval mode", words[2], approve=True)
+            elif typed[0] == "set reasoning" and "`" in content:
+                self.put(self.key, "reasoning", "Reasoning effort", content.split("`")[1])
+            elif typed[0] == "set (permission) write approval" and ".write_approval set to '" in content:
+                what = content.split(".write_approval")[0].split()[-1]
+                self.put(self.key, f"{what}_write_approval", f"Ask before writing {what}", content.split("'")[1],
+                         ["on", "off"], approve=True)
+            self.session_changed(self.key, f"send [reply to {command}, read from its wording]", p)
+        self.last_send = self.emit(item, "notice", "done", "Command output", content, body, f"send [reply to {command}]", p)
 
     def send(self, method, p):
         content = str(p.get("content") or "")
@@ -970,6 +1183,23 @@ class Hermes(Translator):
         if content.startswith("❓") and self.question in self.open:
             self.last_send = None
             return self.skip("send: a question as text, already sent in structured form")
+        if self.confirm in self.open:
+            prev = self.open[self.confirm]
+            if content == prev["text"]:
+                self.last_send = prev
+                return self.skip("send: a command confirmation as text, already sent in structured form")
+            if self.turn_command in self.CONFIRM:
+                # The answer to the confirmation. Hermes's reply is the command's own outcome.
+                choice = self.CONFIRM[self.turn_command]
+                chosen = next(c for c in prev["body"]["choices"] if c["native"] == self.turn_command)
+                self.emit(self.confirm, "approval", "declined" if choice == "cancel" else "done", prev["title"],
+                          f"Answered: {chosen['label']}", {**prev["body"], "answer": {"choice": chosen["id"]}},
+                          f"send [outcome of {prev['body']['command']}, after {self.turn_command}]", p)
+                self.confirm, self.turn_command = None, prev["body"]["command"]
+        if self.turn_command and (meta.get("notify") or final):
+            # Hermes marks its answer to a slash command as it marks an agent's final reply. A command
+            # that runs the model was not recorded, so its reply is not told apart here.
+            return self.command_reply(item, content, p)
         for prefix, kind in self.NOTICES:
             if content.startswith(prefix):
                 self.last_send = self.emit(item, "notice", "done", "Notice", content, {"kind": kind}, f"send [{kind} notice]", p)
@@ -986,7 +1216,7 @@ class Hermes(Translator):
             return self.unknown("edit_message for a message that was not sent")
         self.emit(prev["item"], prev["type"], prev["state"], prev["title"], p.get("content"), prev["body"], method, p)
 
-    # -- the two structured calls
+    # -- the structured calls
 
     def clarify(self, method, p):
         qs = [{"id": "q0", "text": p.get("question"), "multiple": False, "allow_text": True,
@@ -1003,6 +1233,17 @@ class Hermes(Translator):
         self.last_send = self.emit(self.approval, "approval", "waiting", "Allow this command?", prompt.get("command"),
                                    {"answer_via": "request", "reason": prompt.get("description"), "choices": choices}, method, prompt)
 
+    def confirm_card(self, method, p):
+        """Hermes asks the person to confirm one of their own slash commands, such as /new. It is an
+        approval of what a person asked for, not of what the agent wants to do. A platform without
+        buttons gets the same text through send straight after, and the answer is a typed command."""
+        choices = [{"id": "c0", "label": "Approve once", "effect": "allow", "native": "/approve"},
+                   {"id": "c1", "label": "Always approve", "effect": "allow", "native": "/always"},
+                   {"id": "c2", "label": "Cancel", "effect": "deny", "native": "/cancel"}]
+        self.confirm = f"confirm:{p.get('confirm_id')}"
+        self.emit(self.confirm, "approval", "waiting", "Confirm this command?", p.get("message"),
+                  {"answer_via": "message", "subject": "command", "command": p.get("title"), "choices": choices}, method, p)
+
 
 # ---------------------------------------------------------------------------- OpenClaw
 
@@ -1015,7 +1256,11 @@ class OpenClaw(Translator):
 
     A recording is flat: it does not say which inbound.run a callback belongs to. A plugin knows,
     because each run is given its own callbacks. Where that matters, the translator goes by order,
-    and says so in a comment."""
+    and says so in a comment.
+
+    A session item holds the model and the thinking level, which OpenClaw names before each run.
+    The rest of a session arrives only if the plugin asks through the plugin SDK: the stored
+    session entry, the command list with the values each command accepts, and the models."""
 
     harness = "openclaw"
     NOT_SENT = {
@@ -1047,6 +1292,22 @@ class OpenClaw(Translator):
     TOOL_KINDS = {"write": "edit", "edit": "edit"}
     DECISIONS = {"allow-once": "Allow once", "allow-always": "Always allow", "deny": "Deny"}
     BY_DRIVER = "(none: closed by the driver)"
+    # Typed commands that change one setting of the session, and the setting each one changes.
+    SETTING_COMMANDS = {"/think": "think", "/thinking": "think", "/t": "think", "/verbose": "verbose", "/v": "verbose",
+                        "/reasoning": "reasoning", "/reason": "reasoning", "/fast": "fast", "/trace": "trace",
+                        "/usage": "usage", "/queue": "queue", "/activation": "activation", "/send": "send"}
+    # Fields of a stored session entry that are settings: field -> (id, label, needs the right to approve).
+    ENTRY_SETTINGS = {
+        "thinkingLevel": ("think", "Thinking", False), "verboseLevel": ("verbose", "Verbose", False),
+        "reasoningLevel": ("reasoning", "Reasoning", False), "fastMode": ("fast", "Fast mode", False),
+        "traceLevel": ("trace", "Trace", False), "sendPolicy": ("send", "Send policy", False),
+        "elevatedLevel": ("elevated", "Elevated", True), "permissionMode": ("permission_mode", "Permission mode", True),
+        "execHost": ("exec_host", "Exec host", True), "execNode": ("exec_node", "Exec node", True),
+    }
+    HOOKS_NOT_SENT = {
+        "session_start": "a session started, which the next run also says",
+        "before_reset": "the conversation that is about to be dropped",
+    }
 
     def __init__(self):
         super().__init__()
@@ -1067,6 +1328,15 @@ class OpenClaw(Translator):
         self.sent: dict[str, dict] = {}  # the plugin's id for a posted message -> the event it became
         self.posting = None  # (method, event) of the call whose result will name the posted message
         self.denied: set[str] = set()  # tool calls whose approval was denied
+        self.route_key = None  # the session key of the last route OpenClaw gave
+        self.generation: dict[str, int] = {}  # session key -> how many sessions it has named
+        self.known: dict[str, dict] = {}  # session name -> setting id -> the setting
+        self.ended: set[str] = set()  # sessions OpenClaw has started afresh
+        self.options: dict[str, list] = {}  # setting id -> the values OpenClaw accepts, if the plugin asked
+        self.command_list: list[dict] = []  # OpenClaw's command list, if the plugin asked
+        self.asked_key = None  # the session key the plugin last asked about
+        self.last_run = None  # the text of the message last handed to inbound.run, until that call returns
+        self.reset_by_hook = False
 
     def feed(self, rec):
         m, via, out = rec["msg"], rec.get("via"), rec["dir"] == "out"
@@ -1083,6 +1353,8 @@ class OpenClaw(Translator):
             return self.inbound(m)
         if via == "press":
             return self.press(m)
+        if via == "plugin_hook":
+            return self.plugin_hook(m)
         if via == "call":
             return self.call_out(method, m) if out else self.call_in(method, m)
         p = m.get("params")
@@ -1111,19 +1383,45 @@ class OpenClaw(Translator):
 
     # -- what the plugin sends, and what its own calls return
 
+    def typed_control(self, text):
+        """Which control a typed command is. This counts what was typed. Whether OpenClaw accepted it
+        is in the wording of its reply, or in the stored session entry, and nowhere else."""
+        word, *args = text.split()
+        first = args[0] if args else ""
+        if word == "/stop":
+            return "interrupt", "/stop, as a message"
+        if word in ("/new", "/reset"):
+            return "new_session", f"{word}, as a message"
+        if word == "/model" and first and first not in ("list", "status"):
+            return "set model", "/model default, as a message" if first == "default" else "/model <provider/model>, as a message"
+        # The next four change what the agent may do without asking.
+        if word in ("/elevated", "/elev") and first:
+            return "set (permission) elevated", "/elevated <level>, as a message"
+        if word == "/exec" and any(a.startswith(("security=", "ask=")) for a in args):
+            return "set (permission) exec", "/exec security=… ask=…, with or without a message"
+        if word in ("/config", "/debug", "/mcp", "/plugins", "/allowlist") and first in (
+                "set", "unset", "reset", "add", "remove", "install", "enable", "disable"):
+            return "(write configuration, typed)", f"{word} {first}"
+        if word == "/bash" or text.startswith("!"):
+            return "(run a host command, typed)", "/bash <command>" if word == "/bash" else "! <command>"
+        if word == "/exec" and args:
+            return "set exec host", "/exec host=…, as a message"
+        if word in self.SETTING_COMMANDS and first:
+            return f"set {self.SETTING_COMMANDS[word]}", f"/{self.SETTING_COMMANDS[word]} <value>, as a message"
+        return "(slash command, as a message)", word
+
     def inbound(self, m):
         text = str(m.get("text") or "").strip()
         self.inbound_text[m.get("message_id")] = text
         word = text.split(" ")[0]
         if word == "/approve":
-            self.control("(answer an approval, typed)", word)
-        elif word == "/stop":
-            self.control("interrupt", "/stop, as a message")
-        elif word.startswith("/"):
-            self.control("(slash command, as a message)", word)
-        if text.split(" ")[0] == "/approve":
+            # "allow-always" leaves a standing approval behind.
+            self.control("(answer an approval, typed)", "/approve <id> allow-always" if "allow-always" in text.split() else word)
             return self.skip("client: answer to an approval, as a slash command")
-        self.skip("client: slash command" if text.startswith("/") else "client: chat message")
+        if text.startswith(("/", "!")):
+            self.control(*self.typed_control(text))
+        self.skip("client: slash command" if text.startswith("/") else
+                  "client: host command" if text.startswith("!") else "client: chat message")
 
     def press(self, m):
         if "approvalId" in m:
@@ -1135,22 +1433,37 @@ class OpenClaw(Translator):
         if method == "inbound.run":
             # Only a message that is run can be answered. A command is answered by OpenClaw itself.
             text = self.inbound_text.get((m.get("params") or {}).get("messageId"), "")
-            if text.startswith("/"):
+            self.last_run = text
+            if text.startswith(("/", "!")):
                 self.commands.append(text)
                 parts = text.split()
                 if parts[0] == "/approve" and len(parts) >= 3:
                     self.decisions[parts[1]] = parts[2]
+        elif method == "session-store-runtime.getSessionEntryAsync":
+            self.asked_key = (m.get("params") or {}).get("sessionKey")
         self.skip(f"client: {method}")
 
     def call_in(self, method, m):
         result = m.get("result") or {}
         if method == "routing.resolveAgentRoute":
-            self.route_session = result.get("sessionKey")
+            self.route_key = result.get("sessionKey")
+            self.route_session = self.name(self.route_key)
             if self.turn is None:
                 self.session = self.route_session
-        elif method == "inbound.run" and self.driver_turn:
-            # With no run callbacks registered, the return of inbound.run is the only end there is.
-            return self.close_turn("done", "result of inbound.run", result)
+        elif method == "inbound.run":
+            dropped = (result.get("dispatchResult") or {}).get("beforeAgentRunBlocked")
+            if dropped and self.last_run in self.commands:
+                # OpenClaw took the message as a command from someone who may not use commands. It ran
+                # nothing and sent nothing, so no reply will answer it.
+                self.commands.remove(self.last_run)
+            self.last_run = None
+            if dropped:
+                return self.skip("result of inbound.run: OpenClaw dropped the message and sent nothing")
+            if self.driver_turn:
+                # With no run callbacks registered, the return of inbound.run is the only end there is.
+                return self.close_turn("done", "result of inbound.run", result)
+        elif method.startswith(("native-command-registry.", "models-provider-runtime.", "session-store-runtime.")):
+            return self.asked(method, m.get("result"))
         elif method == "resolveApprovalOverGateway":
             if "error" in m:
                 err = m["error"] or {}
@@ -1175,6 +1488,89 @@ class OpenClaw(Translator):
             self.posting = None
         self.skip(f"result of {method}")
 
+    # -- sessions
+
+    def name(self, key):
+        """OpenClaw keeps a session's key and id when it starts the session afresh. So the driver
+        counts: the second session under a key is named key#2."""
+        n = self.generation.get(key, 1)
+        return key if n == 1 or key is None else f"{key}#{n}"
+
+    def put(self, name, id_, label, value, approve=False):
+        self.known.setdefault(name, {})[id_] = self.setting(id_, label, value, self.options.get(id_), approve)
+
+    def send_session(self, name, native_kind, native):
+        """Send the session item, if anything in it is new."""
+        if name not in self.known or name in self.ended:
+            return
+        for x in self.known[name].values():
+            x["options"] = self.options.get(x["id"], x["options"])
+        session, self.session = self.session, name
+        self.session_item(name, list(self.known[name].values()), native_kind, native, commands=self.command_list)
+        self.session = session
+
+    def session_replaced(self, key, native_kind, native):
+        """OpenClaw started this chat's session afresh. Its key and its id stay the same."""
+        name = self.name(key)
+        prev = next((e for e in reversed(self.events) if e["item"] == f"session:{name}"), None)
+        if prev is not None and prev["state"] == "running":
+            turn, session, self.turn, self.session = self.turn, self.session, None, name
+            self.emit(prev["item"], "session", "done", "Session ended", prev["text"], prev["body"], native_kind, native)
+            self.turn, self.session = turn, session
+        self.ended.add(name)
+        self.generation[key] = self.generation.get(key, 1) + 1
+        name = self.name(key)
+        self.known[name] = {}
+        self.send_session(name, native_kind, native)
+        if key == self.route_key:
+            self.route_session = name
+            if self.turn is None:
+                self.session = name
+
+    def plugin_hook(self, m):
+        """Typed hooks a plugin may register beside its channel. None is called unless it does."""
+        hook, event = m.get("hook"), m.get("event") or {}
+        if hook == "session_end":
+            if event.get("reason") in ("new", "reset"):
+                self.reset_by_hook = True
+                return self.session_replaced(event.get("sessionKey"), f"{hook} [{event.get('reason')}]", m)
+            return self.skip(f"plugin hook session_end [{event.get('reason')}]: the gateway stopped, and the session is kept")
+        if hook in self.HOOKS_NOT_SENT:
+            return self.skip(f"plugin hook {hook}: {self.HOOKS_NOT_SENT[hook]}")
+        self.unknown(f"plugin hook {hook}")
+
+    def asked(self, method, result):
+        """What the plugin SDK returned when the plugin asked for something as data."""
+        if method.endswith(".listChatCommands") and isinstance(result, list):
+            self.command_list = [{"name": (c.get("textAliases") or [f"/{c.get('key')}"])[0], "description": c.get("description"),
+                                  "hint": " ".join(f"<{a.get('name')}>" for a in c.get("args") or []) or None} for c in result]
+            for c in result:
+                arg = (c.get("args") or [{}])[0]
+                choices = arg.get("resolvedChoices") or arg.get("choices")
+                if isinstance(choices, list) and len(c.get("args") or []) == 1:
+                    self.options[c.get("key")] = [x.get("value") if isinstance(x, dict) else x for x in choices]
+        elif method.endswith(".buildModelsProviderData") and isinstance(result, dict):
+            self.options["model"] = [f"{prov}/{x}" for prov, models in (result.get("byProvider") or {}).items() for x in models]
+            default = result.get("resolvedDefault") or {}
+            self.default_model = f"{default.get('provider')}/{default.get('model')}" if default else None
+        elif method.endswith(".getSessionEntryAsync") and isinstance(result, dict):
+            name = self.name(self.asked_key)
+            self.known.setdefault(name, {})  # the store has an entry, so there is a session to describe
+            if result.get("providerOverride") and result.get("modelOverride"):
+                self.put(name, "model", "Model", f"{result['providerOverride']}/{result['modelOverride']}")
+            elif result.get("modelOverrideSource") == "default" and getattr(self, "default_model", None):
+                # The session's own choice was cleared. The entry does not name the default it falls
+                # back to; the model list does, if the plugin asked for it.
+                self.put(name, "model", "Model", self.default_model)
+            for field, (id_, label, approve) in self.ENTRY_SETTINGS.items():
+                if field in result:
+                    self.put(name, id_, label, result[field], approve)
+            self.skip(f"result of {method}")
+            return self.send_session(name, method, {k: v for k, v in result.items() if k in self.ENTRY_SETTINGS or "verride" in k})
+        for name in list(self.known):  # the lists belong in the item of every session still running
+            self.send_session(name, method, {"asked": method})
+        self.skip(f"result of {method}")
+
     # -- turns
 
     def model_selected(self, method, p):
@@ -1184,13 +1580,12 @@ class OpenClaw(Translator):
         self.skip("onModelSelected, kept for the turn and the session item")
 
     def open_turn(self, turn=None):
-        # OpenClaw names the model and the thinking level before each run, and nothing else about a
-        # session: no list of models, no list of commands.
+        # OpenClaw names the model and the thinking level before each run. It says nothing else
+        # about a session unless the plugin asks.
         if self.session:
-            self.session_item(self.session, [
-                self.setting("model", "Model", self.model),
-                self.setting("think", "Thinking", getattr(self, "think", None)),
-            ], "onModelSelected", getattr(self, "model_native", None))
+            self.put(self.session, "model", "Model", self.model)
+            self.put(self.session, "think", "Thinking", getattr(self, "think", None))
+            self.send_session(self.session, "onModelSelected", getattr(self, "model_native", None))
         self.turn_n += 1
         self.turn = turn or f"{self.session}:{self.turn_n}"
         self.failed_turn = None
@@ -1201,7 +1596,12 @@ class OpenClaw(Translator):
     def run_start(self, method, p):
         if self.turn is not None:
             return self.unknown("onPreparedAgentRunStart while a turn is open")
-        self.session = (p.get("transcriptStart") or {}).get("sessionKey") or self.session
+        key = (p.get("transcriptStart") or {}).get("sessionKey")
+        self.session = self.name(key) if key else self.session
+        if self.last_run in self.commands:
+            # The message started a run, so it was a directive with a task, or a command the model
+            # answers. OpenClaw sends no reply of its own for it.
+            self.commands.remove(self.last_run)
         self.open_turn(p.get("runId"))
         self.emit(f"turn:{self.turn}", "turn", "running", "Working", body=self.turn_body, native_kind=method, native=p)
 
@@ -1431,6 +1831,16 @@ class OpenClaw(Translator):
             self.emit(f"error:{self.seq + 1}", "error", "failed", "Error", text, {}, f"{method} [{kind}, isError]", p)
             self.turn = turn
             return
+        if payload.get("isStatusNotice") and kind != "final" and "assistantMessageIndex" not in info:
+            # OpenClaw's own line about a directive it took out of a message, sent before the run that
+            # the rest of the message starts. "/exec security=full ask=off <task>" is answered this way.
+            command = self.last_run.split()[0] if self.last_run and self.last_run.startswith("/") else None
+            if self.last_run in self.commands:
+                self.commands.remove(self.last_run)
+            ev = self.emit(f"notice:{self.seq + 1}", "notice", "done", "Directive taken", text,
+                           {"kind": "directive", "command": command}, f"{method} [{kind}, isStatusNotice]", p)
+            self.posting = (method, ev)
+            return
         if "assistantMessageIndex" in info:  # only the agent's own words carry a message index
             self.ensure_turn()
             ev = self.emit(f"message:{self.seq + 1}", "message", "done", "Message", text,
@@ -1448,8 +1858,15 @@ class OpenClaw(Translator):
             return self.unknown("deliver [final] that is not the agent's, with no command waiting")
         command = self.commands.pop(0).split()[0]
         if command != "/stop":
+            body = {"kind": "command_output", "command": command}
+            if command in ("/new", "/reset") and (p[0] or {}).get("isStatusNotice"):
+                # The session was started afresh. Without the plugin hook this reply is the only sign.
+                body["kind"] = "new_session"
+                if not self.reset_by_hook:
+                    self.session_replaced(self.route_key, f"{method} [final, isStatusNotice, reply to {command}]", p)
+                self.reset_by_hook = False
             ev = self.emit(f"notice:{self.seq + 1}", "notice", "done", "Command output", text,
-                           {"kind": "command_output", "command": command}, f"{method} [final, reply to {command}]", p)
+                           body, f"{method} [final, reply to {command}]", p)
             self.posting = (method, ev)
             return
         ev = self.emit(f"notice:{self.seq + 1}", "notice", "done", "Stopped", text, {"kind": "stopped", "command": command},

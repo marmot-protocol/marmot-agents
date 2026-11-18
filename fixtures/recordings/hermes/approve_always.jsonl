@@ -1,0 +1,275 @@
+{"t": 9, "dir": "in", "via": "hook", "msg": {"method": "connect", "params": {"is_reconnect": false}}}
+{"t": 3029, "dir": "out", "via": "note", "msg": {"scenario": "approve_always", "steps": 5}}
+{"t": 3030, "dir": "out", "via": "inbound", "msg": {"message_id": "in-1", "chat": "family", "user": "alice", "user_name": "Alice", "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir", "wait": false}}
+{"t": 3046, "dir": "in", "via": "hook", "msg": {"method": "on_processing_start", "params": {"event": {"_type": "MessageEvent", "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir", "message_type": "text", "user_id": null, "user_name": null, "source": {"_type": "SessionSource", "platform": "recorder", "chat_id": "family", "chat_name": "Family", "chat_type": "group", "user_id": "alice", "user_name": "Alice", "thread_id": null, "chat_topic": null, "user_id_alt": null, "chat_id_alt": null, "is_bot": false, "scope_id": null, "guild_id": null, "parent_chat_id": null, "message_id": "in-1", "role_authorized": false, "profile": null, "profile_route_rejected": false, "auto_thread_created": false, "auto_thread_initial_name": null, "prospective_thread_id": null, "shared_session": false, "delivered_via_upstream_relay": false, "detached_route": null}, "raw_message": {"chat": "family", "user": "alice", "user_name": "Alice", "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir", "wait": false}, "message_id": "in-1", "ledger_message_id": null, "reply_anchor_override": null, "platform_update_id": null, "media_urls": [], "media_types": [], "media_text_inlined": [], "reply_to_message_id": null, "reply_to_text": null, "reply_to_author_id": null, "reply_to_author_name": null, "reply_to_is_own_message": false, "prompt_response": null, "auto_skill": null, "channel_prompt": null, "channel_context": null, "internal": false, "metadata": {}, "timestamp": "2026-11-18T09:55:55.851167+00:00", "allow_gateway_control": true, "reply_expected": null, "inherit_channel_pin": false, "edit_revision": null, "media_filenames": [], "_gateway_accepted": true, "_admitted_before_drain": false, "_notification_reply_muted": null}}}}
+{"t": 3046, "dir": "out", "via": "result", "msg": {"method": "on_processing_start", "result": null}}
+{"t": 3047, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 3047, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 3063, "dir": "in", "via": "hook", "msg": {"method": "on_processing_complete", "params": {"message_id": "in-1", "outcome": "success"}}}
+{"t": 3063, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "family"}}}
+{"t": 3064, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 3064, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "family"}}}
+{"t": 3064, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 3064, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "family"}}}
+{"t": 3064, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 3064, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "family"}}}
+{"t": 3064, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 4388, "dir": "in", "via": "hook", "msg": {"method": "on_processing_start", "params": {"event": {"_type": "MessageEvent", "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir", "message_type": "text", "user_id": null, "user_name": null, "source": {"_type": "SessionSource", "platform": "recorder", "chat_id": "family", "chat_name": "Family", "chat_type": "group", "user_id": "alice", "user_name": "Alice", "thread_id": null, "chat_topic": null, "user_id_alt": null, "chat_id_alt": null, "is_bot": false, "scope_id": null, "guild_id": null, "parent_chat_id": null, "message_id": "in-1", "role_authorized": false, "profile": null, "profile_route_rejected": false, "auto_thread_created": false, "auto_thread_initial_name": null, "prospective_thread_id": null, "shared_session": false, "delivered_via_upstream_relay": false, "detached_route": null}, "raw_message": {"chat": "family", "user": "alice", "user_name": "Alice", "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir", "wait": false}, "message_id": "in-1", "ledger_message_id": null, "reply_anchor_override": null, "platform_update_id": null, "media_urls": [], "media_types": [], "media_text_inlined": [], "reply_to_message_id": null, "reply_to_text": null, "reply_to_author_id": null, "reply_to_author_name": null, "reply_to_is_own_message": false, "prompt_response": null, "auto_skill": null, "channel_prompt": null, "channel_context": null, "internal": false, "metadata": {}, "timestamp": "2026-11-18T09:55:55.851167+00:00", "allow_gateway_control": true, "reply_expected": null, "inherit_channel_pin": false, "edit_revision": null, "media_filenames": [], "_gateway_accepted": true, "_admitted_before_drain": false, "_notification_reply_muted": null}}}}
+{"t": 4389, "dir": "out", "via": "result", "msg": {"method": "on_processing_start", "result": null}}
+{"t": 4418, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 4418, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 4895, "dir": "in", "via": "hook", "msg": {"method": "send", "params": {"chat_id": "family", "content": "📬 No home channel is set for Recorder. A home channel is where Hermes delivers cron job results and cross-platform messages.\n\nType /sethome to make this chat your home channel, or ignore to skip.", "reply_to": null, "metadata": null}}}
+{"t": 4895, "dir": "out", "via": "result", "msg": {"method": "send", "result": {"_type": "SendResult", "success": true, "message_id": "out-2", "error": null, "raw_response": null, "retryable": false, "retry_after": null, "continuation_message_ids": [], "error_kind": null}}}
+{"t": 6423, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 6427, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 6946, "dir": "in", "via": "plugin_hook", "msg": {"hook": "on_session_start", "params": {"session_id": "20261118_095557_6a15c1d1", "model": "z-ai/glm-5.3-flash:free", "platform": "recorder", "telemetry_schema_version": "hermes.observer.v1"}}}
+{"t": 8428, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 8428, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 10428, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 10428, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 12429, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 12429, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 14430, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 14430, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 16430, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 16430, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 18431, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 18431, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 20431, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 20431, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 22432, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 22432, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 24433, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 24434, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 26434, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 26434, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 28434, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 28434, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 30435, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 30436, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 32436, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 32437, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 34437, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 34437, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 36438, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 36438, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 38438, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 38439, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 40439, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 40439, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 42439, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 42440, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 44440, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 44440, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 46441, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 46441, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 48443, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 48443, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 50444, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 50445, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 52442, "dir": "in", "via": "hook", "msg": {"method": "format_tool_preview", "params": {"preview": {"_type": "ToolPreview", "text": "rm -rf /tmp/recorder-demo-dir", "truncated": false, "url": null}}}}
+{"t": 52442, "dir": "out", "via": "result", "msg": {"method": "format_tool_preview", "result": "rm -rf /tmp/recorder-demo-dir"}}
+{"t": 52445, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 52446, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 52611, "dir": "in", "via": "plugin_hook", "msg": {"hook": "pre_approval_request", "params": {"command": "rm -rf /tmp/recorder-demo-dir", "description": "delete in root path", "pattern_key": "delete in root path", "pattern_keys": ["delete in root path"], "session_key": "agent:main:recorder:group:family:alice", "surface": "gateway", "turn_id": "20261118_095557_6a15c1d1:20261118_095557_6a15c1d1:89573738", "tool_call_id": "9948ec41-25ae-4163-a71d-80a0e6a65a26", "session_id": "20261118_095557_6a15c1d1", "telemetry_schema_version": "hermes.observer.v1"}}}
+{"t": 52619, "dir": "in", "via": "hook", "msg": {"method": "send", "params": {"chat_id": "family", "content": "⚠️ **Hermes wants to run a command that needs your OK**\n\nReply `/approve` to run it once, `/approve session` to allow this pattern for the rest of this session, `/approve always` to allow it permanently, or `/deny` to cancel.\nIf you don't answer within 5 minutes it will NOT run.\n\nWhy it was flagged: delete in root path\n```\nrm -rf /tmp/recorder-demo-dir\n```", "reply_to": null, "metadata": {"is_approval_prompt": true, "_interim_send": true}}}}
+{"t": 52620, "dir": "out", "via": "result", "msg": {"method": "send", "result": {"_type": "SendResult", "success": true, "message_id": "out-3", "error": null, "raw_response": null, "retryable": false, "retry_after": null, "continuation_message_ids": [], "error_kind": null}}}
+{"t": 52620, "dir": "out", "via": "note", "msg": {"wait_for_text": "/approve", "seen": true}}
+{"t": 52656, "dir": "in", "via": "hook", "msg": {"method": "send", "params": {"chat_id": "family", "content": "💻 Running rm -rf /tmp/recorder-demo-dir", "reply_to": null, "metadata": null}}}
+{"t": 52656, "dir": "out", "via": "result", "msg": {"method": "send", "result": {"_type": "SendResult", "success": true, "message_id": "out-4", "error": null, "raw_response": null, "retryable": false, "retry_after": null, "continuation_message_ids": [], "error_kind": null}}}
+{"t": 52957, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 52957, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 53621, "dir": "out", "via": "inbound", "msg": {"message_id": "in-5", "chat": "family", "user": "alice", "user_name": "Alice", "text": "/approve always"}}
+{"t": 53628, "dir": "in", "via": "hook", "msg": {"method": "send", "params": {"chat_id": "family", "content": "✅ Command approved (pattern approved permanently). The agent is resuming...", "reply_to": "in-5", "metadata": {"notify": true}}}}
+{"t": 53628, "dir": "out", "via": "result", "msg": {"method": "send", "result": {"_type": "SendResult", "success": true, "message_id": "out-6", "error": null, "raw_response": null, "retryable": false, "retry_after": null, "continuation_message_ids": [], "error_kind": null}}}
+{"t": 53631, "dir": "in", "via": "plugin_hook", "msg": {"hook": "post_approval_response", "params": {"command": "rm -rf /tmp/recorder-demo-dir", "description": "delete in root path", "pattern_key": "delete in root path", "pattern_keys": ["delete in root path"], "session_key": "agent:main:recorder:group:family:alice", "surface": "gateway", "choice": "always", "turn_id": "20261118_095557_6a15c1d1:20261118_095557_6a15c1d1:89573738", "tool_call_id": "9948ec41-25ae-4163-a71d-80a0e6a65a26", "session_id": "20261118_095557_6a15c1d1", "telemetry_schema_version": "hermes.observer.v1"}}}
+{"t": 54447, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 54447, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 56448, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 56448, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 58448, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 58448, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 60449, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 60449, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 62450, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 62450, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 64450, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 64450, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 66452, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 66452, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 68453, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 68453, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 70454, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 70454, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 72455, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 72455, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 74456, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 74456, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 76457, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 76457, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 78457, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 78457, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 80458, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 80459, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 82460, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 82460, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 84461, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 84461, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 86462, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 86462, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 88463, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 88463, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 90463, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 90463, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 92464, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 92464, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 94465, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 94465, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 94734, "dir": "in", "via": "plugin_hook", "msg": {"hook": "on_session_end", "params": {"session_id": "20261118_095557_6a15c1d1", "task_id": "20261118_095557_6a15c1d1", "turn_id": "20261118_095557_6a15c1d1:20261118_095557_6a15c1d1:89573738", "completed": true, "failed": false, "interrupted": false, "turn_exit_reason": "text_response(finish_reason=stop)", "model": "z-ai/glm-5.3-flash:free", "platform": "recorder", "telemetry_schema_version": "hermes.observer.v1"}}}
+{"t": 94789, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "family"}}}
+{"t": 94789, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 94821, "dir": "in", "via": "hook", "msg": {"method": "send_final_ledgered", "params": {"event": {"_type": "MessageEvent", "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir", "message_type": "text", "user_id": null, "user_name": null, "source": {"_type": "SessionSource", "platform": "recorder", "chat_id": "family", "chat_name": "Family", "chat_type": "group", "user_id": "alice", "user_name": "Alice", "thread_id": null, "chat_topic": null, "user_id_alt": null, "chat_id_alt": null, "is_bot": false, "scope_id": null, "guild_id": null, "parent_chat_id": null, "message_id": "in-1", "role_authorized": false, "profile": null, "profile_route_rejected": false, "auto_thread_created": false, "auto_thread_initial_name": null, "prospective_thread_id": null, "shared_session": false, "delivered_via_upstream_relay": false, "detached_route": null}, "raw_message": {"chat": "family", "user": "alice", "user_name": "Alice", "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir", "wait": false}, "message_id": "in-1", "ledger_message_id": null, "reply_anchor_override": null, "platform_update_id": null, "media_urls": [], "media_types": [], "media_text_inlined": [], "reply_to_message_id": null, "reply_to_text": null, "reply_to_author_id": null, "reply_to_author_name": null, "reply_to_is_own_message": false, "prompt_response": null, "auto_skill": null, "channel_prompt": null, "channel_context": null, "internal": false, "metadata": {}, "timestamp": "2026-11-18T09:55:55.851167+00:00", "allow_gateway_control": true, "reply_expected": null, "inherit_channel_pin": false, "edit_revision": null, "media_filenames": [], "_gateway_accepted": true, "_admitted_before_drain": false, "_notification_reply_muted": null}, "session_key": "agent:main:recorder:group:family:alice", "text_content": "The command ran successfully: `rm -rf /tmp/recorder-demo-dir` exited with code 0 and no output — meaning the directory (if it existed) was deleted, and `rm` reports nothing on success.", "metadata": {"notify": true}, "reply_to": "in-1", "is_ephemeral_response": false}}}
+{"t": 94833, "dir": "in", "via": "hook", "msg": {"method": "send", "params": {"chat_id": "family", "content": "The command ran successfully: `rm -rf /tmp/recorder-demo-dir` exited with code 0 and no output — meaning the directory (if it existed) was deleted, and `rm` reports nothing on success.", "reply_to": "in-1", "metadata": {"notify": true}}}}
+{"t": 94833, "dir": "out", "via": "result", "msg": {"method": "send", "result": {"_type": "SendResult", "success": true, "message_id": "out-7", "error": null, "raw_response": null, "retryable": false, "retry_after": null, "continuation_message_ids": [], "error_kind": null}}}
+{"t": 94841, "dir": "out", "via": "result", "msg": {"method": "send_final_ledgered", "result": [{"_type": "SendResult", "success": true, "message_id": "out-7", "error": null, "raw_response": null, "retryable": false, "retry_after": null, "continuation_message_ids": [], "error_kind": null}, "<RecorderAdapter>"]}}
+{"t": 94841, "dir": "in", "via": "hook", "msg": {"method": "on_processing_complete", "params": {"message_id": "in-1", "outcome": "success"}}}
+{"t": 94841, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "family"}}}
+{"t": 94841, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 94841, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "family"}}}
+{"t": 94841, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 94841, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "family"}}}
+{"t": 94841, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 94841, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "family"}}}
+{"t": 94841, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 102842, "dir": "out", "via": "inbound", "msg": {"message_id": "in-8", "chat": "family", "user": "bob", "user_name": "Bob", "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir"}}
+{"t": 102843, "dir": "in", "via": "hook", "msg": {"method": "on_processing_start", "params": {"event": {"_type": "MessageEvent", "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir", "message_type": "text", "user_id": null, "user_name": null, "source": {"_type": "SessionSource", "platform": "recorder", "chat_id": "family", "chat_name": "Family", "chat_type": "group", "user_id": "bob", "user_name": "Bob", "thread_id": null, "chat_topic": null, "user_id_alt": null, "chat_id_alt": null, "is_bot": false, "scope_id": null, "guild_id": null, "parent_chat_id": null, "message_id": "in-8", "role_authorized": false, "profile": null, "profile_route_rejected": false, "auto_thread_created": false, "auto_thread_initial_name": null, "prospective_thread_id": null, "shared_session": false, "delivered_via_upstream_relay": false, "detached_route": null}, "raw_message": {"chat": "family", "user": "bob", "user_name": "Bob", "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir"}, "message_id": "in-8", "ledger_message_id": null, "reply_anchor_override": null, "platform_update_id": null, "media_urls": [], "media_types": [], "media_text_inlined": [], "reply_to_message_id": null, "reply_to_text": null, "reply_to_author_id": null, "reply_to_author_name": null, "reply_to_is_own_message": false, "prompt_response": null, "auto_skill": null, "channel_prompt": null, "channel_context": null, "internal": false, "metadata": {}, "timestamp": "2026-11-18T09:57:35.663819+00:00", "allow_gateway_control": true, "reply_expected": null, "inherit_channel_pin": false, "edit_revision": null, "media_filenames": [], "_gateway_accepted": true, "_admitted_before_drain": false, "_notification_reply_muted": null}}}}
+{"t": 102843, "dir": "out", "via": "result", "msg": {"method": "on_processing_start", "result": null}}
+{"t": 102843, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 102843, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 102885, "dir": "in", "via": "hook", "msg": {"method": "send", "params": {"chat_id": "family", "content": "📬 No home channel is set for Recorder. A home channel is where Hermes delivers cron job results and cross-platform messages.\n\nType /sethome to make this chat your home channel, or ignore to skip.", "reply_to": null, "metadata": null}}}
+{"t": 102885, "dir": "out", "via": "result", "msg": {"method": "send", "result": {"_type": "SendResult", "success": true, "message_id": "out-9", "error": null, "raw_response": null, "retryable": false, "retry_after": null, "continuation_message_ids": [], "error_kind": null}}}
+{"t": 102981, "dir": "in", "via": "plugin_hook", "msg": {"hook": "on_session_start", "params": {"session_id": "20261118_095735_2c899a81", "model": "z-ai/glm-5.3-flash:free", "platform": "recorder", "telemetry_schema_version": "hermes.observer.v1"}}}
+{"t": 104844, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 104844, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 106844, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 106844, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 108845, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 108845, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 110845, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 110845, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 112847, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 112847, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 114847, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 114847, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 116849, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 116849, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 118850, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 118850, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 120850, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 120850, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 122852, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 122852, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 124852, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 124853, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 126854, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 126854, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 128855, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 128855, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 130856, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 130856, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 132856, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 132856, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 134857, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 134857, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 136859, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 136859, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 138860, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 138860, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 140860, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 140860, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 142861, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 142861, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 144862, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 144862, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 145766, "dir": "in", "via": "hook", "msg": {"method": "format_tool_preview", "params": {"preview": {"_type": "ToolPreview", "text": "ls -ld /tmp/recorder-demo-dir + 2 com...", "truncated": true, "url": null}}}}
+{"t": 145766, "dir": "out", "via": "result", "msg": {"method": "format_tool_preview", "result": "ls -ld /tmp/recorder-demo-dir + 2 com..."}}
+{"t": 145906, "dir": "in", "via": "hook", "msg": {"method": "send", "params": {"chat_id": "family", "content": "💻 Running ls -ld /tmp/recorder-demo-dir + 2 com...", "reply_to": null, "metadata": null}}}
+{"t": 145906, "dir": "out", "via": "result", "msg": {"method": "send", "result": {"_type": "SendResult", "success": true, "message_id": "out-10", "error": null, "raw_response": null, "retryable": false, "retry_after": null, "continuation_message_ids": [], "error_kind": null}}}
+{"t": 146207, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 146207, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 146862, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 146863, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 148863, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 148864, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 150864, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 150864, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 152865, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 152865, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 154866, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 154866, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 156867, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 156867, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 158869, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 158869, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 160869, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 160869, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 162870, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 162870, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 164871, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 164871, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 166872, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 166872, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 168872, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 168872, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 170873, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 170873, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 172874, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 172874, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 174874, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 174875, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 176876, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 176876, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 178876, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 178876, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 180877, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 180877, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 182879, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 182879, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 184879, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 184880, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 186881, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 186881, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 188881, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 188881, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 190882, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 190882, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 192883, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 192883, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 194884, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 194884, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 196885, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 196885, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 198887, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 198887, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 200887, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 200887, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 202888, "dir": "in", "via": "hook", "msg": {"method": "send_typing", "params": {"chat_id": "family", "metadata": null}}}
+{"t": 202888, "dir": "out", "via": "result", "msg": {"method": "send_typing", "result": null}}
+{"t": 203751, "dir": "in", "via": "plugin_hook", "msg": {"hook": "on_session_end", "params": {"session_id": "20261118_095735_2c899a81", "task_id": "20261118_095735_2c899a81", "turn_id": "20261118_095735_2c899a81:20261118_095735_2c899a81:b82aeba8", "completed": true, "failed": false, "interrupted": false, "turn_exit_reason": "text_response(finish_reason=stop)", "model": "z-ai/glm-5.3-flash:free", "platform": "recorder", "telemetry_schema_version": "hermes.observer.v1"}}}
+{"t": 203816, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "family"}}}
+{"t": 203816, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 203872, "dir": "in", "via": "hook", "msg": {"method": "send_final_ledgered", "params": {"event": {"_type": "MessageEvent", "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir", "message_type": "text", "user_id": null, "user_name": null, "source": {"_type": "SessionSource", "platform": "recorder", "chat_id": "family", "chat_name": "Family", "chat_type": "group", "user_id": "bob", "user_name": "Bob", "thread_id": null, "chat_topic": null, "user_id_alt": null, "chat_id_alt": null, "is_bot": false, "scope_id": null, "guild_id": null, "parent_chat_id": null, "message_id": "in-8", "role_authorized": false, "profile": null, "profile_route_rejected": false, "auto_thread_created": false, "auto_thread_initial_name": null, "prospective_thread_id": null, "shared_session": false, "delivered_via_upstream_relay": false, "detached_route": null}, "raw_message": {"chat": "family", "user": "bob", "user_name": "Bob", "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir"}, "message_id": "in-8", "ledger_message_id": null, "reply_anchor_override": null, "platform_update_id": null, "media_urls": [], "media_types": [], "media_text_inlined": [], "reply_to_message_id": null, "reply_to_text": null, "reply_to_author_id": null, "reply_to_author_name": null, "reply_to_is_own_message": false, "prompt_response": null, "auto_skill": null, "channel_prompt": null, "channel_context": null, "internal": false, "metadata": {}, "timestamp": "2026-11-18T09:57:35.663819+00:00", "allow_gateway_control": true, "reply_expected": null, "inherit_channel_pin": false, "edit_revision": null, "media_filenames": [], "_gateway_accepted": true, "_admitted_before_drain": false, "_notification_reply_muted": null}, "session_key": "agent:main:recorder:group:family:bob", "text_content": "Done — `/tmp/recorder-demo-dir` doesn't exist on this machine (it may have already been removed, or never created). The `rm -rf` still ran and exited 0 as expected; the error shown is just the `ls` confirming nothing is there now.\n\nOne note: the command was auto-approved by a saved \"always\" approval for deletions, so it executed without prompting. If you'd like that approval removed so destructive commands always ask first, I can help with that.", "metadata": {"notify": true}, "reply_to": "in-8", "is_ephemeral_response": false}}}
+{"t": 203895, "dir": "in", "via": "hook", "msg": {"method": "send", "params": {"chat_id": "family", "content": "Done — `/tmp/recorder-demo-dir` doesn't exist on this machine (it may have already been removed, or never created). The `rm -rf` still ran and exited 0 as expected; the error shown is just the `ls` confirming nothing is there now.\n\nOne note: the command was auto-approved by a saved \"always\" approval for deletions, so it executed without prompting. If you'd like that approval removed so destructive commands always ask first, I can help with that.", "reply_to": "in-8", "metadata": {"notify": true}}}}
+{"t": 203895, "dir": "out", "via": "result", "msg": {"method": "send", "result": {"_type": "SendResult", "success": true, "message_id": "out-11", "error": null, "raw_response": null, "retryable": false, "retry_after": null, "continuation_message_ids": [], "error_kind": null}}}
+{"t": 203906, "dir": "out", "via": "result", "msg": {"method": "send_final_ledgered", "result": [{"_type": "SendResult", "success": true, "message_id": "out-11", "error": null, "raw_response": null, "retryable": false, "retry_after": null, "continuation_message_ids": [], "error_kind": null}, "<RecorderAdapter>"]}}
+{"t": 203906, "dir": "in", "via": "hook", "msg": {"method": "on_processing_complete", "params": {"message_id": "in-8", "outcome": "success"}}}
+{"t": 203907, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "family"}}}
+{"t": 203907, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 203907, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "family"}}}
+{"t": 203907, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 203907, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "family"}}}
+{"t": 203907, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 203907, "dir": "in", "via": "hook", "msg": {"method": "stop_typing", "params": {"chat_id": "family"}}}
+{"t": 203907, "dir": "out", "via": "result", "msg": {"method": "stop_typing", "result": null}}
+{"t": 207907, "dir": "out", "via": "note", "msg": {"finished": "ok"}}
+{"t": 208058, "dir": "in", "via": "hook", "msg": {"method": "disconnect", "params": {}}}

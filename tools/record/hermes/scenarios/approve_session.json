@@ -1,0 +1,41 @@
+{
+  "name": "approve_session",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_PLUGIN_HOOKS": "on_session_start,on_session_end,on_session_finalize,on_session_reset,on_session_open,pre_command,agent_loop_stopped,pre_approval_request,post_approval_response",
+    "HERMES_CONFIG_PATCH": "{\"approvals\": {\"mode\": \"manual\"}}"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir",
+      "wait": false
+    },
+    {
+      "wait_for_text": "/approve",
+      "timeout": 600
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/approve session"
+    },
+    {
+      "wait_turn": true
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Use your terminal tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir"
+    }
+  ]
+}

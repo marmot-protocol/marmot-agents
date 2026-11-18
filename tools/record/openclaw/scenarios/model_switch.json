@@ -1,0 +1,66 @@
+{
+  "name": "model_switch",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_PLUGIN_HOOKS": "session_start,session_end,before_reset",
+    "OPENCLAW_CONFIG_PATCH": "{\"models\": {\"providers\": {\"recorded\": {\"models\": [{\"id\": \"z-ai/glm-5.3-flash:free\", \"name\": \"z-ai/glm-5.3-flash:free\", \"reasoning\": true, \"input\": [\"text\"], \"cost\": {\"input\": 0, \"output\": 0, \"cacheRead\": 0, \"cacheWrite\": 0}, \"contextWindow\": 128000, \"maxTokens\": 8192}, {\"id\": \"z-ai/glm-5.3:free\", \"name\": \"z-ai/glm-5.3:free\", \"reasoning\": true, \"input\": [\"text\"], \"cost\": {\"input\": 0, \"output\": 0, \"cacheRead\": 0, \"cacheWrite\": 0}, \"contextWindow\": 128000, \"maxTokens\": 8192}]}}}}"
+  },
+  "steps": [
+    {
+      "sdk": "models",
+      "chat": "family",
+      "user": "alice"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/models recorded"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/model recorded/z-ai/glm-5.3:free"
+    },
+    {
+      "sdk": "session",
+      "chat": "family",
+      "user": "alice"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Reply with exactly: ok"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/status"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/model default"
+    },
+    {
+      "sdk": "session",
+      "chat": "family",
+      "user": "alice"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/model recorded/no-such-model"
+    }
+  ]
+}

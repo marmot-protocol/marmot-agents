@@ -6,6 +6,8 @@
 #   MODEL_BASE_URL           an OpenAI-compatible endpoint
 #   MODEL_NAME               the model to use
 #   REASONING_EFFORT         optional; the reasoning effort Hermes asks for (default: high)
+#   HERMES_CONFIG_PATCH      optional; a JSON object merged into the configuration last, for example to
+#                            name who may use every slash command
 set -eu
 
 : "${MODEL_BASE_URL:?set MODEL_BASE_URL}"
@@ -18,23 +20,28 @@ rm -rf "$HERMES_HOME/plugins/recorder"
 cp -r /opt/recorder-plugin "$HERMES_HOME/plugins/recorder"
 
 umask 077
-# A fresh config for this recording. JSON strings are valid YAML, which avoids needing a YAML library.
+# A fresh config for this recording. JSON is valid YAML, which avoids needing a YAML library.
 python - <<PY
 import json, os, pathlib
 key = pathlib.Path("$key_file").read_text().strip()
-q = json.dumps
-config = f"""model:
-  default: {q(os.environ["MODEL_NAME"])}
-  provider: custom
-  base_url: {q(os.environ["MODEL_BASE_URL"])}
-  api_key: {q(key)}
-agent:
-  reasoning_effort: {q(os.environ.get("REASONING_EFFORT", "high"))}
-platforms:
-  recorder:
-    enabled: true
-"""
-pathlib.Path(os.environ["HERMES_HOME"], "config.yaml").write_text(config)
+config = {
+    "model": {"default": os.environ["MODEL_NAME"], "provider": "custom",
+              "base_url": os.environ["MODEL_BASE_URL"], "api_key": key},
+    "agent": {"reasoning_effort": os.environ.get("REASONING_EFFORT", "high")},
+    "platforms": {"recorder": {"enabled": True}},
+}
+
+def merge(a, b):
+    for k, v in b.items():
+        if isinstance(v, dict) and isinstance(a.get(k), dict):
+            merge(a[k], v)
+        else:
+            a[k] = v
+    return a
+
+if os.environ.get("HERMES_CONFIG_PATCH"):
+    merge(config, json.loads(os.environ["HERMES_CONFIG_PATCH"]))
+pathlib.Path(os.environ["HERMES_HOME"], "config.yaml").write_text(json.dumps(config, indent=2) + "\n")
 PY
 
 hermes plugins enable recorder || true
