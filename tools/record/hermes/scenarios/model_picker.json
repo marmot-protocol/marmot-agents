@@ -1,0 +1,50 @@
+{
+  "name": "model_picker",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_PLUGIN_HOOKS": "on_session_start,on_session_end,on_session_finalize,on_session_reset,on_session_open,pre_command,agent_loop_stopped,pre_approval_request,post_approval_response",
+    "RECORDER_MODEL_PICKER": "1"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/model"
+    },
+    {
+      "wait_for": "send_model_picker",
+      "timeout": 60
+    },
+    {
+      "pick_model": "z-ai/glm-5.3:free",
+      "provider": "custom",
+      "chat": "family"
+    },
+    {
+      "sleep": 2
+    },
+    {
+      "read": "model_settings",
+      "chat": "family",
+      "user": "alice"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Reply with exactly: ok"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/status"
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "name": "command_not_admin",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_PLUGIN_HOOKS": "on_session_start,on_session_end,on_session_finalize,on_session_reset,on_session_open,pre_command,agent_loop_stopped,pre_approval_request,post_approval_response",
+    "HERMES_CONFIG_PATCH": "{\"platforms\": {\"recorder\": {\"group_allow_admin_from\": [\"alice\"]}}}"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "bob",
+      "user_name": "Bob",
+      "text": "/whoami"
+    },
+    {
+      "chat": "family",
+      "user": "bob",
+      "user_name": "Bob",
+      "text": "/help"
+    },
+    {
+      "chat": "family",
+      "user": "bob",
+      "user_name": "Bob",
+      "text": "/yolo"
+    },
+    {
+      "chat": "family",
+      "user": "bob",
+      "user_name": "Bob",
+      "text": "/approvals off"
+    },
+    {
+      "chat": "family",
+      "user": "bob",
+      "user_name": "Bob",
+      "text": "/model"
+    },
+    {
+      "chat": "family",
+      "user": "bob",
+      "user_name": "Bob",
+      "text": "/new"
+    },
+    {
+      "chat": "family",
+      "user": "bob",
+      "user_name": "Bob",
+      "text": "/stop"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/whoami"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/yolo"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/yolo"
+    }
+  ]
+}
