@@ -2,7 +2,8 @@
 
 Status: decided on 2026-11-18, as [D-027](../decisions.md#d-027-answers-and-controls-are-one-kind-of-event-kind-1202)
 to [D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights), and [D-039](../decisions.md#d-039-controls-need-the-right-to-prompt)
-to [D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat). None of it is in the Marmot
+to [D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat). Later decisions
+that came from the recordings are listed [at the end](#what-was-decided). None of it is in the Marmot
 specification yet, and the exact tags are not fixed.
 
 This is the second half of [how an agent event is carried](event-carrier.md): that page covers what an agent
@@ -125,9 +126,10 @@ Two exceptions stay, because the evidence forces them.
 - **A gateway that takes an approval as text.** Hermes accepts `/approve` and `/deny` as chat messages, and
   OpenClaw accepts `/approve` with an id. A typed message is a prompt, so without a rule, someone who may prompt
   and may not approve could approve by typing. The rule: a connector lists the commands that need the right to
-  approve, and the core checks a message starting with one of them against that right
-  ([D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights)). A command that changes the permission mode
-  belongs on that list too.
+  approve, and the core checks every message against that list
+  ([D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights)). A command that changes the permission
+  mode belongs on the list too. Each entry says whether it counts anywhere in a message or only at the start
+  ([D-047](../decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts)).
 
 ### 5. Controls: a few shared ones, and whatever the harness offers
 
@@ -353,18 +355,24 @@ starts with one ([D-032](../decisions.md#d-032-every-action-needs-one-of-two-rig
 | OpenClaw | `/bash`, `!` | Runs a command on the host with no agent | Refused: off by default |
 | OpenClaw | `/allowlist`, `/acp`, `/mcp`, `/plugins`, `/codex permissions` | Change who may talk to it, or add tools | Refused, or read in the documentation only |
 
-Four things make the rule in D-032 too weak as it stands. They are open:
-[Q-31](../open-questions.md#q-31-how-does-the-core-stop-a-typed-command-that-widens-what-an-agent-may-do).
+Four things made the rule in D-032 too weak as it stood. The first three were decided on 2026-11-18.
 
 1. **A command can sit anywhere in a message.** OpenClaw honoured `/exec security=full ask=off` at the start,
    in the middle and at the end of a message. Each time the command that followed ran with no approval, for
-   an ordinary member of the group. A check of how a message starts misses two of the three.
-2. **One word does two jobs.** In Hermes `/approve` answers an approval, and also confirms `/new`.
+   an ordinary member of the group. A check of how a message starts misses two of the three. So each listed
+   command says whether it counts anywhere in a message or only at the start, and the core checks accordingly
+   ([D-047](../decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts)).
+2. **One word does two jobs.** In Hermes `/approve` answers an approval, and also confirms `/new`. So a
+   request to confirm a command is a `question` item, and a typed `/approve` is an approval answer only while
+   an approval is waiting ([D-048](../decisions.md#d-048-a-request-to-confirm-a-command-is-a-question)).
 3. **An approval can cover other people.** After one person answered "always", the same command from another
    person ran with no prompt, in both gateways. In Hermes the standing approval covers the reason a command
-   was flagged, such as "delete in root path", and not the one command.
+   was flagged, such as "delete in root path", and not the one command. A standing approval stays an
+   ordinary answer that needs the right to approve, and the approval item says what it covers
+   ([D-049](../decisions.md#d-049-a-standing-approval-is-an-ordinary-approval-answer)).
 4. **Hermes can approve by itself.** In its default mode a second model judged a flagged command and approved
-   it, and nobody was asked.
+   it, and nobody was asked. That is the harness's own approval behaviour, which the owner sets on the harness
+   ([D-021](../decisions.md#d-021-approval-behaviour-belongs-to-the-harness)).
 
 Each gateway also has its own list of who may use such commands, separate from the owner's settings in the
 core ([Q-22](../open-questions.md#q-22-whose-rules-govern-a-gateway)).
@@ -438,3 +446,6 @@ In the core:
 | Controls need the right to prompt | [D-039](../decisions.md#d-039-controls-need-the-right-to-prompt) |
 | A message sent during a turn goes straight to the harness | [D-040](../decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness) |
 | A secret answer is accepted only in a two-person chat | [D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat) |
+| A listed command says where in a message it counts | [D-047](../decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts) |
+| A request to confirm a command is a question | [D-048](../decisions.md#d-048-a-request-to-confirm-a-command-is-a-question) |
+| A standing approval is an ordinary approval answer | [D-049](../decisions.md#d-049-a-standing-approval-is-an-ordinary-approval-answer) |

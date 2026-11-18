@@ -161,34 +161,6 @@ Still to work out:
 - **Names.** The identity is per install, so Claude Code on a laptop and on a server are two contacts.
 - **Setup.** Each identity has to be created, named and invited. It should take one step, not five.
 
-### Q-31 How does the core stop a typed command that widens what an agent may do?
-
-A typed command is a message, and a message needs only the right to prompt. So each connector lists the
-commands that need the right to approve, and the core checks a message that starts with one of them
-([D-032](decisions.md#d-032-every-action-needs-one-of-two-rights)). Recordings of the two gateways on
-2026-11-18 show that rule is not enough. See
-[`design/answers-and-controls.md`](design/answers-and-controls.md#typed-commands-that-widen-what-an-agent-may-do).
-
-- **A command can sit anywhere in a message.** OpenClaw honoured `/exec security=full ask=off` at the start,
-  in the middle and at the end of a message, from an ordinary member. The command that followed ran with no
-  approval. A check of how a message starts misses two of those three.
-- **One word does two jobs.** In Hermes `/approve` answers an approval, and also confirms `/new`. Someone who
-  may prompt and may not approve could then ask for a new session and not confirm it.
-- **An approval can cover other people.** After one person answered "always", the same command from another
-  person ran with no prompt, in both gateways. In Hermes the standing approval covers the reason a command was
-  flagged, not the one command.
-- **The lists are long.** Hermes has six such commands and OpenClaw about ten, counting ones that are off by
-  default. Neither gateway marks them.
-
-Proposed, not decided:
-
-1. A connector says, for each listed command, whether it counts anywhere in a message or only at the start.
-   The core checks accordingly, and tells a person it refuses.
-2. Hermes's request to confirm a command becomes a `question` item, which needs only the right to prompt. A
-   typed `/approve` counts as an approval answer only while an approval is waiting.
-3. A standing approval ("always", "for this session") is an answer like any other and needs the right to
-   approve. That it then covers other people is the gateway's behaviour, and is shown in the approval item.
-
 ### Q-27 What happens to a turn when the core or a driver restarts?
 
 People restart connectors for updates without waiting for a turn to finish, and programs crash. Whatever the
