@@ -1,0 +1,66 @@
+{
+  "name": "new_session",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_PLUGIN_HOOKS": "on_session_start,on_session_end,on_session_finalize,on_session_reset,on_session_open,pre_command,agent_loop_stopped,pre_approval_request,post_approval_response"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Remember this code word: marmot-7. Reply with just OK."
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/status"
+    },
+    {
+      "read": "model_settings",
+      "chat": "family",
+      "user": "alice"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/new"
+    },
+    {
+      "sleep": 2
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/approve"
+    },
+    {
+      "sleep": 2
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/status"
+    },
+    {
+      "read": "model_settings",
+      "chat": "family",
+      "user": "alice"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "What code word did I give you earlier in this chat? Do not use any tools. If you do not know, say that you do not know."
+    }
+  ]
+}

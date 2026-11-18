@@ -1,0 +1,75 @@
+{
+  "name": "elevated",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "EXEC_MODE": "ask",
+    "OPENCLAW_CONFIG_PATCH": "{\"approvals\": {\"exec\": {\"enabled\": true, \"mode\": \"session\"}}, \"tools\": {\"elevated\": {\"enabled\": true, \"allowFrom\": {\"recorder\": [\"alice\"]}}}}",
+    "RECORDER_PLUGIN_HOOKS": "session_start,session_end,before_reset"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "bob",
+      "user_name": "Bob",
+      "text": "/elevated full"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/elevated"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/elevated full"
+    },
+    {
+      "sdk": "session",
+      "chat": "family",
+      "user": "alice"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Use your exec tool to run exactly this command and tell me the result: rm -rf /tmp/recorder-demo-dir",
+      "wait": false
+    },
+    {
+      "wait_for_text": "/approve",
+      "timeout": 240,
+      "required": false
+    },
+    {
+      "sleep": 2
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/approve {approval_id} deny",
+      "wait": false
+    },
+    {
+      "wait_turn": true
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/elevated off"
+    },
+    {
+      "sdk": "session",
+      "chat": "family",
+      "user": "alice"
+    }
+  ]
+}

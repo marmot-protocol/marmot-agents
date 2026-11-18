@@ -80,10 +80,17 @@ tools/record/hermes/record.sh tools/record/hermes/scenarios/simple.json out/simp
 - **What is in the image.** Hermes at a pinned commit, and the plugin in `hermes/plugin`. No Marmot, no relay,
   no account of ours. Change `HERMES_AGENT_REF` in the `Dockerfile` to record a newer Hermes.
 - **A scenario is a JSON file** in `hermes/scenarios`: the chats, and a list of steps. A step is a chat message
-  from a named sender, a wait for Hermes to call a method or send some text, a press of an approval button, or
-  a pause. The step types are listed at the top of `hermes/plugin/__init__.py`.
+  from a named sender, a wait for Hermes to call a method or send some text, a press of an approval button, a
+  pick from the model picker, a request to Hermes for its commands or a chat's model settings as data, or a
+  pause. The step types are listed at the top of `hermes/plugin/__init__.py`.
+- **A scenario can change the set-up** with an `env` block: who is allowed, what the plugin claims to support
+  (`RECORDER_APPROVAL_BUTTONS`, `RECORDER_MODEL_PICKER`), which plugin hooks it registers
+  (`RECORDER_PLUGIN_HOOKS`), and a JSON object merged into Hermes's configuration (`HERMES_CONFIG_PATCH`).
+- **Plugin hooks are off unless a scenario names them.** A Hermes plugin can register hooks beside its
+  platform, such as `on_session_reset` and `pre_command`. The scenarios recorded on 2026-11-17 register none.
 - **Reasoning effort.** Hermes asks the model for `medium` by default, and some endpoints refuse values they do
   not offer. The container sets `high`; override it with `REASONING_EFFORT`.
+- **To see why a run failed**, set `RECORD_LOG` to a file. The gateway's own log is written there.
 
 Scrub the output like any other recording, with the files in a folder named `hermes`.
 
@@ -100,7 +107,9 @@ tools/record/openclaw/record.sh tools/record/openclaw/scenarios/simple.json out/
 - **Every run starts from zero.** The container gets a fresh data volume and is removed afterwards.
 - **The key is mounted read-only when the container starts.** It is never built into the image, and OpenClaw's
   configuration file only names the variable that holds it. The plugin also replaces the key with a marker if
-  it ever appears in something it writes.
+  it ever appears in something it writes, whole or in a masked form that keeps its last characters.
+- **Do not send `/model status`.** OpenClaw answers it with the key in a masked form: the first and the last
+  eight characters. The plugin now replaces that too, but a recording is no place to test it.
 - **What is in the image.** OpenClaw at a pinned release, and the plugin in `openclaw/plugin`. No Marmot, no
   relay, no account of ours. Change `OPENCLAW_VERSION` in the `Dockerfile` to record a newer OpenClaw.
 - **The plugin is a channel written for recording**, not a copy of the Marmot channel in MDK. It registers
@@ -109,7 +118,11 @@ tools/record/openclaw/record.sh tools/record/openclaw/scenarios/simple.json out/
   turn to run.
 - **A scenario is a JSON file** in `openclaw/scenarios`: the chats, and a list of steps. A step is a chat
   message from a named sender, a wait for OpenClaw to call something or deliver some text, a press of an
-  approval or question button, or a pause. The step types are listed at the top of `openclaw/plugin/index.js`.
+  approval or question button, a request to OpenClaw through the plugin SDK for its commands, its models or a
+  session's stored entry as data, or a pause. The step types are listed at the top of
+  `openclaw/plugin/index.js`.
+- **Plugin hooks are off unless a scenario names them** in `RECORDER_PLUGIN_HOOKS`, for example
+  `session_start,session_end,before_reset`. The scenarios recorded on 2026-11-17 register none.
 - **A scenario can change the set-up** with an `env` block: who is allowed, whether commands need approval,
   what the plugin claims to support, and how much OpenClaw is asked to send to a chat. The settings are listed
   at the top of `openclaw/entrypoint.sh` and `openclaw/plugin/index.js`.
@@ -130,8 +143,8 @@ say so there: what a harness does instead is the useful part.
 ## Notes
 
 - The Codex recorder starts the app server with `--disable hooks`, so your own Codex hooks do not run. Threads
-  are started as ephemeral, so nothing is added to your Codex history. The `resume` scenario is the exception:
-  it has to keep its thread.
+  are started as ephemeral, so nothing is added to your Codex history. Three scenarios are the exception,
+  because each has to keep its thread: `resume`, `restart_mid_turn` and `resume_with_settings`.
 - Claude Code keeps every session. Each Claude recording adds a small session to your Claude Code history,
   under a project named after the demo directory.
 - The Claude recorder passes `settingSources: []`, so your own Claude Code settings are not loaded, and uses the

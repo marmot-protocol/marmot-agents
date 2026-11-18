@@ -1,0 +1,44 @@
+{
+  "name": "setting_reasoning",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_PLUGIN_HOOKS": "on_session_start,on_session_end,on_session_finalize,on_session_reset,on_session_open,pre_command,agent_loop_stopped,pre_approval_request,post_approval_response"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/reasoning"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/reasoning low"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Reply with exactly: ok"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/reasoning"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/status"
+    }
+  ]
+}

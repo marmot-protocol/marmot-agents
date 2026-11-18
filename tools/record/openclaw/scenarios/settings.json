@@ -1,0 +1,55 @@
+{
+  "name": "settings",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_PLUGIN_HOOKS": "session_start,session_end,before_reset"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/think high"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/verbose off"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/reasoning off"
+    },
+    {
+      "sdk": "session",
+      "chat": "family",
+      "user": "alice"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Reply with exactly: ok"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/status"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/think nonsense"
+    }
+  ]
+}

@@ -183,13 +183,15 @@ built.
 | `questions`: how a question is answered | `request`, `message` or both | Both | `request` | `message` | `request` |
 | `reasoning` | yes or no | No | Yes | No | Yes, when set to stream |
 | `files_in`: attachments on a prompt | yes or no | Images | Images | Not recorded | Not recorded |
-| `approval_commands` | a list | None | None | `/approve`, `/deny` | `/approve` |
+| `approval_commands`: typed commands that need the right to approve | a list; each entry says whether it counts anywhere in a message or only at the start | None | None | `/approve`, `/deny`, `/yolo`, `/approvals` and more | `/approve`, `/exec` anywhere in a message, `/elevated` and more |
 
 `approval_commands` exists because Hermes and OpenClaw accept an approval typed as a message. A typed message
 is a prompt, and needs only the right to prompt. So the core checks a message that starts with one of these
 commands against the right to approve ([D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights)). A command
-that changes the harness's permission mode belongs on the list too. None has been recorded, so the lists above
-may be incomplete.
+that changes the harness's permission mode belongs on the list too. Both gateways have several, and OpenClaw
+honours one of them anywhere in a message, so each entry says where it counts
+([D-047](../decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts)). The full lists are in
+[answers and controls](answers-and-controls.md#typed-commands-that-widen-what-an-agent-may-do).
 
 Codex is a built-in driver and does not use the socket. It is in the table because the same capabilities apply
 to the Rust trait.

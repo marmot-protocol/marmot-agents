@@ -1,0 +1,86 @@
+{
+  "name": "owner_commands",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_PLUGIN_HOOKS": "session_start,session_end,before_reset"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/config show"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/config set tools.exec.mode=full"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/debug set tools.exec.mode=full"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/bash echo recorder-demo"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "! echo recorder-demo"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/allowlist"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/send"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/activation always"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/mcp show"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/plugins list"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/acp status"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/queue"
+    }
+  ]
+}

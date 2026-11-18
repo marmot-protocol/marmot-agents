@@ -10,7 +10,7 @@ The first three block the most other work.
 ### Q-01 What exactly is in an agent event?
 
 [`design/event-model.md`](design/event-model.md) is now a concrete draft: ten item types, the fields of each,
-and eleven rules for drivers. A prototype applies it to 90 recorded sessions with Codex, Claude Code,
+and eleven rules for drivers. A prototype applies it to 123 recorded sessions with Codex, Claude Code,
 Hermes and OpenClaw, with nothing left over. It is still a proposal. To settle: whether these are the right types and fields, and the exact
 tags. How an event is carried is decided ([D-022](decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)
 to [D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb)). A to-do list
@@ -117,6 +117,12 @@ OpenClaw was recorded on 2026-11-17, and differs on each point. This is evidence
   and by structured data on approvals and questions.
 - **What the owner must set.** An approval reaches the chat only if the owner has switched approval
   forwarding on in OpenClaw. Left off, the command waits unseen.
+- **Each gateway has its own owner, too.** Recorded on 2026-11-18: OpenClaw refuses its owner-only commands to
+  anyone else, and drops, without a word, a message with a command from someone not on its command list.
+  Hermes, given a list of administrators, refused `/yolo`, `/approvals`, `/model`, `/new` and `/stop` to anyone
+  else. Those lists are separate from the owner's settings in the core.
+- **Hermes can approve by itself.** In its default mode a second model judged a flagged command and approved
+  it, and nobody was asked.
 
 ### Q-08 How do several agent identities run together?
 

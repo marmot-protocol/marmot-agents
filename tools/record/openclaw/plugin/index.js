@@ -12,6 +12,7 @@
 //   dir "out", via "result"    what that method returned to OpenClaw
 //   dir "out", via "call"      the plugin called OpenClaw (route, admission, context, approval)
 //   dir "in",  via "call"      what that call returned
+//   dir "in",  via "plugin_hook"  OpenClaw called a plugin hook, such as session_end
 //   dir "out", via "press"     a scripted press of an approval or question button
 //   dir "out", via "note"      a marker written by the recorder itself
 //
@@ -29,6 +30,10 @@
 //                            {"press": "<decision>", "user"} answer the last approval: allow-once,
 //                                                            allow-always or deny
 //                            {"answer": "<option>", "user"}  press a button on the last question
+//                            {"sdk": "<what>", "chat"}       ask OpenClaw for something as data, through
+//                                                            the plugin SDK: "commands", "native_commands",
+//                                                            "models", or "session" (the stored entry of
+//                                                            that chat's session)
 //                            {"wait_turn": true}             wait for every running turn to end
 //                            {"sleep": <seconds>}
 //   RECORDER_OUT           path of the .jsonl file to write
@@ -42,6 +47,8 @@
 //                          ask_user tool in the agent's tool list
 //   RECORDER_APPROVAL_CARDS    set to 1 to claim an approval capability: OpenClaw then asks the
 //                          plugin who may approve, and hands it the structured approval request
+//   RECORDER_PLUGIN_HOOKS  comma-separated plugin hooks to register and record, for example
+//                          "session_start,session_end,before_reset". None by default
 //   RECORDER_QUIET         comma-separated method names to count but not write out one by one
 
 import fs from "node:fs";
@@ -52,6 +59,9 @@ import { defineChannelMessageAdapter } from "openclaw/plugin-sdk/channel-outboun
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
+import { listChatCommands, listNativeCommandSpecs, resolveCommandArgChoices } from "openclaw/plugin-sdk/native-command-registry";
+import { buildModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
+import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
 
 const ID = "recorder";
 const env = process.env;
@@ -70,6 +80,18 @@ function readSecret() {
   }
 }
 const MODEL_KEY = readSecret();
+// OpenClaw's own replies can show the key in a masked form that keeps its last characters, as
+// "/model status" does. Match any such form, and the bare end of the key.
+const escapeRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const KEY_TAILS = MODEL_KEY && MODEL_KEY.length >= 16 ? [8, 7, 6, 5, 4].map((n) => escapeRe(MODEL_KEY.slice(-n))) : null;
+const MASKED_KEY = KEY_TAILS ? new RegExp(`[A-Za-z0-9_-]{0,24}(?:\\.{2,}|…|\\*{2,})(?:${KEY_TAILS.join("|")})`, "g") : null;
+
+function withoutKey(line) {
+  if (!MODEL_KEY) return line;
+  line = line.split(MODEL_KEY).join("<model-key>");
+  if (MASKED_KEY) line = line.replace(MASKED_KEY, "<model-key>").split(MODEL_KEY.slice(-8)).join("<model-key>");
+  return line;
+}
 
 function looksLikeConfig(v) {
   return "gateway" in v && ("agents" in v || "models" in v || "channels" in v);
@@ -129,8 +151,7 @@ class Recording {
   }
 
   write(dir, via, msg) {
-    let line = JSON.stringify({ t: Date.now() - this.t0, dir, via, msg: jsonable(msg) });
-    if (MODEL_KEY) line = line.split(MODEL_KEY).join("<model-key>");
+    const line = withoutKey(JSON.stringify({ t: Date.now() - this.t0, dir, via, msg: jsonable(msg) }));
     fs.writeSync(this.fd, line + "\n");
   }
 
@@ -448,6 +469,64 @@ async function handleInbound(step) {
   });
 }
 
+/** Ask OpenClaw for something as data, through the plugin SDK, and record the answer. */
+async function sdkStep(step) {
+  const { cfg, channelRuntime: rt, accountId } = gateway;
+  const [provider, ...rest] = String(cfg.agents?.defaults?.model?.primary ?? "").split("/");
+  const model = rest.join("/");
+  let method;
+  let params = {};
+  let fn;
+  if (step.sdk === "commands") {
+    method = "native-command-registry.listChatCommands";
+    // Some commands compute their choices from the model. Those are resolved for the configured one.
+    params = { resolveChoicesFor: { provider, model } };
+    fn = () =>
+      listChatCommands().map((command) => ({
+        ...command,
+        args: command.args?.map((arg) =>
+          typeof arg.choices === "function"
+            ? { ...arg, choices: "<function>", resolvedChoices: resolveCommandArgChoices({ cfg, provider, model, command, arg }) }
+            : arg,
+        ),
+      }));
+  } else if (step.sdk === "native_commands") {
+    method = "native-command-registry.listNativeCommandSpecs";
+    params = { provider: ID };
+    fn = () => listNativeCommandSpecs({ provider: ID });
+  } else if (step.sdk === "models") {
+    method = "models-provider-runtime.buildModelsProviderData";
+    params = { agentId: "main" };
+    fn = () => buildModelsProviderData(cfg, "main");
+  } else if (step.sdk === "session") {
+    const chat = scenario.chats?.[step.chat] ?? {};
+    const kind = (chat.type ?? "group") === "dm" ? "direct" : "group";
+    const peer = { kind, id: kind === "direct" ? step.user : step.chat };
+    const route = rt.routing.resolveAgentRoute({ cfg, channel: ID, accountId, peer });
+    method = "session-store-runtime.getSessionEntryAsync";
+    params = { agentId: route.agentId, sessionKey: route.sessionKey };
+    fn = async () => {
+      const entry = await getSessionEntryAsync(params);
+      if (!entry) return entry ?? null;
+      // Keep the settings and ids. Leave out the large parts: the skills and the prompt report.
+      const out = {};
+      for (const [k, v] of Object.entries(entry)) {
+        const size = JSON.stringify(jsonable(v) ?? null).length;
+        out[k] = size > 1500 ? { _omitted_bytes: size } : v;
+      }
+      return out;
+    };
+  } else {
+    throw new Error(`unknown sdk step: ${step.sdk}`);
+  }
+  rec.write("out", "call", { method, params });
+  try {
+    rec.write("in", "call", { method, result: await fn() });
+  } catch (err) {
+    rec.write("in", "call", { method, error: jsonable(err) });
+  }
+}
+
 function startInbound(step) {
   const p = handleInbound(step).catch((err) => {
     rec.write("out", "note", { inbound_failed: jsonable(err), stack: String(err?.stack ?? "").split("\n").slice(0, 6) });
@@ -513,6 +592,8 @@ async function runScenario() {
         } catch (err) {
           rec.write("in", "call", { method: "resolveApprovalOverGateway", error: jsonable(err) });
         }
+      } else if ("sdk" in step) {
+        await sdkStep(step);
       } else if ("answer" in step) {
         const params = { questionId: rec.lastQuestionId, optionValue: step.answer, senderId: step.user };
         rec.write("out", "press", params);
@@ -672,4 +753,13 @@ export default defineChannelPluginEntry({
   name: "Recorder",
   description: "Plays scripted chats into OpenClaw and records everything it hands back.",
   plugin: buildPlugin(),
+  registerFull(api) {
+    // Typed plugin hooks, which any plugin may register beside its channel. Each is recorded and
+    // returns nothing, so it changes nothing.
+    for (const name of (env.RECORDER_PLUGIN_HOOKS ?? "").split(",").map((s) => s.trim()).filter(Boolean)) {
+      api.on(name, (event, ctx) => {
+        rec.write("in", "plugin_hook", { hook: name, event, ctx });
+      });
+    }
+  },
 });

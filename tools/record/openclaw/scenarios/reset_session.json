@@ -1,0 +1,47 @@
+{
+  "name": "reset_session",
+  "chats": {
+    "family": {
+      "name": "Family",
+      "type": "group"
+    }
+  },
+  "env": {
+    "RECORDER_PLUGIN_HOOKS": "session_start,session_end,before_reset"
+  },
+  "steps": [
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "Remember this code word: marmot-7. Reply with just OK."
+    },
+    {
+      "sdk": "session",
+      "chat": "family",
+      "user": "alice"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "/reset"
+    },
+    {
+      "sdk": "session",
+      "chat": "family",
+      "user": "alice"
+    },
+    {
+      "chat": "family",
+      "user": "alice",
+      "user_name": "Alice",
+      "text": "What code word did I give you earlier in this chat? Do not use any tools. If you do not know, say that you do not know."
+    },
+    {
+      "sdk": "session",
+      "chat": "family",
+      "user": "alice"
+    }
+  ]
+}

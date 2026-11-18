@@ -452,7 +452,8 @@ Hermes takes `/approve` and `/deny` as messages, and OpenClaw takes `/approve`.
 permission mode decides what the agent may do without asking, so changing it is a standing approval.
 
 Decided 2026-11-18. The project owner asked for the assignment to be checked carefully. Which right the other
-controls need is in [D-039](#d-039-controls-need-the-right-to-prompt).
+controls need is in [D-039](#d-039-controls-need-the-right-to-prompt). The check on typed commands was
+widened by [D-047](#d-047-a-listed-command-says-where-in-a-message-it-counts).
 
 ## D-033 The socket's framing is JSON-RPC 2.0, one message per line
 
@@ -685,3 +686,50 @@ far up the chat, and nothing else would mark it in the flow of the conversation.
 
 Decided 2026-11-18. Found while running the `session` item over the recordings: a resumed Codex thread came
 back with a wider sandbox than it started with.
+
+## D-047 A listed command says where in a message it counts
+
+**Decision.** Each connector lists the typed commands that need the right to approve
+([D-032](#d-032-every-action-needs-one-of-two-rights)). For each one it also says whether the command counts
+only at the start of a message or anywhere in it. The core checks every message accordingly. A message with
+such a command from someone without the right to approve is not passed on, and the person is told.
+
+This replaces the words "a message that starts with one of them" in D-032.
+
+**Why.** OpenClaw honoured `/exec security=full ask=off` at the start, in the middle and at the end of a
+message, from an ordinary member of a group, and the command that followed ran with no approval. A check of
+how a message starts misses two of those three.
+
+The cost: someone who only mentions such a command in a sentence is refused too.
+
+Decided 2026-11-18. The lists as found are in
+[`design/answers-and-controls.md`](design/answers-and-controls.md#typed-commands-that-widen-what-an-agent-may-do).
+Neither gateway marks these commands, so each list is the connector's own and can fall behind.
+
+## D-048 A request to confirm a command is a question
+
+**Decision.** When a gateway asks a person to confirm a command they typed, the connector sends that as a
+`question` item. Answering it needs the right to prompt, like any question
+([D-039](#d-039-controls-need-the-right-to-prompt)).
+
+A typed `/approve` or `/deny` counts as an answer to an approval, and needs the right to approve, only while
+an approval is waiting. While a confirmation is waiting and no approval is, it answers the confirmation.
+
+**Why.** In Hermes `/approve` answers an approval and also confirms `/new`. Without this, someone who may
+prompt and may not approve could ask for a new session and never confirm it.
+
+Decided 2026-11-18.
+
+## D-049 A standing approval is an ordinary approval answer
+
+**Decision.** "Always" and "for this session" are answers to an approval like any other. They need the right
+to approve and nothing more. What a standing approval then covers is the gateway's behaviour
+([D-021](#d-021-approval-behaviour-belongs-to-the-harness)), and the approval item says what it covers when
+the gateway tells the connector.
+
+**Why.** In both gateways, after one person answered "always", the same command from another person ran with
+no prompt. In Hermes the standing approval covers the reason a command was flagged, such as "delete in root
+path", and not the one command. The core cannot narrow that without a second layer of permissions, which
+D-021 rules out. It can make sure the person who gave it had the right to, and show the group what was given.
+
+Decided 2026-11-18.

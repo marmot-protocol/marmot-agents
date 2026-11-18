@@ -22,7 +22,7 @@ The prompts are scripted and are in the recorder sources.
 
 ## Scenarios
 
-50 recordings of coding harnesses: 24 with Codex and 26 with Claude Code. Hermes has 14 more and OpenClaw 26,
+57 recordings of coding harnesses: 28 with Codex and 29 with Claude Code. Hermes has 27 more and OpenClaw 39,
 described below: [Hermes](#hermes), [OpenClaw](#openclaw).
 
 | Scenario | What it exercises | Codex | Claude |
@@ -53,6 +53,14 @@ described below: [Hermes](#hermes), [OpenClaw](#openclaw).
 | `bad_model` | A model that does not exist | yes | yes |
 | `approval_unanswered` | An approval nobody answers for six minutes, then an interrupt | yes | yes |
 | `restart_mid_turn` | The harness is stopped while a command runs, then the session is resumed | yes | yes |
+| `new_session` | A second session for the same project, without resuming the first | yes | yes |
+| `settings_update` | The client changes the model, then the approval policy and the sandbox, between turns | yes | |
+| `settings_mid_turn` | The client changes the reasoning effort of a turn while it runs | yes, refused | |
+| `resume_with_settings` | A session is resumed, with the approval policy and the sandbox sent again | yes | |
+| `permission_mode_switch` | The client changes the permission mode between two turns | | yes |
+| `early_info` | Before any prompt, the client asks what the session offers and waits five seconds | | yes |
+
+The last six rows were recorded on 2026-11-18, to check the three shared controls and the `session` item.
 
 Things that did not go as scripted, and are useful for that reason:
 
@@ -93,8 +101,8 @@ What the recordings show is in [`docs/reference/hermes-messages.md`](../../docs/
 | | |
 | --- | --- |
 | Runtime | Hermes Agent, commit `40d1e95f` (the canary release of 2026-11-17, v0.23.2), in a container |
-| Model | `z-ai/glm-5.3-flash` through an OpenAI-compatible endpoint |
-| Recorded on | 2026-11-17 |
+| Model | `z-ai/glm-5.3-flash` through an OpenAI-compatible endpoint. On 2026-11-18 its free route, `z-ai/glm-5.3-flash:free` |
+| Recorded on | 2026-11-17: the first 14. 2026-11-18: the 13 under [Controls and sessions](#hermes-controls-and-sessions) |
 | Recorder | [`tools/record/hermes`](../../tools/record/README.md#hermes) |
 
 | Scenario | What it exercises |
@@ -112,6 +120,43 @@ What the recordings show is in [`docs/reference/hermes-messages.md`](../../docs/
 | `commands` | `/help` and `/status` |
 | `not_allowed` | A message from someone who is not on the allow-list, then one from someone who is |
 
+<a id="hermes-controls-and-sessions"></a>
+
+**Controls and sessions**, recorded on 2026-11-18. In these the plugin also registers nine plugin hooks, such
+as `on_session_reset` and `pre_command`. What they show is in
+[`docs/reference/hermes-messages.md`](../../docs/reference/hermes-messages.md#controls-and-sessions).
+
+| Scenario | What it exercises |
+| --- | --- |
+| `new_session` | A turn, `/new`, and a turn that asks what the agent remembers |
+| `model_switch` | `/model` to list, `/model <id>` to switch to another model, a turn, `/model reset` |
+| `model_picker` | The same switch, with the platform claiming a model picker, made by a pick |
+| `setting_reasoning` | `/reasoning` to show, `/reasoning low` to change, a turn |
+| `yolo` | `/yolo`, a command that would need approval, `/yolo` again, the same command |
+| `approvals_off` | `/approvals off`, a command that would need approval, `/approvals manual` |
+| `approve_session` | An approval answered with `/approve session`, then the same command again |
+| `approve_always` | An approval answered with `/approve always`, then the same command from another person |
+| `write_approval` | `/memory approval` on and off, `/skills approval`, and three commands that only show a setting |
+| `command_not_admin` | Hermes's own list of admins for slash commands: one person refused five commands, one allowed |
+| `control_catalog` | The plugin asks Hermes for its commands and a chat's model settings as data, then `/commands`, `/model`, `/reasoning`, `/approvals`, `/whoami` |
+| `approvals_unordered` | Five commands sent before the first was answered |
+| `smart_approved` | A command that would need approval, with Hermes's default approval mode |
+
+Things that did not go as scripted, and are useful for that reason:
+
+- **`new_session`.** `/new` did not start a session. Hermes asked for confirmation first, and the scenario
+  answers `/approve`. The agent then still knew the code word, because it had saved it to its memory.
+- **`approvals_unordered`.** Recorded as `approvals_off`. Hermes took 19 seconds to answer the first command,
+  the recorder did not wait, and the five commands were answered out of order. The approval mode ended as
+  `manual`, so the command was asked about, and the approval timed out. `approvals_off` was recorded again
+  with a wait for each reply. The file was renamed, and the recorder's own note in it with the name.
+- **`smart_approved`.** Recorded as `approve_session`. No approval reached the chat: Hermes's default mode,
+  `smart`, has a second model decide, and it approved the command. The scenario then waited ten minutes for a
+  prompt that never came. `approve_session` and `approve_always` were recorded again with the mode set to
+  `manual`. The file was renamed in the same way.
+- **`model_picker`.** The list Hermes handed over held one model. The pick was a model that was not on it,
+  and Hermes accepted it.
+
 In these files `via` is one of:
 
 | `via` | With `dir` | Meaning |
@@ -119,11 +164,15 @@ In these files `via` is one of:
 | `inbound` | `out` | A scripted chat message handed to Hermes |
 | `hook` | `in` | Hermes called a method on the platform adapter |
 | `result` | `out` | What that method returned to Hermes |
-| `press` | `out` | A scripted press of an approval button |
+| `plugin_hook` | `in` | Hermes called a plugin hook that the recorder registered |
+| `call` | `out` | The plugin asked Hermes for something as data: its commands, or a chat's model settings |
+| `call` | `in` | What that returned. Also what the model picker's callback returned |
+| `press` | `out` | A scripted press of an approval button, or a pick from the model picker |
 | `note` | `out` | A marker written by the recorder |
 
-About four fifths of the lines are `send_typing` calls. The container held no account, key or relay of ours, so
-only paths needed scrubbing.
+About four fifths of the lines of the first 14 recordings are `send_typing` calls. The container held no
+account, key or relay of ours, so only paths needed scrubbing. The recordings of 2026-11-18 name the model
+endpoint, which is also the default in the recorder's script.
 
 ## OpenClaw
 
@@ -134,9 +183,9 @@ What the recordings show is in [`docs/reference/openclaw-messages.md`](../../doc
 
 | | |
 | --- | --- |
-| Runtime | OpenClaw 2026.11.5 (build `e13cf15`), the newest stable release on the day, in a container |
+| Runtime | OpenClaw 2026.11.5 (build `e13cf15`), the newest stable release on 2026-11-17, in a container |
 | Model | `z-ai/glm-5.3-flash:free` through an OpenAI-compatible endpoint |
-| Recorded on | 2026-11-17 |
+| Recorded on | 2026-11-17: the first 26. 2026-11-18: the 13 under [Controls and sessions](#openclaw-controls-and-sessions) |
 | Recorder | [`tools/record/openclaw`](../../tools/record/README.md#openclaw) |
 
 | Scenario | What it exercises |
@@ -183,6 +232,44 @@ Things that did not go as scripted, and are useful for that reason:
 - **`approval_denied`.** Recorded twice. The first time the model declined to run the command at all, so
   nothing needed approval; that run was discarded.
 
+<a id="openclaw-controls-and-sessions"></a>
+
+**Controls and sessions**, recorded on 2026-11-18. In these the plugin also registers three typed plugin
+hooks: `session_start`, `session_end` and `before_reset`. What they show is in
+[`docs/reference/openclaw-messages.md`](../../docs/reference/openclaw-messages.md#controls-and-sessions).
+
+| Scenario | What it exercises |
+| --- | --- |
+| `new_session`, `reset_session` | A turn, `/new` or `/reset`, and a turn that asks what the agent remembers |
+| `model_switch` | `/models` to list, `/model <provider/model>` to switch to another model, a turn, `/model default`, and a model that does not exist |
+| `settings` | `/think high`, `/verbose off`, `/reasoning off`, a turn, and a value that does not exist |
+| `elevated` | `/elevated full` from someone not allowed to use it and from someone who is, then a command that needs approval |
+| `exec_directive` | `/exec security=full ask=off` in front of a request for a command that needs approval, and alone |
+| `exec_directive_once` | The same directive and request, then the request again without the directive |
+| `exec_directive_unauthorized` | The same directive and request from someone who may not use commands |
+| `exec_directive_mid_message` | The same directive at the end of a request, then in the middle of one |
+| `approve_always` | An approval answered with `allow-always`, then the same command from another person |
+| `owner_commands` | Twelve commands that are owner-only or switched off, from someone who is not the owner |
+| `owner_config` | The same person made the owner: `/debug set` and `/config set` on the command mode |
+| `control_catalog` | The plugin asks OpenClaw for its commands, its models and a session's stored entry as data, then ten commands that show a setting |
+
+Things that did not go as scripted, and are useful for that reason:
+
+- **`new_session`, `reset_session`.** The session started afresh, and neither its key nor its id changed.
+- **`exec_directive`.** The directive worked: the command ran with no approval. The scenario then waited four
+  minutes for a prompt, and its `/approve unknown deny` was answered as if it were about something else.
+- **`elevated`.** `/elevated full` was accepted and the approval was still asked. The agent in these
+  recordings is not sandboxed.
+- **`approve_always`.** The model first chained the command with another, and OpenClaw refused that outright
+  with no approval. Its second try was the plain command.
+- **`model_switch`.** OpenClaw accepted a model that is not configured.
+- **`owner_config`.** `/debug set` on the command mode was accepted and changed nothing. `/config set` on the
+  same value did.
+- **`exec_directive_unauthorized`.** The message was not treated as plain text. OpenClaw dropped it whole,
+  with no reply.
+- **`exec_directive_mid_message`.** The directive worked in both places: each command ran with no approval.
+  The second turn then ended with OpenClaw's "the request took too long" after the command had run.
+
 In these files `via` is one of:
 
 | `via` | With `dir` | Meaning |
@@ -190,14 +277,23 @@ In these files `via` is one of:
 | `inbound` | `out` | A scripted chat message handed to OpenClaw |
 | `hook` | `in` | OpenClaw called the plugin: an adapter method or a callback |
 | `result` | `out` | What that method returned to OpenClaw |
-| `call` | `out` | The plugin called OpenClaw: for a route, a decision on the sender, the message context, or to run the turn |
+| `call` | `out` | The plugin called OpenClaw: for a route, a decision on the sender, the message context, or to run the turn. Also, through the plugin SDK, for its commands, its models or a session's stored entry |
 | `call` | `in` | What that call returned |
+| `plugin_hook` | `in` | OpenClaw called a typed plugin hook that the recorder registered |
 | `press` | `out` | A scripted press of an approval or question button |
 | `note` | `out` | A marker written by the recorder |
 
-A third of the lines are the typing signal and the receive path's own progress log. The container held no
-account, key or relay of ours. The recorder never writes OpenClaw's configuration, which is where the model
-key is named; it appears as `<config>`. The scrubber replaces the machine's uptime in the output of `/status`.
+A third of the lines of the first 26 recordings are the typing signal and the receive path's own progress
+log. The container held no account, key or relay of ours. The recorder never writes OpenClaw's configuration,
+which is where the model key is named; it appears as `<config>`. The scrubber replaces the machine's uptime in
+the output of `/status`.
+
+In the recordings of 2026-11-18 a stored session entry is written without its two largest parts, the skills
+and the report on the system prompt: each appears as `_omitted_bytes` with its size. The recorder writes
+`<redacted>` for any text value whose field name looks like a secret, and that catches one harmless field of
+a stored entry, `contextTokensSource`. The recordings name the model endpoint, which is also the default in
+the recorder's script. One command is deliberately not in them: `/model status` answers with
+the model key in a masked form that keeps its first and last eight characters.
 
 ## File format
 
@@ -253,3 +349,6 @@ again after any new recording, and read the result before committing.
 - OpenCode, Pi and Goose
 - Hermes with media, reactions, scheduled jobs and its message tools
 - OpenClaw with media, polls, threads, scheduled jobs, subagents, plugin approvals and the pairing code exchange
+- For both gateways: resuming an older session, compacting, and a standing approval or a changed setting across
+  a restart
+- OpenClaw with a sandboxed agent, with a session permission mode, and with `/bash` switched on

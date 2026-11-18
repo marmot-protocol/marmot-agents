@@ -11,7 +11,7 @@ the coding harnesses in [`harness-messages.md`](harness-messages.md).
 
 | Source | What it is |
 | --- | --- |
-| [`fixtures/recordings/openclaw`](../../fixtures/recordings/README.md#openclaw) | 26 scripted sessions, recorded on 2026-11-17 |
+| [`fixtures/recordings/openclaw`](../../fixtures/recordings/README.md#openclaw) | 26 scripted sessions, recorded on 2026-11-17. 13 more, recorded on 2026-11-18, are covered in [Controls and sessions](#controls-and-sessions) only |
 | OpenClaw | Release 2026.11.5 (build `e13cf15`), the newest stable release on that day |
 | Model | `z-ai/glm-5.3-flash:free` through an OpenAI-compatible endpoint |
 | Recorder | [`tools/record/openclaw`](../../tools/record/README.md#openclaw): a channel plugin that plays a scripted chat and records every call in both directions |
@@ -320,6 +320,9 @@ succeeded. The rejection arrived like any failed tool.
 There is no separate control interface. A control is a message whose text starts with a slash, from a sender
 OpenClaw has judged may use commands.
 
+The commands for a new session and for settings were recorded on 2026-11-18. See
+[Controls and sessions](#controls-and-sessions).
+
 `/status` reported the queue mode as `steer`. The recording shows the message waiting and then running
 separately, not being folded into the running turn.
 
@@ -571,3 +574,296 @@ What only the wording holds, and the translator therefore does not have:
 14. **The message tool is a second way for the agent to post.** `send`, `react` and `delete` arrive as
     structured calls with the person who asked. The connector must carry them out or not claim them.
 15. **Typing calls and the receive-path log are a third of the traffic** and must never become events.
+
+## Controls and sessions
+
+Added on 2026-11-18. The design gives every harness three shared controls: interrupt, new session, and set
+([D-029](../decisions.md#d-029-three-shared-controls-and-the-rest-comes-from-the-harness)). It describes a
+session to apps with a `session` item
+([D-030](../decisions.md#d-030-a-session-is-an-item-the-eleventh-type)). The recordings of 2026-11-17 confirmed
+only interrupt. This section records what OpenClaw does for the other two, which typed commands change what
+the agent may do without asking, and what OpenClaw will hand a plugin as data.
+
+It reports what was recorded and read. It decides nothing.
+
+### What was read
+
+| Source | What it is |
+| --- | --- |
+| [`fixtures/recordings/openclaw`](../../fixtures/recordings/README.md#openclaw) | 13 more scripted sessions, recorded on 2026-11-18 |
+| OpenClaw | The same release, 2026.11.5 (build `e13cf15`) |
+| Model | `z-ai/glm-5.3-flash:free`. `model_switch` switches to `z-ai/glm-5.3:free` |
+| OpenClaw's own documentation, shipped in the package | `docs/tools/slash-commands.md`, `elevated.md`, `exec.md`, `permission-modes.md`, `exec-approvals.md`, `docs/gateway/permission-modes.md`, `docs/plugins/hooks.md` and its reference |
+| The built package | The built-in command list (`commands-registry.data`), and the type declarations of the plugin SDK |
+
+OpenClaw ships as built JavaScript, so its handlers were not read as source. Where this section says "read in
+the documentation", the claim is OpenClaw's own and was not recorded.
+
+The recorder gained two abilities for this. It can register typed plugin hooks, and it can ask OpenClaw
+through the plugin SDK for its commands, its models and a session's stored entry. Each is off unless a
+scenario switches it on. The 26 recordings of 2026-11-17 used neither, and are unchanged.
+
+Limits:
+
+- One run of each scenario, one OpenClaw version, one model.
+- The agent in these recordings is not sandboxed. It runs commands on the gateway's own host. Elevated mode
+  is about leaving a sandbox, so `elevated` shows only part of what it does.
+- Every sender in these recordings is one OpenClaw lets use commands, except where a scenario says otherwise.
+- Not recorded: `/reset soft`, `/new <model>`, `/compact`, `/fast`, `/queue <mode>`, `/elevated` with a
+  sandboxed agent, `/exec host=…`, a session permission mode, `/acp` and `/codex` with a harness behind them,
+  `/bash` switched on, and a direct chat.
+
+### Which command is which control
+
+| Control | What a person types | Recording | What the plugin is handed |
+| --- | --- | --- | --- |
+| Interrupt | `/stop` | `stop` (2026-11-17) | A `final` delivery: `⚙️ Agent was aborted.` |
+| New session | `/new`, or `/reset` | `new_session`, `reset_session` | A `final` delivery marked `isStatusNotice`: `✅ New session started.` |
+| Set the model | `/model <provider/model>`. `/model default` goes back | `model_switch` | A `final` delivery: `Model set to … for this session only` |
+| Set the thinking level | `/think <level>` | `settings` | A `final` delivery: `Thinking level set to high.` |
+| Set verbose output, reasoning | `/verbose on`, `off` or `full`; `/reasoning on`, `off` or `stream` | `settings` | A `final` delivery |
+| Leave the sandbox | `/elevated on`, `ask`, `full` or `off` | `elevated` | A `final` delivery: `⚙️ Elevated mode set to full (auto-approve).` |
+| Set the command policy for one message | `/exec security=… ask=…`, in front of the message | `exec_directive` | A `block` delivery marked `isStatusNotice`, then the run |
+| List the commands | `/help`, `/commands` | `commands` (2026-11-17), `control_catalog` | A `final` delivery, text |
+| List the models | `/models`, `/models <provider>` | `control_catalog`, `model_switch` | A `final` delivery, text |
+| Show the session | `/status` | `commands`, `new_session` | A `final` delivery, with a table beside the text |
+
+Every one of these is a chat message, from a sender OpenClaw accepts for commands.
+
+A setting command sent alone changes the session and is answered. Sent with no value it shows the current
+one and the values accepted, as text: `Current thinking level: low. Options: default, off, minimal, low,
+medium, high, ultra.`
+
+### A new session
+
+In `new_session` Alice told the agent a code word, sent `/new`, and asked for the code word.
+
+**Neither the session key nor the session id changed.**
+
+| | Before `/new` | After |
+| --- | --- | --- |
+| `sessionKey` in `onPreparedAgentRunStart` | `agent:main:recorder:group:family` | The same |
+| `sessionId` in `onPreparedAgentRunStart` | `be554125-f808-4a20-a97a-2a88ddff440e` | The same |
+| `generation` in the same call | `45ba35c5…` | The same |
+| `maxSeq` in the same call | 3 | 23: the numbering went on |
+| `sessionStartedAt` in the stored entry | The time of the first message | The time of `/new` |
+| `lifecycleRevision` in the stored entry | Absent | A new id |
+
+The session was nonetheless new. Asked for the code word, the agent answered `I don't know — this session
+just started`. `/status` showed the session's duration starting again.
+
+**Where a plugin can see the change.**
+
+| Signal | Structured? | What it carries |
+| --- | --- | --- |
+| The reply, `✅ New session started.` | Partly | It is a `final` delivery with `isStatusNotice: true`. Only this reply, the one to `/reset`, and the line that acknowledges an `/exec` directive carried that mark. It does not say which session, or that one ended |
+| The stored session entry, if the plugin asks for it | Yes | `lifecycleRevision` and `sessionStartedAt` change |
+| The typed plugin hook `session_end` | Yes | `reason: "new"`, the session key, the session id, and `nextSessionId`, which was the same id |
+| The typed plugin hook `session_start` | Yes | The session key and id, and `resumedFrom`, the same id again |
+| The typed plugin hook `before_reset` | Yes | The whole conversation that is being dropped: 12 messages, with the path of the session's file |
+
+So a channel plugin that does nothing extra is told of a new session by one reply, and a plugin that wants
+more has to register hooks or read the stored entry. **A connector cannot use the session id to tell one
+session from the next.** It has to count resets itself.
+
+`before_reset` handed over the old conversation although the plugin had not been granted access to
+conversations: in the same recording `session_end` reported the ended transcript as `available: false,
+reason: conversation-access-required`. That is outside this section's subject and was not looked into.
+
+`reset_session` repeats the scenario with `/reset`, and went the same way. The reply was `✅ Session reset.`,
+marked `isStatusNotice`. The hooks fired with `reason: "reset"`. The key and the id stayed, and the agent no
+longer knew the code word. OpenClaw's documentation describes `/new` as archiving the session and `/reset` as
+resetting it in place. In a group chat these two recordings show no difference a plugin can see.
+
+### Changing the model
+
+In `model_switch` the configuration listed two models. Alice sent `/models recorded`, then
+`/model recorded/z-ai/glm-5.3:free`, ran a turn, and sent `/model default`.
+
+- **`/models recorded` lists models as text**: `Models (recorded …) — showing 1-2 of 2`, then the two ids.
+- **The switch is answered in text**: `Model set to recorded/z-ai/glm-5.3:free for this session only;
+  configured default unchanged.`
+- **The next run names the new model** in `onModelSelected`, as every run does. This is the confirmation a
+  plugin gets without asking.
+- **The stored entry holds the choice**: `providerOverride`, `modelOverride`, and `modelOverrideSource:
+  "user"`. After `/model default` the first two are gone and the third says `default`.
+- **A model that does not exist was accepted.** `/model recorded/no-such-model` was answered `Model set to
+  recorded/no-such-model for this session only`. No run followed, so what happens next was not recorded.
+  Codex accepted an unknown model in the same way, and failed on the next turn.
+
+### Other settings
+
+In `settings` Alice sent `/think high`, `/verbose off` and `/reasoning off`, and ran a turn.
+
+Each was answered in text. The stored entry then held `thinkingLevel: "high"`, `verboseLevel: "off"` and
+`reasoningLevel: "off"`, and the next run's `onModelSelected` said `thinkLevel: "high"`. `/think nonsense` was
+refused in text, with the accepted values.
+
+Before any of these are set, the stored entry has no such fields: a setting that is at its default is absent,
+not listed with its default value. `onModelSelected` does give the thinking level in force. For verbose
+output and reasoning the default is in the configuration and in the text of `/status`.
+
+### Commands that change what the agent may do without asking
+
+This is the list a connector needs for
+[D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights). It was built from the built-in command
+list, which a plugin can read as data (51 commands), and from OpenClaw's documentation of each.
+
+| Command | What it does | Status | Evidence |
+| --- | --- | --- | --- |
+| `/exec security=full ask=off <message>` | Sets the command policy for the run that message starts | Recorded | `exec_directive`: under the `ask` mode, `rm -rf /tmp/recorder-demo-dir` ran with no approval. `exec_directive_once`: the same command ran with no approval behind the directive, and was asked about when sent again a minute later without it |
+| `/elevated on`, `ask`, `full` | Lets a sandboxed agent run commands outside the sandbox. `full` also skips approvals where the policy already allows it | Recorded, with an agent that is not sandboxed | `elevated`: accepted for Alice, and the stored entry said `elevatedLevel: "full"`. The approval was still asked. Refused for Bob, who was not on the list of people allowed to use it |
+| `/approve <id> allow-always` | Answers an approval, and trusts that command from then on | Recorded | `approve_always`: Alice answered `allow-always`. Bob then asked for the same command, and it ran with no prompt |
+| `/config set <path>=<value>` | Writes OpenClaw's configuration file, which holds the command mode and every other setting | Recorded | `owner_commands`: refused, as owner-only. `owner_config`: with Alice made the owner and the command switched on, `/config set tools.exec.mode=full` was answered `⚙️ Config updated`, and `/exec` then reported `security=full, ask=off`. No command was run after it |
+| `/debug set <path>=<value>` | Overrides a configuration value until restart | Recorded. It did not change the command policy | `owner_commands`: refused, as owner-only. `owner_config`: `/debug set tools.exec.mode=full` was answered `⚙️ Debug override set`. `/exec` still reported `security=allowlist, ask=on-miss`, and the next command was asked about |
+| `/bash <command>`, or `! <command>` | Runs a command on the host directly, with no agent involved | Recorded as refused | `owner_commands`: `⚠️ bash is disabled. Set commands.bash=true to enable.` It is off unless the owner switches it on, and then also needs elevated mode to be available (read in the documentation) |
+| `/allowlist add`, `remove` | Changes who may talk to the agent in this channel | Read in the documentation, not recorded | It needs `commands.config` to be on. `owner_commands` records `/allowlist` alone, which lists |
+| `/acp permissions`, `/acp set-mode` | Change the permissions of a coding harness that OpenClaw drives over ACP | Recorded as refused | `owner_commands`: `/acp status` was refused as owner-only. No such harness was set up |
+| `/codex permissions` | The same for the Codex harness plugin | Read in the documentation, not recorded | |
+| `/mcp set`, `/plugins install`, `enable` | Add tools or code | Recorded as refused | `owner_commands`: `/mcp show` refused as owner-only, `/plugins list` as disabled |
+
+Looked for and not found:
+
+- **A chat command that sets a session's permission mode.** OpenClaw has one per session: `read-only`,
+  `guarded`, `workspace` or `full`. Its documentation describes changing it from the web interface, and from
+  the gateway's own protocol. The built-in command list has no command for it, and a search of the built
+  package for typed commands named `/permissions`, `/mode`, `/approvals`, `/yolo`, `/trust`, `/sudo` and
+  `/bypass` found none.
+- **A command that switches approvals off for a whole session.** `/exec security=… ask=…` sent alone was
+  answered `⚙️ Exec policy for this run only` and changed nothing: `/exec` afterwards showed the same
+  defaults. The documentation says the same.
+
+**What a plugin sees when an approval is skipped.** In `exec_directive` the plugin was handed one `block`
+delivery marked `isStatusNotice`, `⚙️ Exec policy for this run only (security=full, ask=off).`, before the
+run began. Then the run, the tool call and its output, as for any command. Nothing on the tool call says that
+it ran without the approval it would otherwise have needed.
+
+**Who could do it.** Alice, who sent it, was an ordinary member of the group. With the same set-up OpenClaw
+refused her every owner-only command in `owner_commands`, and it reports `senderIsOwner: false` for her
+wherever a recording shows that field. The documentation says `/exec` is honoured for any sender who may use
+commands, and that a directive from anyone else is treated as plain text. `exec_directive_unauthorized` records the other case, with OpenClaw's `commands.allowFrom` naming only
+Alice. Bob's message with the directive and the request started no run and got no reply. The whole message
+was dropped, the request with it, which is stricter than "treated as plain text". The plugin was told through
+the return of `inbound.run`, which carried `beforeAgentRunBlocked: true` and `deliberateSilentTerminalReply:
+true`. Bob's bare `/exec` was dropped in the same way.
+
+**Where in the message it can be.** Anywhere. `exec_directive_mid_message` sent the directive at the end of
+a request, and then in the middle of one that began with "Please". Both times OpenClaw answered `⚙️ Exec
+policy for this run only (security=full, ask=off).` and the command ran with no approval. So a check of how a
+message starts does not catch it. Other directives were not tried in this position.
+
+This differs from what the documentation says elsewhere, that an `/exec` override "can only tighten" a
+session's policy. That sentence is about a session with a permission mode set. These sessions had none.
+
+### OpenClaw has its own owner
+
+Recorded in `owner_commands`, with OpenClaw's defaults. Alice, an allowed member, was refused `/config`,
+`/debug`, `/mcp`, `/acp`, `/send` and `/activation`, each with:
+
+```text
+You are not authorized to use this owner-only command. Ask the operator to run
+`openclaw config set commands.ownerAllowFrom '["recorder:alice"]'` in a terminal to make this sender a
+command owner.
+```
+
+`/bash` and `/plugins` were refused as switched off. `/allowlist`, `/queue`, `/exec`, `/elevated`, `/think`,
+`/model`, `/new` and `/stop` were not owner-only.
+
+So OpenClaw has three levels: a sender it ignores, a sender who may use commands, and an owner. The middle
+level is one switch for all commands, with no notion of "approve" as against "prompt".
+
+A plugin passes OpenClaw a verdict on that middle level with every message, as `CommandAuthorized`. The
+recorder passes on what OpenClaw's own check of the sender returned. That value is not the last word. In
+`exec_directive_unauthorized` it was true for Bob, and OpenClaw dropped his commands all the same, because the
+configuration's `commands.allowFrom` named only Alice. Whether a plugin can refuse commands for a sender by
+passing false was not recorded.
+
+In `owner_config` the configuration named Alice as the owner and switched `/config` and `/debug` on. She
+could then write the configuration from the chat, as the table above records, and `/activation mention` was
+accepted. So for an owner, a typed command can change the command mode of the whole gateway. Nothing the
+plugin is handed marks that but the text of the reply.
+
+### What OpenClaw hands over as data
+
+Nothing arrives unasked but the model and the thinking level, in `onModelSelected` before each run. The rest
+is there for a plugin that asks, through the plugin SDK. `control_catalog` records each call.
+
+| Wanted | Call | What came back |
+| --- | --- | --- |
+| The commands | `listChatCommands()`, from `openclaw/plugin-sdk/native-command-registry` | 51 commands. Each has a key, its typed names, a description, a category, a tier, and its arguments |
+| The values a setting accepts | The same call. An argument lists its `choices`. Where they depend on the model, `resolveCommandArgChoices` gives them | `think`: default, off, minimal, low, medium, high. `verbose`: on, off, full. `reasoning`: on, off, stream. `elevated`: on, off, ask, full. `exec`: the values of `host`, `security` and `ask` |
+| The models | `buildModelsProviderData(cfg, agentId)`, from `openclaw/plugin-sdk/models-provider-runtime` | The models by provider, and the default |
+| A session's settings | `getSessionEntryAsync({agentId, sessionKey})`, from `openclaw/plugin-sdk/session-store-runtime` | The stored entry: the session id, and each setting someone has changed |
+| That a session was replaced | The hooks `session_end`, `session_start` and `before_reset`, registered with `api.on(…)` | See [A new session](#a-new-session) |
+
+Three limits on this:
+
+- **The command list does not say what a command may do.** Nothing in an entry marks `/exec` or `/elevated`
+  as changing permissions, or `/config` as owner-only. The tier (`essential`, `standard`, `power`) is about
+  what to show first.
+- **The accepted values and the text disagreed once.** For the thinking level the call returned six values.
+  The reply to `/think` named seven, with `ultra`.
+- **The stored entry holds changes, not the state.** See [Other settings](#other-settings).
+
+`/status` is the one reply that carries structure beside its text: a `presentation` with a table of rows such
+as `Modes: think low · fast off · reasoning on · verbose:full`. The values are still inside strings.
+
+Not called: the plugin SDK also declares a function to set a session's model
+(`applySessionModelSelection`) and one to change a stored entry (`applySessionEntryPatch`). If they do what
+their names say, a plugin could set the model or a setting with a call and not a typed command. That was not
+tried.
+
+Not examined: the gateway's own protocol, which OpenClaw's web interface uses. The type declarations show
+that it lists sessions with their settings and the thinking levels each accepts. It is not part of what a
+channel plugin is handed.
+
+### The new recordings through the prototype translator
+
+The prototype was extended to the new recordings on 2026-11-18. All 38 OpenClaw recordings translate with
+no line left without a rule and no item left open. A thirteenth new recording, `exec_directive_mid_message`,
+was added afterwards. It translates too, and is not in this table.
+
+| | First 26 recordings | All 38 |
+| --- | --- | --- |
+| Session items | 24 | 36 |
+| Edits of a session item | 0 | 9 |
+| Largest session item, without the native message | 0.3 KB | 4.9 KB |
+
+What changed in the rules:
+
+- **A session item now holds what the plugin asked for.** The settings in the stored entry, with the two that
+  bear on permissions marked as needing the right to approve
+  ([D-043](../decisions.md#d-043-a-setting-says-which-right-it-needs)). The values each setting accepts and
+  the commands, from the command list. The models, from the model list.
+- **A replaced session ends one item and starts another.** The prototype names an OpenClaw session by its
+  session key, as before, and adds a count: the second session under a key is `…:family#2`. It does so on
+  `session_end` when the hook is registered, and otherwise on the reply marked `isStatusNotice`.
+- **A directive in front of a message is a notice** of kind `directive`. The prototype still matches none of
+  OpenClaw's wording.
+- **A typed command is counted as the control it asks for, whether or not OpenClaw accepted it.** Only the
+  wording of the reply, or the stored entry, says which.
+
+### What a connector has to supply from its own knowledge
+
+[D-044](../decisions.md#d-044-a-connector-supplies-what-its-harness-does-not-say) says a connector fills in
+what its harness does not report. OpenClaw reports far more than Hermes, if asked. What is left:
+
+1. **The command for each shared control**: `/stop`, `/new`, `/model <provider/model>`. The command list
+   names them and does not say which control each is.
+2. **Which settings and commands need the right to approve.** Nothing OpenClaw hands over marks them. The
+   table above is the list for this version.
+3. **The default of a setting nobody has changed**, other than the model and the thinking level.
+4. **A count of sessions.** The key and the id stay the same across `/new`.
+5. **Whether a typed command took effect.** The reply is text. The stored entry can be read again. A command
+   that OpenClaw drops gets no reply at all; the return of `inbound.run` says so.
+
+Two points for the people deciding, not for the connector:
+
+- **A directive is part of an ordinary message.** `/exec security=full ask=off` works in front of a prompt.
+  Under D-032 the core checks a message that starts with a listed command against the right to approve. The
+  documentation also describes directives placed inside a message; that was not recorded. If it holds, a
+  check of how a message starts is not enough for OpenClaw.
+- **Anyone who may use commands could skip an approval**, with the set-up recorded here. What narrowed it was
+  OpenClaw's `commands.allowFrom`. Whether that is acceptable is the owner's choice of OpenClaw configuration,
+  under [D-021](../decisions.md#d-021-approval-behaviour-belongs-to-the-harness). A connector's installer
+  would have to know it.
