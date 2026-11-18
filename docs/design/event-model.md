@@ -48,7 +48,8 @@ clients know how to render. Agent events extend that set.
 | `session` | A session with the harness: what it is, and the settings, actions and slash commands it offers |
 
 `session` is the newest, added on 2026-11-18 ([D-030](../decisions.md#d-030-a-session-is-an-item-the-eleventh-type)). The
-recordings were checked against the other ten, and the prototype does not produce it yet.
+prototype produces it for all four harnesses. What that showed is in
+[answers and controls](answers-and-controls.md#checked-against-the-recordings).
 
 A command, a file edit and a web search are all the `tool` type, told apart by `kind`. One harness reports them
 as separate things and the other as one generic tool call; a single type with a kind fits both.
@@ -117,7 +118,7 @@ Only the fields in `body` differ.
 | `task` | `kind`, `description`, `subject`, and `usage` once known |
 | `notice` | `kind`: `compaction`, `waiting`, `retry`, `warning`, `model_changed`, `command_output` |
 | `error` | What was being attempted, and the harness's error code |
-| `session` | `settings`: each with an `id`, a `label`, its `value` and the `options` it accepts. `actions`: each with an `id`, a `label` and a `description`. `commands`: each with a `name`, a `description` and a `hint` |
+| `session` | `settings`: each with an `id`, a `label`, its `value`, the `options` it accepts when the harness says, and whether changing it needs the right to approve. `actions`: each with an `id`, a `label` and a `description`. `commands`: each with a `name`, a `description` and a `hint` |
 
 ## Answers and controls
 
@@ -169,12 +170,16 @@ driver code.
 | --- | --- |
 | Recordings | 90: 24 Codex, 26 Claude Code, 14 Hermes, 26 OpenClaw |
 | Native messages | 8,430 |
-| Agent events produced | 669 |
+| Agent events produced | 789 |
 | Native messages with no rule | 0 |
 | Items left open at the end of a recording | 0 |
 
-The events by type: 233 `turn`, 158 `tool`, 126 `message`, 70 `notice`, 54 `approval`, 12 `question`, 8 `task`,
-4 `error`, 2 `plan`, 2 `reasoning`.
+The events by type: 233 `turn`, 158 `tool`, 126 `message`, 120 `session`, 70 `notice`, 54 `approval`,
+12 `question`, 8 `task`, 4 `error`, 2 `plan`, 2 `reasoning`.
+
+The 120 `session` events were added on 2026-11-18, when the type was. The other counts did not change. They
+are 90 sessions and 30 edits. See
+[answers and controls](answers-and-controls.md#checked-against-the-recordings).
 
 **A gateway fits, with less to say.** Hermes was added after the two coding harnesses, as a check that the ten
 types are not shaped around them. Its 2,618 native calls became 120 events with no new type needed. But it uses
@@ -221,6 +226,7 @@ Detail and evidence for each: [`../reference/harness-messages.md`](../reference/
 - Volume. In one developer's real use a turn averaged about 12 tool calls, 7 reasoning blocks and 3.5 pieces of
   text. With each tool call sent twice that is roughly 35 events per turn
   ([Q-12](../open-questions.md#q-12-how-many-events-is-too-many)).
+- A session that ends, or is replaced by a new one in the same chat. No recording has one.
 - The other four harnesses.
 
 ## What is deliberately not in the model

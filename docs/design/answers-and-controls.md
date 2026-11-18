@@ -224,6 +224,82 @@ An answer or a control can arrive long after it was sent, for example when the a
   the machine comes back. The limit is five minutes. That is a first value with no evidence behind it.
 - **Each event acts at most once.** The agent remembers the ids it has resolved.
 
+## Checked against the recordings
+
+The prototype now produces `session` items for all 90 recordings, and counts which native call each control
+was seen as. Run on 2026-11-18:
+
+```sh
+python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
+    fixtures/recordings/hermes fixtures/recordings/openclaw
+```
+
+The result: 90 sessions and 30 edits of a session item, with no native message left without a rule.
+
+### What each harness says about a session
+
+| | Codex | Claude Code | Hermes | OpenClaw |
+| --- | --- | --- | --- | --- |
+| A session id | Yes | Yes | No. The driver names it after the chat and the sender | Yes |
+| Settings and their values | Model, reasoning effort, mode, approval policy, sandbox | Model, permission mode | None | Model, thinking level |
+| The values a setting accepts | Models, when asked. Nothing else | None seen | None | None |
+| Slash commands | It has none on this interface | 59 names. Descriptions and hints when asked | None | None |
+| First reported | Before any prompt | After the first prompt | At the first turn | At the first run |
+| Sessions in the recordings | 24 | 26 | 16 | 24 |
+| Edits | 27 | 3 | 0 | 0 |
+| Largest item, without the native message | 0.7 KB | 15 KB | Empty | 0.3 KB |
+
+What the edits were:
+
+- **Codex, once in every session.** It states a thread's settings in three places under different names. The
+  first is incomplete, so the item is edited when the first turn starts: the mode appears, and the effort
+  becomes the one the prompt asked for.
+- **Codex, a model change, twice.** Once on its own, and once as part of that first edit. The new model is a
+  field on the next prompt, and Codex confirms it when that turn starts. It confirmed a model that does not
+  exist in the same way; the turn then failed.
+- **Codex, on resume, twice.** See below.
+- **Claude Code, three.** A model change, the permission mode leaving plan mode, and the command list gaining
+  descriptions after the driver asked for them.
+
+### Five things it showed
+
+1. **A resumed Codex thread came back with a wider sandbox.** In both recordings that resume a thread, it was
+   started with a sandbox limited to the project and came back with full access. The resume request named no
+   sandbox, so Codex used whatever the new process defaulted to. The driver must send the permission settings
+   again on resume. The session item is what made this visible.
+2. **Only Codex reports a session before anyone prompts.** Claude Code's opening message arrived after the
+   first prompt in all 26 recordings. The gateways say nothing until a message arrives. So for three of the
+   four, an app has no list until the first prompt has been sent, or has the one from an earlier session.
+   Whether the Claude library can report sooner was not tested.
+3. **The gateways have almost nothing to put in it.** Hermes's item is empty. OpenClaw's holds the model and
+   the thinking level.
+4. **A setting does not say which right it needs.** Codex has two settings that need the right to approve,
+   and Claude Code has one. The prototype marks them, and the model needs that mark.
+5. **A change of setting cannot always be confirmed at once.** In Codex a new model travels with the next
+   prompt. Between the press and that prompt the harness has confirmed nothing, so the driver either reports
+   the setting as changed on its own word or leaves the press pending.
+
+The open points are in [Q-30](../open-questions.md#q-30-what-does-a-session-item-hold-and-when-is-it-sent).
+
+### Which native call each control is
+
+Counts are how often each was recorded.
+
+| Control | Codex | Claude Code | Hermes | OpenClaw |
+| --- | --- | --- | --- | --- |
+| Interrupt | `turn/interrupt` (2) | `interrupt()` (2), `abort()` (1) | The message `/stop` (1) | The message `/stop` (1) |
+| New session | `thread/start` (24) | `query()` (26) | Not recorded | Not recorded |
+| Set the model | A field on `turn/start` (2) | `setModel()` (1) | Not recorded | Not recorded |
+| Set the mode | A field on `turn/start` (1) | Not recorded | Not recorded | Not recorded |
+| Set the permission mode | Not recorded | Not recorded | Not recorded | Not recorded |
+| The harness's own action | `thread/compact/start` (1) | The message `/compact` (1) | | |
+| Resume a session | `thread/resume` (2) | `query()` with `resume` (2) | Not recorded | Not recorded |
+| Answer an approval by typing | | | `/approve` (1), `/deny` (1) | `/approve` (3) |
+
+Interrupt is confirmed for all four. For the two gateways it is a typed command, so their connectors turn the
+control into text. New session and set are confirmed for the two coding harnesses only. No recording changes
+a permission mode from outside, and none ends a session or replaces it in the same chat.
+
 ## What is visible, and to whom
 
 Answers and controls are group events. Every member's device receives them and keeps them. That is intended:

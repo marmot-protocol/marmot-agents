@@ -14,7 +14,8 @@ python3 tools/prototype/translate.py fixtures/recordings/codex/approval_allowed.
 # One recording, in full, with ids and native payloads
 python3 tools/prototype/translate.py fixtures/recordings/claude/question.jsonl
 
-# Every recording: how many events, what was not sent, and anything with no rule
+# Every recording: how many events, the session items, which native call each control was, what was
+# not sent, and anything with no rule
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
     fixtures/recordings/hermes fixtures/recordings/openclaw
 ```

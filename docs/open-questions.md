@@ -17,7 +17,8 @@ to [D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb)). A to-do list
 that changes during a turn has not been seen in a recording.
 
 An eleventh type, `session`, was added on 2026-11-18
-([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)). The prototype does not produce it yet.
+([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)). The prototype produces it, and the open
+points it raised are in [Q-30](#q-30-what-does-a-session-item-hold-and-when-is-it-sent).
 
 ### Q-02 What happens to large output?
 
@@ -36,6 +37,31 @@ carries answers and controls ([D-027](decisions.md#d-027-answers-and-controls-ar
 The kinds are Marmot events, so their definition probably belongs in the
 [Marmot specification](https://github.com/marmot-protocol/marmot), with MDK exposing them to the apps. The
 ownership, and how much is specification versus app convention, is not settled.
+
+### Q-30 What does a session item hold, and when is it sent?
+
+The `session` item is decided ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)). Running it
+over the recordings raised five points. The evidence is in
+[`design/answers-and-controls.md`](design/answers-and-controls.md#checked-against-the-recordings).
+
+- **A setting has to say which right it needs.** Codex has two settings that decide what the agent may do
+  without asking, the approval policy and the sandbox. Claude Code has one. The core cannot tell which they are
+  without checking the harness's name. Proposed: each setting carries a mark that it needs the right to
+  approve. The prototype does this.
+- **What a gateway's session item contains.** Hermes tells a plugin nothing about a session. OpenClaw tells it
+  the model and the thinking level, and nothing else. Either the connector supplies the lists from its own
+  knowledge of the gateway, or the item is nearly empty.
+- **Where a setting's accepted values come from.** No harness states them unasked. Codex lists its models when
+  asked. Nothing lists the approval policies, the sandboxes or Claude Code's permission modes; a driver would
+  have to know them.
+- **How large the list of commands may be.** Claude Code's 59 commands take 1.7 KB as names and 15 KB with
+  descriptions, and an edit resends the whole item. A real install has more commands. The size rule
+  ([D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb)) says how to cut output, not a list. Proposed:
+  names and hints always, descriptions dropped first.
+- **How people see that a setting changed.** An edit changes the item where it first appeared, which can be
+  far up the chat. Nothing marks the moment in the flow of the conversation. The model has a notice for "the
+  model changed", which no recording produced. Proposed: the edit is the record, and a notice is sent as well
+  only for a change nobody asked for, such as Codex widening the sandbox on resume.
 
 ### Q-23 How does an agent send a file to the chat?
 
