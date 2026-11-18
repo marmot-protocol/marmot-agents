@@ -117,7 +117,9 @@ group sees the agent's activity and its details.
 **Why.** Seeing and controlling are different. An owner may want others to watch an agent work without being able
 to direct it or approve what it does on the owner's machine.
 
-How each action maps onto the two rights is in [D-032](#d-032-every-action-needs-one-of-two-rights).
+How each action maps onto the two rights is in [D-032](#d-032-every-action-needs-one-of-two-rights). The words
+"and use controls" above are replaced by [D-039](#d-039-controls-need-the-right-to-prompt): controls need the
+right to prompt.
 
 ## D-011 Full control from the phone
 
@@ -450,7 +452,7 @@ Hermes takes `/approve` and `/deny` as messages, and OpenClaw takes `/approve`.
 permission mode decides what the agent may do without asking, so changing it is a standing approval.
 
 Decided 2026-11-18. The project owner asked for the assignment to be checked carefully. Which right the other
-controls need is not settled: [Q-29](open-questions.md#q-29-which-right-does-each-control-need).
+controls need is in [D-039](#d-039-controls-need-the-right-to-prompt).
 
 ## D-033 The socket's framing is JSON-RPC 2.0, one message per line
 
@@ -540,3 +542,92 @@ cost in setup.
 
 Decided 2026-11-18. How administration is done is still open
 ([Q-05](open-questions.md#q-05-how-is-the-agent-administered)).
+
+## D-039 Controls need the right to prompt
+
+**Decision.** These need the right to prompt: interrupting a turn, starting a new session, changing a setting
+other than the permission mode, using a harness's own action such as compacting, and answering a question.
+
+Answering an approval and changing the permission mode need the right to approve, as
+[D-032](#d-032-every-action-needs-one-of-two-rights) says.
+
+This replaces the words "and use controls" in
+[D-010](#d-010-the-owner-sets-who-may-prompt-and-who-may-approve), which put every control with the right to
+approve.
+
+**Why.** A harness's slash commands are messages
+([D-031](#d-031-a-slash-command-is-a-message-for-the-harness)), and they include commands that stop a turn,
+start a session and switch the model. Someone who may prompt can type those. A stricter rule for the button
+than for the typed command would protect nothing.
+
+Decided 2026-11-18. Still to check when drivers are built: that each connector's list of commands needing the
+right to approve is complete. Whether Hermes and OpenClaw have typed commands that change the permission mode
+has not been recorded.
+
+## D-040 A message sent during a turn goes straight to the harness
+
+**Decision.** The core keeps no queue of its own. A message that arrives while a turn is running is passed to
+the driver at once, and the harness does with it what it does natively:
+
+| Harness | What it does |
+| --- | --- |
+| Codex, Hermes | Folds the message into the running turn |
+| Claude Code | Ends the turn and starts another |
+| OpenClaw | Holds the message until the turn ends |
+
+Each connector states which of these its harness does, so an app can say what will happen before the message
+is sent.
+
+**Why.** A queue in the core would be a second behaviour on top of the harness's own, and the two could
+disagree. People already know how their harness treats a message sent mid-turn.
+
+The cost: in a group, with a harness that ends the turn, a second person's message cuts off the first person's
+turn.
+
+Decided 2026-11-18.
+
+## D-041 A secret answer is accepted only in a two-person chat
+
+**Decision.** A harness can mark a question's answer as secret, for something like a password. Such a question
+can be answered from the chat only when the chat has two members: the agent and one person. In any other chat
+the question is shown, cannot be answered there, and says to answer it at the terminal.
+
+The agent's reply says that the question was answered and never repeats the answer.
+
+**Why.** Everything sent to a group is readable by every member
+([D-009](#d-009-groups-are-first-class-and-every-member-sees-agent-activity)). In a two-person chat the only
+reader besides the agent is the person who typed it.
+
+The cost: the answer stays in that chat's history on that person's devices.
+
+Decided 2026-11-18. Codex's interface has this marking. No recording contains a secret question.
+
+## D-042 An agent may act in its own chat, and may not change a group or the account
+
+**Decision.** Hermes and OpenClaw give their agents message tools. Through the socket's chat section such an
+agent may:
+
+- send a message;
+- edit or delete a message of its own;
+- add and remove a reaction;
+- read history.
+
+It may do these only in the chat its session belongs to. They are ordinary Marmot actions, which the core
+carries out.
+
+Not in the first version: anything that changes a group or the account, such as renaming a chat, creating a
+group, inviting or removing people, or changing the agent's profile. That waits for the design of
+administration ([Q-05](open-questions.md#q-05-how-is-the-agent-administered)).
+
+Codex and Claude Code have no such tools, and none are added now.
+
+**Why.** Sending, editing, deleting and reacting are what any member of a chat can do with their own messages,
+and gateways already rely on them. Keeping an agent to its own chat stops a prompt in one group from causing
+messages in another. Changing a group or the account is the owner's business, and a harness that could do it
+could be talked into it.
+
+Because these are ordinary actions, a deleted message is an ordinary deletion and a reaction is an ordinary
+reaction. No new item type is needed for them. The tool call itself still shows as a `tool` item.
+
+Decided 2026-11-18. How an agent sends a file is still open
+([Q-23](open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)).

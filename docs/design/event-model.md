@@ -154,7 +154,9 @@ look right and are wrong.
    error flag.
 8. **Ask for reasoning.** Claude Code sends empty thinking blocks unless summarised thinking is switched on.
    Codex sent none in any recording.
-9. **Never show a secret answer to the group.** A Codex question can be marked secret.
+9. **Never show a secret answer to the group.** A Codex question can be marked secret. It can be answered from
+   the chat only in a two-person chat
+   ([D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)).
 10. **State what is never sent.** About half of all native traffic is partial text, and a quarter more is
     bookkeeping. Each driver lists the native messages it drops.
 
@@ -191,7 +193,7 @@ become notices, and 51 of its 120 events are notices. See
 | A Codex question can be a field on an ordinary message | `answer_via` on a question |
 | A question can hold several questions, allow several selections, or be secret | `questions` is a list; `multiple` and `secret` on each |
 | Compaction is a turn of its own in Codex; background work starts a turn in Claude Code | `started_by` on a turn |
-| Steering stays in the turn for Codex and ends it for Claude Code | "Steer" is a request the core makes; the driver reports what happened to the turn |
+| Steering stays in the turn for Codex and ends it for Claude Code | A message sent during a turn goes to the harness as it is; the driver reports what happened to the turn |
 
 Detail and evidence for each: [`../reference/harness-messages.md`](../reference/harness-messages.md).
 

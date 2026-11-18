@@ -1,9 +1,9 @@
 # Answers and controls
 
 Status: decided on 2026-11-18, as [D-027](../decisions.md#d-027-answers-and-controls-are-one-kind-of-event-kind-1202)
-to [D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights), except which right each control needs
-([Q-29](../open-questions.md#q-29-which-right-does-each-control-need)). None of it is in the Marmot specification yet,
-and the exact tags are not fixed.
+to [D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights), and [D-039](../decisions.md#d-039-controls-need-the-right-to-prompt)
+to [D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat). None of it is in the Marmot
+specification yet, and the exact tags are not fixed.
 
 This is the second half of [how an agent event is carried](event-carrier.md): that page covers what an agent
 sends to the chat, and this one covers what a person sends back.
@@ -184,9 +184,12 @@ approve, interrupt or change settings.
 
 Steering is not a control. A chat message that arrives while a turn is running is a prompt like any other. What
 happens to it depends on the harness: Codex can fold it into the running turn, Hermes does so by itself, Claude
-Code ends the turn and starts another, and OpenClaw holds it until the turn ends. Who decides that is
-[Q-09](../open-questions.md#q-09-who-owns-the-queue-when-a-message-arrives-mid-turn), and this page does not
-settle it.
+Code ends the turn and starts another, and OpenClaw holds it until the turn ends.
+
+The core keeps no queue of its own. It passes the message on at once, and the harness does what it does
+natively ([D-040](../decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness)). Each
+connector states which behaviour its harness has, so an app can say what will happen before the message is
+sent. In a group, with a harness that ends the turn, a second person's message cuts off the first person's turn.
 
 ### 9. Who may send what
 
@@ -194,27 +197,20 @@ settle it.
 hand out: who may prompt, and who may approve. Both default to the owner alone. Every action needs one of them,
 and there is no third right ([D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights)).
 
-Decided:
-
 | Action | Right needed | Why |
 | --- | --- | --- |
 | Send a prompt or a slash command | Prompt | Except a command on the connector's list, which needs the right to approve |
-| Answer an approval | Approve | |
-| Change the permission mode | Approve | It decides what the agent may do without asking, so it is a standing approval |
-
-Proposed, and not settled ([Q-29](../open-questions.md#q-29-which-right-does-each-control-need)):
-
-| Action | Right proposed | Why |
-| --- | --- | --- |
 | Answer a question | Prompt | The answer is information for the agent, like a prompt |
 | Interrupt | Prompt | Anyone who can start work can stop it |
 | Start a new session | Prompt | |
-| Change another setting, or use a harness's own action | Prompt | |
+| Change a setting other than the permission mode, or use a harness's own action | Prompt | |
+| Answer an approval | Approve | |
+| Change the permission mode | Approve | It decides what the agent may do without asking, so it is a standing approval |
 
-D-010 as written puts "use controls" with the right to approve, so the second table would change it. The
-reason to change it: a harness's slash commands are messages, and they include commands that stop a turn, start
-a session and switch the model. Someone who may prompt can type those. A stricter rule for the button than for
-the typed command would protect nothing.
+D-010 first put "use controls" with the right to approve. [D-039](../decisions.md#d-039-controls-need-the-right-to-prompt) moved
+them to the right to prompt. The reason: a harness's slash commands are messages, and they include commands
+that stop a turn, start a session and switch the model. Someone who may prompt can type those. A stricter rule
+for the button than for the typed command would protect nothing.
 
 Someone without the right gets the "not allowed" notice, which is the refusal D-010 asks for.
 
@@ -234,8 +230,13 @@ Answers and controls are group events. Every member's device receives them and k
 a group should see who approved a command.
 
 It is a problem for one case. Codex can mark a question's answer as secret, such as a password. An answer sent
-to a group is readable by every member, whatever the agent then does with it. This page does not solve that. It
-is [Q-21](../open-questions.md#q-21-what-happens-to-a-secret-answer).
+to a group is readable by every member, whatever the agent then does with it.
+
+So a secret question can be answered from the chat only when the chat has two members, the agent and one
+person ([D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)). In any other
+chat the question is shown, cannot be answered there, and says to answer it at the terminal. The agent's reply
+says the question was answered and never repeats the answer. The answer does stay in that chat's history on
+that person's devices.
 
 ## What older apps show
 
@@ -274,9 +275,6 @@ In the core:
 
 ## Not covered here
 
-- **What happens to a message sent during a turn**
-  ([Q-09](../open-questions.md#q-09-who-owns-the-queue-when-a-message-arrives-mid-turn)).
-- **Secret answers** ([Q-21](../open-questions.md#q-21-what-happens-to-a-secret-answer)).
 - **Choosing among past sessions.** "New session" is here. Listing and resuming older ones depends on how a
   chat maps to a session ([Q-07](../open-questions.md#q-07-how-does-a-chat-map-to-a-harness-session)).
 - **Changing who may prompt and approve from the chat**
@@ -292,5 +290,6 @@ In the core:
 | The list is carried by a `session` item, an eleventh type | [D-030](../decisions.md#d-030-a-session-is-an-item-the-eleventh-type) |
 | A slash command is always a message for the harness | [D-031](../decisions.md#d-031-a-slash-command-is-a-message-for-the-harness) |
 | Every action needs one of two rights | [D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights) |
-
-Still open on this page: which right each control needs ([Q-29](../open-questions.md#q-29-which-right-does-each-control-need)).
+| Controls need the right to prompt | [D-039](../decisions.md#d-039-controls-need-the-right-to-prompt) |
+| A message sent during a turn goes straight to the harness | [D-040](../decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness) |
+| A secret answer is accepted only in a two-person chat | [D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat) |

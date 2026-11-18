@@ -66,7 +66,10 @@ The current thinking:
 - **Later, the owner can administer from the chat.**
 
 Open within this: whether administration gets its own socket or a separate credential on the same one, and
-whether creating a group counts as administration or as an ordinary chat action.
+whether an agent may ever change a group or the account itself: rename a chat, create a group, invite people.
+It may not in the first version
+([D-042](decisions.md#d-042-an-agent-may-act-in-its-own-chat-and-may-not-change-a-group-or-the-account)).
+Raised in [issue 4](https://github.com/marmot-protocol/marmot-agents/issues/4).
 
 The project owner agreed with this direction on 2026-11-17 and chose not to fix its shape yet. It is to be
 decided when drivers are being built against real harnesses, not before.
@@ -172,56 +175,10 @@ session and neither reruns anything. Codex shows the earlier turn as interrupted
 missing from its history. Neither sends any message to say the turn ended, so the driver has to close it. That
 supports the simple version.
 
-### Q-09 Who owns the queue when a message arrives mid-turn?
-
-Harnesses differ: some steer, some queue, some reject. The current thinking is that the core owns the queue and
-each driver says what it supports.
-
-Recordings show the difference is larger than supported or not: Codex folds a mid-turn message into the running
-turn, and Claude Code ends the turn and starts a new one. See
-[`reference/harness-messages.md`](reference/harness-messages.md#side-by-side).
-
-The gateways differ too: Hermes folds the message into the running turn and says so, and OpenClaw held it
-without a word and ran it as a turn of its own afterwards. See
-[`reference/openclaw-messages.md`](reference/openclaw-messages.md#controls-are-chat-messages).
-
-### Q-29 Which right does each control need?
-
-Every action needs the right to prompt or the right to approve
-([D-032](decisions.md#d-032-every-action-needs-one-of-two-rights)). Sending a prompt needs the first. Answering
-an approval and changing the permission mode need the second. The rest is not settled:
-
-| Action | Proposed | Why |
-| --- | --- | --- |
-| Interrupt | Prompt | Anyone who can start work can stop it |
-| Start a new session | Prompt | |
-| Change a setting other than the permission mode, such as the model | Prompt | |
-| Use a harness's own action, such as compacting | Prompt | |
-| Answer a question | Prompt | The answer is information for the agent, like a prompt |
-
-[D-010](decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve) says the opposite as written: it
-puts "use controls" with the right to approve. The reason to move them is that a harness's slash commands are
-messages ([D-031](decisions.md#d-031-a-slash-command-is-a-message-for-the-harness)), and they include commands
-that stop a turn, start a session and switch the model. Someone who may prompt can type those. A stricter rule
-for the button than for the typed command would protect nothing.
-
-Also to check: that each connector's list of commands needing the right to approve is complete. A harness can
-add such a command in any release. Whether Hermes and OpenClaw have typed commands that change the permission
-mode has not been recorded.
-
 ### Q-10 How are permissions changed from the chat?
 
 D-010 wants this later. The mechanism is open, and so is how a client learns who may prompt, so that it can show
 this before someone tries.
-
-### Q-24 What may an agent do in the chat on its own?
-
-A coding agent could act in Marmot during a turn, beyond producing output: rename the chat, create a new group,
-react to a message. Hermes and OpenClaw agents already have tools of this kind. Whether coding agents should,
-which actions, who may allow them, and how the harness asks the core for one are all open. This overlaps with
-administration ([Q-05](#q-05-how-is-the-agent-administered)), which waits until drivers are being built against
-real harnesses. Parked until the Hermes and OpenClaw recordings are in. Raised in
-[issue 4](https://github.com/marmot-protocol/marmot-agents/issues/4).
 
 ### Q-25 Can something outside the chat and the harness start a turn?
 
@@ -246,13 +203,6 @@ alone, which makes it part of administration ([Q-05](#q-05-how-is-the-agent-admi
 Everything the agent does is visible to every member and stays in their history (D-009). Tool output can contain
 secrets from the owner's machine. Whether the owner gets a per-chat detail setting, and what the default is, is
 open.
-
-### Q-21 What happens to a secret answer?
-
-A Codex question can be marked secret, for something like a password. Everything in a group is visible to every
-member ([D-009](decisions.md#d-009-groups-are-first-class-and-every-member-sees-agent-activity)), so the answer
-cannot travel as an ordinary event. Options are to refuse secret questions in a group, to allow them only when
-the group is the owner alone, or to give them a separate path. Not decided.
 
 ### Q-12 How many events is too many?
 

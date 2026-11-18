@@ -151,12 +151,20 @@ Hermes and OpenClaw give their agents message tools, so an agent can act in the 
 chat section is requests from the connector to the core: send, edit and delete a message, add and remove a
 reaction, send a file, and read history.
 
-A connector can use them only in chats its agent belongs to, with the ids the core gave it.
+What an agent may do is decided
+([D-042](../decisions.md#d-042-an-agent-may-act-in-its-own-chat-and-may-not-change-a-group-or-the-account)):
 
-What an agent should be allowed to do here is not decided
-([Q-24](../open-questions.md#q-24-what-may-an-agent-do-in-the-chat-on-its-own)), and neither is how an agent
-sends a file ([Q-23](../open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)). The individual
-requests wait for those.
+- It may send a message, edit or delete a message of its own, add and remove a reaction, and read history.
+- It may do so only in the chat its session belongs to, with the ids the core gave it.
+- It may not change a group or the account: no renaming, creating groups, inviting or removing people. That
+  waits for [administration](#administration).
+
+These are ordinary Marmot actions. A delete is an ordinary deletion of a chat message, and the tool call that
+caused it still arrives as a `tool` item.
+
+How an agent sends a file is not decided
+([Q-23](../open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)). The individual requests are not
+designed yet.
 
 ## Capabilities
 
@@ -283,3 +291,5 @@ administration section that only the owner's tools may use. Its messages are not
 | A prompt is delivered at most once | [D-037](../decisions.md#d-037-a-prompt-is-delivered-at-most-once) |
 | A typed command that approves is checked against the right to approve | [D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights) |
 | A token per connector is enough for now, with its limit stated | [D-038](../decisions.md#d-038-each-connector-has-its-own-token) |
+| A message sent during a turn goes straight to the harness, which is what `mid_turn` reports | [D-040](../decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness) |
+| What an agent may do through the chat section | [D-042](../decisions.md#d-042-an-agent-may-act-in-its-own-chat-and-may-not-change-a-group-or-the-account) |
