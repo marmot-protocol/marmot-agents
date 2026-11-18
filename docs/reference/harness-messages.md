@@ -7,7 +7,7 @@ real sessions, and how each message relates to the proposed [event model](../des
 
 | Source | What it is | How it was used |
 | --- | --- | --- |
-| [`fixtures/recordings`](../../fixtures/recordings/README.md) | 50 scripted sessions, 24 with Codex and 26 with Claude Code, recorded on 2026-11-17 | Read in full. Every claim on this page about order, fields and behaviour comes from these |
+| [`fixtures/recordings`](../../fixtures/recordings/README.md) | 57 scripted sessions, 28 with Codex and 29 with Claude Code, recorded on 2026-11-17 and 2026-11-18 | Read in full. Every claim on this page about order, fields and behaviour comes from these |
 | [`data/claude-sdk-message-structures.txt`](data/claude-sdk-message-structures.txt) | The structure of 176,652 Claude Agent SDK messages from four days of real use on one developer's machine | Counts and field names only. No content was read or kept |
 | Codex's generated protocol schema | `codex app-server generate-json-schema`, codex-cli 0.169.0 | The list of methods |
 | [`tools/prototype/translate.py`](../../tools/prototype/translate.py) | A prototype that turns every recording into proposed agent events | To check that nothing is left without a home |
@@ -124,6 +124,18 @@ From `approval_allowed`, bookkeeping left out:
 | List models | `model/list` returned eight models, each with a display name, a description and the reasoning efforts it supports |
 | Switch model | `model` on the next `turn/start`; the thread's settings then showed the new model |
 | Plan mode | `collaborationMode: {mode: "plan", ...}` on `turn/start`. The agent asked its question, then produced a `plan` item and edited nothing |
+| List modes | `collaborationMode/list` returned two: `default` and `plan` |
+| Change a setting between turns | `thread/settings/update` with the new model returned `{}`, and `thread/settings/updated` followed within a millisecond, with no prompt sent. The same call changed the approval policy and the sandbox, and the next command then asked for approval |
+| Change a setting during a turn | `turn/settings/update` was refused: "turn settings updates require the step_model_switching feature" |
+| New session | A second `thread/start`. The new thread did not remember the first. `thread/unsubscribe` on the first returned `{"status": "unsubscribed"}`, and no message said the thread was over |
+| Resume, with the settings sent again | `thread/resume` with `approvalPolicy` and `sandbox`. The thread came back with the sandbox it started with |
+
+**A resumed thread does not keep its sandbox.** In `resume` and `restart_mid_turn` the thread was started with
+a sandbox limited to the project, and `thread/resume` was sent without one. The thread came back with full
+access, which is the default set in the Codex configuration of the recording machine. In
+`resume_with_settings` the same settings were sent with the resume, and they held.
+
+The model list had ten models on 2026-11-18 and eight the day before.
 
 ### An approval nobody answers
 
@@ -253,6 +265,11 @@ From `approval_denied`:
 | Run a command | The user message `/context`. Its output came back as an `assistant` text block whose model is `<synthetic>` |
 | Switch model | `setModel("sonnet")`. A `user` message wrapped in `<local-command-stdout>` confirmed it, and the next reply came from the new model |
 | Plan mode | `permissionMode: "plan"` |
+| Change the permission mode | `setPermissionMode("acceptEdits")` between two turns. A `system / status` message carried the new mode, and the next `system / init` did too. The first edit had asked for approval; the second did not |
+| New session | A second `query()` without `resume`. It got a new session id and did not remember the first. No message said the first session was over |
+| Ask what the session offers, before any prompt | `initializationResult()` answered in under two seconds, with no prompt sent: 57 commands with descriptions and hints, 14 models, and the current permission mode. `supportedModels()` and `supportedCommands()` returned the same lists. **No `system / init` arrived in the five seconds before the first prompt**, so the session id and the full model name are known only once a turn starts |
+
+`initializationResult()` also names the signed-in account. The recorder leaves that out.
 
 ### An approval nobody answers
 
@@ -304,6 +321,11 @@ In real use, background-task messages are about 7 per turn.
 | Work after the turn ends | Not seen | Yes: background tasks and subagents |
 | Compaction | A turn of its own, started by the client | Part of the turn that ran `/compact` |
 | End of turn | `turn/completed` with a status | `result`; failure is in `is_error`, not the subtype |
+| What a session offers, before any prompt | The response to `thread/start` has the settings. Models and modes when asked | Commands, models and the permission mode when asked. No session id until the first turn |
+| Change a setting | `thread/settings/update`, confirmed at once. Or a field on the next prompt | `setModel()`, `setPermissionMode()` |
+| Values a setting accepts | Models and modes are listed. Approval policies and sandboxes are not | Models are listed. Permission modes are not |
+| A session ends | Nothing says so | Nothing says so |
+| Resume | Does not keep the sandbox unless it is sent again | Not tested: both recordings that resume sent the permission mode again |
 | Usage | `thread/tokenUsage/updated` during the turn | On `result`, with cost |
 | Slash commands | None in this interface | A list from the SDK; run as ordinary user messages |
 | Models | `model/list`; chosen per turn | `setModel()` between turns |

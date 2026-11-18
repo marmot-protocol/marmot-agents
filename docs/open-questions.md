@@ -10,7 +10,7 @@ The first three block the most other work.
 ### Q-01 What exactly is in an agent event?
 
 [`design/event-model.md`](design/event-model.md) is now a concrete draft: ten item types, the fields of each,
-and eleven rules for drivers. A prototype applies it to 90 recorded sessions with Codex, Claude Code,
+and eleven rules for drivers. A prototype applies it to 97 recorded sessions with Codex, Claude Code,
 Hermes and OpenClaw, with nothing left over. It is still a proposal. To settle: whether these are the right types and fields, and the exact
 tags. How an event is carried is decided ([D-022](decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)
 to [D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb)). A to-do list

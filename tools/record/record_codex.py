@@ -474,6 +474,60 @@ def restart_mid_turn(s: AppServer, cwd: str):
     s.turn(t, "You were stopped and restarted. What happened to the command you were running? Answer in one sentence.")
 
 
+def settings_update(s: AppServer, cwd: str):
+    """The client changes the thread's settings between turns with thread/settings/update: first the
+    model, then the approval policy and the sandbox. The command after that needs approval."""
+    s.request_handler = answer_with("accept")
+    s.initialize()
+    models = s.request("model/list", {}).get("result", {}).get("data", [])
+    s.request("collaborationMode/list", {})
+    t = s.start_thread(cwd)
+    s.turn(t, "Reply with exactly: first.")
+    other = next((m.get("model") or m.get("id") for m in models if (m.get("model") or m.get("id")) != s.model), None)
+    if other:
+        s.request("thread/settings/update", {"threadId": t, "model": other})
+        time.sleep(3)  # does Codex report the change before any prompt is sent?
+    s.request(
+        "thread/settings/update",
+        {"threadId": t, "approvalPolicy": "untrusted", "sandboxPolicy": {"type": "readOnly", "networkAccess": False}},
+    )
+    time.sleep(3)
+    s.turn(t, "Run `python3 greet.py` and tell me what it printed.")
+
+
+def settings_mid_turn(s: AppServer, cwd: str):
+    """The client changes the reasoning effort of a turn while it is running, with turn/settings/update."""
+    s.initialize()
+    t = s.start_thread(cwd)
+    turn_id, mark = s.start_turn(t, "Run `sleep 8 && echo finished` and then tell me what it printed.")
+    s.wait_for(lambda m: is_item(m, "item/started", "commandExecution"), timeout=120, start=mark)
+    s.request("turn/settings/update", {"threadId": t, "turnId": turn_id, "effort": "medium"})
+    s.finish_turn(mark)
+
+
+def new_session(s: AppServer, cwd: str):
+    """A second thread is started for the same project, after the client lets go of the first."""
+    s.initialize()
+    a = s.start_thread(cwd)
+    s.turn(a, "Remember the word 'marmot'. Reply with: Noted.")
+    s.request("thread/unsubscribe", {"threadId": a})
+    time.sleep(2)
+    b = s.start_thread(cwd)
+    s.turn(b, "What word did I ask you to remember? If you do not know, say so in one sentence.")
+
+
+def resume_with_settings(s: AppServer, cwd: str):
+    """A session is resumed after the app server restarts, and the client sends the approval policy
+    and the sandbox again with the resume. Leaves one thread in the Codex history."""
+    s.initialize()
+    t = s.start_thread(cwd, ephemeral=False)
+    s.turn(t, "Remember the word 'marmot'. Reply with: Noted.")
+    s.restart()
+    s.initialize()
+    s.request("thread/resume", {"threadId": t, "cwd": cwd, "approvalPolicy": "never", "sandbox": "workspace-write"})
+    s.turn(t, "What word did I ask you to remember? Reply with just the word.")
+
+
 SCENARIOS = {
     f.__name__: f
     for f in [
@@ -501,6 +555,10 @@ SCENARIOS = {
         bad_model,
         approval_unanswered,
         restart_mid_turn,
+        settings_update,
+        settings_mid_turn,
+        new_session,
+        resume_with_settings,
     ]
 }
 

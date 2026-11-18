@@ -138,6 +138,18 @@ class Translator:
         self.emit(item, "session", "running", "Session", text, body, native_kind, native)
         self.turn = turn
 
+    def end_session(self, sid, reason):
+        """Nothing a harness sent in any recording says a session is over. The driver ends the item
+        itself, when the chat's session is replaced."""
+        item = f"session:{sid}"
+        prev = self.open.get(item)
+        if prev is None:
+            return
+        turn, self.turn = self.turn, None
+        self.emit(item, "session", "done", "Session ended", prev["text"], prev["body"],
+                  "(none: closed by the driver)", {"reason": reason})
+        self.turn = turn
+
     @staticmethod
     def setting(id_, label, value, options=None, approve=False):
         return {"id": id_, "label": label, "value": value, "options": options, "approve": approve}
@@ -173,6 +185,7 @@ class Codex(Translator):
         self.last_request = None  # the client's most recent request, to tell who started a turn
         self.settings: dict = {}  # what Codex has said about the thread's settings, merged
         self.models = None  # model ids, once the client has asked for the list
+        self.modes = None  # collaboration modes, once the client has asked for the list
 
     def feed(self, rec):
         m, out = rec["msg"], rec["dir"] == "out"
@@ -195,6 +208,9 @@ class Codex(Translator):
                     self.control("(resume a session)", "thread/resume")
                 elif method == "thread/compact/start":
                     self.control("(action) compact", "thread/compact/start")
+                elif method in ("thread/settings/update", "turn/settings/update"):
+                    for k in sorted(set(p) - {"threadId", "turnId"}):
+                        self.control(f"set {k}", method)
                 elif method == "turn/start":
                     for k in ("model", "collaborationMode", "approvalPolicy", "sandboxPolicy"):
                         if k in p:
@@ -214,7 +230,7 @@ class Codex(Translator):
             if method == "thread/tokenUsage/updated":
                 self.usage = (p.get("tokenUsage") or {}).get("last")
             if method == "thread/started":
-                self.session = (p.get("thread") or {}).get("id")
+                self.use_thread((p.get("thread") or {}).get("id"))
                 return self.thread_settings(method, p.get("thread") or {}, p)
             if method == "thread/settings/updated":
                 return self.thread_settings(method, p.get("threadSettings") or {}, p)
@@ -425,10 +441,20 @@ class Codex(Translator):
         result = m.get("result") or {}
         if method == "model/list":
             self.models = [x.get("id") for x in result.get("data") or []]
+        if method == "collaborationMode/list":
+            self.modes = [x.get("mode") for x in result.get("data") or []]
         if method in ("thread/start", "thread/resume") and isinstance(result.get("thread"), dict):
-            self.session = result["thread"].get("id")
+            self.use_thread(result["thread"].get("id"))
             return self.thread_settings(f"response to {method}", result, result)
         self.skip(f"response to {method}")
+
+    def use_thread(self, thread_id):
+        """A second thread replaces the first as this chat's session. Codex sends nothing to say the
+        first is over, so the driver ends its session item."""
+        if self.session and thread_id != self.session:
+            self.end_session(self.session, "a new thread was started")
+            self.settings = {}
+        self.session = thread_id
 
     def thread_settings(self, native_kind, src, native):
         """Codex states a thread's settings in three places, under different names: the response to
@@ -448,7 +474,7 @@ class Codex(Translator):
         self.session_item(self.session, [
             self.setting("model", "Model", g("model"), self.models),
             self.setting("effort", "Reasoning effort", g("effort")),
-            self.setting("mode", "Mode", g("mode")),
+            self.setting("mode", "Mode", g("mode"), self.modes),
             self.setting("approval_policy", "Approval policy", g("approval_policy"), approve=True),
             self.setting("sandbox", "Sandbox", g("sandbox"), approve=True),
         ], native_kind, native, actions=[{"id": "compact", "label": "Compact the conversation"}])
@@ -503,6 +529,9 @@ class Claude(Translator):
         self.approvals: dict[str, str] = {}  # tool name -> open approval item (answers carry no id)
         self.settings: dict = {}
         self.commands: list = []
+        self.models = None  # model names, once the client has asked for them
+        self.session_key = None  # the driver's own id for the session item
+        self.sessions_started = 0
 
     def feed(self, rec):
         m, via, out = rec["msg"], rec.get("via"), rec["dir"] == "out"
@@ -525,15 +554,32 @@ class Claude(Translator):
                     resumed = "resume" in (m.get("options") or {})
                     self.control("(resume a session)" if resumed else "new_session",
                                  "query() with resume" if resumed else "query()")
+                    if not resumed:
+                        # Claude Code sends nothing to say the earlier session is over.
+                        if self.session_key:
+                            self.end_session(self.session_key, "a new session was started")
+                        self.sessions_started += 1
+                        self.session = self.session_key = None
+                        self.settings, self.commands = {}, []
+                elif method == "setPermissionMode":
+                    self.control("set permission mode", "setPermissionMode()")
                 elif method in ("interrupt", "abort"):
                     self.control("interrupt", f"{method}()")
                 elif method == "setModel":
                     self.control("set model", "setModel()")
-            elif method == "supportedCommands" and isinstance(m.get("response"), list):
-                self.commands = [{"name": c.get("name"), "description": c.get("description"), "hint": c.get("argumentHint")}
-                                 for c in m["response"]]
-                if self.session:
-                    return self.announce("result of supportedCommands()", {"commands": len(self.commands)})
+            elif method in ("supportedCommands", "supportedModels", "initializationResult") and "response" in m:
+                # The client asked, which it can do before any prompt is sent.
+                r = m["response"]
+                r = {"commands": r} if method == "supportedCommands" else {"models": r} if method == "supportedModels" else r
+                if isinstance(r.get("commands"), list):
+                    self.commands = [{"name": c.get("name"), "description": c.get("description"), "hint": c.get("argumentHint")}
+                                     for c in r["commands"]]
+                if isinstance(r.get("models"), list):
+                    self.models = [x.get("value") for x in r["models"]]
+                if r.get("current_permission_mode"):
+                    self.settings["permission_mode"] = r["current_permission_mode"]
+                return self.announce(f"result of {method}()", {k: len(v) if isinstance(v, list) else v for k, v in r.items()
+                                                                  if k in ("commands", "models", "current_permission_mode")})
             return self.skip(f"client: {method}()" if out else f"result of {method}()")
         if via == "callback":
             return self.permission_answer(m) if out else self.permission_request(m)
@@ -555,8 +601,10 @@ class Claude(Translator):
     def announce(self, native_kind, native):
         g = self.settings.get
         before = len(self.events)
-        self.session_item(self.session, [
-            self.setting("model", "Model", g("model")),
+        if self.session_key is None:  # the harness has not named the session yet
+            self.session_key = self.session or f"not-yet-named:{self.sessions_started}"
+        self.session_item(self.session_key, [
+            self.setting("model", "Model", g("model"), self.models),
             self.setting("permission_mode", "Permission mode", g("permission_mode"), approve=True),
         ], native_kind, native, commands=self.commands)
         if len(self.events) == before:
@@ -567,7 +615,7 @@ class Claude(Translator):
         permission mode and the names of the slash commands are stated."""
         self.session = m.get("session_id")
         self.settings.update({"model": m.get("model"), "permission_mode": m.get("permissionMode")})
-        if len(self.commands) != len(m.get("slash_commands") or []):
+        if not self.commands:  # the init message has names only; keep fuller entries the client asked for
             self.commands = [{"name": n} for n in m.get("slash_commands") or []]
         self.announce("system / init", m)
 

@@ -22,7 +22,7 @@ The prompts are scripted and are in the recorder sources.
 
 ## Scenarios
 
-50 recordings of coding harnesses: 24 with Codex and 26 with Claude Code. Hermes has 14 more and OpenClaw 26,
+57 recordings of coding harnesses: 28 with Codex and 29 with Claude Code. Hermes has 14 more and OpenClaw 26,
 described below: [Hermes](#hermes), [OpenClaw](#openclaw).
 
 | Scenario | What it exercises | Codex | Claude |
@@ -53,6 +53,14 @@ described below: [Hermes](#hermes), [OpenClaw](#openclaw).
 | `bad_model` | A model that does not exist | yes | yes |
 | `approval_unanswered` | An approval nobody answers for six minutes, then an interrupt | yes | yes |
 | `restart_mid_turn` | The harness is stopped while a command runs, then the session is resumed | yes | yes |
+| `new_session` | A second session for the same project, without resuming the first | yes | yes |
+| `settings_update` | The client changes the model, then the approval policy and the sandbox, between turns | yes | |
+| `settings_mid_turn` | The client changes the reasoning effort of a turn while it runs | yes, refused | |
+| `resume_with_settings` | A session is resumed, with the approval policy and the sandbox sent again | yes | |
+| `permission_mode_switch` | The client changes the permission mode between two turns | | yes |
+| `early_info` | Before any prompt, the client asks what the session offers and waits five seconds | | yes |
+
+The last six rows were recorded on 2026-11-18, to check the three shared controls and the `session` item.
 
 Things that did not go as scripted, and are useful for that reason:
 

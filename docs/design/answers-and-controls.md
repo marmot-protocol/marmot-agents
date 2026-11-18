@@ -226,60 +226,76 @@ An answer or a control can arrive long after it was sent, for example when the a
 
 ## Checked against the recordings
 
-The prototype now produces `session` items for all 90 recordings, and counts which native call each control
-was seen as. Run on 2026-11-18:
+The prototype produces `session` items for every recording, and counts which native call each control was
+seen as. First run on 2026-11-18 over 90 recordings. Seven more were then recorded with Codex and Claude Code
+to fill the gaps it showed, which makes 97.
 
 ```sh
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
     fixtures/recordings/hermes fixtures/recordings/openclaw
 ```
 
-The result: 90 sessions and 30 edits of a session item, with no native message left without a rule.
+The result: 99 sessions and 41 edits of a session item, with no native message left without a rule.
 
 ### What each harness says about a session
 
 | | Codex | Claude Code | Hermes | OpenClaw |
 | --- | --- | --- | --- | --- |
-| A session id | Yes | Yes | No. The driver names it after the chat and the sender | Yes |
+| A session id | Yes | Yes, once the first turn starts | No. The driver names it after the chat and the sender | Yes |
 | Settings and their values | Model, reasoning effort, mode, approval policy, sandbox | Model, permission mode | None | Model, thinking level |
-| The values a setting accepts | Models, when asked. Nothing else | None seen | None | None |
-| Slash commands | It has none on this interface | 59 names. Descriptions and hints when asked | None | None |
-| First reported | Before any prompt | After the first prompt | At the first turn | At the first run |
-| Sessions in the recordings | 24 | 26 | 16 | 24 |
-| Edits | 27 | 3 | 0 | 0 |
-| Largest item, without the native message | 0.7 KB | 15 KB | Empty | 0.3 KB |
+| The values a setting accepts | Models and modes, when asked. Not approval policies or sandboxes | Models, when asked. Not permission modes | None | None |
+| Slash commands | It has none on this interface | Names unasked. Descriptions and hints when asked | None | None |
+| First reported | Before any prompt | Before any prompt when asked, except the session id and the full model name | At the first turn | At the first run |
+| A session ending | Nothing says so | Nothing says so | Not recorded | Not recorded |
+| Sessions in the recordings | 29 | 30 | 16 | 24 |
+| Edits | 35 | 6 | 0 | 0 |
+| Largest item, without the native message | 0.8 KB | 15 KB | Empty | 0.3 KB |
 
 What the edits were:
 
 - **Codex, once in every session.** It states a thread's settings in three places under different names. The
   first is incomplete, so the item is edited when the first turn starts: the mode appears, and the effort
   becomes the one the prompt asked for.
-- **Codex, a model change, twice.** Once on its own, and once as part of that first edit. The new model is a
-  field on the next prompt, and Codex confirms it when that turn starts. It confirmed a model that does not
-  exist in the same way; the turn then failed.
+- **Codex, a setting changed by the client, four times.** The model three times, and the approval policy and
+  sandbox together once. One model change was part of the first edit.
 - **Codex, on resume, twice.** See below.
-- **Claude Code, three.** A model change, the permission mode leaving plan mode, and the command list gaining
-  descriptions after the driver asked for them.
+- **Codex, a session ended by the driver, once.**
+- **Claude Code, six.** A model change, two permission mode changes, the command list gaining descriptions
+  after the driver asked, the model's full name arriving with the first turn, and a session ended by the
+  driver.
 
-### Five things it showed
+### What it showed
 
-1. **A resumed Codex thread came back with a wider sandbox.** In both recordings that resume a thread, it was
-   started with a sandbox limited to the project and came back with full access. The resume request named no
-   sandbox, so Codex used whatever the new process defaulted to. The driver must send the permission settings
-   again on resume. The session item is what made this visible.
-2. **Only Codex reports a session before anyone prompts.** Claude Code's opening message arrived after the
-   first prompt in all 26 recordings. The gateways say nothing until a message arrives. So for three of the
-   four, an app has no list until the first prompt has been sent, or has the one from an earlier session.
-   Whether the Claude library can report sooner was not tested.
+1. **A resumed Codex thread came back with a wider sandbox.** In the two recordings that resume a thread
+   without sending its settings, it was started with a sandbox limited to the project and came back with full
+   access, the default configured on the recording machine. A third recording sent the approval policy and
+   the sandbox again with the resume, and they held. The driver must do that
+   ([rule 10 for drivers](event-model.md#what-a-driver-has-to-do)). The session item is what made this visible.
+2. **The two coding harnesses can describe a session before anyone prompts. The gateways cannot.** Codex
+   reports a thread's settings in its response to `thread/start`. Claude Code says nothing unasked until the
+   first turn, but when asked it returns its commands, models and permission mode in under two seconds, with
+   no prompt sent. It does not give the session id until a turn starts. The gateways say nothing until a
+   message arrives.
 3. **The gateways have almost nothing to put in it.** Hermes's item is empty. OpenClaw's holds the model and
-   the thinking level.
+   the thinking level. This is what [D-044](../decisions.md#d-044-a-connector-supplies-what-its-harness-does-not-say)
+   answers.
 4. **A setting does not say which right it needs.** Codex has two settings that need the right to approve,
-   and Claude Code has one. The prototype marks them, and the model needs that mark.
-5. **A change of setting cannot always be confirmed at once.** In Codex a new model travels with the next
-   prompt. Between the press and that prompt the harness has confirmed nothing, so the driver either reports
-   the setting as changed on its own word or leaves the press pending.
+   and Claude Code has one. This is what [D-043](../decisions.md#d-043-a-setting-says-which-right-it-needs) answers.
+5. **Both coding harnesses confirm a changed setting at once.** Codex has a call for it,
+   `thread/settings/update`, and reports the new settings within a millisecond, with no prompt sent. Claude
+   Code reports a new permission mode in a status message. In the first 90 recordings Codex's model was
+   changed as a field on the next prompt, which is confirmed only when that turn starts; the dedicated call is
+   the one to use.
+6. **Changing the permission settings works, and takes effect on the next action.** After Codex's approval
+   policy and sandbox were tightened, its next command asked for approval. After Claude Code's permission mode
+   was loosened, its next edit did not.
+7. **No harness says a session is over.** A second Codex thread and a second Claude Code session each started
+   clean, and nothing was sent about the first. The driver ends the session item itself.
+8. **A setting cannot be changed during a running turn in Codex.** `turn/settings/update` was refused, because
+   it needs a feature that is off by default. The refusal becomes the "not supported" reply.
+9. **The lists change.** Codex listed eight models on 2026-11-17 and ten the next day.
 
-What was decided from this, on 2026-11-18:
+What was decided from the first run, on 2026-11-18:
 
 | Point | Decision |
 | --- | --- |
@@ -288,9 +304,6 @@ What was decided from this, on 2026-11-18:
 | The command list keeps names and hints, and loses descriptions first | [D-045](../decisions.md#d-045-a-session-items-commands-keep-their-names-and-lose-descriptions-first) |
 | A setting change is an edit, and a notice only when nobody asked for it | [D-046](../decisions.md#d-046-a-setting-change-is-an-edit-and-a-notice-only-when-nobody-asked-for-it) |
 
-Still open: the session item appears only after the first prompt for three of the four harnesses, and a
-change of setting in Codex is confirmed only when the next turn starts.
-
 ### Which native call each control is
 
 Counts are how often each was recorded.
@@ -298,17 +311,17 @@ Counts are how often each was recorded.
 | Control | Codex | Claude Code | Hermes | OpenClaw |
 | --- | --- | --- | --- | --- |
 | Interrupt | `turn/interrupt` (2) | `interrupt()` (2), `abort()` (1) | The message `/stop` (1) | The message `/stop` (1) |
-| New session | `thread/start` (24) | `query()` (26) | Not recorded | Not recorded |
-| Set the model | A field on `turn/start` (2) | `setModel()` (1) | Not recorded | Not recorded |
+| New session | `thread/start` (29) | `query()` (30) | Not recorded | Not recorded |
+| Set the model | `thread/settings/update` (1), or a field on `turn/start` (2) | `setModel()` (1) | Not recorded | Not recorded |
 | Set the mode | A field on `turn/start` (1) | Not recorded | Not recorded | Not recorded |
-| Set the permission mode | Not recorded | Not recorded | Not recorded | Not recorded |
+| Set the permission mode | `thread/settings/update`, for the approval policy and the sandbox (1) | `setPermissionMode()` (1) | Not recorded | Not recorded |
 | The harness's own action | `thread/compact/start` (1) | The message `/compact` (1) | | |
-| Resume a session | `thread/resume` (2) | `query()` with `resume` (2) | Not recorded | Not recorded |
+| Resume a session | `thread/resume` (3) | `query()` with `resume` (2) | Not recorded | Not recorded |
 | Answer an approval by typing | | | `/approve` (1), `/deny` (1) | `/approve` (3) |
 
-Interrupt is confirmed for all four. For the two gateways it is a typed command, so their connectors turn the
-control into text. New session and set are confirmed for the two coding harnesses only. No recording changes
-a permission mode from outside, and none ends a session or replaces it in the same chat.
+The three shared controls are confirmed for Codex and Claude Code, including a change of the permission
+settings. For the two gateways only interrupt is confirmed, and it is a typed command, so their connectors
+turn the control into text.
 
 ## What is visible, and to whom
 

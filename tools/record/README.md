@@ -130,8 +130,8 @@ say so there: what a harness does instead is the useful part.
 ## Notes
 
 - The Codex recorder starts the app server with `--disable hooks`, so your own Codex hooks do not run. Threads
-  are started as ephemeral, so nothing is added to your Codex history. The `resume` scenario is the exception:
-  it has to keep its thread.
+  are started as ephemeral, so nothing is added to your Codex history. Three scenarios are the exception,
+  because each has to keep its thread: `resume`, `restart_mid_turn` and `resume_with_settings`.
 - Claude Code keeps every session. Each Claude recording adds a small session to your Claude Code history,
   under a project named after the demo directory.
 - The Claude recorder passes `settingSources: []`, so your own Claude Code settings are not loaded, and uses the

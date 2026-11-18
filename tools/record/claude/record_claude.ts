@@ -72,6 +72,10 @@ type Scenario = {
   onMessage?: (m: Msg, ctx: Ctx) => void | Promise<void>;
   /** A second query() that resumes the session of the first one. */
   resumeWith?: Prompt[];
+  /** A second query() that does not resume: a new session for the same project. */
+  thenNew?: Prompt[];
+  /** Runs after query() is called and before the first prompt is sent. */
+  beforePrompt?: (ctx: Ctx) => Promise<void>;
   /** Leave permission requests unanswered for this long, then interrupt the turn. */
   holdPermissionMs?: number;
   /** How long one query() may run before the recorder gives up. */
@@ -292,6 +296,45 @@ const SCENARIOS: Record<string, Scenario> = {
     prompts: ["Reply with exactly: hello."],
     options: { ...allowAll, model: "no-such-model" },
   },
+  early_info: {
+    doc: "Before any prompt is sent, the client asks what the session offers and waits five seconds. Then one turn.",
+    prompts: ["Reply with exactly: Hello from the recording."],
+    options: allowAll,
+    beforePrompt: async (ctx) => {
+      for (const method of ["initializationResult", "supportedModels", "supportedCommands"]) {
+        ctx.record("out", "call", { method });
+        const r = await ctx.q[method]();
+        // The initialization result names the signed-in account. It is never written down.
+        const response = method === "initializationResult" ? { ...r, account: "(left out by the recorder)" } : r;
+        ctx.record("in", "call", { method, response });
+      }
+      await sleep(5000);
+      ctx.record("out", "note", { note: "five seconds have passed since query() and no prompt has been sent yet" });
+    },
+  },
+  permission_mode_switch: {
+    doc: "The client changes the permission mode between two turns. The first edit needs approval; after the switch to acceptEdits the second should not.",
+    prompts: [
+      "Add the comment line `# one` at the top of greet.py. Do nothing else.",
+      "Add the comment line `# two` at the top of greet.py. Do nothing else.",
+    ],
+    options: { permissionMode: "default" },
+    onPermission: (_tool, input) => ({ behavior: "allow", updatedInput: input }),
+    onMessage: async (m, ctx) => {
+      if (m.type === "result" && !ctx.state.switched) {
+        ctx.state.switched = true;
+        ctx.record("out", "call", { method: "setPermissionMode", mode: "acceptEdits" });
+        await ctx.q.setPermissionMode("acceptEdits");
+        ctx.record("in", "call", { method: "setPermissionMode", response: null });
+      }
+    },
+  },
+  new_session: {
+    doc: "A second session is started for the same project without resuming the first.",
+    prompts: ["Remember the word 'marmot'. Reply with: Noted."],
+    thenNew: ["What word did I ask you to remember? If you do not know, say so in one sentence."],
+    options: allowAll,
+  },
 };
 
 async function main() {
@@ -361,7 +404,6 @@ async function main() {
 
     const q: any = query({ prompt: inbox as any, options: { ...options, abortController: abort } as any });
     const ctx: Ctx = { q, abort, inbox, record, state: {} };
-    pushNext();
 
     const timer = setTimeout(() => {
       record("out", "call", { method: "timeout" });
@@ -369,22 +411,30 @@ async function main() {
       q.interrupt?.().catch(() => {});
     }, scenario.timeoutMs ?? 240_000);
 
-    try {
-      for await (const m of q) {
-        record("in", "message", m as Msg);
-        if ((m as Msg).session_id) sessionId = (m as Msg).session_id;
-        if (scenario.onMessage) await scenario.onMessage(m as Msg, ctx);
-        if ((m as Msg).type === "result" && !pushNext()) inbox.close();
+    // Reading starts before the first prompt, so that anything the harness says unasked is recorded
+    // at the moment it arrives.
+    const reading = (async () => {
+      try {
+        for await (const m of q) {
+          record("in", "message", m as Msg);
+          if ((m as Msg).session_id) sessionId = (m as Msg).session_id;
+          if (scenario.onMessage) await scenario.onMessage(m as Msg, ctx);
+          if ((m as Msg).type === "result" && !pushNext()) inbox.close();
+        }
+      } catch (e: any) {
+        status = `ended with an error: ${e?.message}`;
+        record("in", "call", { method: "query", error: String(e?.message ?? e) });
       }
-    } catch (e: any) {
-      status = `ended with an error: ${e?.message}`;
-      record("in", "call", { method: "query", error: String(e?.message ?? e) });
-    }
+    })();
+    if (scenario.beforePrompt && !extra.resume) await scenario.beforePrompt(ctx);
+    pushNext();
+    await reading;
     clearTimeout(timer);
   };
 
   await runQuery(scenario.prompts, {});
   if (scenario.resumeWith) await runQuery(scenario.resumeWith, { resume: sessionId });
+  if (scenario.thenNew) await runQuery(scenario.thenNew, {});
   await new Promise((r) => file.end(r));
   console.log(`${name}: ${status}`);
 }
