@@ -279,7 +279,17 @@ What the edits were:
    prompt. Between the press and that prompt the harness has confirmed nothing, so the driver either reports
    the setting as changed on its own word or leaves the press pending.
 
-The open points are in [Q-30](../open-questions.md#q-30-what-does-a-session-item-hold-and-when-is-it-sent).
+What was decided from this, on 2026-11-18:
+
+| Point | Decision |
+| --- | --- |
+| A setting carries a mark when changing it needs the right to approve | [D-043](../decisions.md#d-043-a-setting-says-which-right-it-needs) |
+| A connector supplies the settings, accepted values and commands its harness does not report | [D-044](../decisions.md#d-044-a-connector-supplies-what-its-harness-does-not-say) |
+| The command list keeps names and hints, and loses descriptions first | [D-045](../decisions.md#d-045-a-session-items-commands-keep-their-names-and-lose-descriptions-first) |
+| A setting change is an edit, and a notice only when nobody asked for it | [D-046](../decisions.md#d-046-a-setting-change-is-an-edit-and-a-notice-only-when-nobody-asked-for-it) |
+
+Still open: the session item appears only after the first prompt for three of the four harnesses, and a
+change of setting in Codex is confirmed only when the next turn starts.
 
 ### Which native call each control is
 

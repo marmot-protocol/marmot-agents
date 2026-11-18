@@ -158,7 +158,9 @@ look right and are wrong.
 9. **Never show a secret answer to the group.** A Codex question can be marked secret. It can be answered from
    the chat only in a two-person chat
    ([D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)).
-10. **State what is never sent.** About half of all native traffic is partial text, and a quarter more is
+10. **Send the permission settings again when resuming a session.** A Codex thread resumed without them came
+    back with a wider sandbox than it started with.
+11. **State what is never sent.** About half of all native traffic is partial text, and a quarter more is
     bookkeeping. Each driver lists the native messages it drops.
 
 ## Checked against real sessions
