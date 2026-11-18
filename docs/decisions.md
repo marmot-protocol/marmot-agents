@@ -631,3 +631,57 @@ reaction. No new item type is needed for them. The tool call itself still shows 
 
 Decided 2026-11-18. How an agent sends a file is still open
 ([Q-23](open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)).
+
+## D-043 A setting says which right it needs
+
+**Decision.** Each setting in a `session` item carries a mark when changing it needs the right to approve. A
+setting without the mark needs the right to prompt.
+
+**Why.** [D-032](#d-032-every-action-needs-one-of-two-rights) puts the permission mode with the right to
+approve. Which settings those are differs by harness: Codex has two, the approval policy and the sandbox, and
+Claude Code has one. Only the driver knows, and the core must not check a harness's name.
+
+Decided 2026-11-18.
+
+## D-044 A connector supplies what its harness does not say
+
+**Decision.** A `session` item holds what the harness reports about the session. Where the harness reports
+nothing, the connector fills it in from its own knowledge of that harness:
+
+- the settings and slash commands of a gateway that reports none;
+- the values a setting accepts, when the harness does not list them.
+
+**Why.** In the recordings Hermes tells a plugin nothing about a session, and OpenClaw tells it only the model
+and the thinking level. No harness lists the values a setting accepts unasked; only Codex lists any, and only
+its models. Without this an app has nothing to draw controls from.
+
+The cost: a connector's list can fall behind its harness. That is the same risk as its list of commands that
+need the right to approve ([D-039](#d-039-controls-need-the-right-to-prompt)).
+
+Decided 2026-11-18.
+
+## D-045 A session item's commands keep their names, and lose descriptions first
+
+**Decision.** The list of slash commands in a `session` item always carries each command's name and hint. When
+the item would be too large, the descriptions are dropped first.
+
+**Why.** Claude Code's 59 commands take 1.7 KB as names and 15 KB with descriptions, a real install has more,
+and every edit sends the whole item again. The size rule
+([D-026](#d-026-an-agent-item-is-at-most-64-kb)) says how to cut output, not a list. A name is enough to
+complete a command as someone types.
+
+Decided 2026-11-18.
+
+## D-046 A setting change is an edit, and a notice only when nobody asked for it
+
+**Decision.** When a setting changes, the agent edits the `session` item. That edit is the record. A notice is
+sent as well only when nobody asked for the change, for example when the harness moves to another model by
+itself or comes back from a resume with different permissions.
+
+**Why.** A person who changed a setting sees their press resolve
+([D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)), so a notice would repeat
+it. A change nobody asked for is different: the edit lands where the session item first appeared, which can be
+far up the chat, and nothing else would mark it in the flow of the conversation.
+
+Decided 2026-11-18. Found while running the `session` item over the recordings: a resumed Codex thread came
+back with a wider sandbox than it started with.
