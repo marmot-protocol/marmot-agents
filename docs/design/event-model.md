@@ -7,7 +7,7 @@ types, the fields and the rules. It is no longer a guess, though. A prototype ap
 with Codex, Claude Code, Hermes and OpenClaw, and every native message either becomes an agent event or is
 deliberately not sent.
 See [Checked against real sessions](#checked-against-real-sessions). The open points are
-[Q-01 to Q-04](../open-questions.md#the-event-model).
+[here](../open-questions.md#the-event-model).
 
 This is the most important design in the project. Every driver produces these events and every client draws
 them.
@@ -31,7 +31,7 @@ three parts.
 Marmot chat already works this way for ordinary messages: people send unsigned Nostr-shaped events of kinds that
 clients know how to render. Agent events extend that set.
 
-## The ten item types
+## The eleven item types
 
 | Type | What it shows |
 | --- | --- |
@@ -45,6 +45,10 @@ clients know how to render. Agent events extend that set.
 | `task` | Work that runs beside a turn or outlives it: a subagent, a background job |
 | `notice` | Compaction, the agent waiting, a retry, a warning, a model change, the output of a command |
 | `error` | Something failed outside any one item |
+| `session` | A session with the harness: what it is, and the settings, actions and slash commands it offers |
+
+`session` is the newest, added on 2026-11-18 ([D-030](../decisions.md#d-030-a-session-is-an-item-the-eleventh-type)). The
+recordings were checked against the other ten, and the prototype does not produce it yet.
 
 A command, a file edit and a web search are all the `tool` type, told apart by `kind`. One harness reports them
 as separate things and the other as one generic tool call; a single type with a kind fits both.
@@ -58,7 +62,7 @@ as separate things and the other as one generic tool call; a single type with a 
 | `turn` | The turn it belongs to |
 | `item` | The item's id. It stays the same for the life of the item |
 | `seq` | Order within the session |
-| `type` | One of the ten item types |
+| `type` | One of the item types |
 | `state` | `running`, `waiting`, `done`, `failed`, `declined` or `cancelled` |
 | `title` | A few words: "Running a command", "Allow this command?" |
 | `text` | The plain rendering, readable on its own |
@@ -113,6 +117,7 @@ Only the fields in `body` differ.
 | `task` | `kind`, `description`, `subject`, and `usage` once known |
 | `notice` | `kind`: `compaction`, `waiting`, `retry`, `warning`, `model_changed`, `command_output` |
 | `error` | What was being attempted, and the harness's error code |
+| `session` | `settings`: each with an `id`, a `label`, its `value` and the `options` it accepts. `actions`: each with an `id`, a `label` and a `description`. `commands`: each with a `name`, a `description` and a `hint` |
 
 ## Answers and controls
 
@@ -121,21 +126,12 @@ People act on the agent in two ways.
 **Answers** respond to something the agent asked: an `approval` or a `question`. An answer names the item it
 answers and the choice or choices made, by id.
 
-**Controls** are things a person does unprompted: interrupt, steer, start or resume a session, switch model or
-mode, run a slash command.
+**Controls** are things a person does unprompted: interrupt, start a new session, change a setting such as the
+model.
 
-Proposed rules, which come from the earlier approvals design
-([Q-04](../open-questions.md#q-04-what-carries-over-from-the-earlier-approvals-design)):
-
-- An answer counts only if it names the exact item and comes from someone allowed to approve.
-- Ordinary text such as "yes" or "go ahead" is never treated as an answer to an approval.
-- Answers and controls go to the core and the driver. They are never passed to the model as a prompt.
-- An item can be answered once. Later answers are ignored.
-- The core never answers for anyone. Whether a harness asks at all, and what it does when nobody answers, is
-  the harness's own permission mode ([D-021](../decisions.md#d-021-approval-behaviour-belongs-to-the-harness)).
-
-One exception is forced by the evidence. A question whose `answer_via` is `message` has nothing to answer: the
-harness simply waits for the person's next message. For such a question the reply is an ordinary prompt.
+How they are carried, what the rules are and who may send which is decided:
+[`answers-and-controls.md`](answers-and-controls.md). The `session` item tells an app what a harness lets it
+set and do.
 
 ## What a driver has to do
 
@@ -158,7 +154,9 @@ look right and are wrong.
    error flag.
 8. **Ask for reasoning.** Claude Code sends empty thinking blocks unless summarised thinking is switched on.
    Codex sent none in any recording.
-9. **Never show a secret answer to the group.** A Codex question can be marked secret.
+9. **Never show a secret answer to the group.** A Codex question can be marked secret. It can be answered from
+   the chat only in a two-person chat
+   ([D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)).
 10. **State what is never sent.** About half of all native traffic is partial text, and a quarter more is
     bookkeeping. Each driver lists the native messages it drops.
 
@@ -211,7 +209,7 @@ counts: [`../reference/openclaw-messages.md`](../reference/openclaw-messages.md#
 | A Codex question can be a field on an ordinary message | `answer_via` on a question |
 | A question can hold several questions, allow several selections, or be secret | `questions` is a list; `multiple` and `secret` on each |
 | Compaction is a turn of its own in Codex; background work starts a turn in Claude Code | `started_by` on a turn |
-| Steering stays in the turn for Codex and ends it for Claude Code | "Steer" is a request the core makes; the driver reports what happened to the turn |
+| Steering stays in the turn for Codex and ends it for Claude Code | A message sent during a turn goes to the harness as it is; the driver reports what happened to the turn |
 
 Detail and evidence for each: [`../reference/harness-messages.md`](../reference/harness-messages.md).
 
@@ -239,4 +237,5 @@ Detail and evidence for each: [`../reference/harness-messages.md`](../reference/
   ([Q-23](../open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)).
 - **How an event is carried, and size limits.** Decided; see [`event-carrier.md`](event-carrier.md). The
   exact tags are not fixed.
-- **The exact form of an answer and of each control.**
+- **The exact tags of an answer and of each control.** Their shape is decided; see
+  [`answers-and-controls.md`](answers-and-controls.md).

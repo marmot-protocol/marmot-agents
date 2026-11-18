@@ -5,7 +5,7 @@ to [D-026](../decisions.md#d-026-an-agent-item-is-at-most-64-kb). None of it is 
 yet, and all of it has to be agreed there
 ([Q-03](../open-questions.md#q-03-where-are-the-event-kinds-specified)). The exact tags are not fixed.
 
-[The event model](event-model.md) says what an agent event means: ten item types, each with a state. This page
+[The event model](event-model.md) says what an agent event means: a set of item types, each with a state. This page
 says how one travels through a Marmot group: what kind of event it is, what it contains, and how an item that
 changes is updated.
 
@@ -55,8 +55,9 @@ One kind is right because the item types have the same shape. Every one carries 
 a turn, a position, a harness, a plain rendering and the native message. They differ only in one part, the
 type's own fields. If a later type needs a different shape, it gets its own kind then.
 
-Kind 1202 stays reserved. It is a candidate for what a person's app sends back, the answers and controls, when
-that piece is designed.
+Kind 1202 carries what a person's app sends back, the answers and controls
+([D-027](../decisions.md#d-027-answers-and-controls-are-one-kind-of-event-kind-1202)). See
+[answers and controls](answers-and-controls.md).
 
 ## Who gets alerted
 
@@ -249,5 +250,5 @@ This is the part of the design that MDK keeps
 
 ## Not covered here
 
-**Answers and controls.** What a person's app sends back, such as "allow once" or "interrupt", is the next piece.
-It will point at an item with an `e` tag.
+**Answers and controls.** What a person's app sends back, such as "allow once" or "interrupt", has its own
+page: [answers and controls](answers-and-controls.md).

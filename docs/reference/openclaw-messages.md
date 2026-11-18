@@ -564,7 +564,8 @@ What only the wording holds, and the translator therefore does not have:
 11. **For OpenClaw, controls are text**, and need a sender OpenClaw accepts for commands. "Interrupt" becomes
     `/stop`. A stopped run reports no outcome, so the connector has to end the turn itself.
 12. **A message sent during a turn waits silently.** If the group should be told, the connector or the core
-    has to say so ([Q-09](../open-questions.md#q-09-who-owns-the-queue-when-a-message-arrives-mid-turn)).
+    has to say so. The core keeps no queue of its own
+    ([D-040](../decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness)).
 13. **OpenClaw talks for itself**, but marks it better than Hermes: by kind, by `isError`, and by
     `channelData`. Somebody still has to decide which of its notices a group should see.
 14. **The message tool is a second way for the agent to post.** `send`, `react` and `delete` arrive as
