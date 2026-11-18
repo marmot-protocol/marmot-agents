@@ -155,7 +155,8 @@ For a change to the recordings or the recording tools:
 ```sh
 python3 tools/record/inventory.py fixtures/recordings/codex --kinds    # every file must parse
 python3 tools/record/inventory.py fixtures/recordings/claude --kinds
-python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude fixtures/recordings/hermes
+python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
+    fixtures/recordings/hermes fixtures/recordings/openclaw
 ```
 
 The last command must end with "native messages with no translation: none". If you change the event model,

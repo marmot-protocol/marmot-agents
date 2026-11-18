@@ -15,8 +15,13 @@ python3 tools/prototype/translate.py fixtures/recordings/codex/approval_allowed.
 python3 tools/prototype/translate.py fixtures/recordings/claude/question.jsonl
 
 # Every recording: how many events, what was not sent, and anything with no rule
-python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude fixtures/recordings/hermes
+python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
+    fixtures/recordings/hermes fixtures/recordings/openclaw
 ```
+
+It has a translator for each harness that has recordings: Codex, Claude Code, Hermes and OpenClaw. It picks one
+from what is in the file, not from the path. What each showed is in
+[`docs/design/event-model.md`](../../docs/design/event-model.md#checked-against-real-sessions).
 
 `--check` exits with an error if any native message has no rule. Run it after adding a recording. A new kind of
 message then needs a decision: an item type, or the not-sent list.
