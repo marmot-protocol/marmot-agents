@@ -946,16 +946,18 @@ Decided 2026-11-19.
 - **Each answer and control carries an id the core makes up, and the event that shows its effect names it**,
   including when the effect is that it failed
   ([D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it),
-  [D-046](#d-046-a-setting-change-is-an-edit-and-a-notice-only-when-nobody-asked-for-it)). When a driver ends,
-  the core settles whatever is still open with a notice that it failed, and closes open items
-  ([D-034](#d-034-the-core-does-the-shared-work-and-a-connector-speaks-only-in-agent-events)).
+  [D-046](#d-046-a-setting-change-is-an-edit-and-a-notice-only-when-nobody-asked-for-it)).
+- **When the harness stops, the driver closes what it can first.** Then the core closes whatever is still
+  open, and settles every open request with a notice that it failed, as it does when a connector's connection
+  drops ([D-034](#d-034-the-core-does-the-shared-work-and-a-connector-speaks-only-in-agent-events)).
 - **An event says which chat it belongs to**, whenever the driver knows. "New session" names a chat, and a
   session only if there is one to end.
 - **An answer says which kind it is.** To an approval it gives one choice. To a question item it gives, for
   each question, the question's id, the ids of the options chosen and any typed text. What is delivered to the
   harness is a different type from what the question item records
   ([D-041](#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)).
-- **A refusal's detail is shown in the chat**, so it never repeats an answer to a secret question.
+- **A refusal's detail is shown in the chat**, to every member. A driver puts the harness's own words there
+  only when it can be sure they do not repeat an answer to a secret question, and otherwise leaves them out.
 - **Starting and stopping a driver are not in the trait.** Each driver has its own settings.
 
 A driver states seven capability flags, every one, every time:
@@ -971,14 +973,23 @@ A driver states seven capability flags, every one, every time:
 | `approval_commands` | a list; each entry has the command and whether it counts at the start of a message or anywhere | none | The core, on every message |
 
 The socket's draft flags `tool_items`, `reasoning` and `questions` are left out: the items already say them.
-When an approval command needs the right to approve, as against the right to prompt, is left for the Hermes
-connector to design ([D-048](#d-048-a-request-to-confirm-a-command-is-a-question)).
+
+An approval command does not say when it needs the right to approve.
+[D-048](#d-048-a-request-to-confirm-a-command-is-a-question) stands: a typed `/approve` or `/deny` needs it
+only while an approval is waiting. A flag with that test was tried and taken out, because an approval can
+start after the core's check and before the harness reads the message, and the same word then approves the
+agent's action. Closing that gap needs a way to tie a confirmation to the exact request it confirms. That is
+for the Hermes connector to design, and until a replacement is accepted D-048 is the rule.
+
+The socket's driver section is a draft and has not caught up. Its answer has a flat list of choices, its
+events have no chat and settle nothing, its requests carry no id, and its `files_in` is yes or no. When the
+socket is designed it takes the shapes above.
 
 **Why.** A built-in driver and a connector on the socket do the same job, so the core treats them the same way.
 A flag is kept only when the core or an app does something different because of it before anything has
 happened. The trait needs no async runtime, so each driver picks its own.
 
-What a debug print shows is not part of this. The types show ids only, which is the starting assumption for
+What a debug print shows is not part of this decision. See
 [Q-13](open-questions.md#q-13-what-may-be-logged).
 
 Decided 2026-11-19. The project owner accepted the trait, and then the seven flags.

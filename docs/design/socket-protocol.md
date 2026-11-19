@@ -108,6 +108,12 @@ A connector may refuse with one of these reasons: `not_supported`, `busy`, `unkn
 `already_answered`, `nothing_to_do`, `invalid`, `failed`. The core turns a refusal into the notice the chat
 sees.
 
+This section is behind the Rust trait, which is decided
+([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)). There, each answer and control
+carries an id the core makes up, an event names the requests it settles and the chat it belongs to, and an
+answer gives one choice to an approval or one entry for each question. The socket takes the same shapes when
+it is designed.
+
 Why each part of a prompt is there:
 
 - **The sender and the chat, on every prompt.** Hermes and OpenClaw route a prompt inside their own runtime.

@@ -65,7 +65,7 @@ the Hermes connector can report messages, notices, approvals and questions, and 
 items without a change on the Hermes side. See
 [`../reference/hermes-messages.md`](../reference/hermes-messages.md).
 
-## Proposed: the driver trait
+## The driver trait
 
 Every Rust driver implements one trait. A first version exists as code, in
 [`crates/marmot-agent-driver`](../../crates/marmot-agent-driver). It has the operations of

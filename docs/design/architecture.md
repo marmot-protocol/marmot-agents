@@ -2,7 +2,9 @@
 
 Status: draft. The layers, the core program, the socket and the driver choices are decided
 ([D-002](../decisions.md#d-002-one-rust-core-program-with-mdk-as-a-library) to
-[D-005](../decisions.md#d-005-which-driver-each-harness-gets)). The details on this page are proposals.
+[D-005](../decisions.md#d-005-which-driver-each-harness-gets)), and so are the driver trait and the capability
+flags ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)). The other details on this
+page are proposals.
 
 Read [the three-minute overview](../README.md) first. This page goes one level deeper: what each part is
 responsible for, and what happens during a turn.
