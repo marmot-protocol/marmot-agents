@@ -863,8 +863,10 @@ This sets aside the official library that
 drivers.
 
 The cost: the types are ours to keep right, and nothing fails to compile when Codex changes a message. A new
-recording, replayed in CI, is what shows a change. The requests and replies the driver sends are built by hand
-too. The trial did not try that; the three checks it names for it are to be run with the transport half of
-the driver, and this decision should be looked at again if they go badly.
+recording, replayed in CI, is what shows a change.
+
+One limit of the evidence: the trial showed reading. The requests and replies the driver sends are built by
+hand too, and that was not tried. The trial page proposes checks for it. They are proposals, not part of
+this decision.
 
 Decided 2026-11-19.
