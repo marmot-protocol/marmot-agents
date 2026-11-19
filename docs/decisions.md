@@ -996,3 +996,31 @@ What a debug print shows is not part of this decision. See
 [Q-13](open-questions.md#q-13-what-may-be-logged).
 
 Decided 2026-11-19. The project owner accepted the trait, and then the seven flags.
+
+## D-059 Eight points about what an agent event carries
+
+**Decision.**
+
+1. **An event has no version number of its own.** The socket and the Marmot event kind carry versions.
+2. **The native message is the harness's whole payload**: for Codex, the whole `params` of its message, or the
+   whole `result` of a reply, as the exact text that arrived.
+3. **An event the driver makes up carries no native message**, such as an item it closes because the harness
+   never did. The harness said nothing. The event's state says what happened.
+4. **`seq` counts the events of one session**, from 1, in the order the driver produced them.
+5. **The answer a question item records gives, for each question, its id, the ids of the options chosen and
+   any typed text.** A driver turns the harness's labels back into ids. Anything that matches no label is
+   typed text. A secret question records its id only
+   ([D-041](#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)).
+6. **A plan's explanation is its `text`**, and its steps are its `entries`.
+7. **A tool's `error` is text.** When a harness sends an object, the driver takes its message, and the object
+   stays in the native message.
+8. **A message's `phase` is `commentary` or `final`.** Any other phase, such as Codex's `partial_answer`, is
+   left out, and the native message keeps the harness's word.
+
+**Why.** The event page, the prototype and the item types disagreed on each of these
+([Q-01](open-questions.md#q-01-what-exactly-is-in-an-agent-event)), and the Codex driver could not be tested
+against the prototype until they agreed. In each case the answer is the one that keeps the event model's own
+promises: the native message is the harness's own and unchanged, the item types carry ids rather than a
+harness's words, and nothing is added that one harness alone would need.
+
+Decided 2026-11-19. The project owner accepted the recommendation on each point.

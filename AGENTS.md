@@ -7,9 +7,10 @@ duplicate it here.
 
 Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) into Marmot group chats.
 
-**Status: the first code.** There is a Rust workspace under `crates/` with two crates, and CI that checks
-them: `marmot-agent-events`, the agent event and its eleven item types, and `marmot-agent-driver`, the trait
-a driver implements. No driver, socket or core exists yet. What is being built now is
+**Status: the first code.** There is a Rust workspace under `crates/` with three crates, and CI that checks
+them: `marmot-agent-events`, the agent event and its eleven item types; `marmot-agent-driver`, the trait a
+driver implements; and `marmot-agent-codex`, the Codex driver, of which only the translation is written. No
+socket or core exists yet. What is being built now is
 the item types, the driver trait and the Codex driver
 ([D-052](docs/decisions.md#d-052-the-codex-driver-is-built-first)). The core program is called `marmot-agent`
 ([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and
@@ -43,7 +44,7 @@ being replaced by what is designed here, not extended.
 | Change a diagram | `docs/images/generate.py` |
 | Work on the item types in Rust | `crates/marmot-agent-events`, after `docs/design/event-model.md` |
 | Work on the driver trait or the capability flags | `crates/marmot-agent-driver`, after `docs/design/drivers.md` |
-| Work on the Codex driver | `crates/marmot-agent-codex` (not created yet), after `fixtures/recordings/codex` |
+| Work on the Codex driver | `crates/marmot-agent-codex`, after `fixtures/recordings/codex` and its `expected/` events |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Change the link check | `lychee.toml` |
 
@@ -224,10 +225,17 @@ python3 tools/record/inventory.py fixtures/recordings/claude --kinds   # nor thi
 python3 -m unittest discover -s tools/prototype -p 'test_*.py'         # cases no recording holds
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
     fixtures/recordings/hermes fixtures/recordings/openclaw
+python3 tools/prototype/translate.py --expected fixtures/recordings/codex --check   # the Codex driver's expected events
 ```
 
-The last command must end with "native messages with no translation: none". If you change the event model,
-change `tools/prototype/translate.py` to match and run it again.
+The `--check` over the four folders must end with "native messages with no translation: none". If you change
+the event model, change `tools/prototype/translate.py` to match and run it again.
+
+The Codex driver is tested against `fixtures/recordings/codex/expected`, which the prototype writes. When the
+prototype's Codex output changes on purpose, write them again with
+`python3 tools/prototype/translate.py --expected fixtures/recordings/codex` and commit them. Never write them
+again only to make the driver's test pass: when the two disagree, the recording and the event model decide
+which is wrong.
 
 Before relying on a claim in `docs/reference/harness-messages.md`, find it in a recording. Each recording is
 one harness version on one day.

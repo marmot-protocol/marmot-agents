@@ -30,6 +30,13 @@ message then needs a decision: an item type, or the not-sent list.
 When the event model changes, change this script with it and run `--check` again. If the two disagree, the
 recordings decide.
 
+It also writes the events the Codex driver is tested against, beside the recordings:
+
+```sh
+python3 tools/prototype/translate.py --expected fixtures/recordings/codex          # write them
+python3 tools/prototype/translate.py --expected fixtures/recordings/codex --check  # fail if out of date
+```
+
 A case that no recording holds is tested with messages written by hand, in
 [`test_translate.py`](test_translate.py). Today that is one case: a Codex question marked secret.
 

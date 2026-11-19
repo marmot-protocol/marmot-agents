@@ -64,7 +64,7 @@ class SecretQuestion(unittest.TestCase):
         _, answered = events(question(secret=True), ANSWER)
         self.assertEqual(answered["state"], "done")
         self.assertIsNone(answered["native"])
-        self.assertEqual(answered["body"]["answer"], {"name": {"answers": ["Alice"]}, "password": {}})
+        self.assertEqual(answered["body"]["answer"], [{"question": "name", "options": [], "text": "Alice"}, {"question": "password"}])
         self.assertNotIn(PASSWORD, json.dumps(answered))
 
     def test_a_cancelled_secret_question_carries_no_native_message(self):
@@ -74,7 +74,7 @@ class SecretQuestion(unittest.TestCase):
 
     def test_a_question_with_nothing_secret_is_unchanged(self):
         _, answered = events(question(secret=False), ANSWER)
-        self.assertEqual(answered["body"]["answer"]["password"], {"answers": [PASSWORD]})
+        self.assertEqual(answered["body"]["answer"][1], {"question": "password", "options": [], "text": PASSWORD})
         self.assertEqual(answered["native"]["payload"]["answers"]["password"], {"answers": [PASSWORD]})
 
 

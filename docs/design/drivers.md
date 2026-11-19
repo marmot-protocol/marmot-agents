@@ -101,6 +101,10 @@ difference.
 
 Hand-written test messages are a guess about what the harness sends. Recordings are what it sends.
 
+The Codex driver is tested this way: each of its recordings must give the events the prototype gives
+([`crates/marmot-agent-codex/tests/replay.rs`](../../crates/marmot-agent-codex/tests/replay.rs)). Whether every
+driver is tested so is [Q-17](../open-questions.md#q-17-how-are-drivers-tested).
+
 ## Adding a harness
 
 1. **Does it speak ACP well?** Add it as a configuration entry for the ACP driver.
