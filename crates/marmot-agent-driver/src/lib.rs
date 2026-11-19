@@ -61,8 +61,10 @@ pub struct Emitted {
     ///
     /// An event can settle a request by showing that it failed. And a request the driver took
     /// may never be settled by an event at all, if the harness goes first: Codex takes a request
-    /// to compact before the turn that does the work has started. When a driver ends, the core
-    /// settles every request that is still open with a notice that it failed.
+    /// to compact before the turn that does the work has started. When a driver ends, for any
+    /// reason, the core settles every answer and control still open with a notice that it failed.
+    /// A prompt is not settled this way: one the driver had not taken is reported as not
+    /// delivered, and is never sent again (D-037, D-058).
     pub settles: Vec<RequestId>,
 }
 
@@ -169,8 +171,9 @@ pub trait Driver: Send {
     /// report, however long that is.
     ///
     /// `None` means the harness has gone and no more will come. A driver that sees its harness
-    /// stop closes what it can first. Whatever is still open then, the core closes, exactly as it
-    /// does when a connector's connection drops (D-034).
+    /// stop closes what it can first. The core then closes the items still open, as it does when
+    /// a connector's connection drops (D-034), and settles answers and controls as
+    /// [`Emitted::settles`] says (D-058).
     fn next_event(&mut self) -> impl Future<Output = Option<Emitted>> + Send;
 }
 

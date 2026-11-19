@@ -212,6 +212,7 @@ to the Rust trait.
 | The connection drops during a turn | Closes the turn and every open item, with the reason. The chat shows the turn as interrupted |
 | The connector comes back | Takes a new hello. Nothing is replayed |
 | A prompt was sent and no response came before the drop | Reports it as not delivered. It is never sent again |
+| An answer or a control was taken and nothing settled it before the drop | Settles it with a notice that it failed ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)) |
 | An event names an unknown turn or session | Accepts it. A harness can produce work outside a turn |
 | A message is not valid | Answers with an error and keeps the connection |
 
