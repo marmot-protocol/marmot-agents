@@ -16,6 +16,10 @@ attributes of HTML in a Markdown file. Headings get the anchors GitHub gives the
 It does not fetch anything. A link to a web address is not checked, so that the check gives the
 same answer on every run and needs no network.
 
+It is not a Markdown parser. It reads one line at a time, so it does not see a link that is
+split over two lines, or a reference definition whose address is on the line below its label.
+Write a link on one line.
+
 It has no dependencies. It exits with an error if any link is broken.
 """
 
@@ -37,9 +41,9 @@ SETEXT_UNDERLINE = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
 DESTINATION = r"<[^>]*>|(?:\\.|\([^()\s]*\)|[^()\s\\])+"
 INLINE_LINK = re.compile(r"\]\(\s*(" + DESTINATION + r")(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)")
 REFERENCE = re.compile(r"^ {0,3}\[[^\]]+\]:\s*(<[^>]*>|\S+)")
-HTML_LINK = re.compile(r"""\b(href|src|srcset)\s*=\s*["']([^"']*)["']""")
+HTML_LINK = re.compile(r"""(?<![\w-])(href|src|srcset)\s*=\s*["']([^"']*)["']""")
 ESCAPED = re.compile(r"\\([!-/:-@\[-`{-~])")
-HTML_ANCHOR = re.compile(r"""\b(?:id|name)\s*=\s*["']([^"']+)["']""")
+HTML_ANCHOR = re.compile(r"""(?<![\w-])(?:id|name)\s*=\s*["']([^"']+)["']""")
 SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 MARKDOWN_LINK_TEXT = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
 HTML_TAG = re.compile(r"<[^>]+>")
@@ -96,6 +100,30 @@ def anchors(text: str) -> set[str]:
     return found
 
 
+def srcset_addresses(value: str) -> list[str]:
+    """The addresses in a `srcset`: candidates split by commas, each an address and then sizes.
+
+    An address can hold a comma itself, so a comma counts only at the end of an address or in
+    the sizes after it.
+    """
+    found = []
+    want_address = True
+    for token in value.split():
+        if want_address:
+            address = token.rstrip(",")
+            if address:
+                found.append(address)
+            want_address = token.endswith(",")
+            continue
+        _, comma, rest = token.partition(",")
+        if comma and rest:  # "1x,next.svg": no space after the comma
+            found.append(rest.rstrip(","))
+            want_address = rest.endswith(",")
+        elif comma:
+            want_address = True
+    return found
+
+
 def links(text: str):
     """Yield (line number, target) for every link in a Markdown file."""
     for number, line in lines_outside_code(text):
@@ -112,8 +140,8 @@ def links(text: str):
             if target:
                 yield number, target
         for attribute, value in HTML_LINK.findall(line):
-            if attribute == "srcset":  # several candidates, each an address and a size
-                candidates = [part.split()[0] for part in value.split(",") if part.split()]
+            if attribute == "srcset":
+                candidates = srcset_addresses(value)
             else:
                 candidates = [value.strip()] if value.strip() else []
             for target in candidates:

@@ -131,6 +131,20 @@ class Links(unittest.TestCase):
         }
         self.assertEqual(problems_in(files), ["README.md:2: gone.svg: no such file"])
 
+    def test_a_srcset_address_may_hold_a_comma(self):
+        self.assertEqual(
+            links.srcset_addresses("https://example.com/a,b.svg 1x, two.svg 2x,three.svg 3x , four.svg"),
+            ["https://example.com/a,b.svg", "two.svg", "three.svg", "four.svg"],
+        )
+        self.assertEqual(links.srcset_addresses("one.svg"), ["one.svg"])
+        self.assertEqual(links.srcset_addresses("one.svg, two.svg"), ["one.svg", "two.svg"])
+
+    def test_only_whole_attribute_names_count(self):
+        files = {"README.md": '<span data-src="not-a-path" data-id="not-an-anchor"></span> [a](#not-an-anchor)\n'}
+        self.assertEqual(
+            problems_in(files), ["README.md:1: #not-an-anchor: no heading '#not-an-anchor' in README.md"]
+        )
+
     def test_a_fragment_on_a_source_file_is_not_a_heading(self):
         self.assertEqual(problems_in({"README.md": "[a](x.py#L3)\n", "x.py": "pass\n"}), [])
 
