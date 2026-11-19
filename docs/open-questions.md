@@ -41,13 +41,23 @@ when the driver for that harness is built:
 
 | Decision | The prototype | The crate |
 | --- | --- | --- |
-| The answer to a secret question is never repeated ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)) | Would repeat it twice: in the item's `answer`, and in the native message, which is Codex's response and holds the answer. No recording has a secret question | Cannot hold one: an answer to a secret question carries the question's id and nothing else. Such an event has no native message |
+| The answer to a secret question is never repeated ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)) | Would repeat it twice: in the item's `answer`, and in the native message, which is Codex's response and holds the answer. No recording has a secret question | The `answer` refuses it: an answer to a secret question carries the question's id and nothing else. The native message is not checked. See below |
+| A session item carries the session's id ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)) | For Claude Code, a session item with no id, when the session is described before its first turn | Allows an event with no session, for any item type. See below |
+| A request to confirm a command is a `question` ([D-048](decisions.md#d-048-a-request-to-confirm-a-command-is-a-question)) | For Hermes, an `approval` | Not applicable: the crate does not choose an item's type |
 | A session item carries the harness's version ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)) | Has none. The page's table has none either | `harness_version`, always present |
 | A command always carries its name and hint ([D-045](decisions.md#d-045-a-session-items-commands-keep-their-names-and-lose-descriptions-first)) | For Claude Code, commands with a name and nothing else, until the driver asks for more | `hint`, always present, empty when the command takes nothing |
 
-The first row needs a second look by the owner. "Never drop the native message"
-([D-007](decisions.md#d-007-one-shared-event-vocabulary)) and "never repeat a secret answer" pull against
-each other for that one event. The crate lets the second win.
+Two things here are for the owner.
+
+- **A secret answer and the native message.** "Never drop the native message"
+  ([D-007](decisions.md#d-007-one-shared-event-vocabulary)) and "never repeat a secret answer" pull against
+  each other for one event: Codex's response to a secret question holds the answer, and that response is the
+  event's native message. One of the two has to give way for that event. The crate does neither yet: it
+  keeps the answer out of the item's `answer`, and accepts whatever native message it is given.
+- **Rules that span more than one field.** "A secret answer has no native message" and "a session item names
+  its session" each tie two parts of an event together. The types hold each part and do not check them
+  against each other. They could, in one check that runs whenever an event is read, and that the core runs on
+  every event a built-in driver hands it.
 
 **What an event carries, for every harness.** Each row needs an answer:
 

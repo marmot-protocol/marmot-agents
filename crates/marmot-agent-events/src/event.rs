@@ -82,10 +82,12 @@ pub struct AgentEvent {
     /// The item type and the fields that belong to it.
     #[serde(flatten)]
     pub body: Body,
-    /// The harness's own message. Two kinds of event have none. One is an event the driver makes
-    /// up itself: nothing arrives from a harness when the driver closes an item the harness never
-    /// closed. The other is the answer to a secret question, because the message would repeat the
-    /// answer (D-041).
+    /// The harness's own message. An event the driver makes up itself has none: nothing arrives
+    /// from a harness when the driver closes an item the harness never closed.
+    ///
+    /// Nothing here checks the message against the item. For the answer to a secret question the
+    /// harness's message holds the answer, so D-007 and D-041 pull against each other, and which
+    /// one wins is not settled. See Q-01 in `docs/open-questions.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native: Option<Native>,
 }

@@ -226,6 +226,12 @@ mod tests {
         );
         let event: AgentEvent = serde_json::from_str(&text).unwrap();
         assert_eq!(event.native.as_ref().unwrap().payload.get(), payload);
+        // Two events are equal only when their native messages are the same text. The same
+        // values written another way are a different message.
+        let respaced: AgentEvent =
+            serde_json::from_str(&text.replace("  \"a\"", " \"a\"")).unwrap();
+        assert_eq!(event, event.clone());
+        assert_ne!(event, respaced);
         let written = serde_json::to_string(&event).unwrap();
         assert!(
             written.contains(&format!(r#""payload":{payload}"#)),
@@ -248,10 +254,16 @@ mod tests {
         assert!(matches!(event.body, Body::Approval(_)));
     }
 
-    // An event with no session, no turn and no native message leaves those fields out.
+    // An event with no session, no turn and no native message leaves those fields out. A notice
+    // can be all three: a gateway answers a slash command itself, outside any turn.
     #[test]
     fn absent_parts_are_left_out() {
-        let mut event = event(State::Running, a_session(), None);
+        let notice = body::Notice {
+            kind: body::NoticeKind::CommandOutput,
+            duration_ms: None,
+            reason: None,
+        };
+        let mut event = event(State::Done, Body::Notice(notice), None);
         event.session = None;
         event.turn = None;
         let written = serde_json::to_value(&event).unwrap();
@@ -288,15 +300,21 @@ mod tests {
         assert!(serde_json::from_value::<body::Session>(no_version).is_err());
     }
 
-    // D-041: the answer to a secret question is never repeated. It cannot be put on an item
-    // here, and an item that carries one cannot be read.
+    // D-041: the answer to a secret question is never repeated in the item's answer. It cannot
+    // be put there, and an item that carries one cannot be read. An answer must also name a
+    // question that was asked, or the check on secret questions could be stepped round.
     #[test]
-    fn a_secret_answer_cannot_be_stored() {
+    fn a_secret_answer_is_refused_in_the_answer_fields() {
         let open = a_secret_question();
         let refused = open
             .clone()
             .answered(vec![answered("password", Some("hunter2"))]);
-        assert_eq!(refused.unwrap_err().question, "password");
+        assert_eq!(
+            refused.unwrap_err(),
+            body::BadAnswer::Secret {
+                question: "password".into()
+            }
+        );
 
         let chosen = body::Answered {
             question: "password".into(),
@@ -305,8 +323,17 @@ mod tests {
         };
         assert!(open.clone().answered(vec![chosen]).is_err());
 
-        let fine = open
+        let elsewhere = open
             .clone()
+            .answered(vec![answered("passw0rd", Some("hunter2"))]);
+        assert_eq!(
+            elsewhere.unwrap_err(),
+            body::BadAnswer::NotAsked {
+                question: "passw0rd".into()
+            }
+        );
+
+        let fine = open
             .answered(vec![
                 answered("name", Some("Alice")),
                 answered("password", None),
