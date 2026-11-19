@@ -86,8 +86,8 @@ replacement entry.
 - Pass agent activity through: reasoning, tool calls, results, plans. Do not hide it
   ([D-008](docs/decisions.md#d-008-pass-everything-through)).
 - Never drop the native payload when translating
-  ([D-007](docs/decisions.md#d-007-one-shared-event-vocabulary)). The one exception is a secret question
-  that is no longer waiting, which carries none
+  ([D-007](docs/decisions.md#d-007-one-shared-event-vocabulary)). A driver makes one exception: a secret
+  question that is no longer waiting carries none
   ([D-056](docs/decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)).
 - Build on the vendor's official interface or library where one exists
   ([D-006](docs/decisions.md#d-006-prefer-official-interfaces-and-libraries)).

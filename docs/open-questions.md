@@ -80,6 +80,14 @@ use for each:
 | `error` | `will_retry`. The page says "what was being attempted, and the harness's error code"; the prototype names them `request` and `code` |
 | `turn` | What `usage` holds: `input_tokens` and `output_tokens` |
 
+**Two shapes Codex can send that no recording holds.** The prototype passes each through as it is, and the
+crate would refuse both. They are for the driver step to settle and to test with hand-written messages:
+
+| Item | What Codex can send | The prototype | The crate |
+| --- | --- | --- | --- |
+| `tool` | A failed MCP call's `error`, which is an object with a `message` | Copies the object | `error` is text. The driver would take the message, and the object stays in the native payload |
+| `message` | A `phase` other than the two the page names, such as `partial_answer` | Copies the word | `phase` is `commentary` or `final` |
+
 **Fields only the prototype has, from the other three harnesses.** The crate does not have them. Each is for
 the connector that produces it to bring up:
 

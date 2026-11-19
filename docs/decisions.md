@@ -843,9 +843,11 @@ waiting for an answer. Once it is answered, cancelled or failed, its events carr
 the item says so, and never what the answer was
 ([D-041](#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)).
 
-This is the one exception to "never drop the native payload"
-([D-007](#d-007-one-shared-event-vocabulary)). While the question waits, its native message is the harness's
-request, which holds no answer, and it is kept.
+This is the one case where a driver leaves the native payload out of an event it builds, against "never
+drop the native payload" ([D-007](#d-007-one-shared-event-vocabulary)). It is separate from the size limit,
+under which the core leaves the native message out of an item that would be over 64 KB
+([D-026](#d-026-an-agent-item-is-at-most-64-kb)). While the question waits, its native message is the
+harness's request, which holds no answer, and it is kept.
 
 **Why.** After a question is answered, the harness's own message about it is the record of the answer. For
 Codex it is the response to the question, and the answer is in it. Passing it on would put a password into the
