@@ -3,8 +3,8 @@
 This page is the starting point for the design. It says what the project does, how it is laid out, why it is laid
 out that way, and where to look for more.
 
-Status: planning. Nothing here is built yet. Decided points are in [`decisions.md`](decisions.md); everything else
-is a proposal until it lands there.
+Status: the design is agreed in outline and the first code has started. Nothing here can be run yet. Decided
+points are in [`decisions.md`](decisions.md); everything else is a proposal until it lands there.
 
 ## What it does
 
@@ -105,8 +105,8 @@ exist so that nobody, human or agent, has to redo the research behind a decision
 
 ## Where the code will live
 
-The first three rows do not exist yet. They are the planned shape, so that the first code lands in the right
-place. The core program is called `marmot-agent`
+`crates/` holds one small crate so far, `marmot-agent-events`. `packages/` and `python/` do not exist yet. They
+are the planned shape, so that the code lands in the right place. The core program is called `marmot-agent`
 ([D-050](decisions.md#d-050-the-core-program-is-called-marmot-agent)), and the Codex driver is built first
 ([D-052](decisions.md#d-052-the-codex-driver-is-built-first)).
 

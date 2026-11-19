@@ -1,0 +1,7 @@
+# Unsafe code is forbidden in every crate of the workspace (D-053). Set here, Cargo applies it to
+# each crate without the crate asking for it, and an `allow` in the code cannot lift it.
+# Dependencies from crates.io or git are not affected.
+#
+# A RUSTFLAGS environment variable replaces this setting. Do not set one in CI.
+[build]
+rustflags = ["-F", "unsafe_code"]

@@ -1,0 +1,97 @@
+name: CI
+
+# Every pull request, and every push to master. The same commands are in AGENTS.md under
+# "Verification"; keep the two in step.
+#
+# Rules for this file: every action is pinned to a commit and every downloaded tool to a version
+# and a checksum, the token can only read, and no job uses a secret. No job sets RUSTFLAGS: that
+# would replace the ban on unsafe code in .cargo/config.toml.
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned toolchain
+        # With no arguments this installs what rust-toolchain.toml names.
+        run: |
+          rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Format
+        # `cargo fmt` builds nothing and has no --locked.
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Tests
+        run: cargo test --locked --workspace --all-features
+
+  recordings:
+    name: Recordings
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Every native message has a rule in the prototype
+        run: >
+          python3 tools/prototype/translate.py --check
+          fixtures/recordings/codex fixtures/recordings/claude
+          fixtures/recordings/hermes fixtures/recordings/openclaw
+
+  documents:
+    name: Documents
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install lychee
+        # A link checker. It is a tool that CI runs, not a dependency of the code. To move to
+        # another release, change the version and the checksum together: the checksum is the
+        # `digest` of this file on the release page.
+        env:
+          LYCHEE_VERSION: 0.24.2
+          LYCHEE_SHA256: 73657a111819a30c47c08352896796f23d64e4eb2b3ed39b6d32149241566fc5
+        run: |
+          set -euo pipefail
+          name=lychee-x86_64-unknown-linux-musl
+          url="https://github.com/lycheeverse/lychee/releases/download/lychee-v${LYCHEE_VERSION}/${name}.tar.gz"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/${name}.tar.gz" "${url}"
+          echo "${LYCHEE_SHA256}  ${RUNNER_TEMP}/${name}.tar.gz" | sha256sum --check
+          tar -xzf "${RUNNER_TEMP}/${name}.tar.gz" -C "${RUNNER_TEMP}"
+          echo "${RUNNER_TEMP}/${name}" >> "${GITHUB_PATH}"
+
+      - name: Links and anchors in the Markdown files
+        # The settings are in lychee.toml.
+        run: |
+          lychee --version
+          lychee .

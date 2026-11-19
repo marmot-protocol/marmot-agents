@@ -786,3 +786,46 @@ The gateways come last because whose rules govern them is still open
 ([Q-22](open-questions.md#q-22-whose-rules-govern-a-gateway)).
 
 Decided 2026-11-19.
+
+## D-053 The Rust workspace builds with MDK's compiler and forbids unsafe code
+
+**Decision.**
+
+- The Rust code is one workspace, with its crates under `crates/`.
+- It is pinned to the compiler MDK is pinned to, which is Rust 1.97.1 today, and uses edition 2024. When MDK
+  moves to another compiler, this repository moves with it.
+- Unsafe code is forbidden in every crate. Cargo's own configuration sets this for the whole workspace, so a
+  new crate cannot leave it out.
+- `Cargo.lock` is committed, and CI builds with `--locked`.
+- The crates are not published to crates.io.
+
+**Why.** The core will link MDK as a library
+([D-002](#d-002-one-rust-core-program-with-mdk-as-a-library)), so both must build with one compiler. Nothing
+planned here needs unsafe code, and the program will hold keys. A committed lock file means CI and every
+machine build the same dependencies.
+
+Decided 2026-11-19.
+
+## D-054 Changes arrive as small signed pull requests that CI checks
+
+**Decision.**
+
+- Each step of the work is one small pull request, on its own branch from `master`. Only the project owner
+  merges.
+- Every commit is signed.
+- CI runs on every pull request and on every push to `master`: formatting, Clippy with warnings as errors, the
+  tests, the prototype over all the recordings, and the links between the Markdown files.
+- The link check is [lychee](https://github.com/lycheeverse/lychee), run without network access. It is a tool
+  that CI runs, not a dependency of the code.
+- The CI workflow pins each action to a commit and each downloaded tool to a version and a checksum, can only
+  read the repository, and uses no secrets.
+- Work here does not change the MDK repository.
+
+**Why.** Small changes are easy to review, and the owner decides what goes in. The documents and the recordings
+are as much the project as the code, so they are checked the same way. A workflow that can only read, pinned to
+commits, has nothing to leak and cannot be changed from outside.
+
+A link check of our own was written first. Three reviews each found Markdown it read wrongly. Lychee read
+the cases that were tried on it correctly.
+
+Decided 2026-11-19.
