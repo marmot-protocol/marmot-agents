@@ -86,9 +86,11 @@ replacement entry.
 - Pass agent activity through: reasoning, tool calls, results, plans. Do not hide it
   ([D-008](docs/decisions.md#d-008-pass-everything-through)).
 - Never drop the native payload when translating
-  ([D-007](docs/decisions.md#d-007-one-shared-event-vocabulary)). A driver makes one exception: a secret
+  ([D-007](docs/decisions.md#d-007-one-shared-event-vocabulary)). There are two exceptions: a secret
   question that is no longer waiting carries none
-  ([D-056](docs/decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)).
+  ([D-056](docs/decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)),
+  and the size limit leaves it out of an item over 64 KB
+  ([D-026](docs/decisions.md#d-026-an-agent-item-is-at-most-64-kb)).
 - Build on the vendor's official interface or library where one exists
   ([D-006](docs/decisions.md#d-006-prefer-official-interfaces-and-libraries)).
 - Cross-language code talks to the core over the socket. Do not add linked libraries or C interfaces
