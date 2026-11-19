@@ -87,7 +87,10 @@ replacement entry.
 - Never drop the native payload when translating
   ([D-007](docs/decisions.md#d-007-one-shared-event-vocabulary)).
 - Build on the vendor's official interface or library where one exists
-  ([D-006](docs/decisions.md#d-006-prefer-official-interfaces-and-libraries)).
+  ([D-006](docs/decisions.md#d-006-prefer-official-interfaces-and-libraries)). Codex is the one exception
+  to "library": its driver speaks `codex app-server` with types of its own, and links neither OpenAI's crates
+  nor `codex-codes`
+  ([D-055](docs/decisions.md#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own)).
 - Cross-language code talks to the core over the socket. Do not add linked libraries or C interfaces
   ([D-003](docs/decisions.md#d-003-the-boundary-to-other-languages-is-a-local-socket)).
 - Use MDK as a Rust library. Do not shell out to its command-line tool

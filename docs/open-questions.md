@@ -261,11 +261,6 @@ short-lived group messages, or remove it is open.
 
 ## Drivers
 
-### Q-15 Which library does the Codex driver build on?
-
-OpenAI's own protocol crates are official but unpublished and pull in much of the Codex workspace. The community
-`codex-codes` crate is lighter. A short trial of both should settle it.
-
 ### Q-16 How does a driver say what it supports?
 
 The current thinking is a set of capability flags per driver, so the core and the clients adapt without checking
