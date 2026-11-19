@@ -1,0 +1,9 @@
+# The link check for the documents. CI runs `lychee .`, and so can you (see AGENTS.md).
+#
+# It checks links between files in this repository, and the headings they name. It fetches
+# nothing: a link to a web address is not checked, so the answer is the same on every run.
+
+offline = true
+include_fragments = "anchor-only"
+extensions = ["md"]
+no_progress = true

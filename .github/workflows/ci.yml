@@ -3,8 +3,8 @@ name: CI
 # Every pull request, and every push to master. The same commands are in AGENTS.md under
 # "Verification"; keep the two in step.
 #
-# Rules for this file: every action is pinned to a commit, the token can only read, and no job
-# uses a secret.
+# Rules for this file: every action is pinned to a commit and every downloaded tool to a version
+# and a checksum, the token can only read, and no job uses a secret.
 on:
   pull_request:
   push:
@@ -39,7 +39,9 @@ jobs:
           cargo --version
 
       - name: Every crate takes the workspace's settings
-        run: python3 tools/check/workspace.py
+        run: |
+          python3 -m unittest discover -s tools/check -p 'test_*.py'
+          python3 tools/check/workspace.py
 
       - name: Format
         # `cargo fmt` builds nothing and has no --locked.
@@ -75,8 +77,25 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: The checks themselves are tested
-        run: python3 -m unittest discover -s tools/check -p 'test_*.py'
+      - name: Install lychee
+        # A link checker. It is a tool that CI runs, not a dependency of the code. To move to
+        # another release, change the version and the checksum together: the checksum is the
+        # `digest` of this file on the release page.
+        env:
+          LYCHEE_VERSION: 0.24.2
+          LYCHEE_SHA256: 73657a111819a30c47c08352896796f23d64e4eb2b3ed39b6d32149241566fc5
+        run: |
+          set -euo pipefail
+          name=lychee-x86_64-unknown-linux-musl
+          url="https://github.com/lycheeverse/lychee/releases/download/lychee-v${LYCHEE_VERSION}/${name}.tar.gz"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/${name}.tar.gz" "${url}"
+          echo "${LYCHEE_SHA256}  ${RUNNER_TEMP}/${name}.tar.gz" | sha256sum --check
+          tar -xzf "${RUNNER_TEMP}/${name}.tar.gz" -C "${RUNNER_TEMP}"
+          echo "${RUNNER_TEMP}/${name}" >> "${GITHUB_PATH}"
 
       - name: Links and anchors in the Markdown files
-        run: python3 tools/check/links.py
+        # The settings are in lychee.toml.
+        run: |
+          lychee --version
+          lychee .

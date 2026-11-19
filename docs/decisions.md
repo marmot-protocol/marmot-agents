@@ -814,11 +814,17 @@ Decided 2026-11-19.
 - Every commit is signed.
 - CI runs on every pull request and on every push to `master`: formatting, Clippy with warnings as errors, the
   tests, the prototype over all the recordings, and the links between the Markdown files.
-- The CI workflow pins each action to a commit, can only read the repository, and uses no secrets.
+- The link check is [lychee](https://github.com/lycheeverse/lychee), run without network access. It is a tool
+  that CI runs, not a dependency of the code.
+- The CI workflow pins each action to a commit and each downloaded tool to a version and a checksum, can only
+  read the repository, and uses no secrets.
 - Work here does not change the MDK repository.
 
 **Why.** Small changes are easy to review, and the owner decides what goes in. The documents and the recordings
 are as much the project as the code, so they are checked the same way. A workflow that can only read, pinned to
 commits, has nothing to leak and cannot be changed from outside.
+
+A link check of our own was written first. Three reviews each found Markdown it read wrongly. Lychee read
+the cases that were tried on it correctly.
 
 Decided 2026-11-19.

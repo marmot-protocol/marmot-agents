@@ -44,7 +44,7 @@ being replaced by what is designed here, not extended.
 | Work on the driver trait | `crates/marmot-agent-driver` (not created yet), after `docs/design/drivers.md` |
 | Work on the Codex driver | `crates/marmot-agent-codex` (not created yet), after `fixtures/recordings/codex` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.github/workflows/ci.yml` |
-| Change a check that CI runs | `tools/check/` |
+| Change a check that CI runs | `tools/check/`, and `lychee.toml` for the link check |
 
 ## The shape, in brief
 
@@ -178,6 +178,7 @@ For any change to Rust code, `Cargo.toml`, `Cargo.lock` or `rust-toolchain.toml`
 
 ```sh
 python3 tools/check/workspace.py
+python3 -m unittest discover -s tools/check -p 'test_*.py'    # only if you changed tools/check/
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-features
@@ -189,12 +190,16 @@ it on purpose, with `cargo update` or by building once without the flag, and com
 For any change to a Markdown file, or to a file a Markdown file links to:
 
 ```sh
-python3 tools/check/links.py                                  # must end with "all resolve"
-python3 -m unittest discover -s tools/check -p 'test_*.py'    # only if you changed tools/check/
+lychee .    # must report 0 errors
 ```
 
-The link check covers links inside the repository, and the headings they name. It does not fetch web
-addresses; check those by hand.
+[lychee](https://github.com/lycheeverse/lychee) is a link checker. It is a tool, not a dependency of the code:
+nothing in `Cargo.toml` names it. CI installs the release named in `.github/workflows/ci.yml`. Install the same
+one, from its release page or with `cargo install lychee --locked --version <that version>`. If you cannot
+install it, say so in the pull request and let CI run the check.
+
+The settings are in `lychee.toml`. The check covers links inside the repository, and the headings they name.
+It does not fetch web addresses; check those by hand.
 
 For a change to a diagram, which CI does not check:
 
