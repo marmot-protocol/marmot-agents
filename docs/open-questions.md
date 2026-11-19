@@ -361,7 +361,7 @@ project owner's answer.
 | On the socket | In the trait |
 | --- | --- |
 | The hello: the harness, and what it can do | `harness`, `capabilities` |
-| The requests `prompt`, `answer`, `control` | `prompt`, `answer`, `control`. Each returns once the harness has taken or refused it, with one of the eight reasons |
+| The requests `prompt`, `answer`, `control` | `prompt`, `answer`, `control`. Each returns once the driver has taken or refused it, with one of the eight reasons |
 | The notification `event` | `next_event`: the next agent event, with the chat it belongs to, the prompts a turn responds to and the requests it settles |
 
 It needs no async runtime. A driver picks its own. It says nothing about how these values are written on the
@@ -419,11 +419,20 @@ What the proposal changes from the socket's draft, and what it leaves for the ow
 - **`files_in` is one of three words**, where the draft says yes or no and then answers "images".
 - **Nothing was added to the flags.** Whether the harness reports usage, plans or tasks is visible in its
   items.
+- **A driver has taken a request once it has handed it to the harness.** It need not wait for the harness
+  to confirm, because a harness may never say. In the Codex recordings, the answer to an approval is a reply
+  that gets no reply. The `serverRequest/resolved` notice that follows also comes, in
+  `approval_unanswered`, when the turn is interrupted with no answer, so it does not say the answer was used.
 - **A request the driver took is settled even if the harness goes first.** An event can settle a request by
   showing that it failed. When a driver ends, the core settles every request that is still open with a
   notice that it failed.
+- **A refusal's detail is shown in the chat**, so it never repeats an answer to a secret question
+  ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)). A driver leaves the
+  harness's words out when it cannot be sure of that.
 - **A debug print of a request or an event shows ids only.** No message text, no name, no answer or choice,
-  no new setting, none of the harness's own words, nothing the agent said. What may be logged is still open
+  no new setting, nothing about an attachment, none of the harness's own words, nothing the agent said. The
+  ids are the core's own and those of the settings and actions the harness published; a question's id is
+  left out, because the agent writes it and it can say what was asked. What may be logged is still open
   ([Q-13](#q-13-what-may-be-logged)); this is the starting assumption there, held in the types. The item
   types' own debug print still shows everything, and needs the same care when Q-13 is settled.
 - **Not in the trait:** starting and stopping a driver. Each driver has its own settings, such as where the

@@ -6,8 +6,10 @@
 //!
 //! Printing any of these for debugging shows which things a request is about, by their ids, and
 //! what kind of request it is. It never shows a value: no message text, no name, no answer, no
-//! new setting, none of the harness's own words. A log must never hold those (AGENTS.md,
-//! "Privacy").
+//! new setting, nothing about an attachment, none of the harness's own words. A log must never
+//! hold those (AGENTS.md, "Privacy"). The ids shown are the core's own, and the ids of settings
+//! and actions that the harness published. A question's id is not shown: the agent writes it,
+//! and it can say what was asked.
 
 use marmot_agent_events::{ItemId, SessionId, TurnId};
 use std::fmt;
@@ -156,11 +158,10 @@ impl fmt::Debug for Quoted {
     }
 }
 
+/// Shows nothing. The path and the name are the person's, and a media type can carry a name too.
 impl fmt::Debug for Attachment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Attachment")
-            .field("media_type", &self.media_type)
-            .finish_non_exhaustive()
+        f.debug_struct("Attachment").finish_non_exhaustive()
     }
 }
 
@@ -201,8 +202,9 @@ impl fmt::Debug for Given {
 ///
 /// This is not what the question item then records. It holds what the person answered, and for
 /// a secret question that is the secret, whether they typed it or chose it. The item records
-/// only that the question was answered (D-041). So neither the options nor the typed text are
-/// shown when a reply is printed for debugging.
+/// only that the question was answered (D-041). So nothing in it is shown when a reply is printed
+/// for debugging: not the options, not the typed text, and not the question's id, which the agent
+/// writes and which can say what was asked.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Reply {
     /// The id of the question.
@@ -215,9 +217,7 @@ pub struct Reply {
 
 impl fmt::Debug for Reply {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Reply")
-            .field("question", &self.question)
-            .finish_non_exhaustive()
+        f.debug_struct("Reply").finish_non_exhaustive()
     }
 }
 
@@ -298,7 +298,10 @@ impl fmt::Debug for Action {
 pub struct Refusal {
     /// Why.
     pub reason: Reason,
-    /// The harness's own words, when it gave any.
+    /// More than the reason says, in words the core shows in the chat. Every member of the chat
+    /// reads them (D-009), so they never repeat a person's answer to a secret question (D-041).
+    /// A driver puts the harness's own words here only when it can be sure of that, and otherwise
+    /// leaves them out.
     pub detail: Option<String>,
 }
 

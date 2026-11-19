@@ -82,9 +82,12 @@ impl fmt::Debug for Emitted {
 
 /// One harness, driven for one agent.
 ///
-/// A request returns as soon as the harness has taken it or refused it. What the harness then
-/// does arrives as events, and the event that shows a request's effect names it in
-/// [`Emitted::settles`].
+/// A request returns as soon as the driver has taken it or refused it. Taking it means the driver
+/// has handed it to the harness and answers for what follows. It need not wait for the harness to
+/// confirm, because a harness may never say: Codex's answer to one of its approval requests is a
+/// reply that gets no reply, and the notice that follows also comes when the turn is interrupted
+/// instead. What the harness then does arrives as events, and the event that shows a request's
+/// effect names it in [`Emitted::settles`], including when the effect is that it failed.
 ///
 /// A driver is used from one task: every method takes `&mut self`. A caller that waits for an
 /// event and for a request at the same time drops the future from [`next_event`] to make the
@@ -174,8 +177,8 @@ pub trait Driver: Send {
 #[cfg(test)]
 mod tests {
     use super::{
-        Action, Answer, Chat, Control, Emitted, Given, Person, Prompt, Quoted, Reason, Refusal,
-        Reply,
+        Action, Answer, Attachment, Chat, Control, Emitted, Given, Person, Prompt, Quoted, Reason,
+        Refusal, Reply,
     };
     use marmot_agent_events::body::{Body, Message};
     use marmot_agent_events::{AgentEvent, Header, Native, State};
@@ -241,10 +244,11 @@ mod tests {
             by: alice(),
             given,
         };
+        // The agent writes a question's id, so it can say what was asked.
         shows(
             &format!("{:?}", answer(Given::Questions(vec![reply]))),
-            &["r-1", "question-1", "password", "u-1"],
-            &["hunter2", "option-7", "Alice Example"],
+            &["r-1", "question-1", "u-1"],
+            &["password", "hunter2", "option-7", "Alice Example"],
         );
         shows(
             &format!("{:?}", answer(Given::Choice("choice-allow".into()))),
@@ -267,6 +271,13 @@ mod tests {
             &["r-2", "s-1", "model"],
             &["a-private-model", "Alice Example"],
         );
+
+        let attachment = Attachment {
+            path: "/home/alice/plan.pdf".into(),
+            name: "plan.pdf".into(),
+            media_type: "application/pdf; name=plan.pdf".into(),
+        };
+        shows(&format!("{attachment:?}"), &[], &["plan", "application"]);
 
         let refusal = Refusal {
             reason: Reason::Failed,
