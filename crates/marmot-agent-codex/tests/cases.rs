@@ -360,3 +360,110 @@ fn a_turn_end_the_driver_cannot_read_closes_nothing() {
     assert!(translator.feed(Direction::In, odd).is_empty());
     assert_eq!(translator.unknown().len(), 1);
 }
+
+const ASKS_IN_A_MESSAGE: &str = r#"{"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1", "item": {"type": "agentMessage", "id": "msg1", "text": "Hello or Hi?", "phase": "final_answer", "questions": [{"title": "Which greeting?", "options": ["Hello", "Hi"]}]}}}"#;
+
+fn thread(id: &str) -> String {
+    format!(
+        r#"{{"method": "thread/started", "params": {{"thread": {{"id": "{id}", "cliVersion": "0.169.0"}}}}}}"#
+    )
+}
+
+fn question_events(events: &[AgentEvent]) -> Vec<(State, Option<String>, Option<String>)> {
+    events
+        .iter()
+        .filter(|e| matches!(e.body(), Body::Question(_)))
+        .map(|e| {
+            let h = e.header();
+            (
+                h.state,
+                h.session.as_ref().map(|s| s.as_str().to_string()),
+                h.turn.as_ref().map(|t| t.as_str().to_string()),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn the_next_message_answers_a_question_asked_in_a_message() {
+    let events = feed(&[
+        (Direction::In, &thread("th1")),
+        (Direction::In, TURN_STARTED),
+        (Direction::In, ASKS_IN_A_MESSAGE),
+        (Direction::In, TURN_DONE),
+        (
+            Direction::Out,
+            r#"{"id": 3, "method": "turn/start", "params": {"threadId": "th1", "input": []}}"#,
+        ),
+    ]);
+    let th1 = Some("th1".to_string());
+    let t1 = Some("t1".to_string());
+    assert_eq!(
+        question_events(&events),
+        [
+            (State::Waiting, th1.clone(), t1.clone()),
+            (State::Done, th1, t1)
+        ]
+    );
+}
+
+#[test]
+fn a_new_session_leaves_such_a_question_unanswered_in_its_own_session() {
+    let events = feed(&[
+        (Direction::In, &thread("th1")),
+        (Direction::In, TURN_STARTED),
+        (Direction::In, ASKS_IN_A_MESSAGE),
+        (Direction::In, TURN_DONE),
+        (Direction::In, &thread("th2")),
+    ]);
+    let th1 = Some("th1".to_string());
+    let t1 = Some("t1".to_string());
+    assert_eq!(
+        question_events(&events),
+        [
+            (State::Waiting, th1.clone(), t1.clone()),
+            (State::Cancelled, th1, t1)
+        ]
+    );
+}
+
+#[test]
+fn a_restarted_codex_reusing_a_request_id_makes_a_new_approval() {
+    let asked = |turn: &str| {
+        format!(
+            r#"{{"id": 0, "method": "item/commandExecution/requestApproval", "params": {{"threadId": "th1", "turnId": "{turn}", "itemId": "c", "command": "ls"}}}}"#
+        )
+    };
+    let mut translator = Translator::new();
+    let first = translator.feed(Direction::In, &asked("t1"));
+    translator.harness_stopped();
+    let second = translator.feed(Direction::In, &asked("t2"));
+    assert_ne!(first[0].header().item, second[0].header().item);
+}
+
+#[test]
+fn a_list_of_models_that_arrives_late_reaches_the_session() {
+    let events = feed(&[
+        (
+            Direction::Out,
+            r#"{"id": 4, "method": "model/list", "params": {}}"#,
+        ),
+        (Direction::In, &thread("th1")),
+        (
+            Direction::In,
+            r#"{"id": 4, "result": {"data": [{"id": "m1"}, {"id": "m2"}]}}"#,
+        ),
+    ]);
+    let Body::Session(session) = events.last().expect("an event").body() else {
+        panic!("a session edit");
+    };
+    let model = session
+        .settings
+        .iter()
+        .find(|s| s.id == "model")
+        .expect("model");
+    assert_eq!(
+        model.options,
+        Some(vec!["m1".to_string(), "m2".to_string()])
+    );
+}

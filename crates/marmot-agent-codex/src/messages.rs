@@ -254,6 +254,7 @@ pub(crate) struct ErrorNote {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct ApprovalRequest {
+    pub turn_id: Option<String>,
     /// The decisions Codex lists. Each is a word or an object with one key.
     pub available_decisions: Option<Vec<Value>>,
     pub item_id: Option<String>,
@@ -264,6 +265,7 @@ pub(crate) struct ApprovalRequest {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct Elicitation {
+    pub turn_id: Option<String>,
     #[serde(rename = "_meta")]
     pub meta: Option<ElicitationMeta>,
     pub message: Option<String>,
@@ -292,6 +294,7 @@ pub(crate) struct Property {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct UserInput {
+    pub turn_id: Option<String>,
     pub item_id: Option<String>,
     pub questions: Option<Vec<UserQuestion>>,
 }

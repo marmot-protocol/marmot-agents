@@ -193,6 +193,9 @@ impl Translator {
 
     fn client_sent(&mut self, m: &Envelope<'_>, out: &mut Vec<AgentEvent>) {
         if let Some(method) = &m.method {
+            if matches!(method.as_str(), "turn/start" | "turn/steer") {
+                self.close_message_questions(State::Done, "Answered by the next message", out);
+            }
             if let Some(id) = &m.id {
                 self.requests.insert(id.clone(), method.clone());
                 match method.as_str() {
@@ -680,7 +683,7 @@ impl Translator {
         } else {
             "permission"
         };
-        let item = format!("approval:{}", show_id(id.as_ref()));
+        let item = self.request_item("approval", p.turn_id.as_deref(), id.as_ref());
         if let Some(id) = id {
             self.asked.insert(
                 id,
@@ -725,7 +728,7 @@ impl Translator {
             choice("c1", "Allow for this session", Effect::Allow),
             choice("c2", "Deny", Effect::Deny),
         ];
-        let item = format!("approval:{}", show_id(id.as_ref()));
+        let item = self.request_item("approval", p.turn_id.as_deref(), id.as_ref());
         if let Some(id) = id {
             self.asked.insert(
                 id,
@@ -780,7 +783,7 @@ impl Translator {
                 ("c0".to_string(), Value::from("accept")),
                 ("c1".to_string(), Value::from("decline")),
             ];
-            let item = format!("approval:{}", show_id(id.as_ref()));
+            let item = self.request_item("approval", p.turn_id.as_deref(), id.as_ref());
             if let Some(id) = id {
                 self.asked.insert(
                     id,
@@ -830,7 +833,7 @@ impl Translator {
                 secret: false,
             })
             .collect();
-        let item = format!("question:{}", show_id(id.as_ref()));
+        let item = self.request_item("question", p.turn_id.as_deref(), id.as_ref());
         self.ask(out, id, &item, None, asked, &text, native);
     }
 
@@ -869,7 +872,7 @@ impl Translator {
             })
             .collect();
         let text = asked.first().map(|q| q.text.clone()).unwrap_or_default();
-        let item = format!("question:{}", show_id(id.as_ref()));
+        let item = self.request_item("question", p.turn_id.as_deref(), id.as_ref());
         let native = native(&format!("{method} (request)"), params);
         let subject = p.item_id.map(Into::into);
         self.ask(out, id, &item, subject, asked, &text, native);
@@ -1037,6 +1040,7 @@ impl Translator {
                         .filter_map(|x| x.id)
                         .collect(),
                 );
+                self.publish_lists("model/list", result, out);
             }
             Some("collaborationMode/list") => {
                 let Some(list) = self.read::<ListReply>("a reply", result) else {
@@ -1049,6 +1053,7 @@ impl Translator {
                         .filter_map(|x| x.mode)
                         .collect(),
                 );
+                self.publish_lists("collaborationMode/list", result, out);
             }
             Some(started @ ("thread/start" | "thread/resume")) => {
                 let Some(settings) = self.read::<messages::Settings>("a reply", result) else {
@@ -1064,12 +1069,22 @@ impl Translator {
         }
     }
 
+    /// A list of models or modes that arrives after the session item reaches it.
+    fn publish_lists(&mut self, method: &str, result: &str, out: &mut Vec<AgentEvent>) {
+        if self.session.is_some() {
+            let kind = format!("response to {method}");
+            self.thread_settings(&messages::Settings::default(), &kind, result, out);
+        }
+    }
+
     /// A second thread replaces the first as this chat's session. Codex sends nothing to say the
     /// first is over, so the driver ends its session item.
     fn use_thread(&mut self, thread: Option<String>, out: &mut Vec<AgentEvent>) {
         if let Some(old) = self.session.clone()
             && thread.as_ref() != Some(&old)
         {
+            let text = "Not answered: a new session started";
+            self.close_message_questions(State::Cancelled, text, out);
             self.end_session(&old, out);
             self.known = Known::default();
         }
@@ -1248,6 +1263,34 @@ impl Translator {
             let (title, text) = (header.title.clone(), header.text.clone());
             let body = prev.body().clone();
             self.emit(out, &item, body, State::Cancelled, &title, &text, None);
+        }
+    }
+
+    /// The item for a request from Codex. Codex counts its requests from 0 again when it restarts,
+    /// so the id names the turn as well, which keeps it unique.
+    fn request_item(&self, kind: &str, turn: Option<&str>, id: Option<&Id>) -> String {
+        let turn = turn.or(self.turn.as_deref());
+        format!("{kind}:{}:{}", show(turn), show_id(id))
+    }
+
+    /// A question answered by the person's next message: that message answers it, or a new
+    /// session leaves it unanswered. It stays in the session and turn it was asked in.
+    fn close_message_questions(&mut self, state: State, text: &str, out: &mut Vec<AgentEvent>) {
+        let open: Vec<(String, AgentEvent)> = self.open.clone();
+        for (item, prev) in open {
+            let Body::Question(q) = prev.body() else {
+                continue;
+            };
+            if q.answer_via() != AnswerVia::Message {
+                continue;
+            }
+            let here = (self.session.take(), self.turn.take());
+            let header = prev.header();
+            self.session = header.session.as_ref().map(|s| s.as_str().to_string());
+            self.turn = header.turn.as_ref().map(|t| t.as_str().to_string());
+            let (title, body) = (header.title.clone(), prev.body().clone());
+            self.emit(out, &item, body, state, &title, text, None);
+            (self.session, self.turn) = here;
         }
     }
 

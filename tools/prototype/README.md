@@ -38,7 +38,7 @@ python3 tools/prototype/translate.py --expected fixtures/recordings/codex --chec
 ```
 
 A case that no recording holds is tested with messages written by hand, in
-[`test_translate.py`](test_translate.py). Today that is one case: a Codex question marked secret.
+[`test_translate.py`](test_translate.py). Today those are a Codex question marked secret, and a question asked in a message that outlives its turn.
 
 ```sh
 python3 -m unittest discover -s tools/prototype -p 'test_*.py'

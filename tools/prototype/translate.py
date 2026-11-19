@@ -96,7 +96,13 @@ class Translator:
         self.sessions: dict[str, str] = {}  # session item -> its body as last sent
         self.controls = collections.Counter()  # (control, the native call it was seen as)
 
-    def emit(self, item, type_, state, title, text="", body=None, native_kind="", native=None):
+    def emit(self, item, type_, state, title, text="", body=None, native_kind="", native=None, owner=None):
+        if owner is not None:  # (session, turn) of the item, when it is not the current one
+            here, (self.session, self.turn) = (self.session, self.turn), owner
+            try:
+                return self.emit(item, type_, state, title, text, body, native_kind, native)
+            finally:
+                self.session, self.turn = here
         assert type_ in ITEM_TYPES and state in STATES, (type_, state)
         self.seq += 1
         self.seq_in[self.session] += 1
@@ -213,6 +219,8 @@ class Codex(Translator):
             return
         method = m.get("method")
         if out:
+            if method in ("turn/start", "turn/steer"):
+                self.close_message_questions("done", "Answered by the next message")
             if method:
                 self.pending[("c", m.get("id"))] = method
                 if "id" in m and method in ("turn/start", "thread/compact/start"):
@@ -414,7 +422,7 @@ class Codex(Translator):
             native_choices[cid] = "decline"  # accepted by Codex although it does not list it
             choices.append({"id": cid, "label": "Deny", "effect": "deny"})
         what = "command" if "commandExecution" in method else "file change" if "fileChange" in method else "permission"
-        item = f"approval:{rid}"
+        item = f"approval:{p.get('turnId') or self.turn}:{rid}"
         self.pending[("s", rid)] = {"item": item, "native_choices": native_choices, "subject": p.get("itemId"), "what": what, "choices": choices}
         self.emit(item, "approval", "waiting", f"Allow this {what}?", p.get("command") or p.get("reason") or "",
                   {"subject": p.get("itemId"), "choices": choices}, f"{method} (request)", p)
@@ -426,7 +434,7 @@ class Codex(Translator):
         choices = [{"id": "c0", "label": "Allow for this turn", "effect": "allow"},
                    {"id": "c1", "label": "Allow for this session", "effect": "allow"},
                    {"id": "c2", "label": "Deny", "effect": "deny"}]
-        item = f"approval:{rid}"
+        item = f"approval:{p.get('turnId') or self.turn}:{rid}"
         self.pending[("s", rid)] = {"item": item, "choices": choices, "permissions": True}
         self.emit(item, "approval", "waiting", "Allow this permission?", p.get("reason") or "",
                   {"subject": p.get("itemId"), "choices": choices}, f"{method} (request)", p)
@@ -437,14 +445,14 @@ class Codex(Translator):
         if meta.get("codex_approval_kind") == "mcp_tool_call":
             native_choices = {"c0": "accept", "c1": "decline"}
             choices = [{"id": "c0", "label": "Allow once", "effect": "allow"}, {"id": "c1", "label": "Deny", "effect": "deny"}]
-            item = f"approval:{rid}"
+            item = f"approval:{p.get('turnId') or self.turn}:{rid}"
             self.pending[("s", rid)] = {"item": item, "native_choices": native_choices, "choices": choices, "decision_key": "action"}
             subject = next((i for i, ev in self.open.items() if ev["type"] == "tool" and ev["body"].get("kind") == "mcp"), None)
             return self.emit(item, "approval", "waiting", "Allow this tool?", p.get("message", ""),
                              {"subject": subject, "choices": choices}, f"{method} (request)", p)
         props = (p.get("requestedSchema") or {}).get("properties") or {}
         qs = [{"id": k, "text": v.get("description") or v.get("title") or k, "multiple": False, "allow_text": True, "options": []} for k, v in props.items()]
-        item = f"question:{rid}"
+        item = f"question:{p.get('turnId') or self.turn}:{rid}"
         self.pending[("s", rid)] = {"item": item, "questions": qs}
         self.emit(item, "question", "waiting", "Question", p.get("message", ""),
                   {"answer_via": "request", "questions": qs}, f"{method} (request)", p)
@@ -455,7 +463,7 @@ class Codex(Translator):
                "allow_text": bool(q.get("isOther")), "secret": bool(q.get("isSecret")),
                "options": [{"id": f"o{k}", "label": o.get("label"), "description": o.get("description")} for k, o in enumerate(q.get("options") or [])]}
               for q in p.get("questions") or []]
-        item = f"question:{rid}"
+        item = f"question:{p.get('turnId') or self.turn}:{rid}"
         self.pending[("s", rid)] = {"item": item, "questions": qs}
         self.emit(item, "question", "waiting", "Question", qs[0]["text"] if qs else "",
                   {"answer_via": "request", "subject": p.get("itemId"), "questions": qs}, f"{method} (request)", p)
@@ -524,15 +532,26 @@ class Codex(Translator):
             self.models = [x.get("id") for x in result.get("data") or []]
         if method == "collaborationMode/list":
             self.modes = [x.get("mode") for x in result.get("data") or []]
+        if method in ("model/list", "collaborationMode/list") and self.session:
+            return self.thread_settings(f"response to {method}", {}, result)
         if method in ("thread/start", "thread/resume") and isinstance(result.get("thread"), dict):
             self.use_thread(result["thread"].get("id"))
             return self.thread_settings(f"response to {method}", result, result)
         self.skip(f"response to {method}")
 
+    def close_message_questions(self, state, text):
+        """A question answered by the person's next message: that message answers it, or a new
+        session leaves it unanswered. It stays in the session and turn it was asked in."""
+        for item, ev in list(self.open.items()):
+            if ev["type"] == "question" and ev["body"].get("answer_via") == "message":
+                self.emit(item, "question", state, ev["title"], text, ev["body"],
+                          "(none: closed by the driver)", None, owner=(ev["session"], ev["turn"]))
+
     def use_thread(self, thread_id):
         """A second thread replaces the first as this chat's session. Codex sends nothing to say the
         first is over, so the driver ends its session item."""
         if self.session and thread_id != self.session:
+            self.close_message_questions("cancelled", "Not answered: a new session started")
             self.end_session(self.session, "a new thread was started")
             self.settings = {}
         self.session = thread_id

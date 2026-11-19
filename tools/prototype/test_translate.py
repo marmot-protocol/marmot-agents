@@ -4,7 +4,8 @@
     python3 -m unittest discover -s tools/prototype -p 'test_*.py'
 
 The recordings are the test of the prototype, and `translate.py --check` runs them all. This file
-covers a case that was never recorded: a Codex question marked secret. The messages below are
+covers a cases that were never recorded: a Codex question marked secret, and a question asked in a message
+that outlives its turn. The messages below are
 written by hand, in the shape `item/tool/requestUserInput` has in
 `fixtures/recordings/codex/plan_mode.jsonl`.
 """
@@ -76,6 +77,33 @@ class SecretQuestion(unittest.TestCase):
         _, answered = events(question(secret=False), ANSWER)
         self.assertEqual(answered["body"]["answer"][1], {"question": "password", "options": [], "text": PASSWORD})
         self.assertEqual(answered["native"]["payload"]["answers"]["password"], {"answers": [PASSWORD]})
+
+
+ASKS_IN_A_MESSAGE = {"dir": "in", "msg": {"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1", "item": {
+    "type": "agentMessage", "id": "msg1", "text": "Hello or Hi?", "phase": "final_answer",
+    "questions": [{"title": "Which greeting?", "options": ["Hello", "Hi"]}]}}}}
+TURN_STARTED = {"dir": "in", "msg": {"method": "turn/started", "params": {"threadId": "th1", "turn": {"id": "t1", "status": "inProgress"}}}}
+TURN_DONE = {"dir": "in", "msg": {"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t1", "status": "completed"}}}}
+
+
+def thread(tid: str) -> dict:
+    return {"dir": "in", "msg": {"method": "thread/started", "params": {"thread": {"id": tid, "cliVersion": "0.169.0"}}}}
+
+
+class QuestionInAMessage(unittest.TestCase):
+    """A question answered by the person's next message waits past the end of its turn."""
+
+    def states(self, *records):
+        return [(e["state"], e["session"], e["turn"]) for e in events(*records)]
+
+    def test_the_next_message_answers_it(self):
+        nxt = {"dir": "out", "msg": {"id": 3, "method": "turn/start", "params": {"threadId": "th1", "input": []}}}
+        self.assertEqual(self.states(thread("th1"), TURN_STARTED, ASKS_IN_A_MESSAGE, TURN_DONE, nxt),
+                         [("waiting", "th1", "t1"), ("done", "th1", "t1")])
+
+    def test_a_new_session_leaves_it_unanswered_where_it_was_asked(self):
+        self.assertEqual(self.states(thread("th1"), TURN_STARTED, ASKS_IN_A_MESSAGE, TURN_DONE, thread("th2")),
+                         [("waiting", "th1", "t1"), ("cancelled", "th1", "t1")])
 
 
 if __name__ == "__main__":
