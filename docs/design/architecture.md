@@ -26,8 +26,10 @@ ciphertext.
 
 - **Permission.** Is this person allowed to prompt the agent, or to approve what it asked? If not, it tells them.
 - **Sessions.** Which harness session does this chat belong to? Does one need to be started or resumed?
-- **Turns.** Is the agent already working? Then the message steers it, waits in a queue, or interrupts, depending
-  on what the person asked for and what the harness supports.
+- **Turns.** Is the agent already working? The message is passed to the driver at once, and the harness does
+  with it what it does natively: fold it into the turn, end the turn and start another, or hold it. The core
+  keeps no queue of its own
+  ([D-040](../decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness)).
 - **Routing.** When someone answers an approval or a question, it finds the request that is waiting and hands
   the answer to the right driver.
 
@@ -110,12 +112,13 @@ Three things to notice:
 
 ## Capabilities
 
-Harnesses do not all support the same things. One can be steered mid-turn; another can only be interrupted. One
-reports token usage; another does not.
+Harnesses do not all support the same things. One folds a message sent during a turn into that turn; another
+ends the turn. One takes images; another takes nothing.
 
-The proposal is that each driver declares what it supports as a set of flags. The core uses them to choose what
-to do, for example to steer when it can and to queue when it cannot. Clients use them to show only the controls
-that work. Nothing above a driver checks the harness's name. See
+The proposal is that each driver declares what its harness does as a set of flags. The core reads three of
+them: who picks the session, whether a session survives a restart, and which typed commands need the right to
+approve. Apps read the rest, to show only the controls that work and to say what a message sent during a turn
+will do. Nothing above a driver checks the harness's name. See
 [Q-16](../open-questions.md#q-16-how-does-a-driver-say-what-it-supports).
 
 ## Where the edges are

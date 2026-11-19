@@ -7,9 +7,9 @@ duplicate it here.
 
 Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) into Marmot group chats.
 
-**Status: the first code.** There is a Rust workspace under `crates/` with one crate,
-`marmot-agent-events`, which holds the agent event and its eleven item types, and CI that checks it. No
-driver, socket or core exists yet. What is being built now is
+**Status: the first code.** There is a Rust workspace under `crates/` with two crates, and CI that checks
+them: `marmot-agent-events`, the agent event and its eleven item types, and `marmot-agent-driver`, the trait
+a driver implements. No driver, socket or core exists yet. What is being built now is
 the item types, the driver trait and the Codex driver
 ([D-052](docs/decisions.md#d-052-the-codex-driver-is-built-first)). The core program is called `marmot-agent`
 ([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and
@@ -42,7 +42,7 @@ being replaced by what is designed here, not extended.
 | Try the event model against the recordings | `tools/prototype/README.md` |
 | Change a diagram | `docs/images/generate.py` |
 | Work on the item types in Rust | `crates/marmot-agent-events`, after `docs/design/event-model.md` |
-| Work on the driver trait | `crates/marmot-agent-driver` (not created yet), after `docs/design/drivers.md` |
+| Work on the driver trait or the capability flags | `crates/marmot-agent-driver`, after `docs/design/drivers.md` |
 | Work on the Codex driver | `crates/marmot-agent-codex` (not created yet), after `fixtures/recordings/codex` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Change the link check | `lychee.toml` |
