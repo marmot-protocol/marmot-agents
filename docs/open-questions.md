@@ -21,30 +21,49 @@ An eleventh type, `session`, was added on 2026-11-18
 ([D-043](decisions.md#d-043-a-setting-says-which-right-it-needs) to
 [D-046](decisions.md#d-046-a-setting-change-is-an-edit-and-a-notice-only-when-nobody-asked-for-it)).
 
-#### Where the page and the prototype disagree
+#### Where the page, the prototype and the decisions disagree
 
 Found on 2026-11-19, when the item types were written in Rust
 ([`crates/marmot-agent-events`](../crates/marmot-agent-events)). The page is
 [`design/event-model.md`](design/event-model.md) and the prototype is
-[`tools/prototype/translate.py`](../tools/prototype/translate.py). Each row needs the project owner's answer.
-Until then the crate does what its column says, and nothing here is decided.
+[`tools/prototype/translate.py`](../tools/prototype/translate.py). Nothing in this section is decided. Until
+the project owner answers, the crate does what its column says.
 
-To measure it, every event the prototype produces was read into the Rust types, which refuse a field they do
-not know. Of Codex's 274 events, 273 fit. Of the other harnesses' 1,035, 585 fit.
+How it was measured: every event the prototype produces for the 123 recordings was collected, and the fields
+of each item type were listed by harness. The events were then read into a first cut of the Rust types that
+refused any field it did not know, after `v`, the native message and empty values had been taken out. Of
+Codex's 274 events, 273 fitted; the other is the answer on a question. Of the other harnesses' 1,035, 585
+fitted. That was a check of field names and shapes, not of the native message. The types have changed since:
+they no longer refuse an unknown field, and a session now needs its version.
 
-**What an event carries, for every harness**
+**Where the prototype goes against a decision.** These are not open. The prototype is the side to change,
+when the driver for that harness is built:
+
+| Decision | The prototype | The crate |
+| --- | --- | --- |
+| The answer to a secret question is never repeated ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)) | Would repeat it twice: in the item's `answer`, and in the native message, which is Codex's response and holds the answer. No recording has a secret question | Cannot hold one: an answer to a secret question carries the question's id and nothing else. Such an event has no native message |
+| A session item carries the harness's version ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)) | Has none. The page's table has none either | `harness_version`, always present |
+| A command always carries its name and hint ([D-045](decisions.md#d-045-a-session-items-commands-keep-their-names-and-lose-descriptions-first)) | For Claude Code, commands with a name and nothing else, until the driver asks for more | `hint`, always present, empty when the command takes nothing |
+
+The first row needs a second look by the owner. "Never drop the native message"
+([D-007](decisions.md#d-007-one-shared-event-vocabulary)) and "never repeat a secret answer" pull against
+each other for that one event. The crate lets the second win.
+
+**What an event carries, for every harness.** Each row needs an answer:
 
 | Point | The page | The prototype | The crate, for now |
 | --- | --- | --- | --- |
 | A version number | Has none | `v: 0` on every event | Has none. The socket and the Marmot kind already carry versions |
-| The native message | Unchanged | Cut to a note of its size when it is over 4,000 characters | Whole, as the exact text that arrived. The core applies the size limit ([D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb)) |
+| The native message: how much of it | "The harness's own event, unchanged" | For a Codex item, only the item inside the message, without its thread and turn ids. For other messages, the whole payload | Does not decide. It holds whatever text the driver gives it |
+| The native message: how long | Unchanged | Cut to a note of its size when it is over 4,000 characters | Whole, as the exact text that arrived. The core applies the size limit ([D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb)) |
 | An event the driver makes up, such as closing an item the harness never closed | Does not say | Gives it a made-up native message that holds the reason | No native message. Where the reason goes is not settled |
 | Long text and output | "Send everything, at full size" on the socket page | Text cut at 600 characters, output at 2,000 | No limit in the types |
-| `seq` | Order within the session. The socket page has no `seq` and says the core numbers items | Counts everything one translator produced, across sessions | Has it: the order in which the driver produced its events |
+| `seq` | Order within the session. The socket page has no `seq` and says the core numbers items | Counts everything one translator produced, across sessions | Has it, and does not say what it counts within |
 | `prompts` on a turn | Only on the socket page | Has none | Has none |
-| The answer on a question | "Once answered: `answer`" | A different shape for each harness. For Codex, the harness's own labels | A list: the question's id, the ids of the options chosen, and typed text. Never the answer to a secret question ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)) |
-| The version of the harness on a session | [D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type) says the item carries it. The page's table does not | Has none | An optional `harness_version` |
+| The answer on a question | "Once answered: `answer`" | A different shape for each harness. For Codex, the harness's own labels | A list: the question's id, the ids of the options chosen, and typed text. This follows what an answer carries in [D-028](decisions.md#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it) |
+| What a task's `usage` holds | "`usage` once known" | Claude Code's three numbers: time, tools used, tokens. Not the shape a turn's usage has | Leaves `usage` off a task |
 | A plan as steps | Entries with a text and a state | For Codex, never recorded: an `explanation`, and steps that are pending, running or done | Steps that are pending, running or done. No `explanation` |
+| A field the types do not know | Does not say | Not applicable | Passed over when an event is read, so that an older core can still show a newer driver's item |
 
 **Fields only the prototype has, that Codex produces.** The crate has them, because the recordings show a
 use for each:
@@ -70,8 +89,9 @@ the connector that produces it to bring up:
 | `approval`, `question` | `native` on each choice: the text to type. The page says a choice carries a label and an effect, "nothing more" | Hermes, OpenClaw |
 | `notice` | Eight more kinds: `runtime`, `activity`, `progress`, `refused`, `steered`, `new_session`, `stopped`, `directive`. A `command` field | Hermes, OpenClaw |
 | `error` | `subject` | OpenClaw |
-| `task` | Its `kind` is the harness's own word: `local_bash`, `subagent`. Its `usage` is not the shape a turn's is | Claude Code |
-| `session` | Commands with a name and nothing else, until the driver asks for more. [D-045](decisions.md#d-045-a-session-items-commands-keep-their-names-and-lose-descriptions-first) says a command always carries its hint | Claude Code |
+
+A task's `kind` is the harness's own word in the prototype, `local_bash` or `subagent` for Claude Code. The
+crate takes it as text, since the page names `kind` and does not list its values.
 
 **On the page, and never produced by the prototype:** the notice kind `retry`, the tool kind `fetch`, and a
 plan as steps. The crate has all three.

@@ -1,13 +1,14 @@
 //! The fields each item type carries.
 //!
 //! These follow the table "What each type carries" in `docs/design/event-model.md`. A field that
-//! is absent is left out of the JSON. A field this module does not name is an error when read, so
-//! that a driver and this vocabulary cannot drift apart unnoticed.
+//! is absent is left out of the JSON. A field this module does not name is passed over when an
+//! event is read: the list of fields is still a proposal, and an event must stay readable to a
+//! core that is older than the driver that sent it.
 
-use crate::ItemType;
 use crate::event::ItemId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fmt;
 
 /// An item type together with its own fields.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -37,30 +38,10 @@ pub enum Body {
     Session(Session),
 }
 
-impl Body {
-    /// The item type these fields belong to.
-    pub fn item_type(&self) -> ItemType {
-        match self {
-            Self::Turn(_) => ItemType::Turn,
-            Self::Message(_) => ItemType::Message,
-            Self::Reasoning(_) => ItemType::Reasoning,
-            Self::Tool(_) => ItemType::Tool,
-            Self::Approval(_) => ItemType::Approval,
-            Self::Question(_) => ItemType::Question,
-            Self::Plan(_) => ItemType::Plan,
-            Self::Task(_) => ItemType::Task,
-            Self::Notice(_) => ItemType::Notice,
-            Self::Error(_) => ItemType::Error,
-            Self::Session(_) => ItemType::Session,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------------------- turn
 
 /// A turn: who or what started it, and once it has ended, how long it took and what it used.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Turn {
     /// What started the turn.
     pub started_by: StartedBy,
@@ -86,7 +67,6 @@ pub enum StartedBy {
 
 /// The tokens a turn used.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Usage {
     /// Tokens read by the model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,7 +80,6 @@ pub struct Usage {
 
 /// Text the agent says. The text itself is the event's `text`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Message {
     /// Whether this is a remark made while working or the final answer, when the harness says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -124,7 +103,6 @@ pub enum Phase {
 
 /// The agent's thinking. It carries nothing beyond the event's `text`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Reasoning {}
 
 // ---------------------------------------------------------------------------------------- tool
@@ -134,7 +112,6 @@ pub struct Reasoning {}
 /// The fields a tool has depend on its kind, but not strictly: a command that only reads files
 /// has the kind `read` and still has a `command`. So they are all optional.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Tool {
     /// Which sort of tool it is.
     pub kind: ToolKind,
@@ -196,7 +173,6 @@ pub enum ToolKind {
 
 /// One file changed by an edit.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Change {
     /// The file.
     pub path: String,
@@ -223,7 +199,6 @@ pub enum ChangeKind {
 
 /// The agent wants permission for one action.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Approval {
     /// The item that is waiting for permission, such as the command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -240,7 +215,6 @@ pub struct Approval {
 /// The id is the driver's own. It is never the harness's value for the choice, which can be an
 /// object. The driver keeps the harness's value and looks it up by this id when an answer comes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Choice {
     /// The id an answer names.
     pub id: String,
@@ -263,7 +237,6 @@ pub enum Effect {
 
 /// How an approval was answered.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ApprovalAnswer {
     /// The id of the choice. Absent when the harness reports a decision the item did not offer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -273,8 +246,12 @@ pub struct ApprovalAnswer {
 // ------------------------------------------------------------------------------------ question
 
 /// The agent asks the person something. One item can hold several questions.
+///
+/// The answers are held so that a secret one cannot be stored: an answer to a question marked
+/// `secret` names the question and nothing else (D-041). That holds for an item built here and
+/// for one read from JSON.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "UncheckedQuestion")]
 pub struct Question {
     /// How the harness expects the answer.
     pub answer_via: AnswerVia,
@@ -283,9 +260,85 @@ pub struct Question {
     pub subject: Option<ItemId>,
     /// The questions asked.
     pub questions: Vec<Asked>,
-    /// The answers, once there are any: one entry for each question that was answered.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub answer: Option<Vec<Answered>>,
+    answer: Option<Vec<Answered>>,
+}
+
+impl Question {
+    /// A question that nobody has answered yet.
+    pub fn new(answer_via: AnswerVia, subject: Option<ItemId>, questions: Vec<Asked>) -> Self {
+        Self {
+            answer_via,
+            subject,
+            questions,
+            answer: None,
+        }
+    }
+
+    /// The answers, once there are any: one entry for each question that was answered.
+    pub fn answer(&self) -> Option<&[Answered]> {
+        self.answer.as_deref()
+    }
+
+    /// The same question, answered. It is refused if an answer to a secret question carries the
+    /// answer itself.
+    pub fn answered(mut self, answers: Vec<Answered>) -> Result<Self, SecretAnswer> {
+        for answer in &answers {
+            let secret = self
+                .questions
+                .iter()
+                .any(|q| q.id == answer.question && q.secret);
+            if secret && (answer.text.is_some() || !answer.options.is_empty()) {
+                return Err(SecretAnswer {
+                    question: answer.question.clone(),
+                });
+            }
+        }
+        self.answer = Some(answers);
+        Ok(self)
+    }
+}
+
+/// An answer to a secret question carried the answer itself.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SecretAnswer {
+    /// The id of the secret question.
+    pub question: String,
+}
+
+impl fmt::Display for SecretAnswer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the answer to the secret question `{}` must not be repeated",
+            self.question
+        )
+    }
+}
+
+impl std::error::Error for SecretAnswer {}
+
+/// A question as it is read from JSON, before its answers are checked.
+#[derive(Deserialize)]
+struct UncheckedQuestion {
+    answer_via: AnswerVia,
+    #[serde(default)]
+    subject: Option<ItemId>,
+    questions: Vec<Asked>,
+    #[serde(default)]
+    answer: Option<Vec<Answered>>,
+}
+
+impl TryFrom<UncheckedQuestion> for Question {
+    type Error = SecretAnswer;
+
+    fn try_from(read: UncheckedQuestion) -> Result<Self, SecretAnswer> {
+        let question = Self::new(read.answer_via, read.subject, read.questions);
+        match read.answer {
+            Some(answers) => question.answered(answers),
+            None => Ok(question),
+        }
+    }
 }
 
 /// How a question is answered.
@@ -300,7 +353,6 @@ pub enum AnswerVia {
 
 /// One question in a question item.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Asked {
     /// The id an answer names.
     pub id: String,
@@ -326,7 +378,6 @@ pub struct Asked {
 
 /// One answer a question offers.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Offered {
     /// The id an answer names.
     pub id: String,
@@ -342,7 +393,6 @@ pub struct Offered {
 /// It names options by the ids the item offered. For a secret question it names the question and
 /// nothing else: the answer itself is never repeated.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Answered {
     /// The id of the question.
     pub question: String,
@@ -358,7 +408,6 @@ pub struct Answered {
 
 /// The agent's plan, as text or as a list of steps.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Plan {
     /// The plan as text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -370,7 +419,6 @@ pub struct Plan {
 
 /// One step of a plan.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct PlanEntry {
     /// The step.
     pub text: String,
@@ -394,7 +442,6 @@ pub enum PlanEntryState {
 
 /// Work that runs beside a turn or outlives it: a subagent, a background job.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Task {
     /// The sort of task, in the harness's own word.
     pub kind: String,
@@ -404,31 +451,12 @@ pub struct Task {
     /// The item that started the task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<ItemId>,
-    /// What the task used, once known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<TaskUsage>,
-}
-
-/// What a task used.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TaskUsage {
-    /// How long it ran.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub duration_ms: Option<u64>,
-    /// How many tools it used.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_uses: Option<u64>,
-    /// How many tokens it used.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total_tokens: Option<u64>,
 }
 
 // -------------------------------------------------------------------------------------- notice
 
 /// Something a person should know that is not the agent's own words.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Notice {
     /// What the notice is about.
     pub kind: NoticeKind,
@@ -462,7 +490,6 @@ pub enum NoticeKind {
 
 /// Something failed outside any one item.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Error {
     /// What was being attempted, such as the request the harness refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -478,12 +505,10 @@ pub struct Error {
 // ------------------------------------------------------------------------------------- session
 
 /// A session with the harness: what an app can set and do in it (D-029, D-030).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
-    /// The version of the harness, when it says.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub harness_version: Option<String>,
+    /// The version of the harness (D-030). A driver that is not told it supplies it (D-044).
+    pub harness_version: String,
     /// What can be set: the model, the mode, the permission mode and so on.
     #[serde(default)]
     pub settings: Vec<Setting>,
@@ -497,7 +522,6 @@ pub struct Session {
 
 /// One setting of a session.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Setting {
     /// The id a `set` control names.
     pub id: String,
@@ -517,7 +541,6 @@ pub struct Setting {
 
 /// An action of the harness's own.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Action {
     /// The id a control names.
     pub id: String,
@@ -528,19 +551,17 @@ pub struct Action {
     pub description: Option<String>,
 }
 
-/// One slash command. A name is always present. A description is the first thing left out when
-/// the item would be too large (D-045).
+/// One slash command. Its name and its hint are always present. A description is the first thing
+/// left out when the item would be too large (D-045).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Command {
     /// The command, without its slash.
     pub name: String,
     /// What it does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    /// What to type after it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hint: Option<String>,
+    /// What to type after it. Empty when the command takes nothing.
+    pub hint: String,
 }
 
 // The signature is serde's: `skip_serializing_if` passes a reference.

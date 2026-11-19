@@ -17,52 +17,6 @@ pub use body::Body;
 pub use event::{AgentEvent, ItemId, Native, SessionId, TurnId};
 use serde::{Deserialize, Serialize};
 
-/// What an item is. A client uses it to choose how to draw the item.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ItemType {
-    /// A turn started or ended.
-    Turn,
-    /// Text the agent says to the people in the chat.
-    Message,
-    /// The agent's thinking, when the harness provides it.
-    Reasoning,
-    /// A tool the agent used: a command, an edit, a search and so on.
-    Tool,
-    /// The agent wants permission for one action.
-    Approval,
-    /// The agent asks the person something.
-    Question,
-    /// The agent's plan or to-do list.
-    Plan,
-    /// Work that runs beside a turn or outlives it: a subagent, a background job.
-    Task,
-    /// Compaction, the agent waiting, a retry, a warning, a model change, the output of a command.
-    Notice,
-    /// Something failed outside any one item.
-    Error,
-    /// A session with the harness, and the settings, actions and slash commands it offers.
-    Session,
-}
-
-impl ItemType {
-    /// The name of this type in an agent event.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Turn => "turn",
-            Self::Message => "message",
-            Self::Reasoning => "reasoning",
-            Self::Tool => "tool",
-            Self::Approval => "approval",
-            Self::Question => "question",
-            Self::Plan => "plan",
-            Self::Task => "task",
-            Self::Notice => "notice",
-            Self::Error => "error",
-            Self::Session => "session",
-        }
-    }
-}
-
 /// Where an item stands. An item changes by being sent again with a new state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -79,20 +33,6 @@ pub enum State {
     Declined,
     /// It was stopped before it finished.
     Cancelled,
-}
-
-impl State {
-    /// The name of this state in an agent event.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Running => "running",
-            Self::Waiting => "waiting",
-            Self::Done => "done",
-            Self::Failed => "failed",
-            Self::Declined => "declined",
-            Self::Cancelled => "cancelled",
-        }
-    }
 }
 
 #[cfg(test)]
@@ -116,13 +56,8 @@ mod tests {
         }
     }
 
-    fn one_of_each() -> Vec<Body> {
-        let turn = body::Turn {
-            started_by: body::StartedBy::User,
-            duration_ms: None,
-            usage: None,
-        };
-        let tool = body::Tool {
+    fn a_command() -> Body {
+        Body::Tool(body::Tool {
             kind: body::ToolKind::Command,
             name: "shell".into(),
             command: Some("python3 greet.py".into()),
@@ -135,23 +70,34 @@ mod tests {
             path: None,
             input: None,
             error: None,
+        })
+    }
+
+    fn a_session() -> Body {
+        Body::Session(body::Session {
+            harness_version: "0.169.0".into(),
+            settings: Vec::new(),
+            actions: Vec::new(),
+            commands: Vec::new(),
+        })
+    }
+
+    fn one_of_each() -> Vec<Body> {
+        let turn = body::Turn {
+            started_by: body::StartedBy::User,
+            duration_ms: None,
+            usage: None,
         };
         let approval = body::Approval {
             subject: None,
             choices: Vec::new(),
             answer: None,
         };
-        let question = body::Question {
-            answer_via: body::AnswerVia::Request,
-            subject: None,
-            questions: Vec::new(),
-            answer: None,
-        };
+        let question = body::Question::new(body::AnswerVia::Request, None, Vec::new());
         let task = body::Task {
             kind: "subagent".into(),
             description: None,
             subject: None,
-            usage: None,
         };
         let notice = body::Notice {
             kind: body::NoticeKind::Waiting,
@@ -162,20 +108,45 @@ mod tests {
             Body::Turn(turn),
             Body::Message(body::Message::default()),
             Body::Reasoning(body::Reasoning {}),
-            Body::Tool(tool),
+            a_command(),
             Body::Approval(approval),
             Body::Question(question),
             Body::Plan(body::Plan::default()),
             Body::Task(task),
             Body::Notice(notice),
             Body::Error(body::Error::default()),
-            Body::Session(body::Session::default()),
+            a_session(),
         ]
+    }
+
+    fn a_secret_question() -> body::Question {
+        let asked = |id: &str, secret: bool| body::Asked {
+            id: id.into(),
+            header: None,
+            text: "?".into(),
+            options: Vec::new(),
+            multiple: false,
+            allow_text: true,
+            secret,
+        };
+        body::Question::new(
+            body::AnswerVia::Request,
+            None,
+            vec![asked("name", false), asked("password", true)],
+        )
+    }
+
+    fn answered(question: &str, text: Option<&str>) -> body::Answered {
+        body::Answered {
+            question: question.into(),
+            options: Vec::new(),
+            text: text.map(str::to_string),
+        }
     }
 
     // The names are part of the protocol: every client matches on them. A rename must fail here.
     #[test]
-    fn states_have_the_names_of_the_design_page() {
+    fn states_are_written_under_the_names_of_the_design_page() {
         let names = [
             (State::Running, "running"),
             (State::Waiting, "waiting"),
@@ -185,13 +156,12 @@ mod tests {
             (State::Cancelled, "cancelled"),
         ];
         for (state, name) in names {
-            assert_eq!(state.as_str(), name);
             assert_eq!(serde_json::to_value(state).unwrap(), json!(name));
         }
     }
 
-    // The eleven types, their names on the wire, and that `type` always matches the fields
-    // beside it: a body cannot be sent under another type's name.
+    // The eleven types and their names on the wire. Each is read back as the type it was written
+    // as, so a body cannot travel under another type's name.
     #[test]
     fn every_item_type_is_written_under_its_own_name() {
         let names = [
@@ -211,7 +181,6 @@ mod tests {
         assert_eq!(bodies.len(), names.len());
         for (body, name) in bodies.into_iter().zip(names) {
             let event = event(State::Running, body, None);
-            assert_eq!(event.item_type().as_str(), name);
             let written = serde_json::to_value(&event).unwrap();
             assert_eq!(written["type"], json!(name));
             assert!(written["body"].is_object(), "{name} has no body object");
@@ -223,12 +192,12 @@ mod tests {
     // What a client receives for one event, field by field.
     #[test]
     fn an_event_is_written_as_the_design_page_describes() {
-        let body = one_of_each().remove(3);
         let native = Native {
             kind: "item/started [commandExecution]".into(),
             payload: serde_json::value::RawValue::from_string(r#"{"id":"i1"}"#.into()).unwrap(),
         };
-        let written = serde_json::to_value(event(State::Running, body, Some(native))).unwrap();
+        let written =
+            serde_json::to_value(event(State::Running, a_command(), Some(native))).unwrap();
         assert_eq!(
             written,
             json!({
@@ -264,28 +233,25 @@ mod tests {
         );
     }
 
-    // A driver and this vocabulary must not drift apart unnoticed: a field that no item type
-    // has is refused, not dropped.
+    // The plain rendering exists so that an item can be shown without knowing its fields. An
+    // event from a newer driver, with a field this version does not have, must still be read.
     #[test]
-    fn a_field_the_vocabulary_does_not_have_is_refused() {
-        let event = json!({
-            "harness": "codex", "item": "i1", "seq": 1, "type": "message", "state": "done",
-            "title": "Message", "text": "hi", "body": {"phase": "final", "mood": "cheerful"},
+    fn a_field_this_version_does_not_know_does_not_cost_the_event() {
+        let newer = json!({
+            "harness": "codex", "item": "i1", "seq": 1, "type": "approval", "state": "waiting",
+            "title": "Allow this command?", "text": "rm -rf build",
+            "body": {"choices": [], "expires_at_ms": 1794910522002u64},
         });
-        let error = serde_json::from_value::<AgentEvent>(event)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("mood"), "{error}");
+        let event: AgentEvent = serde_json::from_value(newer).unwrap();
+        assert_eq!(event.title, "Allow this command?");
+        assert_eq!(event.text, "rm -rf build");
+        assert!(matches!(event.body, Body::Approval(_)));
     }
 
     // An event with no session, no turn and no native message leaves those fields out.
     #[test]
     fn absent_parts_are_left_out() {
-        let mut event = event(
-            State::Running,
-            Body::Session(body::Session::default()),
-            None,
-        );
+        let mut event = event(State::Running, a_session(), None);
         event.session = None;
         event.turn = None;
         let written = serde_json::to_value(&event).unwrap();
@@ -296,9 +262,72 @@ mod tests {
                 "body", "harness", "item", "seq", "state", "text", "title", "type"
             ]
         );
+    }
+
+    // D-030 and D-045: a session always says the harness's version, and a command always has
+    // its hint. Neither can be left out of what is written.
+    #[test]
+    fn a_session_always_carries_the_version_and_each_commands_hint() {
+        let session = body::Session {
+            harness_version: "0.169.0".into(),
+            settings: Vec::new(),
+            actions: Vec::new(),
+            commands: vec![body::Command {
+                name: "compact".into(),
+                description: None,
+                hint: String::new(),
+            }],
+        };
         assert_eq!(
-            written["body"],
-            json!({"settings": [], "actions": [], "commands": []})
+            serde_json::to_value(&session).unwrap(),
+            json!({"harness_version": "0.169.0", "settings": [], "actions": [], "commands": [{"name": "compact", "hint": ""}]})
         );
+        let no_hint = json!({"harness_version": "0.169.0", "commands": [{"name": "compact"}]});
+        assert!(serde_json::from_value::<body::Session>(no_hint).is_err());
+        let no_version = json!({"settings": []});
+        assert!(serde_json::from_value::<body::Session>(no_version).is_err());
+    }
+
+    // D-041: the answer to a secret question is never repeated. It cannot be put on an item
+    // here, and an item that carries one cannot be read.
+    #[test]
+    fn a_secret_answer_cannot_be_stored() {
+        let open = a_secret_question();
+        let refused = open
+            .clone()
+            .answered(vec![answered("password", Some("hunter2"))]);
+        assert_eq!(refused.unwrap_err().question, "password");
+
+        let chosen = body::Answered {
+            question: "password".into(),
+            options: vec!["o1".into()],
+            text: None,
+        };
+        assert!(open.clone().answered(vec![chosen]).is_err());
+
+        let fine = open
+            .clone()
+            .answered(vec![
+                answered("name", Some("Alice")),
+                answered("password", None),
+            ])
+            .unwrap();
+        assert_eq!(fine.answer().unwrap().len(), 2);
+        let written = serde_json::to_value(&fine).unwrap();
+        assert_eq!(
+            written["answer"],
+            json!([{"question": "name", "text": "Alice"}, {"question": "password"}])
+        );
+        assert_eq!(
+            serde_json::from_value::<body::Question>(written.clone()).unwrap(),
+            fine
+        );
+
+        let mut leaking = written;
+        leaking["answer"][1]["text"] = json!("hunter2");
+        let error = serde_json::from_value::<body::Question>(leaking)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("password"), "{error}");
     }
 }

@@ -1,7 +1,7 @@
 //! One agent event: the parts every item type shares.
 
+use crate::State;
 use crate::body::Body;
-use crate::{ItemType, State};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
@@ -69,7 +69,9 @@ pub struct AgentEvent {
     pub turn: Option<TurnId>,
     /// The item this event creates or replaces.
     pub item: ItemId,
-    /// The order in which the driver produced its events, counting from 1.
+    /// The order of the event. What it counts within is not settled: the design page says the
+    /// session, the prototype counts everything one driver produced, and the socket page leaves
+    /// the numbering to the core. See Q-01 in `docs/open-questions.md`.
     pub seq: u64,
     /// Where the item stands.
     pub state: State,
@@ -80,17 +82,12 @@ pub struct AgentEvent {
     /// The item type and the fields that belong to it.
     #[serde(flatten)]
     pub body: Body,
-    /// The harness's own message. An event the driver makes up itself has none: nothing arrives
-    /// from a harness when the driver closes an item the harness never closed.
+    /// The harness's own message. Two kinds of event have none. One is an event the driver makes
+    /// up itself: nothing arrives from a harness when the driver closes an item the harness never
+    /// closed. The other is the answer to a secret question, because the message would repeat the
+    /// answer (D-041).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native: Option<Native>,
-}
-
-impl AgentEvent {
-    /// The item type, which a client uses to choose how to draw the item.
-    pub fn item_type(&self) -> ItemType {
-        self.body.item_type()
-    }
 }
 
 /// A harness's own message, kept exactly as it arrived.
