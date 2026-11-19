@@ -36,6 +36,7 @@ class Anchors(unittest.TestCase):
                 "## Q-07 How does a chat map to a harness session?",
                 "## A [linked](other.md) heading",
                 "## snake_case stays",
+                "## _Emphasis_ and __strong__ lose their marks",
             ]
         )
         self.assertEqual(
@@ -47,11 +48,17 @@ class Anchors(unittest.TestCase):
                 "q-07-how-does-a-chat-map-to-a-harness-session",
                 "a-linked-heading",
                 "snake_case-stays",
+                "emphasis-and-strong-lose-their-marks",
             },
         )
 
     def test_repeated_headings_are_numbered(self):
         self.assertEqual(links.anchors("# Same\n\n## Same\n\n## Same\n"), {"same", "same-1", "same-2"})
+
+    def test_a_repeat_skips_an_anchor_that_is_taken(self):
+        self.assertEqual(
+            links.anchors("# Install\n# Install\n# Install-1\n"), {"install", "install-1", "install-1-1"}
+        )
 
     def test_html_ids_are_anchors(self):
         self.assertEqual(links.anchors('<a id="hermes-controls"></a>\n'), {"hermes-controls"})

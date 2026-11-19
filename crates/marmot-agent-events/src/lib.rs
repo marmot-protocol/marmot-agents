@@ -6,8 +6,6 @@
 //!
 //! The lists follow `docs/design/event-model.md`. That page is a draft, so they can still change.
 
-use std::fmt;
-
 /// What an item is. A client uses it to choose how to draw the item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ItemType {
@@ -36,21 +34,6 @@ pub enum ItemType {
 }
 
 impl ItemType {
-    /// Every item type, in the order of the design page.
-    pub const ALL: [Self; 11] = [
-        Self::Turn,
-        Self::Message,
-        Self::Reasoning,
-        Self::Tool,
-        Self::Approval,
-        Self::Question,
-        Self::Plan,
-        Self::Task,
-        Self::Notice,
-        Self::Error,
-        Self::Session,
-    ];
-
     /// The name of this type in an agent event.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -66,12 +49,6 @@ impl ItemType {
             Self::Error => "error",
             Self::Session => "session",
         }
-    }
-}
-
-impl fmt::Display for ItemType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
     }
 }
 
@@ -93,16 +70,6 @@ pub enum State {
 }
 
 impl State {
-    /// Every state, in the order of the design page.
-    pub const ALL: [Self; 6] = [
-        Self::Running,
-        Self::Waiting,
-        Self::Done,
-        Self::Failed,
-        Self::Declined,
-        Self::Cancelled,
-    ];
-
     /// The name of this state in an agent event.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -116,50 +83,43 @@ impl State {
     }
 }
 
-impl fmt::Display for State {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{ItemType, State};
 
+    // A name is part of the protocol: every client matches on it. A rename must fail here.
     #[test]
     fn item_types_have_the_names_of_the_design_page() {
-        let names: Vec<&str> = ItemType::ALL.iter().map(|t| t.as_str()).collect();
-        assert_eq!(
-            names,
-            [
-                "turn",
-                "message",
-                "reasoning",
-                "tool",
-                "approval",
-                "question",
-                "plan",
-                "task",
-                "notice",
-                "error",
-                "session",
-            ]
-        );
+        let names = [
+            (ItemType::Turn, "turn"),
+            (ItemType::Message, "message"),
+            (ItemType::Reasoning, "reasoning"),
+            (ItemType::Tool, "tool"),
+            (ItemType::Approval, "approval"),
+            (ItemType::Question, "question"),
+            (ItemType::Plan, "plan"),
+            (ItemType::Task, "task"),
+            (ItemType::Notice, "notice"),
+            (ItemType::Error, "error"),
+            (ItemType::Session, "session"),
+        ];
+        for (item_type, name) in names {
+            assert_eq!(item_type.as_str(), name);
+        }
     }
 
     #[test]
     fn states_have_the_names_of_the_design_page() {
-        let names: Vec<&str> = State::ALL.iter().map(|s| s.as_str()).collect();
-        assert_eq!(
-            names,
-            [
-                "running",
-                "waiting",
-                "done",
-                "failed",
-                "declined",
-                "cancelled"
-            ]
-        );
+        let names = [
+            (State::Running, "running"),
+            (State::Waiting, "waiting"),
+            (State::Done, "done"),
+            (State::Failed, "failed"),
+            (State::Declined, "declined"),
+            (State::Cancelled, "cancelled"),
+        ];
+        for (state, name) in names {
+            assert_eq!(state.as_str(), name);
+        }
     }
 }

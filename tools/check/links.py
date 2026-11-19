@@ -16,9 +16,13 @@ attributes of HTML in a Markdown file. Headings get the anchors GitHub gives the
 It does not fetch anything. A link to a web address is not checked, so that the check gives the
 same answer on every run and needs no network.
 
-It is not a Markdown parser. It reads one line at a time, so it does not see a link that is
-split over two lines, or a reference definition whose address is on the line below its label.
-Write a link on one line.
+It is not a Markdown parser. It reads one line at a time and knows the Markdown these documents
+use. Two limits follow:
+
+- It does not see a link that is split over two lines, or a reference definition whose address
+  is on the line below its label. Write a link on one line.
+- It reads a link inside an indented code block or an HTML comment as a link, and reports it if
+  it is broken. Put an example in a fenced block or in backticks.
 
 It has no dependencies. It exits with an error if any link is broken.
 """
@@ -47,12 +51,15 @@ HTML_ANCHOR = re.compile(r"""(?<![\w-])(?:id|name)\s*=\s*["']([^"']+)["']""")
 SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 MARKDOWN_LINK_TEXT = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
 HTML_TAG = re.compile(r"<[^>]+>")
+# `_word_` and `__word__` are emphasis and lose their underscores. `snake_case` keeps its own.
+EMPHASIS = re.compile(r"(?<![A-Za-z0-9_])(_{1,2})(?=\S)(.+?)(?<=\S)\1(?![A-Za-z0-9_])")
 
 
 def slug(heading: str) -> str:
     """The anchor GitHub gives a heading, before duplicates are numbered."""
     text = MARKDOWN_LINK_TEXT.sub(r"\1", heading)
     text = HTML_TAG.sub("", text)
+    text = EMPHASIS.sub(r"\2", text)
     text = text.strip().lower()
     kept = [c for c in text if c.isalnum() or c in " -_"]
     return "".join(kept).replace(" ", "-")
@@ -76,7 +83,7 @@ def lines_outside_code(text: str):
 def anchors(text: str) -> set[str]:
     """Every anchor a Markdown file offers."""
     found: set[str] = set()
-    seen: dict[str, int] = {}
+    repeats: dict[str, int] = {}  # how many times GitHub has had to number each anchor
     above = (0, "")  # the line before this one, for a heading that is underlined
     for number, line in lines_outside_code(text):
         title = None
@@ -90,10 +97,12 @@ def anchors(text: str) -> set[str]:
             if text_above and text_above[0] not in "|>-*+#=":
                 title = text_above
         if title is not None:
-            base = slug(title.replace("`", ""))
-            count = seen.get(base, 0)
-            seen[base] = count + 1
-            found.add(base if count == 0 else f"{base}-{count}")
+            base = anchor = slug(title.replace("`", ""))
+            while anchor in repeats:  # GitHub numbers a repeat, and skips a number already taken
+                repeats[base] += 1
+                anchor = f"{base}-{repeats[base]}"
+            repeats[anchor] = 0
+            found.add(anchor)
         for anchor in HTML_ANCHOR.findall(CODE_SPAN.sub("", line)):
             found.add(anchor)
         above = (number, line)

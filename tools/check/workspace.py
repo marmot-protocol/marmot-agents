@@ -6,10 +6,11 @@ Usage:
 
 Cargo applies the workspace's lints, edition, licence and publish setting only to a crate that
 asks for them. A crate that forgets is not told, and then unsafe code is allowed in it. This
-check fails when a crate under crates/:
+check reads every Cargo.toml below the root, because Cargo also takes a crate into the workspace
+when another crate depends on it by path. It fails when a crate:
 
 - does not inherit the workspace lints, which forbid unsafe code;
-- does not inherit the edition, the Rust version, the licence or `publish = false`;
+- does not inherit the version, the edition, the licence or `publish = false`;
 - is not named after its folder, or does not start with `marmot-agent` (D-050).
 
 It needs Python 3.11 or newer, and nothing else.
@@ -21,7 +22,8 @@ import sys
 import tomllib
 from pathlib import Path
 
-INHERITED = ("version", "edition", "rust-version", "license", "repository", "publish")
+INHERITED = ("version", "edition", "license", "repository", "publish")
+SKIPPED_FOLDERS = {".git", "target", "node_modules"}
 
 
 def check(root: Path) -> list[str]:
@@ -32,9 +34,13 @@ def check(root: Path) -> list[str]:
     if workspace.get("package", {}).get("publish") is not False:
         problems.append("Cargo.toml: the workspace does not set publish = false")
 
-    manifests = sorted((root / "crates").glob("*/Cargo.toml"))
+    manifests = sorted(
+        path
+        for path in root.rglob("Cargo.toml")
+        if path.parent != root and not SKIPPED_FOLDERS.intersection(path.relative_to(root).parts)
+    )
     if not manifests:
-        problems.append("crates/: no crates found")
+        problems.append("no crates found")
     for manifest in manifests:
         shown = manifest.relative_to(root)
         crate = tomllib.loads(manifest.read_text(encoding="utf-8"))

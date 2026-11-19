@@ -75,7 +75,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: The link check checks
+      - name: The checks themselves are tested
         run: python3 -m unittest discover -s tools/check -p 'test_*.py'
 
       - name: Links and anchors in the Markdown files

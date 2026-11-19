@@ -7,9 +7,6 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# Kept equal to rust-toolchain.toml, so that Cargo never picks a dependency release that needs a
-# newer compiler than the pinned one.
-rust-version = "1.97.1"
 license = "MIT"
 repository = "https://github.com/marmot-protocol/marmot-agents"
 publish = false
