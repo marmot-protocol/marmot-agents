@@ -2,8 +2,7 @@
 resolver = "3"
 members = ["crates/*"]
 
-# Every crate inherits these with `<key>.workspace = true`. tools/check/workspace.py checks that
-# each one does.
+# Every crate takes these with `<key>.workspace = true`.
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
@@ -11,6 +10,4 @@ license = "MIT"
 repository = "https://github.com/marmot-protocol/marmot-agents"
 publish = false
 
-# Every crate inherits these with `[lints] workspace = true`.
-[workspace.lints.rust]
-unsafe_code = "forbid"
+# Unsafe code is forbidden for every crate in .cargo/config.toml.

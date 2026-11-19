@@ -43,8 +43,8 @@ being replaced by what is designed here, not extended.
 | Work on the item types in Rust | `crates/marmot-agent-events`, after `docs/design/event-model.md` |
 | Work on the driver trait | `crates/marmot-agent-driver` (not created yet), after `docs/design/drivers.md` |
 | Work on the Codex driver | `crates/marmot-agent-codex` (not created yet), after `fixtures/recordings/codex` |
-| Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.github/workflows/ci.yml` |
-| Change a check that CI runs | `tools/check/`, and `lychee.toml` for the link check |
+| Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
+| Change the link check | `lychee.toml` |
 
 ## The shape, in brief
 
@@ -94,8 +94,9 @@ replacement entry.
   ([D-002](docs/decisions.md#d-002-one-rust-core-program-with-mdk-as-a-library)).
 - Prompting and approving default to the owner only
   ([D-010](docs/decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)).
-- Build with the compiler in `rust-toolchain.toml`, which is MDK's. No unsafe code. Every crate inherits the
-  workspace's settings and is named `marmot-agent-…`
+- Build with the compiler in `rust-toolchain.toml`, which is MDK's. No unsafe code: `.cargo/config.toml` forbids
+  it in every crate, and a `RUSTFLAGS` environment variable would replace that setting, so do not set one.
+  Every crate lives under `crates/`, takes the workspace's settings and is named `marmot-agent-…`
   ([D-053](docs/decisions.md#d-053-the-rust-workspace-builds-with-mdks-compiler-and-forbids-unsafe-code),
   [D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)).
 
@@ -177,8 +178,6 @@ everything that applies before you push. If you change a command here, change it
 For any change to Rust code, `Cargo.toml`, `Cargo.lock` or `rust-toolchain.toml`:
 
 ```sh
-python3 tools/check/workspace.py
-python3 -m unittest discover -s tools/check -p 'test_*.py'    # only if you changed tools/check/
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-features

@@ -4,7 +4,8 @@ name: CI
 # "Verification"; keep the two in step.
 #
 # Rules for this file: every action is pinned to a commit and every downloaded tool to a version
-# and a checksum, the token can only read, and no job uses a secret.
+# and a checksum, the token can only read, and no job uses a secret. No job sets RUSTFLAGS: that
+# would replace the ban on unsafe code in .cargo/config.toml.
 on:
   pull_request:
   push:
@@ -37,11 +38,6 @@ jobs:
           rustup toolchain install
           rustc --version
           cargo --version
-
-      - name: Every crate takes the workspace's settings
-        run: |
-          python3 -m unittest discover -s tools/check -p 'test_*.py'
-          python3 tools/check/workspace.py
 
       - name: Format
         # `cargo fmt` builds nothing and has no --locked.

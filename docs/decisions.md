@@ -794,7 +794,8 @@ Decided 2026-11-19.
 - The Rust code is one workspace, with its crates under `crates/`.
 - It is pinned to the compiler MDK is pinned to, which is Rust 1.97.1 today, and uses edition 2024. When MDK
   moves to another compiler, this repository moves with it.
-- Unsafe code is forbidden in every crate.
+- Unsafe code is forbidden in every crate. Cargo's own configuration sets this for the whole workspace, so a
+  new crate cannot leave it out.
 - `Cargo.lock` is committed, and CI builds with `--locked`.
 - The crates are not published to crates.io.
 

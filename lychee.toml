@@ -6,4 +6,6 @@
 offline = true
 include_fragments = "anchor-only"
 extensions = ["md"]
+# A link that starts with `/` is read from the top of the repository, as GitHub reads it.
+root_dir = "."
 no_progress = true

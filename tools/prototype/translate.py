@@ -1989,21 +1989,21 @@ def translate(path: Path) -> Translator:
 
 
 def check(dirs: list[Path]) -> int:
-    # A mistyped folder or an empty file must not pass as "nothing without a rule".
-    empty = [str(d) for d in dirs if not any(d.glob("*.jsonl"))]
-    empty += [str(p) for d in dirs for p in sorted(d.glob("*.jsonl")) if not p.read_text(encoding="utf-8").strip()]
-    if empty or not dirs:
-        print("no recordings in:", ", ".join(empty) or "no folder was given")
-        return 1
+    empty = []  # a mistyped folder or an empty file must not pass as "nothing without a rule"
     total_native = total_events = 0
     unmapped, not_sent, types = collections.Counter(), collections.Counter(), collections.Counter()
     left_open = []
     sessions = collections.defaultdict(lambda: [0, 0, 0, 0])  # harness -> items, edits, largest body, recordings
     controls = collections.Counter()
     for d in dirs:
-        for path in sorted(d.glob("*.jsonl")):
+        paths = sorted(d.glob("*.jsonl"))
+        if not paths:
+            empty.append(str(d))
+        for path in paths:
             t = translate(path)
-            n = sum(1 for _ in path.read_text(encoding="utf-8").splitlines())
+            n = sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+            if not n:
+                empty.append(str(path))
             total_native += n
             total_events += len(t.events)
             unmapped.update({f"{t.harness}: {k}": v for k, v in t.unmapped.items()})
@@ -2037,7 +2037,9 @@ def check(dirs: list[Path]) -> int:
     print("\nnative messages with no translation:", "none" if not unmapped else "")
     for k, v in unmapped.most_common():
         print(f"  {v:4d}  {k}")
-    return 1 if unmapped else 0
+    if empty or not dirs:
+        print("\nno recordings in:", ", ".join(empty) or "no folder was given")
+    return 1 if unmapped or empty or not dirs else 0
 
 
 def main() -> int:

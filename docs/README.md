@@ -119,7 +119,6 @@ are the planned shape, so that the code lands in the right place. The core progr
 | `fixtures/recordings/` | Real harness sessions, recorded message by message |
 | `tools/record/` | The recorders, the scrubber and the structure inventory |
 | `tools/prototype/` | A prototype that turns recordings into the proposed agent events |
-| `tools/check/` | A check that CI runs on the workspace's settings |
 
 ## Diagrams
 
