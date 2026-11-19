@@ -7,10 +7,11 @@ duplicate it here.
 
 Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) into Marmot group chats.
 
-**Status: design agreed, building begins.** There is no connector code yet. The first code is the item types,
-the driver trait and the Codex driver
+**Status: the first code.** There is a Rust workspace under `crates/` with one small crate,
+`marmot-agent-events`, and CI that checks it. No driver, socket or core exists yet. What is being built now is
+the item types, the driver trait and the Codex driver
 ([D-052](docs/decisions.md#d-052-the-codex-driver-is-built-first)). The core program is called `marmot-agent`
-([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). The work so far is design and
+([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and
 decisions under `docs/`, plus recorded harness sessions and the tools that made them. The connectors that ship
 today are in the MDK repository (`integrations/`, `crates/agent-connector`, `crates/agent-control`); they are
 being replaced by what is designed here, not extended.
@@ -39,6 +40,11 @@ being replaced by what is designed here, not extended.
 | Record a new session or scenario | `tools/record/README.md` |
 | Try the event model against the recordings | `tools/prototype/README.md` |
 | Change a diagram | `docs/images/generate.py` |
+| Work on the item types in Rust | `crates/marmot-agent-events`, after `docs/design/event-model.md` |
+| Work on the driver trait | `crates/marmot-agent-driver` (not created yet), after `docs/design/drivers.md` |
+| Work on the Codex driver | `crates/marmot-agent-codex` (not created yet), after `fixtures/recordings/codex` |
+| Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.github/workflows/ci.yml` |
+| Change a check that CI runs | `tools/check/` |
 
 ## The shape, in brief
 
@@ -50,6 +56,21 @@ being replaced by what is designed here, not extended.
   a **local socket**.
 - Every agent event carries an item type from a shared vocabulary, a plain rendering, and the harness's native
   payload.
+
+## How we work
+
+- **The project owner decides.** When you reach a choice that is the owner's, give your recommendation and the
+  reason, and carry on with work that does not depend on it.
+- **One small pull request per step**, each on its own branch from `master`. Never merge. The owner merges.
+- **Sign every commit.** If signing or `gh` is not set up on the machine, stop and say so.
+- **Do not touch the MDK repository.** Read it when you need to. Changes to it are the owner's to arrange.
+- **Build only what has been asked for.** Today that is the item types, the driver trait and the Codex driver
+  ([D-052](docs/decisions.md#d-052-the-codex-driver-is-built-first)). Do not start the core, the socket or
+  another driver.
+- **Report plainly.** If a test fails or you skipped a step, say so.
+
+These are recorded as
+[D-054](docs/decisions.md#d-054-changes-arrive-as-small-signed-pull-requests-that-ci-checks).
 
 ## Rules that are settled
 
@@ -73,6 +94,10 @@ replacement entry.
   ([D-002](docs/decisions.md#d-002-one-rust-core-program-with-mdk-as-a-library)).
 - Prompting and approving default to the owner only
   ([D-010](docs/decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)).
+- Build with the compiler in `rust-toolchain.toml`, which is MDK's. No unsafe code. Every crate inherits the
+  workspace's settings and is named `marmot-agent-…`
+  ([D-053](docs/decisions.md#d-053-the-rust-workspace-builds-with-mdks-compiler-and-forbids-unsafe-code),
+  [D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)).
 
 ## Rules from the MDK connectors do not carry over
 
@@ -145,19 +170,42 @@ Recorded sessions have their own rules:
 
 ## Verification
 
-There is no connector code to build or test yet. For a documentation change:
+CI runs every command in this section on each pull request and on `master`
+(`.github/workflows/ci.yml`). Run them before you push. If you change one here, change it there.
+
+For any change to Rust code, `Cargo.toml`, `Cargo.lock` or `rust-toolchain.toml`:
 
 ```sh
-python3 docs/images/generate.py   # only if you changed a diagram; commit the regenerated files
+python3 tools/check/workspace.py
+cargo fmt --all --check
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-features
+```
+
+`rustup` installs the pinned compiler the first time. `--locked` fails when `Cargo.lock` is out of date: update
+it on purpose, with `cargo update` or by building once without the flag, and commit it.
+
+For any change to a Markdown file, or to a file a Markdown file links to:
+
+```sh
+python3 tools/check/links.py                                  # must end with "all resolve"
+python3 -m unittest discover -s tools/check -p 'test_*.py'    # only if you changed tools/check/
+```
+
+The link check covers links inside the repository, and the headings they name. It does not fetch web
+addresses; check those by hand.
+
+For a change to a diagram, which CI does not check:
+
+```sh
+python3 docs/images/generate.py   # commit the regenerated files
 git diff --stat                   # the SVG files must not change unless generate.py did
 ```
 
-Check that every relative link you added resolves.
-
-For a change to the recordings or the recording tools:
+For a change to the recordings, the recording tools, the prototype or the event model:
 
 ```sh
-python3 tools/record/inventory.py fixtures/recordings/codex --kinds    # every file must parse
+python3 tools/record/inventory.py fixtures/recordings/codex --kinds    # every file must parse; not in CI
 python3 tools/record/inventory.py fixtures/recordings/claude --kinds
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
     fixtures/recordings/hermes fixtures/recordings/openclaw

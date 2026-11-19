@@ -1,0 +1,6 @@
+# The same compiler as MDK. The core will link MDK as a library (D-002), so both must build with
+# one compiler (D-053). Change this only together with MDK's rust-toolchain.toml.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

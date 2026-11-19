@@ -1,0 +1,12 @@
+[package]
+name = "marmot-agent-events"
+description = "The item types that every Marmot agent driver produces"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

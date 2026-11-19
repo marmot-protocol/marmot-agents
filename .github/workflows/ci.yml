@@ -1,0 +1,82 @@
+name: CI
+
+# Every pull request, and every push to master. The same commands are in AGENTS.md under
+# "Verification"; keep the two in step.
+#
+# Rules for this file: every action is pinned to a commit, the token can only read, and no job
+# uses a secret.
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned toolchain
+        # With no arguments this installs what rust-toolchain.toml names.
+        run: |
+          rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Every crate takes the workspace's settings
+        run: python3 tools/check/workspace.py
+
+      - name: Format
+        # `cargo fmt` builds nothing and has no --locked.
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+      - name: Tests
+        run: cargo test --locked --workspace --all-features
+
+  recordings:
+    name: Recordings
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Every native message has a rule in the prototype
+        run: >
+          python3 tools/prototype/translate.py --check
+          fixtures/recordings/codex fixtures/recordings/claude
+          fixtures/recordings/hermes fixtures/recordings/openclaw
+
+  documents:
+    name: Documents
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: The link check checks
+        run: python3 -m unittest discover -s tools/check -p 'test_*.py'
+
+      - name: Links and anchors in the Markdown files
+        run: python3 tools/check/links.py
