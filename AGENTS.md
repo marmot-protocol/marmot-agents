@@ -217,6 +217,7 @@ For a change to the recordings, the recording tools, the prototype or the event 
 ```sh
 python3 tools/record/inventory.py fixtures/recordings/codex --kinds    # every file must parse; CI does not run this
 python3 tools/record/inventory.py fixtures/recordings/claude --kinds   # nor this
+python3 -m unittest discover -s tools/prototype -p 'test_*.py'         # cases no recording holds
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
     fixtures/recordings/hermes fixtures/recordings/openclaw
 ```

@@ -26,7 +26,7 @@ An agent event:
       "title": "Running a command",
       "text": "python3 greet.py",  the plain rendering, readable on its own
       "body": {...},               fields specific to the item type
-      "native": {"kind": "...", "payload": {...}}
+      "native": {"kind": "...", "payload": {...}}   null for a secret question that is no longer waiting
     }
 
 It has no dependencies.
@@ -57,11 +57,18 @@ TOOL_KINDS = ["command", "edit", "read", "search", "fetch", "mcp", "subagent", "
 
 MAX_TEXT = 600
 MAX_NATIVE = 4000
+NO_NATIVE = object()  # pass as `native` for an event that must carry no native message (D-056)
 
 
 def clip(s, n=MAX_TEXT):
     s = "" if s is None else str(s)
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def has_secret(ev):
+    """A question item with a secret question. Once it stops waiting it carries no native message,
+    and its answer names the question and nothing else (D-041, D-056)."""
+    return ev["type"] == "question" and any(q.get("secret") for q in ev["body"].get("questions") or [])
 
 
 def clip_native(payload):
@@ -101,7 +108,7 @@ class Translator:
             "title": title,
             "text": clip(text),
             "body": body or {},
-            "native": {"kind": native_kind, "payload": clip_native(native)},
+            "native": None if native is NO_NATIVE else {"kind": native_kind, "payload": clip_native(native)},
         }
         self.events.append(ev)
         if state in ("running", "waiting"):
@@ -117,7 +124,8 @@ class Translator:
                 continue  # tasks and sessions may outlive the turn; the turn closes itself
             self.emit(
                 item, ev["type"], "cancelled", ev["title"], ev["text"], ev["body"],
-                native_kind="(none: closed by the driver)", native={"reason": reason},
+                native_kind="(none: closed by the driver)",
+                native=NO_NATIVE if has_secret(ev) else {"reason": reason},
             )
 
     def session_item(self, sid, settings, native_kind, native, actions=(), commands=()):
@@ -429,8 +437,14 @@ class Codex(Translator):
             self.emit(req["item"], "approval", "done" if effect == "allow" else "declined", prev["title"], f"Answered: {label}",
                       {**prev["body"], "answer": {"choice": chosen}}, "response to the approval request", result)
         else:
+            answers, native = result.get("answers"), result
+            if has_secret(prev):
+                # The response holds the answer. Keep which questions were answered, and nothing else.
+                secret = {q["id"] for q in prev["body"]["questions"] if q.get("secret")}
+                answers = {k: ({} if k in secret else v) for k, v in (answers or {}).items()}
+                native = NO_NATIVE
             self.emit(req["item"], "question", "done", prev["title"], "Answered",
-                      {**prev["body"], "answer": result.get("answers")}, "response to the question request", result)
+                      {**prev["body"], "answer": answers}, "response to the question request", native)
 
     def response(self, m):
         method = self.pending.pop(("c", m.get("id")), None)

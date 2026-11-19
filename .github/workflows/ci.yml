@@ -58,6 +58,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: The prototype handles what no recording holds
+        run: python3 -m unittest discover -s tools/prototype -p 'test_*.py'
+
       - name: Every native message has a rule in the prototype
         run: >
           python3 tools/prototype/translate.py --check
