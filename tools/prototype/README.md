@@ -29,3 +29,10 @@ message then needs a decision: an item type, or the not-sent list.
 
 When the event model changes, change this script with it and run `--check` again. If the two disagree, the
 recordings decide.
+
+A case that no recording holds is tested with messages written by hand, in
+[`test_translate.py`](test_translate.py). Today that is one case: a Codex question marked secret.
+
+```sh
+python3 -m unittest discover -s tools/prototype -p 'test_*.py'
+```

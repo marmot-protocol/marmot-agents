@@ -7,8 +7,9 @@ duplicate it here.
 
 Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) into Marmot group chats.
 
-**Status: the first code.** There is a Rust workspace under `crates/` with one small crate,
-`marmot-agent-events`, and CI that checks it. No driver, socket or core exists yet. What is being built now is
+**Status: the first code.** There is a Rust workspace under `crates/` with one crate,
+`marmot-agent-events`, which holds the agent event and its eleven item types, and CI that checks it. No
+driver, socket or core exists yet. What is being built now is
 the item types, the driver trait and the Codex driver
 ([D-052](docs/decisions.md#d-052-the-codex-driver-is-built-first)). The core program is called `marmot-agent`
 ([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and
@@ -85,7 +86,11 @@ replacement entry.
 - Pass agent activity through: reasoning, tool calls, results, plans. Do not hide it
   ([D-008](docs/decisions.md#d-008-pass-everything-through)).
 - Never drop the native payload when translating
-  ([D-007](docs/decisions.md#d-007-one-shared-event-vocabulary)).
+  ([D-007](docs/decisions.md#d-007-one-shared-event-vocabulary)). There are two exceptions: a secret
+  question that is no longer waiting carries none
+  ([D-056](docs/decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)),
+  and the size limit leaves it out of an item over 64 KB
+  ([D-026](docs/decisions.md#d-026-an-agent-item-is-at-most-64-kb)).
 - Build on the vendor's official interface or library where one exists
   ([D-006](docs/decisions.md#d-006-prefer-official-interfaces-and-libraries)). Codex is the one exception
   to "library": its driver speaks `codex app-server` with types of its own, and links neither OpenAI's crates
@@ -215,6 +220,7 @@ For a change to the recordings, the recording tools, the prototype or the event 
 ```sh
 python3 tools/record/inventory.py fixtures/recordings/codex --kinds    # every file must parse; CI does not run this
 python3 tools/record/inventory.py fixtures/recordings/claude --kinds   # nor this
+python3 -m unittest discover -s tools/prototype -p 'test_*.py'         # cases no recording holds
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
     fixtures/recordings/hermes fixtures/recordings/openclaw
 ```
