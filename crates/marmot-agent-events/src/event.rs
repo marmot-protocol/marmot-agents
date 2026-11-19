@@ -59,15 +59,14 @@ id!(
 /// On the wire the item type is `type` and its own fields are `body`. Here the two are one value,
 /// [`Body`], so a type cannot be paired with another type's fields.
 ///
-/// The body and the native message are set together and cannot be changed afterwards, because
-/// one rule ties them: the answer to a secret question carries no native message (D-056). An
-/// event that breaks the rule cannot be built, and cannot be read from JSON.
+/// An event cannot be changed once it is built, because one rule ties its parts together: a
+/// question item that has a secret question carries a native message only while it is waiting
+/// (D-056). An event that breaks the rule cannot be built, and cannot be read from JSON.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "Unchecked")]
 pub struct AgentEvent {
-    /// The parts every item shares.
     #[serde(flatten)]
-    pub header: Header,
+    header: Header,
     #[serde(flatten)]
     body: Body,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -79,17 +78,14 @@ impl AgentEvent {
     /// none: nothing arrives from a harness when the driver closes an item the harness never
     /// closed.
     ///
-    /// It is refused if it would repeat the answer to a secret question: a question item that
-    /// has a secret question and has been answered must come with no native message, because for
-    /// Codex that message is the response that holds the answer.
+    /// It is refused if it could repeat the answer to a secret question. While such a question
+    /// is waiting, the harness's message is the request, which holds no answer. In every other
+    /// state it may be the response, which does. So a question item with a secret question must
+    /// come with no native message unless its state is `waiting`. The rule does not look at
+    /// whether an answer was filled in, so it cannot be stepped round by leaving one out.
     pub fn new(header: Header, body: Body, native: Option<Native>) -> Result<Self, RepeatsSecret> {
-        let answered_secret = match &body {
-            Body::Question(question) => {
-                question.answer().is_some() && question.questions().iter().any(|q| q.secret)
-            }
-            _ => false,
-        };
-        if answered_secret && native.is_some() {
+        let secret = matches!(&body, Body::Question(question) if question.questions().iter().any(|q| q.secret));
+        if secret && native.is_some() && header.state != State::Waiting {
             return Err(RepeatsSecret);
         }
         Ok(Self {
@@ -97,6 +93,11 @@ impl AgentEvent {
             body,
             native,
         })
+    }
+
+    /// The parts every item shares.
+    pub fn header(&self) -> &Header {
+        &self.header
     }
 
     /// The item type and the fields that belong to it.
@@ -135,13 +136,14 @@ pub struct Header {
     pub text: String,
 }
 
-/// An event would have carried a native message that repeats the answer to a secret question.
+/// An event would have carried a native message that could repeat the answer to a secret
+/// question.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RepeatsSecret;
 
 impl fmt::Display for RepeatsSecret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("the answer to a secret question must carry no native message")
+        f.write_str("a secret question carries a native message only while it is waiting")
     }
 }
 
@@ -170,7 +172,7 @@ impl TryFrom<Unchecked> for AgentEvent {
 ///
 /// A driver must never drop or change it (D-007). The payload is therefore the text of the JSON
 /// the harness sent, not a value read from it: spacing, the order of fields and the way a number
-/// was written all survive. The one event that goes without it is the answer to a secret question
+/// was written all survive. The one exception is a secret question that is no longer waiting
 /// (D-056).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Native {

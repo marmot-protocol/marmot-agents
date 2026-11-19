@@ -157,10 +157,10 @@ look right and are wrong.
    Codex sent none in any recording.
 9. **Never show a secret answer to the group.** A Codex question can be marked secret. It can be answered from
    the chat only in a two-person chat
-   ([D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)). The event that
-   records the answer says only that the question was answered, and carries no native message, because
-   Codex's own message holds the answer
-   ([D-056](../decisions.md#d-056-the-answer-to-a-secret-question-carries-no-native-message)).
+   ([D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)). Once such a
+   question is no longer waiting, its events say only that it was answered and carry no native message,
+   because Codex's own message holds the answer
+   ([D-056](../decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)).
 10. **Send the permission settings again when resuming a session.** A Codex thread resumed without them came
     back with a wider sandbox than it started with.
 11. **State what is never sent.** About half of all native traffic is partial text, and a quarter more is

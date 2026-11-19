@@ -89,8 +89,8 @@ client can show, and the harness's native payload.
 **Why.** Clients must be able to draw whatever arrives without knowing every harness. The shared item types and
 the plain rendering give them that. The native payload keeps full fidelity for clients that want to do more.
 
-One event goes without its native payload: the answer to a secret question
-([D-056](#d-056-the-answer-to-a-secret-question-carries-no-native-message)).
+A secret question that is no longer waiting goes without its native payload
+([D-056](#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)).
 
 ## D-008 Pass everything through
 
@@ -606,8 +606,8 @@ The cost: the answer stays in that chat's history on that person's devices.
 
 Decided 2026-11-18. Codex's interface has this marking. No recording contains a secret question.
 
-The event that records such an answer carries no native message
-([D-056](#d-056-the-answer-to-a-secret-question-carries-no-native-message)).
+A secret question carries a native message only while it is waiting
+([D-056](#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)).
 
 ## D-042 An agent may act in its own chat, and may not change a group or the account
 
@@ -836,22 +836,26 @@ the cases that were tried on it correctly.
 
 Decided 2026-11-19.
 
-## D-056 The answer to a secret question carries no native message
+## D-056 A secret question carries a native message only while it is waiting
 
-**Decision.** When a question item holds a secret question, the event that records its answer carries no
-native message. The item still says that the question was answered, and never what the answer was
+**Decision.** A question item that holds a secret question carries a native message only while it is
+waiting for an answer. Once it is answered, cancelled or failed, its events carry none. The item still says
+that the question was answered, and never what the answer was
 ([D-041](#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)).
 
 This is the one exception to "never drop the native payload"
-([D-007](#d-007-one-shared-event-vocabulary)). The event that asks the question keeps its native message,
-which holds no answer.
+([D-007](#d-007-one-shared-event-vocabulary)). While the question waits, its native message is the harness's
+request, which holds no answer, and it is kept.
 
-**Why.** The native message of that event is the harness's own record of the answer. For Codex it is the
-response to the question, and the answer is in it. Passing it on would put a password into the history of
-every member's device, where it cannot be taken back. One event without its native message costs little.
+**Why.** After a question is answered, the harness's own message about it is the record of the answer. For
+Codex it is the response to the question, and the answer is in it. Passing it on would put a password into the
+history of every member's device, where it cannot be taken back. A few events without a native message cost
+little.
 
-The item types hold the rule: such an event cannot be built with a native message, and one that arrives with
-one cannot be read.
+The rule is about the item's state and not about whether an answer was filled in, so that a driver cannot
+miss it by leaving the answer out. The item types hold it: an event that breaks it cannot be built, and one
+that arrives as JSON cannot be read. For the same reason the questions in one item must have ids that differ.
 
-Decided 2026-11-19. No recording contains a secret question, so this has been tested with a hand-written one
-only.
+Decided 2026-11-19. The project owner first decided that the answer to a secret question carries no native
+message, and then accepted this wider form when review showed the narrower one could be stepped round. No
+recording contains a secret question, so this has been tested with a hand-written one only.

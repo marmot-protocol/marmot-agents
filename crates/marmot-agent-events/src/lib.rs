@@ -102,7 +102,7 @@ mod tests {
             choices: Vec::new(),
             answer: None,
         };
-        let question = body::Question::new(body::AnswerVia::Request, None, Vec::new());
+        let question = body::Question::new(body::AnswerVia::Request, None, Vec::new()).unwrap();
         let task = body::Task {
             kind: "subagent".into(),
             description: None,
@@ -128,8 +128,8 @@ mod tests {
         ]
     }
 
-    fn a_secret_question() -> body::Question {
-        let asked = |id: &str, secret: bool| body::Asked {
+    fn asked(id: &str, secret: bool) -> body::Asked {
+        body::Asked {
             id: id.into(),
             header: None,
             text: "?".into(),
@@ -137,12 +137,12 @@ mod tests {
             multiple: false,
             allow_text: true,
             secret,
-        };
-        body::Question::new(
-            body::AnswerVia::Request,
-            None,
-            vec![asked("name", false), asked("password", true)],
-        )
+        }
+    }
+
+    fn a_secret_question() -> body::Question {
+        let questions = vec![asked("name", false), asked("password", true)];
+        body::Question::new(body::AnswerVia::Request, None, questions).unwrap()
     }
 
     fn answered(question: &str, text: Option<&str>) -> body::Answered {
@@ -255,8 +255,8 @@ mod tests {
             "body": {"choices": [], "expires_at_ms": 1794910522002u64},
         });
         let event: AgentEvent = serde_json::from_value(newer).unwrap();
-        assert_eq!(event.header.title, "Allow this command?");
-        assert_eq!(event.header.text, "rm -rf build");
+        assert_eq!(event.header().title, "Allow this command?");
+        assert_eq!(event.header().text, "rm -rf build");
         assert!(matches!(event.body(), Body::Approval(_)));
     }
 
@@ -269,9 +269,10 @@ mod tests {
             duration_ms: None,
             reason: None,
         };
-        let mut event = event(State::Done, Body::Notice(notice), None);
-        event.header.session = None;
-        event.header.turn = None;
+        let mut header = header(State::Done);
+        header.session = None;
+        header.turn = None;
+        let event = AgentEvent::new(header, Body::Notice(notice), None).unwrap();
         let written = serde_json::to_value(&event).unwrap();
         let fields: Vec<&String> = written.as_object().unwrap().keys().collect();
         assert_eq!(
@@ -307,8 +308,7 @@ mod tests {
     }
 
     // D-041: the answer to a secret question is never repeated in the item's answer. It cannot
-    // be put there, and an item that carries one cannot be read. An answer must also name a
-    // question that was asked, or the check on secret questions could be stepped round.
+    // be put there, and an item that carries one cannot be read.
     #[test]
     fn a_secret_answer_is_refused_in_the_answer_fields() {
         let open = a_secret_question();
@@ -317,7 +317,7 @@ mod tests {
             .answered(vec![answered("password", Some("hunter2"))]);
         assert_eq!(
             refused.unwrap_err(),
-            body::BadAnswer::Secret {
+            body::BadQuestion::SecretAnswer {
                 question: "password".into()
             }
         );
@@ -328,16 +328,6 @@ mod tests {
             text: None,
         };
         assert!(open.clone().answered(vec![chosen]).is_err());
-
-        let elsewhere = open
-            .clone()
-            .answered(vec![answered("passw0rd", Some("hunter2"))]);
-        assert_eq!(
-            elsewhere.unwrap_err(),
-            body::BadAnswer::NotAsked {
-                question: "passw0rd".into()
-            }
-        );
 
         let fine = open
             .answered(vec![
@@ -364,11 +354,43 @@ mod tests {
         assert!(error.contains("password"), "{error}");
     }
 
-    // D-056: the answer to a secret question carries no native message, because for Codex that
-    // message is the response that holds the answer. Such an event cannot be built, and one that
-    // arrives as JSON cannot be read.
+    // An answer has to say which question it is for, or the check above could be stepped round:
+    // by an id nobody asked, or by a secret question hiding behind a public one with the same id.
     #[test]
-    fn the_answer_to_a_secret_question_carries_no_native_message() {
+    fn an_answer_names_exactly_one_question() {
+        let elsewhere = a_secret_question().answered(vec![answered("passw0rd", Some("hunter2"))]);
+        assert_eq!(
+            elsewhere.unwrap_err(),
+            body::BadQuestion::NotAsked {
+                question: "passw0rd".into()
+            }
+        );
+
+        let public_first = vec![asked("field", false), asked("field", true)];
+        let twins = body::Question::new(body::AnswerVia::Request, None, public_first);
+        assert_eq!(
+            twins.unwrap_err(),
+            body::BadQuestion::SameId {
+                question: "field".into()
+            }
+        );
+
+        let twins_as_json = json!({
+            "answer_via": "request",
+            "questions": [
+                {"id": "field", "text": "?"},
+                {"id": "field", "text": "?", "secret": true},
+            ],
+            "answer": [{"question": "field", "text": "hunter2"}],
+        });
+        assert!(serde_json::from_value::<body::Question>(twins_as_json).is_err());
+    }
+
+    // D-056: a question item with a secret question carries a native message only while it is
+    // waiting. Then the message is the request, which holds no answer. Afterwards it may be the
+    // response, which does. The rule does not depend on an answer having been filled in.
+    #[test]
+    fn a_secret_question_carries_a_native_message_only_while_waiting() {
         let response = r#"{"answers":{"password":{"answers":["hunter2"]}}}"#;
         let open = a_secret_question();
         let answered = open
@@ -376,22 +398,24 @@ mod tests {
             .answered(vec![answered("password", None)])
             .unwrap();
 
-        // While the question is waiting, its native message is the request, which holds no answer.
-        assert!(
-            AgentEvent::new(
-                header(State::Waiting),
-                Body::Question(open),
-                Some(native("{}"))
-            )
-            .is_ok()
+        let waiting = AgentEvent::new(
+            header(State::Waiting),
+            Body::Question(open.clone()),
+            Some(native("{}")),
         );
+        assert!(waiting.is_ok());
 
-        let refused = AgentEvent::new(
-            header(State::Done),
-            Body::Question(answered.clone()),
-            Some(native(response)),
-        );
-        assert_eq!(refused.unwrap_err(), RepeatsSecret);
+        // Answered, with the answer left out of the item, or with no answer filled in at all.
+        for body in [answered.clone(), open.clone()] {
+            for state in [State::Done, State::Cancelled, State::Failed] {
+                let refused = AgentEvent::new(
+                    header(state),
+                    Body::Question(body.clone()),
+                    Some(native(response)),
+                );
+                assert_eq!(refused.unwrap_err(), RepeatsSecret);
+            }
+        }
 
         let sent = AgentEvent::new(header(State::Done), Body::Question(answered), None).unwrap();
         let mut written = serde_json::to_value(&sent).unwrap();
@@ -406,5 +430,18 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("secret"), "{error}");
+
+        // A question with nothing secret in it keeps its native message in every state.
+        let public =
+            body::Question::new(body::AnswerVia::Request, None, vec![asked("name", false)])
+                .unwrap();
+        assert!(
+            AgentEvent::new(
+                header(State::Done),
+                Body::Question(public),
+                Some(native(response))
+            )
+            .is_ok()
+        );
     }
 }

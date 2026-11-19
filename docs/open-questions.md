@@ -41,16 +41,17 @@ when the driver for that harness is built:
 
 | Decision | The prototype | The crate |
 | --- | --- | --- |
-| The answer to a secret question is never repeated ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat), [D-056](decisions.md#d-056-the-answer-to-a-secret-question-carries-no-native-message)) | Would repeat it twice: in the item's `answer`, and in the native message, which is Codex's response and holds the answer. No recording has a secret question | Cannot hold either. An answer to a secret question carries the question's id and nothing else, and its event cannot be built or read with a native message |
+| The answer to a secret question is never repeated ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat), [D-056](decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)) | Would repeat it twice: in the item's `answer`, and in the native message, which is Codex's response and holds the answer. No recording has a secret question | Cannot hold either. An answer to a secret question carries the question's id and nothing else, and a secret question that is no longer waiting cannot be built or read with a native message |
 | A session item carries the session's id ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)) | For Claude Code, a session item with no id, when the session is described before its first turn | Allows an event with no session, for any item type. See below |
 | A request to confirm a command is a `question` ([D-048](decisions.md#d-048-a-request-to-confirm-a-command-is-a-question)) | For Hermes, an `approval` | Not applicable: the crate does not choose an item's type |
 | A session item carries the harness's version ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)) | Has none. The page's table has none either | `harness_version`, always present |
 | A command always carries its name and hint ([D-045](decisions.md#d-045-a-session-items-commands-keep-their-names-and-lose-descriptions-first)) | For Claude Code, commands with a name and nothing else, until the driver asks for more | `hint`, always present, empty when the command takes nothing |
 
-One thing here is for the owner: **a session item with no session id.** Claude Code describes a session
-before its first turn and gives the id only when that turn starts, so its early session item has none.
-D-030 says the item carries the id. Either the connector waits for the id, or the rule gets an exception.
-The types allow the item for now.
+**A session item with no session id is left open on purpose.** Claude Code describes a session before its
+first turn and gives the id only when that turn starts, so its early session item has none. D-030 says the
+item carries the id. Either the connector waits for the id, or the rule gets an exception. The project owner
+chose on 2026-11-19 to leave this until the Claude Code connector is designed. Until then the types allow the
+item. Nothing built today produces one: Codex always has a thread id.
 
 **What an event carries, for every harness.** Each row needs an answer:
 

@@ -247,9 +247,9 @@ pub struct ApprovalAnswer {
 
 /// The agent asks the person something. One item can hold several questions.
 ///
-/// Its questions and answers cannot be changed once set, and the answers are checked against the
-/// questions: an answer to a question marked `secret` names the question and nothing else
-/// (D-041). That holds for a question built here and for one read from JSON.
+/// A question cannot be changed once it is built. Its questions have ids that differ, and its
+/// answers are checked against them: an answer to a question marked `secret` names the question
+/// and nothing else (D-041). That holds for a question built here and for one read from JSON.
 ///
 /// The native message of the event is the other place a secret answer could be repeated.
 /// [`AgentEvent::new`](crate::AgentEvent::new) covers that (D-056).
@@ -265,14 +265,29 @@ pub struct Question {
 }
 
 impl Question {
-    /// A question that nobody has answered yet.
-    pub fn new(answer_via: AnswerVia, subject: Option<ItemId>, questions: Vec<Asked>) -> Self {
-        Self {
+    /// A question that nobody has answered yet. It is refused if two of its questions share an
+    /// id, since an answer could then not say which one it is for.
+    pub fn new(
+        answer_via: AnswerVia,
+        subject: Option<ItemId>,
+        questions: Vec<Asked>,
+    ) -> Result<Self, BadQuestion> {
+        for (place, asked) in questions.iter().enumerate() {
+            if questions[..place]
+                .iter()
+                .any(|earlier| earlier.id == asked.id)
+            {
+                return Err(BadQuestion::SameId {
+                    question: asked.id.clone(),
+                });
+            }
+        }
+        Ok(Self {
             answer_via,
             subject,
             questions,
             answer: None,
-        }
+        })
     }
 
     /// How the harness expects the answer.
@@ -297,15 +312,15 @@ impl Question {
 
     /// The same question, answered. It is refused if an answer names a question that was not
     /// asked, or carries the answer to a secret question.
-    pub fn answered(mut self, answers: Vec<Answered>) -> Result<Self, BadAnswer> {
+    pub fn answered(mut self, answers: Vec<Answered>) -> Result<Self, BadQuestion> {
         for answer in &answers {
             let Some(asked) = self.questions.iter().find(|q| q.id == answer.question) else {
-                return Err(BadAnswer::NotAsked {
+                return Err(BadQuestion::NotAsked {
                     question: answer.question.clone(),
                 });
             };
             if asked.secret && (answer.text.is_some() || !answer.options.is_empty()) {
-                return Err(BadAnswer::Secret {
+                return Err(BadQuestion::SecretAnswer {
                     question: answer.question.clone(),
                 });
             }
@@ -315,26 +330,32 @@ impl Question {
     }
 }
 
-/// Why a question refused its answers.
+/// Why a question item was refused.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum BadAnswer {
+pub enum BadQuestion {
+    /// Two questions in one item have the same id.
+    SameId {
+        /// The id they share.
+        question: String,
+    },
     /// An answer names a question the item did not ask.
     NotAsked {
         /// The id the answer named.
         question: String,
     },
     /// An answer to a secret question carried the answer itself.
-    Secret {
+    SecretAnswer {
         /// The id of the secret question.
         question: String,
     },
 }
 
-impl fmt::Display for BadAnswer {
+impl fmt::Display for BadQuestion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::SameId { question } => write!(f, "two questions have the id `{question}`"),
             Self::NotAsked { question } => write!(f, "the question `{question}` was not asked"),
-            Self::Secret { question } => {
+            Self::SecretAnswer { question } => {
                 write!(
                     f,
                     "the answer to the secret question `{question}` must not be repeated"
@@ -344,7 +365,7 @@ impl fmt::Display for BadAnswer {
     }
 }
 
-impl std::error::Error for BadAnswer {}
+impl std::error::Error for BadQuestion {}
 
 /// A question as it is read from JSON, before its answers are checked.
 #[derive(Deserialize)]
@@ -358,10 +379,10 @@ struct UncheckedQuestion {
 }
 
 impl TryFrom<UncheckedQuestion> for Question {
-    type Error = BadAnswer;
+    type Error = BadQuestion;
 
-    fn try_from(read: UncheckedQuestion) -> Result<Self, BadAnswer> {
-        let question = Self::new(read.answer_via, read.subject, read.questions);
+    fn try_from(read: UncheckedQuestion) -> Result<Self, BadQuestion> {
+        let question = Self::new(read.answer_via, read.subject, read.questions)?;
         match read.answer {
             Some(answers) => question.answered(answers),
             None => Ok(question),
