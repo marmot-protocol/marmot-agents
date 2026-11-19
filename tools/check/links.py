@@ -32,9 +32,13 @@ SKIPPED_FOLDERS = {".git", "target", "node_modules", "__pycache__", ".venv"}
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$")
 CODE_SPAN = re.compile(r"(`+)(.+?)\1")
-INLINE_LINK = re.compile(r"\]\(\s*(<[^>]*>|[^)\s]+)(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)")
+SETEXT_UNDERLINE = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
+# A destination is `<anything>`, or text with no spaces whose parentheses are escaped or balanced.
+DESTINATION = r"<[^>]*>|(?:\\.|\([^()\s]*\)|[^()\s\\])+"
+INLINE_LINK = re.compile(r"\]\(\s*(" + DESTINATION + r")(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)")
 REFERENCE = re.compile(r"^ {0,3}\[[^\]]+\]:\s*(<[^>]*>|\S+)")
-HTML_LINK = re.compile(r"""\b(?:href|src|srcset)\s*=\s*["']([^"']*)["']""")
+HTML_LINK = re.compile(r"""\b(href|src|srcset)\s*=\s*["']([^"']*)["']""")
+ESCAPED = re.compile(r"\\([!-/:-@\[-`{-~])")
 HTML_ANCHOR = re.compile(r"""\b(?:id|name)\s*=\s*["']([^"']+)["']""")
 SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 MARKDOWN_LINK_TEXT = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
@@ -69,15 +73,26 @@ def anchors(text: str) -> set[str]:
     """Every anchor a Markdown file offers."""
     found: set[str] = set()
     seen: dict[str, int] = {}
-    for _, line in lines_outside_code(text):
+    above = (0, "")  # the line before this one, for a heading that is underlined
+    for number, line in lines_outside_code(text):
+        title = None
         heading = HEADING.match(line)
         if heading:
-            base = slug(heading.group(2).replace("`", ""))
+            title = heading.group(2)
+        elif SETEXT_UNDERLINE.match(line) and above[0] == number - 1:
+            # Under a paragraph line, `===` or `---` makes it a heading. Under a table row, a
+            # list item, a quote or another heading it does not.
+            text_above = above[1].strip()
+            if text_above and text_above[0] not in "|>-*+#=":
+                title = text_above
+        if title is not None:
+            base = slug(title.replace("`", ""))
             count = seen.get(base, 0)
             seen[base] = count + 1
             found.add(base if count == 0 else f"{base}-{count}")
         for anchor in HTML_ANCHOR.findall(CODE_SPAN.sub("", line)):
             found.add(anchor)
+        above = (number, line)
     return found
 
 
@@ -85,15 +100,24 @@ def links(text: str):
     """Yield (line number, target) for every link in a Markdown file."""
     for number, line in lines_outside_code(text):
         line = CODE_SPAN.sub("", line)
-        targets = INLINE_LINK.findall(line) + HTML_LINK.findall(line)
+        targets = list(INLINE_LINK.findall(line))
         reference = REFERENCE.match(line)
         if reference:
             targets.append(reference.group(1))
         for target in targets:
-            for part in target.split(","):  # srcset can hold several
-                part = part.strip().strip("<>").split(" ")[0]
-                if part:
-                    yield number, part
+            if target.startswith("<") and target.endswith(">"):
+                target = target[1:-1]
+            else:
+                target = ESCAPED.sub(r"\1", target)
+            if target:
+                yield number, target
+        for attribute, value in HTML_LINK.findall(line):
+            if attribute == "srcset":  # several candidates, each an address and a size
+                candidates = [part.split()[0] for part in value.split(",") if part.split()]
+            else:
+                candidates = [value.strip()] if value.strip() else []
+            for target in candidates:
+                yield number, target
 
 
 def markdown_files(root: Path) -> list[Path]:

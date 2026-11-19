@@ -170,8 +170,9 @@ Recorded sessions have their own rules:
 
 ## Verification
 
-CI runs every command in this section on each pull request and on `master`
-(`.github/workflows/ci.yml`). Run them before you push. If you change one here, change it there.
+CI runs these commands on each pull request and on `master` (`.github/workflows/ci.yml`), with two exceptions
+that are marked below: the diagrams and `tools/record/inventory.py`. Those two are checked only by you. Run
+everything that applies before you push. If you change a command here, change it there.
 
 For any change to Rust code, `Cargo.toml`, `Cargo.lock` or `rust-toolchain.toml`:
 
@@ -205,8 +206,8 @@ git diff --stat                   # the SVG files must not change unless generat
 For a change to the recordings, the recording tools, the prototype or the event model:
 
 ```sh
-python3 tools/record/inventory.py fixtures/recordings/codex --kinds    # every file must parse; not in CI
-python3 tools/record/inventory.py fixtures/recordings/claude --kinds
+python3 tools/record/inventory.py fixtures/recordings/codex --kinds    # every file must parse; CI does not run this
+python3 tools/record/inventory.py fixtures/recordings/claude --kinds   # nor this
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
     fixtures/recordings/hermes fixtures/recordings/openclaw
 ```

@@ -56,6 +56,14 @@ class Anchors(unittest.TestCase):
     def test_html_ids_are_anchors(self):
         self.assertEqual(links.anchors('<a id="hermes-controls"></a>\n'), {"hermes-controls"})
 
+    def test_an_underlined_heading_is_an_anchor(self):
+        text = "Installation\n============\n\nSecond part\n---\n"
+        self.assertEqual(links.anchors(text), {"installation", "second-part"})
+
+    def test_a_rule_or_a_table_is_not_an_underlined_heading(self):
+        text = "A paragraph.\n\n---\n\n| a | b |\n| --- | --- |\n\n- item\n---\n"
+        self.assertEqual(links.anchors(text), set())
+
     def test_a_heading_inside_a_code_block_is_not_an_anchor(self):
         self.assertEqual(links.anchors("```sh\n# not a heading\n```\n# Real\n"), {"real"})
 
@@ -104,6 +112,24 @@ class Links(unittest.TestCase):
             problems_in({"README.md": "`[a](gone.md)`\n\n```text\n[b](gone.md)\n```\n\n~~~\n[c](gone.md)\n~~~\n"}),
             [],
         )
+
+    def test_parentheses_and_spaces_in_a_file_name(self):
+        files = {
+            "README.md": "[a](guide(v2).md) [b](<release notes.md>) [c](one\\(two.md) [d](gone(v2).md)\n",
+            "guide(v2).md": "",
+            "release notes.md": "",
+            "one(two.md": "",
+        }
+        self.assertEqual(problems_in(files), ["README.md:1: gone(v2).md: no such file"])
+
+    def test_a_comma_splits_only_a_srcset(self):
+        files = {
+            "README.md": "[web](https://example.com/a,b) [a](one,two.md)\n"
+            '<source srcset="small.svg 1x, gone.svg 2x">\n',
+            "one,two.md": "",
+            "small.svg": "",
+        }
+        self.assertEqual(problems_in(files), ["README.md:2: gone.svg: no such file"])
 
     def test_a_fragment_on_a_source_file_is_not_a_heading(self):
         self.assertEqual(problems_in({"README.md": "[a](x.py#L3)\n", "x.py": "pass\n"}), [])
