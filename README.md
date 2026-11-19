@@ -7,7 +7,7 @@ end-to-end encrypted group, so you and the people you choose can talk to it from
 what it is doing, approve what it asks, and control it as fully as you could at the terminal.
 
 > **Status: the first code.** The design is in [`docs/`](docs/README.md). The code so far is a Rust workspace
-> under [`crates/`](crates) with the list of item types; the Codex driver is being built first. Nothing here
+> under [`crates/`](crates) with the agent event and its item types; the Codex driver is being built first. Nothing here
 > can be run yet.
 > The connectors that ship today live in [MDK](https://github.com/marmot-protocol/mdk) under `integrations/`.
 

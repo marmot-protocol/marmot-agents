@@ -7,8 +7,9 @@ duplicate it here.
 
 Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) into Marmot group chats.
 
-**Status: the first code.** There is a Rust workspace under `crates/` with one small crate,
-`marmot-agent-events`, and CI that checks it. No driver, socket or core exists yet. What is being built now is
+**Status: the first code.** There is a Rust workspace under `crates/` with one crate,
+`marmot-agent-events`, which holds the agent event and its eleven item types, and CI that checks it. No
+driver, socket or core exists yet. What is being built now is
 the item types, the driver trait and the Codex driver
 ([D-052](docs/decisions.md#d-052-the-codex-driver-is-built-first)). The core program is called `marmot-agent`
 ([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and

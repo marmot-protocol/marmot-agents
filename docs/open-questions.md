@@ -21,6 +21,61 @@ An eleventh type, `session`, was added on 2026-11-18
 ([D-043](decisions.md#d-043-a-setting-says-which-right-it-needs) to
 [D-046](decisions.md#d-046-a-setting-change-is-an-edit-and-a-notice-only-when-nobody-asked-for-it)).
 
+#### Where the page and the prototype disagree
+
+Found on 2026-11-19, when the item types were written in Rust
+([`crates/marmot-agent-events`](../crates/marmot-agent-events)). The page is
+[`design/event-model.md`](design/event-model.md) and the prototype is
+[`tools/prototype/translate.py`](../tools/prototype/translate.py). Each row needs the project owner's answer.
+Until then the crate does what its column says, and nothing here is decided.
+
+To measure it, every event the prototype produces was read into the Rust types, which refuse a field they do
+not know. Of Codex's 274 events, 273 fit. Of the other harnesses' 1,035, 585 fit.
+
+**What an event carries, for every harness**
+
+| Point | The page | The prototype | The crate, for now |
+| --- | --- | --- | --- |
+| A version number | Has none | `v: 0` on every event | Has none. The socket and the Marmot kind already carry versions |
+| The native message | Unchanged | Cut to a note of its size when it is over 4,000 characters | Whole, as the exact text that arrived. The core applies the size limit ([D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb)) |
+| An event the driver makes up, such as closing an item the harness never closed | Does not say | Gives it a made-up native message that holds the reason | No native message. Where the reason goes is not settled |
+| Long text and output | "Send everything, at full size" on the socket page | Text cut at 600 characters, output at 2,000 | No limit in the types |
+| `seq` | Order within the session. The socket page has no `seq` and says the core numbers items | Counts everything one translator produced, across sessions | Has it: the order in which the driver produced its events |
+| `prompts` on a turn | Only on the socket page | Has none | Has none |
+| The answer on a question | "Once answered: `answer`" | A different shape for each harness. For Codex, the harness's own labels | A list: the question's id, the ids of the options chosen, and typed text. Never the answer to a secret question ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)) |
+| The version of the harness on a session | [D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type) says the item carries it. The page's table does not | Has none | An optional `harness_version` |
+| A plan as steps | Entries with a text and a state | For Codex, never recorded: an `explanation`, and steps that are pending, running or done | Steps that are pending, running or done. No `explanation` |
+
+**Fields only the prototype has, that Codex produces.** The crate has them, because the recordings show a
+use for each:
+
+| Item | Field |
+| --- | --- |
+| `tool` | `changes[].change`: whether a file was added, changed or deleted. `error`. `path`, for a file that was read |
+| `question` | `subject`. A `header` on each question. A `description` on each option |
+| `notice` | `duration_ms` on a wait. `reason` on a change of model |
+| `error` | `will_retry`. The page says "what was being attempted, and the harness's error code"; the prototype names them `request` and `code` |
+| `turn` | What `usage` holds: `input_tokens` and `output_tokens` |
+
+**Fields only the prototype has, from the other three harnesses.** The crate does not have them. Each is for
+the connector that produces it to bring up:
+
+| Item | Field | From |
+| --- | --- | --- |
+| `turn` | `model`. `cost_usd` inside `usage` | Claude Code, OpenClaw |
+| `message` | `sent_with` | OpenClaw |
+| `tool` | `patch`: an edit as numbered hunks, where the page has `changes` with a diff. `parent` | Claude Code |
+| `tool` | `action`, `target`, `called_through`, `subject` | OpenClaw |
+| `approval` | `answer_via`, `command`, `reason`, `expires_at_ms`, `subject_inferred`, `tool` | Hermes, OpenClaw, Claude Code |
+| `approval`, `question` | `native` on each choice: the text to type. The page says a choice carries a label and an effect, "nothing more" | Hermes, OpenClaw |
+| `notice` | Eight more kinds: `runtime`, `activity`, `progress`, `refused`, `steered`, `new_session`, `stopped`, `directive`. A `command` field | Hermes, OpenClaw |
+| `error` | `subject` | OpenClaw |
+| `task` | Its `kind` is the harness's own word: `local_bash`, `subagent`. Its `usage` is not the shape a turn's is | Claude Code |
+| `session` | Commands with a name and nothing else, until the driver asks for more. [D-045](decisions.md#d-045-a-session-items-commands-keep-their-names-and-lose-descriptions-first) says a command always carries its hint | Claude Code |
+
+**On the page, and never produced by the prototype:** the notice kind `retry`, the tool kind `fetch`, and a
+plan as steps. The crate has all three.
+
 ### Q-02 What happens to large output?
 
 The limit is decided: an agent item is at most 64 KB ([D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb)).
