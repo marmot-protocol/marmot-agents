@@ -1,0 +1,15 @@
+[package]
+name = "marmot-agent-driver"
+description = "The trait every Rust driver implements, and what a driver says it supports"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+marmot-agent-events = { path = "../marmot-agent-events" }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

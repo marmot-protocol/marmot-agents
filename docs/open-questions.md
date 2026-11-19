@@ -351,8 +351,51 @@ short-lived group messages, or remove it is open.
 
 ### Q-16 How does a driver say what it supports?
 
-The current thinking is a set of capability flags per driver, so the core and the clients adapt without checking
-the harness name. The exact flags are open.
+A proposal now exists as code: [`crates/marmot-agent-driver`](../crates/marmot-agent-driver), written on
+2026-11-19. It holds the trait every Rust driver implements and the capability flags. Both wait for the
+project owner's answer.
+
+**The trait** has the operations of
+[the socket's driver section](design/socket-protocol.md#the-driver-section), and no others:
+
+| On the socket | In the trait |
+| --- | --- |
+| The hello: the harness, and what it can do | `harness`, `capabilities` |
+| The requests `prompt`, `answer`, `control` | `prompt`, `answer`, `control`. Each returns once the harness has taken or refused it, with one of the eight reasons |
+| The notification `event` | `next_event`: the next agent event, and on a turn the prompts it responds to |
+
+It needs no async runtime. A driver picks its own.
+
+**The flags** are the ten of the draft on
+[the socket page](design/socket-protocol.md#capabilities). The Codex column is what its driver will state.
+
+| Flag | Values | Codex | Who reads it |
+| --- | --- | --- | --- |
+| `interrupt` | yes or no | yes | An app, to offer the button |
+| `mid_turn` | `fold`, `restart`, `queue` | `fold` | An app, to say what a message sent during a turn will do |
+| `sessions` | `core`, `own` | `core` | The core, to know whether it names the session |
+| `resume` | yes or no | yes | The core, after a restart |
+| `tool_items` | yes or no | yes | An app |
+| `approvals` | yes or no | yes | An app |
+| `questions` | `request`: yes or no. `message`: yes or no | both | An app |
+| `reasoning` | yes or no | no | An app |
+| `files_in` | `none`, `images`, `any` | `images` | An app, to allow an attachment |
+| `approval_commands` | a list; each entry has the command and `where` it counts: `start` or `anywhere` | none | The core, on every message |
+
+What the proposal changes from the draft, and what it leaves for the owner:
+
+- **`questions` is two yes-or-no values**, where the draft has "request, message or both". A harness that
+  asks no questions then needs no fourth word.
+- **`files_in` is one of three words**, where the draft says yes or no and then answers "images".
+- **An answer says which kind it is.** To an approval it gives one choice. To a question item it gives one
+  entry for each question: the question's id, the ids of the options and any typed text. The example on the
+  socket page has a flat list of choices, which cannot say which question a choice belongs to.
+- **Three flags describe what will arrive, and the items already say it.** `tool_items`, `reasoning` and
+  `questions` change nothing the core does. They are kept because the draft has them. Dropping them would
+  leave seven.
+- **Nothing was added.** Whether the harness reports usage, plans or tasks is visible in its items.
+- **Not in the trait:** starting and stopping a driver. Each driver has its own settings, such as where the
+  harness's program is, so each has its own way to be made. Dropping a driver stops its harness.
 
 ### Q-17 How are drivers tested?
 

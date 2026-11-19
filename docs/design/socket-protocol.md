@@ -170,7 +170,8 @@ designed yet.
 
 The connector states in the hello what its harness can do. The core and the apps read these and never check a
 harness's name. This list is a draft, drawn from the recordings. It will change when the first drivers are
-built.
+built. A proposal that turns it into types, with two small changes, is under
+[Q-16](../open-questions.md#q-16-how-does-a-driver-say-what-it-supports).
 
 | Capability | Values | Codex | Claude Code | Hermes | OpenClaw |
 | --- | --- | --- | --- | --- | --- |

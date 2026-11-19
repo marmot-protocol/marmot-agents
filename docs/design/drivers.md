@@ -76,13 +76,23 @@ Every Rust driver implements one trait. In outline it needs to:
 - change session settings such as model and mode;
 - produce a stream of agent events.
 
-Programs on the socket do the same things as messages. The exact trait is not designed yet.
+Programs on the socket do the same things as messages.
+
+A first version exists as code, in [`crates/marmot-agent-driver`](../../crates/marmot-agent-driver). It has
+the operations of [the socket's driver section](socket-protocol.md#the-driver-section) and no others: say
+what the harness is and can do, take a prompt, take an answer, take a control, and hand back the next agent
+event. Opening and resuming a session are not operations of their own: a prompt names its session, and
+"new session" is a control. It is a proposal
+([Q-16](../open-questions.md#q-16-how-does-a-driver-say-what-it-supports)).
 
 ## Proposed: capabilities
 
 Each driver declares what its harness can do: steer mid-turn, resume, report usage, ask questions, and so on.
 The core and the clients read these flags and never check a harness's name. When a capability is missing, the
 core falls back in a defined way, for example interrupt-and-restart where steering is not supported.
+
+The proposed flags, with what Codex states for each, are under
+[Q-16](../open-questions.md#q-16-how-does-a-driver-say-what-it-supports).
 
 ## Proposed: testing with recorded sessions
 
