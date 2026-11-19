@@ -341,7 +341,8 @@ output, identifiers or keys. The exact rules are not written yet.
 
 What the code does today, as a starting point and not a rule: the driver crate's types print, for debugging,
 the core's own ids and the ids of the settings and actions a harness published. They never print a value: no
-text, name, answer, choice, new setting or attachment. They leave out a question's id too, because the agent
+text, name, answer, choice, new setting or attachment, and none of the harness's own words, such as a
+refusal's detail. They leave out a question's id too, because the agent
 writes it, and the ids of the options and the choice a person gave. That is more than "no identifiers" allows, because the core's ids are shown. The item types in
 `marmot-agent-events` still print everything, the native message included.
 

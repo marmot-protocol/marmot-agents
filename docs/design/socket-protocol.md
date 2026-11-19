@@ -175,10 +175,11 @@ designed yet.
 ## Capabilities
 
 The connector states in the hello what its harness can do. The core and the apps read these and never check a
-harness's name. This list is a draft, drawn from the recordings. It will change when the first drivers are
-built. The Rust drivers' flags are decided
+harness's name. This table is a draft, drawn from the recordings, and stays one until the socket is
+designed. The Rust drivers' flags are decided
 ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)): seven of these, leaving out
-`tool_items`, `questions` and `reasoning`.
+`tool_items`, `questions` and `reasoning`, and with `files_in` as `none`, `images` or `any` rather than yes or
+no. The socket takes those when it is designed.
 
 | Capability | Values | Codex | Claude Code | Hermes | OpenClaw |
 | --- | --- | --- | --- | --- | --- |

@@ -947,9 +947,12 @@ Decided 2026-11-19.
   including when the effect is that it failed
   ([D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it),
   [D-046](#d-046-a-setting-change-is-an-edit-and-a-notice-only-when-nobody-asked-for-it)).
-- **When the harness stops, the driver closes what it can first.** Then the core closes whatever is still
-  open, and settles every open request with a notice that it failed, as it does when a connector's connection
-  drops ([D-034](#d-034-the-core-does-the-shared-work-and-a-connector-speaks-only-in-agent-events)).
+- **When the harness stops, the driver closes what it can first.** The core closes whatever items are still
+  open, as it does when a connector goes away
+  ([D-034](#d-034-the-core-does-the-shared-work-and-a-connector-speaks-only-in-agent-events)).
+- **When a driver ends, for any reason, the core settles every answer and control still open** with a
+  notice that it failed. A prompt is not settled this way: one that was not taken is not delivered, and is
+  never sent again ([D-037](#d-037-a-prompt-is-delivered-at-most-once)).
 - **An event says which chat it belongs to**, whenever the driver knows. "New session" names a chat, and a
   session only if there is one to end.
 - **An answer says which kind it is.** To an approval it gives one choice. To a question item it gives, for
