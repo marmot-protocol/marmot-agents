@@ -66,6 +66,15 @@ class Workspace(unittest.TestCase):
             ],
         )
 
+    def test_a_crate_in_the_root_manifest_fails(self):
+        found = problems_in(
+            {
+                "Cargo.toml": ROOT + '[package]\nname = "marmot-agent"\n',
+                "crates/marmot-agent-a/Cargo.toml": crate("marmot-agent-a"),
+            }
+        )
+        self.assertEqual(found, ["Cargo.toml: the root manifest is a crate; crates live under crates/"])
+
     def test_a_build_folder_is_not_read(self):
         found = problems_in(
             {

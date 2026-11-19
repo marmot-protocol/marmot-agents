@@ -1989,8 +1989,10 @@ def translate(path: Path) -> Translator:
 
 
 def check(dirs: list[Path]) -> int:
+    # A mistyped folder or an empty file must not pass as "nothing without a rule".
     empty = [str(d) for d in dirs if not any(d.glob("*.jsonl"))]
-    if empty or not dirs:  # a mistyped folder must not pass as "nothing without a rule"
+    empty += [str(p) for d in dirs for p in sorted(d.glob("*.jsonl")) if not p.read_text(encoding="utf-8").strip()]
+    if empty or not dirs:
         print("no recordings in:", ", ".join(empty) or "no folder was given")
         return 1
     total_native = total_events = 0

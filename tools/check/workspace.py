@@ -7,11 +7,12 @@ Usage:
 Cargo applies the workspace's lints, edition, licence and publish setting only to a crate that
 asks for them. A crate that forgets is not told, and then unsafe code is allowed in it. This
 check reads every Cargo.toml below the root, because Cargo also takes a crate into the workspace
-when another crate depends on it by path. It fails when a crate:
+when another crate depends on it by path. It fails when:
 
-- does not inherit the workspace lints, which forbid unsafe code;
-- does not inherit the version, the edition, the licence or `publish = false`;
-- is not named after its folder, or does not start with `marmot-agent` (D-050).
+- a crate does not inherit the workspace lints, which forbid unsafe code;
+- a crate does not inherit the edition, the licence or `publish = false`;
+- a crate's name does not start with `marmot-agent` (D-050);
+- the root manifest is itself a crate. Crates live under crates/ (D-053).
 
 It needs Python 3.11 or newer, and nothing else.
 """
@@ -22,13 +23,16 @@ import sys
 import tomllib
 from pathlib import Path
 
-INHERITED = ("version", "edition", "license", "repository", "publish")
+INHERITED = ("edition", "license", "publish")
 SKIPPED_FOLDERS = {".git", "target", "node_modules"}
 
 
 def check(root: Path) -> list[str]:
     problems = []
-    workspace = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))["workspace"]
+    top = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
+    workspace = top["workspace"]
+    if "package" in top:
+        problems.append("Cargo.toml: the root manifest is a crate; crates live under crates/")
     if workspace.get("lints", {}).get("rust", {}).get("unsafe_code") != "forbid":
         problems.append("Cargo.toml: the workspace does not forbid unsafe code")
     if workspace.get("package", {}).get("publish") is not False:
@@ -46,8 +50,6 @@ def check(root: Path) -> list[str]:
         crate = tomllib.loads(manifest.read_text(encoding="utf-8"))
         package = crate.get("package", {})
         name = package.get("name", "")
-        if name != manifest.parent.name:
-            problems.append(f"{shown}: the crate is named '{name}', not after its folder")
         if not name.startswith("marmot-agent"):
             problems.append(f"{shown}: the name does not start with 'marmot-agent'")
         if crate.get("lints") != {"workspace": True}:
