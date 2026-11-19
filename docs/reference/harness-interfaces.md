@@ -53,12 +53,13 @@ Read again on 2026-11-19. The newest release is 0.170.0 (2026-11-18). The record
   `codex-rs/app-server-client`, Apache-2.0. Neither is published on crates.io. The crates named
   `codex-app-server-protocol` and `codex-protocol` there are one upload each, version 0.63.0 of 2025-12-11,
   from `namastexlabs/codex`: a third-party fork, not OpenAI's.
-- **The client crate does not speak stdio.** `codex-app-server-client` has two parts. One runs the app server
-  inside the calling program. The other is a remote client for a separate app server, and it always carries
-  WebSocket frames, over TCP or a Unix socket. Neither talks to `codex app-server` over stdio, which is the
-  interface the recordings were made on. The crate depends on `codex-core` and on `codex-app-server` itself,
-  so it is heavier than the protocol crate. It was read and not built. If the driver ever moves to the
-  WebSocket transport, it is worth another look.
+- **The client crate does not speak stdio.** `codex-app-server-client` offers three ways to reach an app
+  server. One runs it inside the calling program. One is a remote client for a separate app server, which
+  always carries WebSocket frames, over TCP or a Unix socket. One is a client for OpenAI's cloud. None talks
+  to `codex app-server` over stdio, which is the interface the recordings were made on. The crate depends on
+  `codex-core` and on `codex-app-server` itself, so it is heavier than the protocol crate. It was read at
+  `rust-v0.169.0` and not built. If the driver ever moves to the WebSocket transport, it is worth another
+  look.
 - **The protocol crate is heavy.** At `rust-v0.169.0` the workspace has 168 member crates and pins Rust
   1.95.0. The protocol crate alone builds 721 crates. See
   [the trial](#codex-which-library-to-build-on).
@@ -158,7 +159,7 @@ Read again on 2026-11-19. The newest release is 0.170.0 (2026-11-18). The record
 | `@anthropic-ai/claude-agent-sdk` | npm | 0.3.326, 2026-11-16 | Official |
 | `@cursor/sdk` | npm | 1.4.0, 2026-11-15 | Official |
 | `@openai/codex-sdk` | npm | 0.170.0, 2026-11-18 | Official, but wraps the JSON-lines mode |
-| `codex-app-server-protocol`, `codex-app-server-client` | `openai/codex` on GitHub | Unpublished; `rust-v0.170.0`, 2026-11-18 | Official Rust crates. A git dependency does not build without OpenAI's lock file and patches, and cannot be linked beside MDK today. See [the trial](#codex-which-library-to-build-on) |
+| `codex-app-server-protocol`, `codex-app-server-client` | `openai/codex` on GitHub | Unpublished. Tried at `rust-v0.169.0`; the newest tag, `rust-v0.170.0` of 2026-11-18, was not built | Official Rust crates. At `rust-v0.169.0` the protocol crate does not build as a git dependency without OpenAI's lock file and patches, and cannot be linked beside MDK at `6f6d2017d`. See [the trial](#codex-which-library-to-build-on) |
 | `claude-codes`, `codex-codes`, `pi-codes`, `opencode-codes` | crates.io, `meawoppl/rust-code-agent-sdks` | `codex-codes` 0.169.6, 2026-11-18; `claude-codes` 2.1.327, 2026-11-17 | Community. Each version names the CLI release it was tested against. One maintainer wrote 668 of 674 commits; 30 stars |
 
 Other Rust crates for Claude Code on crates.io were stale when checked. One named `claude-agent-sdk` lists an
@@ -215,8 +216,9 @@ Build times are one run each on a warm machine. They show the scale, not exact f
    built.
 
 **A cannot be linked beside MDK today.** The core has to link MDK
-([D-002](../decisions.md#d-002-one-rust-core-program-with-mdk-as-a-library)). This was tried by resolving one
-project that depends on A and on `rusqlite` as MDK does. Cargo refuses:
+([D-002](../decisions.md#d-002-one-rust-core-program-with-mdk-as-a-library)). This was tried for one pair
+of versions, Codex `rust-v0.169.0` and MDK `6f6d2017d`, by resolving one project that depends on A and on
+`rusqlite` as MDK does. Cargo refuses:
 
 - OpenAI's `codex-state`, which the protocol crate reaches through `codex-rollout`, needs
   `libsqlite3-sys ^0.39.1`.
@@ -271,9 +273,11 @@ What is behind those numbers:
   the word `redacted` over account details. Where Codex sends one of a fixed list of words, A and B refuse
   the whole message: `account/updated` and `remoteControl/status/changed` in both, and
   `account/rateLimits/updated` in B. Real traffic would not fail this way. A real new word would.
-- **A's typed values lost nothing that these recordings can show.** Its 69 changed values are one scrubbed
-  plan name, which it reads as "unknown". That is a statement about its types and about scrubbed traffic. Its
-  envelope still drops `emittedAtMs`, and its 62 failures are messages it did not read at all.
+- **A's typed values lost nothing that these recordings can show.** Its 69 changed values are one field: the
+  plan name in `rateLimits.planType`, on each of the 69 `account/rateLimits/updated` messages. A's type for
+  that one field has a catch-all, so the scrubbed word parses and is written back as `unknown`. That is a
+  statement about its types and about scrubbed traffic. Its envelope still drops `emittedAtMs`, and its 62
+  failures are messages it did not read at all.
 - **B loses what the driver needs most.** Its types come from the stable schema, so they have no place for
   experimental fields. It drops `availableDecisions` from all five command approvals: that is the list of
   choices a person is offered. It has no type for `thread/settings/update`, `turn/settings/update` or
@@ -296,6 +300,10 @@ These seven were written by hand.
 | An item of an unknown type | Error | Error | Caught, payload kept whole |
 | A known field with an unknown word | Error | Error | Parses |
 | A known notification without a required field | Error | Error | Error |
+
+The "known field with an unknown word" was the `status` of a turn, which has no catch-all in A or B. A few
+fields do have one, such as the plan name above, and for those an unknown word parses. So the answer depends
+on the field, and nothing in the types says which ones are safe.
 
 An error in A or B is an error for that one message. The envelope has already parsed, so a driver can still
 fall back to the JSON. But it then needs that fallback for every message, which is most of what C is.
@@ -369,13 +377,18 @@ Codex means moving all three together, and re-checking the clash with MDK each t
 **What the trial showed for C is reading.** It did not try writing. The driver sends 12 kinds of request in
 the recordings and answers 4 kinds of request from Codex, and with C each of those is built by hand. An
 approval can be read correctly and still be answered in the wrong shape, which would leave the turn waiting.
-Two checks are meant to cover that, and neither has been run:
+Three checks are meant to cover that, and none has been run:
 
 - build each request and reply the recordings hold from the driver's own types, and require the same JSON
-  that was recorded;
-- check what the driver builds against Codex's schema.
+  that was recorded. That includes `initialized`, which the client sends after every handshake and which is
+  a notification, not a request;
+- check what the driver builds against Codex's schema;
+- answer an approval with a decision that Codex offers as an object. All five recorded command approvals
+  offer one, and none of the four recorded replies chose it, so the first two checks would pass a driver
+  that turned it into a plain "accept". The test has to check the whole decision and the id of the request
+  it answers.
 
-Both belong with the transport half of the driver. If they turn out badly, this recommendation should be
+All three belong with the transport half of the driver. If they turn out badly, this recommendation should be
 looked at again before the driver is finished.
 
 This goes against the official library, which
@@ -402,7 +415,7 @@ What C costs:
 
 - The types are ours to keep right. Nothing fails to compile when Codex changes. A new recording, replayed in
   CI, is what shows the change, and that is true of A and B as well, since each has to be moved by hand.
-- The requests and replies the driver sends are built by hand, which is why the two checks above matter.
+- The requests and replies the driver sends are built by hand, which is why the three checks above matter.
 - If the driver comes to read far more of the protocol, this choice should be looked at again.
 
 ## Sources
