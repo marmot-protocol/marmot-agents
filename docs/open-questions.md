@@ -281,10 +281,6 @@ model ([`tools/prototype`](../tools/prototype/README.md)). There is no driver to
 
 ## The repository and the move from MDK
 
-### Q-18 What is the core program called?
-
-The name of the core program is not chosen. Today's daemon is `wn-agent`.
-
 ### Q-19 How do existing installs move over?
 
 Account homes, identities, allow-lists, services and installers exist for every current connector. The cutover

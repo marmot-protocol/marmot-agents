@@ -106,7 +106,9 @@ exist so that nobody, human or agent, has to redo the research behind a decision
 ## Where the code will live
 
 The first three rows do not exist yet. They are the planned shape, so that the first code lands in the right
-place.
+place. The core program is called `marmot-agent`
+([D-050](decisions.md#d-050-the-core-program-is-called-marmot-agent)), and the Codex driver is built first
+([D-052](decisions.md#d-052-the-codex-driver-is-built-first)).
 
 | Path | Holds |
 | --- | --- |

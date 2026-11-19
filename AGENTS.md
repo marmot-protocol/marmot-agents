@@ -7,10 +7,13 @@ duplicate it here.
 
 Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) into Marmot group chats.
 
-**Status: planning.** There is no connector code yet. The work so far is design and decisions under `docs/`,
-plus recorded harness sessions and the tools that made them. The connectors that ship today are in the MDK
-repository (`integrations/`, `crates/agent-connector`,
-`crates/agent-control`); they are being replaced by what is designed here, not extended.
+**Status: design agreed, building begins.** There is no connector code yet. The first code is the item types,
+the driver trait and the Codex driver
+([D-052](docs/decisions.md#d-052-the-codex-driver-is-built-first)). The core program is called `marmot-agent`
+([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). The work so far is design and
+decisions under `docs/`, plus recorded harness sessions and the tools that made them. The connectors that ship
+today are in the MDK repository (`integrations/`, `crates/agent-connector`, `crates/agent-control`); they are
+being replaced by what is designed here, not extended.
 
 ## Read these first
 

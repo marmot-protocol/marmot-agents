@@ -27,6 +27,7 @@ Read from the Marmot specification at commit `162c61b` and MDK at `a2d3486ac`, b
 | An app event is an unsigned Nostr-shaped event: `kind`, `content`, `tags`, `created_at`, `pubkey`, and an `id` computed from them. The sender is proven by the group's encryption, not by a signature | An agent event is one of these; nothing new is needed underneath |
 | The list of kinds is not a gate. A client must accept an event of a kind it does not know, and may choose not to show it | A new kind is allowed |
 | Kinds 1201 and 1202 are reserved for agent activity, with no definition yet | They are the obvious numbers to use |
+| MDK already builds a 1201 and a 1202 in an older shape, and today's connectors send very few ([below](#what-kinds-1201-and-1202-carry-today)) | The new shape replaces the old one ([D-051](../decisions.md#d-051-kinds-1201-and-1202-take-the-new-shape-and-the-old-one-is-not-kept)) |
 | An edit (kind 1009) points at an earlier event with one `e` tag and replaces its text. It is honoured only from the same author, never shows as a row of its own, and does not count as new activity | This is the mechanism for changing something already sent |
 | An edit replaces only the text, and MDK applies one only to a chat message or a comment | To update an agent item, an edit must be allowed to target one and to replace its tags too |
 | Competing edits are ordered by `created_at`, which counts whole seconds | Two updates in the same second have no defined winner |
@@ -35,6 +36,27 @@ Read from the Marmot specification at commit `162c61b` and MDK at `a2d3486ac`, b
 | Files and images travel as attachments on chat messages (kind 9) only | A large output cannot be attached to an agent event as things stand |
 | Nothing is short-lived except live previews over the separate QUIC channel | Every agent event sent is kept as history |
 | The spec sets no size limit on an app event | We have to choose one |
+
+### What kinds 1201 and 1202 carry today
+
+Read from MDK at `a2d3486ac` on 2026-11-19. Older connector releases were not checked.
+
+Today's `wn-agent` adds nothing to these events. A connector hands it the fields and MDK builds the event.
+
+| Kind | Tags | Content |
+| --- | --- | --- |
+| 1201 | `status`, and an `e` tag for the message being answered | JSON: `v`, `status`, `text`, and an optional `extra` that no connector sets |
+| 1202 | `operation`, `operation-status`, an optional `operation-name`, and the same `e` tag | JSON: `v`, `status`, `text`, `event_type`, and optional ids, a preview, details, a sequence number, a result and a duration |
+
+| Connector | Sends a 1201 | Sends a 1202 |
+| --- | --- | --- |
+| Terminal harness (Claude Code, Codex, OpenCode, Pi, Goose) | Status `error`, only when a file the agent produced cannot be delivered | Never |
+| Hermes | Status `commentary`: what the agent says between tool calls | Tool progress |
+| OpenClaw | Never | Never |
+
+When one arrives, MDK stores its content and tags as they are and gives it a row. For a notification's preview
+it reads the content as JSON and takes `text`, then `status`. An agent item's content is plain text, so that
+preview has to change with the new shape. What the apps draw for these kinds was not checked.
 
 ## The agent's words are ordinary chat messages
 
