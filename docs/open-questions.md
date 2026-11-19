@@ -263,23 +263,14 @@ short-lived group messages, or remove it is open.
 
 ### Q-15 Which library does the Codex driver build on?
 
-The trial was run on 2026-11-19, against the 28 Codex recordings:
-[`reference/harness-interfaces.md`](reference/harness-interfaces.md#codex-which-library-to-build-on). It is
-waiting for the project owner's answer.
+A trial was run on 2026-11-19, against the 28 Codex recordings. It is waiting for the project owner's answer.
+The findings and the recommendation are in
+[`reference/harness-interfaces.md`](reference/harness-interfaces.md#codex-which-library-to-build-on).
 
-What it found:
-
-- **OpenAI's own protocol crate** reads every recorded message, but it cannot be linked beside MDK today,
-  because the two need different versions of SQLite's Rust binding. It also does not build as an ordinary
-  dependency: it needs OpenAI's lock file and four of their patches, and it is 721 crates.
-- **`codex-codes`** is light and well kept, but it covers only the stable half of the protocol. It drops the
-  list of choices from a command approval and has no types for the settings requests.
-- **Types of our own, written by hand,** read everything the translation needs in about 250 lines, on `serde`
-  alone, and keep each message as the JSON it arrived as.
-
-The recommendation is the third, with Codex's own schema as the reference. That goes against the official
-library, which [D-006](decisions.md#d-006-prefer-official-interfaces-and-libraries) prefers, so it needs a
-decision. If accepted, it also replaces what the Codex row of
+The recommendation is types of our own, written by hand, with Codex's own schema as the reference. It is
+against both OpenAI's protocol crate and `codex-codes`. That goes against the official library, which
+[D-006](decisions.md#d-006-prefer-official-interfaces-and-libraries) prefers, so it needs a decision. If
+accepted, it also replaces what the Codex row of
 [D-005](decisions.md#d-005-which-driver-each-harness-gets) says the driver builds on.
 
 ### Q-16 How does a driver say what it supports?

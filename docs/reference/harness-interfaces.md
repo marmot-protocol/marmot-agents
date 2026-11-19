@@ -53,9 +53,12 @@ Read again on 2026-11-19. The newest release is 0.170.0 (2026-11-18). The record
   `codex-rs/app-server-client`, Apache-2.0. Neither is published on crates.io. The crates named
   `codex-app-server-protocol` and `codex-protocol` there are one upload each, version 0.63.0 of 2025-12-11,
   from `namastexlabs/codex`: a third-party fork, not OpenAI's.
-- **The client crate is not a client library.** `codex-app-server-client` depends on `codex-core` and on
-  `codex-app-server` itself: it runs the app server inside the calling program. Only the protocol crate is a
-  candidate for a driver that starts `codex app-server` as a separate process.
+- **The client crate does not speak stdio.** `codex-app-server-client` has two parts. One runs the app server
+  inside the calling program. The other is a remote client for a separate app server, and it always carries
+  WebSocket frames, over TCP or a Unix socket. Neither talks to `codex app-server` over stdio, which is the
+  interface the recordings were made on. The crate depends on `codex-core` and on `codex-app-server` itself,
+  so it is heavier than the protocol crate. It was read and not built. If the driver ever moves to the
+  WebSocket transport, it is worth another look.
 - **The protocol crate is heavy.** At `rust-v0.169.0` the workspace has 168 member crates and pins Rust
   1.95.0. The protocol crate alone builds 721 crates. See
   [the trial](#codex-which-library-to-build-on).
@@ -228,7 +231,12 @@ would replace MDK's WebSocket library with OpenAI's fork.
 ### What each one does with the recordings
 
 Of the 1,997 messages, 1,731 are notifications from Codex, 8 are requests from Codex, 110 are requests to
-Codex, 31 are the client's `initialized`, and 117 are responses.
+Codex and 31 are the client's `initialized`. The other 117 are responses: 109 successful ones and one error
+from Codex, and 7 replies from the client to Codex's requests.
+
+The table has three levels, and they are different questions. *The envelope* is the JSON-RPC wrapper. *A
+type* is the candidate's own value for one method's payload. *Written back* is that value turned into JSON
+again and compared with the recording.
 
 | | A: OpenAI's crate | B: `codex-codes` | C: by hand |
 | --- | --- | --- | --- |
@@ -238,7 +246,9 @@ Codex, 31 are the client's `initialized`, and 117 are responses.
 | Notifications from Codex that fail | 62 | 131 | 0 |
 | Requests from Codex that parse into a type | 8 of 8 | 8 of 8 | 8 of 8 |
 | Requests to Codex that have a type | 110 of 110 | 106 of 110 | Built by hand. Not tried |
-| Responses from Codex that have a type | 109 of 109 | 106 of 109 | 35 are read. The rest need none |
+| Replies to Codex's requests that have a type | 7 of 7 | 7 of 7 | Built by hand. Not tried |
+| Successful responses from Codex that have a type | 109 of 109 | 106 of 109 | 35 are read. The rest need none |
+| The one error response from Codex | Envelope only | Envelope only | Envelope only |
 | Typed value written back: identical | 1,759 | 1,294 | Not written back |
 | Typed value written back: differs only in nulls and defaults | 106 | 433 | |
 | Typed value written back: a value lost or changed | 69 | 100 | |
@@ -252,8 +262,9 @@ What is behind those numbers:
   the word `redacted` over account details. Where Codex sends one of a fixed list of words, A and B refuse
   the whole message: `account/updated` and `remoteControl/status/changed` in both, and
   `account/rateLimits/updated` in B. Real traffic would not fail this way. A real new word would.
-- **A loses nothing from real messages.** Its 69 changed values are one scrubbed plan name, which it reads as
-  "unknown".
+- **A's typed values lost nothing that these recordings can show.** Its 69 changed values are one scrubbed
+  plan name, which it reads as "unknown". That is a statement about its types and about scrubbed traffic. Its
+  envelope still drops `emittedAtMs`, and its 62 failures are messages it did not read at all.
 - **B loses what the driver needs most.** Its types come from the stable schema, so they have no place for
   experimental fields. It drops `availableDecisions` from all five command approvals: that is the list of
   choices a person is offered. It has no type for `thread/settings/update`, `turn/settings/update` or
@@ -301,8 +312,10 @@ produced nothing:
 | `codex_app_server_protocol.schemas.json` | Panic: a `$ref` it could not find |
 | `ServerRequest.json` | Panic: "not yet implemented" |
 
-Generating types therefore means writing a generator. `codex-codes` did exactly that, in a Python script of
-its own, so candidate B is what generated types look like in practice.
+So this trial produced no generated types. That is as far as it goes: other generators were not tried, nor
+were the several hundred schema files for single messages, nor the generator `codex-codes` wrote for itself,
+which is a Python script in its repository. Candidate B is the one example here of types generated from the
+schema.
 
 ### Who maintains each, and how fast it follows Codex
 
@@ -324,7 +337,8 @@ Codex means moving all three together, and re-checking the clash with MDK each t
 - A's build on a clean CI runner, and on macOS.
 - Whether B or C can be linked beside MDK. Neither brings native code, so no clash is expected (inferred).
 - B's own clients. Only its types were tried, since the driver has its own transport half.
-- Checking what the driver sends against Codex's schema. See the recommendation.
+- Anything the driver writes with types of its own: requests, and replies to Codex's requests. See the
+  recommendation.
 
 ### Recommendation
 
@@ -335,8 +349,19 @@ Codex means moving all three together, and re-checking the clash with MDK each t
   the trial. An unknown method, an unknown item type or an unknown word becomes a catch-all, not an error.
 - It depends on `serde` and `serde_json`, which the item types need anyway.
 - Codex's own schema, from `codex app-server generate-json-schema --experimental` at the version we record,
-  stays the reference. Checking each request the driver builds against that schema in a test would catch a
-  wrong field name without linking anything. This has not been tried. It belongs with the transport half.
+  stays the reference.
+
+**What the trial showed for C is reading.** It did not try writing. The driver sends 12 kinds of request in
+the recordings and answers 4 kinds of request from Codex, and with C each of those is built by hand. An
+approval can be read correctly and still be answered in the wrong shape, which would leave the turn waiting.
+Two checks are meant to cover that, and neither has been run:
+
+- build each request and reply the recordings hold from the driver's own types, and require the same JSON
+  that was recorded;
+- check what the driver builds against Codex's schema.
+
+Both belong with the transport half of the driver. If they turn out badly, this recommendation should be
+looked at again before the driver is finished.
 
 This goes against the official library, which
 [D-006](../decisions.md#d-006-prefer-official-interfaces-and-libraries) prefers where one exists. The reasons:
@@ -362,7 +387,7 @@ What C costs:
 
 - The types are ours to keep right. Nothing fails to compile when Codex changes. A new recording, replayed in
   CI, is what shows the change, and that is true of A and B as well, since each has to be moved by hand.
-- The requests the driver sends are built by hand, which is why the schema check above matters.
+- The requests and replies the driver sends are built by hand, which is why the two checks above matter.
 - If the driver comes to read far more of the protocol, this choice should be looked at again.
 
 ## Sources
