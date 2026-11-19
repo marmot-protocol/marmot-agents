@@ -21,7 +21,7 @@ It does not decide who is allowed to do anything, and it does not touch Marmot. 
 
 | Harness | Driver | Language | Interface it speaks | Builds on |
 | --- | --- | --- | --- | --- |
-| Codex | Native | Rust | `codex app-server`, JSON-RPC over stdio | OpenAI's protocol crates, or `codex-codes` |
+| Codex | Native | Rust | `codex app-server`, JSON-RPC over stdio | Types of its own, with Codex's schema as the reference ([D-055](../decisions.md#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own)) |
 | Pi | Native | Rust | `pi --mode rpc`, JSON lines over stdio | `pi-codes` |
 | Goose | ACP, with a small Goose flavour | Rust | `goose acp` | `agent-client-protocol` |
 | OpenCode | ACP | Rust | `opencode acp` | `agent-client-protocol` |

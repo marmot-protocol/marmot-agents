@@ -65,8 +65,12 @@ Read again on 2026-11-19. The newest release is 0.170.0 (2026-11-18). The record
   [the trial](#codex-which-library-to-build-on).
 - **Codex publishes its own schema.** `codex app-server generate-json-schema --out <dir>` writes JSON Schema
   for the protocol, and `generate-ts` writes TypeScript. Both are marked experimental in the CLI's help. From
-  0.169.0 the schema has 329 files: 86 server notifications, 109 client requests, 10 server requests. With
-  `--experimental` it has 479 files and 184 client requests.
+  0.169.0 the schema is 329 files, most of them one type each. It lists 86 notifications from the server, 109
+  requests from a client and 10 requests from the server. With `--experimental` it is 479 files, with 184
+  requests from a client and 11 from the server. These were counted on 2026-11-19 from the `method` lists in
+  `ServerNotification.json`, `ClientRequest.json` and `ServerRequest.json`.
+  [`harness-messages.md`](harness-messages.md#size-of-the-protocol) gives 81, 108 and 9 for the same command
+  and version, read on 2026-11-17. The difference was not traced.
 - **Part of what a driver needs is in the experimental half.** A client opts in with
   `capabilities.experimentalApi` in `initialize`, as our recorder does. Experimental, and used in the
   recordings: the requests `thread/settings/update`, `turn/settings/update` and `collaborationMode/list`, and
@@ -167,8 +171,8 @@ Anthropic repository that does not exist, so it is not official.
 
 ## Codex: which library to build on
 
-This is the trial that [Q-15](../open-questions.md#q-15-which-library-does-the-codex-driver-build-on) asked
-for. It ends in a recommendation, which is a proposal until the project owner accepts it.
+This is the trial that the open question Q-15 asked for. Its recommendation was accepted on 2026-11-19 as
+[D-055](../decisions.md#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own).
 
 - **Run on:** 2026-11-19, on one Linux machine with 20 cores, with Rust 1.97.1, the compiler this repository
   pins.
@@ -364,7 +368,8 @@ Codex means moving all three together, and re-checking the clash with MDK each t
 
 ### Recommendation
 
-**Build the Codex driver on types of its own, written by hand (C).** It is a proposal until it is accepted.
+**Build the Codex driver on types of its own, written by hand (C).** Accepted on 2026-11-19 as
+[D-055](../decisions.md#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own).
 
 - The driver keeps every message as the JSON it arrived as. That is the native payload.
 - It reads a message through small types that hold only the fields the translation uses, about 250 lines in
@@ -394,13 +399,16 @@ looked at again before the driver is finished.
 This goes against the official library, which
 [D-006](../decisions.md#d-006-prefer-official-interfaces-and-libraries) prefers where one exists. The reasons:
 
-1. **It cannot be linked beside MDK today**, and the core must link MDK. The SQLite clash is settled by
-   OpenAI's and MDK's release schedules, not by us, and can come back with any Codex release.
-2. **It does not build as a dependency.** It needs OpenAI's lock file and four of their patches in our root
-   manifest, one of which would replace MDK's WebSocket library.
+1. **It cannot be linked beside MDK today**, and the core must link MDK. That is the result for the pair
+   that was tried, Codex `rust-v0.169.0` and MDK `6f6d2017d`; `rust-v0.170.0` was not built. The SQLite
+   clash is settled by OpenAI's and MDK's release schedules, not by us, and can come back with any Codex
+   release.
+2. **It does not build as a dependency.** At `rust-v0.169.0` it needed OpenAI's lock file as a starting
+   point and four of their patches in our root manifest, one of which would replace MDK's WebSocket library.
 3. **It is 721 crates and native code** for a job that is reading JSON.
-4. **It does not remove the work.** It has no catch-all, so the driver would still keep the raw message and
-   handle the unknown itself.
+4. **It does not remove the work.** An unknown method, an unknown item type and an unknown status of a turn
+   are each an error. The one field found with a catch-all, the plan name, turns an unknown word into
+   `unknown` without saying so. So the driver would still keep the raw message and handle the unknown itself.
 
 The driver still builds on the official interface, `codex app-server`, and on OpenAI's own schema. What it
 does not use is an internal crate that OpenAI does not publish.

@@ -261,18 +261,6 @@ short-lived group messages, or remove it is open.
 
 ## Drivers
 
-### Q-15 Which library does the Codex driver build on?
-
-A trial was run on 2026-11-19, against the 28 Codex recordings. It is waiting for the project owner's answer.
-The findings and the recommendation are in
-[`reference/harness-interfaces.md`](reference/harness-interfaces.md#codex-which-library-to-build-on).
-
-The recommendation is types of our own, written by hand, with Codex's own schema as the reference. It is
-against both OpenAI's protocol crate and `codex-codes`. That goes against the official library, which
-[D-006](decisions.md#d-006-prefer-official-interfaces-and-libraries) prefers, so it needs a decision. If
-accepted, it also replaces what the Codex row of
-[D-005](decisions.md#d-005-which-driver-each-harness-gets) says the driver builds on.
-
 ### Q-16 How does a driver say what it supports?
 
 The current thinking is a set of capability flags per driver, so the core and the clients adapt without checking

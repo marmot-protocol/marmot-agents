@@ -71,6 +71,10 @@ maintained by its vendor. ACP models one editor user per session, so it cannot c
 group it came from; Hermes and OpenClaw need those, so they keep their own plugins.
 See [`reference/harness-interfaces.md`](reference/harness-interfaces.md).
 
+What the Codex driver builds on is replaced by
+[D-055](#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own): types of its own, and neither
+OpenAI's protocol crates nor `codex-codes`.
+
 ## D-006 Prefer official interfaces and libraries
 
 **Decision.** Build each driver on the vendor's official interface or library where one exists. Use a community
@@ -779,7 +783,7 @@ The plan after that, which is not fixed:
 
 **Why.** The Codex driver needs nothing from MDK, so it can start at once, and it is the cheapest test of the
 design in real code. It also settles three open questions by doing them: which Codex library to build on
-([Q-15](open-questions.md#q-15-which-library-does-the-codex-driver-build-on)), the capability flags
+(Q-15, since settled as [D-055](#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own)), the capability flags
 ([Q-16](open-questions.md#q-16-how-does-a-driver-say-what-it-supports)) and how drivers are tested
 ([Q-17](open-questions.md#q-17-how-are-drivers-tested)). The core cannot send an agent item until MDK changes.
 The gateways come last because whose rules govern them is still open
@@ -827,5 +831,40 @@ commits, has nothing to leak and cannot be changed from outside.
 
 A link check of our own was written first. Three reviews each found Markdown it read wrongly. Lychee read
 the cases that were tried on it correctly.
+
+Decided 2026-11-19.
+
+## D-055 The Codex driver reads Codex's messages with types of its own
+
+**Decision.**
+
+- The Codex driver keeps each message from `codex app-server` as the JSON it arrived as. It reads a message
+  through small types written in this repository, which hold only the fields the translation uses.
+- It links neither OpenAI's protocol crates nor `codex-codes`.
+- The interface is still OpenAI's own, `codex app-server`. Codex's own schema, from
+  `codex app-server generate-json-schema --experimental` at the version that was recorded, is the reference
+  for what the driver reads and sends.
+
+This replaces what the Codex row of [D-005](#d-005-which-driver-each-harness-gets) says the driver builds on.
+
+**Why.** All three candidates were built and run against the 28 Codex recordings
+([the trial](reference/harness-interfaces.md#codex-which-library-to-build-on)).
+
+- OpenAI's protocol crate, at `rust-v0.169.0`, could not be resolved into one program with MDK at
+  `6f6d2017d`: the two need different versions of SQLite's Rust binding, and the core must link MDK
+  ([D-002](#d-002-one-rust-core-program-with-mdk-as-a-library)). It also built only with OpenAI's lock file
+  and four of their patches, and it is 721 crates.
+- `codex-codes` is light and well kept, but it covers only the stable half of the protocol. It drops the
+  choices a command approval offers and has no types for the settings requests.
+- Neither keeps a message unchanged, so the driver has to keep the JSON itself whichever it uses.
+
+This sets aside the official library that
+[D-006](#d-006-prefer-official-interfaces-and-libraries) prefers, for Codex only. D-006 stands for the other
+drivers.
+
+The cost: the types are ours to keep right, and nothing fails to compile when Codex changes a message. A new
+recording, replayed in CI, is what shows a change. The requests and replies the driver sends are built by hand
+too. The trial did not try that; the three checks it names for it are to be run with the transport half of
+the driver, and this decision should be looked at again if they go badly.
 
 Decided 2026-11-19.
