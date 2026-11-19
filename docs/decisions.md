@@ -319,6 +319,9 @@ Decided 2026-11-17.
 **Decision.** An agent item is at most 64 KB. When one would be larger, the driver first leaves out the native
 message, then cuts the output, keeping the start and the end, and says in the event what it did.
 
+Replaced in part by [D-057](#d-057-the-core-applies-the-64-kb-limit): the core applies the limit, not the
+driver. The limit and the order stand.
+
 **Why.** 64 KB carried every one of 16,841 tool outputs measured in real use; 16 KB would have cut one in 70.
 Storage is not a constraint at these sizes. The only constraint is relays that accept small events: an item
 near the limit is about 86 KB by the time it reaches a relay. We accept that. 64 KB is not large, and we want
@@ -326,9 +329,6 @@ relays to accept more.
 
 Decided 2026-11-17. How the full output is fetched when it was cut is still open
 ([Q-02](open-questions.md#q-02-what-happens-to-large-output)).
-
-Who applies the limit is replaced by [D-057](#d-057-the-core-applies-the-64-kb-limit): the core, not the
-driver.
 
 ## D-027 Answers and controls are one kind of event, kind 1202
 
@@ -910,9 +910,14 @@ recording contains a secret question, so this has been tested with a hand-writte
 ## D-057 The core applies the 64 KB limit
 
 **Decision.** The core applies the size limit of [D-026](#d-026-an-agent-item-is-at-most-64-kb) to every agent
-item, whichever driver or connector it came from. A driver hands over every event whole: the native message as
-it arrived, and text and output at full size. When an item would be over 64 KB, the core leaves out the native
-message first, then cuts the output, keeping the start and the end, and says in the event what it did.
+item, whichever driver or connector it came from. A driver never leaves anything out or cuts anything to keep
+an item under the limit: it hands over the native message as it arrived, and text and output at full size. When
+an item would be over 64 KB, the core leaves out the native message first, then cuts the output, keeping the
+start and the end, and says in the event what it did.
+
+This is about size only. A secret question that is no longer waiting still carries no native message
+([D-056](#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)), and its driver leaves
+that out.
 
 This replaces "the driver" in D-026. The limit, and the order in which parts are left out, stand.
 

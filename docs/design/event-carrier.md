@@ -210,7 +210,7 @@ accepts only 64 KB will not take it. If a group uses only such relays, that item
 not large, and relays should accept more.
 
 When an item would be larger, the core drops parts in this order and says so in the event
-([D-057](../decisions.md#d-057-the-core-applies-the-64-kb-limit)). A driver always hands it over whole.
+([D-057](../decisions.md#d-057-the-core-applies-the-64-kb-limit)). A driver never cuts anything to fit.
 
 1. the native message is left out, with its size noted;
 2. the output is cut, keeping the start and the end, with the full length noted.

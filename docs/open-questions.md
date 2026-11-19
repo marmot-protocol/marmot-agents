@@ -46,6 +46,7 @@ when the driver for that harness is built:
 | A request to confirm a command is a `question` ([D-048](decisions.md#d-048-a-request-to-confirm-a-command-is-a-question)) | For Hermes, an `approval` | Not applicable: the crate does not choose an item's type |
 | A session item carries the harness's version ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)) | Has none. The page's table has none either | `harness_version`, always present |
 | A command always carries its name and hint ([D-045](decisions.md#d-045-a-session-items-commands-keep-their-names-and-lose-descriptions-first)) | For Claude Code, commands with a name and nothing else, until the driver asks for more | `hint`, always present, empty when the command takes nothing |
+| The core applies the 64 KB limit, and a driver cuts nothing to fit it ([D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb), [D-057](decisions.md#d-057-the-core-applies-the-64-kb-limit)) | Cuts the native message to a note of its size over 4,000 characters, text at 600 characters and output at 2,000 | Applies no limit |
 
 **A session item with no session id is left open on purpose.** Claude Code describes a session before its
 first turn and gives the id only when that turn starts, so its early session item has none. D-030 says the
@@ -66,12 +67,6 @@ item. Nothing built today produces one: Codex always has a thread id.
 | What a task's `usage` holds | "`usage` once known" | Claude Code's three numbers: time, tools used, tokens. Not the shape a turn's usage has | Leaves `usage` off a task |
 | A plan as steps | Entries with a text and a state | For Codex, never recorded: an `explanation`, and steps that are pending, running or done | Steps that are pending, running or done. No `explanation` |
 | A field the types do not know | Does not say | Not applicable | Passed over when an event is read, so that an older core can still show a newer driver's item |
-
-**Settled since: the core applies the 64 KB limit**
-([D-057](decisions.md#d-057-the-core-applies-the-64-kb-limit)). So a driver hands over the native message whole,
-and text and output at full size, as the socket page says. The prototype still cuts the native message to a
-note of its size over 4,000 characters, text at 600 characters and output at 2,000. That is to be changed when
-the Codex driver is tested against it.
 
 **Fields only the prototype has, that Codex produces.** The crate has them, because the recordings show a
 use for each:

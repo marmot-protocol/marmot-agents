@@ -181,7 +181,7 @@ impl TryFrom<Unchecked> for AgentEvent {
 ///
 /// Two things leave it out of an event. A secret question that is no longer waiting carries
 /// none (D-056), which [`AgentEvent::new`] holds. And the core leaves it out of an item over 64 KB
-/// (D-026, D-057). A driver never does: it hands every event over whole.
+/// (D-026, D-057). A driver never leaves it out to fit that limit.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Native {
     /// What the harness calls this message, such as `item/completed`.
