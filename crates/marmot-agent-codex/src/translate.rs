@@ -124,6 +124,8 @@ pub struct Translator {
     /// The client's requests that will start a turn, oldest first, and who they count as.
     starts: Vec<(Id, StartedBy)>,
     started_by: Option<StartedBy>,
+    /// The thread the message being translated names, if it names one.
+    message_thread: Option<String>,
     known: Known,
     models: Option<Vec<String>>,
     modes: Option<Vec<String>>,
@@ -254,6 +256,19 @@ impl Translator {
             }
             return;
         }
+        #[derive(Deserialize)]
+        struct Named {
+            #[serde(default, rename = "threadId")]
+            thread_id: Option<String>,
+        }
+        self.message_thread = serde_json::from_str::<Named>(params)
+            .ok()
+            .and_then(|n| n.thread_id);
+        self.handle(method, m, params, out);
+        self.message_thread = None;
+    }
+
+    fn handle(&mut self, method: &str, m: &Envelope<'_>, params: &str, out: &mut Vec<AgentEvent>) {
         match method {
             "turn/started" => self.turn_started(method, params, out),
             "turn/completed" => self.turn_completed(method, params, out),
@@ -929,11 +944,7 @@ impl Translator {
                 };
                 let (decision, chosen) = match replied_by {
                     Reply::Grant => {
-                        let granted = reply
-                            .permissions
-                            .iter()
-                            .flatten()
-                            .any(|(_, v)| !v.is_null());
+                        let granted = reply.permissions.iter().flatten().any(|(_, v)| grants(v));
                         let chosen = match (granted, reply.scope.as_deref()) {
                             (false, _) => "c2",
                             (true, Some("session")) => "c1",
@@ -1015,7 +1026,8 @@ impl Translator {
             let Some(e) = self.read::<ErrorReply>("an error reply", error.get()) else {
                 return;
             };
-            let item = format!("error:{}", show_id(m.id.as_ref()));
+            // Numbered like every item the driver names, not by request id, which Codex reuses.
+            let item = format!("error:{}", self.made);
             let body = Body::Error(Error {
                 request: method.clone(),
                 code: e.code,
@@ -1262,7 +1274,16 @@ impl Translator {
             let header = prev.header();
             let (title, text) = (header.title.clone(), header.text.clone());
             let body = prev.body().clone();
-            self.emit(out, &item, body, State::Cancelled, &title, &text, None);
+            self.emit_owned(
+                out,
+                owner(&prev),
+                &item,
+                body,
+                State::Cancelled,
+                &title,
+                &text,
+                None,
+            );
         }
     }
 
@@ -1284,13 +1305,8 @@ impl Translator {
             if q.answer_via() != AnswerVia::Message {
                 continue;
             }
-            let here = (self.session.take(), self.turn.take());
-            let header = prev.header();
-            self.session = header.session.as_ref().map(|s| s.as_str().to_string());
-            self.turn = header.turn.as_ref().map(|t| t.as_str().to_string());
-            let (title, body) = (header.title.clone(), prev.body().clone());
-            self.emit(out, &item, body, state, &title, text, None);
-            (self.session, self.turn) = here;
+            let (title, body) = (prev.header().title.clone(), prev.body().clone());
+            self.emit_owned(out, owner(&prev), &item, body, state, &title, text, None);
         }
     }
 
@@ -1325,13 +1341,33 @@ impl Translator {
         text: &str,
         native: Option<Native>,
     ) {
+        // An event from a message that names its thread belongs to that thread.
+        let session = self.message_thread.clone().or_else(|| self.session.clone());
+        let owner = (session, self.turn.clone());
+        self.emit_owned(out, owner, item, body, state, title, text, native);
+    }
+
+    /// An event for an item that belongs to `owner`, a session and a turn, which need not be the
+    /// current ones: an item the driver closes keeps the session and turn it was in.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_owned(
+        &mut self,
+        out: &mut Vec<AgentEvent>,
+        (session, turn): (Option<String>, Option<String>),
+        item: &str,
+        body: Body,
+        state: State,
+        title: &str,
+        text: &str,
+        native: Option<Native>,
+    ) {
         self.made += 1;
-        let seq = self.seq.entry(self.session.clone()).or_default();
+        let seq = self.seq.entry(session.clone()).or_default();
         *seq += 1;
         let header = Header {
             harness: "codex".into(),
-            session: self.session.clone().map(Into::into),
-            turn: self.turn.clone().map(Into::into),
+            session: session.map(Into::into),
+            turn: turn.map(Into::into),
             item: item.into(),
             seq: *seq,
             state,
@@ -1424,6 +1460,26 @@ fn native_text(kind: &str, payload: &str) -> Native {
         kind: kind.to_string(),
         payload: RawValue::from_string(payload.to_string())
             .unwrap_or_else(|_| RawValue::from_string("{}".into()).expect("valid JSON")),
+    }
+}
+
+/// The session and turn an event belongs to.
+fn owner(event: &AgentEvent) -> (Option<String>, Option<String>) {
+    let h = event.header();
+    (
+        h.session.as_ref().map(|s| s.as_str().to_string()),
+        h.turn.as_ref().map(|t| t.as_str().to_string()),
+    )
+}
+
+/// Whether a permission grant grants anything: a true flag or a non-empty list somewhere in it.
+/// `{"network": {"enabled": false}}` and `{"fileSystem": {"read": [], "write": []}}` grant nothing.
+fn grants(value: &Value) -> bool {
+    match value {
+        Value::Object(fields) => fields.values().any(grants),
+        Value::Array(items) => !items.is_empty(),
+        Value::Bool(flag) => *flag,
+        _ => false,
     }
 }
 

@@ -193,13 +193,19 @@ fn a_harness_that_stops_mid_turn_closes_the_turn() {
 #[test]
 fn seq_counts_within_each_session() {
     let first = r#"{"method": "thread/started", "params": {"thread": {"id": "th1", "cliVersion": "0.169.0"}}}"#;
-    let warn = r#"{"method": "warning", "params": {"threadId": "th1", "message": "careful"}}"#;
+    let warn = |thread: &str| {
+        format!(
+            r#"{{"method": "warning", "params": {{"threadId": "{thread}", "message": "careful"}}}}"#
+        )
+    };
     let second = r#"{"method": "thread/started", "params": {"thread": {"id": "th2", "cliVersion": "0.169.0"}}}"#;
     let events = feed(&[
         (Direction::In, first),
-        (Direction::In, warn),
+        (Direction::In, &warn("th1")),
         (Direction::In, second),
-        (Direction::In, warn),
+        (Direction::In, &warn("th2")),
+        // A late message from the first thread still belongs to it.
+        (Direction::In, &warn("th1")),
     ]);
     let seqs: Vec<(String, u64)> = events
         .iter()
@@ -214,11 +220,18 @@ fn seq_counts_within_each_session() {
             )
         })
         .collect();
-    // th1: its session item, the warning, then its session ending; th2: its item, the warning.
+    // th1: its session item, a warning, its session ending, the late warning; th2: its item, a warning.
     assert_eq!(
         seqs,
-        [("th1", 1), ("th1", 2), ("th1", 3), ("th2", 1), ("th2", 2)]
-            .map(|(s, n)| (s.to_string(), n))
+        [
+            ("th1", 1),
+            ("th1", 2),
+            ("th1", 3),
+            ("th2", 1),
+            ("th2", 2),
+            ("th1", 4)
+        ]
+        .map(|(s, n)| (s.to_string(), n))
     );
     assert!(matches!(events[1].body(), Body::Notice(n) if n.kind == NoticeKind::Warning));
 }
@@ -337,6 +350,16 @@ fn a_permission_request_is_granted_for_a_scope_or_denied() {
             "c0",
         ),
         (r#"{"permissions": {}}"#, State::Declined, "c2"),
+        (
+            r#"{"permissions": {"network": {"enabled": false}}}"#,
+            State::Declined,
+            "c2",
+        ),
+        (
+            r#"{"permissions": {"fileSystem": {"read": [], "write": []}}}"#,
+            State::Declined,
+            "c2",
+        ),
     ] {
         let events = feed(&[(Direction::In, asked), (Direction::Out, &reply(grant))]);
         let Body::Approval(approval) = events[1].body() else {
@@ -466,4 +489,57 @@ fn a_list_of_models_that_arrives_late_reaches_the_session() {
         model.options,
         Some(vec!["m1".to_string(), "m2".to_string()])
     );
+}
+
+#[test]
+fn a_question_that_outlived_its_turn_is_closed_in_that_turn() {
+    let later = r#"{"method": "turn/started", "params": {"threadId": "th1", "turn": {"id": "t2", "items": [], "status": "inProgress", "error": null}}}"#;
+    let interrupted = r#"{"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t2", "items": [], "status": "interrupted", "error": null}}}"#;
+    let asked = [
+        (Direction::In, thread("th1")),
+        (Direction::In, TURN_STARTED.to_string()),
+        (Direction::In, ASKS_IN_A_MESSAGE.to_string()),
+        (Direction::In, TURN_DONE.to_string()),
+    ];
+    let th1 = Some("th1".to_string());
+    let t1 = Some("t1".to_string());
+    let cancelled = (State::Cancelled, th1.clone(), t1.clone());
+
+    // The harness stops.
+    let mut translator = Translator::new();
+    let mut events: Vec<AgentEvent> = asked
+        .iter()
+        .flat_map(|(d, m)| translator.feed(*d, m))
+        .collect();
+    events.extend(translator.harness_stopped());
+    assert_eq!(question_events(&events).last(), Some(&cancelled));
+
+    // A later turn, started by Codex itself, is interrupted.
+    let mut translator = Translator::new();
+    let mut events: Vec<AgentEvent> = asked
+        .iter()
+        .flat_map(|(d, m)| translator.feed(*d, m))
+        .collect();
+    events.extend(translator.feed(Direction::In, later));
+    events.extend(translator.feed(Direction::In, interrupted));
+    assert_eq!(question_events(&events).last(), Some(&cancelled));
+}
+
+#[test]
+fn a_refused_request_and_an_error_notice_are_different_items() {
+    let events = feed(&[
+        (
+            Direction::Out,
+            r#"{"id": 3, "method": "thread/settings/update", "params": {"threadId": "th1"}}"#,
+        ),
+        (
+            Direction::In,
+            r#"{"id": 3, "error": {"code": -32600, "message": "no"}}"#,
+        ),
+        (
+            Direction::In,
+            r#"{"method": "error", "params": {"threadId": "th1", "error": {"message": "later"}, "willRetry": false}}"#,
+        ),
+    ]);
+    assert_ne!(events[0].header().item, events[1].header().item);
 }

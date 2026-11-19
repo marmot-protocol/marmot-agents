@@ -76,6 +76,16 @@ def has_secret(ev):
     return ev["type"] == "question" and any(q.get("secret") for q in ev["body"].get("questions") or [])
 
 
+def grants(value):
+    """Whether a permission grant grants anything: a true flag or a non-empty list somewhere in it.
+    `{"network": {"enabled": false}}` and `{"fileSystem": {"read": [], "write": []}}` grant nothing."""
+    if isinstance(value, dict):
+        return any(grants(v) for v in value.values())
+    if isinstance(value, list):
+        return len(value) > 0
+    return value is True
+
+
 def clip_native(payload):
     """The native payload, whole. The core applies the size limit (D-057)."""
     return payload
@@ -90,6 +100,7 @@ class Translator:
         self.turn = None
         self.seq = 0  # every event this translator made; some made-up item ids use it
         self.seq_in = collections.Counter()  # session -> events in it, for each event's `seq`
+        self.message_thread = None  # the thread the message being translated names, if it names one
         self.open: dict[str, dict] = {}  # item id -> last event, for items not yet finished
         self.not_sent = collections.Counter()
         self.unmapped = collections.Counter()
@@ -97,23 +108,22 @@ class Translator:
         self.controls = collections.Counter()  # (control, the native call it was seen as)
 
     def emit(self, item, type_, state, title, text="", body=None, native_kind="", native=None, owner=None):
-        if owner is not None:  # (session, turn) of the item, when it is not the current one
-            here, (self.session, self.turn) = (self.session, self.turn), owner
-            try:
-                return self.emit(item, type_, state, title, text, body, native_kind, native)
-            finally:
-                self.session, self.turn = here
+        """`owner` is the (session, turn) the item belongs to, when that is not the current one. An
+        event from a message that names its thread belongs to that thread."""
+        if owner is None:
+            owner = (self.message_thread or self.session, self.turn)
+        session, turn = owner
         assert type_ in ITEM_TYPES and state in STATES, (type_, state)
         self.seq += 1
-        self.seq_in[self.session] += 1
+        self.seq_in[session] += 1
         if native_kind.startswith("(none"):
             native = NO_NATIVE  # the driver made this event up; the harness said nothing
         ev = {
             "harness": self.harness,
-            "session": self.session,
-            "turn": self.turn,
+            "session": session,
+            "turn": turn,
             "item": item,
-            "seq": self.seq_in[self.session],
+            "seq": self.seq_in[session],
             "type": type_,
             "state": state,
             "title": title,
@@ -140,6 +150,7 @@ class Translator:
                 item, ev["type"], "cancelled", ev["title"], ev["text"], ev["body"],
                 native_kind="(none: closed by the driver)",
                 native=NO_NATIVE if has_secret(ev) else {"reason": reason},
+                owner=(ev["session"], ev["turn"]),
             )
 
     def session_item(self, sid, settings, native_kind, native, actions=(), commands=(), version=None):
@@ -285,7 +296,11 @@ class Codex(Translator):
         }.get(method)
         if handler is None:
             return self.unknown(method)
-        handler(method, m, p)
+        self.message_thread = p.get("threadId")
+        try:
+            handler(method, m, p)
+        finally:
+            self.message_thread = None
 
     def harness_stopped(self):
         """The harness process ended. Nothing it was doing will ever report again, so the driver
@@ -478,7 +493,7 @@ class Codex(Translator):
         if prev is None:
             return
         if prev["type"] == "approval" and req.get("permissions"):
-            granted = any(v is not None for v in (result.get("permissions") or {}).values())
+            granted = grants(result.get("permissions"))
             chosen = "c2" if not granted else "c1" if result.get("scope") == "session" else "c0"
             label = next(c["label"] for c in req["choices"] if c["id"] == chosen)
             self.emit(req["item"], "approval", "done" if granted else "declined", prev["title"], f"Answered: {label}",
@@ -525,7 +540,7 @@ class Codex(Translator):
         if "error" in m:
             self.starts = [s for s in self.starts if s[0] != m.get("id")]  # that request starts no turn
             err = m["error"] or {}
-            return self.emit(f"error:{m.get('id')}", "error", "failed", "The harness refused a request", err.get("message", ""),
+            return self.emit(f"error:{self.seq}", "error", "failed", "The harness refused a request", err.get("message", ""),
                              {"request": method, "code": err.get("code")}, f"error response to {method}", err)
         result = m.get("result") or {}
         if method == "model/list":

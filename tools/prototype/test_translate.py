@@ -106,5 +106,15 @@ class QuestionInAMessage(unittest.TestCase):
                          [("waiting", "th1", "t1"), ("cancelled", "th1", "t1")])
 
 
+class QuestionOutlivingItsTurn(unittest.TestCase):
+    def test_closed_in_its_own_turn_when_the_harness_stops(self):
+        codex = translate.Codex()
+        for record in (thread("th1"), TURN_STARTED, ASKS_IN_A_MESSAGE, TURN_DONE):
+            codex.feed(record)
+        codex.harness_stopped()
+        last = [e for e in codex.events if e["type"] == "question"][-1]
+        self.assertEqual((last["state"], last["session"], last["turn"]), ("cancelled", "th1", "t1"))
+
+
 if __name__ == "__main__":
     unittest.main()
