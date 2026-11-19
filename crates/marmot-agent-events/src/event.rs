@@ -61,7 +61,7 @@ id!(
 ///
 /// An event cannot be changed once it is built, because one rule ties its parts together: a
 /// question item that has a secret question carries a native message only while it is waiting
-/// (D-056). An event that breaks the rule cannot be built, and cannot be read from JSON.
+/// for an answer (D-056). An event that breaks the rule cannot be built, and cannot be read from JSON.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "Unchecked")]
 pub struct AgentEvent {
@@ -79,14 +79,19 @@ impl AgentEvent {
     /// closed.
     ///
     /// It is refused if it could repeat the answer to a secret question. While such a question
-    /// is waiting, the harness's message is the request, which holds no answer. In every other
-    /// state it may be the response, which does. So a question item with a secret question must
-    /// come with no native message unless its state is `waiting`. The rule does not look at
-    /// whether an answer was filled in, so it cannot be stepped round by leaving one out.
+    /// is waiting and unanswered, the harness's message is the request, which holds no answer.
+    /// Otherwise it may be the response, which does. So a question item with a secret question
+    /// must come with no native message unless its state is `waiting` and it records no answer.
+    ///
+    /// The types cannot read a native message. A driver that hands over the response and calls
+    /// the item waiting and unanswered is not caught here; that is for the driver's own tests.
     pub fn new(header: Header, body: Body, native: Option<Native>) -> Result<Self, RepeatsSecret> {
-        let secret = matches!(&body, Body::Question(question) if question.questions().iter().any(|q| q.secret));
-        if secret && native.is_some() && header.state != State::Waiting {
-            return Err(RepeatsSecret);
+        if let Body::Question(question) = &body {
+            let secret = question.questions().iter().any(|q| q.secret);
+            let still_asking = header.state == State::Waiting && question.answer().is_none();
+            if secret && native.is_some() && !still_asking {
+                return Err(RepeatsSecret);
+            }
         }
         Ok(Self {
             header,

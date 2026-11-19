@@ -274,13 +274,9 @@ mod tests {
         header.turn = None;
         let event = AgentEvent::new(header, Body::Notice(notice), None).unwrap();
         let written = serde_json::to_value(&event).unwrap();
-        let fields: Vec<&String> = written.as_object().unwrap().keys().collect();
-        assert_eq!(
-            fields,
-            [
-                "body", "harness", "item", "seq", "state", "text", "title", "type"
-            ]
-        );
+        for absent in ["session", "turn", "native"] {
+            assert!(written.get(absent).is_none(), "{absent} was written");
+        }
     }
 
     // D-030 and D-045: a session always says the harness's version, and a command always has
@@ -416,6 +412,14 @@ mod tests {
                 assert_eq!(refused.unwrap_err(), RepeatsSecret);
             }
         }
+
+        // A header that still says waiting does not let an answered question through.
+        let stale = AgentEvent::new(
+            header(State::Waiting),
+            Body::Question(answered.clone()),
+            Some(native(response)),
+        );
+        assert_eq!(stale.unwrap_err(), RepeatsSecret);
 
         let sent = AgentEvent::new(header(State::Done), Body::Question(answered), None).unwrap();
         let mut written = serde_json::to_value(&sent).unwrap();

@@ -839,8 +839,8 @@ Decided 2026-11-19.
 ## D-056 A secret question carries a native message only while it is waiting
 
 **Decision.** A question item that holds a secret question carries a native message only while it is
-waiting for an answer. Once it is answered, cancelled or failed, its events carry none. The item still says
-that the question was answered, and never what the answer was
+waiting for an answer. Once it is answered, cancelled or failed, its events carry none. If it was answered,
+the item says so, and never what the answer was
 ([D-041](#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)).
 
 This is the one exception to "never drop the native payload"
@@ -852,9 +852,11 @@ Codex it is the response to the question, and the answer is in it. Passing it on
 history of every member's device, where it cannot be taken back. A few events without a native message cost
 little.
 
-The rule is about the item's state and not about whether an answer was filled in, so that a driver cannot
-miss it by leaving the answer out. The item types hold it: an event that breaks it cannot be built, and one
-that arrives as JSON cannot be read. For the same reason the questions in one item must have ids that differ.
+The rule does not depend on an answer having been filled in, so that a driver cannot miss it by leaving the
+answer out: an item counts as waiting only when its state says so and it records no answer. The item types
+hold it: an event that breaks it cannot be built, and one that arrives as JSON cannot be read. For the same
+reason the questions in one item must have ids that differ. The types cannot read a native message, so a
+driver's own tests still have to show that it never hands over the response as if it were the request.
 
 Decided 2026-11-19. The project owner first decided that the answer to a secret question carries no native
 message, and then accepted this wider form when review showed the narrower one could be stepped round. No
