@@ -230,9 +230,12 @@ would replace MDK's WebSocket library with OpenAI's fork.
 
 ### What each one does with the recordings
 
-Of the 1,997 messages, 1,731 are notifications from Codex, 8 are requests from Codex, 110 are requests to
-Codex and 31 are the client's `initialized`. The other 117 are responses: 109 successful ones and one error
-from Codex, and 7 replies from the client to Codex's requests.
+The 1,997 messages are:
+
+- 1,731 notifications from Codex, and 8 requests from Codex;
+- 110 requests to Codex, and 31 `initialized` notifications to Codex;
+- 109 successful responses from Codex, and 1 error response;
+- 7 replies from the client to Codex's requests. One of the 8 requests was never answered.
 
 The table has three levels, and they are different questions. *The envelope* is the JSON-RPC wrapper. *A
 type* is the candidate's own value for one method's payload. *Written back* is that value turned into JSON
@@ -240,18 +243,24 @@ again and compared with the recording.
 
 | | A: OpenAI's crate | B: `codex-codes` | C: by hand |
 | --- | --- | --- | --- |
-| Envelope parses | 1,997 | 1,997 | 1,997 |
-| Envelope written back is identical | 266 | 266 | 1,997 |
-| Notifications from Codex that parse into a type | 1,669 | 1,600 | 455 are read through a type. 1,276 need none |
-| Notifications from Codex that fail | 62 | 131 | 0 |
-| Requests from Codex that parse into a type | 8 of 8 | 8 of 8 | 8 of 8 |
-| Requests to Codex that have a type | 110 of 110 | 106 of 110 | Built by hand. Not tried |
-| Replies to Codex's requests that have a type | 7 of 7 | 7 of 7 | Built by hand. Not tried |
-| Successful responses from Codex that have a type | 109 of 109 | 106 of 109 | 35 are read. The rest need none |
-| The one error response from Codex | Envelope only | Envelope only | Envelope only |
-| Typed value written back: identical | 1,759 | 1,294 | Not written back |
-| Typed value written back: differs only in nulls and defaults | 106 | 433 | |
-| Typed value written back: a value lost or changed | 69 | 100 | |
+| **The envelope** | | | |
+| Parses, of 1,997 | 1,997 | 1,997 | 1,997 |
+| Written back is identical | 266 | 266 | 1,997 |
+| **A type for the payload** | | | |
+| Notifications from Codex, of 1,731 | 1,669. The other 62 fail | 1,600. The other 131 fail | 455 are read through a type. 1,276 need none |
+| Requests from Codex, of 8 | 8 | 8 | 8 |
+| Requests to Codex, of 110 | 110 | 106. It has no type for 4 | Built by hand. Not tried |
+| `initialized`, of 31 | 31 | 0. It has no type for it | Built by hand. Not tried |
+| Successful responses from Codex, of 109 | 109 | 106. It has no type for 3 | 35 are read. The rest need none |
+| The error response from Codex, of 1 | None: it is read from the envelope | None: it is read from the envelope | None: it is read from the envelope |
+| Replies to Codex's requests, of 7 | 7 | 7 | Built by hand. Not tried |
+| Total that parsed into a type | 1,934 | 1,827 | 498 read |
+| **That type written back** | | | |
+| Identical | 1,759 | 1,294 | Not written back: the JSON is kept |
+| Differs only in nulls and defaults | 106 | 433 | |
+| A value lost or changed | 69 | 100 | |
+
+Each column's last three rows add up to its total: 1,934 for A and 1,827 for B.
 
 What is behind those numbers:
 
@@ -270,8 +279,9 @@ What is behind those numbers:
   choices a person is offered. It has no type for `thread/settings/update`, `turn/settings/update` or
   `collaborationMode/list`. It also drops the server name and the thread and turn ids from the MCP elicitation
   request, and several settings from `thread/started` and the responses to `thread/start` and `thread/resume`.
-- **C reads less on purpose.** The translation reads fields of 17 kinds of message. For the other 1,276
-  notifications the method name is enough, either to pass the message on or to leave it out.
+- **C reads less on purpose.** The translation reads fields of 17 kinds of message, and the message and code
+  of an error response, which are in the envelope. For the other 1,276 notifications the method name is
+  enough, either to pass the message on or to leave it out.
 
 ### What each one does with a message it does not know
 
@@ -312,10 +322,14 @@ produced nothing:
 | `codex_app_server_protocol.schemas.json` | Panic: a `$ref` it could not find |
 | `ServerRequest.json` | Panic: "not yet implemented" |
 
-So this trial produced no generated types. That is as far as it goes: other generators were not tried, nor
-were the several hundred schema files for single messages, nor the generator `codex-codes` wrote for itself,
-which is a Python script in its repository. Candidate B is the one example here of types generated from the
-schema.
+So `typify` 0.10.1 cannot read this schema, and this trial produced no generated types. That is as far as
+it goes. Other generators were not tried, nor were the several hundred schema files for single messages, nor
+the generator `codex-codes` wrote for itself, which is a Python script in its repository.
+
+Candidate B is the one example here of generated types, and it is generated from the stable schema only.
+That is why it lacks the approval choices and the settings requests. A generator run on the schema from
+`--experimental` would not have that gap. Generated types are therefore not ruled out by this trial. They
+were not shown to work either.
 
 ### Who maintains each, and how fast it follows Codex
 
@@ -347,7 +361,8 @@ Codex means moving all three together, and re-checking the clash with MDK each t
 - The driver keeps every message as the JSON it arrived as. That is the native payload.
 - It reads a message through small types that hold only the fields the translation uses, about 250 lines in
   the trial. An unknown method, an unknown item type or an unknown word becomes a catch-all, not an error.
-- It depends on `serde` and `serde_json`, which the item types need anyway.
+- It adds `serde` and `serde_json`: 11 crates with what they need. The item types are expected to need the
+  same two.
 - Codex's own schema, from `codex app-server generate-json-schema --experimental` at the version we record,
   stays the reference.
 
