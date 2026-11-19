@@ -1,14 +1,12 @@
 //! What a driver says its harness can do.
 //!
 //! The core and the apps read these and never check a harness's name. A connector on the socket
-//! states the same facts in its hello. The list is a proposal
-//! (`docs/open-questions.md`, Q-16), drawn from the draft in `docs/design/socket-protocol.md`.
-
-use serde::{Deserialize, Serialize};
+//! will state the same facts in its hello. How they are written there is for the socket to
+//! define: these are plain Rust values. The list is a proposal (`docs/open-questions.md`, Q-16),
+//! drawn from the draft in `docs/design/socket-protocol.md`.
 
 /// What a harness can do, as its driver states it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Capabilities {
     /// Whether a running turn can be stopped.
     pub interrupt: bool,
@@ -31,14 +29,13 @@ pub struct Capabilities {
     pub files_in: FilesIn,
     /// Typed commands that need the right to approve (D-032, D-047). The core checks every
     /// message against this list, because a typed message otherwise needs only the right to
-    /// prompt.
-    #[serde(default)]
+    /// prompt. A driver always states it, even when it is empty: leaving it out by mistake would
+    /// switch the check off.
     pub approval_commands: Vec<ApprovalCommand>,
 }
 
 /// What a harness does with a prompt that arrives while a turn is running.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MidTurn {
     /// Folds it into the running turn.
     Fold,
@@ -49,8 +46,7 @@ pub enum MidTurn {
 }
 
 /// Who picks the session a prompt goes to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Sessions {
     /// The core names the session on each prompt.
     Core,
@@ -59,8 +55,7 @@ pub enum Sessions {
 }
 
 /// The ways a harness has a question answered.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Questions {
     /// By an answer that points at the question item.
     pub request: bool,
@@ -69,8 +64,7 @@ pub struct Questions {
 }
 
 /// Which attachments a prompt may carry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FilesIn {
     /// None.
     None,
@@ -81,19 +75,16 @@ pub enum FilesIn {
 }
 
 /// A typed command that needs the right to approve.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApprovalCommand {
     /// The command as typed, such as `/approve`.
     pub command: String,
     /// Where in a message it counts.
-    #[serde(rename = "where")]
     pub counts: Position,
 }
 
 /// Where in a message a typed command counts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Position {
     /// Only at the start of the message.
     Start,

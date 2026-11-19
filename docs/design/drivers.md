@@ -66,30 +66,28 @@ items without a change on the Hermes side. See
 
 ## Proposed: the driver trait
 
-Every Rust driver implements one trait. In outline it needs to:
+Every Rust driver implements one trait. A first version exists as code, in
+[`crates/marmot-agent-driver`](../../crates/marmot-agent-driver). It has the operations of
+[the socket's driver section](socket-protocol.md#the-driver-section) and no others, because a program on the
+socket does the same job as messages:
 
-- say what the harness supports (capabilities);
-- open a session, and resume an existing one;
-- start a turn with a prompt;
-- steer or interrupt a running turn;
-- deliver an answer to a waiting request;
-- change session settings such as model and mode;
-- produce a stream of agent events.
+- say what the harness is, and what it can do (capabilities);
+- take a prompt;
+- take an answer to a waiting request;
+- take a control: interrupt, new session, change a setting, or one of the harness's own actions;
+- hand back the next agent event.
 
-Programs on the socket do the same things as messages.
+Three things a driver does are not operations of their own. A prompt names its session, so opening and
+resuming one happen when a prompt arrives. A message sent during a turn is a prompt like any other, so there
+is no "steer". And "new session" is a control.
 
-A first version exists as code, in [`crates/marmot-agent-driver`](../../crates/marmot-agent-driver). It has
-the operations of [the socket's driver section](socket-protocol.md#the-driver-section) and no others: say
-what the harness is and can do, take a prompt, take an answer, take a control, and hand back the next agent
-event. Opening and resuming a session are not operations of their own: a prompt names its session, and
-"new session" is a control. It is a proposal
-([Q-16](../open-questions.md#q-16-how-does-a-driver-say-what-it-supports)).
+It is a proposal ([Q-16](../open-questions.md#q-16-how-does-a-driver-say-what-it-supports)).
 
 ## Proposed: capabilities
 
-Each driver declares what its harness can do: steer mid-turn, resume, report usage, ask questions, and so on.
-The core and the clients read these flags and never check a harness's name. When a capability is missing, the
-core falls back in a defined way, for example interrupt-and-restart where steering is not supported.
+Each driver declares what its harness can do: interrupt a turn, what it does with a message sent during one,
+resume a session, take attachments, and so on. The core and the clients read these flags and never check a
+harness's name. When a capability is missing, the core falls back in a defined way.
 
 The proposed flags, with what Codex states for each, are under
 [Q-16](../open-questions.md#q-16-how-does-a-driver-say-what-it-supports).

@@ -4,9 +4,8 @@
 //! (`docs/design/socket-protocol.md`): a prompt, an answer and a control. Everything a driver
 //! receives has already been checked by the core: the sender may prompt, or may approve.
 
-use marmot_agent_events::body::Answered;
 use marmot_agent_events::{ItemId, SessionId, TurnId};
-use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::PathBuf;
 
 /// Declares an id that the core makes up for this install (D-036). It is never a group's id or a
@@ -14,8 +13,7 @@ use std::path::PathBuf;
 macro_rules! core_id {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
-        #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-        #[serde(transparent)]
+        #[derive(Clone, Debug, PartialEq, Eq, Hash)]
         pub struct $name(pub String);
 
         impl $name {
@@ -45,23 +43,26 @@ core_id!(
     /// The core's id for a chat message.
     MessageId
 );
+core_id!(
+    /// The core's id for one answer or one control. The driver hands it back on the event that
+    /// shows what the request did, so the core can tell that event from a change nobody asked
+    /// for (D-028, D-046).
+    RequestId
+);
 
 /// A chat, as a driver sees it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Chat {
     /// The core's id for the chat.
     pub id: ChatId,
     /// Whether the chat has more than one person in it.
     pub group: bool,
     /// The chat's name, when it has one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
 
 /// A person, as a driver sees them. The name is passed as it is, because the model needs it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Person {
     /// The core's id for the person.
     pub id: PersonId,
@@ -70,8 +71,7 @@ pub struct Person {
 }
 
 /// A message for the agent. A slash command is one too: it is passed exactly as typed (D-031).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Prompt {
     /// The message's id. A turn names the prompts it responds to by this id.
     pub message: MessageId,
@@ -82,20 +82,16 @@ pub struct Prompt {
     /// Who sent it.
     pub sender: Person,
     /// The message it replies to, when it is a reply.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reply_to: Option<Quoted>,
     /// Files sent with it. The core has already written each one to disk.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<Attachment>,
     /// The session it is for, when the core chooses the session.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<SessionId>,
 }
 
 /// The message a prompt replies to. The text is quoted because some harnesses cannot look a
 /// message up by its id.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Quoted {
     /// The id of the message replied to.
     pub message: MessageId,
@@ -106,24 +102,23 @@ pub struct Quoted {
 }
 
 /// A file sent with a prompt.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Attachment {
     /// Where the core wrote the file.
     pub path: PathBuf,
     /// The file's name.
     pub name: String,
     /// The file's media type, such as `image/png`.
-    #[serde(rename = "type")]
     pub media_type: String,
 }
 
 /// A person's answer to an approval or a question.
 ///
 /// It goes to the harness's own answer call and never to the model as a prompt (D-028).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Answer {
+    /// The core's id for this answer.
+    pub request: RequestId,
     /// The item being answered.
     pub item: ItemId,
     /// Who answered.
@@ -133,19 +128,44 @@ pub struct Answer {
 }
 
 /// What an answer holds. It names choices by the ids the item offered.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Given {
     /// To an approval: the id of one choice.
     Choice(String),
     /// To a question item: one entry for each question answered.
-    Questions(Vec<Answered>),
+    Questions(Vec<Reply>),
+}
+
+/// The answer to one question, as it is delivered to the harness.
+///
+/// This is not what the question item then records. It holds what the person typed, and for a
+/// secret question that is the secret. The item records only that the question was answered
+/// (D-041). So the typed text is left out when a reply is printed for debugging.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Reply {
+    /// The id of the question.
+    pub question: String,
+    /// The ids of the options chosen.
+    pub options: Vec<String>,
+    /// What the person typed, when the question allows it.
+    pub text: Option<String>,
+}
+
+impl fmt::Debug for Reply {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Reply")
+            .field("question", &self.question)
+            .field("options", &self.options)
+            .field("text", &self.text.as_ref().map(|_| "(not shown)"))
+            .finish()
+    }
 }
 
 /// Something a person does unprompted (D-029).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Control {
+    /// The core's id for this control.
+    pub request: RequestId,
     /// Who sent it.
     pub by: Person,
     /// What to do, and what to do it to.
@@ -154,18 +174,19 @@ pub struct Control {
 
 /// What a control does. Three actions mean the same for every harness. The fourth is whatever
 /// the harness published in its session item.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     /// Stop the running turn.
     Interrupt {
         /// The turn to stop.
         turn: TurnId,
     },
-    /// End a chat's session and start a fresh one.
+    /// End a chat's session, if it has one, and start a fresh one.
     NewSession {
-        /// The session to end.
-        session: SessionId,
+        /// The chat the new session is for.
+        chat: Chat,
+        /// The session to end. A chat that has had no session has none.
+        session: Option<SessionId>,
     },
     /// Change one setting of a session.
     Set {
@@ -186,13 +207,11 @@ pub enum Action {
 }
 
 /// A driver did not take a request. The core turns this into the notice the chat sees.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Refusal {
     /// Why.
     pub reason: Reason,
     /// The harness's own words, when it gave any.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
 
@@ -206,9 +225,8 @@ impl Refusal {
     }
 }
 
-/// Why a driver did not take a request.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// Why a driver did not take a request. These are the eight reasons the socket page lists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Reason {
     /// The harness cannot do this.
     NotSupported,
