@@ -6,7 +6,8 @@ You run an agent harness such as Claude Code, Codex or Hermes on your own machin
 end-to-end encrypted group, so you and the people you choose can talk to it from White Noise on your phone, see
 what it is doing, approve what it asks, and control it as fully as you could at the terminal.
 
-> **Status: planning.** There is no code here yet. The design is being worked out in [`docs/`](docs/README.md).
+> **Status: design agreed, building begins.** There is no code here yet. The design is in [`docs/`](docs/README.md),
+> and the first code is the Codex driver.
 > The connectors that ship today live in [MDK](https://github.com/marmot-protocol/mdk) under `integrations/`.
 
 <picture>

@@ -733,3 +733,56 @@ path", and not the one command. The core cannot narrow that without a second lay
 D-021 rules out. It can make sure the person who gave it had the right to, and show the group what was given.
 
 Decided 2026-11-18.
+
+## D-050 The core program is called `marmot-agent`
+
+**Decision.** The core program is `marmot-agent`. Its crates take the name as a prefix: for example
+`marmot-agent-events` for the item types, `marmot-agent-driver` for the driver trait and `marmot-agent-codex`
+for the Codex driver.
+
+**Why.** The name says what the program is and matches the repository and the socket
+(`marmot.agent-control`). It is not tied to one app, so it suits anyone who uses a Marmot client. It differs
+from today's `wn-agent`, so both can be installed while an install moves over
+([Q-19](open-questions.md#q-19-how-do-existing-installs-move-over)). The name was free on crates.io when
+checked on 2026-11-19.
+
+Decided 2026-11-19.
+
+## D-051 Kinds 1201 and 1202 take the new shape, and the old one is not kept
+
+**Decision.** Agent items use kind 1201 and answers and controls use kind 1202, in the shapes designed here.
+The shapes that MDK builds for those kinds today are replaced, not kept beside the new ones. Nothing is added
+to tell the two apart, and no new kind numbers are taken.
+
+**Why.** The old shapes are hardly used. Today's connectors send a kind 1201 in two cases only, and a kind 1202
+in one ([what they carry today](design/event-carrier.md#what-kinds-1201-and-1202-carry-today)). Keeping both
+shapes would put a second set of rules into MDK and every app for almost no traffic.
+
+An old connector that is still running will send the old shape for a while. A client shows such an event as
+it shows any agent item it cannot read.
+
+Decided 2026-11-19.
+
+## D-052 The Codex driver is built first
+
+**Decision.** The first code is the item types, the driver trait and the Codex driver. It is tested by
+replaying the Codex recordings and requiring the events the prototype produces
+([`tools/prototype`](../tools/prototype/README.md)).
+
+The plan after that, which is not fixed:
+
+1. MDK learns the new shapes: agent items, edits of them, and answers and controls. This can run beside the
+   first step.
+2. The core: the account, the socket, rights, sessions and delivery, with the Codex driver built in.
+3. The Claude Code driver, over the socket.
+4. The Hermes and OpenClaw plugins.
+
+**Why.** The Codex driver needs nothing from MDK, so it can start at once, and it is the cheapest test of the
+design in real code. It also settles three open questions by doing them: which Codex library to build on
+([Q-15](open-questions.md#q-15-which-library-does-the-codex-driver-build-on)), the capability flags
+([Q-16](open-questions.md#q-16-how-does-a-driver-say-what-it-supports)) and how drivers are tested
+([Q-17](open-questions.md#q-17-how-are-drivers-tested)). The core cannot send an agent item until MDK changes.
+The gateways come last because whose rules govern them is still open
+([Q-22](open-questions.md#q-22-whose-rules-govern-a-gateway)).
+
+Decided 2026-11-19.
