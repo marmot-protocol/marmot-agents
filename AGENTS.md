@@ -89,8 +89,9 @@ replacement entry.
   ([D-007](docs/decisions.md#d-007-one-shared-event-vocabulary)). There are two exceptions: a secret
   question that is no longer waiting carries none
   ([D-056](docs/decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)),
-  and the size limit leaves it out of an item over 64 KB
-  ([D-026](docs/decisions.md#d-026-an-agent-item-is-at-most-64-kb)).
+  and the core leaves it out of an item over 64 KB. A driver hands every event over whole, at full size
+  ([D-026](docs/decisions.md#d-026-an-agent-item-is-at-most-64-kb),
+  [D-057](docs/decisions.md#d-057-the-core-applies-the-64-kb-limit)).
 - Build on the vendor's official interface or library where one exists
   ([D-006](docs/decisions.md#d-006-prefer-official-interfaces-and-libraries)). Codex is the one exception
   to "library": its driver speaks `codex app-server` with types of its own, and links neither OpenAI's crates

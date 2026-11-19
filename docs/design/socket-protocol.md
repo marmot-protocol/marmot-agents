@@ -52,7 +52,7 @@ Decided as [D-034](../decisions.md#d-034-the-core-does-the-shared-work-and-a-con
 | Decide whether a group message is for this agent | A connector receives only messages that are |
 | Turn an agent event into a chat message, an agent item or an edit | [D-022](../decisions.md#d-022-the-agents-words-are-ordinary-chat-messages), [D-023](../decisions.md#d-023-one-kind-carries-every-agent-item), [D-025](../decisions.md#d-025-an-agent-item-is-updated-with-an-edit) |
 | Number the items in a turn and the versions of an item | |
-| Apply the size limit | [D-026](../decisions.md#d-026-an-agent-item-is-at-most-64-kb) |
+| Apply the size limit | [D-026](../decisions.md#d-026-an-agent-item-is-at-most-64-kb), [D-057](../decisions.md#d-057-the-core-applies-the-64-kb-limit) |
 | Decide who is alerted | [D-024](../decisions.md#d-024-who-an-agent-event-alerts) |
 | Report the result of an answer or a control to the chat | [Answers and controls](answers-and-controls.md#3-the-agents-reply-is-what-counts) |
 | Close open items when a connector goes away | A harness that is killed sends nothing |
