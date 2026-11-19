@@ -64,14 +64,17 @@ pub enum FilesIn {
 }
 
 /// A typed command that needs the right to approve.
+///
+/// One gateway uses the same word to answer an approval and to confirm a command the person
+/// typed, and the second needs only the right to prompt (D-048). Nothing here says which of the
+/// two a given message is. That needs a way to tie a confirmation to the exact request it
+/// confirms, which is for that gateway's connector to design.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ApprovalCommand {
     /// The command as typed, such as `/approve`.
     pub command: String,
     /// Where in a message it counts.
     pub counts: Position,
-    /// When it needs the right to approve.
-    pub needed: Needed,
 }
 
 /// Where in a message a typed command counts.
@@ -81,15 +84,4 @@ pub enum Position {
     Start,
     /// Anywhere in the message.
     Anywhere,
-}
-
-/// When a typed command needs the right to approve.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Needed {
-    /// Always. A command that switches approvals off is one.
-    Always,
-    /// Only while an approval is waiting in the session. One gateway uses the same word to
-    /// answer an approval and to confirm a command the person typed. While no approval waits it
-    /// is the confirmation, which needs only the right to prompt (D-048).
-    WhileAnApprovalWaits,
 }

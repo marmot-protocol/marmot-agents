@@ -376,9 +376,9 @@ socket; that is for the socket to define.
 | `mid_turn` | `fold`, `restart`, `queue` | `fold` | An app, to say what a message sent during a turn will do |
 | `sessions` | `core`, `own` | `core` | The core, to know whether it names the session |
 | `resume` | yes or no | yes | The core, after a restart |
-| `approvals` | yes or no | yes | An app, to show who may approve |
+| `approvals` | yes or no | yes | An app, to know whether approval requests will arrive in the chat |
 | `files_in` | none, images, any | images | An app, to allow an attachment |
-| `approval_commands` | a list, always stated; each entry has the command, whether it counts at the start of a message or anywhere, and whether it needs the right to approve always or only while an approval waits | none | The core, on every message |
+| `approval_commands` | a list, always stated; each entry has the command and whether it counts at the start of a message or anywhere | none | The core, on every message |
 
 What the proposal changes from the socket's draft, and what it leaves for the owner:
 
@@ -395,10 +395,13 @@ What the proposal changes from the socket's draft, and what it leaves for the ow
   guess shows one chat's activity in another. The socket's draft has no such field.
 - **"New session" names a chat, and a session only if there is one to end.** A chat that has had no session
   has none to name.
-- **An approval command says when it needs the right to approve.** Always, or only while an approval is
-  waiting. Hermes uses `/approve` both to answer an approval and to confirm a command the person typed, and
-  the second needs only the right to prompt
-  ([D-048](decisions.md#d-048-a-request-to-confirm-a-command-is-a-question)).
+- **An approval command does not yet say when it needs the right to approve.** Hermes uses `/approve` both
+  to answer an approval and to confirm a command the person typed, and the second needs only the right to
+  prompt ([D-048](decisions.md#d-048-a-request-to-confirm-a-command-is-a-question)). A flag such as "only
+  while an approval is waiting" was tried and taken out: an approval can start between the core's check and
+  the harness reading the message, and the same word would then approve an agent's action. Telling the two
+  apart needs a way to tie a confirmation to the exact request it confirms. That is for the Hermes connector
+  to design. Codex has no such commands.
 - **An answer says which kind it is.** To an approval it gives one choice. To a question item it gives one
   entry for each question: the question's id, the ids of the options and any typed text. The example on the
   socket page has a flat list of choices, which cannot say which question a choice belongs to.
@@ -419,8 +422,8 @@ What the proposal changes from the socket's draft, and what it leaves for the ow
 - **A request the driver took is settled even if the harness goes first.** An event can settle a request by
   showing that it failed. When a driver ends, the core settles every request that is still open with a
   notice that it failed.
-- **A debug print of a request or an event shows ids only.** No message text, no name, no answer, nothing the
-  agent said. What may be logged is still open
+- **A debug print of a request or an event shows ids only.** No message text, no name, no answer or choice,
+  no new setting, none of the harness's own words, nothing the agent said. What may be logged is still open
   ([Q-13](#q-13-what-may-be-logged)); this is the starting assumption there, held in the types. The item
   types' own debug print still shows everything, and needs the same care when Q-13 is settled.
 - **Not in the trait:** starting and stopping a driver. Each driver has its own settings, such as where the

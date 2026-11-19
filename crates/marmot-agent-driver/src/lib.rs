@@ -23,9 +23,7 @@
 mod capabilities;
 mod request;
 
-pub use capabilities::{
-    ApprovalCommand, Capabilities, FilesIn, MidTurn, Needed, Position, Sessions,
-};
+pub use capabilities::{ApprovalCommand, Capabilities, FilesIn, MidTurn, Position, Sessions};
 use marmot_agent_events::AgentEvent;
 pub use request::{
     Action, Answer, Attachment, Chat, ChatId, Control, Given, MessageId, Person, PersonId, Prompt,
@@ -117,11 +115,7 @@ impl fmt::Debug for Emitted {
 ///             approvals: false,
 ///             files_in: FilesIn::None,
 ///             // A harness with no such command still says so. This one has one, to show how.
-///             approval_commands: vec![ApprovalCommand {
-///                 command: "/approve".into(),
-///                 counts: Position::Start,
-///                 needed: Needed::WhileAnApprovalWaits,
-///             }],
+///             approval_commands: vec![ApprovalCommand { command: "/approve".into(), counts: Position::Start }],
 ///         }
 ///     }
 ///
@@ -179,7 +173,12 @@ pub trait Driver: Send {
 
 #[cfg(test)]
 mod tests {
-    use super::{Answer, Chat, Given, Person, Prompt, Quoted, Reply};
+    use super::{
+        Action, Answer, Chat, Control, Emitted, Given, Person, Prompt, Quoted, Reason, Refusal,
+        Reply,
+    };
+    use marmot_agent_events::body::{Body, Message};
+    use marmot_agent_events::{AgentEvent, Header, Native, State};
 
     fn alice() -> Person {
         Person {
@@ -188,10 +187,20 @@ mod tests {
         }
     }
 
-    // This is a private messenger: a log must never hold what a person wrote, their name, or
-    // what they answered. A request printed for debugging shows the core's ids and no more.
+    fn shows(printed: &str, ids: &[&str], private: &[&str]) {
+        for id in ids {
+            assert!(printed.contains(id), "{id} is missing from {printed}");
+        }
+        for value in private {
+            assert!(!printed.contains(value), "{value} is shown in {printed}");
+        }
+    }
+
+    // This is a private messenger: a log must never hold what a person wrote, their name, what
+    // they answered or chose, or what the agent or the harness said. Anything a driver is handed
+    // or hands back, printed for debugging, shows which things it is about and no value.
     #[test]
-    fn a_request_printed_for_debugging_shows_nothing_a_person_wrote() {
+    fn nothing_printed_for_debugging_shows_a_value() {
         let prompt = Prompt {
             message: "m-31".into(),
             text: "the launch code is 0000".into(),
@@ -209,18 +218,16 @@ mod tests {
             attachments: Vec::new(),
             session: Some("s-1".into()),
         };
-        let printed = format!("{prompt:?}");
-        for private in [
-            "launch code",
-            "what is the code",
-            "Alice Example",
-            "Family Chat",
-        ] {
-            assert!(!printed.contains(private), "{private} in {printed}");
-        }
-        for id in ["m-31", "m-30", "c-2", "u-1", "s-1"] {
-            assert!(printed.contains(id), "{id} not in {printed}");
-        }
+        shows(
+            &format!("{prompt:?}"),
+            &["m-31", "m-30", "c-2", "u-1", "s-1"],
+            &[
+                "launch code",
+                "what is the code",
+                "Alice Example",
+                "Family Chat",
+            ],
+        );
 
         // For a secret question the answer is the secret, whether it was typed or chosen.
         let reply = Reply {
@@ -228,19 +235,74 @@ mod tests {
             options: vec!["option-7".into()],
             text: Some("hunter2".into()),
         };
-        let answer = Answer {
+        let answer = |given| Answer {
             request: "r-1".into(),
             item: "question-1".into(),
             by: alice(),
-            given: Given::Questions(vec![reply]),
+            given,
         };
-        let printed = format!("{answer:?}");
-        for private in ["hunter2", "option-7", "Alice Example"] {
-            assert!(!printed.contains(private), "{private} in {printed}");
-        }
-        assert!(
-            printed.contains("password") && printed.contains("question-1"),
-            "{printed}"
+        shows(
+            &format!("{:?}", answer(Given::Questions(vec![reply]))),
+            &["r-1", "question-1", "password", "u-1"],
+            &["hunter2", "option-7", "Alice Example"],
+        );
+        shows(
+            &format!("{:?}", answer(Given::Choice("choice-allow".into()))),
+            &["question-1"],
+            &["choice-allow"],
+        );
+
+        let set = Action::Set {
+            session: "s-1".into(),
+            setting: "model".into(),
+            value: "a-private-model".into(),
+        };
+        let control = Control {
+            request: "r-2".into(),
+            by: alice(),
+            action: set,
+        };
+        shows(
+            &format!("{control:?}"),
+            &["r-2", "s-1", "model"],
+            &["a-private-model", "Alice Example"],
+        );
+
+        let refusal = Refusal {
+            reason: Reason::Failed,
+            detail: Some("could not read /home/alice/secret.txt".into()),
+        };
+        shows(&format!("{refusal:?}"), &["Failed"], &["secret.txt"]);
+
+        let header = Header {
+            harness: "codex".into(),
+            session: Some("s-1".into()),
+            turn: Some("t-1".into()),
+            item: "item-9".into(),
+            seq: 1,
+            state: State::Done,
+            title: "Message".into(),
+            text: "the launch code is 0000".into(),
+        };
+        let native = Native {
+            kind: "item/completed".into(),
+            payload: serde_json::value::RawValue::from_string(
+                r#"{"text":"native launch code"}"#.into(),
+            )
+            .unwrap(),
+        };
+        let event =
+            AgentEvent::new(header, Body::Message(Message::default()), Some(native)).unwrap();
+        let emitted = Emitted {
+            event,
+            chat: Some("c-2".into()),
+            prompts: vec!["m-31".into()],
+            settles: vec!["r-2".into()],
+        };
+        shows(
+            &format!("{emitted:?}"),
+            &["item-9", "c-2", "m-31", "r-2"],
+            &["launch code"],
         );
     }
 }

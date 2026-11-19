@@ -13,6 +13,7 @@ name = "marmot-agent-driver"
 version = "0.1.0"
 dependencies = [
  "marmot-agent-events",
+ "serde_json",
 ]
 
 [[package]]

@@ -9,3 +9,7 @@ publish.workspace = true
 
 [dependencies]
 marmot-agent-events = { path = "../marmot-agent-events" }
+
+[dev-dependencies]
+# The tests build an event with a native payload, which is raw JSON.
+serde_json = { version = "1", features = ["raw_value"] }

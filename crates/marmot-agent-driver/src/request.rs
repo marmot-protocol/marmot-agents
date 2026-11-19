@@ -4,8 +4,10 @@
 //! (`docs/design/socket-protocol.md`): a prompt, an answer and a control. Everything a driver
 //! receives has already been checked by the core: the sender may prompt, or may approve.
 //!
-//! Printing any of these for debugging shows the core's own ids and nothing a person wrote: no
-//! message text, no name, no answer. A log must never hold those (AGENTS.md, "Privacy").
+//! Printing any of these for debugging shows which things a request is about, by their ids, and
+//! what kind of request it is. It never shows a value: no message text, no name, no answer, no
+//! new setting, none of the harness's own words. A log must never hold those (AGENTS.md,
+//! "Privacy").
 
 use marmot_agent_events::{ItemId, SessionId, TurnId};
 use std::fmt;
@@ -178,12 +180,21 @@ pub struct Answer {
 }
 
 /// What an answer holds. It names choices by the ids the item offered.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Given {
     /// To an approval: the id of one choice.
     Choice(String),
     /// To a question item: one entry for each question answered.
     Questions(Vec<Reply>),
+}
+
+impl fmt::Debug for Given {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Choice(_) => f.write_str("Choice(..)"),
+            Self::Questions(replies) => f.debug_tuple("Questions").field(replies).finish(),
+        }
+    }
 }
 
 /// The answer to one question, as it is delivered to the harness.
@@ -223,7 +234,7 @@ pub struct Control {
 
 /// What a control does. Three actions mean the same for every harness. The fourth is whatever
 /// the harness published in its session item.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Action {
     /// Stop the running turn.
     Interrupt {
@@ -255,8 +266,35 @@ pub enum Action {
     },
 }
 
+impl fmt::Debug for Action {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Interrupt { turn } => f.debug_struct("Interrupt").field("turn", turn).finish(),
+            Self::NewSession { chat, session } => f
+                .debug_struct("NewSession")
+                .field("chat", chat)
+                .field("session", session)
+                .finish(),
+            Self::Set {
+                session,
+                setting,
+                value: _,
+            } => f
+                .debug_struct("Set")
+                .field("session", session)
+                .field("setting", setting)
+                .finish_non_exhaustive(),
+            Self::Own { session, id } => f
+                .debug_struct("Own")
+                .field("session", session)
+                .field("id", id)
+                .finish(),
+        }
+    }
+}
+
 /// A driver did not take a request. The core turns this into the notice the chat sees.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Refusal {
     /// Why.
     pub reason: Reason,
@@ -271,6 +309,14 @@ impl Refusal {
             reason,
             detail: None,
         }
+    }
+}
+
+impl fmt::Debug for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Refusal")
+            .field("reason", &self.reason)
+            .finish_non_exhaustive()
     }
 }
 
