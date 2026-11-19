@@ -86,7 +86,9 @@ replacement entry.
 - Pass agent activity through: reasoning, tool calls, results, plans. Do not hide it
   ([D-008](docs/decisions.md#d-008-pass-everything-through)).
 - Never drop the native payload when translating
-  ([D-007](docs/decisions.md#d-007-one-shared-event-vocabulary)).
+  ([D-007](docs/decisions.md#d-007-one-shared-event-vocabulary)). The one exception is the answer to a secret
+  question, which carries none
+  ([D-056](docs/decisions.md#d-056-the-answer-to-a-secret-question-carries-no-native-message)).
 - Build on the vendor's official interface or library where one exists
   ([D-006](docs/decisions.md#d-006-prefer-official-interfaces-and-libraries)).
 - Cross-language code talks to the core over the socket. Do not add linked libraries or C interfaces

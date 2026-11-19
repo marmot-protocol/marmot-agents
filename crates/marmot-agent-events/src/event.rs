@@ -4,6 +4,7 @@ use crate::State;
 use crate::body::Body;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
+use std::fmt;
 
 /// Declares an id that is text on the wire and its own type in Rust, so that the id of a turn
 /// cannot be passed where the id of an item is wanted.
@@ -57,8 +58,61 @@ id!(
 ///
 /// On the wire the item type is `type` and its own fields are `body`. Here the two are one value,
 /// [`Body`], so a type cannot be paired with another type's fields.
+///
+/// The body and the native message are set together and cannot be changed afterwards, because
+/// one rule ties them: the answer to a secret question carries no native message (D-056). An
+/// event that breaks the rule cannot be built, and cannot be read from JSON.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "Unchecked")]
 pub struct AgentEvent {
+    /// The parts every item shares.
+    #[serde(flatten)]
+    pub header: Header,
+    #[serde(flatten)]
+    body: Body,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    native: Option<Native>,
+}
+
+impl AgentEvent {
+    /// An event. `native` is the harness's own message. An event the driver makes up itself has
+    /// none: nothing arrives from a harness when the driver closes an item the harness never
+    /// closed.
+    ///
+    /// It is refused if it would repeat the answer to a secret question: a question item that
+    /// has a secret question and has been answered must come with no native message, because for
+    /// Codex that message is the response that holds the answer.
+    pub fn new(header: Header, body: Body, native: Option<Native>) -> Result<Self, RepeatsSecret> {
+        let answered_secret = match &body {
+            Body::Question(question) => {
+                question.answer().is_some() && question.questions().iter().any(|q| q.secret)
+            }
+            _ => false,
+        };
+        if answered_secret && native.is_some() {
+            return Err(RepeatsSecret);
+        }
+        Ok(Self {
+            header,
+            body,
+            native,
+        })
+    }
+
+    /// The item type and the fields that belong to it.
+    pub fn body(&self) -> &Body {
+        &self.body
+    }
+
+    /// The harness's own message, when the event has one.
+    pub fn native(&self) -> Option<&Native> {
+        self.native.as_ref()
+    }
+}
+
+/// The parts every item shares, whatever its type.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Header {
     /// Which harness produced the event.
     pub harness: String,
     /// The harness's session. A harness can produce an event before it has named one.
@@ -79,24 +133,45 @@ pub struct AgentEvent {
     pub title: String,
     /// The plain rendering, readable on its own by a client that does not know the item type.
     pub text: String,
-    /// The item type and the fields that belong to it.
+}
+
+/// An event would have carried a native message that repeats the answer to a secret question.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RepeatsSecret;
+
+impl fmt::Display for RepeatsSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the answer to a secret question must carry no native message")
+    }
+}
+
+impl std::error::Error for RepeatsSecret {}
+
+/// An event as it is read from JSON, before the rule above is checked.
+#[derive(Deserialize)]
+struct Unchecked {
     #[serde(flatten)]
-    pub body: Body,
-    /// The harness's own message. An event the driver makes up itself has none: nothing arrives
-    /// from a harness when the driver closes an item the harness never closed.
-    ///
-    /// Nothing here checks the message against the item. For the answer to a secret question the
-    /// harness's message holds the answer, so D-007 and D-041 pull against each other, and which
-    /// one wins is not settled. See Q-01 in `docs/open-questions.md`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub native: Option<Native>,
+    header: Header,
+    #[serde(flatten)]
+    body: Body,
+    #[serde(default)]
+    native: Option<Native>,
+}
+
+impl TryFrom<Unchecked> for AgentEvent {
+    type Error = RepeatsSecret;
+
+    fn try_from(read: Unchecked) -> Result<Self, RepeatsSecret> {
+        Self::new(read.header, read.body, read.native)
+    }
 }
 
 /// A harness's own message, kept exactly as it arrived.
 ///
 /// A driver must never drop or change it (D-007). The payload is therefore the text of the JSON
 /// the harness sent, not a value read from it: spacing, the order of fields and the way a number
-/// was written all survive.
+/// was written all survive. The one event that goes without it is the answer to a secret question
+/// (D-056).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Native {
     /// What the harness calls this message, such as `item/completed`.

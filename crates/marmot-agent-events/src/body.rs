@@ -251,9 +251,8 @@ pub struct ApprovalAnswer {
 /// questions: an answer to a question marked `secret` names the question and nothing else
 /// (D-041). That holds for a question built here and for one read from JSON.
 ///
-/// This covers the answer fields only. It does not look at the native message of the event the
-/// question travels in, which for Codex is the response that holds the answer. See Q-01 in
-/// `docs/open-questions.md`.
+/// The native message of the event is the other place a secret answer could be repeated.
+/// [`AgentEvent::new`](crate::AgentEvent::new) covers that (D-056).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "UncheckedQuestion")]
 pub struct Question {

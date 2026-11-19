@@ -14,7 +14,7 @@ pub mod body;
 mod event;
 
 pub use body::Body;
-pub use event::{AgentEvent, ItemId, Native, SessionId, TurnId};
+pub use event::{AgentEvent, Header, ItemId, Native, RepeatsSecret, SessionId, TurnId};
 use serde::{Deserialize, Serialize};
 
 /// Where an item stands. An item changes by being sent again with a new state.
@@ -38,11 +38,11 @@ pub enum State {
 #[cfg(test)]
 mod tests {
     use super::body::{self, Body};
-    use super::{AgentEvent, Native, State};
+    use super::{AgentEvent, Header, Native, RepeatsSecret, State};
     use serde_json::json;
 
-    fn event(state: State, body: Body, native: Option<Native>) -> AgentEvent {
-        AgentEvent {
+    fn header(state: State) -> Header {
+        Header {
             harness: "codex".into(),
             session: Some("s1".into()),
             turn: Some("t1".into()),
@@ -51,8 +51,17 @@ mod tests {
             state,
             title: "Running a command".into(),
             text: "python3 greet.py".into(),
-            body,
-            native,
+        }
+    }
+
+    fn event(state: State, body: Body, native: Option<Native>) -> AgentEvent {
+        AgentEvent::new(header(state), body, native).unwrap()
+    }
+
+    fn native(payload: &str) -> Native {
+        Native {
+            kind: "item/started [commandExecution]".into(),
+            payload: serde_json::value::RawValue::from_string(payload.into()).unwrap(),
         }
     }
 
@@ -192,10 +201,7 @@ mod tests {
     // What a client receives for one event, field by field.
     #[test]
     fn an_event_is_written_as_the_design_page_describes() {
-        let native = Native {
-            kind: "item/started [commandExecution]".into(),
-            payload: serde_json::value::RawValue::from_string(r#"{"id":"i1"}"#.into()).unwrap(),
-        };
+        let native = native(r#"{"id":"i1"}"#);
         let written =
             serde_json::to_value(event(State::Running, a_command(), Some(native))).unwrap();
         assert_eq!(
@@ -225,7 +231,7 @@ mod tests {
             r#"{{"harness":"codex","item":"i1","seq":1,"type":"reasoning","state":"done","title":"Thinking","text":"","body":{{}},"native":{{"kind":"item/completed","payload":{payload}}}}}"#
         );
         let event: AgentEvent = serde_json::from_str(&text).unwrap();
-        assert_eq!(event.native.as_ref().unwrap().payload.get(), payload);
+        assert_eq!(event.native().unwrap().payload.get(), payload);
         // Two events are equal only when their native messages are the same text. The same
         // values written another way are a different message.
         let respaced: AgentEvent =
@@ -249,9 +255,9 @@ mod tests {
             "body": {"choices": [], "expires_at_ms": 1794910522002u64},
         });
         let event: AgentEvent = serde_json::from_value(newer).unwrap();
-        assert_eq!(event.title, "Allow this command?");
-        assert_eq!(event.text, "rm -rf build");
-        assert!(matches!(event.body, Body::Approval(_)));
+        assert_eq!(event.header.title, "Allow this command?");
+        assert_eq!(event.header.text, "rm -rf build");
+        assert!(matches!(event.body(), Body::Approval(_)));
     }
 
     // An event with no session, no turn and no native message leaves those fields out. A notice
@@ -264,8 +270,8 @@ mod tests {
             reason: None,
         };
         let mut event = event(State::Done, Body::Notice(notice), None);
-        event.session = None;
-        event.turn = None;
+        event.header.session = None;
+        event.header.turn = None;
         let written = serde_json::to_value(&event).unwrap();
         let fields: Vec<&String> = written.as_object().unwrap().keys().collect();
         assert_eq!(
@@ -356,5 +362,49 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("password"), "{error}");
+    }
+
+    // D-056: the answer to a secret question carries no native message, because for Codex that
+    // message is the response that holds the answer. Such an event cannot be built, and one that
+    // arrives as JSON cannot be read.
+    #[test]
+    fn the_answer_to_a_secret_question_carries_no_native_message() {
+        let response = r#"{"answers":{"password":{"answers":["hunter2"]}}}"#;
+        let open = a_secret_question();
+        let answered = open
+            .clone()
+            .answered(vec![answered("password", None)])
+            .unwrap();
+
+        // While the question is waiting, its native message is the request, which holds no answer.
+        assert!(
+            AgentEvent::new(
+                header(State::Waiting),
+                Body::Question(open),
+                Some(native("{}"))
+            )
+            .is_ok()
+        );
+
+        let refused = AgentEvent::new(
+            header(State::Done),
+            Body::Question(answered.clone()),
+            Some(native(response)),
+        );
+        assert_eq!(refused.unwrap_err(), RepeatsSecret);
+
+        let sent = AgentEvent::new(header(State::Done), Body::Question(answered), None).unwrap();
+        let mut written = serde_json::to_value(&sent).unwrap();
+        assert!(!written.to_string().contains("hunter2"));
+        assert_eq!(
+            serde_json::from_value::<AgentEvent>(written.clone()).unwrap(),
+            sent
+        );
+
+        written["native"] = json!({"kind": "response", "payload": {"answers": {"password": {"answers": ["hunter2"]}}}});
+        let error = serde_json::from_value::<AgentEvent>(written)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("secret"), "{error}");
     }
 }
