@@ -47,6 +47,12 @@ pub struct Harness {
 pub struct Emitted {
     /// The event.
     pub event: AgentEvent,
+    /// The chat the event belongs to. A driver knows it from the prompt or the control that led
+    /// to the event, and states it whenever it does. The core needs it for a session it has not
+    /// seen before: a harness can open a session and report it before any turn starts, and the
+    /// turn may never start. Without the chat the core would have to guess where the session
+    /// belongs, and a wrong guess shows one chat's activity in another.
+    pub chat: Option<ChatId>,
     /// On a turn: the prompts it responds to. Empty on every other item.
     pub prompts: Vec<MessageId>,
     /// The answers and controls whose effect this event shows: the approval that was answered,
@@ -68,42 +74,18 @@ pub struct Emitted {
 /// never lost. A request that waits for the harness keeps reading from it meanwhile, and holds
 /// back the events it reads for the next call of [`next_event`].
 ///
-/// A driver that only repeats each prompt back shows the shape. It is idle between turns, and
-/// an idle driver waits: it does not end.
+/// The smallest driver has a harness that never does anything. It shows the two things every
+/// driver shares: the requests are `async fn`, and a driver with nothing to report waits. It does
+/// not end.
 ///
 /// ```
 /// use marmot_agent_driver::*;
-/// use marmot_agent_events::body::{Body, Message, StartedBy, Turn};
-/// use marmot_agent_events::{AgentEvent, Header, State};
-/// use std::collections::VecDeque;
 ///
-/// struct Echo {
-///     ready: VecDeque<Emitted>,
-///     seq: u64,
-/// }
+/// struct Silent;
 ///
-/// impl Echo {
-///     fn emit(&mut self, item: &str, state: State, text: &str, body: Body, prompts: Vec<MessageId>) {
-///         self.seq += 1;
-///         let header = Header {
-///             harness: "echo".into(),
-///             session: None,
-///             turn: Some("turn-1".into()),
-///             item: item.into(),
-///             seq: self.seq,
-///             state,
-///             title: String::new(),
-///             text: text.into(),
-///         };
-///         // Only a question can be refused here, and this driver asks none.
-///         let event = AgentEvent::new(header, body, None).expect("not a question");
-///         self.ready.push_back(Emitted { event, prompts, settles: Vec::new() });
-///     }
-/// }
-///
-/// impl Driver for Echo {
+/// impl Driver for Silent {
 ///     fn harness(&self) -> Harness {
-///         Harness { name: "echo".into(), version: None }
+///         Harness { name: "silent".into(), version: None }
 ///     }
 ///
 ///     fn capabilities(&self) -> Capabilities {
@@ -121,13 +103,8 @@ pub struct Emitted {
 ///         }
 ///     }
 ///
-///     async fn prompt(&mut self, prompt: Prompt) -> Result<(), Refusal> {
-///         let turn = || Body::Turn(Turn { started_by: StartedBy::User, duration_ms: None, usage: None });
-///         // The turn names the prompt it responds to. The message inside it does not.
-///         self.emit("turn-1", State::Running, "", turn(), vec![prompt.message]);
-///         self.emit("message-1", State::Done, &prompt.text, Body::Message(Message::default()), Vec::new());
-///         self.emit("turn-1", State::Done, "", turn(), Vec::new());
-///         Ok(())
+///     async fn prompt(&mut self, _prompt: Prompt) -> Result<(), Refusal> {
+///         Err(Refusal::new(Reason::NotSupported))
 ///     }
 ///
 ///     async fn answer(&mut self, _answer: Answer) -> Result<(), Refusal> {
@@ -139,19 +116,16 @@ pub struct Emitted {
 ///     }
 ///
 ///     async fn next_event(&mut self) -> Option<Emitted> {
-///         match self.ready.pop_front() {
-///             Some(emitted) => Some(emitted),
-///             // Nothing to report yet. `None` would say the harness has gone.
-///             None => std::future::pending().await,
-///         }
+///         // Nothing to report, now or later. `None` would say the harness has gone.
+///         std::future::pending().await
 ///     }
 /// }
 ///
-/// // The core holds a driver by its type, and its futures can move between threads.
+/// // The core holds a driver by its type, and can move it between threads.
 /// fn held_by_the_core<D: Driver + 'static>(driver: D) -> impl Send {
 ///     driver
 /// }
-/// let _ = held_by_the_core(Echo { ready: VecDeque::new(), seq: 0 });
+/// let _ = held_by_the_core(Silent);
 /// ```
 ///
 /// [`next_event`]: Driver::next_event
@@ -183,21 +157,32 @@ pub trait Driver: Send {
 
 #[cfg(test)]
 mod tests {
-    use super::Reply;
+    use super::{Answer, Given, Person, Reply};
 
-    // A reply holds what a person typed, and for a secret question that is the secret. It must
-    // not reach a log through a debug print of the request it travels in.
+    // A reply holds what a person answered, and for a secret question that is the secret,
+    // whether they typed it or chose it. It must not reach a log through a debug print of the
+    // request it travels in.
     #[test]
-    fn a_reply_printed_for_debugging_does_not_show_what_was_typed() {
+    fn an_answer_printed_for_debugging_does_not_show_what_was_answered() {
         let reply = Reply {
             question: "password".into(),
-            options: vec!["o1".into()],
+            options: vec!["option-7".into()],
             text: Some("hunter2".into()),
         };
-        let printed = format!("{reply:?}");
+        let answer = Answer {
+            request: "r-1".into(),
+            item: "question-1".into(),
+            by: Person {
+                id: "u-1".into(),
+                name: "Alice".into(),
+            },
+            given: Given::Questions(vec![reply]),
+        };
+        let printed = format!("{answer:?}");
         assert!(!printed.contains("hunter2"), "{printed}");
+        assert!(!printed.contains("option-7"), "{printed}");
         assert!(
-            printed.contains("password") && printed.contains("o1"),
+            printed.contains("password") && printed.contains("question-1"),
             "{printed}"
         );
     }

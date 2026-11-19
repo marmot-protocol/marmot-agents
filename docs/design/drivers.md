@@ -87,7 +87,7 @@ It is a proposal ([Q-16](../open-questions.md#q-16-how-does-a-driver-say-what-it
 
 Each driver declares what its harness can do: interrupt a turn, what it does with a message sent during one,
 resume a session, take attachments, and so on. The core and the clients read these flags and never check a
-harness's name. When a capability is missing, the core falls back in a defined way.
+harness's name. A driver states every flag; none is optional.
 
 The proposed flags, with what Codex states for each, are under
 [Q-16](../open-questions.md#q-16-how-does-a-driver-say-what-it-supports).

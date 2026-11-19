@@ -362,7 +362,7 @@ project owner's answer.
 | --- | --- |
 | The hello: the harness, and what it can do | `harness`, `capabilities` |
 | The requests `prompt`, `answer`, `control` | `prompt`, `answer`, `control`. Each returns once the harness has taken or refused it, with one of the eight reasons |
-| The notification `event` | `next_event`: the next agent event, with the prompts a turn responds to and the requests it settles |
+| The notification `event` | `next_event`: the next agent event, with the chat it belongs to, the prompts a turn responds to and the requests it settles |
 
 It needs no async runtime. A driver picks its own. It says nothing about how these values are written on the
 socket; that is for the socket to define.
@@ -381,7 +381,7 @@ socket; that is for the socket to define.
 | `questions` | by a request: yes or no. By a message: yes or no | both | An app |
 | `reasoning` | yes or no | no | An app |
 | `files_in` | none, images, any | images | An app, to allow an attachment |
-| `approval_commands` | a list, always stated; each entry has the command and whether it counts at the start of a message or anywhere | none | The core, on every message |
+| `approval_commands` | a list, always stated; each entry has the command, whether it counts at the start of a message or anywhere, and whether it needs the right to approve always or only while an approval waits | none | The core, on every message |
 
 What the proposal changes from the socket's draft, and what it leaves for the owner:
 
@@ -392,13 +392,21 @@ What the proposal changes from the socket's draft, and what it leaves for the ow
   ([D-046](decisions.md#d-046-a-setting-change-is-an-edit-and-a-notice-only-when-nobody-asked-for-it)). So
   each answer and control carries an id the core makes up, and the driver hands it back on the event that
   shows the effect.
+- **An event says which chat it belongs to, when the driver knows.** A harness can open a session and report
+  it before any turn starts, and the turn may never start. The Codex recordings show `thread/started` before
+  `turn/started`. Without the chat, the core would have to guess where a new session belongs, and a wrong
+  guess shows one chat's activity in another. The socket's draft has no such field.
 - **"New session" names a chat, and a session only if there is one to end.** A chat that has had no session
   has none to name.
+- **An approval command says when it needs the right to approve.** Always, or only while an approval is
+  waiting. Hermes uses `/approve` both to answer an approval and to confirm a command the person typed, and
+  the second needs only the right to prompt
+  ([D-048](decisions.md#d-048-a-request-to-confirm-a-command-is-a-question)).
 - **An answer says which kind it is.** To an approval it gives one choice. To a question item it gives one
   entry for each question: the question's id, the ids of the options and any typed text. The example on the
   socket page has a flat list of choices, which cannot say which question a choice belongs to.
 - **What is delivered is not what is recorded.** The answer handed to the harness holds what the person
-  typed, including a secret. The question item then records only that the question was answered
+  typed or chose, including a secret. The question item then records only that the question was answered
   ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)). They are two types.
 - **When a driver ends, the core closes what is open**, as it does when a connector's connection drops
   ([D-034](decisions.md#d-034-the-core-does-the-shared-work-and-a-connector-speaks-only-in-agent-events)). A

@@ -138,9 +138,10 @@ pub enum Given {
 
 /// The answer to one question, as it is delivered to the harness.
 ///
-/// This is not what the question item then records. It holds what the person typed, and for a
-/// secret question that is the secret. The item records only that the question was answered
-/// (D-041). So the typed text is left out when a reply is printed for debugging.
+/// This is not what the question item then records. It holds what the person answered, and for
+/// a secret question that is the secret, whether they typed it or chose it. The item records
+/// only that the question was answered (D-041). So neither the options nor the typed text are
+/// shown when a reply is printed for debugging.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Reply {
     /// The id of the question.
@@ -155,9 +156,7 @@ impl fmt::Debug for Reply {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Reply")
             .field("question", &self.question)
-            .field("options", &self.options)
-            .field("text", &self.text.as_ref().map(|_| "(not shown)"))
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
