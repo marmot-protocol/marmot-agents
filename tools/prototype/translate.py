@@ -122,11 +122,14 @@ class Translator:
             self.open.pop(item, None)
         return ev
 
-    def close_open_items(self, reason):
-        """A turn ended. Anything still running will never report again, so close it."""
+    def close_open_items(self, reason, keep_message_questions=False):
+        """A turn ended. Anything still running will never report again, so close it. A question
+        answered by the person's next message is still waiting when a turn completes normally."""
         for item, ev in list(self.open.items()):
             if ev["type"] in ("turn", "task", "session"):
                 continue  # tasks and sessions may outlive the turn; the turn closes itself
+            if keep_message_questions and ev["type"] == "question" and ev["body"].get("answer_via") == "message":
+                continue
             self.emit(
                 item, ev["type"], "cancelled", ev["title"], ev["text"], ev["body"],
                 native_kind="(none: closed by the driver)",
@@ -196,8 +199,8 @@ class Codex(Translator):
     def __init__(self):
         super().__init__()
         self.pending: dict = {}  # JSON-RPC request id -> what the client asked or was asked
-        self.usage = None
-        self.last_request = None  # the client's most recent request, to tell who started a turn
+        self.usage = {}  # turn -> [tokens before its first model call, the thread's total since]
+        self.starts = []  # (request id, who) for each request that will start a turn, oldest first
         self.settings: dict = {}  # what Codex has said about the thread's settings, merged
         self.models = None  # model ids, once the client has asked for the list
         self.modes = None  # collaboration modes, once the client has asked for the list
@@ -212,8 +215,8 @@ class Codex(Translator):
         if out:
             if method:
                 self.pending[("c", m.get("id"))] = method
-                if "id" in m:
-                    self.last_request = method
+                if "id" in m and method in ("turn/start", "thread/compact/start"):
+                    self.starts.append((m["id"], "user" if method == "turn/start" else "control"))
                 p = m.get("params") or {}
                 if method == "turn/interrupt":
                     self.control("interrupt", "turn/interrupt")
@@ -243,7 +246,13 @@ class Codex(Translator):
             return self.skip("partial text and output (…/delta)")
         if method in self.NOT_SENT:
             if method == "thread/tokenUsage/updated":
-                self.usage = (p.get("tokenUsage") or {}).get("last")
+                # `last` is one model call; `total` counts the whole thread. A turn used the
+                # increase in the total from before its first call.
+                tu = p.get("tokenUsage") or {}
+                total, last = tu.get("total") or {}, tu.get("last") or {}
+                if p.get("turnId") not in self.usage:
+                    self.usage[p.get("turnId")] = [{k: (total.get(k) or 0) - (last.get(k) or 0) for k in ("inputTokens", "outputTokens")}, total]
+                self.usage[p.get("turnId")][1] = total
             if method == "thread/started":
                 self.use_thread((p.get("thread") or {}).get("id"))
                 return self.thread_settings(method, p.get("thread") or {}, p)
@@ -280,28 +289,34 @@ class Codex(Translator):
             self.emit(turn_item, "turn", "cancelled", "Interrupted", "The harness stopped before the turn finished.",
                       prev["body"], native_kind="(none: closed by the driver)", native={"reason": "the harness process ended"})
         self.pending.clear()
+        self.starts.clear()
+        self.usage.clear()
+        self.turn = None
 
     # -- turns
 
     def turn_started(self, method, m, p):
         self.turn = (p.get("turn") or {}).get("id")
-        self.started_by = "user" if self.last_request == "turn/start" else "control"
+        # The oldest request that starts a turn started this one. With none, Codex started it.
+        self.started_by = self.starts.pop(0)[1] if self.starts else "agent"
         self.emit(f"turn:{self.turn}", "turn", "running", "Working", body={"started_by": self.started_by},
                   native_kind=method, native=p)
 
     def turn_completed(self, method, m, p):
         turn = p.get("turn") or {}
         status = turn.get("status")
-        self.close_open_items(f"the turn ended with status {status}")
+        self.close_open_items(f"the turn ended with status {status}", keep_message_questions=status == "completed")
         state = {"completed": "done", "interrupted": "cancelled", "failed": "failed"}.get(status, "done")
         title = {"done": "Finished", "cancelled": "Interrupted", "failed": "Failed"}[state]
         err = turn.get("error")
         body = {"started_by": getattr(self, "started_by", "user"), "duration_ms": turn.get("durationMs")}
-        if self.usage:
-            body["usage"] = {"input_tokens": self.usage.get("inputTokens"), "output_tokens": self.usage.get("outputTokens")}
+        used = self.usage.pop(turn.get("id"), None)
+        if used:
+            before, total = used
+            body["usage"] = {k: (total.get(c) or 0) - before[c] for k, c in (("input_tokens", "inputTokens"), ("output_tokens", "outputTokens"))}
         self.emit(f"turn:{turn.get('id')}", "turn", state, title, text=(err or {}).get("message", "") if err else "",
                   body=body, native_kind=method, native=p)
-        self.usage = None
+        self.turn = None  # nothing that follows belongs to this turn
 
     # -- items
 
@@ -383,6 +398,8 @@ class Codex(Translator):
 
     def approval(self, method, m, p):
         rid = m.get("id")
+        if "permissions" in method:
+            return self.permissions(method, m, p)
         offered = p.get("availableDecisions")
         choices, native_choices = [], {}
         for n, d in enumerate(offered or ["accept", "decline"]):
@@ -400,6 +417,18 @@ class Codex(Translator):
         item = f"approval:{rid}"
         self.pending[("s", rid)] = {"item": item, "native_choices": native_choices, "subject": p.get("itemId"), "what": what, "choices": choices}
         self.emit(item, "approval", "waiting", f"Allow this {what}?", p.get("command") or p.get("reason") or "",
+                  {"subject": p.get("itemId"), "choices": choices}, f"{method} (request)", p)
+
+    def permissions(self, method, m, p):
+        """Codex asks for more permissions. The reply grants some, for the turn or for the session,
+        or grants none, which denies them."""
+        rid = m.get("id")
+        choices = [{"id": "c0", "label": "Allow for this turn", "effect": "allow"},
+                   {"id": "c1", "label": "Allow for this session", "effect": "allow"},
+                   {"id": "c2", "label": "Deny", "effect": "deny"}]
+        item = f"approval:{rid}"
+        self.pending[("s", rid)] = {"item": item, "choices": choices, "permissions": True}
+        self.emit(item, "approval", "waiting", "Allow this permission?", p.get("reason") or "",
                   {"subject": p.get("itemId"), "choices": choices}, f"{method} (request)", p)
 
     def elicitation(self, method, m, p):
@@ -440,7 +469,13 @@ class Codex(Translator):
         prev = self.open.get(req["item"])
         if prev is None:
             return
-        if prev["type"] == "approval":
+        if prev["type"] == "approval" and req.get("permissions"):
+            granted = any(v is not None for v in (result.get("permissions") or {}).values())
+            chosen = "c2" if not granted else "c1" if result.get("scope") == "session" else "c0"
+            label = next(c["label"] for c in req["choices"] if c["id"] == chosen)
+            self.emit(req["item"], "approval", "done" if granted else "declined", prev["title"], f"Answered: {label}",
+                      {**prev["body"], "answer": {"choice": chosen}}, "response to the approval request", result)
+        elif prev["type"] == "approval":
             decision = result.get(req.get("decision_key", "decision"))
             chosen = next((c for c, d in req["native_choices"].items() if d == decision), None)
             label = next((c["label"] for c in req["choices"] if c["id"] == chosen), str(decision))
@@ -480,6 +515,7 @@ class Codex(Translator):
     def response(self, m):
         method = self.pending.pop(("c", m.get("id")), None)
         if "error" in m:
+            self.starts = [s for s in self.starts if s[0] != m.get("id")]  # that request starts no turn
             err = m["error"] or {}
             return self.emit(f"error:{m.get('id')}", "error", "failed", "The harness refused a request", err.get("message", ""),
                              {"request": method, "code": err.get("code")}, f"error response to {method}", err)
@@ -510,7 +546,7 @@ class Codex(Translator):
             "version": thread.get("cliVersion"),
             "model": src.get("model"),
             "effort": src.get("effort") or src.get("reasoningEffort"),
-            "approval_policy": src.get("approvalPolicy"),
+            "approval_policy": next(iter(src["approvalPolicy"])) if isinstance(src.get("approvalPolicy"), dict) else src.get("approvalPolicy"),
             "sandbox": sandbox.get("type") if isinstance(sandbox, dict) else sandbox,
             "mode": (src.get("collaborationMode") or {}).get("mode"),
         }.items():
@@ -2063,7 +2099,8 @@ def check(dirs: list[Path]) -> int:
             row[2] = max([row[2]] + [len(json.dumps(e["body"], ensure_ascii=False).encode("utf-8")) for e in evs])
             row[3] += 1
             controls.update({(t.harness, *k): v for k, v in t.controls.items()})
-            still = [e for e in t.open.values() if e["type"] not in ("task", "session")]
+            still = [e for e in t.open.values() if e["type"] not in ("task", "session")
+                     and not (e["type"] == "question" and e["body"].get("answer_via") == "message")]
             if still:
                 left_open.append((path.name, [f"{e['type']}:{e['state']}" for e in still]))
             print(f"{t.harness:8s} {path.stem:18s} {n:4d} native messages -> {len(t.events):3d} agent events")
@@ -2100,8 +2137,8 @@ def crate_shape(value, key=None):
     if isinstance(value, dict):
         out = {}
         for k, v in value.items():
-            if key == "native" and k == "payload":
-                out[k] = v
+            if (key == "native" and k == "payload") or (key == "body" and k == "input"):
+                out[k] = v  # the harness's own JSON, kept as it is
                 continue
             if v is None or (k in LEFT_OUT_WHEN_FALSE and v is False) or (k in LEFT_OUT_WHEN_EMPTY and v == []):
                 continue

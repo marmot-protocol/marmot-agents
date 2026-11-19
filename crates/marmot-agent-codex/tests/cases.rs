@@ -222,3 +222,141 @@ fn seq_counts_within_each_session() {
     );
     assert!(matches!(events[1].body(), Body::Notice(n) if n.kind == NoticeKind::Warning));
 }
+
+const TURN_STARTED: &str = r#"{"method": "turn/started", "params": {"threadId": "th1", "turn": {"id": "t1", "items": [], "status": "inProgress", "error": null}}}"#;
+const TURN_DONE: &str = r#"{"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t1", "items": [], "status": "completed", "error": null, "durationMs": 900}}}"#;
+
+fn turn_body(event: &AgentEvent) -> &marmot_agent_events::body::Turn {
+    let Body::Turn(turn) = event.body() else {
+        panic!("a turn event");
+    };
+    turn
+}
+
+#[test]
+fn a_turn_reports_every_model_call_it_made() {
+    // `last` is one call; `total` is the thread. Two calls of 37 and 19 output tokens follow
+    // 1,000 tokens from earlier turns.
+    let usage = |total_in: u64, total_out: u64, last_in: u64, last_out: u64| {
+        format!(
+            r#"{{"method": "thread/tokenUsage/updated", "params": {{"threadId": "th1", "turnId": "t1", "tokenUsage": {{"total": {{"inputTokens": {total_in}, "outputTokens": {total_out}}}, "last": {{"inputTokens": {last_in}, "outputTokens": {last_out}}}}}}}}}"#
+        )
+    };
+    let events = feed(&[
+        (Direction::In, TURN_STARTED),
+        (Direction::In, &usage(1100, 1037, 100, 37)),
+        (Direction::In, &usage(1300, 1056, 200, 19)),
+        (Direction::In, TURN_DONE),
+    ]);
+    let used = turn_body(&events[1]).usage.clone().expect("usage");
+    assert_eq!(
+        (used.input_tokens, used.output_tokens),
+        (Some(300), Some(56))
+    );
+}
+
+#[test]
+fn a_request_between_starting_a_turn_and_its_start_does_not_change_who_started_it() {
+    let events = feed(&[
+        (
+            Direction::Out,
+            r#"{"id": 1, "method": "turn/start", "params": {"threadId": "th1", "input": []}}"#,
+        ),
+        (
+            Direction::Out,
+            r#"{"id": 2, "method": "model/list", "params": {}}"#,
+        ),
+        (Direction::In, TURN_STARTED),
+    ]);
+    assert_eq!(
+        turn_body(&events[0]).started_by,
+        marmot_agent_events::body::StartedBy::User
+    );
+}
+
+#[test]
+fn a_turn_nobody_asked_for_was_started_by_the_agent() {
+    let events = feed(&[(Direction::In, TURN_STARTED)]);
+    assert_eq!(
+        turn_body(&events[0]).started_by,
+        marmot_agent_events::body::StartedBy::Agent
+    );
+}
+
+#[test]
+fn what_follows_a_turn_does_not_belong_to_it() {
+    let refused = r#"{"id": 5, "error": {"code": -32600, "message": "no such setting"}}"#;
+    let events = feed(&[
+        (Direction::In, TURN_STARTED),
+        (Direction::In, TURN_DONE),
+        (
+            Direction::Out,
+            r#"{"id": 5, "method": "thread/settings/update", "params": {"threadId": "th1"}}"#,
+        ),
+        (Direction::In, refused),
+    ]);
+    assert!(matches!(events[2].body(), Body::Error(_)));
+    assert_eq!(events[2].header().turn, None);
+}
+
+#[test]
+fn an_approval_policy_can_be_an_object() {
+    let started = r#"{"method": "thread/started", "params": {"thread": {"id": "th1", "cliVersion": "0.169.0", "model": "m1", "approvalPolicy": {"granular": {"mcp_elicitations": true, "rules": true, "sandbox_approval": false}}}}}"#;
+    let events = feed(&[(Direction::In, started)]);
+    let Body::Session(session) = events[0].body() else {
+        panic!("a session item");
+    };
+    let value = |id: &str| {
+        session
+            .settings
+            .iter()
+            .find(|s| s.id == id)
+            .and_then(|s| s.value.clone())
+    };
+    assert_eq!(value("approval_policy").as_deref(), Some("granular"));
+    assert_eq!(
+        value("model").as_deref(),
+        Some("m1"),
+        "the other settings survive"
+    );
+}
+
+#[test]
+fn a_permission_request_is_granted_for_a_scope_or_denied() {
+    let asked = r#"{"id": 9, "method": "item/permissions/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "call9", "cwd": "/w", "startedAtMs": 1, "reason": "needs the network", "permissions": {"network": {"enabled": true}}}}"#;
+    let reply = |grant: &str| format!(r#"{{"id": 9, "result": {grant}}}"#);
+    for (grant, state, choice) in [
+        (
+            r#"{"permissions": {"network": {"enabled": true}}, "scope": "session"}"#,
+            State::Done,
+            "c1",
+        ),
+        (
+            r#"{"permissions": {"network": {"enabled": true}}}"#,
+            State::Done,
+            "c0",
+        ),
+        (r#"{"permissions": {}}"#, State::Declined, "c2"),
+    ] {
+        let events = feed(&[(Direction::In, asked), (Direction::Out, &reply(grant))]);
+        let Body::Approval(approval) = events[1].body() else {
+            panic!("an approval");
+        };
+        assert_eq!(events[1].header().state, state, "{grant}");
+        assert_eq!(
+            approval.answer.as_ref().and_then(|a| a.choice.as_deref()),
+            Some(choice),
+            "{grant}"
+        );
+    }
+}
+
+#[test]
+fn a_turn_end_the_driver_cannot_read_closes_nothing() {
+    let mut translator = Translator::new();
+    let started = r#"{"method": "item/started", "params": {"threadId": "th1", "turnId": "t1", "item": {"type": "commandExecution", "id": "cmd1", "command": "make", "cwd": "/w", "status": "inProgress"}}}"#;
+    translator.feed(Direction::In, started);
+    let odd = r#"{"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t1", "status": "completed", "error": "a string where an object goes"}}}"#;
+    assert!(translator.feed(Direction::In, odd).is_empty());
+    assert_eq!(translator.unknown().len(), 1);
+}

@@ -51,12 +51,16 @@ pub(crate) struct Envelope<'a> {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct TokenUsageUpdated {
+    pub turn_id: Option<String>,
     pub token_usage: Option<TokenUsage>,
 }
 
 #[derive(Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct TokenUsage {
+    /// The whole thread so far.
+    pub total: Option<Tokens>,
+    /// The last model call.
     pub last: Option<Tokens>,
 }
 
@@ -88,13 +92,21 @@ pub(crate) struct Settings {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub reasoning_effort: Option<String>,
-    pub approval_policy: Option<String>,
+    pub approval_policy: Option<Policy>,
     pub sandbox_policy: Option<Sandbox>,
     pub sandbox: Option<Sandbox>,
     pub collaboration_mode: Option<Mode>,
     pub cli_version: Option<String>,
     /// In a reply, the thread itself, which says the version.
     pub thread: Option<Box<Settings>>,
+}
+
+/// An approval policy: a word, or an object whose one key names its kind, such as `granular`.
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub(crate) enum Policy {
+    Word(String),
+    Object(serde_json::Map<String, Value>),
 }
 
 /// A sandbox, named by a word or by an object with a `type`.
@@ -305,12 +317,15 @@ pub(crate) struct UserOption {
 // -------------------------------------------------------------------------------------- replies
 
 /// The client's reply to an approval request: the decision under `decision`, or for an MCP
-/// server's approval under `action`.
+/// server's approval under `action`. A reply to a request for permissions has neither: it grants
+/// `permissions`, for a `scope` of the turn or the session, and an empty grant denies.
 #[derive(Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct ApprovalReply {
     pub decision: Option<Value>,
     pub action: Option<Value>,
+    pub permissions: Option<serde_json::Map<String, Value>>,
+    pub scope: Option<String>,
 }
 
 /// The client's reply to a question: Codex's questions get labels under `answers`, an MCP

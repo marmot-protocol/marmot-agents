@@ -14,7 +14,7 @@
 
 use crate::messages::{
     self, ApprovalReply, ApprovalRequest, ChangeKind as NativeChange, Elicitation, Envelope,
-    ErrorNote, ErrorReply, Id, ItemNote, ListReply, Message as NativeMessage, PlanUpdated,
+    ErrorNote, ErrorReply, Id, ItemNote, ListReply, Message as NativeMessage, PlanUpdated, Policy,
     QuestionReply, Rerouted, Sandbox, ThreadSettingsUpdated, ThreadStarted, TokenUsageUpdated,
     Tokens, TurnNote, UserInput,
 };
@@ -71,12 +71,23 @@ enum Pending {
         /// Each choice's id, and the decision Codex takes for it.
         decisions: Vec<(String, Value)>,
         choices: Vec<Choice>,
-        /// Where the reply puts the decision: `decision`, or `action` for an MCP server.
-        by_action: bool,
+        /// Where the reply says what was chosen.
+        reply: Reply,
     },
     Question {
         item: String,
     },
+}
+
+/// Where a reply to an approval says what was chosen.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reply {
+    /// Under `decision`.
+    Decision,
+    /// Under `action`, for an MCP server.
+    Action,
+    /// As `permissions` granted for a `scope`. An empty grant denies.
+    Grant,
 }
 
 /// The settings Codex has stated for the thread, merged.
@@ -107,8 +118,11 @@ pub struct Translator {
     requests: HashMap<Id, String>,
     /// Codex's requests that the client has not answered, by id.
     asked: HashMap<Id, Pending>,
-    usage: Option<Tokens>,
-    last_request: Option<String>,
+    /// For each turn, the thread's tokens before its first model call, and the thread's total
+    /// since. `last` in Codex's notice is one model call; a turn used the increase in the total.
+    usage: HashMap<Option<String>, (Tokens, Tokens)>,
+    /// The client's requests that will start a turn, oldest first, and who they count as.
+    starts: Vec<(Id, StartedBy)>,
     started_by: Option<StartedBy>,
     known: Known,
     models: Option<Vec<String>>,
@@ -155,7 +169,7 @@ impl Translator {
     /// open items and the open turn itself.
     pub fn harness_stopped(&mut self) -> Vec<AgentEvent> {
         let mut out = Vec::new();
-        self.close_open_items(&mut out);
+        self.close_open_items(&mut out, false);
         let turn_item = format!("turn:{}", show(self.turn.as_deref()));
         if let Some(prev) = self.open_event(&turn_item) {
             let body = prev.body().clone();
@@ -171,6 +185,9 @@ impl Translator {
         }
         self.requests.clear();
         self.asked.clear();
+        self.starts.clear();
+        self.usage.clear();
+        self.turn = None;
         out
     }
 
@@ -178,7 +195,11 @@ impl Translator {
         if let Some(method) = &m.method {
             if let Some(id) = &m.id {
                 self.requests.insert(id.clone(), method.clone());
-                self.last_request = Some(method.clone());
+                match method.as_str() {
+                    "turn/start" => self.starts.push((id.clone(), StartedBy::User)),
+                    "thread/compact/start" => self.starts.push((id.clone(), StartedBy::Control)),
+                    _ => {}
+                }
             }
             return;
         }
@@ -196,17 +217,33 @@ impl Translator {
         if NOT_SENT.contains(&method) {
             match method {
                 "thread/tokenUsage/updated" => {
-                    let p: TokenUsageUpdated = read(params);
-                    self.usage = p.token_usage.and_then(|u| u.last);
+                    let Some(p) = self.read::<TokenUsageUpdated>(method, params) else {
+                        return;
+                    };
+                    let usage = p.token_usage.unwrap_or_default();
+                    let total = usage.total.unwrap_or_default();
+                    let last = usage.last.unwrap_or_default();
+                    let before = Tokens {
+                        input_tokens: Some(less(&total.input_tokens, &last.input_tokens)),
+                        output_tokens: Some(less(&total.output_tokens, &last.output_tokens)),
+                    };
+                    self.usage
+                        .entry(p.turn_id)
+                        .and_modify(|(_, latest)| *latest = total.clone())
+                        .or_insert((before, total));
                 }
                 "thread/started" => {
-                    let p: ThreadStarted = read(params);
+                    let Some(p) = self.read::<ThreadStarted>(method, params) else {
+                        return;
+                    };
                     let thread = p.thread.unwrap_or_default();
                     self.use_thread(thread.id.clone(), out);
                     self.thread_settings(&thread, method, params, out);
                 }
                 "thread/settings/updated" => {
-                    let p: ThreadSettingsUpdated = read(params);
+                    let Some(p) = self.read::<ThreadSettingsUpdated>(method, params) else {
+                        return;
+                    };
                     let settings = p.thread_settings.unwrap_or_default();
                     self.thread_settings(&settings, method, params, out);
                 }
@@ -218,10 +255,11 @@ impl Translator {
             "turn/started" => self.turn_started(method, params, out),
             "turn/completed" => self.turn_completed(method, params, out),
             "item/started" | "item/completed" => self.item(method, params, out),
-            "item/commandExecution/requestApproval"
-            | "item/fileChange/requestApproval"
-            | "item/permissions/requestApproval" => {
+            "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
                 self.approval(method, m.id.clone(), params, out)
+            }
+            "item/permissions/requestApproval" => {
+                self.permissions(method, m.id.clone(), params, out)
             }
             "item/tool/requestUserInput" => self.user_input(method, m.id.clone(), params, out),
             "mcpServer/elicitation/request" => self.elicitation(method, m.id.clone(), params, out),
@@ -241,7 +279,9 @@ impl Translator {
                 );
             }
             "model/rerouted" => {
-                let p: Rerouted = read(params);
+                let Some(p) = self.read::<Rerouted>(method, params) else {
+                    return;
+                };
                 let item = format!("model:{}", self.made);
                 let text = format!(
                     "{} to {}",
@@ -265,7 +305,9 @@ impl Translator {
                 );
             }
             "warning" => {
-                let p: NativeMessage = read(params);
+                let Some(p) = self.read::<NativeMessage>(method, params) else {
+                    return;
+                };
                 let item = format!("warning:{}", self.made);
                 let body = Body::Notice(notice(NoticeKind::Warning));
                 let text = p.message.unwrap_or_default();
@@ -273,7 +315,9 @@ impl Translator {
                 self.emit(out, &item, body, State::Done, "Warning", &text, native);
             }
             "error" => {
-                let p: ErrorNote = read(params);
+                let Some(p) = self.read::<ErrorNote>(method, params) else {
+                    return;
+                };
                 let item = format!("error:{}", self.made);
                 let text = p.error.and_then(|e| e.message).unwrap_or_default();
                 let body = Body::Error(Error {
@@ -290,12 +334,15 @@ impl Translator {
     // -- turns
 
     fn turn_started(&mut self, method: &str, params: &str, out: &mut Vec<AgentEvent>) {
-        let p: TurnNote = read(params);
+        let Some(p) = self.read::<TurnNote>(method, params) else {
+            return;
+        };
         self.turn = p.turn.and_then(|t| t.id);
-        let started_by = if self.last_request.as_deref() == Some("turn/start") {
-            StartedBy::User
+        // The oldest request that starts a turn started this one. With none, Codex started it.
+        let started_by = if self.starts.is_empty() {
+            StartedBy::Agent
         } else {
-            StartedBy::Control
+            self.starts.remove(0).1
         };
         self.started_by = Some(started_by);
         let item = format!("turn:{}", show(self.turn.as_deref()));
@@ -309,23 +356,24 @@ impl Translator {
     }
 
     fn turn_completed(&mut self, method: &str, params: &str, out: &mut Vec<AgentEvent>) {
-        let turn = read::<TurnNote>(params).turn.unwrap_or_default();
-        self.close_open_items(out);
+        let Some(note) = self.read::<TurnNote>(method, params) else {
+            return;
+        };
+        let turn = note.turn.unwrap_or_default();
+        // A question answered by the person's next message still waits after a turn that
+        // completed. Anything else open will never report again.
+        let completed = turn.status.as_deref() == Some("completed");
+        self.close_open_items(out, completed);
         let (state, title) = match turn.status.as_deref() {
             Some("interrupted") => (State::Cancelled, "Interrupted"),
             Some("failed") => (State::Failed, "Failed"),
             _ => (State::Done, "Finished"),
         };
         let text = turn.error.and_then(|e| e.message).unwrap_or_default();
-        // Tokens are reported only when Codex said how many.
-        let usage = self
-            .usage
-            .take()
-            .filter(|u| u.input_tokens.is_some() || u.output_tokens.is_some())
-            .map(|u| Usage {
-                input_tokens: u.input_tokens,
-                output_tokens: u.output_tokens,
-            });
+        let usage = self.usage.remove(&turn.id).map(|(before, total)| Usage {
+            input_tokens: Some(less(&total.input_tokens, &before.input_tokens)),
+            output_tokens: Some(less(&total.output_tokens, &before.output_tokens)),
+        });
         let body = Body::Turn(Turn {
             started_by: self.started_by.unwrap_or(StartedBy::User),
             duration_ms: turn.duration_ms,
@@ -334,12 +382,16 @@ impl Translator {
         let item = format!("turn:{}", show(turn.id.as_deref()));
         let native = native(method, params);
         self.emit(out, &item, body, state, title, &text, native);
+        self.turn = None; // nothing that follows belongs to this turn
     }
 
     // -- items
 
     fn item(&mut self, method: &str, params: &str, out: &mut Vec<AgentEvent>) {
-        let it = read::<ItemNote<'_>>(params).item.unwrap_or_default();
+        let Some(note) = self.read::<ItemNote<'_>>(method, params) else {
+            return;
+        };
+        let it = note.item.unwrap_or_default();
         let started = method == "item/started";
         let kind = it.kind.as_deref();
         let native_kind = format!("{method} [{}]", show(kind));
@@ -576,7 +628,9 @@ impl Translator {
     // -- approvals and questions
 
     fn approval(&mut self, method: &str, id: Option<Id>, params: &str, out: &mut Vec<AgentEvent>) {
-        let p: ApprovalRequest = read(params);
+        let Some(p) = self.read::<ApprovalRequest>(method, params) else {
+            return;
+        };
         let offered = p
             .available_decisions
             .filter(|d| !d.is_empty())
@@ -634,7 +688,7 @@ impl Translator {
                     item: item.clone(),
                     decisions,
                     choices: choices.clone(),
-                    by_action: false,
+                    reply: Reply::Decision,
                 },
             );
         }
@@ -649,6 +703,51 @@ impl Translator {
         self.emit(out, &item, body, State::Waiting, &title, &text, native);
     }
 
+    /// Codex asks for more permissions. The reply grants some, for the turn or for the session, or
+    /// grants none, which denies them.
+    fn permissions(
+        &mut self,
+        method: &str,
+        id: Option<Id>,
+        params: &str,
+        out: &mut Vec<AgentEvent>,
+    ) {
+        let Some(p) = self.read::<ApprovalRequest>(method, params) else {
+            return;
+        };
+        let choice = |id: &str, label: &str, effect| Choice {
+            id: id.into(),
+            label: label.into(),
+            effect,
+        };
+        let choices = vec![
+            choice("c0", "Allow for this turn", Effect::Allow),
+            choice("c1", "Allow for this session", Effect::Allow),
+            choice("c2", "Deny", Effect::Deny),
+        ];
+        let item = format!("approval:{}", show_id(id.as_ref()));
+        if let Some(id) = id {
+            self.asked.insert(
+                id,
+                Pending::Approval {
+                    item: item.clone(),
+                    decisions: Vec::new(),
+                    choices: choices.clone(),
+                    reply: Reply::Grant,
+                },
+            );
+        }
+        let body = Body::Approval(Approval {
+            subject: p.item_id.map(Into::into),
+            choices,
+            answer: None,
+        });
+        let text = p.reason.unwrap_or_default();
+        let native = native(&format!("{method} (request)"), params);
+        let title = "Allow this permission?";
+        self.emit(out, &item, body, State::Waiting, title, &text, native);
+    }
+
     /// An MCP server asks the person for something. Codex also uses this to approve an MCP tool
     /// call.
     fn elicitation(
@@ -658,7 +757,9 @@ impl Translator {
         params: &str,
         out: &mut Vec<AgentEvent>,
     ) {
-        let p: Elicitation = read(params);
+        let Some(p) = self.read::<Elicitation>(method, params) else {
+            return;
+        };
         let native = native(&format!("{method} (request)"), params);
         let text = p.message.unwrap_or_default();
         let approval = p.meta.and_then(|m| m.codex_approval_kind);
@@ -687,7 +788,7 @@ impl Translator {
                         item: item.clone(),
                         decisions,
                         choices: choices.clone(),
-                        by_action: true,
+                        reply: Reply::Action,
                     },
                 );
             }
@@ -740,7 +841,9 @@ impl Translator {
         params: &str,
         out: &mut Vec<AgentEvent>,
     ) {
-        let p: UserInput = read(params);
+        let Some(p) = self.read::<UserInput>(method, params) else {
+            return;
+        };
         let asked: Vec<Asked> = p
             .questions
             .unwrap_or_default()
@@ -813,21 +916,41 @@ impl Translator {
                 item,
                 decisions,
                 choices,
-                by_action,
+                reply: replied_by,
             } => {
                 let Some(prev) = self.open_event(&item) else {
                     return;
                 };
-                let reply: ApprovalReply = read(result);
-                let decision = if by_action {
-                    reply.action
-                } else {
-                    reply.decision
+                let Some(reply) = self.read::<ApprovalReply>("a reply", result) else {
+                    return;
                 };
-                let chosen = decisions
-                    .iter()
-                    .find(|(_, d)| Some(d) == decision.as_ref())
-                    .map(|(id, _)| id.clone());
+                let (decision, chosen) = match replied_by {
+                    Reply::Grant => {
+                        let granted = reply
+                            .permissions
+                            .iter()
+                            .flatten()
+                            .any(|(_, v)| !v.is_null());
+                        let chosen = match (granted, reply.scope.as_deref()) {
+                            (false, _) => "c2",
+                            (true, Some("session")) => "c1",
+                            (true, _) => "c0",
+                        };
+                        (None, Some(chosen.to_string()))
+                    }
+                    Reply::Decision | Reply::Action => {
+                        let decision = if replied_by == Reply::Action {
+                            reply.action
+                        } else {
+                            reply.decision
+                        };
+                        let chosen = decisions
+                            .iter()
+                            .find(|(_, d)| Some(d) == decision.as_ref())
+                            .map(|(id, _)| id.clone());
+                        (decision, chosen)
+                    }
+                };
                 let choice = chosen
                     .as_ref()
                     .and_then(|id| choices.iter().find(|c| &c.id == id));
@@ -860,7 +983,9 @@ impl Translator {
                 let Body::Question(question) = prev.body().clone() else {
                     return;
                 };
-                let reply: QuestionReply = read(result);
+                let Some(reply) = self.read::<QuestionReply>("a reply", result) else {
+                    return;
+                };
                 let answers = answered(question.questions(), reply);
                 let secret = question.questions().iter().any(|q| q.secret);
                 let Ok(question) = question.answered(answers) else {
@@ -883,7 +1008,10 @@ impl Translator {
     fn response(&mut self, m: &Envelope<'_>, out: &mut Vec<AgentEvent>) {
         let method = m.id.as_ref().and_then(|id| self.requests.remove(id));
         if let Some(error) = m.error {
-            let e: ErrorReply = read(error.get());
+            self.starts.retain(|(id, _)| Some(id) != m.id.as_ref()); // that request starts no turn
+            let Some(e) = self.read::<ErrorReply>("an error reply", error.get()) else {
+                return;
+            };
             let item = format!("error:{}", show_id(m.id.as_ref()));
             let body = Body::Error(Error {
                 request: method.clone(),
@@ -899,7 +1027,9 @@ impl Translator {
         let result = m.result.map_or("{}", RawValue::get);
         match method.as_deref() {
             Some("model/list") => {
-                let list: ListReply = read(result);
+                let Some(list) = self.read::<ListReply>("a reply", result) else {
+                    return;
+                };
                 self.models = Some(
                     list.data
                         .unwrap_or_default()
@@ -909,7 +1039,9 @@ impl Translator {
                 );
             }
             Some("collaborationMode/list") => {
-                let list: ListReply = read(result);
+                let Some(list) = self.read::<ListReply>("a reply", result) else {
+                    return;
+                };
                 self.modes = Some(
                     list.data
                         .unwrap_or_default()
@@ -919,7 +1051,9 @@ impl Translator {
                 );
             }
             Some(started @ ("thread/start" | "thread/resume")) => {
-                let settings: messages::Settings = read(result);
+                let Some(settings) = self.read::<messages::Settings>("a reply", result) else {
+                    return;
+                };
                 if let Some(thread) = &settings.thread {
                     self.use_thread(thread.id.clone(), out);
                     let kind = format!("response to {started}");
@@ -969,7 +1103,13 @@ impl Translator {
                 &mut known.effort,
                 src.effort.clone().or(src.reasoning_effort.clone()),
             ),
-            (&mut known.approval_policy, src.approval_policy.clone()),
+            (
+                &mut known.approval_policy,
+                src.approval_policy.as_ref().and_then(|p| match p {
+                    Policy::Word(word) => Some(word.clone()),
+                    Policy::Object(kinds) => kinds.keys().next().cloned(),
+                }),
+            ),
             (&mut known.sandbox, sandbox),
             (
                 &mut known.mode,
@@ -1045,7 +1185,9 @@ impl Translator {
     // -- other
 
     fn plan(&mut self, method: &str, params: &str, out: &mut Vec<AgentEvent>) {
-        let p: PlanUpdated = read(params);
+        let Some(p) = self.read::<PlanUpdated>(method, params) else {
+            return;
+        };
         let entries: Vec<PlanEntry> = p
             .plan
             .unwrap_or_default()
@@ -1089,19 +1231,36 @@ impl Translator {
     // -- events
 
     /// A turn ended. Anything still running will never report again, so the driver closes it.
-    fn close_open_items(&mut self, out: &mut Vec<AgentEvent>) {
+    fn close_open_items(&mut self, out: &mut Vec<AgentEvent>, keep_message_questions: bool) {
         let open: Vec<(String, AgentEvent)> = self.open.clone();
         for (item, prev) in open {
-            if matches!(
-                prev.body(),
-                Body::Turn(_) | Body::Task(_) | Body::Session(_)
-            ) {
-                continue; // tasks and sessions may outlive the turn; the turn closes itself
+            match prev.body() {
+                // Tasks and sessions may outlive the turn; the turn closes itself.
+                Body::Turn(_) | Body::Task(_) | Body::Session(_) => continue,
+                Body::Question(q)
+                    if keep_message_questions && q.answer_via() == AnswerVia::Message =>
+                {
+                    continue;
+                }
+                _ => {}
             }
             let header = prev.header();
             let (title, text) = (header.title.clone(), header.text.clone());
             let body = prev.body().clone();
             self.emit(out, &item, body, State::Cancelled, &title, &text, None);
+        }
+    }
+
+    /// Reads a message's payload. One the driver cannot read is a shape it does not know: it is
+    /// noted, and makes no event, rather than being taken as empty.
+    fn read<'a, T: Deserialize<'a>>(&mut self, what: &str, text: &'a str) -> Option<T> {
+        match serde_json::from_str(text) {
+            Ok(value) => Some(value),
+            Err(_) => {
+                self.unknown
+                    .push(format!("{what}: a shape the driver cannot read"));
+                None
+            }
         }
     }
 
@@ -1213,10 +1372,6 @@ fn answered(questions: &[Asked], reply: QuestionReply) -> Vec<Answered> {
     out
 }
 
-fn read<'a, T: Deserialize<'a> + Default>(text: &'a str) -> T {
-    serde_json::from_str(text).unwrap_or_default()
-}
-
 fn native(kind: &str, payload: &str) -> Option<Native> {
     Some(native_text(kind, payload))
 }
@@ -1227,6 +1382,11 @@ fn native_text(kind: &str, payload: &str) -> Native {
         payload: RawValue::from_string(payload.to_string())
             .unwrap_or_else(|_| RawValue::from_string("{}".into()).expect("valid JSON")),
     }
+}
+
+/// A count less another, as Codex reports them; a count it left out is nought.
+fn less(a: &Option<u64>, b: &Option<u64>) -> u64 {
+    a.unwrap_or(0).saturating_sub(b.unwrap_or(0))
 }
 
 /// A value Codex left out, written as the prototype writes it.

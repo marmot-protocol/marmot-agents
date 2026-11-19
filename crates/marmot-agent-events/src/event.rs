@@ -129,9 +129,8 @@ pub struct Header {
     pub turn: Option<TurnId>,
     /// The item this event creates or replaces.
     pub item: ItemId,
-    /// The order of the event. What it counts within is not settled: the design page says the
-    /// session, the prototype counts everything one driver produced, and the socket page leaves
-    /// the numbering to the core. See Q-01 in `docs/open-questions.md`.
+    /// The event's place among the events of its session, from 1, in the order the driver
+    /// produced them (D-059).
     pub seq: u64,
     /// Where the item stands.
     pub state: State,
