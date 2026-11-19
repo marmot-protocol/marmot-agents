@@ -319,6 +319,9 @@ Decided 2026-11-17.
 **Decision.** An agent item is at most 64 KB. When one would be larger, the driver first leaves out the native
 message, then cuts the output, keeping the start and the end, and says in the event what it did.
 
+Replaced in part by [D-057](#d-057-the-core-applies-the-64-kb-limit): the core applies the limit, not the
+driver. The limit and the order stand.
+
 **Why.** 64 KB carried every one of 16,841 tool outputs measured in real use; 16 KB would have cut one in 70.
 Storage is not a constraint at these sizes. The only constraint is relays that accept small events: an item
 near the limit is about 86 KB by the time it reaches a relay. We accept that. 64 KB is not large, and we want
@@ -886,20 +889,42 @@ the item says so, and never what the answer was
 
 This is an exception to "never drop the native payload" ([D-007](#d-007-one-shared-event-vocabulary)). The
 only other one is the size limit, which leaves the native message out of an item that would be over 64 KB
-([D-026](#d-026-an-agent-item-is-at-most-64-kb)). While the question waits, its native message is the
+([D-026](#d-026-an-agent-item-is-at-most-64-kb)). The core applies it, not the driver
+([D-057](#d-057-the-core-applies-the-64-kb-limit)). While the question waits, its native message is the
 harness's request, which holds no answer, and it is kept.
 
-**Why.** After a question is answered, the harness's own message about it is the record of the answer. For
-Codex it is the response to the question, and the answer is in it. Passing it on would put a password into the
-history of every member's device, where it cannot be taken back. A few events without a native message cost
-little.
+**Why.** After a question is answered, the message that records it holds the answer. For Codex that message
+is the reply the client sends to Codex's request. Passing it on would put a password into the history of every
+member's device, where it cannot be taken back. A few events without a native message cost little.
 
 The rule does not depend on an answer having been filled in, so that a driver cannot miss it by leaving the
 answer out: an item counts as waiting only when its state says so and it records no answer. The item types
 hold it: an event that breaks it cannot be built, and one that arrives as JSON cannot be read. For the same
 reason the questions in one item must have ids that differ. The types cannot read a native message, so a
-driver's own tests still have to show that it never hands over the response as if it were the request.
+driver's own tests still have to show that it never hands over that reply as if it were the request.
 
 Decided 2026-11-19. The project owner first decided that the answer to a secret question carries no native
 message, and then accepted this wider form when review showed the narrower one could be stepped round. No
 recording contains a secret question, so this has been tested with a hand-written one only.
+
+## D-057 The core applies the 64 KB limit
+
+**Decision.** The core applies the size limit of [D-026](#d-026-an-agent-item-is-at-most-64-kb) to every agent
+item, whichever driver or connector it came from. A driver never leaves anything out or cuts anything to keep
+an item under the limit: it hands over the native message as it arrived, and text and output at full size. When
+an item would be over 64 KB, the core leaves out the native message first, then cuts the output, keeping the
+start and the end, and says in the event what it did.
+
+This is about size only. A secret question that is no longer waiting still carries no native message
+([D-056](#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)), and its driver leaves
+that out.
+
+This replaces "the driver" in D-026. The limit, and the order in which parts are left out, stand.
+
+**Why.** D-026 says the driver applies the limit.
+[D-034](#d-034-the-core-does-the-shared-work-and-a-connector-speaks-only-in-agent-events), a day later, lists
+it among the shared work the core does, and the socket page follows D-034. Only the core knows an item's final
+size, because the core turns the event into the item. In one place, the rule exists once, and a connector
+written in another language cannot get it wrong.
+
+Decided 2026-11-19.

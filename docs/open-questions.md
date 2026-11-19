@@ -41,11 +41,12 @@ when the driver for that harness is built:
 
 | Decision | The prototype | The crate |
 | --- | --- | --- |
-| The answer to a secret question is never repeated ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat), [D-056](decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)) | Followed for Codex since 2026-11-19, tested with hand-written messages because no recording has a secret question. Before that it repeated the answer twice: in the item's `answer`, and in the native message, which is Codex's response | Cannot hold either. An answer to a secret question carries the question's id and nothing else, and a secret question that is no longer waiting cannot be built or read with a native message |
+| The answer to a secret question is never repeated ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat), [D-056](decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)) | Followed for Codex since 2026-11-19, tested with hand-written messages because no recording has a secret question. Before that it repeated the answer twice: in the item's `answer`, and in the native message, which is the client's reply to Codex's request | Cannot hold either. An answer to a secret question carries the question's id and nothing else, and a secret question that is no longer waiting cannot be built or read with a native message |
 | A session item carries the session's id ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)) | For Claude Code, a session item with no id, when the session is described before its first turn | Allows an event with no session, for any item type. See below |
 | A request to confirm a command is a `question` ([D-048](decisions.md#d-048-a-request-to-confirm-a-command-is-a-question)) | For Hermes, an `approval` | Not applicable: the crate does not choose an item's type |
 | A session item carries the harness's version ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)) | Has none. The page's table has none either | `harness_version`, always present |
 | A command always carries its name and hint ([D-045](decisions.md#d-045-a-session-items-commands-keep-their-names-and-lose-descriptions-first)) | For Claude Code, commands with a name and nothing else, until the driver asks for more | `hint`, always present, empty when the command takes nothing |
+| The core applies the 64 KB limit, and a driver cuts nothing to fit it ([D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb), [D-057](decisions.md#d-057-the-core-applies-the-64-kb-limit)) | Cuts the native message to a note of its size over 4,000 characters, text at 600 characters and output at 2,000 | Applies no limit |
 
 **A session item with no session id is left open on purpose.** Claude Code describes a session before its
 first turn and gives the id only when that turn starts, so its early session item has none. D-030 says the
@@ -59,10 +60,7 @@ item. Nothing built today produces one: Codex always has a thread id.
 | --- | --- | --- | --- |
 | A version number | Has none | `v: 0` on every event | Has none. The socket and the Marmot kind already carry versions |
 | The native message: how much of it | "The harness's own event, unchanged" | For a Codex item, only the item inside the message, without its thread and turn ids. For other messages, the whole payload | Does not decide. It holds whatever text the driver gives it |
-| The native message: how long | Unchanged | Cut to a note of its size when it is over 4,000 characters | Whole, as the exact text that arrived. The types apply no limit. See the next row |
-| Who applies the 64 KB limit | Two decisions disagree. [D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb) and the carrier page say the driver leaves out the native message and cuts the output. [D-034](decisions.md#d-034-the-core-does-the-shared-work-and-a-connector-speaks-only-in-agent-events), a day later, and the socket page say the core applies the size limit and a connector sends everything at full size | Cuts in the translator, at its own smaller sizes | Has no limit, so either answer fits. The Codex driver needs the answer before it is written |
 | An event the driver makes up, such as closing an item the harness never closed | Does not say | Gives it a made-up native message that holds the reason | No native message. Where the reason goes is not settled |
-| Long text and output | "Send everything, at full size" on the socket page | Text cut at 600 characters, output at 2,000 | No limit in the types |
 | `seq` | Order within the session. The socket page has no `seq` and says the core numbers items | Counts everything one translator produced, across sessions | Has it, and does not say what it counts within |
 | `prompts` on a turn | Only on the socket page | Has none | Has none |
 | The answer on a question | "Once answered: `answer`" | A different shape for each harness. For Codex, the harness's own labels | A list: the question's id, the ids of the options chosen, and typed text. This follows what an answer carries in [D-028](decisions.md#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it) |
@@ -111,7 +109,8 @@ plan as steps. The crate has all three.
 
 ### Q-02 What happens to large output?
 
-The limit is decided: an agent item is at most 64 KB ([D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb)).
+The limit is decided: an agent item is at most 64 KB ([D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb)),
+and the core applies it ([D-057](decisions.md#d-057-the-core-applies-the-64-kb-limit)).
 What is still open is how the full output is fetched when it was cut.
 
 A tool result can be megabytes. Relays limit event size, and every durable event is stored on every member's

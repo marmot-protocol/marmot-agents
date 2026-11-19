@@ -1,8 +1,9 @@
 # How an agent event is carried
 
 Status: decided on 2026-11-17, as [D-022](../decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)
-to [D-026](../decisions.md#d-026-an-agent-item-is-at-most-64-kb). None of it is in the Marmot specification
-yet, and all of it has to be agreed there
+to [D-026](../decisions.md#d-026-an-agent-item-is-at-most-64-kb). Who applies the size limit was decided on
+2026-11-19, as [D-057](../decisions.md#d-057-the-core-applies-the-64-kb-limit). None of it is in the Marmot
+specification yet, and all of it has to be agreed there
 ([Q-03](../open-questions.md#q-03-where-are-the-event-kinds-specified)). The exact tags are not fixed.
 
 [The event model](event-model.md) says what an agent event means: a set of item types, each with a state. This page
@@ -208,7 +209,8 @@ The consequence is accepted on purpose: an item near the limit reaches a relay a
 accepts only 64 KB will not take it. If a group uses only such relays, that item is not delivered. 64 KB is
 not large, and relays should accept more.
 
-When an item would be larger, the driver drops parts in this order and says so in the event:
+When an item would be larger, the core drops parts in this order and says so in the event
+([D-057](../decisions.md#d-057-the-core-applies-the-64-kb-limit)). A driver never cuts anything to fit.
 
 1. the native message is left out, with its size noted;
 2. the output is cut, keeping the start and the end, with the full length noted.

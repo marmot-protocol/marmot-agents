@@ -180,9 +180,8 @@ impl TryFrom<Unchecked> for AgentEvent {
 /// was written all survive.
 ///
 /// Two things leave it out of an event. A secret question that is no longer waiting carries
-/// none (D-056), which [`AgentEvent::new`] holds. And an item over 64 KB loses it (D-026). Whether
-/// the driver or the core applies that limit is not settled: see Q-01 in
-/// `docs/open-questions.md`.
+/// none (D-056), which [`AgentEvent::new`] holds. And the core leaves it out of an item over 64 KB
+/// (D-026, D-057). A driver never leaves it out to fit that limit.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Native {
     /// What the harness calls this message, such as `item/completed`.
