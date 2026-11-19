@@ -2,8 +2,8 @@
 //!
 //! The core and the apps read these and never check a harness's name. A connector on the socket
 //! will state the same facts in its hello. How they are written there is for the socket to
-//! define: these are plain Rust values. The list is a proposal (`docs/open-questions.md`, Q-16),
-//! drawn from the draft in `docs/design/socket-protocol.md`.
+//! define: these are plain Rust values. The list is decided (`docs/decisions.md`, D-058), drawn
+//! from the draft in `docs/design/socket-protocol.md`.
 //!
 //! A flag is here only if the core or an app does something different because of it before
 //! anything has happened. What a harness reports once it is working, such as tools, thinking or

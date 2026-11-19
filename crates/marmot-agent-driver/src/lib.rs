@@ -15,7 +15,7 @@
 //! | the request `control` | [`Driver::control`] |
 //! | the notification `event` | [`Driver::next_event`] |
 //!
-//! The trait and the capabilities are a proposal (`docs/open-questions.md`, Q-16). Nothing here
+//! The trait and the capabilities are decided (`docs/decisions.md`, D-058). Nothing here
 //! says how these values are written on the socket; that is for the socket to define.
 //!
 //! This crate needs no async runtime. A driver chooses its own.

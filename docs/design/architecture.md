@@ -115,11 +115,11 @@ Three things to notice:
 Harnesses do not all support the same things. One folds a message sent during a turn into that turn; another
 ends the turn. One takes images; another takes nothing.
 
-The proposal is that each driver declares what its harness does as a set of flags. The core reads three of
+Each driver declares what its harness does as a set of flags. The core reads three of
 them: who picks the session, whether a session survives a restart, and which typed commands need the right to
 approve. Apps read the rest, to show only the controls that work and to say what a message sent during a turn
-will do. Nothing above a driver checks the harness's name. See
-[Q-16](../open-questions.md#q-16-how-does-a-driver-say-what-it-supports).
+will do. Nothing above a driver checks the harness's name. Decided as
+[D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags).
 
 ## Where the edges are
 
