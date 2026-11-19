@@ -24,13 +24,14 @@ mod capabilities;
 mod request;
 
 pub use capabilities::{
-    ApprovalCommand, Capabilities, FilesIn, MidTurn, Position, Questions, Sessions,
+    ApprovalCommand, Capabilities, FilesIn, MidTurn, Needed, Position, Sessions,
 };
 use marmot_agent_events::AgentEvent;
 pub use request::{
     Action, Answer, Attachment, Chat, ChatId, Control, Given, MessageId, Person, PersonId, Prompt,
     Quoted, Reason, Refusal, Reply, RequestId,
 };
+use std::fmt;
 use std::future::Future;
 
 /// A harness's name and version.
@@ -43,7 +44,7 @@ pub struct Harness {
 }
 
 /// An agent event, as a driver hands it to the core, with what it follows from.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Emitted {
     /// The event.
     pub event: AgentEvent,
@@ -59,7 +60,26 @@ pub struct Emitted {
     /// the turn that was interrupted, the session whose setting changed (D-028). An event that
     /// follows from no request has none. That is how the core tells a setting someone changed
     /// from one the harness changed by itself, which gets a notice (D-046).
+    ///
+    /// An event can settle a request by showing that it failed. And a request the driver took
+    /// may never be settled by an event at all, if the harness goes first: Codex takes a request
+    /// to compact before the turn that does the work has started. When a driver ends, the core
+    /// settles every request that is still open with a notice that it failed.
     pub settles: Vec<RequestId>,
+}
+
+/// Shows where an event came from and what it settles, and nothing the agent said or did: no
+/// text, no fields of the item, no native message. A log must never hold those.
+impl fmt::Debug for Emitted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Emitted")
+            .field("item", &self.event.header().item)
+            .field("state", &self.event.header().state)
+            .field("chat", &self.chat)
+            .field("prompts", &self.prompts)
+            .field("settles", &self.settles)
+            .finish_non_exhaustive()
+    }
 }
 
 /// One harness, driven for one agent.
@@ -94,12 +114,14 @@ pub struct Emitted {
 ///             mid_turn: MidTurn::Queue,
 ///             sessions: Sessions::Core,
 ///             resume: false,
-///             tool_items: false,
 ///             approvals: false,
-///             questions: Questions::default(),
-///             reasoning: false,
 ///             files_in: FilesIn::None,
-///             approval_commands: Vec::new(),
+///             // A harness with no such command still says so. This one has one, to show how.
+///             approval_commands: vec![ApprovalCommand {
+///                 command: "/approve".into(),
+///                 counts: Position::Start,
+///                 needed: Needed::WhileAnApprovalWaits,
+///             }],
 ///         }
 ///     }
 ///
@@ -157,13 +179,50 @@ pub trait Driver: Send {
 
 #[cfg(test)]
 mod tests {
-    use super::{Answer, Given, Person, Reply};
+    use super::{Answer, Chat, Given, Person, Prompt, Quoted, Reply};
 
-    // A reply holds what a person answered, and for a secret question that is the secret,
-    // whether they typed it or chose it. It must not reach a log through a debug print of the
-    // request it travels in.
+    fn alice() -> Person {
+        Person {
+            id: "u-1".into(),
+            name: "Alice Example".into(),
+        }
+    }
+
+    // This is a private messenger: a log must never hold what a person wrote, their name, or
+    // what they answered. A request printed for debugging shows the core's ids and no more.
     #[test]
-    fn an_answer_printed_for_debugging_does_not_show_what_was_answered() {
+    fn a_request_printed_for_debugging_shows_nothing_a_person_wrote() {
+        let prompt = Prompt {
+            message: "m-31".into(),
+            text: "the launch code is 0000".into(),
+            chat: Chat {
+                id: "c-2".into(),
+                group: true,
+                name: Some("Family Chat".into()),
+            },
+            sender: alice(),
+            reply_to: Some(Quoted {
+                message: "m-30".into(),
+                text: "what is the code?".into(),
+                author: alice(),
+            }),
+            attachments: Vec::new(),
+            session: Some("s-1".into()),
+        };
+        let printed = format!("{prompt:?}");
+        for private in [
+            "launch code",
+            "what is the code",
+            "Alice Example",
+            "Family Chat",
+        ] {
+            assert!(!printed.contains(private), "{private} in {printed}");
+        }
+        for id in ["m-31", "m-30", "c-2", "u-1", "s-1"] {
+            assert!(printed.contains(id), "{id} not in {printed}");
+        }
+
+        // For a secret question the answer is the secret, whether it was typed or chosen.
         let reply = Reply {
             question: "password".into(),
             options: vec!["option-7".into()],
@@ -172,15 +231,13 @@ mod tests {
         let answer = Answer {
             request: "r-1".into(),
             item: "question-1".into(),
-            by: Person {
-                id: "u-1".into(),
-                name: "Alice".into(),
-            },
+            by: alice(),
             given: Given::Questions(vec![reply]),
         };
         let printed = format!("{answer:?}");
-        assert!(!printed.contains("hunter2"), "{printed}");
-        assert!(!printed.contains("option-7"), "{printed}");
+        for private in ["hunter2", "option-7", "Alice Example"] {
+            assert!(!printed.contains(private), "{private} in {printed}");
+        }
         assert!(
             printed.contains("password") && printed.contains("question-1"),
             "{printed}"

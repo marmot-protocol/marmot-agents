@@ -3,6 +3,9 @@
 //! These are the three requests of the socket protocol's driver section
 //! (`docs/design/socket-protocol.md`): a prompt, an answer and a control. Everything a driver
 //! receives has already been checked by the core: the sender may prompt, or may approve.
+//!
+//! Printing any of these for debugging shows the core's own ids and nothing a person wrote: no
+//! message text, no name, no answer. A log must never hold those (AGENTS.md, "Privacy").
 
 use marmot_agent_events::{ItemId, SessionId, TurnId};
 use std::fmt;
@@ -51,7 +54,7 @@ core_id!(
 );
 
 /// A chat, as a driver sees it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Chat {
     /// The core's id for the chat.
     pub id: ChatId,
@@ -62,7 +65,7 @@ pub struct Chat {
 }
 
 /// A person, as a driver sees them. The name is passed as it is, because the model needs it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Person {
     /// The core's id for the person.
     pub id: PersonId,
@@ -71,7 +74,7 @@ pub struct Person {
 }
 
 /// A message for the agent. A slash command is one too: it is passed exactly as typed (D-031).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Prompt {
     /// The message's id. A turn names the prompts it responds to by this id.
     pub message: MessageId,
@@ -91,7 +94,7 @@ pub struct Prompt {
 
 /// The message a prompt replies to. The text is quoted because some harnesses cannot look a
 /// message up by its id.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Quoted {
     /// The id of the message replied to.
     pub message: MessageId,
@@ -102,7 +105,7 @@ pub struct Quoted {
 }
 
 /// A file sent with a prompt.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Attachment {
     /// Where the core wrote the file.
     pub path: PathBuf,
@@ -110,6 +113,53 @@ pub struct Attachment {
     pub name: String,
     /// The file's media type, such as `image/png`.
     pub media_type: String,
+}
+
+impl fmt::Debug for Chat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Chat")
+            .field("id", &self.id)
+            .field("group", &self.group)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for Person {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Person")
+            .field("id", &self.id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for Prompt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Prompt")
+            .field("message", &self.message)
+            .field("chat", &self.chat)
+            .field("sender", &self.sender)
+            .field("reply_to", &self.reply_to)
+            .field("attachments", &self.attachments.len())
+            .field("session", &self.session)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for Quoted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Quoted")
+            .field("message", &self.message)
+            .field("author", &self.author)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for Attachment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Attachment")
+            .field("media_type", &self.media_type)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A person's answer to an approval or a question.

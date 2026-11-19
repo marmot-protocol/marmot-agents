@@ -367,7 +367,7 @@ project owner's answer.
 It needs no async runtime. A driver picks its own. It says nothing about how these values are written on the
 socket; that is for the socket to define.
 
-**The flags** are the ten of the draft on
+**The flags** are seven of the ten in the draft on
 [the socket page](design/socket-protocol.md#capabilities). The Codex column is what its driver will state.
 
 | Flag | Values | Codex | Who reads it |
@@ -376,10 +376,7 @@ socket; that is for the socket to define.
 | `mid_turn` | `fold`, `restart`, `queue` | `fold` | An app, to say what a message sent during a turn will do |
 | `sessions` | `core`, `own` | `core` | The core, to know whether it names the session |
 | `resume` | yes or no | yes | The core, after a restart |
-| `tool_items` | yes or no | yes | An app |
-| `approvals` | yes or no | yes | An app |
-| `questions` | by a request: yes or no. By a message: yes or no | both | An app |
-| `reasoning` | yes or no | no | An app |
+| `approvals` | yes or no | yes | An app, to show who may approve |
 | `files_in` | none, images, any | images | An app, to allow an attachment |
 | `approval_commands` | a list, always stated; each entry has the command, whether it counts at the start of a message or anywhere, and whether it needs the right to approve always or only while an approval waits | none | The core, on every message |
 
@@ -411,14 +408,21 @@ What the proposal changes from the socket's draft, and what it leaves for the ow
 - **When a driver ends, the core closes what is open**, as it does when a connector's connection drops
   ([D-034](decisions.md#d-034-the-core-does-the-shared-work-and-a-connector-speaks-only-in-agent-events)). A
   driver that sees its harness stop closes what it can first.
-- **`questions` is two yes-or-no values**, where the draft has "request, message or both". A harness that
-  asks no questions then needs no fourth word.
+- **Three of the draft's flags are left out: `tool_items`, `reasoning` and `questions`.** Each describes
+  what a harness reports once it is working, and the items already say it: a question item carries how it is
+  answered. Nothing the core or an app does before the first item depends on them. A flag is kept only when
+  something is done differently because of it before anything has happened. They can come back when an app
+  needs to know in advance.
 - **`files_in` is one of three words**, where the draft says yes or no and then answers "images".
-- **Three flags describe what will arrive, and the items already say it.** `tool_items`, `reasoning` and
-  `questions` change nothing the core does. They are kept because the draft has them. Dropping them would
-  leave seven.
 - **Nothing was added to the flags.** Whether the harness reports usage, plans or tasks is visible in its
   items.
+- **A request the driver took is settled even if the harness goes first.** An event can settle a request by
+  showing that it failed. When a driver ends, the core settles every request that is still open with a
+  notice that it failed.
+- **A debug print of a request or an event shows ids only.** No message text, no name, no answer, nothing the
+  agent said. What may be logged is still open
+  ([Q-13](#q-13-what-may-be-logged)); this is the starting assumption there, held in the types. The item
+  types' own debug print still shows everything, and needs the same care when Q-13 is settled.
 - **Not in the trait:** starting and stopping a driver. Each driver has its own settings, such as where the
   harness's program is, so each has its own way to be made.
 
