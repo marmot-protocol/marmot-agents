@@ -40,11 +40,29 @@ enum Purpose {
     Plain,
     /// A prompt: a new turn, or, with the turn, one joined to a running turn.
     Prompt(MessageId, Option<String>),
-    /// A control, settled by its effect or by Codex refusing it.
-    Control(RequestId),
+    /// A control, settled by its effect or by Codex refusing it; with the effect, until the
+    /// message is written and the effect starts to be watched for.
+    Control(RequestId, Option<Effect>),
+}
+
+/// A message for Codex, and what follows once all of it is written. Nothing follows a message
+/// that was not written: an answer Codex never received is not shown as given.
+struct Frame {
+    bytes: Vec<u8>,
+    written: usize,
+    then: Option<Written>,
+}
+
+/// What follows a message for a chat once it is written.
+struct Written {
+    chat: ChatId,
+    text: String,
+    request: Option<(i64, Purpose)>,
+    settles: Vec<RequestId>,
 }
 
 /// What shows that a control has had its effect.
+#[derive(Clone)]
 enum Effect {
     /// The turn it interrupted has ended.
     TurnEnded(String),
@@ -67,9 +85,10 @@ struct Chat {
 pub struct Codex {
     reader: Reader,
     writer: Writer,
-    /// Bytes to write to Codex. They stay here until written, so a write cut short when the core
-    /// drops a future is finished, whole, by the next.
-    unwritten: Vec<u8>,
+    /// Messages to write to Codex, in order. Each stays here until all of it is written, so one
+    /// cut short when a future is dropped is finished, whole, by the next write, and only then
+    /// does what follows from it happen.
+    unwritten: VecDeque<Frame>,
     /// The process, when the driver started it. It is killed when the driver is dropped.
     child: Option<Child>,
     setup: Setup,
@@ -78,6 +97,8 @@ pub struct Codex {
     chats: HashMap<ChatId, Chat>,
     /// Each chat's session, by Codex thread.
     threads: HashMap<String, ChatId>,
+    /// Every thread a chat has had, and the chat: a session belongs to its chat for good.
+    owners: HashMap<String, ChatId>,
     /// The driver's requests Codex has not answered: the chat each is for, and what for.
     requests: HashMap<i64, (ChatId, Purpose)>,
     /// The prompt behind each `turn/start` sent, until its turn starts or Codex refuses it. It is
@@ -131,13 +152,14 @@ impl Codex {
         let mut codex = Self {
             reader: BufReader::new(output).lines(),
             writer: Box::new(input),
-            unwritten: Vec::new(),
+            unwritten: VecDeque::new(),
             child: None,
             setup,
             version: None,
             next_id: 1,
             chats: HashMap::new(),
             threads: HashMap::new(),
+            owners: HashMap::new(),
             requests: HashMap::new(),
             starting: HashMap::new(),
             prompts: HashMap::new(),
@@ -147,7 +169,7 @@ impl Codex {
             unrouted: 0,
         };
         let id = codex.id();
-        codex.queue(&initialize(id));
+        codex.queue(&initialize(id), None);
         codex.flush().await?;
         let reply = loop {
             let line = codex.reader.next_line().await?;
@@ -169,7 +191,7 @@ impl Codex {
             .and_then(|agent| agent.split_whitespace().next())
             .and_then(|name| name.split_once('/'))
             .map(|(_, version)| version.to_string());
-        codex.queue(&initialized());
+        codex.queue(&initialized(), None);
         codex.flush().await?;
         Ok(codex)
     }
@@ -185,21 +207,60 @@ impl Codex {
         id
     }
 
-    fn queue(&mut self, text: &str) {
-        self.unwritten.extend_from_slice(text.as_bytes());
-        self.unwritten.push(b'\n');
+    fn queue(&mut self, text: &str, then: Option<Written>) {
+        let mut bytes = text.as_bytes().to_vec();
+        bytes.push(b'\n');
+        self.unwritten.push_back(Frame {
+            bytes,
+            written: 0,
+            then,
+        });
     }
 
-    /// Writes what is queued. Cut short, it leaves the rest queued for the next call.
+    /// Writes what is queued, and does what follows each message once all of it is written. Cut
+    /// short, it leaves the rest queued for the next call.
     async fn flush(&mut self) -> io::Result<()> {
-        while !self.unwritten.is_empty() {
-            let written = self.writer.write(&self.unwritten).await?;
-            if written == 0 {
-                return Err(io::Error::from(io::ErrorKind::WriteZero));
+        while let Some(frame) = self.unwritten.front_mut() {
+            while frame.written < frame.bytes.len() {
+                let written = self.writer.write(&frame.bytes[frame.written..]).await?;
+                if written == 0 {
+                    return Err(io::Error::from(io::ErrorKind::WriteZero));
+                }
+                frame.written += written;
             }
-            self.unwritten.drain(..written);
+            if let Some(then) = self.unwritten.pop_front().and_then(|f| f.then) {
+                self.written(then);
+            }
         }
         self.writer.flush().await
+    }
+
+    /// What follows a message once it is written: its request is kept until Codex answers, and
+    /// the chat's translator is fed it.
+    fn written(&mut self, then: Written) {
+        let Written {
+            chat,
+            text,
+            request,
+            settles,
+        } = then;
+        if let Some((id, mut purpose)) = request {
+            match &mut purpose {
+                // Codex can announce the turn before it replies: its prompt is kept from now.
+                Purpose::Prompt(message, None) => {
+                    self.starting.insert(id, message.clone());
+                }
+                Purpose::Control(request, effect) => {
+                    if let Some(effect) = effect.take() {
+                        let c = self.chats.entry(chat.clone()).or_default();
+                        c.effects.push((request.clone(), effect));
+                    }
+                }
+                _ => {}
+            }
+            self.requests.insert(id, (chat.clone(), purpose));
+        }
+        self.feed(&chat, Direction::Out, &text, settles);
     }
 
     /// Sends a message for a chat and feeds it to that chat's translator; the events it makes
@@ -214,11 +275,13 @@ impl Codex {
         if self.gone {
             return Err(Refusal::new(Reason::Failed));
         }
-        self.queue(text);
-        if let Some((id, purpose)) = request {
-            self.requests.insert(id, (chat.clone(), purpose));
-        }
-        self.feed(chat, Direction::Out, text, settles);
+        let then = Written {
+            chat: chat.clone(),
+            text: text.to_string(),
+            request,
+            settles,
+        };
+        self.queue(text, Some(then));
         if self.flush().await.is_err() {
             self.stopped();
             return Err(Refusal::new(Reason::Failed));
@@ -251,8 +314,8 @@ impl Codex {
     fn route(&mut self, line: &str) {
         let message: Value = serde_json::from_str(line).unwrap_or(Value::Null);
         if message.get("method").is_some() {
-            let params = &message["params"];
-            let thread = (params["threadId"].as_str()).or(params["thread"]["id"].as_str());
+            let thread = thread_of(line);
+            let thread = thread.as_deref();
             match thread.and_then(|t| self.threads.get(t)).cloned() {
                 Some(chat) => self.feed(&chat, Direction::In, line, Vec::new()),
                 // A thread being picked can speak before the reply that picks it.
@@ -283,17 +346,25 @@ impl Codex {
             Purpose::Prompt(_, None) => {} // its turn takes it from `starting`
             // Codex refused a control: the event the refusal makes settles it, unless its effect
             // already did.
-            Purpose::Control(request) => {
+            Purpose::Control(request, _) => {
                 if refused && self.unsettled(&chat, &request) {
                     settles.push(request);
                 }
             }
         }
         self.feed(&chat, Direction::In, line, settles);
+        // What a thread said before its session was picked goes to it now, before anything it
+        // says next; what names a thread still unknown waits while a session is being picked.
+        let (known, unknown): (Vec<String>, Vec<String>) = std::mem::take(&mut self.early)
+            .into_iter()
+            .partition(|line| thread_of(line).is_some_and(|t| self.threads.contains_key(&t)));
+        self.early = unknown;
+        for line in known {
+            self.route(&line);
+        }
         if !self.picking() {
-            for line in std::mem::take(&mut self.early) {
-                self.route(&line);
-            }
+            self.unrouted += self.early.len() as u64;
+            self.early.clear();
         }
     }
 
@@ -326,6 +397,7 @@ impl Codex {
                 self.threads.remove(&old);
             }
             if let Some(new) = after {
+                self.owners.insert(new.clone(), chat.clone());
                 self.threads.insert(new, chat.clone());
             }
         }
@@ -334,8 +406,13 @@ impl Codex {
             self.ready_event(chat, event, std::mem::take(&mut settles));
         }
         for reply in replies {
-            self.queue(&reply);
-            self.feed(chat, Direction::Out, &reply, Vec::new());
+            let then = Written {
+                chat: chat.clone(),
+                text: reply.clone(),
+                request: None,
+                settles: Vec::new(),
+            };
+            self.queue(&reply, Some(then));
         }
     }
 
@@ -406,8 +483,18 @@ impl Codex {
         self.requests.clear();
         self.starting.clear();
         self.early.clear();
-        self.unwritten.clear();
+        self.unwritten.clear(); // never written: nothing follows from them
     }
+}
+
+/// The thread a message from Codex names, if it names one.
+fn thread_of(line: &str) -> Option<String> {
+    let message: Value = serde_json::from_str(line).ok()?;
+    let params = &message["params"];
+    let thread = params["threadId"]
+        .as_str()
+        .or(params["thread"]["id"].as_str());
+    thread.map(String::from)
 }
 
 // -- the core's requests
@@ -420,18 +507,23 @@ impl Codex {
             return Ok(());
         }
         self.chats.insert(chat.clone(), Chat::default());
-        let id = self.id();
-        self.send(
-            chat,
-            Some((id, Purpose::Plain)),
-            &model_list(id),
-            Vec::new(),
-        )
-        .await?;
-        let id = self.id();
-        let modes = collaboration_mode_list(id);
-        self.send(chat, Some((id, Purpose::Plain)), &modes, Vec::new())
-            .await
+        // Both are queued before either is written, so a write cut short loses neither.
+        for list in [model_list as fn(i64) -> String, collaboration_mode_list] {
+            let id = self.id();
+            let text = list(id);
+            let then = Written {
+                chat: chat.clone(),
+                text: text.clone(),
+                request: Some((id, Purpose::Plain)),
+                settles: Vec::new(),
+            };
+            self.queue(&text, Some(then));
+        }
+        if self.flush().await.is_err() {
+            self.stopped();
+            return Err(Refusal::new(Reason::Failed));
+        }
+        Ok(())
     }
 
     /// Builds a request with `build` and sends it, returning its id. While the translator refuses
@@ -440,14 +532,20 @@ impl Codex {
     async fn ask(
         &mut self,
         chat: &ChatId,
-        purpose: Purpose,
+        purpose: impl Fn(&Translator, i64) -> Purpose,
         build: impl Fn(&Translator, i64) -> Result<String, Refusal>,
     ) -> Result<i64, Refusal> {
         loop {
+            // A message cut short is finished first, so the translator builds from what was sent.
+            if self.flush().await.is_err() {
+                self.stopped();
+                return Err(Refusal::new(Reason::Failed));
+            }
             let id = self.next_id;
             let translator = &self.chats.get(chat).expect("a chat").translator;
             match build(translator, id) {
                 Ok(text) => {
+                    let purpose = purpose(translator, id);
                     self.next_id += 1;
                     self.send(chat, Some((id, purpose)), &text, Vec::new())
                         .await?;
@@ -467,7 +565,7 @@ impl Codex {
     async fn pick(&mut self, chat: &ChatId, session: Option<&str>) -> Result<(), Refusal> {
         let setup = self.setup.clone();
         let build = |t: &Translator, id| t.pick(id, session, &setup);
-        let id = self.ask(chat, Purpose::Plain, build).await?;
+        let id = self.ask(chat, |_, _| Purpose::Plain, build).await?;
         while self.requests.contains_key(&id) {
             if !self.read().await {
                 return Err(Refusal::new(Reason::Failed));
@@ -521,9 +619,10 @@ impl Driver for Codex {
             return Err(Refusal::new(Reason::Failed));
         }
         let chat = prompt.chat.id.clone();
-        let wanted = prompt.session.as_ref().map(|s| s.as_str().to_string());
-        // A session belongs to one chat: resuming another chat's would show its activity here.
-        if let Some(owner) = wanted.as_ref().and_then(|w| self.threads.get(w))
+        let mut wanted = prompt.session.as_ref().map(|s| s.as_str().to_string());
+        // A session belongs to its chat for good: resuming another chat's would show its history
+        // and activity here.
+        if let Some(owner) = wanted.as_ref().and_then(|w| self.owners.get(w))
             && *owner != chat
         {
             return Err(Refusal::new(Reason::Invalid));
@@ -531,30 +630,29 @@ impl Driver for Codex {
         self.chat(&chat).await?;
         // A session being picked, by a control or an earlier prompt, is waited for before deciding
         // whether this prompt needs one.
+        let before = self.chats[&chat].translator.session().map(String::from);
         while self.chats[&chat].translator.picking() {
             if !self.read().await {
                 return Err(Refusal::new(Reason::Failed));
             }
         }
         let current = self.chats[&chat].translator.session().map(String::from);
+        // A prompt naming the session a new one has just replaced was sent before the core heard
+        // of the new one: it is for the new one.
+        if wanted.is_some() && wanted == before && current != before {
+            wanted = current.clone();
+        }
         if current.is_none() || (wanted.is_some() && wanted != current) {
             self.pick(&chat, wanted.as_deref()).await?;
         }
-        let message = Purpose::Prompt(prompt.message.clone(), None);
-        let id = self
-            .ask(&chat, message, |t, id| t.prompt(id, &prompt))
+        let mut prompt = prompt;
+        prompt.session = wanted.map(Into::into); // the session it is for, now settled
+        // Built during a turn, it joins that turn: the translator builds it that way.
+        let message = prompt.message.clone();
+        let purpose =
+            |t: &Translator, _| Purpose::Prompt(message.clone(), t.turn().map(String::from));
+        self.ask(&chat, purpose, |t, id| t.prompt(id, &prompt))
             .await?;
-        match self.chats[&chat].translator.turn().map(String::from) {
-            // Built during a turn, it joins that turn: the translator built it that way.
-            Some(turn) => {
-                if let Some((_, Purpose::Prompt(_, joins))) = self.requests.get_mut(&id) {
-                    *joins = Some(turn);
-                }
-            }
-            None => {
-                self.starting.insert(id, prompt.message);
-            }
-        }
         Ok(())
     }
 
@@ -604,16 +702,15 @@ impl Driver for Codex {
         let setup = self.setup.clone();
         let action = control.action.clone();
         let build = |t: &Translator, id| t.control(id, &action, &setup);
-        let id = self
-            .ask(&chat, Purpose::Control(request.clone()), build)
-            .await?;
-        let effect = match effect {
-            Effect::TurnStartedBy(_) => Effect::TurnStartedBy(id),
-            other => other,
+        // Its effect is watched for from the moment it is written.
+        let purpose = |_: &Translator, id| {
+            let effect = match &effect {
+                Effect::TurnStartedBy(_) => Effect::TurnStartedBy(id),
+                other => other.clone(),
+            };
+            Purpose::Control(request.clone(), Some(effect))
         };
-        // Nothing has been read since it was sent, so its effect is still to come.
-        let c = self.chats.get_mut(&chat).expect("a chat");
-        c.effects.push((request, effect));
+        self.ask(&chat, purpose, build).await?;
         Ok(())
     }
 

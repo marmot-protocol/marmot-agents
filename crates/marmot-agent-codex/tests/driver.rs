@@ -426,7 +426,14 @@ async fn a_message_cut_short_is_finished_before_the_next() {
         first["method"], "model/list",
         "the cut message arrives whole, first"
     );
+    let second = fake.heard.recv().await.unwrap();
+    assert_eq!(
+        second["method"], "collaborationMode/list",
+        "and what was queued with it"
+    );
     fake.say(json!({"id": first["id"], "result": {"data": []}}))
+        .await;
+    fake.say(json!({"id": second["id"], "result": {"data": []}}))
         .await;
     fake.answer("thread/start", json!({"thread": {"id": "th1"}}))
         .await;
@@ -636,4 +643,233 @@ async fn a_chat_cannot_take_another_chats_session() {
     fake.say(turn("turn/completed", "completed")).await;
     let events = until(&mut codex, is_turn(State::Done)).await;
     assert!(events.iter().all(|e| e.chat == Some("c-1".into())));
+}
+
+/// A writer that fails once it is told to, as Codex's input does when Codex has gone.
+struct Breakable {
+    inner: WriteHalf<DuplexStream>,
+    broken: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl tokio::io::AsyncWrite for Breakable {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        if self.broken.load(std::sync::atomic::Ordering::SeqCst) {
+            let gone = std::io::Error::from(std::io::ErrorKind::BrokenPipe);
+            return std::task::Poll::Ready(Err(gone));
+        }
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+// An answer that never reached Codex is not shown as given: when Codex has gone, the approval is
+// closed unanswered, and nothing settles the answer.
+#[tokio::test]
+async fn an_answer_codex_never_received_is_not_shown_as_given() {
+    let (driver_side, fake_side) = duplex(1 << 16);
+    let (from_driver, to_driver) = tokio::io::split(fake_side);
+    let (driver_reads, driver_writes) = tokio::io::split(driver_side);
+    let broken = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let writer = Breakable {
+        inner: driver_writes,
+        broken: broken.clone(),
+    };
+    let (tx, heard) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(from_driver).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = tx.send(serde_json::from_str::<Value>(&line).unwrap());
+        }
+    });
+    let mut fake = Fake { heard, to_driver };
+    let codex = tokio::spawn(Codex::connect(driver_reads, writer, Setup::new("/w")));
+    let hello = fake.heard.recv().await.unwrap();
+    fake.say(json!({"id": hello["id"], "result": {"userAgent": "codex_cli_rs/0.169.0"}}))
+        .await;
+    let mut codex = codex.await.unwrap().unwrap();
+    let driver = tokio::spawn(async move {
+        codex.prompt(prompt("m-1", "hello")).await.unwrap();
+        codex
+    });
+    fake.answer("thread/start", json!({"thread": {"id": "th1"}}))
+        .await;
+    fake.answer("turn/start", json!({"turn": {"id": "t1"}}))
+        .await;
+    let mut codex = driver.await.unwrap();
+    fake.say(turn("turn/started", "inProgress")).await;
+    fake.say(json!({"id": 0, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "c", "command": "ls"}})).await;
+    let asked = until(&mut codex, |e| matches!(e.event.body(), Body::Approval(_))).await;
+    let item = asked.last().unwrap().event.header().item.clone();
+    broken.store(true, std::sync::atomic::Ordering::SeqCst);
+    let allow = Answer {
+        request: "r-9".into(),
+        item: item.clone(),
+        by: alice(),
+        given: Given::Choice("c0".into()),
+    };
+    assert_eq!(
+        codex.answer(allow).await.unwrap_err().reason,
+        Reason::Failed
+    );
+    let mut rest = Vec::new();
+    while let Some(event) = codex.next_event().await {
+        rest.push(event);
+    }
+    assert!(
+        rest.iter().all(|e| e.settles.is_empty()),
+        "nothing settles the answer"
+    );
+    let closed = rest
+        .iter()
+        .find(|e| e.event.header().item == item)
+        .expect("the approval closed");
+    assert_eq!(closed.event.header().state, State::Cancelled);
+}
+
+/// Starts a session for chat `chat` with thread `thread`, and lets its turn finish.
+async fn idle(codex: Codex, fake: &mut Fake, chat: &str, thread: &str) -> Codex {
+    let mut asked = prompt("m-1", "hello");
+    asked.chat.id = chat.into();
+    let driver = tokio::spawn(async move {
+        let mut codex = codex;
+        codex.prompt(asked).await.unwrap();
+        codex
+    });
+    let turn_id = format!("{thread}-t");
+    fake.answer("thread/start", json!({"thread": {"id": thread}}))
+        .await;
+    fake.answer("turn/start", json!({"turn": {"id": turn_id}}))
+        .await;
+    let mut codex = driver.await.unwrap();
+    let mark = |method: &str, status: &str| json!({"method": method, "params": {"threadId": thread, "turn": {"id": turn_id, "items": [], "status": status, "error": null}}});
+    fake.say(mark("turn/started", "inProgress")).await;
+    fake.say(mark("turn/completed", "completed")).await;
+    until(&mut codex, is_turn(State::Done)).await;
+    codex
+}
+
+fn new_session_of(chat: &str, session: Option<&str>, request: &str) -> Control {
+    let mut target = prompt("m-0", "").chat;
+    target.id = chat.into();
+    Control {
+        request: request.into(),
+        by: alice(),
+        action: Action::NewSession {
+            chat: target,
+            session: session.map(Into::into),
+        },
+    }
+}
+
+// A session stays its chat's after the chat moves on to a new one: another chat cannot resume it.
+#[tokio::test]
+async fn a_chats_old_session_stays_its_own() {
+    let (codex, mut fake) = connect().await;
+    let mut codex = idle(codex, &mut fake, "c-1", "th1").await;
+    codex
+        .control(new_session_of("c-1", Some("th1"), "r-10"))
+        .await
+        .unwrap();
+    fake.answer("thread/start", json!({"thread": {"id": "th2"}}))
+        .await;
+    until(&mut codex, |e| !e.settles.is_empty()).await;
+    let mut other = prompt("m-9", "let me in");
+    other.chat.id = "c-2".into();
+    other.session = Some("th1".into());
+    assert_eq!(
+        codex.prompt(other).await.unwrap_err().reason,
+        Reason::Invalid
+    );
+}
+
+// Right after a new session is asked for, the core still names the old one: a prompt naming it
+// goes to the new session, and the old one is not resumed.
+#[tokio::test]
+async fn a_prompt_naming_the_replaced_session_goes_to_the_new_one() {
+    let (codex, mut fake) = connect().await;
+    let mut codex = idle(codex, &mut fake, "c-1", "th1").await;
+    let driver = tokio::spawn(async move {
+        codex
+            .control(new_session_of("c-1", Some("th1"), "r-11"))
+            .await
+            .unwrap();
+        let mut next = prompt("m-2", "carry on");
+        next.session = Some("th1".into());
+        codex.prompt(next).await.unwrap();
+        codex
+    });
+    fake.answer("thread/start", json!({"thread": {"id": "th2"}}))
+        .await;
+    let next = fake
+        .answer("turn/start", json!({"turn": {"id": "t2"}}))
+        .await;
+    assert_eq!(
+        next["params"]["threadId"], "th2",
+        "no thread/resume came first"
+    );
+    driver.await.unwrap();
+}
+
+// While two chats pick sessions at once, what one session's thread said before its reply reaches
+// it before what it said after.
+#[tokio::test]
+async fn early_messages_keep_their_order_while_another_chat_picks() {
+    let (mut codex, mut fake) = connect().await;
+    let driver = tokio::spawn(async move {
+        codex
+            .control(new_session_of("c-1", None, "r-12"))
+            .await
+            .unwrap();
+        let mut other = prompt("m-1", "hello");
+        other.chat.id = "c-2".into();
+        codex.prompt(other).await.unwrap();
+        codex
+    });
+    let first = fake.hear().await;
+    let second = fake.hear().await;
+    assert_eq!(first["method"], "thread/start");
+    assert_eq!(second["method"], "thread/start");
+    let updated = |model: &str| json!({"method": "thread/settings/updated", "params": {"threadId": "tha", "threadSettings": {"model": model}}});
+    fake.say(updated("m9")).await; // before tha's reply
+    fake.say(json!({"id": first["id"], "result": {"thread": {"id": "tha"}, "model": "m1"}}))
+        .await;
+    fake.say(updated("m8")).await; // after it, while c-2 still waits
+    fake.say(json!({"id": second["id"], "result": {"thread": {"id": "thb"}}}))
+        .await;
+    fake.answer("turn/start", json!({"turn": {"id": "tb"}}))
+        .await;
+    let mut codex = driver.await.unwrap();
+    let mut models = Vec::new();
+    while let Ok(Some(event)) =
+        tokio::time::timeout(std::time::Duration::from_millis(50), codex.next_event()).await
+    {
+        if let Body::Session(s) = event.event.body()
+            && event.chat == Some("c-1".into())
+        {
+            let model = s
+                .settings
+                .iter()
+                .find(|x| x.id == "model")
+                .and_then(|x| x.value.clone());
+            models.push(model.unwrap_or_default());
+        }
+    }
+    assert_eq!(models.last().map(String::as_str), Some("m8"), "{models:?}");
 }
