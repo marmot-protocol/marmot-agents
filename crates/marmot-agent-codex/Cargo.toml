@@ -8,6 +8,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+marmot-agent-driver = { path = "../marmot-agent-driver" }
 marmot-agent-events = { path = "../marmot-agent-events" }
 serde = { version = "1", features = ["derive"] }
 # `raw_value` keeps Codex's own message as the exact text it arrived as.

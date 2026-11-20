@@ -15,7 +15,7 @@ use serde_json::value::RawValue;
 use std::fmt;
 
 /// A JSON-RPC id. Codex uses numbers; the protocol allows text.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, serde::Serialize)]
 #[serde(untagged)]
 pub(crate) enum Id {
     Number(i64),
@@ -262,6 +262,8 @@ pub(crate) struct ApprovalRequest {
     pub item_id: Option<String>,
     pub command: Option<String>,
     pub reason: Option<String>,
+    /// For a permission request: what Codex asks for. A grant gives it back.
+    pub permissions: Option<Value>,
 }
 
 #[derive(Default, Deserialize)]

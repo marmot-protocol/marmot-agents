@@ -18,6 +18,10 @@ use crate::messages::{
     QuestionReply, Rerouted, Sandbox, ThreadSettingsUpdated, ThreadStarted, TokenUsageUpdated,
     Tokens, TurnNote, UserInput,
 };
+use crate::send::{self, Setup};
+use marmot_agent_driver::{
+    Action as DriverAction, Answer as DriverAnswer, Given, Prompt, Reason, Refusal,
+};
 use marmot_agent_events::body::{
     Action, AnswerVia, Answered, Approval, ApprovalAnswer, Asked, Change, ChangeKind, Choice,
     Effect, Error, Message, Notice, NoticeKind, Offered, Phase, Plan, PlanEntry, PlanEntryState,
@@ -25,8 +29,8 @@ use marmot_agent_events::body::{
 };
 use marmot_agent_events::{AgentEvent, Body, Header, Native, State};
 use serde::Deserialize;
-use serde_json::Value;
 use serde_json::value::RawValue;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 /// Which way a message went.
@@ -73,9 +77,14 @@ enum Pending {
         choices: Vec<Choice>,
         /// Where the reply says what was chosen.
         reply: Reply,
+        /// For a permission request, what Codex asked for.
+        asked_for: Option<Value>,
     },
     Question {
         item: String,
+        /// An MCP server's form, answered with values, rather than Codex's own questions,
+        /// answered with labels.
+        form: bool,
     },
 }
 
@@ -745,6 +754,7 @@ impl Translator {
                     decisions,
                     choices: choices.clone(),
                     reply: Reply::Decision,
+                    asked_for: None,
                 },
             );
         }
@@ -790,6 +800,7 @@ impl Translator {
                     decisions: Vec::new(),
                     choices: choices.clone(),
                     reply: Reply::Grant,
+                    asked_for: p.permissions.clone(),
                 },
             );
         }
@@ -846,6 +857,7 @@ impl Translator {
                         decisions,
                         choices: choices.clone(),
                         reply: Reply::Action,
+                        asked_for: None,
                     },
                 );
             }
@@ -901,7 +913,7 @@ impl Translator {
             })
             .collect();
         let item = self.request_item("question", p.turn_id.as_deref(), id.as_ref());
-        self.ask(out, id, &item, None, asked, &text, native);
+        self.ask(out, true, id, &item, None, asked, &text, native);
     }
 
     fn user_input(
@@ -942,13 +954,14 @@ impl Translator {
         let item = self.request_item("question", p.turn_id.as_deref(), id.as_ref());
         let native = native(&format!("{method} (request)"), params);
         let subject = p.item_id.map(Into::into);
-        self.ask(out, id, &item, subject, asked, &text, native);
+        self.ask(out, false, id, &item, subject, asked, &text, native);
     }
 
     #[allow(clippy::too_many_arguments)]
     fn ask(
         &mut self,
         out: &mut Vec<AgentEvent>,
+        form: bool,
         id: Option<Id>,
         item: &str,
         subject: Option<marmot_agent_events::ItemId>,
@@ -968,6 +981,7 @@ impl Translator {
                 id,
                 Pending::Question {
                     item: item.to_string(),
+                    form,
                 },
             );
         }
@@ -987,6 +1001,7 @@ impl Translator {
                 decisions,
                 choices,
                 reply: replied_by,
+                ..
             } => {
                 let Some(prev) = self.open_event(&item) else {
                     return;
@@ -1042,7 +1057,7 @@ impl Translator {
                 let native = native("response to the approval request", result);
                 self.emit(out, &item, body, state, &title, &text, native);
             }
-            Pending::Question { item } => {
+            Pending::Question { item, .. } => {
                 let Some(prev) = self.open_event(&item) else {
                     return;
                 };
@@ -1642,5 +1657,201 @@ fn round_half_even(x: f64) -> i64 {
         (r - x.signum()) as i64
     } else {
         r as i64
+    }
+}
+
+// -- what the driver sends
+
+/// What the driver sends for the core's requests. Each method builds the message and changes
+/// nothing: the driver writes it to Codex and feeds it here as [`Direction::Out`], as it does
+/// every message, so the translator learns what was sent the same way whoever sent it.
+impl Translator {
+    /// The request that passes a prompt to the session: a new turn, or, while one runs, the same
+    /// message added to it (`mid_turn: fold`).
+    pub fn prompt(&self, id: i64, prompt: &Prompt) -> Result<String, Refusal> {
+        let Some(thread) = &self.session else {
+            return Err(Refusal::new(Reason::Failed)); // the driver picks a session first
+        };
+        let input = send::input(prompt)?;
+        Ok(match &self.turn {
+            Some(turn) => {
+                let params = json!({"threadId": thread, "expectedTurnId": turn, "input": input});
+                send::request(id, "turn/steer", params)
+            }
+            None => send::request(
+                id,
+                "turn/start",
+                json!({"threadId": thread, "input": input}),
+            ),
+        })
+    }
+
+    /// The request that starts a new session, or resumes one Codex kept. A chat's session is
+    /// replaced only while it is idle, and only once at a time (D-060).
+    pub fn pick(&self, id: i64, session: Option<&str>, setup: &Setup) -> Result<String, Refusal> {
+        let picking = (self.requests.values())
+            .any(|sent| matches!(sent.method.as_str(), "thread/start" | "thread/resume"));
+        if self.turn.is_some() || picking {
+            return Err(Refusal::new(Reason::Busy));
+        }
+        Ok(match session {
+            Some(thread) => send::thread_resume(id, thread, setup),
+            None => send::thread_start(id, setup),
+        })
+    }
+
+    /// The request that carries out a control.
+    pub fn control(
+        &self,
+        id: i64,
+        action: &DriverAction,
+        setup: &Setup,
+    ) -> Result<String, Refusal> {
+        let refuse = |reason| Err(Refusal::new(reason));
+        match action {
+            DriverAction::Interrupt { turn } => {
+                let (Some(thread), Some(running)) = (&self.session, &self.turn) else {
+                    return refuse(Reason::NothingToDo);
+                };
+                if running.as_str() != turn.as_str() {
+                    return refuse(Reason::NothingToDo);
+                }
+                let params = json!({"threadId": thread, "turnId": running});
+                Ok(send::request(id, "turn/interrupt", params))
+            }
+            DriverAction::NewSession { .. } => self.pick(id, None, setup),
+            DriverAction::Set {
+                session,
+                setting,
+                value,
+            } => {
+                let thread = self.session_named(session.as_str())?;
+                // Each value is one the session item shows, so it is what Codex reported.
+                let (key, change) = match setting.as_str() {
+                    "model" => ("model", json!(value)),
+                    "effort" => ("effort", json!(value)),
+                    "approval_policy" => ("approvalPolicy", json!(value)),
+                    "sandbox" => ("sandboxPolicy", json!({"type": value})),
+                    "mode" => {
+                        // Codex takes a mode with the model it runs on.
+                        let Some(model) = &self.known.model else {
+                            return refuse(Reason::Failed);
+                        };
+                        let effort = &self.known.effort;
+                        let settings = json!({"model": model, "reasoning_effort": effort, "developer_instructions": null});
+                        (
+                            "collaborationMode",
+                            json!({"mode": value, "settings": settings}),
+                        )
+                    }
+                    _ => return refuse(Reason::Invalid),
+                };
+                let params = json!({"threadId": thread, key: change});
+                Ok(send::request(id, "thread/settings/update", params))
+            }
+            DriverAction::Own {
+                session,
+                id: action,
+            } => {
+                let thread = self.session_named(session.as_str())?;
+                if action != "compact" {
+                    return refuse(Reason::Invalid);
+                }
+                Ok(send::request(
+                    id,
+                    "thread/compact/start",
+                    json!({"threadId": thread}),
+                ))
+            }
+        }
+    }
+
+    /// The reply to the Codex request that an answer is for.
+    pub fn reply(&self, answer: &DriverAnswer) -> Result<String, Refusal> {
+        let refuse = |reason| Err(Refusal::new(reason));
+        let item = answer.item.as_str();
+        let Some((id, pending)) = self.asked.iter().find(|(_, p)| match p {
+            Pending::Approval { item: i, .. } | Pending::Question { item: i, .. } => i == item,
+        }) else {
+            return refuse(if self.open_event(item).is_some() {
+                Reason::NotWaiting
+            } else {
+                Reason::UnknownItem
+            });
+        };
+        let result = match (pending, &answer.given) {
+            (
+                Pending::Approval {
+                    decisions,
+                    reply,
+                    asked_for,
+                    ..
+                },
+                Given::Choice(choice),
+            ) => match reply {
+                Reply::Decision | Reply::Action => {
+                    let Some((_, decision)) = decisions.iter().find(|(c, _)| c == choice) else {
+                        return refuse(Reason::Invalid);
+                    };
+                    if *reply == Reply::Decision {
+                        json!({"decision": decision})
+                    } else if *decision == "accept" {
+                        json!({"action": decision, "content": {}})
+                    } else {
+                        json!({"action": decision, "content": null})
+                    }
+                }
+                // c0 grants for the turn, c1 for the session, c2 grants nothing.
+                Reply::Grant => match choice.as_str() {
+                    "c0" => json!({"permissions": asked_for, "scope": "turn"}),
+                    "c1" => json!({"permissions": asked_for, "scope": "session"}),
+                    "c2" => json!({"permissions": {}}),
+                    _ => return refuse(Reason::Invalid),
+                },
+            },
+            (Pending::Question { item, form }, Given::Questions(replies)) => {
+                let Some(Body::Question(question)) =
+                    self.open_event(item).map(|e| e.body().clone())
+                else {
+                    return refuse(Reason::NotWaiting);
+                };
+                let mut answers = serde_json::Map::new();
+                for given in replies {
+                    let Some(asked) = question.questions().iter().find(|q| q.id == given.question)
+                    else {
+                        return refuse(Reason::Invalid);
+                    };
+                    // Codex's own questions take labels; Codex turns them back into choices.
+                    let mut said = Vec::new();
+                    for option in &given.options {
+                        let Some(offered) = asked.options.iter().find(|o| &o.id == option) else {
+                            return refuse(Reason::Invalid);
+                        };
+                        said.push(offered.label.clone());
+                    }
+                    said.extend(given.text.clone());
+                    let value = if *form {
+                        Value::from(said.join("\n"))
+                    } else {
+                        json!({"answers": said})
+                    };
+                    answers.insert(given.question.clone(), value);
+                }
+                if *form {
+                    json!({"action": "accept", "content": answers})
+                } else {
+                    json!({"answers": answers})
+                }
+            }
+            _ => return refuse(Reason::Invalid),
+        };
+        Ok(json!({"id": id, "result": result}).to_string())
+    }
+
+    fn session_named(&self, session: &str) -> Result<&str, Refusal> {
+        match &self.session {
+            Some(thread) if thread == session => Ok(thread),
+            _ => Err(Refusal::new(Reason::UnknownItem)),
+        }
     }
 }

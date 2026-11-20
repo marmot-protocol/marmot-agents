@@ -1053,3 +1053,43 @@ and the translator stays a translation of one session. The four rules above are 
 impossible.
 
 Decided 2026-11-20. The project owner chose this over keeping each thread's state inside the translator.
+
+## D-061 A Codex session starts in a working folder, with a safe sandbox unless configured
+
+**Decision.** The core gives the Codex driver a working folder, and may give a sandbox and an approval policy.
+Without them, a session's sandbox lets commands write only inside the working folder (`workspace-write`), and
+Codex asks before anything outside it (`on-request`). Nothing wider is used unless it is configured. The driver
+sends all three whenever it starts or resumes a session.
+
+**Why.** A Codex thread resumed without its settings came back with full access, the default on the machine
+that recorded it ([rule 10 for drivers](design/event-model.md#what-a-driver-has-to-do)). Sending them every
+time means a session does what it was set up to do, whatever Codex's own configuration says. The defaults are
+the narrowest that still let an agent work on a project.
+
+Decided 2026-11-20. The project owner accepted the recommendation.
+
+## D-062 What Codex reads for a chat message
+
+**Decision.** In a two-person chat Codex reads the message's text alone. In a group it reads the sender's name
+and the text, as `Alice: run the tests`. A reply first quotes the message it answers, as
+`> Bob: which file?`, followed by a blank line. An image goes as an image Codex reads from the file the core
+wrote. A message that starts with a slash goes exactly as typed, with no name and no quote
+([D-031](#d-031-a-slash-command-is-a-message-for-the-harness)).
+
+**Why.** Codex has one user per thread and cannot tell people apart, so in a group the name is the only way it
+knows who asked. In a two-person chat there is only one person, and a name would add nothing. A slash command
+has to reach Codex as the command it is.
+
+Decided 2026-11-20. The project owner accepted the recommendation. The slash-command exception follows from
+D-031.
+
+## D-063 Codex keeps a session so it can be resumed
+
+**Decision.** The Codex driver starts each session as one Codex keeps on disk (`ephemeral: false`), so it can
+be resumed after Codex or the core restarts.
+
+**Why.** The capability flags say Codex resumes sessions
+([D-058](#d-058-the-driver-trait-and-the-capability-flags)), and a session Codex threw away could not be. Codex
+keeps the conversation in its own home folder on the machine that runs it, as it does for any Codex user.
+
+Decided 2026-11-20. The project owner accepted the recommendation.
