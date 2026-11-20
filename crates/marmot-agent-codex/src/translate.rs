@@ -133,6 +133,8 @@ pub struct Translator {
     sessions: HashMap<String, Session>,
     /// The client's requests that have not been answered, by id.
     requests: HashMap<Id, Sent>,
+    /// For each turn a request started, that request's id.
+    turn_requests: HashMap<String, i64>,
     /// Items answered by the client's reply, so a second answer is told so. Cleared when the
     /// session is replaced.
     answered: HashSet<String>,
@@ -189,6 +191,22 @@ impl Translator {
     /// message the transport gave the wrong translator.
     pub fn other_threads(&self) -> u64 {
         self.other_threads
+    }
+
+    /// The Codex thread followed: the chat's session, once one is picked.
+    pub fn session(&self) -> Option<&str> {
+        self.session.as_deref()
+    }
+
+    /// The turn running in the session, once Codex has said it started.
+    pub fn turn(&self) -> Option<&str> {
+        self.turn.as_deref()
+    }
+
+    /// The request that started a turn: a `turn/start` or a compaction the driver sent. None for
+    /// a turn Codex started by itself.
+    pub fn turn_request(&self, turn: &str) -> Option<i64> {
+        self.turn_requests.get(turn).copied()
     }
 
     /// One message, as the exact text that went over the connection. Returns the events it makes,
@@ -429,7 +447,11 @@ impl Translator {
         let started_by = if self.starts.is_empty() {
             StartedBy::Agent
         } else {
-            self.starts.remove(0).1
+            let (request, by, _) = self.starts.remove(0);
+            if let (Some(turn), Id::Number(request)) = (&self.turn, request) {
+                self.turn_requests.insert(turn.clone(), request);
+            }
+            by
         };
         self.started_by = Some(started_by);
         let item = format!("turn:{}", show(self.turn.as_deref()));
@@ -1773,6 +1795,19 @@ impl Translator {
                 value,
             } => {
                 let thread = self.session_named(session.as_str())?;
+                // A value the session already has changes nothing, and Codex may not report it.
+                let k = &self.known;
+                let now = match setting.as_str() {
+                    "model" => &k.model,
+                    "effort" => &k.effort,
+                    "approval_policy" => &k.approval_policy,
+                    "sandbox" => &k.sandbox,
+                    "mode" => &k.mode,
+                    _ => &None,
+                };
+                if now.as_deref() == Some(value.as_str()) {
+                    return refuse(Reason::NothingToDo);
+                }
                 // Each value is one the session item shows, so it is what Codex reported.
                 let (key, change) = match setting.as_str() {
                     "model" => ("model", json!(value)),

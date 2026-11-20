@@ -13,7 +13,10 @@ marmot-agent-events = { path = "../marmot-agent-events" }
 serde = { version = "1", features = ["derive"] }
 # `raw_value` keeps Codex's own message as the exact text it arrived as.
 serde_json = { version = "1", features = ["raw_value"] }
+# Runs Codex and reads it without blocking the core.
+tokio = { version = "1", features = ["io-util", "process"] }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "sync"] }
 serde_json = { version = "1", features = ["raw_value"] }
