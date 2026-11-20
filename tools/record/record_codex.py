@@ -182,6 +182,17 @@ class AppServer:
         _, msg = self.wait_for(lambda m: m.get("method") == "turn/completed", timeout=timeout, start=mark)
         return msg
 
+    def finish_own_turn(self, thread_id: str, mark: int, timeout: float = TURN_TIMEOUT, settle: float = 15) -> dict:
+        """Wait for this thread's own turn to end, not a subagent's, then a while longer for whatever
+        the subagents still send."""
+        _, msg = self.wait_for(
+            lambda m: m.get("method") == "turn/completed" and m.get("params", {}).get("threadId") == thread_id,
+            timeout=timeout,
+            start=mark,
+        )
+        time.sleep(settle)
+        return msg
+
     def turn(self, thread_id: str, text: str, **extra) -> dict | None:
         turn_id, mark = self.start_turn(thread_id, text, **extra)
         if not turn_id:
@@ -528,6 +539,103 @@ def resume_with_settings(s: AppServer, cwd: str):
     s.turn(t, "What word did I ask you to remember? Reply with just the word.")
 
 
+def from_subagent(thread_id: str):
+    """Whether a message comes from a thread other than `thread_id`: a subagent's."""
+    return lambda m: (m.get("params") or {}).get("threadId") not in (None, thread_id, "redacted")
+
+
+# Codex keeps a subagent's thread beside its parent's, so a parent that is not kept cannot start one
+# ("no rollout found"). Every subagent scenario keeps its thread, and leaves it in the Codex history.
+
+
+def subagent(s: AppServer, cwd: str):
+    """The agent starts one subagent and waits for its answer. Default model, multi-agent v2."""
+    s.initialize()
+    t = s.start_thread(cwd, ephemeral=False)
+    _, mark = s.start_turn(
+        t,
+        "Start exactly one subagent and ask it to count the lines in greet.py. Wait for its answer, "
+        "then tell me the count. Do not count them yourself.",
+    )
+    s.finish_own_turn(t, mark)
+
+
+def subagent_v1(s: AppServer, cwd: str):
+    """The same on gpt-5.6-luna, the one model here that runs multi-agent v1."""
+    s.initialize()
+    t = s.start_thread(cwd, ephemeral=False)
+    _, mark = s.start_turn(
+        t,
+        "Start exactly one subagent and ask it to count the lines in greet.py. Wait for its answer, "
+        "then tell me the count. Do not count them yourself.",
+        model="gpt-5.6-luna",
+    )
+    s.finish_own_turn(t, mark)
+
+
+def subagent_nested(s: AppServer, cwd: str):
+    """A subagent starts a subagent of its own."""
+    s.initialize()
+    t = s.start_thread(cwd, ephemeral=False)
+    _, mark = s.start_turn(
+        t,
+        "Start exactly one subagent. Tell it to start exactly one subagent of its own, which reads "
+        "test_greet.py and reports the name of the test function. Wait for both, then tell me the name.",
+    )
+    s.finish_own_turn(t, mark, timeout=420)
+
+
+def subagent_approval(s: AppServer, cwd: str):
+    """A subagent runs a command that needs approval, and the user allows it."""
+    s.request_handler = answer_with("accept")
+    s.initialize()
+    t = s.start_thread(cwd, approval="untrusted", sandbox="read-only", ephemeral=False)
+    _, mark = s.start_turn(
+        t,
+        "Start exactly one subagent and ask it to run `python3 greet.py` and report what it printed. "
+        "Wait for its answer, then tell me. Do not run anything yourself.",
+    )
+    s.finish_own_turn(t, mark)
+
+
+def subagent_interrupt(s: AppServer, cwd: str):
+    """The user interrupts the turn while a subagent is running a command. The recorder then waits to
+    see whether the subagent carries on."""
+    s.initialize()
+    t = s.start_thread(cwd, ephemeral=False)
+    turn_id, mark = s.start_turn(
+        t,
+        "Start exactly one subagent and ask it to run `sleep 60 && echo finished` and report what it "
+        "printed. Wait for it, then tell me.",
+    )
+    s.wait_for(
+        lambda m: is_item(m, "item/started", "commandExecution") and from_subagent(t)(m),
+        timeout=180,
+        start=mark,
+    )
+    time.sleep(2)
+    s.request("turn/interrupt", {"threadId": t, "turnId": turn_id})
+    s.finish_own_turn(t, mark, timeout=60, settle=75)  # past the end of the subagent's sleep
+
+
+def subagent_continue(s: AppServer, cwd: str):
+    """A later turn sends more work to the subagent an earlier turn started."""
+    s.initialize()
+    t = s.start_thread(cwd, ephemeral=False)
+    _, mark = s.start_turn(
+        t,
+        "Start exactly one subagent and ask it to read greet.py and remember the name of its function. "
+        "Wait for it to confirm, then reply with: Started.",
+    )
+    s.finish_own_turn(t, mark)
+    _, mark = s.start_turn(
+        t,
+        "Ask the same subagent, not a new one, which function name it remembered. Wait for its answer, "
+        "then tell me.",
+    )
+    s.finish_own_turn(t, mark)
+
+
 SCENARIOS = {
     f.__name__: f
     for f in [
@@ -559,6 +667,12 @@ SCENARIOS = {
         settings_mid_turn,
         new_session,
         resume_with_settings,
+        subagent,
+        subagent_v1,
+        subagent_nested,
+        subagent_approval,
+        subagent_interrupt,
+        subagent_continue,
     ]
 }
 

@@ -92,6 +92,28 @@ Things that did not go as scripted, and are useful for that reason:
 - **Codex `resume`.** The recording has a marker line, `{"_recorder": ...}`, where the app server was stopped
   and started again.
 
+## Codex subagents
+
+Six more Codex sessions, in [`codex/subagents`](codex/subagents), recorded on 2026-11-20 with codex-cli 0.169.0.
+Each prompt asks Codex to use subagents. They run on `gpt-6.1-sol` at low effort, except `subagent_v1`, which
+uses `gpt-5.6-luna`, the one model offered that runs Codex's first multi-agent runtime. The threads are kept
+(`ephemeral: false`), because a subagent could not start from a throwaway thread, so each run left its threads
+in the recording machine's Codex history.
+
+| Scenario | What it exercises |
+| --- | --- |
+| `subagent` | One subagent, waited for |
+| `subagent_v1` | The same, on the first multi-agent runtime |
+| `subagent_nested` | A subagent that starts one of its own |
+| `subagent_approval` | A subagent's command needs approval; allowed |
+| `subagent_interrupt` | The parent's turn is interrupted while the subagent runs a command |
+| `subagent_continue` | A later turn sends more work to the same subagent |
+
+They are in a folder of their own because neither the prototype nor the Codex driver translates subagents yet:
+how a chat shows them is being designed
+([Q-30](../../docs/open-questions.md#q-30-how-does-a-chat-show-an-agents-subagents)). What they show is in
+[harness messages](../../docs/reference/harness-messages.md#subagents).
+
 ## Hermes
 
 Hermes is a gateway, not a coding harness, so it is recorded differently. A plugin plays the part of a chat

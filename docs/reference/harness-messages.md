@@ -7,7 +7,7 @@ real sessions, and how each message relates to the proposed [event model](../des
 
 | Source | What it is | How it was used |
 | --- | --- | --- |
-| [`fixtures/recordings`](../../fixtures/recordings/README.md) | 57 scripted sessions, 28 with Codex and 29 with Claude Code, recorded on 2026-11-17 and 2026-11-18 | Read in full. Every claim on this page about order, fields and behaviour comes from these |
+| [`fixtures/recordings`](../../fixtures/recordings/README.md) | 57 scripted sessions, 28 with Codex and 29 with Claude Code, recorded on 2026-11-17 and 2026-11-18, and six more Codex sessions with subagents, recorded on 2026-11-20 | Read in full. Every claim on this page about order, fields and behaviour comes from these |
 | [`data/claude-sdk-message-structures.txt`](data/claude-sdk-message-structures.txt) | The structure of 176,652 Claude Agent SDK messages from four days of real use on one developer's machine | Counts and field names only. No content was read or kept |
 | Codex's generated protocol schema | `codex app-server generate-json-schema`, codex-cli 0.169.0 | The list of methods |
 | [`tools/prototype/translate.py`](../../tools/prototype/translate.py) | A prototype that turns every recording into proposed agent events | To check that nothing is left without a home |
@@ -163,6 +163,51 @@ notification with a code (`modelNotFound`), then `turn/completed` with status `f
 - **No to-do plan.** Told twice to use its plan tool in default mode, Codex did the work without one. The schema
   has `turn/plan/updated`; it was never sent.
 - **No reasoning text**, as noted above.
+
+### Subagents
+
+Recorded on 2026-11-20 with codex-cli 0.169.0, in
+[`fixtures/recordings/codex/subagents`](../../fixtures/recordings/codex/subagents): six scenarios, each prompt
+asking for subagents in so many words. Five ran on `gpt-6.1-sol`, which uses Codex's second multi-agent runtime
+(`multiAgentVersion: v2` in `model/list`), and one on `gpt-5.6-luna`, the only model offered here on the first
+(`v1`). Every other model listed was `v2`. Compared with T3 Code's recordings of 0.156.1
+([prior art](prior-art.md#t3-code)); where they agree it is said, and where they differ this page follows ours.
+
+**A subagent is a thread of its own.** Its turns, items, approvals and token usage arrive on the same
+connection, each naming the subagent's `threadId`. No `thread/started` is sent for it, in any recording, so
+nothing announces the thread. The only link to the parent is an item in the parent's turn, which names it.
+
+**How the parent reports it differs by runtime.**
+
+| | `v2` (`gpt-6.1-sol`) | `v1` (`gpt-5.6-luna`) |
+| --- | --- | --- |
+| Starting one | A `subAgentActivity` item with `kind: started`, `agentThreadId`, `agentPath` (such as `/root/count_lines`), `model` and `reasoningEffort` | A `collabAgentToolCall` with `tool: spawnAgent` and the `prompt`. The subagent's thread id is in `receiverThreadIds` only when the item completes |
+| Waiting for it | `collabAgentToolCall`, `tool: wait`, with no ids and no states | `collabAgentToolCall`, `tool: wait`, naming the subagent and its final `status` |
+| Its end | A `subAgentActivity` item with `kind: completed`, sent in the same millisecond as the subagent's `turn/completed` | Only the `wait` item |
+| More work for it later | A `subAgentActivity` item with `kind: interacted`; the subagent's thread gets a new turn | Not recorded |
+| What it was asked | Not sent anywhere | In the `spawnAgent` item |
+
+T3 Code's 0.156.1 recordings had no `model` or `reasoningEffort` on `subAgentActivity`; 0.169.0 sends them
+when a subagent starts, and `null` after. The rest agrees.
+
+**Nested subagents.** In `subagent_nested`, the subagent's own thread sends a `subAgentActivity` that starts a
+third thread, and its `agentPath` extends its parent's (`/root/find_test/read_test`). No depth field is sent.
+
+**Approvals.** In `subagent_approval`, the command approval came from the subagent's thread and turn, as an
+ordinary server request on the same connection, and was answered by its id. Nothing marks it as a subagent's
+except the thread it names.
+
+**Interrupting the parent does not stop the subagent.** In `subagent_interrupt`, the client interrupted the
+parent's turn while the subagent was running `sleep 60`. The parent's turn ended as `interrupted` within 20
+milliseconds. Its `wait` item was never completed. The subagent carried on: its command finished a minute
+later, it answered, its turn completed, and the parent's thread then sent `subAgentActivity` `completed`, after
+the parent's turn had ended. A client that wants Stop to stop everything has to interrupt each subagent's turn
+itself, as T3 Code does.
+
+**A subagent needs a parent Codex keeps.** In the first attempt the parent threads were throwaway
+(`ephemeral: true`). Four of the five `v2` runs failed: the agent reported a "thread-store error", "no rollout
+found". The `v1` run and one `v2` run worked. With `ephemeral: false`, all six worked. Inferred: a `v2`
+subagent's thread is stored beside its parent's, so the parent must be stored.
 
 ## Claude Code
 
