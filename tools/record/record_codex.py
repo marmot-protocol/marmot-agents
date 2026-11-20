@@ -628,13 +628,14 @@ def subagent_nested(s: AppServer, cwd: str):
 
 def allow_only(s: AppServer, command: str, cwd: str):
     """Allow the one command a scenario expects, exactly, run in the demo project; decline anything else.
-    The command may come wrapped in a login shell, as `/usr/bin/zsh -lc 'python3 greet.py'`."""
+    The command may come wrapped in a login shell from /bin or /usr/bin, as
+    `/usr/bin/zsh -lc 'python3 greet.py'`."""
 
     def handler(msg: dict):
         method, p = msg.get("method", ""), msg.get("params") or {}
         if method == "item/commandExecution/requestApproval":
             asked = p.get("command") or ""
-            wrapped = re.fullmatch(r"/\S*sh -lc '([^']*)'", asked)
+            wrapped = re.fullmatch(r"(?:/usr)?/bin/(?:sh|bash|zsh) -lc '([^']*)'", asked)
             expected = (wrapped.group(1) if wrapped else asked) == command and p.get("cwd") == cwd
             if expected:
                 s.allowed.append(p.get("threadId"))

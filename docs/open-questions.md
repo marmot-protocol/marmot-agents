@@ -384,8 +384,9 @@ translator ([D-060](decisions.md#d-060-a-codex-translator-follows-one-thread-and
 starts a thread by itself for each subagent. The recordings of 2026-11-20 show it: the subagent's messages name
 its own thread and no `thread/started` announces it. An item in the parent's turn names the thread, and each of
 its turns names the top-level turn in `rootTurnId`
-([harness messages](reference/harness-messages.md#subagents)). As D-060 stands, they would be dropped and
-counted, and an approval from a subagent would never be answered. The project owner wants them shown in the
+([harness messages](reference/harness-messages.md#subagents)). D-060 does not say where the transport sends
+them. Given to the parent's translator, they would be dropped and counted; and an approval from a subagent
+must be answered by someone, or the subagent waits. The project owner wants them shown in the
 parent's chat; how is [Q-30](#q-30-how-does-a-chat-show-an-agents-subagents). Whether any other thread can
 arrive unasked is not known.
 
