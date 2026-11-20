@@ -171,9 +171,9 @@ pub trait Driver: Send {
     /// report, however long that is.
     ///
     /// `None` means the harness has gone and no more will come. A driver that sees its harness
-    /// stop closes what it can first. The core then closes the items still open, as it does when
-    /// a connector's connection drops (D-034), and settles answers and controls as
-    /// [`Emitted::settles`] says (D-058).
+    /// stop closes what it can first. When a driver ends, for any reason, the core closes the
+    /// items still open, as it does when a connector's connection drops (D-034), and settles
+    /// answers and controls as [`Emitted::settles`] says (D-058).
     fn next_event(&mut self) -> impl Future<Output = Option<Emitted>> + Send;
 }
 

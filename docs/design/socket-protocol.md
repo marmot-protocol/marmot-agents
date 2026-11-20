@@ -202,8 +202,8 @@ honours one of them anywhere in a message, so each entry says where it counts
 ([D-047](../decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts)). The full lists are in
 [answers and controls](answers-and-controls.md#typed-commands-that-widen-what-an-agent-may-do).
 
-Codex is a built-in driver and does not use the socket. It is in the table because the same capabilities apply
-to the Rust trait.
+Codex is a built-in driver and does not use the socket. It is in the table because the same facts about each
+harness apply to the Rust trait, whose flags are the seven in D-058, not the rows of this draft.
 
 ## When things go wrong
 
