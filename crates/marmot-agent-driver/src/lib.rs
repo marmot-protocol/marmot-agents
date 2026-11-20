@@ -95,7 +95,8 @@ impl fmt::Debug for Emitted {
 /// event and for a request at the same time drops the future from [`next_event`] to make the
 /// request, so that future must be safe to drop: an event is either returned or still to come,
 /// never lost. A request that waits for the harness keeps reading from it meanwhile, and holds
-/// back the events it reads for the next call of [`next_event`].
+/// back the events it reads for the next call of [`next_event`]. The future from a request is
+/// never dropped: the caller waits for it to return, and ends the driver to stop waiting (D-066).
 ///
 /// The smallest driver has a harness that never does anything. It shows the two things every
 /// driver shares: the requests are `async fn`, and a driver with nothing to report waits. It does

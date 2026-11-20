@@ -1111,3 +1111,39 @@ for an answer that cannot come, and the chat says what happened. Forms become a 
 recording of one.
 
 Decided 2026-11-20. The project owner accepted the recommendation.
+
+## D-065 A prompt names a session only to resume one
+
+**Decision.** For a driver whose `sessions` flag is `core`, the core keeps each chat's session, and a prompt
+names it only to take it up again: on the first prompt the core sends a chat after the driver has started,
+when that chat had a session and no "new session" has been sent for it since. Every other prompt names no
+session, and the driver sends it to the chat's current session, or starts one if the chat has none. A driver
+that gets a prompt naming a session the chat does not have resumes that session, unless it belongs to
+another chat.
+
+**Why.** While a prompt named the session it was for on every turn, it could name one the chat had just left.
+A "new session" control returns once it is handed to the harness, before the new session is reported, so the
+core's next prompt still named the old one, and the driver could not tell that from a wish to go back to it.
+Review of the Codex transport found this in three rounds running; each fix closed one timing and the next
+round found another. Naming a session only to resume it leaves nothing to tell apart: the driver always
+knows the chat's current session better than the core does.
+
+Decided 2026-11-20. The project owner accepted the recommendation, after four rounds of review on the Codex
+transport.
+
+## D-066 The core finishes every request it starts
+
+**Decision.** The core waits for each call of `prompt`, `answer` and `control` to return, and never drops
+one before it does. Only the future from `next_event` may be dropped, as
+[D-058](#d-058-the-driver-trait-and-the-capability-flags) says. To stop waiting on a driver, the core ends
+the driver.
+
+**Why.** A request can be partway through when it is dropped: written in part, or waiting for the harness to
+answer a request it has sent. The driver then cannot know whether the harness has it, and the same request
+sent again can arrive twice, or leave a session marked as being taken that nobody takes. Review of the Codex
+transport found such cases in each of its four rounds, and each fix added more state to the transport. A
+request is short: it returns once the driver has handed it to the
+harness, so there is no reason to give up on one. A harness that never answers is a driver that has stopped
+working, and ending it is the remedy.
+
+Decided 2026-11-20. The project owner accepted the recommendation.
