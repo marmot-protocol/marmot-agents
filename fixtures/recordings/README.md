@@ -46,7 +46,7 @@ described below: [Hermes](#hermes), [OpenClaw](#openclaw).
 | `compact` | The conversation is compacted between turns | yes | yes |
 | `model_switch` | The model is changed between turns | yes | yes |
 | `slash_command` | The commands are listed and one is run | not in this interface | yes |
-| `subagent` | The agent hands work to a subagent | not recorded | yes |
+| `subagent` | The agent hands work to a subagent | in [`codex/subagents`](#codex-subagents) | yes |
 | `mcp_tool` | A tool on an MCP server | yes, with approval | yes |
 | `web_search` | A web search | yes | yes |
 | `image` | The user attaches an image | yes | yes |

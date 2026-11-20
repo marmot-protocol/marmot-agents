@@ -168,27 +168,37 @@ notification with a code (`modelNotFound`), then `turn/completed` with status `f
 
 Recorded on 2026-11-20 with codex-cli 0.169.0, in
 [`fixtures/recordings/codex/subagents`](../../fixtures/recordings/codex/subagents): six scenarios, each prompt
-asking for subagents in so many words. Five ran on `gpt-6.1-sol`, which uses Codex's second multi-agent runtime
-(`multiAgentVersion: v2` in `model/list`), and one on `gpt-5.6-luna`, the only model offered here on the first
-(`v1`). Every other model listed was `v2`. Compared with T3 Code's recordings of 0.156.1
-([prior art](prior-art.md#t3-code)); where they agree it is said, and where they differ this page follows ours.
+asking for subagents in so many words. Each recording starts with `model/list`, whose reply gives each model's
+`multiAgentVersion`: `gpt-5.6-luna` is `v1`, and the nine other models offered are `v2`. Five scenarios ran on
+`gpt-6.1-sol` (`v2`) and one, `subagent_v1`, on `gpt-5.6-luna`.
 
 **A subagent is a thread of its own.** Its turns, items, approvals and token usage arrive on the same
-connection, each naming the subagent's `threadId`. No `thread/started` is sent for it, in any recording, so
-nothing announces the thread. The only link to the parent is an item in the parent's turn, which names it.
+connection, each naming the subagent's `threadId`. No `thread/started` is sent for it in any recording. Two
+things link it to its parent:
+
+- **An item in the parent's turn names the subagent's thread**: `agentThreadId` on `subAgentActivity` (`v2`),
+  or `receiverThreadIds` on `collabAgentToolCall` (`v1`).
+- **Every turn carries `rootTurnId`** inside `turn`. On a top-level turn it is the turn's own id. On a
+  subagent's turn, at any depth, it is the id of the top-level turn the person started. It still names that
+  turn after the turn was interrupted.
 
 **How the parent reports it differs by runtime.**
 
 | | `v2` (`gpt-6.1-sol`) | `v1` (`gpt-5.6-luna`) |
 | --- | --- | --- |
 | Starting one | A `subAgentActivity` item with `kind: started`, `agentThreadId`, `agentPath` (such as `/root/count_lines`), `model` and `reasoningEffort` | A `collabAgentToolCall` with `tool: spawnAgent` and the `prompt`. The subagent's thread id is in `receiverThreadIds` only when the item completes |
-| Waiting for it | `collabAgentToolCall`, `tool: wait`, with no ids and no states | `collabAgentToolCall`, `tool: wait`, naming the subagent and its final `status` |
-| Its end | A `subAgentActivity` item with `kind: completed`, sent in the same millisecond as the subagent's `turn/completed` | Only the `wait` item |
+| What it was asked | Not sent anywhere | In the `spawnAgent` item, and again as a `userMessage` item on the subagent's thread |
+| Waiting for it | `collabAgentToolCall`, `tool: wait`, with no ids and no states | `collabAgentToolCall`, `tool: wait`, naming the subagent and, on completion, its `status` |
+| Its end | A `subAgentActivity` item with `kind: completed`. In every recording it was sent in the same millisecond as the subagent's `turn/completed` | Only the `wait` item |
 | More work for it later | A `subAgentActivity` item with `kind: interacted`; the subagent's thread gets a new turn | Not recorded |
-| What it was asked | Not sent anywhere | In the `spawnAgent` item |
 
-T3 Code's 0.156.1 recordings had no `model` or `reasoningEffort` on `subAgentActivity`; 0.169.0 sends them
-when a subagent starts, and `null` after. The rest agrees.
+`model` and `reasoningEffort` on `subAgentActivity` are set when a subagent starts and `null` after.
+
+**Order.** A subagent's first message can come before the item that names it. In `subagent_v1` the subagent's
+`thread/status/changed` arrived just before the `spawnAgent` item completed, which is the first message to give
+its thread id. With `v2`, `item/started` for `subAgentActivity` already names the thread, and the status change
+can fall between its `started` and `completed`. A router that drops messages for a thread it does not know yet
+loses that first status.
 
 **Nested subagents.** In `subagent_nested`, the subagent's own thread sends a `subAgentActivity` that starts a
 third thread, and its `agentPath` extends its parent's (`/root/find_test/read_test`). No depth field is sent.
@@ -198,16 +208,19 @@ ordinary server request on the same connection, and was answered by its id. Noth
 except the thread it names.
 
 **Interrupting the parent does not stop the subagent.** In `subagent_interrupt`, the client interrupted the
-parent's turn while the subagent was running `sleep 60`. The parent's turn ended as `interrupted` within 20
-milliseconds. Its `wait` item was never completed. The subagent carried on: its command finished a minute
-later, it answered, its turn completed, and the parent's thread then sent `subAgentActivity` `completed`, after
-the parent's turn had ended. A client that wants Stop to stop everything has to interrupt each subagent's turn
-itself, as T3 Code does.
+parent's turn while the subagent was running `sleep 60`. The parent's turn ended as `interrupted` at once. Its
+`wait` item was never completed. The subagent carried on: its command finished about a minute later, its turn
+completed, and the parent's thread then sent `subAgentActivity` `completed`, after the parent's turn had ended.
+A client that wants Stop to stop everything has to interrupt each subagent's turn itself.
 
-**A subagent needs a parent Codex keeps.** In the first attempt the parent threads were throwaway
-(`ephemeral: true`). Four of the five `v2` runs failed: the agent reported a "thread-store error", "no rollout
-found". The `v1` run and one `v2` run worked. With `ephemeral: false`, all six worked. Inferred: a `v2`
-subagent's thread is stored beside its parent's, so the parent must be stored.
+**A subagent needs a parent Codex keeps.** In a first attempt, not kept, the parent threads were throwaway
+(`ephemeral: true`). Most `v2` runs failed: the agent reported a "thread-store error", "no rollout found". With
+`ephemeral: false`, all six worked. Inferred: a `v2` subagent's thread is stored beside its parent's, so the
+parent must be stored.
+
+**Compared with T3 Code.** T3 Code's recordings of 0.156.1, read in its repository
+(`apps/server/src/orchestration-v2/testkit/fixtures/subagent*`) on 2026-11-20, agree on all of the above that
+they cover, with one difference: their `subAgentActivity` items have no `model` or `reasoningEffort`.
 
 ## Claude Code
 

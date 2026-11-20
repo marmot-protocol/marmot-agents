@@ -143,8 +143,12 @@ say so there: what a harness does instead is the useful part.
 ## Notes
 
 - The Codex recorder starts the app server with `--disable hooks`, so your own Codex hooks do not run. Threads
-  are started as ephemeral, so nothing is added to your Codex history. Three scenarios are the exception,
-  because each has to keep its thread: `resume`, `restart_mid_turn` and `resume_with_settings`.
+  are started as ephemeral, so nothing is added to your Codex history. Nine scenarios are the exception,
+  because each has to keep its thread: `resume`, `restart_mid_turn`, `resume_with_settings`, and the six
+  `subagent` scenarios, since a subagent cannot start from a thread Codex does not keep.
+- The subagent recordings are kept in their own folder, `fixtures/recordings/codex/subagents`. The scrubber reads
+  a raw folder named after the harness, so record them into a separate raw folder, scrub it into a staging
+  folder, and move the scrubbed files from `<staging>/codex/` into `fixtures/recordings/codex/subagents/`.
 - Claude Code keeps every session. Each Claude recording adds a small session to your Claude Code history,
   under a project named after the demo directory.
 - The Claude recorder passes `settingSources: []`, so your own Claude Code settings are not loaded, and uses the

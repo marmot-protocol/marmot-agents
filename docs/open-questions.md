@@ -382,7 +382,8 @@ What Codex sends for subagents is in
 A Codex translator follows the thread its chat picked, and the transport routes each thread's messages to its
 translator ([D-060](decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes)). Codex
 starts a thread by itself for each subagent. The recordings of 2026-11-20 show it: the subagent's messages name
-its own thread, no `thread/started` announces it, and only an item in the parent's turn links the two
+its own thread and no `thread/started` announces it. An item in the parent's turn names the thread, and each of
+its turns names the top-level turn in `rootTurnId`
 ([harness messages](reference/harness-messages.md#subagents)). As D-060 stands, they would be dropped and
 counted, and an approval from a subagent would never be answered. The project owner wants them shown in the
 parent's chat; how is [Q-30](#q-30-how-does-a-chat-show-an-agents-subagents). Whether any other thread can
