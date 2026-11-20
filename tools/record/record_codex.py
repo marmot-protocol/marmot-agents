@@ -15,6 +15,7 @@ Raw recordings contain local paths and account details. Scrub them before sharin
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import threading
@@ -550,13 +551,22 @@ def from_subagent(thread_id: str):
     return lambda m: (m.get("params") or {}).get("threadId") not in (None, thread_id, "redacted")
 
 
-def spawned(m: dict) -> bool:
-    item = (m.get("params") or {}).get("item") or {}
+def spawn(m: dict) -> tuple[str, str] | None:
+    """For a subagent that started: the thread that started it, and its own thread."""
+    p = m.get("params") or {}
+    item = p.get("item") or {}
     if m.get("method") != "item/completed":
-        return False
-    v2 = item.get("type") == "subAgentActivity" and item.get("kind") == "started"
-    v1 = item.get("type") == "collabAgentToolCall" and item.get("tool") == "spawnAgent"
-    return v2 or v1
+        return None
+    if item.get("type") == "subAgentActivity" and item.get("kind") == "started" and item.get("agentThreadId"):
+        return p.get("threadId"), item["agentThreadId"]
+    if item.get("type") == "collabAgentToolCall" and item.get("tool") == "spawnAgent":
+        if item.get("status") == "completed" and item.get("receiverThreadIds"):
+            return p.get("threadId"), item["receiverThreadIds"][0]
+    return None
+
+
+def spawned(m: dict) -> bool:
+    return spawn(m) is not None
 
 
 def require(s: AppServer, mark: int, what: str, predicate, at_least: int = 1):
@@ -611,16 +621,23 @@ def subagent_nested(s: AppServer, cwd: str):
         model=V2_MODEL,
     )
     finished(s, t, mark, timeout=420)
-    require(s, mark, "two subagents, one inside the other", spawned, at_least=2)
+    children = {child for parent, child in filter(None, map(spawn, s.inbox[mark:])) if parent == t}
+    inner = lambda m: (spawn(m) or (None, None))[0] in children  # noqa: E731
+    require(s, mark, "a subagent started by the parent's subagent", inner)
 
 
-def allow_only(command: str, cwd: str):
-    """Allow the one command a scenario expects, run in the demo project; decline anything else."""
+def allow_only(s: AppServer, command: str, cwd: str):
+    """Allow the one command a scenario expects, exactly, run in the demo project; decline anything else.
+    The command may come wrapped in a login shell, as `/usr/bin/zsh -lc 'python3 greet.py'`."""
 
     def handler(msg: dict):
         method, p = msg.get("method", ""), msg.get("params") or {}
         if method == "item/commandExecution/requestApproval":
-            expected = command in (p.get("command") or "") and p.get("cwd") in (None, cwd)
+            asked = p.get("command") or ""
+            wrapped = re.fullmatch(r"/\S*sh -lc '([^']*)'", asked)
+            expected = (wrapped.group(1) if wrapped else asked) == command and p.get("cwd") == cwd
+            if expected:
+                s.allowed.append(p.get("threadId"))
             return {"decision": "accept" if expected else "decline"}
         if method.endswith("/requestApproval"):
             return {"decision": "decline"}
@@ -633,7 +650,8 @@ def allow_only(command: str, cwd: str):
 
 def subagent_approval(s: AppServer, cwd: str):
     """A subagent runs a command that needs approval, and the user allows it."""
-    s.request_handler = allow_only("python3 greet.py", cwd)
+    s.allowed = []
+    s.request_handler = allow_only(s, "python3 greet.py", cwd)
     t = subagent_start(s, cwd, approval="untrusted", sandbox="read-only")
     _, mark = s.start_turn(
         t,
@@ -642,8 +660,8 @@ def subagent_approval(s: AppServer, cwd: str):
         model=V2_MODEL,
     )
     finished(s, t, mark)
-    asked = lambda m: str(m.get("method", "")).endswith("/requestApproval") and from_subagent(t)(m)  # noqa: E731
-    require(s, mark, "an approval from the subagent", asked)
+    if not any(thread not in (None, t) for thread in s.allowed):
+        raise RuntimeError("expected the subagent's command to be allowed")
 
 
 def subagent_interrupt(s: AppServer, cwd: str):
@@ -663,7 +681,9 @@ def subagent_interrupt(s: AppServer, cwd: str):
     )
     time.sleep(2)
     s.request("turn/interrupt", {"threadId": t, "turnId": turn_id})
-    s.finish_turn(mark, timeout=60, thread_id=t)
+    ended = s.finish_turn(mark, timeout=60, thread_id=t)["params"]["turn"]["status"]
+    if ended != "interrupted":
+        raise RuntimeError(f"the parent's turn ended {ended}, not interrupted")
     child_done = lambda m: m.get("method") == "turn/completed" and from_subagent(t)(m)  # noqa: E731
     try:
         s.wait_for(child_done, timeout=120, start=mark)

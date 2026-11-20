@@ -189,7 +189,7 @@ things link it to its parent:
 | Starting one | A `subAgentActivity` item with `kind: started`, `agentThreadId`, `agentPath` (such as `/root/count_lines`), `model` and `reasoningEffort` | A `collabAgentToolCall` with `tool: spawnAgent` and the `prompt`. The subagent's thread id is in `receiverThreadIds` only when the item completes |
 | What it was asked | Not sent anywhere | In the `spawnAgent` item, and again as a `userMessage` item on the subagent's thread |
 | Waiting for it | `collabAgentToolCall`, `tool: wait`, with no ids and no states | `collabAgentToolCall`, `tool: wait`, naming the subagent and, on completion, its `status` |
-| Its end | A `subAgentActivity` item with `kind: completed`. In every recording it was sent in the same millisecond as the subagent's `turn/completed` | Only the `wait` item |
+| Its end | A `subAgentActivity` item with `kind: completed`. In every recording its `item/started` came in the same millisecond as the subagent's `turn/completed`, and its `item/completed` up to 2 ms later | Only the `wait` item |
 | More work for it later | A `subAgentActivity` item with `kind: interacted`; the subagent's thread gets a new turn | Not recorded |
 
 `model` and `reasoningEffort` on `subAgentActivity` are set when a subagent starts and `null` after.

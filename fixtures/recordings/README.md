@@ -372,7 +372,6 @@ again after any new recording, and read the result before committing.
 - A rate limit, an expired sign-in, and a harness crash
 - Claude Code stopped while it is in the middle of writing a reply
 - A file attachment other than an image
-- A subagent in Codex
 - OpenCode, Pi and Goose
 - Hermes with media, reactions, scheduled jobs and its message tools
 - OpenClaw with media, polls, threads, scheduled jobs, subagents, plugin approvals and the pairing code exchange
