@@ -309,6 +309,11 @@ One JSON object per line.
 Codex messages are JSON-RPC: a request has `id` and `method`, a notification has `method` only, and a response
 has `id` with `result` or `error`.
 
+`codex/expected/` holds, for each Codex recording, the agent events the Codex driver must produce from it, one
+per line, as the Rust item types write them. The prototype writes them
+(`python3 tools/prototype/translate.py --expected fixtures/recordings/codex`), and CI checks that they are
+current.
+
 For Claude, `via` is one of:
 
 | `via` | With `dir` | Meaning |

@@ -44,9 +44,9 @@ when the driver for that harness is built:
 | The answer to a secret question is never repeated ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat), [D-056](decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)) | Followed for Codex since 2026-11-19, tested with hand-written messages because no recording has a secret question. Before that it repeated the answer twice: in the item's `answer`, and in the native message, which is the client's reply to Codex's request | Cannot hold either. An answer to a secret question carries the question's id and nothing else, and a secret question that is no longer waiting cannot be built or read with a native message |
 | A session item carries the session's id ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)) | For Claude Code, a session item with no id, when the session is described before its first turn | Allows an event with no session, for any item type. See below |
 | A request to confirm a command is a `question` ([D-048](decisions.md#d-048-a-request-to-confirm-a-command-is-a-question)) | For Hermes, an `approval` | Not applicable: the crate does not choose an item's type |
-| A session item carries the harness's version ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)) | Has none. The page's table has none either | `harness_version`, always present |
+| A session item carries the harness's version ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)) | For Codex, Codex's `cliVersion`. For the other three, none. The page's table has none either | `harness_version`, always present |
+| What an event carries ([D-059](decisions.md#d-059-eight-points-about-what-an-agent-event-carries)) | Followed for Codex. For Claude Code, Hermes and OpenClaw, the answer on a question keeps each harness's own shape, and how much of the native message is kept was not changed | Holds D-059's shapes |
 | A command always carries its name and hint ([D-045](decisions.md#d-045-a-session-items-commands-keep-their-names-and-lose-descriptions-first)) | For Claude Code, commands with a name and nothing else, until the driver asks for more | `hint`, always present, empty when the command takes nothing |
-| The core applies the 64 KB limit, and a driver cuts nothing to fit it ([D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb), [D-057](decisions.md#d-057-the-core-applies-the-64-kb-limit)) | Cuts the native message to a note of its size over 4,000 characters, text at 600 characters and output at 2,000 | Applies no limit |
 
 **A session item with no session id is left open on purpose.** Claude Code describes a session before its
 first turn and gives the id only when that turn starts, so its early session item has none. D-030 says the
@@ -54,18 +54,14 @@ item carries the id. Either the connector waits for the id, or the rule gets an 
 chose on 2026-11-19 to leave this until the Claude Code connector is designed. Until then the types allow the
 item. Nothing built today produces one: Codex always has a thread id.
 
-**What an event carries, for every harness.** Each row needs an answer:
+**What an event carries, for every harness.** Most of what was here is settled: the version number, how much
+of the native message is kept, events the driver makes up, `seq`, the answer on a question and a plan as steps
+([D-059](decisions.md#d-059-eight-points-about-what-an-agent-event-carries)), and the prompts a turn responds to
+([D-058](decisions.md#d-058-the-driver-trait-and-the-capability-flags)). Each row left needs an answer:
 
 | Point | The page | The prototype | The crate, for now |
 | --- | --- | --- | --- |
-| A version number | Has none | `v: 0` on every event | Has none. The socket and the Marmot kind already carry versions |
-| The native message: how much of it | "The harness's own event, unchanged" | For a Codex item, only the item inside the message, without its thread and turn ids. For other messages, the whole payload | Does not decide. It holds whatever text the driver gives it |
-| An event the driver makes up, such as closing an item the harness never closed | Does not say | Gives it a made-up native message that holds the reason | No native message. Where the reason goes is not settled |
-| `seq` | Order within the session. The socket page has no `seq` and says the core numbers items | Counts everything one translator produced, across sessions | Has it, and does not say what it counts within |
-| `prompts` on a turn | Only on the socket page | Has none | Has none |
-| The answer on a question | "Once answered: `answer`" | A different shape for each harness. For Codex, the harness's own labels | A list: the question's id, the ids of the options chosen, and typed text. This follows what an answer carries in [D-028](decisions.md#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it) |
 | What a task's `usage` holds | "`usage` once known" | Claude Code's three numbers: time, tools used, tokens. Not the shape a turn's usage has | Leaves `usage` off a task |
-| A plan as steps | Entries with a text and a state | For Codex, never recorded: an `explanation`, and steps that are pending, running or done | Steps that are pending, running or done. No `explanation` |
 | A field the types do not know | Does not say | Not applicable | Passed over when an event is read, so that an older core can still show a newer driver's item |
 
 **Fields only the prototype has, that Codex produces.** The crate has them, because the recordings show a
@@ -79,13 +75,9 @@ use for each:
 | `error` | `will_retry`. The page says "what was being attempted, and the harness's error code"; the prototype names them `request` and `code` |
 | `turn` | What `usage` holds: `input_tokens` and `output_tokens` |
 
-**Two shapes Codex can send that no recording holds.** The prototype passes each through as it is, and the
-crate would refuse both. They are for the driver step to settle and to test with hand-written messages:
-
-| Item | What Codex can send | The prototype | The crate |
-| --- | --- | --- | --- |
-| `tool` | A failed MCP call's `error`, which is an object with a `message` | Copies the object | `error` is text. The driver would take the message, and the object stays in the native payload |
-| `message` | A `phase` other than the two the page names, such as `partial_answer` | Copies the word | `phase` is `commentary` or `final` |
+**Two shapes Codex can send that no recording holds**, a failed MCP call's error object and a phase such as
+`partial_answer`, are settled by D-059 and tested with hand-written messages in
+[`crates/marmot-agent-codex/tests/cases.rs`](../crates/marmot-agent-codex/tests/cases.rs).
 
 **Fields only the prototype has, from the other three harnesses.** The crate does not have them. Each is for
 the connector that produces it to bring up:
@@ -361,7 +353,20 @@ The current thinking is to record real sessions and replay them through the driv
 
 The recorders and 50 recordings of coding harnesses exist: [`tools/record`](../tools/record/README.md) and
 [`fixtures/recordings`](../fixtures/recordings/README.md). A prototype replays them through the proposed event
-model ([`tools/prototype`](../tools/prototype/README.md)). There is no driver to replay them through yet.
+model ([`tools/prototype`](../tools/prototype/README.md)).
+
+The Codex driver is tested this way, as the project owner asked for it: its 28 recordings are replayed through
+the driver, which must produce the events the prototype produces for each. Those are committed beside the
+recordings, in [`fixtures/recordings/codex/expected`](../fixtures/recordings/codex/expected), and CI checks that
+they are what the prototype writes. Whether every driver is tested the same way is still open.
+
+### Q-29 What does the Codex driver do with a thread no chat asked for?
+
+A Codex translator follows the thread its chat picked, and the transport routes each thread's messages to its
+translator ([D-060](decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes)). Codex
+may start a thread by itself, for example for a sub-agent. No recording shows this; it is inferred from the
+protocol, where `thread/started` can name a thread no request asked for. Such a thread could be shown in the
+chat that owns the thread it came from, or dropped and counted. To be settled when the transport is built.
 
 ## The repository and the move from MDK
 

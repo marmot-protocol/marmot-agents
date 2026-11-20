@@ -3,8 +3,9 @@
 Status: draft. Which driver each harness gets is decided
 ([D-005](../decisions.md#d-005-which-driver-each-harness-gets)), and so is the preference for official
 libraries ([D-006](../decisions.md#d-006-prefer-official-interfaces-and-libraries)), and so are the trait and
-the capability flags ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)). The testing
-approach is a proposal.
+the capability flags ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)), and so is how
+the Codex driver splits its work ([D-060](../decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes)).
+The testing approach is a proposal.
 
 ## What a driver does
 
@@ -100,6 +101,17 @@ and check the agent events that come out. When a harness changes its interface, 
 difference.
 
 Hand-written test messages are a guess about what the harness sends. Recordings are what it sends.
+
+The Codex driver is tested this way: each of its recordings must give the events the prototype gives
+([`crates/marmot-agent-codex/tests/replay.rs`](../../crates/marmot-agent-codex/tests/replay.rs)). Whether every
+driver is tested so is [Q-17](../open-questions.md#q-17-how-are-drivers-tested).
+
+## The Codex driver
+
+It has two halves: a translator, which turns the messages of one chat's Codex session into agent events, and a
+transport, which runs `codex app-server` and gives each translator its own thread's messages
+([D-060](../decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes)). The
+translator is written ([`crates/marmot-agent-codex`](../../crates/marmot-agent-codex)); the transport is not.
 
 ## Adding a harness
 

@@ -67,6 +67,9 @@ jobs:
           fixtures/recordings/codex fixtures/recordings/claude
           fixtures/recordings/hermes fixtures/recordings/openclaw
 
+      - name: The Codex driver's expected events are what the prototype writes
+        run: python3 tools/prototype/translate.py --expected fixtures/recordings/codex --check
+
   documents:
     name: Documents
     runs-on: ubuntu-24.04
