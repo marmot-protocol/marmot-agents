@@ -46,7 +46,7 @@ described below: [Hermes](#hermes), [OpenClaw](#openclaw).
 | `compact` | The conversation is compacted between turns | yes | yes |
 | `model_switch` | The model is changed between turns | yes | yes |
 | `slash_command` | The commands are listed and one is run | not in this interface | yes |
-| `subagent` | The agent hands work to a subagent | not recorded | yes |
+| `subagent` | The agent hands work to a subagent | in [`codex/subagents`](#codex-subagents) | yes |
 | `mcp_tool` | A tool on an MCP server | yes, with approval | yes |
 | `web_search` | A web search | yes | yes |
 | `image` | The user attaches an image | yes | yes |
@@ -91,6 +91,28 @@ Things that did not go as scripted, and are useful for that reason:
   first reported the stopped task and an empty turn, and then answered.
 - **Codex `resume`.** The recording has a marker line, `{"_recorder": ...}`, where the app server was stopped
   and started again.
+
+## Codex subagents
+
+Six more Codex sessions, in [`codex/subagents`](codex/subagents), recorded on 2026-11-20 with codex-cli 0.169.0.
+Each prompt asks Codex to use subagents. They run on `gpt-6.1-sol` at low effort, except `subagent_v1`, which
+uses `gpt-5.6-luna`, the one model offered that runs Codex's first multi-agent runtime. The threads are kept
+(`ephemeral: false`), because a subagent could not start from a throwaway thread, so each run left its threads
+in the recording machine's Codex history.
+
+| Scenario | What it exercises |
+| --- | --- |
+| `subagent` | One subagent, waited for |
+| `subagent_v1` | The same, on the first multi-agent runtime |
+| `subagent_nested` | A subagent that starts one of its own |
+| `subagent_approval` | A subagent's command needs approval; allowed |
+| `subagent_interrupt` | The parent's turn is interrupted while the subagent runs a command |
+| `subagent_continue` | A later turn sends more work to the same subagent |
+
+They are in a folder of their own because neither the prototype nor the Codex driver translates subagents yet:
+how a chat shows them is being designed
+([Q-30](../../docs/open-questions.md#q-30-how-does-a-chat-show-an-agents-subagents)). What they show is in
+[harness messages](../../docs/reference/harness-messages.md#subagents).
 
 ## Hermes
 
@@ -350,7 +372,6 @@ again after any new recording, and read the result before committing.
 - A rate limit, an expired sign-in, and a harness crash
 - Claude Code stopped while it is in the middle of writing a reply
 - A file attachment other than an image
-- A subagent in Codex
 - OpenCode, Pi and Goose
 - Hermes with media, reactions, scheduled jobs and its message tools
 - OpenClaw with media, polls, threads, scheduled jobs, subagents, plugin approvals and the pairing code exchange

@@ -360,13 +360,35 @@ the driver, which must produce the events the prototype produces for each. Those
 recordings, in [`fixtures/recordings/codex/expected`](../fixtures/recordings/codex/expected), and CI checks that
 they are what the prototype writes. Whether every driver is tested the same way is still open.
 
+### Q-30 How does a chat show an agent's subagents?
+
+Codex and Claude Code can start subagents: agents of their own that work in parallel, can start subagents in
+turn, and can ask for approval. The project owner wants a chat to show each one, and to let a person open it
+and see everything it does, like a thread inside the conversation.
+
+The current thinking, agreed with the project owner on 2026-11-20 and not yet written as a design: a subagent
+is a thread in the same group, using Nostr's threaded comments (NIP-22, kind 1111), which White Noise for Linux
+and MDK already support. The item that started the subagent is the thread's root and its card in the main
+chat. The subagent's items carry the thread's tags, and its words are kind 1111 comments. Stop in the main chat
+stops every subagent, and Stop in a thread stops that subagent. A waiting approval in a thread alerts as any
+approval does. A person can write to a subagent only when the harness allows it.
+
+What Codex sends for subagents is in
+[harness messages](reference/harness-messages.md#subagents), from the recordings in
+[`fixtures/recordings/codex/subagents`](../fixtures/recordings/codex/subagents).
+
 ### Q-29 What does the Codex driver do with a thread no chat asked for?
 
 A Codex translator follows the thread its chat picked, and the transport routes each thread's messages to its
 translator ([D-060](decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes)). Codex
-may start a thread by itself, for example for a sub-agent. No recording shows this; it is inferred from the
-protocol, where `thread/started` can name a thread no request asked for. Such a thread could be shown in the
-chat that owns the thread it came from, or dropped and counted. To be settled when the transport is built.
+starts a thread by itself for each subagent. The recordings of 2026-11-20 show it: the subagent's messages name
+its own thread and no `thread/started` announces it. An item in the parent's turn names the thread, and each of
+its turns names the top-level turn in `rootTurnId`
+([harness messages](reference/harness-messages.md#subagents)). D-060 does not say where the transport sends
+them. Given to the parent's translator, they would be dropped and counted; and an approval from a subagent
+must be answered by someone, or the subagent waits. The project owner wants them shown in the
+parent's chat; how is [Q-30](#q-30-how-does-a-chat-show-an-agents-subagents). Whether any other thread can
+arrive unasked is not known.
 
 ## The repository and the move from MDK
 

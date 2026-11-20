@@ -7,10 +7,10 @@ real sessions, and how each message relates to the proposed [event model](../des
 
 | Source | What it is | How it was used |
 | --- | --- | --- |
-| [`fixtures/recordings`](../../fixtures/recordings/README.md) | 57 scripted sessions, 28 with Codex and 29 with Claude Code, recorded on 2026-11-17 and 2026-11-18 | Read in full. Every claim on this page about order, fields and behaviour comes from these |
+| [`fixtures/recordings`](../../fixtures/recordings/README.md) | 57 scripted sessions, 28 with Codex and 29 with Claude Code, recorded on 2026-11-17 and 2026-11-18, and six more Codex sessions with subagents, recorded on 2026-11-20 | Read in full. Every claim on this page about order, fields and behaviour comes from these |
 | [`data/claude-sdk-message-structures.txt`](data/claude-sdk-message-structures.txt) | The structure of 176,652 Claude Agent SDK messages from four days of real use on one developer's machine | Counts and field names only. No content was read or kept |
 | Codex's generated protocol schema | `codex app-server generate-json-schema`, codex-cli 0.169.0 | The list of methods |
-| [`tools/prototype/translate.py`](../../tools/prototype/translate.py) | A prototype that turns every recording into proposed agent events | To check that nothing is left without a home |
+| [`tools/prototype/translate.py`](../../tools/prototype/translate.py) | A prototype that turns every recording into proposed agent events, except the subagent recordings, which nothing translates yet | To check that nothing is left without a home |
 
 Limits of this evidence:
 
@@ -163,6 +163,64 @@ notification with a code (`modelNotFound`), then `turn/completed` with status `f
 - **No to-do plan.** Told twice to use its plan tool in default mode, Codex did the work without one. The schema
   has `turn/plan/updated`; it was never sent.
 - **No reasoning text**, as noted above.
+
+### Subagents
+
+Recorded on 2026-11-20 with codex-cli 0.169.0, in
+[`fixtures/recordings/codex/subagents`](../../fixtures/recordings/codex/subagents): six scenarios, each prompt
+asking for subagents in so many words. Each recording starts with `model/list`, whose reply gives each model's
+`multiAgentVersion`: `gpt-5.6-luna` is `v1`, and the nine other models offered are `v2`. Five scenarios ran on
+`gpt-6.1-sol` (`v2`) and one, `subagent_v1`, on `gpt-5.6-luna`.
+
+**A subagent is a thread of its own.** Its turns, items, approvals and token usage arrive on the same
+connection, each naming the subagent's `threadId`. No `thread/started` is sent for it in any recording. Two
+things link it to its parent:
+
+- **An item in the parent's turn names the subagent's thread**: `agentThreadId` on `subAgentActivity` (`v2`),
+  or `receiverThreadIds` on `collabAgentToolCall` (`v1`).
+- **Every turn carries `rootTurnId`** inside `turn`. On a top-level turn it is the turn's own id. On a
+  subagent's turn, at any depth, it is the id of the top-level turn the person started. It still names that
+  turn after the turn was interrupted.
+
+**How the parent reports it differs by runtime.**
+
+| | `v2` (`gpt-6.1-sol`) | `v1` (`gpt-5.6-luna`) |
+| --- | --- | --- |
+| Starting one | A `subAgentActivity` item with `kind: started`, `agentThreadId`, `agentPath` (such as `/root/count_lines`), `model` and `reasoningEffort` | A `collabAgentToolCall` with `tool: spawnAgent` and the `prompt`. The subagent's thread id is in `receiverThreadIds` only when the item completes |
+| What it was asked | Not sent anywhere | In the `spawnAgent` item, and again as a `userMessage` item on the subagent's thread |
+| Waiting for it | `collabAgentToolCall`, `tool: wait`, with no ids and no states | `collabAgentToolCall`, `tool: wait`, naming the subagent and, on completion, its `status` |
+| Its end | A `subAgentActivity` item with `kind: completed`. In every recording its `item/started` came in the same millisecond as the subagent's `turn/completed`, and its `item/completed` up to 2 ms later | Only the `wait` item |
+| More work for it later | A `subAgentActivity` item with `kind: interacted`; the subagent's thread gets a new turn | Not recorded |
+
+`model` and `reasoningEffort` on `subAgentActivity` are set when a subagent starts and `null` after.
+
+**Order.** A subagent's first message can come before the item that names it. In `subagent_v1` the subagent's
+`thread/status/changed` arrived just before the `spawnAgent` item completed, which is the first message to give
+its thread id. With `v2`, `item/started` for `subAgentActivity` already names the thread, and the status change
+can fall between its `started` and `completed`. A router that drops messages for a thread it does not know yet
+loses that first status.
+
+**Nested subagents.** In `subagent_nested`, the subagent's own thread sends a `subAgentActivity` that starts a
+third thread, and its `agentPath` extends its parent's (`/root/find_test/read_test`). No depth field is sent.
+
+**Approvals.** In `subagent_approval`, the command approval came from the subagent's thread and turn, as an
+ordinary server request on the same connection, and was answered by its id. Nothing marks it as a subagent's
+except the thread it names.
+
+**Interrupting the parent does not stop the subagent.** In `subagent_interrupt`, the client interrupted the
+parent's turn while the subagent was running `sleep 60`. The parent's turn ended as `interrupted` at once. Its
+`wait` item was never completed. The subagent carried on: its command finished about a minute later, its turn
+completed, and the parent's thread then sent `subAgentActivity` `completed`, after the parent's turn had ended.
+A client that wants Stop to stop everything has to interrupt each subagent's turn itself.
+
+**A subagent needs a parent Codex keeps.** In a first attempt, not kept, the parent threads were throwaway
+(`ephemeral: true`). Most `v2` runs failed: the agent reported a "thread-store error", "no rollout found". With
+`ephemeral: false`, all six worked. Inferred: a `v2` subagent's thread is stored beside its parent's, so the
+parent must be stored.
+
+**Compared with T3 Code.** T3 Code's recordings of 0.156.1, read in its repository
+(`apps/server/src/orchestration-v2/testkit/fixtures/subagent*`) on 2026-11-20, agree on all of the above that
+they cover, with one difference: their `subAgentActivity` items have no `model` or `reasoningEffort`.
 
 ## Claude Code
 
