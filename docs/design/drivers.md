@@ -116,8 +116,10 @@ A session starts in a working folder with a narrow sandbox unless configured oth
 Codex reads a group message with its sender's name
 ([D-062](../decisions.md#d-062-what-codex-reads-for-a-chat-message)), Codex keeps each session so it can be
 resumed ([D-063](../decisions.md#d-063-codex-keeps-a-session-so-it-can-be-resumed)), and a form from an MCP
-server is declined for now ([D-064](../decisions.md#d-064-the-codex-driver-declines-an-mcp-servers-form-until-forms-are-designed)). The translator is written
-([`crates/marmot-agent-codex`](../../crates/marmot-agent-codex)); the transport is not.
+server is declined for now ([D-064](../decisions.md#d-064-the-codex-driver-declines-an-mcp-servers-form-until-forms-are-designed)). Both halves are written
+([`crates/marmot-agent-codex`](../../crates/marmot-agent-codex)). The transport runs one Codex for every chat of an
+agent, and starts it with subagents switched off until how a chat shows them is decided
+([subagents as threads](subagents.md)).
 
 ## Adding a harness
 

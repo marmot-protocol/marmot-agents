@@ -133,6 +133,8 @@ pub struct Translator {
     sessions: HashMap<String, Session>,
     /// The client's requests that have not been answered, by id.
     requests: HashMap<Id, Sent>,
+    /// For each turn a request started, that request's id.
+    turn_requests: HashMap<String, i64>,
     /// Items answered by the client's reply, so a second answer is told so. Cleared when the
     /// session is replaced.
     answered: HashSet<String>,
@@ -189,6 +191,22 @@ impl Translator {
     /// message the transport gave the wrong translator.
     pub fn other_threads(&self) -> u64 {
         self.other_threads
+    }
+
+    /// The Codex thread followed: the chat's session, once one is picked.
+    pub fn session(&self) -> Option<&str> {
+        self.session.as_deref()
+    }
+
+    /// The turn running in the session, once Codex has said it started.
+    pub fn turn(&self) -> Option<&str> {
+        self.turn.as_deref()
+    }
+
+    /// The request that started a turn: a `turn/start` or a compaction the driver sent. None for
+    /// a turn Codex started by itself.
+    pub fn turn_request(&self, turn: &str) -> Option<i64> {
+        self.turn_requests.get(turn).copied()
     }
 
     /// One message, as the exact text that went over the connection. Returns the events it makes,
@@ -429,7 +447,11 @@ impl Translator {
         let started_by = if self.starts.is_empty() {
             StartedBy::Agent
         } else {
-            self.starts.remove(0).1
+            let (request, by, _) = self.starts.remove(0);
+            if let (Some(turn), Id::Number(request)) = (&self.turn, request) {
+                self.turn_requests.insert(turn.clone(), request);
+            }
+            by
         };
         self.started_by = Some(started_by);
         let item = format!("turn:{}", show(self.turn.as_deref()));
@@ -469,6 +491,9 @@ impl Translator {
         let item = format!("turn:{}", show(turn.id.as_deref()));
         let native = native(method, params);
         self.emit(out, &item, body, state, title, &text, native);
+        if let Some(id) = &turn.id {
+            self.turn_requests.remove(id); // nothing more comes for this turn
+        }
         self.turn = None; // nothing that follows belongs to this turn
     }
 
@@ -1773,6 +1798,19 @@ impl Translator {
                 value,
             } => {
                 let thread = self.session_named(session.as_str())?;
+                // A value the session already has changes nothing, and Codex may not report it.
+                let k = &self.known;
+                let now = match setting.as_str() {
+                    "model" => &k.model,
+                    "effort" => &k.effort,
+                    "approval_policy" => &k.approval_policy,
+                    "sandbox" => &k.sandbox,
+                    "mode" => &k.mode,
+                    _ => &None,
+                };
+                if now.as_deref() == Some(value.as_str()) {
+                    return refuse(Reason::NothingToDo);
+                }
                 // Each value is one the session item shows, so it is what Codex reported.
                 let (key, change) = match setting.as_str() {
                     "model" => ("model", json!(value)),
@@ -1897,13 +1935,17 @@ impl Translator {
     }
 
     /// Whether a request that starts a turn, picks the session or changes a setting is waiting
-    /// for Codex. Until Codex answers, what the translator knows of the session may be out of
+    /// for Codex: a wait that ends without anyone in the chat doing anything. Until Codex answers, what the translator knows of the session may be out of
     /// date, so it builds nothing but replies to Codex's requests and interrupts; the driver holds
     /// the rest and asks again.
-    fn waiting_on_codex(&self) -> bool {
-        let picking = (self.requests.values())
-            .any(|sent| matches!(sent.method.as_str(), "thread/start" | "thread/resume"));
-        picking || !self.starts.is_empty() || !self.asked_settings.is_empty()
+    /// Whether a request to start or resume a session is waiting for Codex, whoever sent it.
+    pub fn picking(&self) -> bool {
+        (self.requests.values())
+            .any(|sent| matches!(sent.method.as_str(), "thread/start" | "thread/resume"))
+    }
+
+    pub fn waiting_on_codex(&self) -> bool {
+        self.picking() || !self.starts.is_empty() || !self.asked_settings.is_empty()
     }
 
     fn session_named(&self, session: &str) -> Result<&str, Refusal> {
