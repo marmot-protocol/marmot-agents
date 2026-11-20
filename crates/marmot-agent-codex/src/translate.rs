@@ -18,6 +18,10 @@ use crate::messages::{
     QuestionReply, Rerouted, Sandbox, ThreadSettingsUpdated, ThreadStarted, TokenUsageUpdated,
     Tokens, TurnNote, UserInput,
 };
+use crate::send::{self, Setup};
+use marmot_agent_driver::{
+    Action as DriverAction, Answer as DriverAnswer, Given, Prompt, Reason, Refusal,
+};
 use marmot_agent_events::body::{
     Action, AnswerVia, Answered, Approval, ApprovalAnswer, Asked, Change, ChangeKind, Choice,
     Effect, Error, Message, Notice, NoticeKind, Offered, Phase, Plan, PlanEntry, PlanEntryState,
@@ -25,9 +29,9 @@ use marmot_agent_events::body::{
 };
 use marmot_agent_events::{AgentEvent, Body, Header, Native, State};
 use serde::Deserialize;
-use serde_json::Value;
 use serde_json::value::RawValue;
-use std::collections::HashMap;
+use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet};
 
 /// Which way a message went.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +77,8 @@ enum Pending {
         choices: Vec<Choice>,
         /// Where the reply says what was chosen.
         reply: Reply,
+        /// For a permission request, what Codex asked for.
+        asked_for: Option<Value>,
     },
     Question {
         item: String,
@@ -127,6 +133,14 @@ pub struct Translator {
     sessions: HashMap<String, Session>,
     /// The client's requests that have not been answered, by id.
     requests: HashMap<Id, Sent>,
+    /// Items answered by the client's reply, so a second answer is told so. Cleared when the
+    /// session is replaced.
+    answered: HashSet<String>,
+    /// Replies the driver sends without asking anyone, for the transport to send and feed back.
+    outbox: Vec<String>,
+    /// Changes of settings sent that Codex has not answered yet, by request: the model and the
+    /// effort each asks for. Codex answers every request, so none can wait for ever.
+    asked_settings: HashMap<Id, (Option<String>, Option<String>)>,
     /// Codex's requests that the client has not answered, by id.
     asked: HashMap<Id, Pending>,
     /// For each turn, the thread's tokens before its first model call, and the thread's total
@@ -157,6 +171,13 @@ impl Translator {
     /// can add one; it is then the driver's to decide.
     pub fn unknown(&self) -> &[String] {
         &self.unknown
+    }
+
+    /// Replies to send to Codex at once, which nobody is asked for: a form the chat cannot show is
+    /// declined, so Codex does not wait for it. The driver sends each and feeds it back, as it does
+    /// every message it sends.
+    pub fn take_replies(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.outbox)
     }
 
     /// How many messages could not be read as JSON-RPC.
@@ -204,6 +225,8 @@ impl Translator {
             );
         }
         self.requests.clear();
+        self.asked_settings.clear();
+        self.outbox.clear(); // nothing is left to answer
         self.asked.clear();
         self.starts.clear();
         self.usage.clear();
@@ -223,6 +246,14 @@ impl Translator {
                     owner,
                 };
                 self.requests.insert(id.clone(), sent);
+                if method == "thread/settings/update" {
+                    let params: Value = m.params.map_or(Value::Null, |p| {
+                        serde_json::from_str(p.get()).unwrap_or(Value::Null)
+                    });
+                    let said = |key: &str| params[key].as_str().map(String::from);
+                    self.asked_settings
+                        .insert(id.clone(), (said("model"), said("effort")));
+                }
                 let by = match method.as_str() {
                     "turn/start" => Some(StartedBy::User),
                     "thread/compact/start" => Some(StartedBy::Control),
@@ -693,35 +724,23 @@ impl Translator {
             .unwrap_or_else(|| vec![Value::from("accept"), Value::from("decline")]);
         let mut decisions = Vec::new();
         let mut choices = Vec::new();
+        let count = offered.len();
         for (n, decision) in offered.into_iter().enumerate() {
-            let key = match &decision {
-                Value::String(word) => word.clone(),
-                Value::Object(one) => one.keys().next().cloned().unwrap_or_default(),
-                other => other.to_string(),
+            // A decision the driver does not know is not offered: its effect would be a guess.
+            let Some((effect, label)) = decision_choice(&decision) else {
+                continue;
             };
             let id = format!("c{n}");
-            let label = match key.as_str() {
-                "accept" => "Allow once",
-                "acceptForSession" => "Allow for this session",
-                "decline" => "Deny",
-                "cancel" => "Deny and stop",
-                "acceptWithExecpolicyAmendment" => "Allow, and don't ask again for this command",
-                other => other,
-            };
             choices.push(Choice {
                 id: id.clone(),
-                label: label.to_string(),
-                effect: if key.starts_with("accept") {
-                    Effect::Allow
-                } else {
-                    Effect::Deny
-                },
+                label,
+                effect,
             });
             decisions.push((id, decision));
         }
         // Codex accepts "decline" although it does not always list it (rule 2).
         if !decisions.iter().any(|(_, d)| *d == "decline") {
-            let id = format!("c{}", choices.len());
+            let id = format!("c{count}");
             choices.push(Choice {
                 id: id.clone(),
                 label: "Deny".to_string(),
@@ -745,6 +764,7 @@ impl Translator {
                     decisions,
                     choices: choices.clone(),
                     reply: Reply::Decision,
+                    asked_for: None,
                 },
             );
         }
@@ -790,6 +810,7 @@ impl Translator {
                     decisions: Vec::new(),
                     choices: choices.clone(),
                     reply: Reply::Grant,
+                    asked_for: p.permissions.clone(),
                 },
             );
         }
@@ -846,6 +867,7 @@ impl Translator {
                         decisions,
                         choices: choices.clone(),
                         reply: Reply::Action,
+                        asked_for: None,
                     },
                 );
             }
@@ -881,27 +903,16 @@ impl Translator {
                 native,
             );
         }
-        let asked: Vec<Asked> = p
-            .requested_schema
-            .and_then(|s| s.properties)
-            .unwrap_or_default()
-            .0
-            .into_iter()
-            .map(|(key, field)| Asked {
-                text: field
-                    .description
-                    .or(field.title)
-                    .unwrap_or_else(|| key.clone()),
-                id: key,
-                header: None,
-                options: Vec::new(),
-                multiple: false,
-                allow_text: true,
-                secret: false,
-            })
-            .collect();
-        let item = self.request_item("question", p.turn_id.as_deref(), id.as_ref());
-        self.ask(out, id, &item, None, asked, &text, native);
+        // A form from an MCP server. The chat cannot show one yet, so the driver declines it at
+        // once, so that Codex does not wait, and says so in the chat (D-064).
+        if let Some(id) = &id {
+            let reply = json!({"id": id, "result": {"action": "decline", "content": null}});
+            self.outbox.push(reply.to_string());
+        }
+        let item = self.request_item("form", p.turn_id.as_deref(), id.as_ref());
+        let body = Body::Notice(notice(NoticeKind::Warning));
+        let title = "A form the chat cannot show was declined";
+        self.emit(out, &item, body, State::Done, title, &text, native);
     }
 
     fn user_input(
@@ -980,6 +991,8 @@ impl Translator {
         let Some(asked) = m.id.as_ref().and_then(|id| self.asked.remove(id)) else {
             return;
         };
+        let (Pending::Approval { item, .. } | Pending::Question { item, .. }) = &asked;
+        self.answered.insert(item.clone());
         let result = m.result.map_or("{}", RawValue::get);
         match asked {
             Pending::Approval {
@@ -987,6 +1000,7 @@ impl Translator {
                 decisions,
                 choices,
                 reply: replied_by,
+                ..
             } => {
                 let Some(prev) = self.open_event(&item) else {
                     return;
@@ -1042,7 +1056,7 @@ impl Translator {
                 let native = native("response to the approval request", result);
                 self.emit(out, &item, body, state, &title, &text, native);
             }
-            Pending::Question { item } => {
+            Pending::Question { item, .. } => {
                 let Some(prev) = self.open_event(&item) else {
                     return;
                 };
@@ -1077,8 +1091,15 @@ impl Translator {
             Some(Sent { method, owner }) => (Some(method), owner),
             None => (None, (self.session.clone(), self.turn.clone())),
         };
+        // A change of settings Codex took holds from now, whether or not Codex reports it again.
+        let asked = m.id.as_ref().and_then(|id| self.asked_settings.remove(id));
+        if let (Some((model, effort)), None) = (asked, m.error) {
+            self.known.model = model.or(self.known.model.take());
+            self.known.effort = effort.or(self.known.effort.take());
+        }
         if let Some(error) = m.error {
             self.starts.retain(|(id, ..)| Some(id) != m.id.as_ref()); // that request starts no turn
+
             let Some(e) = self.read::<ErrorReply>("an error reply", error.get()) else {
                 return;
             };
@@ -1157,6 +1178,7 @@ impl Translator {
             self.close_message_questions(State::Cancelled, text, out);
             self.end_session(&old, out);
             self.known = Known::default();
+            self.answered.clear();
             // A turn the old thread was asked to start is not this thread's.
             self.starts
                 .retain(|(.., named)| named.as_ref() != Some(&old));
@@ -1459,22 +1481,11 @@ impl Translator {
 
 /// What the client's reply answered, for each question asked: the ids of the options whose labels
 /// it gave, and anything else as typed text. A secret question records only that it was answered
-/// (D-041). Codex replies with labels; an MCP server's form gets values.
+/// (D-041). Codex replies with labels.
 fn answered(questions: &[Asked], reply: QuestionReply) -> Vec<Answered> {
-    let given: Vec<(String, Vec<Value>)> = match reply.answers {
-        Some(answers) => answers
-            .0
-            .into_iter()
-            .map(|(id, given)| (id, given.answers.unwrap_or_default()))
-            .collect(),
-        None => reply
-            .content
-            .unwrap_or_default()
-            .0
-            .into_iter()
-            .map(|(id, value)| (id, vec![value]))
-            .collect(),
-    };
+    let given: Vec<(String, Vec<Value>)> = (reply.answers.unwrap_or_default().0.into_iter())
+        .map(|(id, given)| (id, given.answers.unwrap_or_default()))
+        .collect();
     let mut out = Vec::new();
     for q in questions {
         let Some((_, values)) = given.iter().find(|(id, _)| *id == q.id) else {
@@ -1511,6 +1522,36 @@ fn answered(questions: &[Asked], reply: QuestionReply) -> Vec<Answered> {
         });
     }
     out
+}
+
+/// What a decision Codex offers on an approval does, and what its button says: each kind Codex's
+/// schema (0.169.0) documents. A network rule allows or denies by its own action, and lasts.
+fn decision_choice(decision: &Value) -> Option<(Effect, String)> {
+    let (effect, label) = match decision {
+        Value::String(word) => match word.as_str() {
+            "accept" => (Effect::Allow, "Allow once".to_string()),
+            "acceptForSession" => (Effect::Allow, "Allow for this session".to_string()),
+            "decline" => (Effect::Deny, "Deny".to_string()),
+            "cancel" => (Effect::Deny, "Deny and stop".to_string()),
+            _ => return None,
+        },
+        Value::Object(one) if one.len() == 1 => {
+            if one.contains_key("acceptWithExecpolicyAmendment") {
+                let label = "Allow, and don't ask again for this command";
+                (Effect::Allow, label.to_string())
+            } else {
+                let rule = &one.get("applyNetworkPolicyAmendment")?["network_policy_amendment"];
+                let host = rule["host"].as_str()?;
+                match rule["action"].as_str()? {
+                    "allow" => (Effect::Allow, format!("Always allow {host}")),
+                    "deny" => (Effect::Deny, format!("Always deny {host}")),
+                    _ => return None,
+                }
+            }
+        }
+        _ => return None,
+    };
+    Some((effect, label))
 }
 
 /// The thread a message's params name, if they name one.
@@ -1642,5 +1683,233 @@ fn round_half_even(x: f64) -> i64 {
         (r - x.signum()) as i64
     } else {
         r as i64
+    }
+}
+
+// -- what the driver sends
+
+/// What the driver sends for the core's requests. Each method builds the message and changes
+/// nothing: the driver writes it to Codex and feeds it here as [`Direction::Out`], as it does
+/// every message, so the translator learns what was sent the same way whoever sent it.
+impl Translator {
+    /// The request that passes a prompt to the session: a new turn, or, while one runs, the same
+    /// message added to it (`mid_turn: fold`).
+    pub fn prompt(&self, id: i64, prompt: &Prompt) -> Result<String, Refusal> {
+        let Some(thread) = &self.session else {
+            return Err(Refusal::new(Reason::Busy)); // the driver picks a session first
+        };
+        if self.waiting_on_codex() {
+            return Err(Refusal::new(Reason::Busy));
+        }
+        if prompt
+            .session
+            .as_ref()
+            .is_some_and(|s| s.as_str() != thread)
+        {
+            // The driver resumes the session a prompt names before it sends the prompt.
+            return Err(Refusal::new(Reason::UnknownItem));
+        }
+        let input = send::input(prompt)?;
+        Ok(match &self.turn {
+            Some(turn) => {
+                let params = json!({"threadId": thread, "expectedTurnId": turn, "input": input});
+                send::request(id, "turn/steer", params)
+            }
+            None => send::request(
+                id,
+                "turn/start",
+                json!({"threadId": thread, "input": input}),
+            ),
+        })
+    }
+
+    /// The request that starts a new session, or resumes one Codex kept. A chat's session is
+    /// replaced only while it is idle, and only once at a time (D-060).
+    pub fn pick(&self, id: i64, session: Option<&str>, setup: &Setup) -> Result<String, Refusal> {
+        if self.turn.is_some() || self.waiting_on_codex() {
+            return Err(Refusal::new(Reason::Busy));
+        }
+        Ok(match session {
+            Some(thread) => send::thread_resume(id, thread, setup),
+            None => send::thread_start(id, setup),
+        })
+    }
+
+    /// The request that carries out a control.
+    pub fn control(
+        &self,
+        id: i64,
+        action: &DriverAction,
+        setup: &Setup,
+    ) -> Result<String, Refusal> {
+        let refuse = |reason| Err(Refusal::new(reason));
+        // Only an interrupt is built while Codex has yet to answer: it is how a person stops
+        // whatever that request started.
+        if self.waiting_on_codex() && !matches!(action, DriverAction::Interrupt { .. }) {
+            return refuse(Reason::Busy);
+        }
+        match action {
+            DriverAction::Interrupt { turn } => {
+                let (Some(thread), Some(running)) = (&self.session, &self.turn) else {
+                    return refuse(Reason::NothingToDo);
+                };
+                if running.as_str() != turn.as_str() {
+                    return refuse(Reason::NothingToDo);
+                }
+                let params = json!({"threadId": thread, "turnId": running});
+                Ok(send::request(id, "turn/interrupt", params))
+            }
+            DriverAction::NewSession { session, .. } => {
+                // The session it replaces must still be the chat's: one asked for before another
+                // replaced it is out of date.
+                if session.as_ref().map(|s| s.as_str()) != self.session.as_deref() {
+                    return refuse(Reason::UnknownItem);
+                }
+                self.pick(id, None, setup)
+            }
+            DriverAction::Set {
+                session,
+                setting,
+                value,
+            } => {
+                let thread = self.session_named(session.as_str())?;
+                // Each value is one the session item shows, so it is what Codex reported.
+                let (key, change) = match setting.as_str() {
+                    "model" => ("model", json!(value)),
+                    "effort" => ("effort", json!(value)),
+                    "approval_policy" => ("approvalPolicy", json!(value)),
+                    "sandbox" => ("sandboxPolicy", json!({"type": value})),
+                    "mode" => {
+                        // Codex takes a mode with the model it runs on.
+                        let (Some(model), Some(effort)) = (&self.known.model, &self.known.effort)
+                        else {
+                            return refuse(Reason::Busy); // until Codex has said them
+                        };
+                        let settings = json!({"model": model, "reasoning_effort": effort, "developer_instructions": null});
+                        (
+                            "collaborationMode",
+                            json!({"mode": value, "settings": settings}),
+                        )
+                    }
+                    _ => return refuse(Reason::Invalid),
+                };
+                let params = json!({"threadId": thread, key: change});
+                Ok(send::request(id, "thread/settings/update", params))
+            }
+            DriverAction::Own {
+                session,
+                id: action,
+            } => {
+                let thread = self.session_named(session.as_str())?;
+                if action != "compact" {
+                    return refuse(Reason::Invalid);
+                }
+                Ok(send::request(
+                    id,
+                    "thread/compact/start",
+                    json!({"threadId": thread}),
+                ))
+            }
+        }
+    }
+
+    /// The reply to the Codex request that an answer is for.
+    pub fn reply(&self, answer: &DriverAnswer) -> Result<String, Refusal> {
+        let refuse = |reason| Err(Refusal::new(reason));
+        let item = answer.item.as_str();
+        if self.answered.contains(item) {
+            return refuse(Reason::AlreadyAnswered);
+        }
+        let Some((id, pending)) = self.asked.iter().find(|(_, p)| match p {
+            Pending::Approval { item: i, .. } | Pending::Question { item: i, .. } => i == item,
+        }) else {
+            return refuse(if self.open_event(item).is_some() {
+                Reason::NotWaiting
+            } else {
+                Reason::UnknownItem
+            });
+        };
+        // An approval or question the driver closed, such as at a turn's end, takes no answer.
+        if !self
+            .open_event(item)
+            .is_some_and(|e| e.header().state == State::Waiting)
+        {
+            return refuse(Reason::NotWaiting);
+        }
+        let result = match (pending, &answer.given) {
+            (
+                Pending::Approval {
+                    decisions,
+                    reply,
+                    asked_for,
+                    ..
+                },
+                Given::Choice(choice),
+            ) => match reply {
+                Reply::Decision | Reply::Action => {
+                    let Some((_, decision)) = decisions.iter().find(|(c, _)| c == choice) else {
+                        return refuse(Reason::Invalid);
+                    };
+                    if *reply == Reply::Decision {
+                        json!({"decision": decision})
+                    } else if *decision == "accept" {
+                        json!({"action": decision, "content": {}})
+                    } else {
+                        json!({"action": decision, "content": null})
+                    }
+                }
+                // c0 grants for the turn, c1 for the session, c2 grants nothing.
+                Reply::Grant => match choice.as_str() {
+                    "c0" => json!({"permissions": asked_for, "scope": "turn"}),
+                    "c1" => json!({"permissions": asked_for, "scope": "session"}),
+                    "c2" => json!({"permissions": {}}),
+                    _ => return refuse(Reason::Invalid),
+                },
+            },
+            (Pending::Question { item }, Given::Questions(replies)) => {
+                let Some(Body::Question(question)) =
+                    self.open_event(item).map(|e| e.body().clone())
+                else {
+                    return refuse(Reason::NotWaiting);
+                };
+                let mut answers = serde_json::Map::new();
+                for given in replies {
+                    let Some(asked) = question.questions().iter().find(|q| q.id == given.question)
+                    else {
+                        return refuse(Reason::Invalid);
+                    };
+                    // Codex's questions take labels; Codex turns them back into choices.
+                    let mut said = Vec::new();
+                    for option in &given.options {
+                        let Some(offered) = asked.options.iter().find(|o| &o.id == option) else {
+                            return refuse(Reason::Invalid);
+                        };
+                        said.push(offered.label.clone());
+                    }
+                    said.extend(given.text.clone());
+                    answers.insert(given.question.clone(), json!({"answers": said}));
+                }
+                json!({"answers": answers})
+            }
+            _ => return refuse(Reason::Invalid),
+        };
+        Ok(json!({"id": id, "result": result}).to_string())
+    }
+
+    /// Whether a request that starts a turn, picks the session or changes a setting is waiting
+    /// for Codex. Until Codex answers, what the translator knows of the session may be out of
+    /// date, so it builds nothing but replies to Codex's requests and interrupts; the driver holds
+    /// the rest and asks again.
+    fn waiting_on_codex(&self) -> bool {
+        let picking = (self.requests.values())
+            .any(|sent| matches!(sent.method.as_str(), "thread/start" | "thread/resume"));
+        picking || !self.starts.is_empty() || !self.asked_settings.is_empty()
+    }
+
+    fn session_named(&self, session: &str) -> Result<&str, Refusal> {
+        match &self.session {
+            Some(thread) if thread == session => Ok(thread),
+            _ => Err(Refusal::new(Reason::UnknownItem)),
+        }
     }
 }

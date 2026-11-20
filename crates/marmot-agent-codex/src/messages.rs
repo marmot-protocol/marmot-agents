@@ -15,7 +15,7 @@ use serde_json::value::RawValue;
 use std::fmt;
 
 /// A JSON-RPC id. Codex uses numbers; the protocol allows text.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, serde::Serialize)]
 #[serde(untagged)]
 pub(crate) enum Id {
     Number(i64),
@@ -262,6 +262,8 @@ pub(crate) struct ApprovalRequest {
     pub item_id: Option<String>,
     pub command: Option<String>,
     pub reason: Option<String>,
+    /// For a permission request: what Codex asks for. A grant gives it back.
+    pub permissions: Option<Value>,
 }
 
 #[derive(Default, Deserialize)]
@@ -272,7 +274,6 @@ pub(crate) struct Elicitation {
     #[serde(rename = "_meta")]
     pub meta: Option<ElicitationMeta>,
     pub message: Option<String>,
-    pub requested_schema: Option<Schema>,
 }
 
 #[derive(Default, Deserialize)]
@@ -280,19 +281,6 @@ pub(crate) struct Elicitation {
 pub(crate) struct ElicitationMeta {
     pub codex_approval_kind: Option<String>,
     pub tool_name: Option<String>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default)]
-pub(crate) struct Schema {
-    pub properties: Option<Ordered<Property>>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default)]
-pub(crate) struct Property {
-    pub description: Option<String>,
-    pub title: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -335,13 +323,11 @@ pub(crate) struct ApprovalReply {
     pub scope: Option<String>,
 }
 
-/// The client's reply to a question: Codex's questions get labels under `answers`, an MCP
-/// server's form gets values under `content`.
+/// The client's reply to one of Codex's questions: labels, under `answers`.
 #[derive(Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct QuestionReply {
     pub answers: Option<Ordered<Given>>,
-    pub content: Option<Ordered<Value>>,
 }
 
 #[derive(Default, Deserialize)]

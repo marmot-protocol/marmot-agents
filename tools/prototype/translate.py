@@ -91,6 +91,22 @@ def clip_native(payload):
     return payload
 
 
+def decision_choice(d):
+    """What a decision Codex offers on an approval does, and what its button says: each kind Codex's
+    schema (0.169.0) documents, or None. A network rule allows or denies by its own action, and lasts."""
+    if isinstance(d, str):
+        return {"accept": ("allow", "Allow once"), "acceptForSession": ("allow", "Allow for this session"),
+                "decline": ("deny", "Deny"), "cancel": ("deny", "Deny and stop")}.get(d)
+    if isinstance(d, dict) and len(d) == 1:
+        if "acceptWithExecpolicyAmendment" in d:
+            return "allow", "Allow, and don't ask again for this command"
+        rule = (d.get("applyNetworkPolicyAmendment") or {}).get("network_policy_amendment") or {}
+        host, action = rule.get("host"), rule.get("action")
+        if isinstance(host, str) and action in ("allow", "deny"):
+            return action, f"Always {action} {host}"
+    return None
+
+
 class Translator:
     harness = "?"
 
@@ -432,17 +448,18 @@ class Codex(Translator):
         rid = m.get("id")
         if "permissions" in method:
             return self.permissions(method, m, p)
-        offered = p.get("availableDecisions")
+        offered = p.get("availableDecisions") or ["accept", "decline"]
         choices, native_choices = [], {}
-        for n, d in enumerate(offered or ["accept", "decline"]):
-            key = d if isinstance(d, str) else next(iter(d))
+        for n, d in enumerate(offered):
+            known = decision_choice(d)
+            if known is None:
+                continue  # a decision the driver does not know is not offered: its effect would be a guess
+            effect, label = known
             cid = f"c{n}"
             native_choices[cid] = d
-            label = {"accept": "Allow once", "acceptForSession": "Allow for this session", "decline": "Deny", "cancel": "Deny and stop",
-                     "acceptWithExecpolicyAmendment": "Allow, and don't ask again for this command"}.get(key, key)
-            choices.append({"id": cid, "label": label, "effect": "allow" if key.startswith("accept") else "deny"})
+            choices.append({"id": cid, "label": label, "effect": effect})
         if not any(native_choices[c] == "decline" for c in native_choices):
-            cid = f"c{len(choices)}"
+            cid = f"c{len(offered)}"
             native_choices[cid] = "decline"  # accepted by Codex although it does not list it
             choices.append({"id": cid, "label": "Deny", "effect": "deny"})
         what = "command" if "commandExecution" in method else "file change" if "fileChange" in method else "permission"
@@ -479,12 +496,10 @@ class Codex(Translator):
             subject = tools[0] if len(tools) == 1 else None
             return self.emit(item, "approval", "waiting", "Allow this tool?", p.get("message", ""),
                              {"subject": subject, "choices": choices}, f"{method} (request)", p)
-        props = (p.get("requestedSchema") or {}).get("properties") or {}
-        qs = [{"id": k, "text": v.get("description") or v.get("title") or k, "multiple": False, "allow_text": True, "options": []} for k, v in props.items()]
-        item = f"question:{p.get('turnId') or self.turn}:{rid}"
-        self.pending[("s", rid)] = {"item": item, "questions": qs}
-        self.emit(item, "question", "waiting", "Question", p.get("message", ""),
-                  {"answer_via": "request", "questions": qs}, f"{method} (request)", p)
+        # A form from an MCP server. The chat cannot show one yet, so the driver declines it at once and
+        # says so in the chat (D-064).
+        self.emit(f"form:{p.get('turnId') or self.turn}:{rid}", "notice", "done", "A form the chat cannot show was declined",
+                  p.get("message", ""), {"kind": "warning"}, f"{method} (request)", p)
 
     def user_input(self, method, m, p):
         rid = m.get("id")

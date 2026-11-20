@@ -396,6 +396,14 @@ Three checks are meant to cover that, and none has been run:
 All three belong with the transport half of the driver. If they turn out badly, this recommendation should be
 looked at again before the driver is finished.
 
+Two have been run, on 2026-11-20, in
+[`crates/marmot-agent-codex/tests/send.rs`](../../crates/marmot-agent-codex/tests/send.rs). The first passes on
+every message the recorded client sent, 146 of 148: two were the recorder's own and the driver never sends them
+(`thread/unsubscribe`, and `turn/settings/update`, which Codex refused). The differences it allows are each named
+there, such as the recorder's per-turn `effort`. The third passes: an approval answered with the decision Codex
+offered as an object sends the whole object back, under the request's id. The second, against Codex's schema, is
+left to the test against a real Codex, which sends each kind of request and sees whether Codex takes it.
+
 This goes against the official library, which
 [D-006](../decisions.md#d-006-prefer-official-interfaces-and-libraries) prefers where one exists. The reasons:
 
