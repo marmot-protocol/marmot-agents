@@ -92,9 +92,9 @@ pub struct Prompt {
     pub reply_to: Option<Quoted>,
     /// Files sent with it. The core has already written each one to disk.
     pub attachments: Vec<Attachment>,
-    /// The session to resume, and only that: the chat's session from before the driver started,
-    /// on the first prompt since (D-065). Otherwise none, and the prompt goes to the chat's
-    /// current session, or a new one.
+    /// The session to resume, and only that: the chat's own session from before the driver
+    /// started, until the driver has taken a prompt or a new session for the chat (D-065).
+    /// Otherwise none, and the prompt goes to the chat's current session, or a new one.
     pub session: Option<SessionId>,
 }
 

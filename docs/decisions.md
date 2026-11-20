@@ -1115,11 +1115,14 @@ Decided 2026-11-20. The project owner accepted the recommendation.
 ## D-065 A prompt names a session only to resume one
 
 **Decision.** For a driver whose `sessions` flag is `core`, the core keeps each chat's session, and a prompt
-names it only to take it up again: on the first prompt the core sends a chat after the driver has started,
-when that chat had a session and no "new session" has been sent for it since. Every other prompt names no
+names it only to take it up again: after the driver has started, when that chat had a session, on each prompt
+until the driver has taken one for the chat or taken a "new session" for it. Every other prompt names no
 session, and the driver sends it to the chat's current session, or starts one if the chat has none. A driver
-that gets a prompt naming a session the chat does not have resumes that session, unless it belongs to
-another chat.
+that gets a prompt naming a session the chat does not have resumes that session.
+
+The core names only a session of that chat's own. The driver refuses a session it knows belongs to another
+chat, but it knows only the sessions it has seen since it started, so the core's record is what keeps one
+chat's history out of another after a restart.
 
 **Why.** While a prompt named the session it was for on every turn, it could name one the chat had just left.
 A "new session" control returns once it is handed to the harness, before the new session is reported, so the
@@ -1135,15 +1138,16 @@ transport.
 
 **Decision.** The core waits for each call of `prompt`, `answer` and `control` to return, and never drops
 one before it does. Only the future from `next_event` may be dropped, as
-[D-058](#d-058-the-driver-trait-and-the-capability-flags) says. To stop waiting on a driver, the core ends
-the driver.
+[D-058](#d-058-the-driver-trait-and-the-capability-flags) says. To stop waiting on a driver, the core drops
+the request and the driver together, and never uses that driver again; a driver that runs a harness stops it
+when it is dropped. A request is never dropped with the driver kept.
 
 **Why.** A request can be partway through when it is dropped: written in part, or waiting for the harness to
 answer a request it has sent. The driver then cannot know whether the harness has it, and the same request
 sent again can arrive twice, or leave a session marked as being taken that nobody takes. Review of the Codex
 transport found such cases in each of its four rounds, and each fix added more state to the transport. A
-request is short: it returns once the driver has handed it to the
-harness, so there is no reason to give up on one. A harness that never answers is a driver that has stopped
+request is short: it returns once the driver has handed it to the harness, so there is no reason to give up
+on one. A harness that never answers is a driver that has stopped
 working, and ending it is the remedy.
 
 Decided 2026-11-20. The project owner accepted the recommendation.
