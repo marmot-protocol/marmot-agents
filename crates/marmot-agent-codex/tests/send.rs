@@ -174,6 +174,7 @@ fn the_driver_sends_what_the_recorded_client_sent() {
         let mut translator = Translator::new();
         let mut events: Vec<AgentEvent> = Vec::new();
         let mut started: Option<Setup> = None;
+        let mut started_params = json!({});
         for line in text.lines().filter(|l| !l.trim().is_empty()) {
             let line: Line<'_> = serde_json::from_str(line).expect("a recorded line");
             let message = line.msg.get();
@@ -209,6 +210,7 @@ fn the_driver_sends_what_the_recorded_client_sent() {
                         let setup = setup(&params, None);
                         let built = translator.pick(id, None, &setup).expect("a new session");
                         started = Some(setup);
+                        started_params = params.clone();
                         // The recorder's sessions were throwaway; the driver's are kept (D-063).
                         // `config` added the recorder's demo MCP server.
                         let mut expected = drop_keys(recorded.clone(), &["config"]);
@@ -221,10 +223,12 @@ fn the_driver_sends_what_the_recorded_client_sent() {
                         let setup = setup(&params, started.as_ref());
                         let thread = params["threadId"].as_str().unwrap();
                         let built = translator.pick(id, Some(thread), &setup).expect("a resume");
+                        // Expected: what the recording resent, or else what it started with.
                         let mut expected = recorded.clone();
-                        let resent = json(&built)["params"].clone();
                         for key in ["approvalPolicy", "sandbox"] {
-                            expected["params"][key] = resent[key].clone();
+                            if expected["params"].get(key).is_none() {
+                                expected["params"][key] = started_params[key].clone();
+                            }
                         }
                         Some((json(&built), expected))
                     }
@@ -494,4 +498,103 @@ fn a_permission_grant_and_a_form_are_answered_in_codexs_shapes() {
         built,
         json!({"id": 4, "result": {"action": "accept", "content": {"city": "Lisbon"}}})
     );
+}
+
+#[test]
+fn a_session_starts_and_resumes_narrow_unless_configured() {
+    // D-061: writes only inside the working folder, and Codex asks before anything outside it.
+    let setup = Setup::new("/w");
+    let start = json(&Translator::new().pick(1, None, &setup).unwrap());
+    let resume = json(&Translator::new().pick(1, Some("th1"), &setup).unwrap());
+    for built in [&start, &resume] {
+        assert_eq!(built["params"]["sandbox"], "workspace-write");
+        assert_eq!(built["params"]["approvalPolicy"], "on-request");
+        assert_eq!(built["params"]["cwd"], "/w");
+    }
+    assert_eq!(start["params"]["ephemeral"], false, "D-063");
+}
+
+fn started(translator: &mut Translator) {
+    translator.feed(
+        Direction::Out,
+        r#"{"id": 1, "method": "thread/start", "params": {}}"#,
+    );
+    translator.feed(
+        Direction::In,
+        r#"{"id": 1, "result": {"thread": {"id": "th1"}}}"#,
+    );
+}
+
+#[test]
+fn a_turn_asked_for_and_not_started_keeps_the_session() {
+    let setup = Setup::new("/w");
+    let mut translator = Translator::new();
+    started(&mut translator);
+    let turn = translator.prompt(2, &prompt("hello", false)).unwrap();
+    translator.feed(Direction::Out, &turn);
+    assert_eq!(
+        translator.pick(3, None, &setup).unwrap_err().reason,
+        Reason::Busy
+    );
+}
+
+#[test]
+fn a_prompt_needs_its_own_session() {
+    let mut translator = Translator::new();
+    let refused = translator.prompt(2, &prompt("hello", false)).unwrap_err();
+    assert_eq!(refused.reason, Reason::Busy, "no session has been picked");
+    started(&mut translator);
+    let mut elsewhere = prompt("hello", false);
+    elsewhere.session = Some("th0".into());
+    let refused = translator.prompt(2, &elsewhere).unwrap_err();
+    assert_eq!(
+        refused.reason,
+        Reason::UnknownItem,
+        "the driver resumes th0 first"
+    );
+}
+
+#[test]
+fn an_approval_closed_at_the_turns_end_takes_no_answer() {
+    let mut translator = Translator::new();
+    let asked = translator.feed(
+        Direction::In,
+        r#"{"id": 0, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "c", "command": "ls"}}"#,
+    );
+    translator.feed(
+        Direction::In,
+        r#"{"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t1", "items": [], "status": "interrupted", "error": null}}}"#,
+    );
+    let late = translator.reply(&answer(&asked[0], Given::Choice("c0".into())));
+    assert_eq!(late.unwrap_err().reason, Reason::NotWaiting);
+}
+
+#[test]
+fn a_form_field_gets_the_type_it_asks_for() {
+    let form = r#"{"id": 4, "method": "mcpServer/elicitation/request", "params": {"threadId": "th1", "turnId": "t1", "serverName": "demo", "mode": "form", "message": "Settings", "requestedSchema": {"type": "object", "properties": {"verbose": {"type": "boolean"}, "count": {"type": "integer"}, "ratio": {"type": "number"}, "name": {"type": "string"}}}}}"#;
+    let mut translator = Translator::new();
+    let events = translator.feed(Direction::In, form);
+    let typed = |pairs: &[(&str, &str)]| {
+        let replies = pairs
+            .iter()
+            .map(|(q, t)| Reply {
+                question: (*q).into(),
+                options: Vec::new(),
+                text: Some((*t).into()),
+            })
+            .collect();
+        translator.reply(&answer(&events[0], Given::Questions(replies)))
+    };
+    let built = typed(&[
+        ("verbose", "false"),
+        ("count", "3"),
+        ("ratio", "0.5"),
+        ("name", "x"),
+    ]);
+    assert_eq!(
+        json(&built.unwrap())["result"]["content"],
+        json!({"verbose": false, "count": 3, "ratio": 0.5, "name": "x"})
+    );
+    let refused = typed(&[("count", "three")]).unwrap_err();
+    assert_eq!(refused.reason, Reason::Invalid);
 }

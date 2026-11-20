@@ -295,6 +295,9 @@ pub(crate) struct Schema {
 pub(crate) struct Property {
     pub description: Option<String>,
     pub title: Option<String>,
+    /// The JSON type the answer must have: `string`, `number`, `integer` or `boolean`.
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
 }
 
 #[derive(Default, Deserialize)]

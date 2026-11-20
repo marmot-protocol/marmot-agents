@@ -82,9 +82,9 @@ enum Pending {
     },
     Question {
         item: String,
-        /// An MCP server's form, answered with values, rather than Codex's own questions,
-        /// answered with labels.
-        form: bool,
+        /// For an MCP server's form, answered with values, the JSON type of each field. Codex's
+        /// own questions are answered with labels, and have none.
+        form: Option<HashMap<String, String>>,
     },
 }
 
@@ -893,11 +893,13 @@ impl Translator {
                 native,
             );
         }
-        let asked: Vec<Asked> = p
-            .requested_schema
-            .and_then(|s| s.properties)
+        let fields = (p.requested_schema.and_then(|s| s.properties))
             .unwrap_or_default()
-            .0
+            .0;
+        let types = (fields.iter())
+            .map(|(key, field)| (key.clone(), field.kind.clone().unwrap_or_default()))
+            .collect();
+        let asked: Vec<Asked> = fields
             .into_iter()
             .map(|(key, field)| Asked {
                 text: field
@@ -913,7 +915,7 @@ impl Translator {
             })
             .collect();
         let item = self.request_item("question", p.turn_id.as_deref(), id.as_ref());
-        self.ask(out, true, id, &item, None, asked, &text, native);
+        self.ask(out, Some(types), id, &item, None, asked, &text, native);
     }
 
     fn user_input(
@@ -954,14 +956,14 @@ impl Translator {
         let item = self.request_item("question", p.turn_id.as_deref(), id.as_ref());
         let native = native(&format!("{method} (request)"), params);
         let subject = p.item_id.map(Into::into);
-        self.ask(out, false, id, &item, subject, asked, &text, native);
+        self.ask(out, None, id, &item, subject, asked, &text, native);
     }
 
     #[allow(clippy::too_many_arguments)]
     fn ask(
         &mut self,
         out: &mut Vec<AgentEvent>,
-        form: bool,
+        form: Option<HashMap<String, String>>,
         id: Option<Id>,
         item: &str,
         subject: Option<marmot_agent_events::ItemId>,
@@ -1538,6 +1540,21 @@ fn named_thread(params: &str) -> Option<String> {
     serde_json::from_str::<Named>(params).ok()?.thread_id
 }
 
+/// A form field's answer as the JSON type the field asks for.
+fn typed(kind: &str, text: &str) -> Result<Value, Refusal> {
+    let invalid = || Refusal::new(Reason::Invalid);
+    Ok(match kind {
+        "string" | "" => Value::from(text),
+        "boolean" => Value::from(text.parse::<bool>().map_err(|_| invalid())?),
+        "integer" => Value::from(text.parse::<i64>().map_err(|_| invalid())?),
+        "number" => {
+            let n = text.parse::<f64>().map_err(|_| invalid())?;
+            serde_json::Number::from_f64(n).ok_or_else(invalid)?.into()
+        }
+        _ => return Err(Refusal::new(Reason::NotSupported)),
+    })
+}
+
 fn native(kind: &str, payload: &str) -> Option<Native> {
     Some(native_text(kind, payload))
 }
@@ -1670,8 +1687,16 @@ impl Translator {
     /// message added to it (`mid_turn: fold`).
     pub fn prompt(&self, id: i64, prompt: &Prompt) -> Result<String, Refusal> {
         let Some(thread) = &self.session else {
-            return Err(Refusal::new(Reason::Failed)); // the driver picks a session first
+            return Err(Refusal::new(Reason::Busy)); // the driver picks a session first
         };
+        if prompt
+            .session
+            .as_ref()
+            .is_some_and(|s| s.as_str() != thread)
+        {
+            // The driver resumes the session a prompt names before it sends the prompt.
+            return Err(Refusal::new(Reason::UnknownItem));
+        }
         let input = send::input(prompt)?;
         Ok(match &self.turn {
             Some(turn) => {
@@ -1691,7 +1716,8 @@ impl Translator {
     pub fn pick(&self, id: i64, session: Option<&str>, setup: &Setup) -> Result<String, Refusal> {
         let picking = (self.requests.values())
             .any(|sent| matches!(sent.method.as_str(), "thread/start" | "thread/resume"));
-        if self.turn.is_some() || picking {
+        // A turn asked for and not started yet counts as running.
+        if self.turn.is_some() || !self.starts.is_empty() || picking {
             return Err(Refusal::new(Reason::Busy));
         }
         Ok(match session {
@@ -1734,10 +1760,10 @@ impl Translator {
                     "sandbox" => ("sandboxPolicy", json!({"type": value})),
                     "mode" => {
                         // Codex takes a mode with the model it runs on.
-                        let Some(model) = &self.known.model else {
-                            return refuse(Reason::Failed);
+                        let (Some(model), Some(effort)) = (&self.known.model, &self.known.effort)
+                        else {
+                            return refuse(Reason::Busy); // until Codex has said them
                         };
-                        let effort = &self.known.effort;
                         let settings = json!({"model": model, "reasoning_effort": effort, "developer_instructions": null});
                         (
                             "collaborationMode",
@@ -1779,6 +1805,13 @@ impl Translator {
                 Reason::UnknownItem
             });
         };
+        // An approval or question the driver closed, such as at a turn's end, takes no answer.
+        if !self
+            .open_event(item)
+            .is_some_and(|e| e.header().state == State::Waiting)
+        {
+            return refuse(Reason::NotWaiting);
+        }
         let result = match (pending, &answer.given) {
             (
                 Pending::Approval {
@@ -1830,14 +1863,16 @@ impl Translator {
                         said.push(offered.label.clone());
                     }
                     said.extend(given.text.clone());
-                    let value = if *form {
-                        Value::from(said.join("\n"))
-                    } else {
-                        json!({"answers": said})
+                    let value = match form {
+                        Some(types) => {
+                            let kind = types.get(&given.question).map_or("", String::as_str);
+                            typed(kind, &said.join("\n"))?
+                        }
+                        None => json!({"answers": said}),
                     };
                     answers.insert(given.question.clone(), value);
                 }
-                if *form {
+                if form.is_some() {
                     json!({"action": "accept", "content": answers})
                 } else {
                     json!({"answers": answers})
