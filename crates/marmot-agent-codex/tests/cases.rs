@@ -3,7 +3,7 @@
 //! holds the same secret question for the prototype.
 
 use marmot_agent_codex::{Direction, Translator};
-use marmot_agent_events::body::{Answered, NoticeKind};
+use marmot_agent_events::body::{Answered, NoticeKind, StartedBy};
 use marmot_agent_events::{AgentEvent, Body, State};
 
 const PASSWORD: &str = "hunter2";
@@ -560,4 +560,125 @@ fn a_session_the_chat_goes_back_to_runs_again() {
         .map(|e| e.header().state)
         .collect();
     assert_eq!(th1, [State::Running, State::Done, State::Running]);
+}
+
+fn owned(event: &AgentEvent) -> (Option<String>, Option<String>) {
+    let h = event.header();
+    (
+        h.session.as_ref().map(|s| s.as_str().to_string()),
+        h.turn.as_ref().map(|t| t.as_str().to_string()),
+    )
+}
+
+#[test]
+fn a_refused_request_stays_where_it_was_sent() {
+    let update = r#"{"id": 7, "method": "turn/settings/update", "params": {"threadId": "th1", "turnId": "t1", "model": "m2"}}"#;
+    let refused = r#"{"id": 7, "error": {"code": -32600, "message": "no such turn"}}"#;
+    let sent_in_t1 = (Some("th1".to_string()), Some("t1".to_string()));
+    // The turn ends before the refusal comes; or the chat moves to another session.
+    for later in [
+        vec![TURN_DONE.to_string()],
+        vec![TURN_DONE.to_string(), PICK.to_string(), thread("th2")],
+    ] {
+        let mut messages = vec![
+            (Direction::Out, PICK.to_string()),
+            (Direction::In, thread("th1")),
+            (Direction::In, TURN_STARTED.to_string()),
+            (Direction::Out, update.to_string()),
+        ];
+        for message in later {
+            let direction = if message == PICK {
+                Direction::Out
+            } else {
+                Direction::In
+            };
+            messages.push((direction, message));
+        }
+        messages.push((Direction::In, refused.to_string()));
+        let mut translator = Translator::new();
+        let events: Vec<_> = (messages.iter())
+            .flat_map(|(d, m)| translator.feed(*d, m))
+            .collect();
+        let error = events.last().unwrap();
+        assert!(matches!(error.body(), Body::Error(_)));
+        assert_eq!(owned(error), sent_in_t1);
+    }
+}
+
+#[test]
+fn an_mcp_approval_names_the_tool_it_is_for() {
+    let tool = |id: &str, name: &str| {
+        format!(
+            r#"{{"method": "item/started", "params": {{"threadId": "th1", "turnId": "t1", "item": {{"type": "mcpToolCall", "id": "{id}", "server": "demo", "tool": "{name}", "status": "inProgress", "arguments": {{}}}}}}}}"#
+        )
+    };
+    let approval = |id: u32, meta: &str| {
+        format!(
+            r#"{{"id": {id}, "method": "mcpServer/elicitation/request", "params": {{"threadId": "th1", "turnId": "t1", "serverName": "demo", "mode": "form", "_meta": {{"codex_approval_kind": "mcp_tool_call"{meta}}}, "message": "Allow?", "requestedSchema": {{"type": "object", "properties": {{}}}}}}}}"#
+        )
+    };
+    let events = feed(&[
+        (Direction::In, TURN_STARTED),
+        (Direction::In, &tool("a", "define_word")),
+        (Direction::In, &tool("b", "spell_word")),
+        (
+            Direction::In,
+            &approval(0, r#", "tool_name": "spell_word""#),
+        ),
+        // Without the tool's name there are two it could be, and it names neither.
+        (Direction::In, &approval(1, "")),
+    ]);
+    let subjects: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e.body() {
+            Body::Approval(a) => Some(a.subject.as_ref().map(|s| s.as_str().to_string())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(subjects, [Some("b".to_string()), None]);
+}
+
+#[test]
+fn a_turn_the_old_session_was_asked_for_is_not_the_new_sessions() {
+    let compact = r#"{"id": 8, "method": "thread/compact/start", "params": {"threadId": "th1"}}"#;
+    let turn2 = r#"{"method": "turn/started", "params": {"threadId": "th2", "turn": {"id": "t2", "items": [], "status": "inProgress", "error": null}}}"#;
+    let events = feed(&[
+        (Direction::Out, PICK),
+        (Direction::In, &thread("th1")),
+        (Direction::Out, compact),
+        (Direction::Out, PICK),
+        (Direction::In, &thread("th2")),
+        (Direction::In, turn2),
+    ]);
+    assert_eq!(
+        turn_body(events.last().unwrap()).started_by,
+        StartedBy::Agent
+    );
+}
+
+#[test]
+fn token_usage_for_another_thread_is_not_counted_in_this_turn() {
+    let usage = |thread: &str, total_out: u64, last_out: u64| {
+        format!(
+            r#"{{"method": "thread/tokenUsage/updated", "params": {{"threadId": "{thread}", "turnId": "t1", "tokenUsage": {{"total": {{"inputTokens": 0, "outputTokens": {total_out}}}, "last": {{"inputTokens": 0, "outputTokens": {last_out}}}}}}}}}"#
+        )
+    };
+    let mut translator = Translator::new();
+    let mut events = Vec::new();
+    for (direction, message) in [
+        (Direction::Out, PICK.to_string()),
+        (Direction::In, thread("th1")),
+        (Direction::In, TURN_STARTED.to_string()),
+        (Direction::In, usage("th9", 5000, 5000)),
+        (Direction::In, usage("th1", 40, 40)),
+        (Direction::In, TURN_DONE.to_string()),
+    ] {
+        events.extend(translator.feed(direction, &message));
+    }
+    let used = turn_body(events.last().unwrap())
+        .usage
+        .clone()
+        .expect("usage");
+    assert_eq!(used.output_tokens, Some(40));
+    assert_eq!(translator.other_threads(), 1);
 }

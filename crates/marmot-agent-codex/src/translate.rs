@@ -101,6 +101,12 @@ struct Known {
     version: Option<String>,
 }
 
+/// A request the client sent: its method, and the session and turn it was sent in.
+struct Sent {
+    method: String,
+    owner: (Option<String>, Option<String>),
+}
+
 /// Turns the messages of one chat's Codex session into agent events.
 ///
 /// A translator follows one Codex thread at a time: the chat's session, which the client picks with
@@ -120,14 +126,15 @@ pub struct Translator {
     /// Each session item's body as it was last sent.
     sessions: HashMap<String, Session>,
     /// The client's requests that have not been answered, by id.
-    requests: HashMap<Id, String>,
+    requests: HashMap<Id, Sent>,
     /// Codex's requests that the client has not answered, by id.
     asked: HashMap<Id, Pending>,
     /// For each turn, the thread's tokens before its first model call, and the thread's total
     /// since. `last` in Codex's notice is one model call; a turn used the increase in the total.
     usage: HashMap<Option<String>, (Tokens, Tokens)>,
-    /// The client's requests that will start a turn, oldest first, and who they count as.
-    starts: Vec<(Id, StartedBy)>,
+    /// The client's requests that will start a turn, oldest first: who they count as, and the
+    /// thread they name.
+    starts: Vec<(Id, StartedBy, Option<String>)>,
     started_by: Option<StartedBy>,
     known: Known,
     models: Option<Vec<String>>,
@@ -210,11 +217,20 @@ impl Translator {
                 self.close_message_questions(State::Done, "Answered by the next message", out);
             }
             if let Some(id) = &m.id {
-                self.requests.insert(id.clone(), method.clone());
-                match method.as_str() {
-                    "turn/start" => self.starts.push((id.clone(), StartedBy::User)),
-                    "thread/compact/start" => self.starts.push((id.clone(), StartedBy::Control)),
-                    _ => {}
+                let owner = (self.session.clone(), self.turn.clone());
+                let sent = Sent {
+                    method: method.clone(),
+                    owner,
+                };
+                self.requests.insert(id.clone(), sent);
+                let by = match method.as_str() {
+                    "turn/start" => Some(StartedBy::User),
+                    "thread/compact/start" => Some(StartedBy::Control),
+                    _ => None,
+                };
+                if let Some(by) = by {
+                    let thread = named_thread(m.params.map_or("{}", RawValue::get));
+                    self.starts.push((id.clone(), by, thread));
                 }
             }
             return;
@@ -236,6 +252,9 @@ impl Translator {
                     let Some(p) = self.read::<TokenUsageUpdated>(method, params) else {
                         return;
                     };
+                    if self.for_another_thread(p.thread_id.as_deref()) {
+                        return;
+                    }
                     let usage = p.token_usage.unwrap_or_default();
                     let total = usage.total.unwrap_or_default();
                     let last = usage.last.unwrap_or_default();
@@ -273,13 +292,7 @@ impl Translator {
             }
             return;
         }
-        #[derive(Deserialize)]
-        struct Named {
-            #[serde(default, rename = "threadId")]
-            thread_id: Option<String>,
-        }
-        let named = serde_json::from_str::<Named>(params).ok();
-        if self.for_another_thread(named.and_then(|n| n.thread_id).as_deref()) {
+        if self.for_another_thread(named_thread(params).as_deref()) {
             return;
         }
         self.handle(method, m, params, out);
@@ -805,7 +818,8 @@ impl Translator {
         };
         let native = native(&format!("{method} (request)"), params);
         let text = p.message.unwrap_or_default();
-        let approval = p.meta.and_then(|m| m.codex_approval_kind);
+        let meta = p.meta.unwrap_or_default();
+        let approval = meta.codex_approval_kind;
         if approval.as_deref() == Some("mcp_tool_call") {
             let choices = vec![
                 Choice {
@@ -835,10 +849,23 @@ impl Translator {
                     },
                 );
             }
-            let subject = self.open.iter().find_map(|(item, ev)| match ev.body() {
-                Body::Tool(t) if t.kind == ToolKind::Mcp => Some(item.as_str().into()),
+            // The MCP tool waiting for this approval: the open one with the server and tool it
+            // names. Codex can run several at once; with no single match, it names none.
+            let name = match (&p.server_name, &meta.tool_name) {
+                (Some(server), Some(tool)) => Some(format!("{server}.{tool}")),
                 _ => None,
-            });
+            };
+            let tools: Vec<&String> = (self.open.iter())
+                .filter(|(_, ev)| match ev.body() {
+                    Body::Tool(t) => t.kind == ToolKind::Mcp && name.iter().all(|n| *n == t.name),
+                    _ => false,
+                })
+                .map(|(item, _)| item)
+                .collect();
+            let subject = match tools[..] {
+                [item] => Some(item.as_str().into()),
+                _ => None,
+            };
             let body = Body::Approval(Approval {
                 subject,
                 choices,
@@ -1045,9 +1072,13 @@ impl Translator {
     }
 
     fn response(&mut self, m: &Envelope<'_>, out: &mut Vec<AgentEvent>) {
-        let method = m.id.as_ref().and_then(|id| self.requests.remove(id));
+        let sent = m.id.as_ref().and_then(|id| self.requests.remove(id));
+        let (method, owner) = match sent {
+            Some(Sent { method, owner }) => (Some(method), owner),
+            None => (None, (self.session.clone(), self.turn.clone())),
+        };
         if let Some(error) = m.error {
-            self.starts.retain(|(id, _)| Some(id) != m.id.as_ref()); // that request starts no turn
+            self.starts.retain(|(id, ..)| Some(id) != m.id.as_ref()); // that request starts no turn
             let Some(e) = self.read::<ErrorReply>("an error reply", error.get()) else {
                 return;
             };
@@ -1062,7 +1093,9 @@ impl Translator {
             let kind = format!("error response to {}", show(method.as_deref()));
             let native = native(&kind, error.get());
             let title = "The harness refused a request";
-            return self.emit(out, &item, body, State::Failed, title, &text, native);
+            let state = State::Failed;
+            // It belongs where the request was sent, whatever has finished or changed since.
+            return self.emit_owned(out, owner, &item, body, state, title, &text, native);
         }
         let result = m.result.map_or("{}", RawValue::get);
         match method.as_deref() {
@@ -1124,6 +1157,9 @@ impl Translator {
             self.close_message_questions(State::Cancelled, text, out);
             self.end_session(&old, out);
             self.known = Known::default();
+            // A turn the old thread was asked to start is not this thread's.
+            self.starts
+                .retain(|(.., named)| named.as_ref() != Some(&old));
             // A session the chat goes back to runs again, though its settings may be unchanged.
             self.sessions
                 .remove(&format!("session:{}", show(thread.as_deref())));
@@ -1475,6 +1511,16 @@ fn answered(questions: &[Asked], reply: QuestionReply) -> Vec<Answered> {
         });
     }
     out
+}
+
+/// The thread a message's params name, if they name one.
+fn named_thread(params: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct Named {
+        #[serde(default, rename = "threadId")]
+        thread_id: Option<String>,
+    }
+    serde_json::from_str::<Named>(params).ok()?.thread_id
 }
 
 fn native(kind: &str, payload: &str) -> Option<Native> {

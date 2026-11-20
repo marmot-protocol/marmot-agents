@@ -215,7 +215,7 @@ class Codex(Translator):
         super().__init__()
         self.pending: dict = {}  # JSON-RPC request id -> what the client asked or was asked
         self.usage = {}  # turn -> [tokens before its first model call, the thread's total since]
-        self.starts = []  # (request id, who) for each request that will start a turn, oldest first
+        self.starts = []  # (request id, who, thread it names) for each request that will start a turn, oldest first
         # A translator follows one thread: the chat's session. The transport gives it only that
         # thread's messages; one for another thread makes no event and is counted here.
         self.other_threads = 0
@@ -234,9 +234,10 @@ class Codex(Translator):
             if method in ("turn/start", "turn/steer"):
                 self.close_message_questions("done", "Answered by the next message")
             if method:
-                self.pending[("c", m.get("id"))] = method
+                self.pending[("c", m.get("id"))] = (method, (self.session, self.turn))  # where it was sent
                 if "id" in m and method in ("turn/start", "thread/compact/start"):
-                    self.starts.append((m["id"], "user" if method == "turn/start" else "control"))
+                    self.starts.append((m["id"], "user" if method == "turn/start" else "control",
+                                        (m.get("params") or {}).get("threadId")))
                 p = m.get("params") or {}
                 if method == "turn/interrupt":
                     self.control("interrupt", "turn/interrupt")
@@ -265,7 +266,7 @@ class Codex(Translator):
         if "delta" in method.lower():
             return self.skip("partial text and output (…/delta)")
         if method in self.NOT_SENT:
-            if method == "thread/tokenUsage/updated":
+            if method == "thread/tokenUsage/updated" and not self.for_another_thread(p.get("threadId")):
                 # `last` is one model call; `total` counts the whole thread. A turn used the
                 # increase in the total from before its first call.
                 tu = p.get("tokenUsage") or {}
@@ -470,7 +471,12 @@ class Codex(Translator):
             choices = [{"id": "c0", "label": "Allow once", "effect": "allow"}, {"id": "c1", "label": "Deny", "effect": "deny"}]
             item = f"approval:{p.get('turnId') or self.turn}:{rid}"
             self.pending[("s", rid)] = {"item": item, "native_choices": native_choices, "choices": choices, "decision_key": "action"}
-            subject = next((i for i, ev in self.open.items() if ev["type"] == "tool" and ev["body"].get("kind") == "mcp"), None)
+            # The MCP tool waiting for this approval: the open one with the server and tool it names.
+            # Codex can run several at once; with no single match, it names none.
+            name = f"{p['serverName']}.{meta['tool_name']}" if p.get("serverName") and meta.get("tool_name") else None
+            tools = [i for i, ev in self.open.items() if ev["type"] == "tool" and ev["body"].get("kind") == "mcp"
+                     and name in (None, ev["body"].get("name"))]
+            subject = tools[0] if len(tools) == 1 else None
             return self.emit(item, "approval", "waiting", "Allow this tool?", p.get("message", ""),
                              {"subject": subject, "choices": choices}, f"{method} (request)", p)
         props = (p.get("requestedSchema") or {}).get("properties") or {}
@@ -544,12 +550,13 @@ class Codex(Translator):
         return out
 
     def response(self, m):
-        method = self.pending.pop(("c", m.get("id")), None)
+        method, owner = self.pending.pop(("c", m.get("id")), (None, None))
         if "error" in m:
             self.starts = [s for s in self.starts if s[0] != m.get("id")]  # that request starts no turn
             err = m["error"] or {}
+            # It belongs where the request was sent, whatever has finished or changed since.
             return self.emit(f"error:{self.seq}", "error", "failed", "The harness refused a request", err.get("message", ""),
-                             {"request": method, "code": err.get("code")}, f"error response to {method}", err)
+                             {"request": method, "code": err.get("code")}, f"error response to {method}", err, owner=owner)
         result = m.get("result") or {}
         if method == "model/list":
             self.models = [x.get("id") for x in result.get("data") or []]
@@ -577,6 +584,7 @@ class Codex(Translator):
             self.close_message_questions("cancelled", "Not answered: a new session started")
             self.end_session(self.session, "a new thread was started")
             self.settings = {}
+            self.starts = [s for s in self.starts if s[2] != self.session]  # a turn the old thread was asked to start
             # A session the chat goes back to runs again, though its settings may be unchanged.
             self.sessions.pop(f"session:{thread_id}", None)
         self.session = thread_id

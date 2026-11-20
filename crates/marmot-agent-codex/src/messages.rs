@@ -51,6 +51,7 @@ pub(crate) struct Envelope<'a> {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct TokenUsageUpdated {
+    pub thread_id: Option<String>,
     pub turn_id: Option<String>,
     pub token_usage: Option<TokenUsage>,
 }
@@ -267,6 +268,7 @@ pub(crate) struct ApprovalRequest {
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct Elicitation {
     pub turn_id: Option<String>,
+    pub server_name: Option<String>,
     #[serde(rename = "_meta")]
     pub meta: Option<ElicitationMeta>,
     pub message: Option<String>,
@@ -277,6 +279,7 @@ pub(crate) struct Elicitation {
 #[serde(default)]
 pub(crate) struct ElicitationMeta {
     pub codex_approval_kind: Option<String>,
+    pub tool_name: Option<String>,
 }
 
 #[derive(Default, Deserialize)]

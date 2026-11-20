@@ -141,5 +141,54 @@ class OneThread(unittest.TestCase):
         self.assertEqual([e["state"] for e in codex.events if e["item"] == "session:th1"], ["running", "done", "running"])
 
 
+    def test_a_refused_request_stays_where_it_was_sent(self):
+        update = {"dir": "out", "msg": {"id": 7, "method": "turn/settings/update",
+                                        "params": {"threadId": "th1", "turnId": "t1", "model": "m2"}}}
+        refused = {"dir": "in", "msg": {"id": 7, "error": {"code": -32600, "message": "no such turn"}}}
+        for later in ([TURN_DONE], [TURN_DONE, PICK, thread("th2")]):
+            codex = translate.Codex()
+            for record in (PICK, thread("th1"), TURN_STARTED, update, *later, refused):
+                codex.feed(record)
+            last = codex.events[-1]
+            self.assertEqual((last["type"], last["session"], last["turn"]), ("error", "th1", "t1"))
+
+    def test_an_mcp_approval_names_the_tool_it_is_for(self):
+        def tool(iid, name):
+            return {"dir": "in", "msg": {"method": "item/started", "params": {"threadId": "th1", "turnId": "t1", "item": {
+                "type": "mcpToolCall", "id": iid, "server": "demo", "tool": name, "status": "inProgress"}}}}
+
+        def approval(rid, **meta):
+            return {"dir": "in", "msg": {"id": rid, "method": "mcpServer/elicitation/request", "params": {
+                "threadId": "th1", "turnId": "t1", "serverName": "demo", "message": "Allow?",
+                "_meta": {"codex_approval_kind": "mcp_tool_call", **meta}}}}
+
+        codex = translate.Codex()
+        # Without the tool's name there are two it could be, and it names neither.
+        for record in (TURN_STARTED, tool("a", "define_word"), tool("b", "spell_word"),
+                       approval(0, tool_name="spell_word"), approval(1)):
+            codex.feed(record)
+        self.assertEqual([e["body"]["subject"] for e in codex.events if e["type"] == "approval"], ["b", None])
+
+    def test_a_turn_the_old_session_was_asked_for_is_not_the_new_sessions(self):
+        compact = {"dir": "out", "msg": {"id": 8, "method": "thread/compact/start", "params": {"threadId": "th1"}}}
+        turn2 = {"dir": "in", "msg": {"method": "turn/started", "params": {"threadId": "th2", "turn": {"id": "t2"}}}}
+        codex = translate.Codex()
+        for record in (PICK, thread("th1"), compact, PICK, thread("th2"), turn2):
+            codex.feed(record)
+        self.assertEqual(codex.events[-1]["body"]["started_by"], "agent")
+
+    def test_token_usage_for_another_thread_is_not_counted_in_this_turn(self):
+        def usage(tid, out):
+            return {"dir": "in", "msg": {"method": "thread/tokenUsage/updated", "params": {
+                "threadId": tid, "turnId": "t1",
+                "tokenUsage": {"total": {"inputTokens": 0, "outputTokens": out}, "last": {"inputTokens": 0, "outputTokens": out}}}}}
+
+        codex = translate.Codex()
+        for record in (PICK, thread("th1"), TURN_STARTED, usage("th9", 5000), usage("th1", 40), TURN_DONE):
+            codex.feed(record)
+        self.assertEqual(codex.events[-1]["body"]["usage"]["output_tokens"], 40)
+        self.assertEqual(codex.other_threads, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
