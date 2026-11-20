@@ -3,15 +3,17 @@
 //!
 //! Each message from Codex goes to the chat whose session it names, or, for a reply, to the chat
 //! that made the request (D-060). Each message the driver sends is fed to that chat's translator
-//! as well, so the translator learns what was sent the same way whoever sent it. When a
-//! translator refuses a request as busy, because Codex has yet to answer one before it, the driver
-//! keeps reading from Codex and asks again.
+//! as well, so the translator learns what was sent the same way whoever sent it. Every request the
+//! driver sends is kept, with what it is for, until Codex answers it; an answer or a control is
+//! settled once, by the event that shows its effect or by Codex refusing it.
+//!
+//! When a translator refuses a request as busy, the driver waits only if the wait ends without
+//! anyone in the chat doing anything: Codex has yet to answer a request before it. Otherwise the
+//! request is refused as busy, so the core can go on, for instance to answer an approval.
 //!
 //! Subagents are switched off when Codex starts: how a chat shows them is a proposal not yet
-//! decided ([Q-30], `docs/design/subagents.md`), and without them an approval from a subagent
-//! would have nowhere to go.
-//!
-//! [Q-30]: https://github.com/marmot-protocol/marmot-agents/blob/master/docs/open-questions.md
+//! decided (`docs/design/subagents.md`), and without them an approval from a subagent would have
+//! nowhere to go.
 
 use crate::{
     Direction, Setup, Translator, collaboration_mode_list, initialize, initialized, model_list,
@@ -31,13 +33,25 @@ use tokio::process::{Child, Command};
 type Reader = Lines<BufReader<Box<dyn AsyncRead + Unpin + Send>>>;
 type Writer = Box<dyn AsyncWrite + Unpin + Send>;
 
-/// What shows that a control the driver sent has had its effect.
-enum Settle {
+/// What a request the driver sent is for.
+enum Purpose {
+    /// A list of models or modes: nothing follows from it.
+    List,
+    /// Starting or resuming a session.
+    Pick,
+    /// A prompt: a new turn, or, with the turn, one joined to a running turn.
+    Prompt(MessageId, Option<String>),
+    /// A control, settled by its effect or by Codex refusing it.
+    Control(RequestId),
+}
+
+/// What shows that a control has had its effect.
+enum Effect {
     /// The turn it interrupted has ended.
     TurnEnded(String),
-    /// The session item has been edited.
-    SessionEdited,
-    /// A turn started by this request has started.
+    /// The session item shows this setting with this value.
+    Setting(String, String),
+    /// A turn started by the driver's request with this id has started.
     TurnStartedBy(i64),
     /// A session other than this one is running.
     NewSession(Option<String>),
@@ -47,13 +61,16 @@ enum Settle {
 #[derive(Default)]
 struct Chat {
     translator: Translator,
-    settling: Vec<(RequestId, Settle)>,
+    effects: Vec<(RequestId, Effect)>,
 }
 
 /// The Codex driver: one `codex app-server` process, serving every chat of one agent.
 pub struct Codex {
     reader: Reader,
     writer: Writer,
+    /// Bytes to write to Codex. They stay here until written, so a write cut short when the core
+    /// drops a future is finished, whole, by the next.
+    unwritten: Vec<u8>,
     /// The process, when the driver started it. It is killed when the driver is dropped.
     child: Option<Child>,
     setup: Setup,
@@ -62,19 +79,16 @@ pub struct Codex {
     chats: HashMap<ChatId, Chat>,
     /// Each chat's session, by Codex thread.
     threads: HashMap<String, ChatId>,
-    /// The driver's requests Codex has not answered, and the chat each is for.
-    requests: HashMap<i64, ChatId>,
-    /// The core's answer or control behind each of the driver's requests, so that a refusal from
-    /// Codex settles it.
-    behind: HashMap<i64, RequestId>,
-    /// The prompt each `turn/start` or `turn/steer` carried.
-    messages: HashMap<i64, MessageId>,
-    /// The prompts each turn responds to.
+    /// The driver's requests Codex has not answered: the chat each is for, and what for.
+    requests: HashMap<i64, (ChatId, Purpose)>,
+    /// The prompt behind each `turn/start` Codex has taken, until its turn starts.
+    starting: HashMap<i64, MessageId>,
+    /// The prompts each running turn responds to.
     prompts: HashMap<(ChatId, String), Vec<MessageId>>,
+    /// Messages naming a thread no chat has yet, kept while a session is being picked.
+    early: Vec<String>,
     /// Events read and not yet handed to the core.
     ready: VecDeque<Emitted>,
-    /// Replies a translator sends without asking anyone, waiting to be written.
-    later: VecDeque<(ChatId, String)>,
     /// Codex has gone.
     gone: bool,
     /// Messages for no chat: Codex's own bookkeeping, and anything for a thread no chat has.
@@ -117,6 +131,7 @@ impl Codex {
         let mut codex = Self {
             reader: BufReader::new(output).lines(),
             writer: Box::new(input),
+            unwritten: Vec::new(),
             child: None,
             setup,
             version: None,
@@ -124,16 +139,16 @@ impl Codex {
             chats: HashMap::new(),
             threads: HashMap::new(),
             requests: HashMap::new(),
-            behind: HashMap::new(),
-            messages: HashMap::new(),
+            starting: HashMap::new(),
             prompts: HashMap::new(),
+            early: Vec::new(),
             ready: VecDeque::new(),
-            later: VecDeque::new(),
             gone: false,
             unrouted: 0,
         };
         let id = codex.id();
-        codex.write(&initialize(id)).await?;
+        codex.queue(&initialize(id));
+        codex.flush().await?;
         let reply = loop {
             let line = codex.reader.next_line().await?;
             let Some(line) = line else {
@@ -154,7 +169,8 @@ impl Codex {
             .and_then(|agent| agent.split_whitespace().next())
             .and_then(|name| name.split_once('/'))
             .map(|(_, version)| version.to_string());
-        codex.write(&initialized()).await?;
+        codex.queue(&initialized());
+        codex.flush().await?;
         Ok(codex)
     }
 
@@ -169,29 +185,44 @@ impl Codex {
         id
     }
 
-    async fn write(&mut self, text: &str) -> io::Result<()> {
-        self.writer.write_all(text.as_bytes()).await?;
-        self.writer.write_all(b"\n").await?;
+    fn queue(&mut self, text: &str) {
+        self.unwritten.extend_from_slice(text.as_bytes());
+        self.unwritten.push(b'\n');
+    }
+
+    /// Writes what is queued. Cut short, it leaves the rest queued for the next call.
+    async fn flush(&mut self) -> io::Result<()> {
+        while !self.unwritten.is_empty() {
+            let written = self.writer.write(&self.unwritten).await?;
+            if written == 0 {
+                return Err(io::Error::from(io::ErrorKind::WriteZero));
+            }
+            self.unwritten.drain(..written);
+        }
         self.writer.flush().await
     }
 
-    /// Sends a message for a chat, and feeds it to that chat's translator. The events it makes
-    /// settle `settles`.
+    /// Sends a message for a chat and feeds it to that chat's translator; the events it makes
+    /// settle `settles`. A request is kept, with what it is for, until Codex answers it.
     async fn send(
         &mut self,
         chat: &ChatId,
-        id: Option<i64>,
+        request: Option<(i64, Purpose)>,
         text: &str,
         settles: Vec<RequestId>,
     ) -> Result<(), Refusal> {
-        if self.gone || self.write(text).await.is_err() {
+        if self.gone {
+            return Err(Refusal::new(Reason::Failed));
+        }
+        self.queue(text);
+        if let Some((id, purpose)) = request {
+            self.requests.insert(id, (chat.clone(), purpose));
+        }
+        self.feed(chat, Direction::Out, text, settles);
+        if self.flush().await.is_err() {
             self.stopped();
             return Err(Refusal::new(Reason::Failed));
         }
-        if let Some(id) = id {
-            self.requests.insert(id, chat.clone());
-        }
-        self.feed(chat, Direction::Out, text, settles);
         Ok(())
     }
 
@@ -200,10 +231,13 @@ impl Codex {
         if self.gone {
             return false;
         }
+        if self.flush().await.is_err() {
+            self.stopped();
+            return false;
+        }
         match self.reader.next_line().await {
             Ok(Some(line)) => {
                 self.route(&line);
-                self.write_later().await;
                 true
             }
             Ok(None) | Err(_) => {
@@ -213,44 +247,74 @@ impl Codex {
         }
     }
 
-    /// Writes the replies a translator sends without asking anyone.
-    async fn write_later(&mut self) {
-        while let Some((chat, reply)) = self.later.pop_front() {
-            if self.send(&chat, None, &reply, Vec::new()).await.is_err() {
-                return;
+    /// Gives a message from Codex to the chat it is for.
+    fn route(&mut self, line: &str) {
+        let message: Value = serde_json::from_str(line).unwrap_or(Value::Null);
+        if message.get("method").is_some() {
+            let params = &message["params"];
+            let thread = (params["threadId"].as_str()).or(params["thread"]["id"].as_str());
+            match thread.and_then(|t| self.threads.get(t)).cloned() {
+                Some(chat) => self.feed(&chat, Direction::In, line, Vec::new()),
+                // A thread being picked can speak before the reply that picks it.
+                None if thread.is_some() && self.picking() => self.early.push(line.to_string()),
+                None => self.unrouted += 1,
+            }
+            return;
+        }
+        let id = message["id"].as_i64();
+        let Some((chat, purpose)) = id.and_then(|id| self.requests.remove(&id)) else {
+            self.unrouted += 1;
+            return;
+        };
+        let refused = message.get("error").is_some();
+        let mut settles = Vec::new();
+        match purpose {
+            Purpose::List | Purpose::Pick => {}
+            Purpose::Prompt(..) if refused => {}
+            // A prompt joins a running turn only once Codex has taken it.
+            Purpose::Prompt(prompt, Some(turn)) => {
+                if let Some(prompts) = self.prompts.get_mut(&(chat.clone(), turn)) {
+                    prompts.push(prompt);
+                }
+            }
+            Purpose::Prompt(prompt, None) => {
+                self.starting.insert(id.expect("a numbered reply"), prompt);
+            }
+            // Codex refused a control: the event the refusal makes settles it, unless its effect
+            // already did.
+            Purpose::Control(request) => {
+                if refused && self.unsettled(&chat, &request) {
+                    settles.push(request);
+                }
+            }
+        }
+        self.feed(&chat, Direction::In, line, settles);
+        if !self.picking() {
+            for line in std::mem::take(&mut self.early) {
+                self.route(&line);
             }
         }
     }
 
-    /// Gives a message from Codex to the chat it is for.
-    fn route(&mut self, line: &str) {
-        let message: Value = serde_json::from_str(line).unwrap_or(Value::Null);
-        let chat = if message.get("method").is_some() {
-            let params = &message["params"];
-            let thread = (params["threadId"].as_str()).or(params["thread"]["id"].as_str());
-            thread.and_then(|t| self.threads.get(t)).cloned()
-        } else {
-            message["id"]
-                .as_i64()
-                .and_then(|id| self.requests.remove(&id))
-        };
-        let Some(chat) = chat else {
-            self.unrouted += 1;
-            return;
-        };
-        // A refusal of an answer or a control settles it: the event it makes shows that it failed.
-        let refused = (message["id"].as_i64())
-            .filter(|_| message.get("error").is_some() && message.get("method").is_none())
-            .and_then(|id| self.behind.remove(&id));
-        if let Some(request) = &refused
-            && let Some(c) = self.chats.get_mut(&chat)
-        {
-            c.settling.retain(|(r, _)| r != request);
-        }
-        self.feed(&chat, Direction::In, line, refused.into_iter().collect());
+    /// Whether a request to start or resume a session is waiting for Codex.
+    fn picking(&self) -> bool {
+        self.requests
+            .values()
+            .any(|(_, purpose)| matches!(purpose, Purpose::Pick))
     }
 
-    /// Feeds a message to a chat's translator, and makes its events ready.
+    /// Takes a control off the list of those waiting for their effect; false if it was not there.
+    fn unsettled(&mut self, chat: &ChatId, request: &RequestId) -> bool {
+        let Some(c) = self.chats.get_mut(chat) else {
+            return false;
+        };
+        let before = c.effects.len();
+        c.effects.retain(|(r, _)| r != request);
+        c.effects.len() != before
+    }
+
+    /// Feeds a message to a chat's translator, makes its events ready, and sends the replies
+    /// that need nobody's answer, such as declining a form.
     fn feed(&mut self, chat: &ChatId, direction: Direction, text: &str, settles: Vec<RequestId>) {
         let c = self.chats.entry(chat.clone()).or_default();
         let before = c.translator.session().map(String::from);
@@ -269,9 +333,9 @@ impl Codex {
         for event in events {
             self.ready_event(chat, event, std::mem::take(&mut settles));
         }
-        // Replies nobody is asked for, such as declining a form, go to Codex at once.
         for reply in replies {
-            self.later.push_back((chat.clone(), reply));
+            self.queue(&reply);
+            self.feed(chat, Direction::Out, &reply, Vec::new());
         }
     }
 
@@ -281,37 +345,39 @@ impl Codex {
         let turn = header.turn.as_ref().map(|t| t.as_str().to_string());
         let ended = !matches!(header.state, State::Running | State::Waiting);
         let session = header.session.as_ref().map(|s| s.as_str().to_string());
-        c.settling.retain(|(request, waits)| {
-            let effect = match (waits, event.body()) {
-                (Settle::TurnEnded(t), Body::Turn(_)) => ended && turn.as_deref() == Some(t),
-                (Settle::SessionEdited, Body::Session(_)) => true,
-                (Settle::TurnStartedBy(r), Body::Turn(_)) => {
+        c.effects.retain(|(request, effect)| {
+            let shown = match (effect, event.body()) {
+                (Effect::TurnEnded(t), Body::Turn(_)) => ended && turn.as_deref() == Some(t),
+                (Effect::Setting(id, value), Body::Session(s)) => (s.settings.iter())
+                    .any(|setting| setting.id == *id && setting.value.as_ref() == Some(value)),
+                (Effect::TurnStartedBy(r), Body::Turn(_)) => {
                     let started = turn.as_deref().and_then(|t| c.translator.turn_request(t));
                     started == Some(*r)
                 }
-                (Settle::NewSession(old), Body::Session(_)) => {
+                (Effect::NewSession(old), Body::Session(_)) => {
                     header.state == State::Running && session != *old
                 }
                 _ => false,
             };
-            if effect {
+            if shown {
                 settles.push(request.clone());
             }
-            !effect
+            !shown
         });
         let prompts = match (event.body(), turn) {
             (Body::Turn(_), Some(turn)) => {
-                let started = c.translator.turn_request(&turn);
-                let messages = &self.messages;
-                (self.prompts.entry((chat.clone(), turn)))
-                    .or_insert_with(|| {
-                        started
-                            .and_then(|r| messages.get(&r))
-                            .cloned()
-                            .into_iter()
-                            .collect()
-                    })
-                    .clone()
+                let key = (chat.clone(), turn);
+                if !self.prompts.contains_key(&key) {
+                    let started = c.translator.turn_request(&key.1);
+                    let prompt = started.and_then(|r| self.starting.remove(&r));
+                    self.prompts
+                        .insert(key.clone(), prompt.into_iter().collect());
+                }
+                if ended {
+                    self.prompts.remove(&key).unwrap_or_default() // nothing more comes for it
+                } else {
+                    self.prompts[&key].clone()
+                }
             }
             _ => Vec::new(),
         };
@@ -331,23 +397,23 @@ impl Codex {
         self.gone = true;
         let chats: Vec<ChatId> = self.chats.keys().cloned().collect();
         for chat in chats {
-            let events = self
-                .chats
-                .get_mut(&chat)
-                .expect("a chat")
-                .translator
-                .harness_stopped();
+            let c = self.chats.get_mut(&chat).expect("a chat");
+            let events = c.translator.harness_stopped();
             for event in events {
                 self.ready_event(&chat, event, Vec::new());
             }
         }
+        self.requests.clear();
+        self.starting.clear();
+        self.early.clear();
+        self.unwritten.clear();
     }
 }
 
 // -- the core's requests
 
 impl Codex {
-    /// A chat's translator, made the first time the chat is seen. A new chat asks Codex for its
+    /// Makes a chat's translator the first time the chat is seen. A new chat asks Codex for its
     /// models and modes, which the session item offers.
     async fn chat(&mut self, chat: &ChatId) -> Result<(), Refusal> {
         if self.chats.contains_key(chat) {
@@ -355,19 +421,21 @@ impl Codex {
         }
         self.chats.insert(chat.clone(), Chat::default());
         let id = self.id();
-        self.send(chat, Some(id), &model_list(id), Vec::new())
+        self.send(chat, Some((id, Purpose::List)), &model_list(id), Vec::new())
             .await?;
         let id = self.id();
-        self.send(chat, Some(id), &collaboration_mode_list(id), Vec::new())
+        let modes = collaboration_mode_list(id);
+        self.send(chat, Some((id, Purpose::List)), &modes, Vec::new())
             .await
     }
 
-    /// Builds a request with `build`, sends it, and returns its id. While the translator refuses
-    /// it as busy, because Codex has yet to answer one before it, reads on and asks again.
+    /// Builds a request with `build` and sends it, returning its id. While the translator refuses
+    /// it as busy only because Codex has yet to answer a request before it, reads on and asks
+    /// again. Refused as busy for any other reason, such as a turn running, it stays refused.
     async fn ask(
         &mut self,
         chat: &ChatId,
-        settles: Vec<RequestId>,
+        purpose: Purpose,
         build: impl Fn(&Translator, i64) -> Result<String, Refusal>,
     ) -> Result<i64, Refusal> {
         loop {
@@ -376,10 +444,11 @@ impl Codex {
             match build(translator, id) {
                 Ok(text) => {
                     self.next_id += 1;
-                    self.send(chat, Some(id), &text, settles).await?;
+                    self.send(chat, Some((id, purpose)), &text, Vec::new())
+                        .await?;
                     return Ok(id);
                 }
-                Err(refusal) if refusal.reason == Reason::Busy => {
+                Err(refusal) if refusal.reason == Reason::Busy && translator.waiting_on_codex() => {
                     if !self.read().await {
                         return Err(Refusal::new(Reason::Failed));
                     }
@@ -389,23 +458,16 @@ impl Codex {
         }
     }
 
-    /// Reads until Codex has answered request `id`.
-    async fn answered(&mut self, id: i64) -> Result<(), Refusal> {
+    /// Makes `session` the chat's session, starting a new one if it is none, and waits for Codex.
+    async fn pick(&mut self, chat: &ChatId, session: Option<&str>) -> Result<(), Refusal> {
+        let setup = self.setup.clone();
+        let build = |t: &Translator, id| t.pick(id, session, &setup);
+        let id = self.ask(chat, Purpose::Pick, build).await?;
         while self.requests.contains_key(&id) {
             if !self.read().await {
                 return Err(Refusal::new(Reason::Failed));
             }
         }
-        Ok(())
-    }
-
-    /// Makes `session` the chat's session, starting a new one if it is none, and waits for Codex.
-    async fn pick(&mut self, chat: &ChatId, session: Option<&str>) -> Result<(), Refusal> {
-        let setup = self.setup.clone();
-        let id = self
-            .ask(chat, Vec::new(), |t, id| t.pick(id, session, &setup))
-            .await?;
-        self.answered(id).await?;
         let now = self.chats[chat].translator.session().map(String::from);
         match (now, session) {
             (Some(now), Some(wanted)) if now == wanted => Ok(()),
@@ -414,7 +476,7 @@ impl Codex {
         }
     }
 
-    /// The chat that has `item` waiting, or else the first chat's refusal.
+    /// The chat that has the answer's item waiting, or else the most telling refusal.
     fn chat_with_item(&self, answer: &Answer) -> Result<ChatId, Refusal> {
         let mut refusal = Refusal::new(Reason::UnknownItem);
         for (chat, c) in &self.chats {
@@ -459,15 +521,15 @@ impl Driver for Codex {
         if current.is_none() || (wanted.is_some() && wanted != current) {
             self.pick(&chat, wanted.as_deref()).await?;
         }
+        let message = Purpose::Prompt(prompt.message.clone(), None);
         let id = self
-            .ask(&chat, Vec::new(), |t, id| t.prompt(id, &prompt))
+            .ask(&chat, message, |t, id| t.prompt(id, &prompt))
             .await?;
-        self.messages.insert(id, prompt.message.clone());
-        // A message during a turn joins it: the turn responds to that prompt too.
+        // Built during a turn, it joins that turn; the translator built it that way.
         if let Some(turn) = self.chats[&chat].translator.turn().map(String::from)
-            && let Some(prompts) = self.prompts.get_mut(&(chat.clone(), turn))
+            && let Some((_, Purpose::Prompt(_, joins))) = self.requests.get_mut(&id)
         {
-            prompts.push(prompt.message);
+            *joins = Some(turn);
         }
         Ok(())
     }
@@ -487,46 +549,48 @@ impl Driver for Codex {
             return Err(Refusal::new(Reason::Failed));
         }
         let request = control.request.clone();
-        let (chat, waits) = match &control.action {
+        let (chat, effect) = match &control.action {
             Action::Interrupt { turn } => {
                 let chat = (self.chats.iter())
                     .find(|(_, c)| c.translator.turn() == Some(turn.as_str()))
                     .map(|(chat, _)| chat.clone())
                     .ok_or_else(|| Refusal::new(Reason::NothingToDo))?;
-                (chat, Settle::TurnEnded(turn.as_str().to_string()))
+                (chat, Effect::TurnEnded(turn.as_str().to_string()))
             }
             Action::NewSession { chat, session } => {
                 let chat = chat.id.clone();
                 self.chat(&chat).await?;
                 let old = session.as_ref().map(|s| s.as_str().to_string());
-                (chat, Settle::NewSession(old))
+                (chat, Effect::NewSession(old))
             }
-            Action::Set { session, .. } => {
+            Action::Set {
+                session,
+                setting,
+                value,
+            } => {
                 let chat = (self.threads.get(session.as_str()).cloned())
                     .ok_or_else(|| Refusal::new(Reason::UnknownItem))?;
-                (chat, Settle::SessionEdited)
+                (chat, Effect::Setting(setting.clone(), value.clone()))
             }
             Action::Own { session, .. } => {
                 let chat = (self.threads.get(session.as_str()).cloned())
                     .ok_or_else(|| Refusal::new(Reason::UnknownItem))?;
-                (chat, Settle::TurnStartedBy(0))
+                (chat, Effect::TurnStartedBy(0))
             }
         };
         let setup = self.setup.clone();
         let action = control.action.clone();
+        let build = |t: &Translator, id| t.control(id, &action, &setup);
         let id = self
-            .ask(&chat, Vec::new(), |t, id| t.control(id, &action, &setup))
+            .ask(&chat, Purpose::Control(request.clone()), build)
             .await?;
-        let waits = match waits {
-            Settle::TurnStartedBy(_) => Settle::TurnStartedBy(id),
+        let effect = match effect {
+            Effect::TurnStartedBy(_) => Effect::TurnStartedBy(id),
             other => other,
         };
-        self.behind.insert(id, request.clone());
-        self.chats
-            .get_mut(&chat)
-            .expect("a chat")
-            .settling
-            .push((request, waits));
+        // Nothing has been read since it was sent, so its effect is still to come.
+        let c = self.chats.get_mut(&chat).expect("a chat");
+        c.effects.push((request, effect));
         Ok(())
     }
 

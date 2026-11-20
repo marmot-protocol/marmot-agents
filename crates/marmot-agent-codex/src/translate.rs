@@ -491,6 +491,9 @@ impl Translator {
         let item = format!("turn:{}", show(turn.id.as_deref()));
         let native = native(method, params);
         self.emit(out, &item, body, state, title, &text, native);
+        if let Some(id) = &turn.id {
+            self.turn_requests.remove(id); // nothing more comes for this turn
+        }
         self.turn = None; // nothing that follows belongs to this turn
     }
 
@@ -1932,10 +1935,10 @@ impl Translator {
     }
 
     /// Whether a request that starts a turn, picks the session or changes a setting is waiting
-    /// for Codex. Until Codex answers, what the translator knows of the session may be out of
+    /// for Codex: a wait that ends without anyone in the chat doing anything. Until Codex answers, what the translator knows of the session may be out of
     /// date, so it builds nothing but replies to Codex's requests and interrupts; the driver holds
     /// the rest and asks again.
-    fn waiting_on_codex(&self) -> bool {
+    pub fn waiting_on_codex(&self) -> bool {
         let picking = (self.requests.values())
             .any(|sent| matches!(sent.method.as_str(), "thread/start" | "thread/resume"));
         picking || !self.starts.is_empty() || !self.asked_settings.is_empty()

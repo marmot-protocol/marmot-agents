@@ -307,3 +307,244 @@ async fn a_real_codex_answers_a_prompt() {
     assert!(said, "{events:?}");
     std::fs::remove_dir_all(&folder).ok();
 }
+
+// A new session needs the turn to end, and the turn waits for an approval only a person can give:
+// the driver says busy at once, rather than waiting for something the core cannot then send.
+#[tokio::test]
+async fn a_new_session_during_a_waiting_turn_is_refused_so_the_approval_can_be_answered() {
+    let (mut codex, mut fake) = running().await;
+    fake.say(json!({"id": 0, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "c", "command": "ls"}})).await;
+    let asked = until(&mut codex, |e| matches!(e.event.body(), Body::Approval(_))).await;
+    let item = asked.last().unwrap().event.header().item.clone();
+    let fresh = Control {
+        request: "r-4".into(),
+        by: alice(),
+        action: Action::NewSession {
+            chat: prompt("m-0", "").chat,
+            session: Some("th1".into()),
+        },
+    };
+    assert_eq!(codex.control(fresh).await.unwrap_err().reason, Reason::Busy);
+    let allow = Answer {
+        request: "r-5".into(),
+        item,
+        by: alice(),
+        given: Given::Choice("c0".into()),
+    };
+    codex.answer(allow).await.unwrap();
+    assert_eq!(
+        fake.heard.recv().await.unwrap()["result"]["decision"],
+        "accept"
+    );
+}
+
+/// A writer that takes only `allowed` more bytes, then waits until given more.
+struct Choke {
+    inner: WriteHalf<DuplexStream>,
+    allowed: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl tokio::io::AsyncWrite for Choke {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        use std::sync::atomic::Ordering;
+        let allowed = self.allowed.load(Ordering::SeqCst);
+        if allowed == 0 {
+            cx.waker().wake_by_ref(); // checked again when polled
+            return std::task::Poll::Pending;
+        }
+        let n = buf.len().min(allowed);
+        let polled = std::pin::Pin::new(&mut self.inner).poll_write(cx, &buf[..n]);
+        if let std::task::Poll::Ready(Ok(written)) = polled {
+            self.allowed.fetch_sub(written, Ordering::SeqCst);
+        }
+        polled
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+// The core drops a request's future to do something else. A message cut short in the middle is
+// finished, whole, before the next one, so Codex never reads half a line.
+#[tokio::test]
+async fn a_message_cut_short_is_finished_before_the_next() {
+    use std::sync::atomic::Ordering;
+    let (driver_side, fake_side) = duplex(1 << 16);
+    let (from_driver, to_driver) = tokio::io::split(fake_side);
+    let (driver_reads, driver_writes) = tokio::io::split(driver_side);
+    let allowed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX / 2));
+    let choke = Choke {
+        inner: driver_writes,
+        allowed: allowed.clone(),
+    };
+    let (tx, heard) = mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(from_driver).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = tx.send(serde_json::from_str::<Value>(&line).expect("whole lines only"));
+        }
+    });
+    let mut fake = Fake { heard, to_driver };
+    let codex = tokio::spawn(Codex::connect(driver_reads, choke, Setup::new("/w")));
+    let hello = fake.heard.recv().await.unwrap();
+    fake.say(json!({"id": hello["id"], "result": {"userAgent": "codex_cli_rs/0.169.0"}}))
+        .await;
+    let mut codex = codex.await.unwrap().unwrap();
+    assert_eq!(fake.heard.recv().await.unwrap()["method"], "initialized");
+
+    allowed.store(10, Ordering::SeqCst); // the next message gets ten bytes out, then stalls
+    let cut = tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        codex.prompt(prompt("m-1", "hi")),
+    );
+    assert!(
+        cut.await.is_err(),
+        "the write stalls and the core gives up on it"
+    );
+    allowed.store(usize::MAX / 2, Ordering::SeqCst);
+    let driver = tokio::spawn(async move {
+        codex.prompt(prompt("m-1", "hi")).await.unwrap();
+        codex
+    });
+    let first = fake.heard.recv().await.unwrap();
+    assert_eq!(
+        first["method"], "model/list",
+        "the cut message arrives whole, first"
+    );
+    fake.say(json!({"id": first["id"], "result": {"data": []}}))
+        .await;
+    fake.answer("thread/start", json!({"thread": {"id": "th1"}}))
+        .await;
+    fake.answer("turn/start", json!({"turn": {"id": "t1"}}))
+        .await;
+    driver.await.unwrap();
+}
+
+fn set_model(request: &str, value: &str) -> Control {
+    Control {
+        request: request.into(),
+        by: alice(),
+        action: Action::Set {
+            session: "th1".into(),
+            setting: "model".into(),
+            value: value.into(),
+        },
+    }
+}
+
+fn settings_updated(model: &str, effort: &str) -> Value {
+    json!({"method": "thread/settings/updated", "params": {"threadId": "th1", "threadSettings": {"model": model, "effort": effort}}})
+}
+
+// Codex restates a new session's settings a moment after it starts. That is not the change a
+// person asked for, and does not settle it; the edit that shows the new value does.
+#[tokio::test]
+async fn a_setting_is_settled_by_the_edit_that_shows_its_value() {
+    let (mut codex, mut fake) = running().await;
+    // Codex's own restatement of the new session, still unread: it edits the session item, and
+    // still shows the old model.
+    fake.say(settings_updated("m1", "medium")).await;
+    let driver = tokio::spawn(async move {
+        codex.control(set_model("r-6", "m2")).await.unwrap();
+        codex
+    });
+    let change = fake.answer("thread/settings/update", json!({})).await;
+    assert_eq!(change["params"]["model"], "m2");
+    let mut codex = driver.await.unwrap();
+    fake.say(settings_updated("m2", "medium")).await;
+    let events = until(&mut codex, |e| !e.settles.is_empty()).await;
+    let settled = events.last().unwrap();
+    assert_eq!(settled.settles, ["r-6".into()]);
+    let Body::Session(session) = settled.event.body() else {
+        panic!("the session item");
+    };
+    let model = session.settings.iter().find(|s| s.id == "model").unwrap();
+    assert_eq!(model.value.as_deref(), Some("m2"));
+}
+
+// A prompt joins a turn only if Codex takes it.
+#[tokio::test]
+async fn a_prompt_codex_refuses_to_add_to_a_turn_is_not_counted_in_it() {
+    let (mut codex, mut fake) = running().await;
+    let driver = tokio::spawn(async move {
+        codex.prompt(prompt("m-2", "and this")).await.unwrap();
+        codex
+    });
+    let steer = fake.hear().await;
+    assert_eq!(steer["method"], "turn/steer");
+    let mut codex = driver.await.unwrap();
+    fake.say(turn("turn/completed", "completed")).await;
+    fake.say(json!({"id": steer["id"], "error": {"code": -32600, "message": "no active turn"}}))
+        .await;
+    let events = until(&mut codex, is_turn(State::Done)).await;
+    assert_eq!(events.last().unwrap().prompts, ["m-1".into()]);
+}
+
+// A turn that ends before Codex handles the interrupt settles it; Codex's later refusal does not
+// settle it again.
+#[tokio::test]
+async fn an_interrupt_is_settled_once() {
+    let (mut codex, mut fake) = running().await;
+    until(&mut codex, is_turn(State::Running)).await;
+    let stop = Control {
+        request: "r-7".into(),
+        by: alice(),
+        action: Action::Interrupt { turn: "t1".into() },
+    };
+    codex.control(stop).await.unwrap();
+    let interrupt = fake.hear().await;
+    fake.say(turn("turn/completed", "completed")).await;
+    fake.say(
+        json!({"id": interrupt["id"], "error": {"code": -32600, "message": "no active turn"}}),
+    )
+    .await;
+    fake.say(json!({"method": "warning", "params": {"threadId": "th1", "message": "after"}}))
+        .await;
+    let events = until(&mut codex, |e| matches!(e.event.body(), Body::Notice(_))).await;
+    let settled: Vec<_> = events.iter().flat_map(|e| e.settles.clone()).collect();
+    assert_eq!(settled, ["r-7".into()]);
+}
+
+// A session's thread can speak before the reply that starts it; what it says is kept for it.
+#[tokio::test]
+async fn what_a_new_thread_says_before_its_reply_is_kept() {
+    let (mut codex, mut fake) = connect().await;
+    let driver = tokio::spawn(async move {
+        codex.prompt(prompt("m-1", "hello")).await.unwrap();
+        codex
+    });
+    let start = fake.hear().await;
+    assert_eq!(start["method"], "thread/start");
+    fake.say(settings_updated("m9", "low")).await; // before the reply
+    fake.say(json!({"id": start["id"], "result": {"thread": {"id": "th1"}, "model": "m1"}}))
+        .await;
+    fake.answer("turn/start", json!({"turn": {"id": "t1"}}))
+        .await;
+    let mut codex = driver.await.unwrap();
+    assert_eq!(codex.unrouted(), 0);
+    let events = until(&mut codex, |e| {
+        let Body::Session(s) = e.event.body() else {
+            return false;
+        };
+        s.settings
+            .iter()
+            .any(|x| x.id == "model" && x.value.as_deref() == Some("m9"))
+    })
+    .await;
+    assert!(!events.is_empty());
+}
