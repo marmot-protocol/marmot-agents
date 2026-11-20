@@ -1938,10 +1938,14 @@ impl Translator {
     /// for Codex: a wait that ends without anyone in the chat doing anything. Until Codex answers, what the translator knows of the session may be out of
     /// date, so it builds nothing but replies to Codex's requests and interrupts; the driver holds
     /// the rest and asks again.
+    /// Whether a request to start or resume a session is waiting for Codex, whoever sent it.
+    pub fn picking(&self) -> bool {
+        (self.requests.values())
+            .any(|sent| matches!(sent.method.as_str(), "thread/start" | "thread/resume"))
+    }
+
     pub fn waiting_on_codex(&self) -> bool {
-        let picking = (self.requests.values())
-            .any(|sent| matches!(sent.method.as_str(), "thread/start" | "thread/resume"));
-        picking || !self.starts.is_empty() || !self.asked_settings.is_empty()
+        self.picking() || !self.starts.is_empty() || !self.asked_settings.is_empty()
     }
 
     fn session_named(&self, session: &str) -> Result<&str, Refusal> {

@@ -35,10 +35,9 @@ type Writer = Box<dyn AsyncWrite + Unpin + Send>;
 
 /// What a request the driver sent is for.
 enum Purpose {
-    /// A list of models or modes: nothing follows from it.
-    List,
-    /// Starting or resuming a session.
-    Pick,
+    /// Nothing follows from it: a list of models or modes, or picking a session, which the
+    /// chat's translator follows.
+    Plain,
     /// A prompt: a new turn, or, with the turn, one joined to a running turn.
     Prompt(MessageId, Option<String>),
     /// A control, settled by its effect or by Codex refusing it.
@@ -81,7 +80,8 @@ pub struct Codex {
     threads: HashMap<String, ChatId>,
     /// The driver's requests Codex has not answered: the chat each is for, and what for.
     requests: HashMap<i64, (ChatId, Purpose)>,
-    /// The prompt behind each `turn/start` Codex has taken, until its turn starts.
+    /// The prompt behind each `turn/start` sent, until its turn starts or Codex refuses it. It is
+    /// kept from the moment it is sent: Codex can announce the turn before it replies.
     starting: HashMap<i64, MessageId>,
     /// The prompts each running turn responds to.
     prompts: HashMap<(ChatId, String), Vec<MessageId>>,
@@ -269,7 +269,10 @@ impl Codex {
         let refused = message.get("error").is_some();
         let mut settles = Vec::new();
         match purpose {
-            Purpose::List | Purpose::Pick => {}
+            Purpose::Plain => {}
+            Purpose::Prompt(_, None) if refused => {
+                self.starting.remove(&id.expect("a numbered reply")); // no turn will start
+            }
             Purpose::Prompt(..) if refused => {}
             // A prompt joins a running turn only once Codex has taken it.
             Purpose::Prompt(prompt, Some(turn)) => {
@@ -277,9 +280,7 @@ impl Codex {
                     prompts.push(prompt);
                 }
             }
-            Purpose::Prompt(prompt, None) => {
-                self.starting.insert(id.expect("a numbered reply"), prompt);
-            }
+            Purpose::Prompt(_, None) => {} // its turn takes it from `starting`
             // Codex refused a control: the event the refusal makes settles it, unless its effect
             // already did.
             Purpose::Control(request) => {
@@ -296,11 +297,10 @@ impl Codex {
         }
     }
 
-    /// Whether a request to start or resume a session is waiting for Codex.
+    /// Whether a request to start or resume a session is waiting for Codex, in any chat, whether
+    /// a prompt or a control sent it.
     fn picking(&self) -> bool {
-        self.requests
-            .values()
-            .any(|(_, purpose)| matches!(purpose, Purpose::Pick))
+        self.chats.values().any(|c| c.translator.picking())
     }
 
     /// Takes a control off the list of those waiting for their effect; false if it was not there.
@@ -421,11 +421,16 @@ impl Codex {
         }
         self.chats.insert(chat.clone(), Chat::default());
         let id = self.id();
-        self.send(chat, Some((id, Purpose::List)), &model_list(id), Vec::new())
-            .await?;
+        self.send(
+            chat,
+            Some((id, Purpose::Plain)),
+            &model_list(id),
+            Vec::new(),
+        )
+        .await?;
         let id = self.id();
         let modes = collaboration_mode_list(id);
-        self.send(chat, Some((id, Purpose::List)), &modes, Vec::new())
+        self.send(chat, Some((id, Purpose::Plain)), &modes, Vec::new())
             .await
     }
 
@@ -462,7 +467,7 @@ impl Codex {
     async fn pick(&mut self, chat: &ChatId, session: Option<&str>) -> Result<(), Refusal> {
         let setup = self.setup.clone();
         let build = |t: &Translator, id| t.pick(id, session, &setup);
-        let id = self.ask(chat, Purpose::Pick, build).await?;
+        let id = self.ask(chat, Purpose::Plain, build).await?;
         while self.requests.contains_key(&id) {
             if !self.read().await {
                 return Err(Refusal::new(Reason::Failed));
@@ -476,12 +481,13 @@ impl Codex {
         }
     }
 
-    /// The chat that has the answer's item waiting, or else the most telling refusal.
-    fn chat_with_item(&self, answer: &Answer) -> Result<ChatId, Refusal> {
+    /// The chat that has the answer's item waiting, and the reply to send it, or else the most
+    /// telling refusal.
+    fn chat_with_item(&self, answer: &Answer) -> Result<(ChatId, String), Refusal> {
         let mut refusal = Refusal::new(Reason::UnknownItem);
         for (chat, c) in &self.chats {
             match c.translator.reply(answer) {
-                Ok(_) => return Ok(chat.clone()),
+                Ok(reply) => return Ok((chat.clone(), reply)),
                 Err(r) if r.reason == Reason::UnknownItem => {}
                 Err(r) => refusal = r,
             }
@@ -515,9 +521,22 @@ impl Driver for Codex {
             return Err(Refusal::new(Reason::Failed));
         }
         let chat = prompt.chat.id.clone();
-        self.chat(&chat).await?;
-        let current = self.chats[&chat].translator.session().map(String::from);
         let wanted = prompt.session.as_ref().map(|s| s.as_str().to_string());
+        // A session belongs to one chat: resuming another chat's would show its activity here.
+        if let Some(owner) = wanted.as_ref().and_then(|w| self.threads.get(w))
+            && *owner != chat
+        {
+            return Err(Refusal::new(Reason::Invalid));
+        }
+        self.chat(&chat).await?;
+        // A session being picked, by a control or an earlier prompt, is waited for before deciding
+        // whether this prompt needs one.
+        while self.chats[&chat].translator.picking() {
+            if !self.read().await {
+                return Err(Refusal::new(Reason::Failed));
+            }
+        }
+        let current = self.chats[&chat].translator.session().map(String::from);
         if current.is_none() || (wanted.is_some() && wanted != current) {
             self.pick(&chat, wanted.as_deref()).await?;
         }
@@ -525,11 +544,16 @@ impl Driver for Codex {
         let id = self
             .ask(&chat, message, |t, id| t.prompt(id, &prompt))
             .await?;
-        // Built during a turn, it joins that turn; the translator built it that way.
-        if let Some(turn) = self.chats[&chat].translator.turn().map(String::from)
-            && let Some((_, Purpose::Prompt(_, joins))) = self.requests.get_mut(&id)
-        {
-            *joins = Some(turn);
+        match self.chats[&chat].translator.turn().map(String::from) {
+            // Built during a turn, it joins that turn: the translator built it that way.
+            Some(turn) => {
+                if let Some((_, Purpose::Prompt(_, joins))) = self.requests.get_mut(&id) {
+                    *joins = Some(turn);
+                }
+            }
+            None => {
+                self.starting.insert(id, prompt.message);
+            }
         }
         Ok(())
     }
@@ -538,8 +562,7 @@ impl Driver for Codex {
         if self.gone {
             return Err(Refusal::new(Reason::Failed));
         }
-        let chat = self.chat_with_item(&answer)?;
-        let text = self.chats[&chat].translator.reply(&answer)?;
+        let (chat, text) = self.chat_with_item(&answer)?;
         // The reply's event, fed back, shows the answer: it settles it.
         self.send(&chat, None, &text, vec![answer.request]).await
     }

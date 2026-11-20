@@ -548,3 +548,92 @@ async fn what_a_new_thread_says_before_its_reply_is_kept() {
     .await;
     assert!(!events.is_empty());
 }
+
+// Codex can announce a turn before it replies to the request that started it: 7 of the 37
+// recorded turns came that way. The turn still names its prompt.
+#[tokio::test]
+async fn a_turn_announced_before_its_reply_still_names_its_prompt() {
+    let (mut codex, mut fake) = connect().await;
+    let driver = tokio::spawn(async move {
+        codex.prompt(prompt("m-1", "hello")).await.unwrap();
+        codex
+    });
+    fake.answer("thread/start", json!({"thread": {"id": "th1"}}))
+        .await;
+    let start = fake.hear().await;
+    assert_eq!(start["method"], "turn/start");
+    fake.say(turn("turn/started", "inProgress")).await; // before the reply
+    fake.say(json!({"id": start["id"], "result": {"turn": {"id": "t1"}}}))
+        .await;
+    fake.say(turn("turn/completed", "completed")).await;
+    let mut codex = driver.await.unwrap();
+    let events = until(&mut codex, is_turn(State::Done)).await;
+    for turn in events
+        .iter()
+        .filter(|e| matches!(e.event.body(), Body::Turn(_)))
+    {
+        assert_eq!(turn.prompts, ["m-1".into()]);
+    }
+}
+
+fn new_session(request: &str) -> Control {
+    Control {
+        request: request.into(),
+        by: alice(),
+        action: Action::NewSession {
+            chat: prompt("m-0", "").chat,
+            session: None,
+        },
+    }
+}
+
+// A new session asked for by a control is the same as one a prompt starts: what its thread says
+// before Codex's reply is kept, and a prompt sent meanwhile uses it rather than starting another.
+#[tokio::test]
+async fn a_new_session_from_a_control_is_kept_and_used_by_the_next_prompt() {
+    let (mut codex, mut fake) = connect().await;
+    let driver = tokio::spawn(async move {
+        codex.control(new_session("r-8")).await.unwrap();
+        codex.prompt(prompt("m-1", "hello")).await.unwrap();
+        codex
+    });
+    let start = fake.hear().await;
+    assert_eq!(start["method"], "thread/start");
+    fake.say(settings_updated("m9", "low")).await; // before the reply
+    fake.say(json!({"id": start["id"], "result": {"thread": {"id": "th1"}, "model": "m1"}}))
+        .await;
+    let next = fake
+        .answer("turn/start", json!({"turn": {"id": "t1"}}))
+        .await;
+    assert_eq!(next["params"]["threadId"], "th1", "one session, not two");
+    let mut codex = driver.await.unwrap();
+    assert_eq!(codex.unrouted(), 0);
+    let events = until(&mut codex, |e| {
+        let Body::Session(s) = e.event.body() else {
+            return false;
+        };
+        s.settings
+            .iter()
+            .any(|x| x.id == "model" && x.value.as_deref() == Some("m9"))
+    })
+    .await;
+    let settled: Vec<_> = events.iter().flat_map(|e| e.settles.clone()).collect();
+    assert_eq!(settled, ["r-8".into()]);
+}
+
+// A session belongs to one chat. Another chat asking to resume it is refused before anything is
+// sent, and the session's activity still goes to its own chat.
+#[tokio::test]
+async fn a_chat_cannot_take_another_chats_session() {
+    let (mut codex, mut fake) = running().await;
+    let mut other = prompt("m-9", "let me in");
+    other.chat.id = "c-2".into();
+    other.session = Some("th1".into());
+    assert_eq!(
+        codex.prompt(other).await.unwrap_err().reason,
+        Reason::Invalid
+    );
+    fake.say(turn("turn/completed", "completed")).await;
+    let events = until(&mut codex, is_turn(State::Done)).await;
+    assert!(events.iter().all(|e| e.chat == Some("c-1".into())));
+}
