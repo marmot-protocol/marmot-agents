@@ -375,7 +375,8 @@ approval does. A person can write to a subagent only when the harness allows it.
 
 What Codex sends for subagents is in
 [harness messages](reference/harness-messages.md#subagents), from the recordings in
-[`fixtures/recordings/codex/subagents`](../fixtures/recordings/codex/subagents).
+[`fixtures/recordings/codex/subagents`](../fixtures/recordings/codex/subagents). The proposal, with the points to
+decide, is [subagents as threads](design/subagents.md).
 
 ### Q-29 What does the Codex driver do with a thread no chat asked for?
 
