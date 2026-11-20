@@ -114,8 +114,9 @@ thread's messages ([D-060](../decisions.md#d-060-a-codex-translator-follows-one-
 A session starts in a working folder with a narrow sandbox unless configured otherwise
 ([D-061](../decisions.md#d-061-a-codex-session-starts-in-a-working-folder-with-a-safe-sandbox-unless-configured)),
 Codex reads a group message with its sender's name
-([D-062](../decisions.md#d-062-what-codex-reads-for-a-chat-message)), and Codex keeps each session so it can be
-resumed ([D-063](../decisions.md#d-063-codex-keeps-a-session-so-it-can-be-resumed)). The translator is written
+([D-062](../decisions.md#d-062-what-codex-reads-for-a-chat-message)), Codex keeps each session so it can be
+resumed ([D-063](../decisions.md#d-063-codex-keeps-a-session-so-it-can-be-resumed)), and a form from an MCP
+server is declined for now ([D-064](../decisions.md#d-064-the-codex-driver-declines-an-mcp-servers-form-until-forms-are-designed)). The translator is written
 ([`crates/marmot-agent-codex`](../../crates/marmot-agent-codex)); the transport is not.
 
 ## Adding a harness

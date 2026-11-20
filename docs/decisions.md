@@ -1097,3 +1097,17 @@ be resumed after Codex or the core restarts.
 keeps the conversation in its own home folder on the machine that runs it, as it does for any Codex user.
 
 Decided 2026-11-20. The project owner accepted the recommendation.
+
+## D-064 The Codex driver declines an MCP server's form until forms are designed
+
+**Decision.** When an MCP server asks, through Codex, for a form to be filled in, the Codex driver declines it
+at once and shows a notice in the chat that a form it cannot show was declined. A request to approve an MCP
+tool is not a form, and is shown and answered as an approval.
+
+**Why.** No recording holds a form, so everything the driver would do with one came from Codex's schema, and
+review of that kept finding cases it got wrong: answers recorded as text, not as the options chosen, fields of
+kinds it could not show, forms that ask the person to open a link. Declining at once means Codex never waits
+for an answer that cannot come, and the chat says what happened. Forms become a step of their own, built from a
+recording of one.
+
+Decided 2026-11-20. The project owner accepted the recommendation.

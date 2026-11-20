@@ -9,6 +9,7 @@ use marmot_agent_codex::{
     initialized, model_list,
 };
 use marmot_agent_driver::{Action, Answer, Attachment, Chat, Given, Person, Prompt, Reason, Reply};
+use marmot_agent_events::body::Effect;
 use marmot_agent_events::{AgentEvent, Body, State};
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -92,16 +93,6 @@ fn drop_keys(mut value: Value, keys: &[&str]) -> Value {
         }
     }
     value
-}
-
-/// Whether everything in `part` is in `whole`, with the same value.
-fn within(part: &Value, whole: &Value) -> bool {
-    match (part, whole) {
-        (Value::Object(p), Value::Object(w)) => p
-            .iter()
-            .all(|(k, v)| w.get(k).is_some_and(|x| within(v, x))),
-        _ => part == whole,
-    }
 }
 
 /// The item waiting for the reply to Codex's request `id`, from the events so far.
@@ -276,7 +267,8 @@ fn the_driver_sends_what_the_recorded_client_sent() {
                     }
                     Some("thread/settings/update") => {
                         // The driver changes one setting a request; the recorder sent two at once,
-                        // and one more field than the session item shows. Each must be within it.
+                        // and the sandbox with a field the session item does not show. Each setting
+                        // is built alone and must be exactly the recorded one.
                         let shown = [
                             ("model", "model", None),
                             ("approvalPolicy", "approval_policy", None),
@@ -286,18 +278,19 @@ fn the_driver_sends_what_the_recorded_client_sent() {
                             let Some(value) = params.get(key) else {
                                 continue;
                             };
-                            let value = inner.map_or(value, |k| &value[k]).as_str().unwrap();
+                            let value = inner.map_or(value, |k| &value[k]).clone();
                             let action = Action::Set {
                                 session: session.clone().expect("a session").into(),
                                 setting: setting.into(),
-                                value: value.into(),
+                                value: value.as_str().unwrap().into(),
                             };
                             let built = translator.control(id, &action, &Setup::new("/w"));
-                            let built = json(&built.expect("a setting"));
-                            assert!(
-                                within(&built, &recorded),
-                                "{name}: {built} is not within {recorded}"
-                            );
+                            let recorded_value = match inner {
+                                Some(k) => json!({ k: value }),
+                                None => value,
+                            };
+                            let expected = json!({"id": id, "method": "thread/settings/update", "params": {"threadId": params["threadId"], key: recorded_value}});
+                            assert_eq!(json(&built.expect("a setting")), expected, "{name}");
                         }
                         *checked.entry("thread/settings/update".into()).or_default() += 1;
                         None
@@ -465,9 +458,9 @@ fn a_session_is_replaced_only_while_idle_and_once_at_a_time() {
     );
 }
 
-// No recording holds these replies; their shapes are from Codex's schema (0.169.0).
+// No recording holds this reply; its shape is from Codex's schema (0.169.0).
 #[test]
-fn a_permission_grant_and_a_form_are_answered_in_codexs_shapes() {
+fn a_permission_grant_is_answered_in_codexs_shape() {
     let asked = r#"{"id": 9, "method": "item/permissions/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "call9", "cwd": "/w", "reason": "needs the network", "permissions": {"network": {"enabled": true}}}}"#;
     let mut translator = Translator::new();
     let events = translator.feed(Direction::In, asked);
@@ -484,20 +477,6 @@ fn a_permission_grant_and_a_form_are_answered_in_codexs_shapes() {
     assert_eq!(reply("c2"), json!({"permissions": {}}));
     let wrong = translator.reply(&answer(&events[0], Given::Choice("c9".into())));
     assert_eq!(wrong.unwrap_err().reason, Reason::Invalid);
-
-    let form = r#"{"id": 4, "method": "mcpServer/elicitation/request", "params": {"threadId": "th1", "turnId": "t1", "serverName": "demo", "mode": "form", "message": "Your details", "requestedSchema": {"type": "object", "properties": {"city": {"type": "string", "title": "City"}}}}}"#;
-    let mut translator = Translator::new();
-    let events = translator.feed(Direction::In, form);
-    let given = Given::Questions(vec![Reply {
-        question: "city".into(),
-        options: Vec::new(),
-        text: Some("Lisbon".into()),
-    }]);
-    let built = json(&translator.reply(&answer(&events[0], given)).unwrap());
-    assert_eq!(
-        built,
-        json!({"id": 4, "result": {"action": "accept", "content": {"city": "Lisbon"}}})
-    );
 }
 
 #[test]
@@ -567,36 +546,6 @@ fn an_approval_closed_at_the_turns_end_takes_no_answer() {
     );
     let late = translator.reply(&answer(&asked[0], Given::Choice("c0".into())));
     assert_eq!(late.unwrap_err().reason, Reason::NotWaiting);
-}
-
-#[test]
-fn a_form_field_gets_the_type_it_asks_for() {
-    let form = r#"{"id": 4, "method": "mcpServer/elicitation/request", "params": {"threadId": "th1", "turnId": "t1", "serverName": "demo", "mode": "form", "message": "Settings", "requestedSchema": {"type": "object", "properties": {"verbose": {"type": "boolean"}, "count": {"type": "integer"}, "ratio": {"type": "number"}, "name": {"type": "string"}}}}}"#;
-    let mut translator = Translator::new();
-    let events = translator.feed(Direction::In, form);
-    let typed = |pairs: &[(&str, &str)]| {
-        let replies = pairs
-            .iter()
-            .map(|(q, t)| Reply {
-                question: (*q).into(),
-                options: Vec::new(),
-                text: Some((*t).into()),
-            })
-            .collect();
-        translator.reply(&answer(&events[0], Given::Questions(replies)))
-    };
-    let built = typed(&[
-        ("verbose", "false"),
-        ("count", "3"),
-        ("ratio", "0.5"),
-        ("name", "x"),
-    ]);
-    assert_eq!(
-        json(&built.unwrap())["result"]["content"],
-        json!({"verbose": false, "count": 3, "ratio": 0.5, "name": "x"})
-    );
-    let refused = typed(&[("count", "three")]).unwrap_err();
-    assert_eq!(refused.reason, Reason::Invalid);
 }
 
 fn turn_started(translator: &mut Translator) {
@@ -672,61 +621,9 @@ fn a_second_answer_is_told_it_was_already_answered() {
     );
 }
 
-fn question_body(event: &AgentEvent) -> &marmot_agent_events::body::Question {
-    let Body::Question(question) = event.body() else {
-        panic!("a question");
-    };
-    question
-}
-
-// Every kind of field Codex's schema (0.169.0) allows in an MCP form: choices are offered as
-// options and answered with their values.
 #[test]
-fn a_forms_choices_are_options_answered_with_their_values() {
-    let form = r#"{"id": 4, "method": "mcpServer/elicitation/request", "params": {"threadId": "th1", "turnId": "t1", "serverName": "demo", "mode": "form", "message": "Order", "requestedSchema": {"type": "object", "properties": {
-        "size": {"type": "string", "enum": ["s", "m"], "enumNames": ["Small", "Medium"]},
-        "milk": {"type": "string", "oneOf": [{"const": "oat", "title": "Oat milk"}, {"const": "none", "title": "None"}]},
-        "extras": {"type": "array", "items": {"anyOf": [{"const": "shot", "title": "Extra shot"}, {"const": "syrup", "title": "Syrup"}]}},
-        "tags": {"type": "array", "items": {"type": "string", "enum": ["hot", "to-go"]}},
-        "iced": {"type": "boolean"}}}}}"#;
-    let mut translator = Translator::new();
-    let events = translator.feed(Direction::In, form);
-    let question = question_body(&events[0]);
-    let labels = |id: &str| -> Vec<String> {
-        let asked = question.questions().iter().find(|q| q.id == id).unwrap();
-        asked.options.iter().map(|o| o.label.clone()).collect()
-    };
-    assert_eq!(labels("size"), ["Small", "Medium"]);
-    assert_eq!(labels("milk"), ["Oat milk", "None"]);
-    assert_eq!(labels("extras"), ["Extra shot", "Syrup"]);
-    assert_eq!(labels("iced"), ["Yes", "No"]);
-    let pick = |q: &str, options: &[&str]| Reply {
-        question: q.into(),
-        options: options.iter().map(|o| (*o).into()).collect(),
-        text: None,
-    };
-    let given = Given::Questions(vec![
-        pick("size", &["o1"]),
-        pick("milk", &["o0"]),
-        pick("extras", &["o0", "o1"]),
-        pick("tags", &["o1"]),
-        pick("iced", &["o1"]),
-    ]);
-    let built = json(&translator.reply(&answer(&events[0], given)).unwrap());
-    assert_eq!(
-        built["result"]["content"],
-        json!({"size": "m", "milk": "oat", "extras": ["shot", "syrup"], "tags": ["to-go"], "iced": false})
-    );
-    let two_of_one = Given::Questions(vec![pick("size", &["o0", "o1"])]);
-    let refused = translator
-        .reply(&answer(&events[0], two_of_one))
-        .unwrap_err();
-    assert_eq!(refused.reason, Reason::Invalid);
-}
-
-#[test]
-fn a_form_the_chat_cannot_show_is_declined_at_once() {
-    let form = r#"{"id": 5, "method": "mcpServer/elicitation/request", "params": {"threadId": "th1", "turnId": "t1", "serverName": "demo", "mode": "form", "message": "Upload", "requestedSchema": {"type": "object", "properties": {"file": {"type": "object"}}}}}"#;
+fn an_mcp_form_is_declined_at_once() {
+    let form = r#"{"id": 5, "method": "mcpServer/elicitation/request", "params": {"threadId": "th1", "turnId": "t1", "serverName": "demo", "mode": "form", "message": "Upload", "requestedSchema": {"type": "object", "properties": {"city": {"type": "string"}}}}}"#;
     let mut translator = Translator::new();
     let events = translator.feed(Direction::In, form);
     assert!(
@@ -739,4 +636,114 @@ fn a_form_the_chat_cannot_show_is_declined_at_once() {
         [json!({"id": 5, "result": {"action": "decline", "content": null}})]
     );
     assert!(translator.take_replies().is_empty());
+}
+
+fn command_approval(decisions: &str) -> String {
+    format!(
+        r#"{{"id": 0, "method": "item/commandExecution/requestApproval", "params": {{"threadId": "th1", "turnId": "t1", "itemId": "c", "command": "curl example.org", "availableDecisions": {decisions}}}}}"#
+    )
+}
+
+// A choice says what it does only when the driver knows the decision: a lasting network rule allows
+// or denies by its own action, and a decision of a kind the driver does not know is not offered.
+#[test]
+fn a_choice_does_what_its_decision_does() {
+    let decisions = r#"["accept", {"applyNetworkPolicyAmendment": {"network_policy_amendment": {"action": "allow", "host": "example.org"}}}, {"applyNetworkPolicyAmendment": {"network_policy_amendment": {"action": "deny", "host": "example.org"}}}, {"somethingNew": {}}, "cancel"]"#;
+    let mut translator = Translator::new();
+    let events = translator.feed(Direction::In, &command_approval(decisions));
+    let Body::Approval(approval) = events[0].body() else {
+        panic!("an approval");
+    };
+    let shown: Vec<(&str, &str, Effect)> = (approval.choices.iter())
+        .map(|c| (c.id.as_str(), c.label.as_str(), c.effect))
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("c0", "Allow once", Effect::Allow),
+            ("c1", "Always allow example.org", Effect::Allow),
+            ("c2", "Always deny example.org", Effect::Deny),
+            ("c4", "Deny and stop", Effect::Deny),
+            ("c5", "Deny", Effect::Deny),
+        ]
+    );
+    // The decision not offered cannot be chosen.
+    let unknown = translator.reply(&answer(&events[0], Given::Choice("c3".into())));
+    assert_eq!(unknown.unwrap_err().reason, Reason::Invalid);
+    let allow = translator
+        .reply(&answer(&events[0], Given::Choice("c1".into())))
+        .unwrap();
+    let offered = json(&command_approval(decisions))["params"]["availableDecisions"][1].clone();
+    assert_eq!(json(&allow)["result"], json!({"decision": offered}));
+}
+
+#[test]
+fn a_setting_is_waited_for_until_codex_reports_it() {
+    let setup = Setup::new("/w");
+    let set = |setting: &str, value: &str| Action::Set {
+        session: "th1".into(),
+        setting: setting.into(),
+        value: value.into(),
+    };
+    let mut translator = Translator::new();
+    started(&mut translator);
+    let change = translator.control(2, &set("model", "m2"), &setup).unwrap();
+    translator.feed(Direction::Out, &change);
+    translator.feed(Direction::In, r#"{"id": 2, "result": {}}"#);
+    // Codex has answered, and not yet reported the new model: a mode would carry the old one.
+    let refused = translator
+        .control(3, &set("effort", "high"), &setup)
+        .unwrap_err();
+    assert_eq!(refused.reason, Reason::Busy);
+    translator.feed(
+        Direction::In,
+        r#"{"method": "thread/settings/updated", "params": {"threadId": "th1", "threadSettings": {"model": "m2"}}}"#,
+    );
+    assert!(
+        translator
+            .control(3, &set("effort", "high"), &setup)
+            .is_ok()
+    );
+
+    // A refused change is not waited for.
+    let change = translator.control(4, &set("model", "m3"), &setup).unwrap();
+    translator.feed(Direction::Out, &change);
+    translator.feed(
+        Direction::In,
+        r#"{"id": 4, "error": {"code": -32600, "message": "no"}}"#,
+    );
+    assert!(translator.control(5, &set("effort", "low"), &setup).is_ok());
+}
+
+#[test]
+fn a_new_session_asked_for_an_old_one_is_out_of_date() {
+    let setup = Setup::new("/w");
+    let new_session = |session: Option<&str>| Action::NewSession {
+        chat: Chat {
+            id: "c-1".into(),
+            group: false,
+            name: None,
+        },
+        session: session.map(Into::into),
+    };
+    let mut translator = Translator::new();
+    assert!(translator.control(1, &new_session(None), &setup).is_ok());
+    started(&mut translator);
+    let stale = translator
+        .control(2, &new_session(Some("th0")), &setup)
+        .unwrap_err();
+    assert_eq!(stale.reason, Reason::UnknownItem);
+    let none = translator
+        .control(2, &new_session(None), &setup)
+        .unwrap_err();
+    assert_eq!(
+        none.reason,
+        Reason::UnknownItem,
+        "the chat has a session now"
+    );
+    assert!(
+        translator
+            .control(2, &new_session(Some("th1")), &setup)
+            .is_ok()
+    );
 }

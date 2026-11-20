@@ -190,5 +190,22 @@ class OneThread(unittest.TestCase):
         self.assertEqual(codex.other_threads, 1)
 
 
+
+class ApprovalChoices(unittest.TestCase):
+    """A choice says what it does only when the driver knows the decision. The Rust driver has the same
+    case in `tests/send.rs`."""
+
+    def test_a_choice_does_what_its_decision_does(self):
+        rule = lambda action: {"applyNetworkPolicyAmendment": {"network_policy_amendment": {"action": action, "host": "example.org"}}}  # noqa: E731
+        codex = translate.Codex()
+        codex.feed({"dir": "in", "msg": {"id": 0, "method": "item/commandExecution/requestApproval", "params": {
+            "threadId": "th1", "turnId": "t1", "command": "curl example.org",
+            "availableDecisions": ["accept", rule("allow"), rule("deny"), {"somethingNew": {}}, "cancel"]}}})
+        choices = [(c["id"], c["label"], c["effect"]) for c in codex.events[-1]["body"]["choices"]]
+        self.assertEqual(choices, [("c0", "Allow once", "allow"), ("c1", "Always allow example.org", "allow"),
+                                   ("c2", "Always deny example.org", "deny"), ("c4", "Deny and stop", "deny"),
+                                   ("c5", "Deny", "deny")])
+
+
 if __name__ == "__main__":
     unittest.main()

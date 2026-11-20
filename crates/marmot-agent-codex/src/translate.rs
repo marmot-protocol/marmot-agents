@@ -68,60 +68,6 @@ pub const NOT_SENT: &[&str] = &[
     "deprecationNotice",
 ];
 
-/// What a field of an MCP server's form takes, and so how its answer is written.
-#[derive(Clone)]
-enum Field {
-    Text,
-    Number,
-    Integer,
-    /// Offered as two options, yes and no.
-    Boolean,
-    /// One of these values, offered as options in this order.
-    One(Vec<String>),
-    /// Any of these values.
-    Many(Vec<String>),
-}
-
-/// A form field as the driver can show it, or none for a field it cannot.
-fn field(property: &messages::Property) -> Option<(Field, Vec<Offered>)> {
-    let offer = |labels: Vec<String>| -> Vec<Offered> {
-        (labels.into_iter().enumerate())
-            .map(|(k, label)| Offered {
-                id: format!("o{k}"),
-                label,
-                description: None,
-            })
-            .collect()
-    };
-    let choice = |p: &messages::Property, titled: Option<&Vec<messages::Titled>>| {
-        if let Some(titled) = titled {
-            let values = titled.iter().map(|t| t.value.clone()).collect();
-            let labels = (titled.iter())
-                .map(|t| t.title.clone().unwrap_or_else(|| t.value.clone()))
-                .collect();
-            return Some((values, labels));
-        }
-        let values = p.values.clone()?;
-        let labels = p.value_names.clone().unwrap_or_else(|| values.clone());
-        Some((values, labels))
-    };
-    match property.kind.as_ref().and_then(Value::as_str) {
-        Some("boolean") => Some((Field::Boolean, offer(vec!["Yes".into(), "No".into()]))),
-        Some("number") => Some((Field::Number, Vec::new())),
-        Some("integer") => Some((Field::Integer, Vec::new())),
-        Some("string") => match choice(property, property.titled.as_ref()) {
-            Some((values, labels)) => Some((Field::One(values), offer(labels))),
-            None => Some((Field::Text, Vec::new())),
-        },
-        Some("array") => {
-            let items = property.items.as_deref()?;
-            let (values, labels) = choice(items, items.titled_any.as_ref())?;
-            Some((Field::Many(values), offer(labels)))
-        }
-        _ => None,
-    }
-}
-
 /// What the driver waits to hear back about.
 enum Pending {
     Approval {
@@ -136,9 +82,6 @@ enum Pending {
     },
     Question {
         item: String,
-        /// For an MCP server's form, answered with values, what each field takes. Codex's own
-        /// questions are answered with labels, and have none.
-        form: Option<HashMap<String, Field>>,
     },
 }
 
@@ -195,6 +138,8 @@ pub struct Translator {
     answered: HashSet<String>,
     /// Replies the driver sends without asking anyone, for the transport to send and feed back.
     outbox: Vec<String>,
+    /// Changes of settings sent that Codex has not yet confirmed with `thread/settings/updated`.
+    unconfirmed_settings: u32,
     /// Codex's requests that the client has not answered, by id.
     asked: HashMap<Id, Pending>,
     /// For each turn, the thread's tokens before its first model call, and the thread's total
@@ -227,7 +172,6 @@ impl Translator {
         &self.unknown
     }
 
-    /// How many messages could not be read as JSON-RPC.
     /// Replies to send to Codex at once, which nobody is asked for: a form the chat cannot show is
     /// declined, so Codex does not wait for it. The driver sends each and feeds it back, as it does
     /// every message it sends.
@@ -235,6 +179,7 @@ impl Translator {
         std::mem::take(&mut self.outbox)
     }
 
+    /// How many messages could not be read as JSON-RPC.
     pub fn unreadable(&self) -> u64 {
         self.unreadable
     }
@@ -279,6 +224,7 @@ impl Translator {
             );
         }
         self.requests.clear();
+        self.unconfirmed_settings = 0;
         self.asked.clear();
         self.starts.clear();
         self.usage.clear();
@@ -298,6 +244,9 @@ impl Translator {
                     owner,
                 };
                 self.requests.insert(id.clone(), sent);
+                if method == "thread/settings/update" {
+                    self.unconfirmed_settings += 1;
+                }
                 let by = match method.as_str() {
                     "turn/start" => Some(StartedBy::User),
                     "thread/compact/start" => Some(StartedBy::Control),
@@ -360,6 +309,7 @@ impl Translator {
                     if self.for_another_thread(p.thread_id.as_deref()) {
                         return;
                     }
+                    self.unconfirmed_settings = self.unconfirmed_settings.saturating_sub(1);
                     let settings = p.thread_settings.unwrap_or_default();
                     self.thread_settings(&settings, method, params, out);
                 }
@@ -768,35 +718,23 @@ impl Translator {
             .unwrap_or_else(|| vec![Value::from("accept"), Value::from("decline")]);
         let mut decisions = Vec::new();
         let mut choices = Vec::new();
+        let count = offered.len();
         for (n, decision) in offered.into_iter().enumerate() {
-            let key = match &decision {
-                Value::String(word) => word.clone(),
-                Value::Object(one) => one.keys().next().cloned().unwrap_or_default(),
-                other => other.to_string(),
+            // A decision the driver does not know is not offered: its effect would be a guess.
+            let Some((effect, label)) = decision_choice(&decision) else {
+                continue;
             };
             let id = format!("c{n}");
-            let label = match key.as_str() {
-                "accept" => "Allow once",
-                "acceptForSession" => "Allow for this session",
-                "decline" => "Deny",
-                "cancel" => "Deny and stop",
-                "acceptWithExecpolicyAmendment" => "Allow, and don't ask again for this command",
-                other => other,
-            };
             choices.push(Choice {
                 id: id.clone(),
-                label: label.to_string(),
-                effect: if key.starts_with("accept") {
-                    Effect::Allow
-                } else {
-                    Effect::Deny
-                },
+                label,
+                effect,
             });
             decisions.push((id, decision));
         }
         // Codex accepts "decline" although it does not always list it (rule 2).
         if !decisions.iter().any(|(_, d)| *d == "decline") {
-            let id = format!("c{}", choices.len());
+            let id = format!("c{count}");
             choices.push(Choice {
                 id: id.clone(),
                 label: "Deny".to_string(),
@@ -959,38 +897,16 @@ impl Translator {
                 native,
             );
         }
-        let fields = (p.requested_schema.and_then(|s| s.properties))
-            .unwrap_or_default()
-            .0;
-        let mut form = HashMap::new();
-        let mut asked = Vec::new();
-        for (key, property) in fields {
-            let Some((kind, options)) = field(&property) else {
-                // A field the chat cannot show: decline the form now, so Codex does not wait.
-                if let Some(id) = &id {
-                    let reply = json!({"id": id, "result": {"action": "decline", "content": null}});
-                    self.outbox.push(reply.to_string());
-                }
-                let item = self.request_item("form", p.turn_id.as_deref(), id.as_ref());
-                let body = Body::Notice(notice(NoticeKind::Warning));
-                let said = "A form the chat cannot show was declined";
-                return self.emit(out, &item, body, State::Done, said, &text, native);
-            };
-            asked.push(Asked {
-                text: (property.description.clone())
-                    .or(property.title.clone())
-                    .unwrap_or_else(|| key.clone()),
-                id: key.clone(),
-                header: None,
-                multiple: matches!(kind, Field::Many(_)),
-                allow_text: matches!(kind, Field::Text | Field::Number | Field::Integer),
-                options,
-                secret: false,
-            });
-            form.insert(key, kind);
+        // A form from an MCP server. The chat cannot show one yet, so the driver declines it at
+        // once, so that Codex does not wait, and says so in the chat (D-064).
+        if let Some(id) = &id {
+            let reply = json!({"id": id, "result": {"action": "decline", "content": null}});
+            self.outbox.push(reply.to_string());
         }
-        let item = self.request_item("question", p.turn_id.as_deref(), id.as_ref());
-        self.ask(out, Some(form), id, &item, None, asked, &text, native);
+        let item = self.request_item("form", p.turn_id.as_deref(), id.as_ref());
+        let body = Body::Notice(notice(NoticeKind::Warning));
+        let title = "A form the chat cannot show was declined";
+        self.emit(out, &item, body, State::Done, title, &text, native);
     }
 
     fn user_input(
@@ -1031,14 +947,13 @@ impl Translator {
         let item = self.request_item("question", p.turn_id.as_deref(), id.as_ref());
         let native = native(&format!("{method} (request)"), params);
         let subject = p.item_id.map(Into::into);
-        self.ask(out, None, id, &item, subject, asked, &text, native);
+        self.ask(out, id, &item, subject, asked, &text, native);
     }
 
     #[allow(clippy::too_many_arguments)]
     fn ask(
         &mut self,
         out: &mut Vec<AgentEvent>,
-        form: Option<HashMap<String, Field>>,
         id: Option<Id>,
         item: &str,
         subject: Option<marmot_agent_events::ItemId>,
@@ -1058,7 +973,6 @@ impl Translator {
                 id,
                 Pending::Question {
                     item: item.to_string(),
-                    form,
                 },
             );
         }
@@ -1173,6 +1087,9 @@ impl Translator {
         };
         if let Some(error) = m.error {
             self.starts.retain(|(id, ..)| Some(id) != m.id.as_ref()); // that request starts no turn
+            if method.as_deref() == Some("thread/settings/update") {
+                self.unconfirmed_settings = self.unconfirmed_settings.saturating_sub(1);
+            }
             let Some(e) = self.read::<ErrorReply>("an error reply", error.get()) else {
                 return;
             };
@@ -1554,22 +1471,11 @@ impl Translator {
 
 /// What the client's reply answered, for each question asked: the ids of the options whose labels
 /// it gave, and anything else as typed text. A secret question records only that it was answered
-/// (D-041). Codex replies with labels; an MCP server's form gets values.
+/// (D-041). Codex replies with labels.
 fn answered(questions: &[Asked], reply: QuestionReply) -> Vec<Answered> {
-    let given: Vec<(String, Vec<Value>)> = match reply.answers {
-        Some(answers) => answers
-            .0
-            .into_iter()
-            .map(|(id, given)| (id, given.answers.unwrap_or_default()))
-            .collect(),
-        None => reply
-            .content
-            .unwrap_or_default()
-            .0
-            .into_iter()
-            .map(|(id, value)| (id, vec![value]))
-            .collect(),
-    };
+    let given: Vec<(String, Vec<Value>)> = (reply.answers.unwrap_or_default().0.into_iter())
+        .map(|(id, given)| (id, given.answers.unwrap_or_default()))
+        .collect();
     let mut out = Vec::new();
     for q in questions {
         let Some((_, values)) = given.iter().find(|(id, _)| *id == q.id) else {
@@ -1608,6 +1514,36 @@ fn answered(questions: &[Asked], reply: QuestionReply) -> Vec<Answered> {
     out
 }
 
+/// What a decision Codex offers on an approval does, and what its button says: each kind Codex's
+/// schema (0.169.0) documents. A network rule allows or denies by its own action, and lasts.
+fn decision_choice(decision: &Value) -> Option<(Effect, String)> {
+    let (effect, label) = match decision {
+        Value::String(word) => match word.as_str() {
+            "accept" => (Effect::Allow, "Allow once".to_string()),
+            "acceptForSession" => (Effect::Allow, "Allow for this session".to_string()),
+            "decline" => (Effect::Deny, "Deny".to_string()),
+            "cancel" => (Effect::Deny, "Deny and stop".to_string()),
+            _ => return None,
+        },
+        Value::Object(one) if one.len() == 1 => {
+            if one.contains_key("acceptWithExecpolicyAmendment") {
+                let label = "Allow, and don't ask again for this command";
+                (Effect::Allow, label.to_string())
+            } else {
+                let rule = &one.get("applyNetworkPolicyAmendment")?["network_policy_amendment"];
+                let host = rule["host"].as_str()?;
+                match rule["action"].as_str()? {
+                    "allow" => (Effect::Allow, format!("Always allow {host}")),
+                    "deny" => (Effect::Deny, format!("Always deny {host}")),
+                    _ => return None,
+                }
+            }
+        }
+        _ => return None,
+    };
+    Some((effect, label))
+}
+
 /// The thread a message's params name, if they name one.
 fn named_thread(params: &str) -> Option<String> {
     #[derive(Deserialize)]
@@ -1616,38 +1552,6 @@ fn named_thread(params: &str) -> Option<String> {
         thread_id: Option<String>,
     }
     serde_json::from_str::<Named>(params).ok()?.thread_id
-}
-
-/// A form field's answer, written as the field asks: the options chosen, or the text typed.
-fn typed(field: &Field, chosen: &[usize], text: Option<&str>) -> Result<Value, Refusal> {
-    let invalid = || Refusal::new(Reason::Invalid);
-    let typed = || text.ok_or_else(invalid);
-    Ok(match field {
-        Field::Text if chosen.is_empty() => Value::from(typed()?),
-        Field::Integer if chosen.is_empty() => {
-            typed()?.parse::<i64>().map_err(|_| invalid())?.into()
-        }
-        Field::Number if chosen.is_empty() => {
-            let n = typed()?.parse::<f64>().map_err(|_| invalid())?;
-            serde_json::Number::from_f64(n).ok_or_else(invalid)?.into()
-        }
-        Field::Boolean => match (chosen, text) {
-            ([0], None) => true.into(),
-            ([1], None) => false.into(),
-            ([], Some(t)) => t.parse::<bool>().map_err(|_| invalid())?.into(),
-            _ => return Err(invalid()),
-        },
-        Field::One(values) if text.is_none() => match chosen {
-            [at] => values[*at].clone().into(),
-            _ => return Err(invalid()),
-        },
-        Field::Many(values) if text.is_none() => chosen
-            .iter()
-            .map(|&at| values[at].clone())
-            .collect::<Vec<_>>()
-            .into(),
-        _ => return Err(invalid()),
-    })
 }
 
 fn native(kind: &str, payload: &str) -> Option<Native> {
@@ -1845,7 +1749,14 @@ impl Translator {
                 let params = json!({"threadId": thread, "turnId": running});
                 Ok(send::request(id, "turn/interrupt", params))
             }
-            DriverAction::NewSession { .. } => self.pick(id, None, setup),
+            DriverAction::NewSession { session, .. } => {
+                // The session it replaces must still be the chat's: one asked for before another
+                // replaced it is out of date.
+                if session.as_ref().map(|s| s.as_str()) != self.session.as_deref() {
+                    return refuse(Reason::UnknownItem);
+                }
+                self.pick(id, None, setup)
+            }
             DriverAction::Set {
                 session,
                 setting,
@@ -1945,7 +1856,7 @@ impl Translator {
                     _ => return refuse(Reason::Invalid),
                 },
             },
-            (Pending::Question { item, form }, Given::Questions(replies)) => {
+            (Pending::Question { item }, Given::Questions(replies)) => {
                 let Some(Body::Question(question)) =
                     self.open_event(item).map(|e| e.body().clone())
                 else {
@@ -1957,47 +1868,32 @@ impl Translator {
                     else {
                         return refuse(Reason::Invalid);
                     };
-                    // The positions of the options chosen.
-                    let mut chosen = Vec::new();
+                    // Codex's questions take labels; Codex turns them back into choices.
+                    let mut said = Vec::new();
                     for option in &given.options {
-                        let Some(at) = asked.options.iter().position(|o| &o.id == option) else {
+                        let Some(offered) = asked.options.iter().find(|o| &o.id == option) else {
                             return refuse(Reason::Invalid);
                         };
-                        chosen.push(at);
+                        said.push(offered.label.clone());
                     }
-                    let value = match form.as_ref().and_then(|f| f.get(&given.question)) {
-                        Some(field) => typed(field, &chosen, given.text.as_deref())?,
-                        None if form.is_some() => return refuse(Reason::Invalid),
-                        // Codex's own questions take labels; Codex turns them back into choices.
-                        None => {
-                            let mut said: Vec<String> = chosen
-                                .iter()
-                                .map(|&at| asked.options[at].label.clone())
-                                .collect();
-                            said.extend(given.text.clone());
-                            json!({"answers": said})
-                        }
-                    };
-                    answers.insert(given.question.clone(), value);
+                    said.extend(given.text.clone());
+                    answers.insert(given.question.clone(), json!({"answers": said}));
                 }
-                if form.is_some() {
-                    json!({"action": "accept", "content": answers})
-                } else {
-                    json!({"answers": answers})
-                }
+                json!({"answers": answers})
             }
             _ => return refuse(Reason::Invalid),
         };
         Ok(json!({"id": id, "result": result}).to_string())
     }
 
-    /// Whether a request that starts a turn or picks the session is waiting for Codex. Until Codex
-    /// answers, what the translator knows of the session may be out of date, so it builds nothing
-    /// but replies to Codex's requests and interrupts; the driver holds the rest and asks again.
+    /// Whether a request that starts a turn, picks the session or changes a setting is waiting
+    /// for Codex. Until Codex answers, and for a setting until it reports the new settings, what
+    /// the translator knows of the session may be out of date, so it builds nothing but replies to
+    /// Codex's requests and interrupts; the driver holds the rest and asks again.
     fn waiting_on_codex(&self) -> bool {
         let picking = (self.requests.values())
             .any(|sent| matches!(sent.method.as_str(), "thread/start" | "thread/resume"));
-        picking || !self.starts.is_empty()
+        picking || !self.starts.is_empty() || self.unconfirmed_settings > 0
     }
 
     fn session_named(&self, session: &str) -> Result<&str, Refusal> {

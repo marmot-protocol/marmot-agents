@@ -274,7 +274,6 @@ pub(crate) struct Elicitation {
     #[serde(rename = "_meta")]
     pub meta: Option<ElicitationMeta>,
     pub message: Option<String>,
-    pub requested_schema: Option<Schema>,
 }
 
 #[derive(Default, Deserialize)]
@@ -282,45 +281,6 @@ pub(crate) struct Elicitation {
 pub(crate) struct ElicitationMeta {
     pub codex_approval_kind: Option<String>,
     pub tool_name: Option<String>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default)]
-pub(crate) struct Schema {
-    pub properties: Option<Ordered<Property>>,
-}
-
-#[derive(Default, Deserialize)]
-#[serde(default)]
-pub(crate) struct Property {
-    pub description: Option<String>,
-    pub title: Option<String>,
-    /// `string`, `number`, `integer`, `boolean` or `array`. Kept as JSON, so a type the driver does
-    /// not know cannot stop the request being read.
-    #[serde(rename = "type")]
-    pub kind: Option<Value>,
-    /// A choice of one: its values.
-    #[serde(rename = "enum")]
-    pub values: Option<Vec<String>>,
-    /// The values' names, in the older form of a choice of one.
-    #[serde(rename = "enumNames")]
-    pub value_names: Option<Vec<String>>,
-    /// A choice of one, each value with a title.
-    #[serde(rename = "oneOf")]
-    pub titled: Option<Vec<Titled>>,
-    /// A choice of several: the values offered, under `enum` or, with titles, `anyOf`.
-    pub items: Option<Box<Property>>,
-    #[serde(rename = "anyOf")]
-    pub titled_any: Option<Vec<Titled>>,
-}
-
-/// A value offered in a form, with what it is called.
-#[derive(Default, Deserialize)]
-#[serde(default)]
-pub(crate) struct Titled {
-    #[serde(rename = "const")]
-    pub value: String,
-    pub title: Option<String>,
 }
 
 #[derive(Default, Deserialize)]
@@ -363,13 +323,11 @@ pub(crate) struct ApprovalReply {
     pub scope: Option<String>,
 }
 
-/// The client's reply to a question: Codex's questions get labels under `answers`, an MCP
-/// server's form gets values under `content`.
+/// The client's reply to one of Codex's questions: labels, under `answers`.
 #[derive(Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct QuestionReply {
     pub answers: Option<Ordered<Given>>,
-    pub content: Option<Ordered<Value>>,
 }
 
 #[derive(Default, Deserialize)]
