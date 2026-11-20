@@ -2,8 +2,9 @@
 
 Status: draft. Which driver each harness gets is decided
 ([D-005](../decisions.md#d-005-which-driver-each-harness-gets)), and so is the preference for official
-libraries ([D-006](../decisions.md#d-006-prefer-official-interfaces-and-libraries)). The trait, the capability
-flags and the testing approach are proposals.
+libraries ([D-006](../decisions.md#d-006-prefer-official-interfaces-and-libraries)), and so are the trait and
+the capability flags ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)). The testing
+approach is a proposal.
 
 ## What a driver does
 
@@ -64,7 +65,7 @@ the Hermes connector can report messages, notices, approvals and questions, and 
 items without a change on the Hermes side. See
 [`../reference/hermes-messages.md`](../reference/hermes-messages.md).
 
-## Proposed: the driver trait
+## The driver trait
 
 Every Rust driver implements one trait. A first version exists as code, in
 [`crates/marmot-agent-driver`](../../crates/marmot-agent-driver). It has the operations of
@@ -81,16 +82,16 @@ Three things a driver does are not operations of their own. A prompt names its s
 resuming one happen when a prompt arrives. A message sent during a turn is a prompt like any other, so there
 is no "steer". And "new session" is a control.
 
-It is a proposal ([Q-16](../open-questions.md#q-16-how-does-a-driver-say-what-it-supports)).
+It is decided ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)).
 
-## Proposed: capabilities
+## Capabilities
 
 Each driver declares what its harness can do: interrupt a turn, what it does with a message sent during one,
 resume a session, take attachments, and so on. The core and the clients read these flags and never check a
 harness's name. A driver states every flag; none is optional.
 
-The proposed flags, with what Codex states for each, are under
-[Q-16](../open-questions.md#q-16-how-does-a-driver-say-what-it-supports).
+The flags, with what Codex states for each, are in
+[D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags).
 
 ## Proposed: testing with recorded sessions
 

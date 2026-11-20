@@ -108,6 +108,12 @@ A connector may refuse with one of these reasons: `not_supported`, `busy`, `unkn
 `already_answered`, `nothing_to_do`, `invalid`, `failed`. The core turns a refusal into the notice the chat
 sees.
 
+This section is behind the Rust trait, which is decided
+([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)). There, each answer and control
+carries an id the core makes up, an event names the requests it settles and the chat it belongs to, and an
+answer gives one choice to an approval or one entry for each question. The socket takes the same shapes when
+it is designed.
+
 Why each part of a prompt is there:
 
 - **The sender and the chat, on every prompt.** Hermes and OpenClaw route a prompt inside their own runtime.
@@ -169,10 +175,11 @@ designed yet.
 ## Capabilities
 
 The connector states in the hello what its harness can do. The core and the apps read these and never check a
-harness's name. This list is a draft, drawn from the recordings. It will change when the first drivers are
-built. A proposal that turns it into types is under
-[Q-16](../open-questions.md#q-16-how-does-a-driver-say-what-it-supports). It keeps seven of these flags and
-leaves out `tool_items`, `questions` and `reasoning`.
+harness's name. This table is a draft, drawn from the recordings, and stays one until the socket is
+designed. The Rust drivers' flags are decided
+([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)): seven of these, leaving out
+`tool_items`, `questions` and `reasoning`, and with `files_in` as `none`, `images` or `any` rather than yes or
+no. The socket takes those when it is designed.
 
 | Capability | Values | Codex | Claude Code | Hermes | OpenClaw |
 | --- | --- | --- | --- | --- | --- |
@@ -195,8 +202,8 @@ honours one of them anywhere in a message, so each entry says where it counts
 ([D-047](../decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts)). The full lists are in
 [answers and controls](answers-and-controls.md#typed-commands-that-widen-what-an-agent-may-do).
 
-Codex is a built-in driver and does not use the socket. It is in the table because the same capabilities apply
-to the Rust trait.
+Codex is a built-in driver and does not use the socket. It is in the table because the same facts about each
+harness apply to the Rust trait, whose flags are the seven in D-058, not the rows of this draft.
 
 ## When things go wrong
 
@@ -205,6 +212,7 @@ to the Rust trait.
 | The connection drops during a turn | Closes the turn and every open item, with the reason. The chat shows the turn as interrupted |
 | The connector comes back | Takes a new hello. Nothing is replayed |
 | A prompt was sent and no response came before the drop | Reports it as not delivered. It is never sent again |
+| An answer or a control was taken and nothing settled it before the drop | Settles it with a notice that it failed ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)) |
 | An event names an unknown turn or session | Accepts it. A harness can produce work outside a turn |
 | A message is not valid | Answers with an error and keeps the connection |
 

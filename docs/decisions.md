@@ -793,7 +793,7 @@ The plan after that, which is not fixed:
 **Why.** The Codex driver needs nothing from MDK, so it can start at once, and it is the cheapest test of the
 design in real code. It also settles three open questions by doing them: which Codex library to build on
 (Q-15, since settled as [D-055](#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own)), the capability flags
-([Q-16](open-questions.md#q-16-how-does-a-driver-say-what-it-supports)) and how drivers are tested
+(Q-16, since settled as [D-058](#d-058-the-driver-trait-and-the-capability-flags)) and how drivers are tested
 ([Q-17](open-questions.md#q-17-how-are-drivers-tested)). The core cannot send an agent item until MDK changes.
 The gateways come last because whose rules govern them is still open
 ([Q-22](open-questions.md#q-22-whose-rules-govern-a-gateway)).
@@ -928,3 +928,71 @@ size, because the core turns the event into the item. In one place, the rule exi
 written in another language cannot get it wrong.
 
 Decided 2026-11-19.
+
+## D-058 The driver trait and the capability flags
+
+**Decision.** Every Rust driver implements the trait in
+[`crates/marmot-agent-driver`](../crates/marmot-agent-driver). It has the operations of
+[the socket's driver section](design/socket-protocol.md#the-driver-section), and no others:
+
+| On the socket | In the trait |
+| --- | --- |
+| The hello: the harness, and what it can do | `harness`, `capabilities` |
+| The requests `prompt`, `answer`, `control` | `prompt`, `answer`, `control`. Each returns once the driver has taken or refused it, with one of the eight reasons |
+| The notification `event` | `next_event`: the next agent event, with the chat it belongs to, the prompts a turn responds to and the requests it settles |
+
+- **A request is taken once the driver has handed it to the harness.** It does not wait for the harness to
+  confirm, because a harness may never say.
+- **Each answer and control carries an id the core makes up, and the event that shows its effect names it**,
+  including when the effect is that it failed
+  ([D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it),
+  [D-046](#d-046-a-setting-change-is-an-edit-and-a-notice-only-when-nobody-asked-for-it)).
+- **When the harness stops, the driver closes what it can first.**
+- **When a driver ends, for any reason, the core closes the items still open**, as it does when a connector
+  goes away ([D-034](#d-034-the-core-does-the-shared-work-and-a-connector-speaks-only-in-agent-events)), and
+  settles every answer and control still open with a notice that it failed. A prompt is not settled this way:
+  one that was not taken is not delivered, and is never sent again
+  ([D-037](#d-037-a-prompt-is-delivered-at-most-once)).
+- **An event says which chat it belongs to**, whenever the driver knows. "New session" names a chat, and a
+  session only if there is one to end.
+- **An answer says which kind it is.** To an approval it gives one choice. To a question item it gives, for
+  each question, the question's id, the ids of the options chosen and any typed text. What is delivered to the
+  harness is a different type from what the question item records
+  ([D-041](#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)).
+- **A refusal's detail is shown in the chat**, to every member. A driver puts the harness's own words there
+  only when it can be sure they do not repeat an answer to a secret question, and otherwise leaves them out.
+- **Starting and stopping a driver are not in the trait.** Each driver has its own settings.
+
+A driver states seven capability flags, every one, every time:
+
+| Flag | Values | Codex | Who reads it |
+| --- | --- | --- | --- |
+| `interrupt` | yes or no | yes | An app, to offer the button |
+| `mid_turn` | `fold`, `restart`, `queue` | `fold` | An app, to say what a message sent during a turn will do |
+| `sessions` | `core`, `own` | `core` | The core, to know whether it names the session |
+| `resume` | yes or no | yes | The core, after a restart |
+| `approvals` | yes or no | yes | An app, to know whether approval requests will arrive in the chat |
+| `files_in` | none, images, any | images | An app, to allow an attachment |
+| `approval_commands` | a list; each entry has the command and whether it counts at the start of a message or anywhere | none | The core, on every message |
+
+The socket's draft flags `tool_items`, `reasoning` and `questions` are left out: the items already say them.
+
+An approval command does not say when it needs the right to approve.
+[D-048](#d-048-a-request-to-confirm-a-command-is-a-question) stands: a typed `/approve` or `/deny` needs it
+only while an approval is waiting. A flag with that test was tried and taken out, because an approval can
+start after the core's check and before the harness reads the message, and the same word then approves the
+agent's action. Closing that gap needs a way to tie a confirmation to the exact request it confirms. That is
+for the Hermes connector to design, and until a replacement is accepted D-048 is the rule.
+
+The socket's driver section is a draft and has not caught up. Its answer has a flat list of choices, its
+events have no chat and settle nothing, its requests carry no id, and its `files_in` is yes or no. When the
+socket is designed it takes the shapes above.
+
+**Why.** A built-in driver and a connector on the socket do the same job, so the core treats them the same way.
+A flag is kept only when the core or an app does something different because of it before anything has
+happened. The trait needs no async runtime, so each driver picks its own.
+
+What a debug print shows is not part of this decision. See
+[Q-13](open-questions.md#q-13-what-may-be-logged).
+
+Decided 2026-11-19. The project owner accepted the trait, and then the seven flags.

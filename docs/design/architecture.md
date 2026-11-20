@@ -2,7 +2,9 @@
 
 Status: draft. The layers, the core program, the socket and the driver choices are decided
 ([D-002](../decisions.md#d-002-one-rust-core-program-with-mdk-as-a-library) to
-[D-005](../decisions.md#d-005-which-driver-each-harness-gets)). The details on this page are proposals.
+[D-005](../decisions.md#d-005-which-driver-each-harness-gets)), and so are the driver trait and the capability
+flags ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)). The other details on this
+page are proposals.
 
 Read [the three-minute overview](../README.md) first. This page goes one level deeper: what each part is
 responsible for, and what happens during a turn.
@@ -115,11 +117,11 @@ Three things to notice:
 Harnesses do not all support the same things. One folds a message sent during a turn into that turn; another
 ends the turn. One takes images; another takes nothing.
 
-The proposal is that each driver declares what its harness does as a set of flags. The core reads three of
+Each driver declares what its harness does as a set of flags. The core reads three of
 them: who picks the session, whether a session survives a restart, and which typed commands need the right to
 approve. Apps read the rest, to show only the controls that work and to say what a message sent during a turn
-will do. Nothing above a driver checks the harness's name. See
-[Q-16](../open-questions.md#q-16-how-does-a-driver-say-what-it-supports).
+will do. Nothing above a driver checks the harness's name. Decided as
+[D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags).
 
 ## Where the edges are
 
