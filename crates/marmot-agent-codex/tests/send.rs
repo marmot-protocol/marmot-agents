@@ -636,6 +636,11 @@ fn an_mcp_form_is_declined_at_once() {
         [json!({"id": 5, "result": {"action": "decline", "content": null}})]
     );
     assert!(translator.take_replies().is_empty());
+
+    // A decline still waiting to be sent is dropped when Codex stops: nothing is left to answer.
+    translator.feed(Direction::In, form);
+    translator.harness_stopped();
+    assert!(translator.take_replies().is_empty());
 }
 
 fn command_approval(decisions: &str) -> String {
@@ -678,7 +683,7 @@ fn a_choice_does_what_its_decision_does() {
 }
 
 #[test]
-fn a_setting_is_waited_for_until_codex_reports_it() {
+fn a_setting_is_waited_for_until_codex_answers_and_holds_from_then() {
     let setup = Setup::new("/w");
     let set = |setting: &str, value: &str| Action::Set {
         session: "th1".into(),
@@ -686,33 +691,45 @@ fn a_setting_is_waited_for_until_codex_reports_it() {
         value: value.into(),
     };
     let mut translator = Translator::new();
-    started(&mut translator);
-    let change = translator.control(2, &set("model", "m2"), &setup).unwrap();
-    translator.feed(Direction::Out, &change);
-    translator.feed(Direction::In, r#"{"id": 2, "result": {}}"#);
-    // Codex has answered, and not yet reported the new model: a mode would carry the old one.
-    let refused = translator
-        .control(3, &set("effort", "high"), &setup)
-        .unwrap_err();
-    assert_eq!(refused.reason, Reason::Busy);
+    translator.feed(
+        Direction::Out,
+        r#"{"id": 1, "method": "thread/start", "params": {}}"#,
+    );
     translator.feed(
         Direction::In,
-        r#"{"method": "thread/settings/updated", "params": {"threadId": "th1", "threadSettings": {"model": "m2"}}}"#,
+        r#"{"id": 1, "result": {"thread": {"id": "th1"}, "model": "m1", "reasoningEffort": "low"}}"#,
     );
-    assert!(
-        translator
-            .control(3, &set("effort", "high"), &setup)
-            .is_ok()
+    let change = translator.control(2, &set("model", "m2"), &setup).unwrap();
+    translator.feed(Direction::Out, &change);
+    // Codex has not answered: what it runs on is not known.
+    let refused = translator
+        .control(3, &set("mode", "plan"), &setup)
+        .unwrap_err();
+    assert_eq!(refused.reason, Reason::Busy);
+    // Codex took it. A mode built now carries the new model, though Codex has not reported it.
+    translator.feed(Direction::In, r#"{"id": 2, "result": {}}"#);
+    let mode = json(&translator.control(3, &set("mode", "plan"), &setup).unwrap());
+    let settings = &mode["params"]["collaborationMode"]["settings"];
+    assert_eq!(
+        (
+            settings["model"].as_str(),
+            settings["reasoning_effort"].as_str()
+        ),
+        (Some("m2"), Some("low"))
     );
 
-    // A refused change is not waited for.
+    // A refused change is not waited for, and does not hold.
     let change = translator.control(4, &set("model", "m3"), &setup).unwrap();
     translator.feed(Direction::Out, &change);
     translator.feed(
         Direction::In,
         r#"{"id": 4, "error": {"code": -32600, "message": "no"}}"#,
     );
-    assert!(translator.control(5, &set("effort", "low"), &setup).is_ok());
+    let mode = json(&translator.control(5, &set("mode", "plan"), &setup).unwrap());
+    assert_eq!(
+        mode["params"]["collaborationMode"]["settings"]["model"],
+        "m2"
+    );
 }
 
 #[test]

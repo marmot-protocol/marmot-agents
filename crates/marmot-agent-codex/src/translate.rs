@@ -138,8 +138,9 @@ pub struct Translator {
     answered: HashSet<String>,
     /// Replies the driver sends without asking anyone, for the transport to send and feed back.
     outbox: Vec<String>,
-    /// Changes of settings sent that Codex has not yet confirmed with `thread/settings/updated`.
-    unconfirmed_settings: u32,
+    /// Changes of settings sent that Codex has not answered yet, by request: the model and the
+    /// effort each asks for. Codex answers every request, so none can wait for ever.
+    asked_settings: HashMap<Id, (Option<String>, Option<String>)>,
     /// Codex's requests that the client has not answered, by id.
     asked: HashMap<Id, Pending>,
     /// For each turn, the thread's tokens before its first model call, and the thread's total
@@ -224,7 +225,8 @@ impl Translator {
             );
         }
         self.requests.clear();
-        self.unconfirmed_settings = 0;
+        self.asked_settings.clear();
+        self.outbox.clear(); // nothing is left to answer
         self.asked.clear();
         self.starts.clear();
         self.usage.clear();
@@ -245,7 +247,12 @@ impl Translator {
                 };
                 self.requests.insert(id.clone(), sent);
                 if method == "thread/settings/update" {
-                    self.unconfirmed_settings += 1;
+                    let params: Value = m.params.map_or(Value::Null, |p| {
+                        serde_json::from_str(p.get()).unwrap_or(Value::Null)
+                    });
+                    let said = |key: &str| params[key].as_str().map(String::from);
+                    self.asked_settings
+                        .insert(id.clone(), (said("model"), said("effort")));
                 }
                 let by = match method.as_str() {
                     "turn/start" => Some(StartedBy::User),
@@ -309,7 +316,6 @@ impl Translator {
                     if self.for_another_thread(p.thread_id.as_deref()) {
                         return;
                     }
-                    self.unconfirmed_settings = self.unconfirmed_settings.saturating_sub(1);
                     let settings = p.thread_settings.unwrap_or_default();
                     self.thread_settings(&settings, method, params, out);
                 }
@@ -1085,11 +1091,15 @@ impl Translator {
             Some(Sent { method, owner }) => (Some(method), owner),
             None => (None, (self.session.clone(), self.turn.clone())),
         };
+        // A change of settings Codex took holds from now, whether or not Codex reports it again.
+        let asked = m.id.as_ref().and_then(|id| self.asked_settings.remove(id));
+        if let (Some((model, effort)), None) = (asked, m.error) {
+            self.known.model = model.or(self.known.model.take());
+            self.known.effort = effort.or(self.known.effort.take());
+        }
         if let Some(error) = m.error {
             self.starts.retain(|(id, ..)| Some(id) != m.id.as_ref()); // that request starts no turn
-            if method.as_deref() == Some("thread/settings/update") {
-                self.unconfirmed_settings = self.unconfirmed_settings.saturating_sub(1);
-            }
+
             let Some(e) = self.read::<ErrorReply>("an error reply", error.get()) else {
                 return;
             };
@@ -1887,13 +1897,13 @@ impl Translator {
     }
 
     /// Whether a request that starts a turn, picks the session or changes a setting is waiting
-    /// for Codex. Until Codex answers, and for a setting until it reports the new settings, what
-    /// the translator knows of the session may be out of date, so it builds nothing but replies to
-    /// Codex's requests and interrupts; the driver holds the rest and asks again.
+    /// for Codex. Until Codex answers, what the translator knows of the session may be out of
+    /// date, so it builds nothing but replies to Codex's requests and interrupts; the driver holds
+    /// the rest and asks again.
     fn waiting_on_codex(&self) -> bool {
         let picking = (self.requests.values())
             .any(|sent| matches!(sent.method.as_str(), "thread/start" | "thread/resume"));
-        picking || !self.starts.is_empty() || self.unconfirmed_settings > 0
+        picking || !self.starts.is_empty() || !self.asked_settings.is_empty()
     }
 
     fn session_named(&self, session: &str) -> Result<&str, Refusal> {
