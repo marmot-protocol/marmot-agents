@@ -31,7 +31,7 @@ use marmot_agent_events::{AgentEvent, Body, Header, Native, State};
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Which way a message went.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +68,60 @@ pub const NOT_SENT: &[&str] = &[
     "deprecationNotice",
 ];
 
+/// What a field of an MCP server's form takes, and so how its answer is written.
+#[derive(Clone)]
+enum Field {
+    Text,
+    Number,
+    Integer,
+    /// Offered as two options, yes and no.
+    Boolean,
+    /// One of these values, offered as options in this order.
+    One(Vec<String>),
+    /// Any of these values.
+    Many(Vec<String>),
+}
+
+/// A form field as the driver can show it, or none for a field it cannot.
+fn field(property: &messages::Property) -> Option<(Field, Vec<Offered>)> {
+    let offer = |labels: Vec<String>| -> Vec<Offered> {
+        (labels.into_iter().enumerate())
+            .map(|(k, label)| Offered {
+                id: format!("o{k}"),
+                label,
+                description: None,
+            })
+            .collect()
+    };
+    let choice = |p: &messages::Property, titled: Option<&Vec<messages::Titled>>| {
+        if let Some(titled) = titled {
+            let values = titled.iter().map(|t| t.value.clone()).collect();
+            let labels = (titled.iter())
+                .map(|t| t.title.clone().unwrap_or_else(|| t.value.clone()))
+                .collect();
+            return Some((values, labels));
+        }
+        let values = p.values.clone()?;
+        let labels = p.value_names.clone().unwrap_or_else(|| values.clone());
+        Some((values, labels))
+    };
+    match property.kind.as_ref().and_then(Value::as_str) {
+        Some("boolean") => Some((Field::Boolean, offer(vec!["Yes".into(), "No".into()]))),
+        Some("number") => Some((Field::Number, Vec::new())),
+        Some("integer") => Some((Field::Integer, Vec::new())),
+        Some("string") => match choice(property, property.titled.as_ref()) {
+            Some((values, labels)) => Some((Field::One(values), offer(labels))),
+            None => Some((Field::Text, Vec::new())),
+        },
+        Some("array") => {
+            let items = property.items.as_deref()?;
+            let (values, labels) = choice(items, items.titled_any.as_ref())?;
+            Some((Field::Many(values), offer(labels)))
+        }
+        _ => None,
+    }
+}
+
 /// What the driver waits to hear back about.
 enum Pending {
     Approval {
@@ -82,9 +136,9 @@ enum Pending {
     },
     Question {
         item: String,
-        /// For an MCP server's form, answered with values, the JSON type of each field. Codex's
-        /// own questions are answered with labels, and have none.
-        form: Option<HashMap<String, String>>,
+        /// For an MCP server's form, answered with values, what each field takes. Codex's own
+        /// questions are answered with labels, and have none.
+        form: Option<HashMap<String, Field>>,
     },
 }
 
@@ -136,6 +190,11 @@ pub struct Translator {
     sessions: HashMap<String, Session>,
     /// The client's requests that have not been answered, by id.
     requests: HashMap<Id, Sent>,
+    /// Items answered by the client's reply, so a second answer is told so. Cleared when the
+    /// session is replaced.
+    answered: HashSet<String>,
+    /// Replies the driver sends without asking anyone, for the transport to send and feed back.
+    outbox: Vec<String>,
     /// Codex's requests that the client has not answered, by id.
     asked: HashMap<Id, Pending>,
     /// For each turn, the thread's tokens before its first model call, and the thread's total
@@ -169,6 +228,13 @@ impl Translator {
     }
 
     /// How many messages could not be read as JSON-RPC.
+    /// Replies to send to Codex at once, which nobody is asked for: a form the chat cannot show is
+    /// declined, so Codex does not wait for it. The driver sends each and feeds it back, as it does
+    /// every message it sends.
+    pub fn take_replies(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.outbox)
+    }
+
     pub fn unreadable(&self) -> u64 {
         self.unreadable
     }
@@ -896,26 +962,35 @@ impl Translator {
         let fields = (p.requested_schema.and_then(|s| s.properties))
             .unwrap_or_default()
             .0;
-        let types = (fields.iter())
-            .map(|(key, field)| (key.clone(), field.kind.clone().unwrap_or_default()))
-            .collect();
-        let asked: Vec<Asked> = fields
-            .into_iter()
-            .map(|(key, field)| Asked {
-                text: field
-                    .description
-                    .or(field.title)
+        let mut form = HashMap::new();
+        let mut asked = Vec::new();
+        for (key, property) in fields {
+            let Some((kind, options)) = field(&property) else {
+                // A field the chat cannot show: decline the form now, so Codex does not wait.
+                if let Some(id) = &id {
+                    let reply = json!({"id": id, "result": {"action": "decline", "content": null}});
+                    self.outbox.push(reply.to_string());
+                }
+                let item = self.request_item("form", p.turn_id.as_deref(), id.as_ref());
+                let body = Body::Notice(notice(NoticeKind::Warning));
+                let said = "A form the chat cannot show was declined";
+                return self.emit(out, &item, body, State::Done, said, &text, native);
+            };
+            asked.push(Asked {
+                text: (property.description.clone())
+                    .or(property.title.clone())
                     .unwrap_or_else(|| key.clone()),
-                id: key,
+                id: key.clone(),
                 header: None,
-                options: Vec::new(),
-                multiple: false,
-                allow_text: true,
+                multiple: matches!(kind, Field::Many(_)),
+                allow_text: matches!(kind, Field::Text | Field::Number | Field::Integer),
+                options,
                 secret: false,
-            })
-            .collect();
+            });
+            form.insert(key, kind);
+        }
         let item = self.request_item("question", p.turn_id.as_deref(), id.as_ref());
-        self.ask(out, Some(types), id, &item, None, asked, &text, native);
+        self.ask(out, Some(form), id, &item, None, asked, &text, native);
     }
 
     fn user_input(
@@ -963,7 +1038,7 @@ impl Translator {
     fn ask(
         &mut self,
         out: &mut Vec<AgentEvent>,
-        form: Option<HashMap<String, String>>,
+        form: Option<HashMap<String, Field>>,
         id: Option<Id>,
         item: &str,
         subject: Option<marmot_agent_events::ItemId>,
@@ -996,6 +1071,8 @@ impl Translator {
         let Some(asked) = m.id.as_ref().and_then(|id| self.asked.remove(id)) else {
             return;
         };
+        let (Pending::Approval { item, .. } | Pending::Question { item, .. }) = &asked;
+        self.answered.insert(item.clone());
         let result = m.result.map_or("{}", RawValue::get);
         match asked {
             Pending::Approval {
@@ -1174,6 +1251,7 @@ impl Translator {
             self.close_message_questions(State::Cancelled, text, out);
             self.end_session(&old, out);
             self.known = Known::default();
+            self.answered.clear();
             // A turn the old thread was asked to start is not this thread's.
             self.starts
                 .retain(|(.., named)| named.as_ref() != Some(&old));
@@ -1540,18 +1618,35 @@ fn named_thread(params: &str) -> Option<String> {
     serde_json::from_str::<Named>(params).ok()?.thread_id
 }
 
-/// A form field's answer as the JSON type the field asks for.
-fn typed(kind: &str, text: &str) -> Result<Value, Refusal> {
+/// A form field's answer, written as the field asks: the options chosen, or the text typed.
+fn typed(field: &Field, chosen: &[usize], text: Option<&str>) -> Result<Value, Refusal> {
     let invalid = || Refusal::new(Reason::Invalid);
-    Ok(match kind {
-        "string" | "" => Value::from(text),
-        "boolean" => Value::from(text.parse::<bool>().map_err(|_| invalid())?),
-        "integer" => Value::from(text.parse::<i64>().map_err(|_| invalid())?),
-        "number" => {
-            let n = text.parse::<f64>().map_err(|_| invalid())?;
+    let typed = || text.ok_or_else(invalid);
+    Ok(match field {
+        Field::Text if chosen.is_empty() => Value::from(typed()?),
+        Field::Integer if chosen.is_empty() => {
+            typed()?.parse::<i64>().map_err(|_| invalid())?.into()
+        }
+        Field::Number if chosen.is_empty() => {
+            let n = typed()?.parse::<f64>().map_err(|_| invalid())?;
             serde_json::Number::from_f64(n).ok_or_else(invalid)?.into()
         }
-        _ => return Err(Refusal::new(Reason::NotSupported)),
+        Field::Boolean => match (chosen, text) {
+            ([0], None) => true.into(),
+            ([1], None) => false.into(),
+            ([], Some(t)) => t.parse::<bool>().map_err(|_| invalid())?.into(),
+            _ => return Err(invalid()),
+        },
+        Field::One(values) if text.is_none() => match chosen {
+            [at] => values[*at].clone().into(),
+            _ => return Err(invalid()),
+        },
+        Field::Many(values) if text.is_none() => chosen
+            .iter()
+            .map(|&at| values[at].clone())
+            .collect::<Vec<_>>()
+            .into(),
+        _ => return Err(invalid()),
     })
 }
 
@@ -1689,6 +1784,9 @@ impl Translator {
         let Some(thread) = &self.session else {
             return Err(Refusal::new(Reason::Busy)); // the driver picks a session first
         };
+        if self.waiting_on_codex() {
+            return Err(Refusal::new(Reason::Busy));
+        }
         if prompt
             .session
             .as_ref()
@@ -1714,10 +1812,7 @@ impl Translator {
     /// The request that starts a new session, or resumes one Codex kept. A chat's session is
     /// replaced only while it is idle, and only once at a time (D-060).
     pub fn pick(&self, id: i64, session: Option<&str>, setup: &Setup) -> Result<String, Refusal> {
-        let picking = (self.requests.values())
-            .any(|sent| matches!(sent.method.as_str(), "thread/start" | "thread/resume"));
-        // A turn asked for and not started yet counts as running.
-        if self.turn.is_some() || !self.starts.is_empty() || picking {
+        if self.turn.is_some() || self.waiting_on_codex() {
             return Err(Refusal::new(Reason::Busy));
         }
         Ok(match session {
@@ -1734,6 +1829,11 @@ impl Translator {
         setup: &Setup,
     ) -> Result<String, Refusal> {
         let refuse = |reason| Err(Refusal::new(reason));
+        // Only an interrupt is built while Codex has yet to answer: it is how a person stops
+        // whatever that request started.
+        if self.waiting_on_codex() && !matches!(action, DriverAction::Interrupt { .. }) {
+            return refuse(Reason::Busy);
+        }
         match action {
             DriverAction::Interrupt { turn } => {
                 let (Some(thread), Some(running)) = (&self.session, &self.turn) else {
@@ -1796,6 +1896,9 @@ impl Translator {
     pub fn reply(&self, answer: &DriverAnswer) -> Result<String, Refusal> {
         let refuse = |reason| Err(Refusal::new(reason));
         let item = answer.item.as_str();
+        if self.answered.contains(item) {
+            return refuse(Reason::AlreadyAnswered);
+        }
         let Some((id, pending)) = self.asked.iter().find(|(_, p)| match p {
             Pending::Approval { item: i, .. } | Pending::Question { item: i, .. } => i == item,
         }) else {
@@ -1854,21 +1957,26 @@ impl Translator {
                     else {
                         return refuse(Reason::Invalid);
                     };
-                    // Codex's own questions take labels; Codex turns them back into choices.
-                    let mut said = Vec::new();
+                    // The positions of the options chosen.
+                    let mut chosen = Vec::new();
                     for option in &given.options {
-                        let Some(offered) = asked.options.iter().find(|o| &o.id == option) else {
+                        let Some(at) = asked.options.iter().position(|o| &o.id == option) else {
                             return refuse(Reason::Invalid);
                         };
-                        said.push(offered.label.clone());
+                        chosen.push(at);
                     }
-                    said.extend(given.text.clone());
-                    let value = match form {
-                        Some(types) => {
-                            let kind = types.get(&given.question).map_or("", String::as_str);
-                            typed(kind, &said.join("\n"))?
+                    let value = match form.as_ref().and_then(|f| f.get(&given.question)) {
+                        Some(field) => typed(field, &chosen, given.text.as_deref())?,
+                        None if form.is_some() => return refuse(Reason::Invalid),
+                        // Codex's own questions take labels; Codex turns them back into choices.
+                        None => {
+                            let mut said: Vec<String> = chosen
+                                .iter()
+                                .map(|&at| asked.options[at].label.clone())
+                                .collect();
+                            said.extend(given.text.clone());
+                            json!({"answers": said})
                         }
-                        None => json!({"answers": said}),
                     };
                     answers.insert(given.question.clone(), value);
                 }
@@ -1881,6 +1989,15 @@ impl Translator {
             _ => return refuse(Reason::Invalid),
         };
         Ok(json!({"id": id, "result": result}).to_string())
+    }
+
+    /// Whether a request that starts a turn or picks the session is waiting for Codex. Until Codex
+    /// answers, what the translator knows of the session may be out of date, so it builds nothing
+    /// but replies to Codex's requests and interrupts; the driver holds the rest and asks again.
+    fn waiting_on_codex(&self) -> bool {
+        let picking = (self.requests.values())
+            .any(|sent| matches!(sent.method.as_str(), "thread/start" | "thread/resume"));
+        picking || !self.starts.is_empty()
     }
 
     fn session_named(&self, session: &str) -> Result<&str, Refusal> {

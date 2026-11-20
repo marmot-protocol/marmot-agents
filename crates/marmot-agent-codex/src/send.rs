@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 pub enum Sandbox {
     /// Read anything, write nothing.
     ReadOnly,
-    /// Write only inside the working folder.
+    /// Write inside the working folder and the temporary folders.
     #[default]
     WorkspaceWrite,
     /// No sandbox.
@@ -61,7 +61,7 @@ impl ApprovalPolicy {
 pub struct Setup {
     /// The working folder, an absolute path.
     pub cwd: String,
-    /// The sandbox. The default keeps writes inside the working folder.
+    /// The sandbox. The default keeps writes inside the working folder and the temporary folders.
     pub sandbox: Sandbox,
     /// When Codex asks. The default asks before anything outside the sandbox.
     pub approval_policy: ApprovalPolicy,

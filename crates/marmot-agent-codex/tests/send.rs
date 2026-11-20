@@ -598,3 +598,145 @@ fn a_form_field_gets_the_type_it_asks_for() {
     let refused = typed(&[("count", "three")]).unwrap_err();
     assert_eq!(refused.reason, Reason::Invalid);
 }
+
+fn turn_started(translator: &mut Translator) {
+    translator.feed(
+        Direction::In,
+        r#"{"method": "turn/started", "params": {"threadId": "th1", "turn": {"id": "t1", "items": [], "status": "inProgress", "error": null}}}"#,
+    );
+}
+
+// While a request that starts a turn or picks the session waits for Codex, only replies and
+// interrupts are built; everything else is busy until Codex answers.
+#[test]
+fn nothing_but_an_interrupt_is_built_while_codex_has_yet_to_answer() {
+    let setup = Setup::new("/w");
+    let compact = Action::Own {
+        session: "th1".into(),
+        id: "compact".into(),
+    };
+    let model = Action::Set {
+        session: "th1".into(),
+        setting: "model".into(),
+        value: "m2".into(),
+    };
+    let busy = |translator: &Translator| {
+        for refused in [
+            translator.prompt(9, &prompt("and this", false)),
+            translator.pick(9, None, &setup),
+            translator.control(9, &compact, &setup),
+            translator.control(9, &model, &setup),
+        ] {
+            assert_eq!(refused.unwrap_err().reason, Reason::Busy);
+        }
+    };
+
+    let mut translator = Translator::new();
+    started(&mut translator);
+    let first = translator.prompt(2, &prompt("hello", false)).unwrap();
+    translator.feed(Direction::Out, &first);
+    busy(&translator); // the turn was asked for and has not started
+    turn_started(&mut translator);
+    let second = json(&translator.prompt(3, &prompt("and this", false)).unwrap());
+    assert_eq!(
+        second["method"], "turn/steer",
+        "once it runs, a message joins it"
+    );
+
+    let mut translator = Translator::new();
+    started(&mut translator);
+    let compaction = translator.control(2, &compact, &setup).unwrap();
+    translator.feed(Direction::Out, &compaction);
+    busy(&translator); // a compaction starts a turn too
+
+    let mut translator = Translator::new();
+    started(&mut translator);
+    let pick = translator.pick(2, None, &setup).unwrap();
+    translator.feed(Direction::Out, &pick);
+    busy(&translator); // a new session is on its way
+}
+
+#[test]
+fn a_second_answer_is_told_it_was_already_answered() {
+    let mut translator = Translator::new();
+    let asked = translator.feed(
+        Direction::In,
+        r#"{"id": 0, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "c", "command": "ls"}}"#,
+    );
+    let allow = answer(&asked[0], Given::Choice("c0".into()));
+    let reply = translator.reply(&allow).unwrap();
+    translator.feed(Direction::Out, &reply);
+    assert_eq!(
+        translator.reply(&allow).unwrap_err().reason,
+        Reason::AlreadyAnswered
+    );
+}
+
+fn question_body(event: &AgentEvent) -> &marmot_agent_events::body::Question {
+    let Body::Question(question) = event.body() else {
+        panic!("a question");
+    };
+    question
+}
+
+// Every kind of field Codex's schema (0.169.0) allows in an MCP form: choices are offered as
+// options and answered with their values.
+#[test]
+fn a_forms_choices_are_options_answered_with_their_values() {
+    let form = r#"{"id": 4, "method": "mcpServer/elicitation/request", "params": {"threadId": "th1", "turnId": "t1", "serverName": "demo", "mode": "form", "message": "Order", "requestedSchema": {"type": "object", "properties": {
+        "size": {"type": "string", "enum": ["s", "m"], "enumNames": ["Small", "Medium"]},
+        "milk": {"type": "string", "oneOf": [{"const": "oat", "title": "Oat milk"}, {"const": "none", "title": "None"}]},
+        "extras": {"type": "array", "items": {"anyOf": [{"const": "shot", "title": "Extra shot"}, {"const": "syrup", "title": "Syrup"}]}},
+        "tags": {"type": "array", "items": {"type": "string", "enum": ["hot", "to-go"]}},
+        "iced": {"type": "boolean"}}}}}"#;
+    let mut translator = Translator::new();
+    let events = translator.feed(Direction::In, form);
+    let question = question_body(&events[0]);
+    let labels = |id: &str| -> Vec<String> {
+        let asked = question.questions().iter().find(|q| q.id == id).unwrap();
+        asked.options.iter().map(|o| o.label.clone()).collect()
+    };
+    assert_eq!(labels("size"), ["Small", "Medium"]);
+    assert_eq!(labels("milk"), ["Oat milk", "None"]);
+    assert_eq!(labels("extras"), ["Extra shot", "Syrup"]);
+    assert_eq!(labels("iced"), ["Yes", "No"]);
+    let pick = |q: &str, options: &[&str]| Reply {
+        question: q.into(),
+        options: options.iter().map(|o| (*o).into()).collect(),
+        text: None,
+    };
+    let given = Given::Questions(vec![
+        pick("size", &["o1"]),
+        pick("milk", &["o0"]),
+        pick("extras", &["o0", "o1"]),
+        pick("tags", &["o1"]),
+        pick("iced", &["o1"]),
+    ]);
+    let built = json(&translator.reply(&answer(&events[0], given)).unwrap());
+    assert_eq!(
+        built["result"]["content"],
+        json!({"size": "m", "milk": "oat", "extras": ["shot", "syrup"], "tags": ["to-go"], "iced": false})
+    );
+    let two_of_one = Given::Questions(vec![pick("size", &["o0", "o1"])]);
+    let refused = translator
+        .reply(&answer(&events[0], two_of_one))
+        .unwrap_err();
+    assert_eq!(refused.reason, Reason::Invalid);
+}
+
+#[test]
+fn a_form_the_chat_cannot_show_is_declined_at_once() {
+    let form = r#"{"id": 5, "method": "mcpServer/elicitation/request", "params": {"threadId": "th1", "turnId": "t1", "serverName": "demo", "mode": "form", "message": "Upload", "requestedSchema": {"type": "object", "properties": {"file": {"type": "object"}}}}}"#;
+    let mut translator = Translator::new();
+    let events = translator.feed(Direction::In, form);
+    assert!(
+        matches!(events[0].body(), Body::Notice(_)),
+        "it is shown, not asked"
+    );
+    let replies = translator.take_replies();
+    assert_eq!(
+        replies.iter().map(|r| json(r)).collect::<Vec<_>>(),
+        [json!({"id": 5, "result": {"action": "decline", "content": null}})]
+    );
+    assert!(translator.take_replies().is_empty());
+}

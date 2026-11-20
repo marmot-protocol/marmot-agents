@@ -295,9 +295,32 @@ pub(crate) struct Schema {
 pub(crate) struct Property {
     pub description: Option<String>,
     pub title: Option<String>,
-    /// The JSON type the answer must have: `string`, `number`, `integer` or `boolean`.
+    /// `string`, `number`, `integer`, `boolean` or `array`. Kept as JSON, so a type the driver does
+    /// not know cannot stop the request being read.
     #[serde(rename = "type")]
-    pub kind: Option<String>,
+    pub kind: Option<Value>,
+    /// A choice of one: its values.
+    #[serde(rename = "enum")]
+    pub values: Option<Vec<String>>,
+    /// The values' names, in the older form of a choice of one.
+    #[serde(rename = "enumNames")]
+    pub value_names: Option<Vec<String>>,
+    /// A choice of one, each value with a title.
+    #[serde(rename = "oneOf")]
+    pub titled: Option<Vec<Titled>>,
+    /// A choice of several: the values offered, under `enum` or, with titles, `anyOf`.
+    pub items: Option<Box<Property>>,
+    #[serde(rename = "anyOf")]
+    pub titled_any: Option<Vec<Titled>>,
+}
+
+/// A value offered in a form, with what it is called.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct Titled {
+    #[serde(rename = "const")]
+    pub value: String,
+    pub title: Option<String>,
 }
 
 #[derive(Default, Deserialize)]

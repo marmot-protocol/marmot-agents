@@ -1057,16 +1057,20 @@ Decided 2026-11-20. The project owner chose this over keeping each thread's stat
 ## D-061 A Codex session starts in a working folder, with a safe sandbox unless configured
 
 **Decision.** The core gives the Codex driver a working folder, and may give a sandbox and an approval policy.
-Without them, a session's sandbox lets commands write only inside the working folder (`workspace-write`), and
-Codex asks before anything outside it (`on-request`). Nothing wider is used unless it is configured. The driver
+Without them, a session's sandbox is Codex's `workspace-write`: commands may write inside the working folder and
+the machine's temporary folders (`/tmp` and the folder `$TMPDIR` names), and nowhere else. Codex asks before
+anything outside that (`on-request`). Nothing wider is used unless it is configured. The driver
 sends all three whenever it starts or resumes a session.
 
 **Why.** A Codex thread resumed without its settings came back with full access, the default on the machine
 that recorded it ([rule 10 for drivers](design/event-model.md#what-a-driver-has-to-do)). Sending them every
 time means a session does what it was set up to do, whatever Codex's own configuration says. The defaults are
-the narrowest that still let an agent work on a project.
+the narrowest that still let an agent work on a project. The temporary folders are writable because many tools,
+such as package installers, test runners and compilers, write there; closing them would make an agent ask for
+approval for ordinary work. This is what Codex's `workspace-write` does for any Codex user.
 
-Decided 2026-11-20. The project owner accepted the recommendation.
+Decided 2026-11-20. The project owner accepted the recommendation, and that the temporary folders stay
+writable.
 
 ## D-062 What Codex reads for a chat message
 
