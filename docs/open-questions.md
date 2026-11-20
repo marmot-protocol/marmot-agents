@@ -360,6 +360,14 @@ the driver, which must produce the events the prototype produces for each. Those
 recordings, in [`fixtures/recordings/codex/expected`](../fixtures/recordings/codex/expected), and CI checks that
 they are what the prototype writes. Whether every driver is tested the same way is still open.
 
+### Q-29 What does the Codex driver do with a thread no chat asked for?
+
+A Codex translator follows the thread its chat picked, and the transport routes each thread's messages to its
+translator ([D-060](decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes)). Codex
+may start a thread by itself, for example for a sub-agent. No recording shows this; it is inferred from the
+protocol, where `thread/started` can name a thread no request asked for. Such a thread could be shown in the
+chat that owns the thread it came from, or dropped and counted. To be settled when the transport is built.
+
 ## The repository and the move from MDK
 
 ### Q-19 How do existing installs move over?

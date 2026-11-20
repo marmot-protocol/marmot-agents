@@ -80,6 +80,7 @@ pub(crate) struct ThreadStarted {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct ThreadSettingsUpdated {
+    pub thread_id: Option<String>,
     pub thread_settings: Option<Settings>,
 }
 

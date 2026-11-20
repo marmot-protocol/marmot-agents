@@ -192,48 +192,42 @@ fn a_harness_that_stops_mid_turn_closes_the_turn() {
 
 #[test]
 fn seq_counts_within_each_session() {
-    let first = r#"{"method": "thread/started", "params": {"thread": {"id": "th1", "cliVersion": "0.169.0"}}}"#;
     let warn = |thread: &str| {
         format!(
             r#"{{"method": "warning", "params": {{"threadId": "{thread}", "message": "careful"}}}}"#
         )
     };
-    let second = r#"{"method": "thread/started", "params": {"thread": {"id": "th2", "cliVersion": "0.169.0"}}}"#;
-    let events = feed(&[
-        (Direction::In, first),
-        (Direction::In, &warn("th1")),
-        (Direction::In, second),
-        (Direction::In, &warn("th2")),
-        // A late message from the first thread still belongs to it.
-        (Direction::In, &warn("th1")),
-    ]);
+    let mut translator = Translator::new();
+    let mut events = Vec::new();
+    for (direction, message) in [
+        (Direction::Out, PICK.to_string()),
+        (Direction::In, thread("th1")),
+        (Direction::In, warn("th1")),
+        (Direction::Out, PICK.to_string()),
+        (Direction::In, thread("th2")),
+        (Direction::In, warn("th2")),
+        // A late message from the first thread is for another translator: the transport routes
+        // each thread's messages. Here it makes no event, and is counted.
+        (Direction::In, warn("th1")),
+    ] {
+        events.extend(translator.feed(direction, &message));
+    }
     let seqs: Vec<(String, u64)> = events
         .iter()
         .map(|e| {
             let h = e.header();
-            (
-                h.session
-                    .as_ref()
-                    .map(|s| s.as_str().to_string())
-                    .unwrap_or_default(),
-                h.seq,
-            )
+            let session = h.session.as_ref().map(|s| s.as_str().to_string());
+            (session.unwrap_or_default(), h.seq)
         })
         .collect();
-    // th1: its session item, a warning, its session ending, the late warning; th2: its item, a warning.
+    // th1: its session item, a warning, its session ending; th2: its item, a warning.
     assert_eq!(
         seqs,
-        [
-            ("th1", 1),
-            ("th1", 2),
-            ("th1", 3),
-            ("th2", 1),
-            ("th2", 2),
-            ("th1", 4)
-        ]
-        .map(|(s, n)| (s.to_string(), n))
+        [("th1", 1), ("th1", 2), ("th1", 3), ("th2", 1), ("th2", 2)]
+            .map(|(s, n)| (s.to_string(), n))
     );
     assert!(matches!(events[1].body(), Body::Notice(n) if n.kind == NoticeKind::Warning));
+    assert_eq!(translator.other_threads(), 1);
 }
 
 const TURN_STARTED: &str = r#"{"method": "turn/started", "params": {"threadId": "th1", "turn": {"id": "t1", "items": [], "status": "inProgress", "error": null}}}"#;
@@ -386,10 +380,11 @@ fn a_turn_end_the_driver_cannot_read_closes_nothing() {
 
 const ASKS_IN_A_MESSAGE: &str = r#"{"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1", "item": {"type": "agentMessage", "id": "msg1", "text": "Hello or Hi?", "phase": "final_answer", "questions": [{"title": "Which greeting?", "options": ["Hello", "Hi"]}]}}}"#;
 
+/// The client asks for a new session. Codex's reply, [`thread`], picks it.
+const PICK: &str = r#"{"id": 100, "method": "thread/start", "params": {}}"#;
+
 fn thread(id: &str) -> String {
-    format!(
-        r#"{{"method": "thread/started", "params": {{"thread": {{"id": "{id}", "cliVersion": "0.169.0"}}}}}}"#
-    )
+    format!(r#"{{"id": 100, "result": {{"thread": {{"id": "{id}", "cliVersion": "0.169.0"}}}}}}"#)
 }
 
 fn question_events(events: &[AgentEvent]) -> Vec<(State, Option<String>, Option<String>)> {
@@ -410,6 +405,7 @@ fn question_events(events: &[AgentEvent]) -> Vec<(State, Option<String>, Option<
 #[test]
 fn the_next_message_answers_a_question_asked_in_a_message() {
     let events = feed(&[
+        (Direction::Out, PICK),
         (Direction::In, &thread("th1")),
         (Direction::In, TURN_STARTED),
         (Direction::In, ASKS_IN_A_MESSAGE),
@@ -433,10 +429,12 @@ fn the_next_message_answers_a_question_asked_in_a_message() {
 #[test]
 fn a_new_session_leaves_such_a_question_unanswered_in_its_own_session() {
     let events = feed(&[
+        (Direction::Out, PICK),
         (Direction::In, &thread("th1")),
         (Direction::In, TURN_STARTED),
         (Direction::In, ASKS_IN_A_MESSAGE),
         (Direction::In, TURN_DONE),
+        (Direction::Out, PICK),
         (Direction::In, &thread("th2")),
     ]);
     let th1 = Some("th1".to_string());
@@ -471,6 +469,7 @@ fn a_list_of_models_that_arrives_late_reaches_the_session() {
             Direction::Out,
             r#"{"id": 4, "method": "model/list", "params": {}}"#,
         ),
+        (Direction::Out, PICK),
         (Direction::In, &thread("th1")),
         (
             Direction::In,
@@ -496,6 +495,7 @@ fn a_question_that_outlived_its_turn_is_closed_in_that_turn() {
     let later = r#"{"method": "turn/started", "params": {"threadId": "th1", "turn": {"id": "t2", "items": [], "status": "inProgress", "error": null}}}"#;
     let interrupted = r#"{"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t2", "items": [], "status": "interrupted", "error": null}}}"#;
     let asked = [
+        (Direction::Out, PICK.to_string()),
         (Direction::In, thread("th1")),
         (Direction::In, TURN_STARTED.to_string()),
         (Direction::In, ASKS_IN_A_MESSAGE.to_string()),
@@ -542,4 +542,22 @@ fn a_refused_request_and_an_error_notice_are_different_items() {
         ),
     ]);
     assert_ne!(events[0].header().item, events[1].header().item);
+}
+
+#[test]
+fn a_session_the_chat_goes_back_to_runs_again() {
+    let events = feed(&[
+        (Direction::Out, PICK),
+        (Direction::In, &thread("th1")),
+        (Direction::Out, PICK),
+        (Direction::In, &thread("th2")),
+        (Direction::Out, PICK),
+        (Direction::In, &thread("th1")),
+    ]);
+    let th1: Vec<State> = events
+        .iter()
+        .filter(|e| e.header().item.as_str() == "session:th1")
+        .map(|e| e.header().state)
+        .collect();
+    assert_eq!(th1, [State::Running, State::Done, State::Running]);
 }

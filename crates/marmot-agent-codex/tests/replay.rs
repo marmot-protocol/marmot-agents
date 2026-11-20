@@ -75,6 +75,8 @@ fn replay(path: &Path) -> Vec<AgentEvent> {
         events.extend(made);
     }
     assert_eq!(translator.unreadable(), 0, "{}", path.display());
+    // Each recording is one chat: every message is for the session it follows.
+    assert_eq!(translator.other_threads(), 0, "{}", path.display());
     assert!(
         translator.unknown().is_empty(),
         "{}: no rule for {:?}",

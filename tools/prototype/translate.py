@@ -100,7 +100,6 @@ class Translator:
         self.turn = None
         self.seq = 0  # every event this translator made; some made-up item ids use it
         self.seq_in = collections.Counter()  # session -> events in it, for each event's `seq`
-        self.message_thread = None  # the thread the message being translated names, if it names one
         self.open: dict[str, dict] = {}  # item id -> last event, for items not yet finished
         self.not_sent = collections.Counter()
         self.unmapped = collections.Counter()
@@ -108,10 +107,9 @@ class Translator:
         self.controls = collections.Counter()  # (control, the native call it was seen as)
 
     def emit(self, item, type_, state, title, text="", body=None, native_kind="", native=None, owner=None):
-        """`owner` is the (session, turn) the item belongs to, when that is not the current one. An
-        event from a message that names its thread belongs to that thread."""
+        """`owner` is the (session, turn) the item belongs to, when that is not the current one."""
         if owner is None:
-            owner = (self.message_thread or self.session, self.turn)
+            owner = (self.session, self.turn)
         session, turn = owner
         assert type_ in ITEM_TYPES and state in STATES, (type_, state)
         self.seq += 1
@@ -218,6 +216,9 @@ class Codex(Translator):
         self.pending: dict = {}  # JSON-RPC request id -> what the client asked or was asked
         self.usage = {}  # turn -> [tokens before its first model call, the thread's total since]
         self.starts = []  # (request id, who) for each request that will start a turn, oldest first
+        # A translator follows one thread: the chat's session. The transport gives it only that
+        # thread's messages; one for another thread makes no event and is counted here.
+        self.other_threads = 0
         self.settings: dict = {}  # what Codex has said about the thread's settings, merged
         self.models = None  # model ids, once the client has asked for the list
         self.modes = None  # collaboration modes, once the client has asked for the list
@@ -272,10 +273,13 @@ class Codex(Translator):
                 if p.get("turnId") not in self.usage:
                     self.usage[p.get("turnId")] = [{k: (total.get(k) or 0) - (last.get(k) or 0) for k in ("inputTokens", "outputTokens")}, total]
                 self.usage[p.get("turnId")][1] = total
-            if method == "thread/started":
-                self.use_thread((p.get("thread") or {}).get("id"))
+            if method == "thread/started":  # the reply to the client's request picks the session
+                if self.for_another_thread((p.get("thread") or {}).get("id")):
+                    return
                 return self.thread_settings(method, p.get("thread") or {}, p)
             if method == "thread/settings/updated":
+                if self.for_another_thread(p.get("threadId")):
+                    return
                 return self.thread_settings(method, p.get("threadSettings") or {}, p)
             return self.skip(method)
         handler = {
@@ -296,11 +300,15 @@ class Codex(Translator):
         }.get(method)
         if handler is None:
             return self.unknown(method)
-        self.message_thread = p.get("threadId")
-        try:
-            handler(method, m, p)
-        finally:
-            self.message_thread = None
+        if self.for_another_thread(p.get("threadId")):
+            return
+        handler(method, m, p)
+
+    def for_another_thread(self, thread_id):
+        """Whether a message names a thread that is not the session, once there is one."""
+        other = thread_id is not None and self.session is not None and thread_id != self.session
+        self.other_threads += other
+        return other
 
     def harness_stopped(self):
         """The harness process ended. Nothing it was doing will ever report again, so the driver
@@ -569,6 +577,8 @@ class Codex(Translator):
             self.close_message_questions("cancelled", "Not answered: a new session started")
             self.end_session(self.session, "a new thread was started")
             self.settings = {}
+            # A session the chat goes back to runs again, though its settings may be unchanged.
+            self.sessions.pop(f"session:{thread_id}", None)
         self.session = thread_id
 
     def thread_settings(self, native_kind, src, native):

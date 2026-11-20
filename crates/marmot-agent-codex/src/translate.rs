@@ -101,7 +101,12 @@ struct Known {
     version: Option<String>,
 }
 
-/// Turns one Codex connection's messages into agent events.
+/// Turns the messages of one chat's Codex session into agent events.
+///
+/// A translator follows one Codex thread at a time: the chat's session, which the client picks with
+/// `thread/start` or `thread/resume` and can replace. One connection can carry several threads, and
+/// it is the transport's job to give each translator only its own thread's messages. One that names
+/// another thread makes no event here and is counted ([`Translator::other_threads`]).
 #[derive(Default)]
 pub struct Translator {
     /// Every event made so far. Some made-up item ids use it.
@@ -124,13 +129,13 @@ pub struct Translator {
     /// The client's requests that will start a turn, oldest first, and who they count as.
     starts: Vec<(Id, StartedBy)>,
     started_by: Option<StartedBy>,
-    /// The thread the message being translated names, if it names one.
-    message_thread: Option<String>,
     known: Known,
     models: Option<Vec<String>>,
     modes: Option<Vec<String>>,
     /// Messages that could not be read as JSON-RPC at all.
     unreadable: u64,
+    /// Messages for a thread that is not the session.
+    other_threads: u64,
     /// Methods with no rule. Each is a gap in the driver.
     unknown: Vec<String>,
 }
@@ -150,6 +155,12 @@ impl Translator {
     /// How many messages could not be read as JSON-RPC.
     pub fn unreadable(&self) -> u64 {
         self.unreadable
+    }
+
+    /// How many messages named a thread that is not the session. They made no event. Any is a
+    /// message the transport gave the wrong translator.
+    pub fn other_threads(&self) -> u64 {
+        self.other_threads
     }
 
     /// One message, as the exact text that went over the connection. Returns the events it makes,
@@ -241,14 +252,20 @@ impl Translator {
                     let Some(p) = self.read::<ThreadStarted>(method, params) else {
                         return;
                     };
+                    // The reply to the client's request picks the session; this reports on it.
                     let thread = p.thread.unwrap_or_default();
-                    self.use_thread(thread.id.clone(), out);
+                    if self.for_another_thread(thread.id.as_deref()) {
+                        return;
+                    }
                     self.thread_settings(&thread, method, params, out);
                 }
                 "thread/settings/updated" => {
                     let Some(p) = self.read::<ThreadSettingsUpdated>(method, params) else {
                         return;
                     };
+                    if self.for_another_thread(p.thread_id.as_deref()) {
+                        return;
+                    }
                     let settings = p.thread_settings.unwrap_or_default();
                     self.thread_settings(&settings, method, params, out);
                 }
@@ -261,11 +278,19 @@ impl Translator {
             #[serde(default, rename = "threadId")]
             thread_id: Option<String>,
         }
-        self.message_thread = serde_json::from_str::<Named>(params)
-            .ok()
-            .and_then(|n| n.thread_id);
+        let named = serde_json::from_str::<Named>(params).ok();
+        if self.for_another_thread(named.and_then(|n| n.thread_id).as_deref()) {
+            return;
+        }
         self.handle(method, m, params, out);
-        self.message_thread = None;
+    }
+
+    /// Whether a message names a thread that is not the session, once there is one. It is
+    /// counted, and makes no event.
+    fn for_another_thread(&mut self, thread: Option<&str>) -> bool {
+        let other = thread.is_some() && self.session.is_some() && thread != self.session.as_deref();
+        self.other_threads += u64::from(other);
+        other
     }
 
     fn handle(&mut self, method: &str, m: &Envelope<'_>, params: &str, out: &mut Vec<AgentEvent>) {
@@ -1099,6 +1124,9 @@ impl Translator {
             self.close_message_questions(State::Cancelled, text, out);
             self.end_session(&old, out);
             self.known = Known::default();
+            // A session the chat goes back to runs again, though its settings may be unchanged.
+            self.sessions
+                .remove(&format!("session:{}", show(thread.as_deref())));
         }
         self.session = thread;
     }
@@ -1341,9 +1369,7 @@ impl Translator {
         text: &str,
         native: Option<Native>,
     ) {
-        // An event from a message that names its thread belongs to that thread.
-        let session = self.message_thread.clone().or_else(|| self.session.clone());
-        let owner = (session, self.turn.clone());
+        let owner = (self.session.clone(), self.turn.clone());
         self.emit_owned(out, owner, item, body, state, title, text, native);
     }
 

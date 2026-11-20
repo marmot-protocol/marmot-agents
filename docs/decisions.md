@@ -1024,3 +1024,32 @@ promises: the native message is the harness's own and unchanged, the item types 
 harness's words, and nothing is added that one harness alone would need.
 
 Decided 2026-11-19. The project owner accepted the recommendation on each point.
+
+## D-060 A Codex translator follows one thread, and the transport routes
+
+**Decision.** The Codex driver's translator follows one Codex thread at a time: the chat's session. The reply
+to the client's `thread/start` or `thread/resume` picks it. A chat can replace its session, and the translator
+then ends the old session item. A message that names another thread makes no event in that translator, and is
+counted.
+
+One Codex connection can carry several threads, so the transport, the half of the driver that runs Codex,
+gives each translator only its own thread's messages. It:
+
+1. gives each chat its own translator, and sends it the messages that name that chat's thread;
+2. sends Codex's reply to a request to the translator that made the request;
+3. has at most one request to start or resume a session waiting for each chat;
+4. replaces a chat's session only when its thread is idle: no turn running, or an interrupt that Codex has
+   confirmed.
+
+What the transport does with a thread that no chat asked for is open
+([Q-29](open-questions.md#q-29-what-does-the-codex-driver-do-with-a-thread-no-chat-asked-for)).
+
+**Why.** Review of the translator went five rounds. From the third on, every finding was one case of a single
+translator receiving several threads' messages: a late message from a replaced thread landing in the new one's
+turn, then its settings, a resumed session, delayed replies, an MCP approval and a refused request. None of
+them is in any of the 28 recordings. Handling them inside the translator meant routing between threads there,
+and the transport has to route anyway, to serve several chats on one connection. Routing is now in one place,
+and the translator stays a translation of one session. The four rules above are what make the reviewed cases
+impossible.
+
+Decided 2026-11-20. The project owner chose this over keeping each thread's state inside the translator.
