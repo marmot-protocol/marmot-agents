@@ -871,5 +871,30 @@ async fn early_messages_keep_their_order_while_another_chat_picks() {
             models.push(model.unwrap_or_default());
         }
     }
+    // Both arrive, in the order Codex sent them.
+    let at = |model: &str| models.iter().position(|m| m == model);
+    assert!(at("m9").is_some() && at("m9") < at("m8"), "{models:?}");
     assert_eq!(models.last().map(String::as_str), Some("m8"), "{models:?}");
+}
+
+// Codex stopping is not an interrupt working: the turn the driver closes then settles nothing, and
+// the core settles the interrupt as failed (D-058).
+#[tokio::test]
+async fn a_turn_closed_because_codex_stopped_does_not_settle_an_interrupt() {
+    let (mut codex, mut fake) = running().await;
+    until(&mut codex, is_turn(State::Running)).await;
+    let stop = Control {
+        request: "r-13".into(),
+        by: alice(),
+        action: Action::Interrupt { turn: "t1".into() },
+    };
+    codex.control(stop).await.unwrap();
+    assert_eq!(fake.hear().await["method"], "turn/interrupt");
+    fake.to_driver.shutdown().await.unwrap();
+    let mut rest = Vec::new();
+    while let Some(event) = codex.next_event().await {
+        rest.push(event);
+    }
+    assert!(rest.iter().any(|e| matches!(e.event.body(), Body::Turn(_))));
+    assert!(rest.iter().all(|e| e.settles.is_empty()));
 }

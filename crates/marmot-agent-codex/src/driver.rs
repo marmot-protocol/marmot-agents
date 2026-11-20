@@ -89,6 +89,9 @@ pub struct Codex {
     /// cut short when a future is dropped is finished, whole, by the next write, and only then
     /// does what follows from it happen.
     unwritten: VecDeque<Frame>,
+    /// What follows messages written and not yet flushed: it happens once the flush succeeds, so
+    /// a writer that buffers and then fails does not leave an answer shown as given.
+    unflushed: Vec<Written>,
     /// The process, when the driver started it. It is killed when the driver is dropped.
     child: Option<Child>,
     setup: Setup,
@@ -153,6 +156,7 @@ impl Codex {
             reader: BufReader::new(output).lines(),
             writer: Box::new(input),
             unwritten: VecDeque::new(),
+            unflushed: Vec::new(),
             child: None,
             setup,
             version: None,
@@ -229,10 +233,14 @@ impl Codex {
                 frame.written += written;
             }
             if let Some(then) = self.unwritten.pop_front().and_then(|f| f.then) {
-                self.written(then);
+                self.unflushed.push(then);
             }
         }
-        self.writer.flush().await
+        self.writer.flush().await?;
+        for then in std::mem::take(&mut self.unflushed) {
+            self.written(then);
+        }
+        Ok(())
     }
 
     /// What follows a message once it is written: its request is kept until Codex answers, and
@@ -403,7 +411,7 @@ impl Codex {
         }
         let mut settles = settles;
         for event in events {
-            self.ready_event(chat, event, std::mem::take(&mut settles));
+            self.ready_event(chat, event, std::mem::take(&mut settles), true);
         }
         for reply in replies {
             let then = Written {
@@ -416,26 +424,36 @@ impl Codex {
         }
     }
 
-    fn ready_event(&mut self, chat: &ChatId, event: AgentEvent, mut settles: Vec<RequestId>) {
+    /// Makes an event ready for the core. An event Codex sent shows the effect of a control; one
+    /// the driver made when Codex stopped does not (`seen` false): that control failed, and the
+    /// core settles it so (D-058).
+    fn ready_event(
+        &mut self,
+        chat: &ChatId,
+        event: AgentEvent,
+        mut settles: Vec<RequestId>,
+        seen: bool,
+    ) {
         let c = self.chats.get_mut(chat).expect("a chat that was fed");
         let header = event.header();
         let turn = header.turn.as_ref().map(|t| t.as_str().to_string());
         let ended = !matches!(header.state, State::Running | State::Waiting);
         let session = header.session.as_ref().map(|s| s.as_str().to_string());
         c.effects.retain(|(request, effect)| {
-            let shown = match (effect, event.body()) {
-                (Effect::TurnEnded(t), Body::Turn(_)) => ended && turn.as_deref() == Some(t),
-                (Effect::Setting(id, value), Body::Session(s)) => (s.settings.iter())
-                    .any(|setting| setting.id == *id && setting.value.as_ref() == Some(value)),
-                (Effect::TurnStartedBy(r), Body::Turn(_)) => {
-                    let started = turn.as_deref().and_then(|t| c.translator.turn_request(t));
-                    started == Some(*r)
-                }
-                (Effect::NewSession(old), Body::Session(_)) => {
-                    header.state == State::Running && session != *old
-                }
-                _ => false,
-            };
+            let shown = seen
+                && match (effect, event.body()) {
+                    (Effect::TurnEnded(t), Body::Turn(_)) => ended && turn.as_deref() == Some(t),
+                    (Effect::Setting(id, value), Body::Session(s)) => (s.settings.iter())
+                        .any(|setting| setting.id == *id && setting.value.as_ref() == Some(value)),
+                    (Effect::TurnStartedBy(r), Body::Turn(_)) => {
+                        let started = turn.as_deref().and_then(|t| c.translator.turn_request(t));
+                        started == Some(*r)
+                    }
+                    (Effect::NewSession(old), Body::Session(_)) => {
+                        header.state == State::Running && session != *old
+                    }
+                    _ => false,
+                };
             if shown {
                 settles.push(request.clone());
             }
@@ -477,13 +495,14 @@ impl Codex {
             let c = self.chats.get_mut(&chat).expect("a chat");
             let events = c.translator.harness_stopped();
             for event in events {
-                self.ready_event(&chat, event, Vec::new());
+                self.ready_event(&chat, event, Vec::new(), false);
             }
         }
         self.requests.clear();
         self.starting.clear();
         self.early.clear();
         self.unwritten.clear(); // never written: nothing follows from them
+        self.unflushed.clear();
     }
 }
 
@@ -563,6 +582,25 @@ impl Codex {
 
     /// Makes `session` the chat's session, starting a new one if it is none, and waits for Codex.
     async fn pick(&mut self, chat: &ChatId, session: Option<&str>) -> Result<(), Refusal> {
+        // A session to resume is the chat's from the moment it is asked for, so no other chat can
+        // ask for it meanwhile; if Codex refuses, a reservation made here is let go.
+        let reserved = session
+            .filter(|t| !self.owners.contains_key(*t))
+            .map(String::from);
+        if let Some(thread) = &reserved {
+            self.owners.insert(thread.clone(), chat.clone());
+        }
+        let picked = self.pick_now(chat, session).await;
+        if picked.is_err()
+            && let Some(thread) = reserved
+            && self.chats[chat].translator.session() != Some(thread.as_str())
+        {
+            self.owners.remove(&thread);
+        }
+        picked
+    }
+
+    async fn pick_now(&mut self, chat: &ChatId, session: Option<&str>) -> Result<(), Refusal> {
         let setup = self.setup.clone();
         let build = |t: &Translator, id| t.pick(id, session, &setup);
         let id = self.ask(chat, |_, _| Purpose::Plain, build).await?;
@@ -658,6 +696,11 @@ impl Driver for Codex {
 
     async fn answer(&mut self, answer: Answer) -> Result<(), Refusal> {
         if self.gone {
+            return Err(Refusal::new(Reason::Failed));
+        }
+        // A message cut short is finished first: it may be an answer to the same item.
+        if self.flush().await.is_err() {
+            self.stopped();
             return Err(Refusal::new(Reason::Failed));
         }
         let (chat, text) = self.chat_with_item(&answer)?;
