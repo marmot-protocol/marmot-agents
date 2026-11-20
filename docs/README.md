@@ -90,6 +90,7 @@ Details and reasons are in [`design/drivers.md`](design/drivers.md).
 | How does a person answer an agent, or control it? | [`design/answers-and-controls.md`](design/answers-and-controls.md) |
 | What travels over the socket? | [`design/socket-protocol.md`](design/socket-protocol.md) |
 | How is each harness driven, and how do I add one? | [`design/drivers.md`](design/drivers.md) |
+| How does a chat show an agent's subagents? (a proposal) | [`design/subagents.md`](design/subagents.md) |
 | What do today's connectors in MDK do? | [`reference/current-connectors.md`](reference/current-connectors.md) |
 | What did we learn from other projects? | [`reference/prior-art.md`](reference/prior-art.md) |
 | What interface does each harness offer? | [`reference/harness-interfaces.md`](reference/harness-interfaces.md) |

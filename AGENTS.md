@@ -31,6 +31,7 @@ being replaced by what is designed here, not extended.
 | Understand how the parts fit | `docs/design/architecture.md` |
 | Work on what agents send to the chat | `docs/design/event-model.md`, then `docs/design/event-carrier.md` |
 | Work on what people send back to an agent | `docs/design/answers-and-controls.md` |
+| Work on how a chat shows subagents | `docs/design/subagents.md`, then `fixtures/recordings/codex/subagents` |
 | Work on the boundary to TypeScript and Python programs | `docs/design/socket-protocol.md` |
 | Add or change a harness driver | `docs/design/drivers.md`, then `docs/reference/harness-interfaces.md` |
 | Check what today's MDK connectors do | `docs/reference/current-connectors.md` |

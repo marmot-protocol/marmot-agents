@@ -169,7 +169,8 @@ Still open:
   group chat has several. OpenClaw puts every direct chat in one session unless its plugin arranges otherwise,
   so the plugin has to arrange one per chat. Whether the core should accept Hermes's split is part of
   [Q-22](#q-22-whose-rules-govern-a-gateway).
-- **Threads.** Whether a thread inside a chat gets its own session.
+- **Threads.** Whether a thread inside a chat gets its own session. For a subagent's thread, the proposal in
+  [subagents as threads](design/subagents.md) says it does.
 
 Raised in [issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8).
 
@@ -366,16 +367,9 @@ Codex and Claude Code can start subagents: agents of their own that work in para
 turn, and can ask for approval. The project owner wants a chat to show each one, and to let a person open it
 and see everything it does, like a thread inside the conversation.
 
-The current thinking, agreed with the project owner on 2026-11-20 and not yet written as a design: a subagent
-is a thread in the same group, using Nostr's threaded comments (NIP-22, kind 1111), which White Noise for Linux
-and MDK already support. The item that started the subagent is the thread's root and its card in the main
-chat. The subagent's items carry the thread's tags, and its words are kind 1111 comments. Stop in the main chat
-stops every subagent, and Stop in a thread stops that subagent. A waiting approval in a thread alerts as any
-approval does. A person can write to a subagent only when the harness allows it.
-
-What Codex sends for subagents is in
-[harness messages](reference/harness-messages.md#subagents), from the recordings in
-[`fixtures/recordings/codex/subagents`](../fixtures/recordings/codex/subagents).
+The current thinking, agreed in direction with the project owner on 2026-11-20, is a thread in the same group
+for each subagent: [subagents as threads](design/subagents.md), with the points to decide. What Codex sends for
+subagents is in [harness messages](reference/harness-messages.md#subagents).
 
 ### Q-29 What does the Codex driver do with a thread no chat asked for?
 
