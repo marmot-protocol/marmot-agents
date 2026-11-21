@@ -2819,6 +2819,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "marmot-agent-chat"
+version = "0.1.0"
+dependencies = [
+ "cgka-traits",
+ "hex",
+ "marmot-account",
+ "marmot-agent",
+ "marmot-agent-events",
+ "marmot-app",
+ "nostr-relay-builder",
+ "tokio",
+]
+
+[[package]]
 name = "marmot-agent-codex"
 version = "0.1.0"
 dependencies = [

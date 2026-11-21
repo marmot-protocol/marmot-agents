@@ -30,6 +30,7 @@ being replaced by what is designed here, not extended.
 | Task | Start here |
 | --- | --- |
 | See what to build next | `docs/plan.md` |
+| Try the core by hand | `docs/try.md`, then `crates/marmot-agent-chat` |
 | Understand how the parts fit | `docs/design/architecture.md` |
 | Work on what agents send to the chat | `docs/design/event-model.md`, then `docs/design/event-carrier.md` |
 | Work on what people send back to an agent | `docs/design/answers-and-controls.md` |
