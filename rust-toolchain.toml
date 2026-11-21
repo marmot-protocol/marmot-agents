@@ -2,5 +2,6 @@
 # one compiler (D-053). Change this only together with MDK's rust-toolchain.toml.
 [toolchain]
 channel = "1.97.1"
-components = ["rustfmt", "clippy"]
+# MDK's markdown parser runs `opt` from llvm-tools when it is built optimised.
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
 profile = "minimal"

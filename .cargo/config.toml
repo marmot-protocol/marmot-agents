@@ -5,3 +5,8 @@
 # A RUSTFLAGS environment variable replaces this setting. Do not set one in CI.
 [build]
 rustflags = ["-F", "unsafe_code"]
+
+[env]
+# MDK's unoptimised OpenMLS code can overflow Rust's default 2 MiB thread stack. MDK sets this in
+# its own .cargo/config.toml, which does not reach a program that uses MDK, so it is repeated here.
+RUST_MIN_STACK = "4194304"

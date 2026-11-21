@@ -26,11 +26,19 @@ jobs:
   rust:
     name: Rust
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # MDK, which the core links, takes most of this to build.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Install Odin
+        # MDK's markdown parser is written in Odin and its build needs this exact release. The
+        # script pins it by version, commit and checksum.
+        run: |
+          bash tools/odin/install.sh "${RUNNER_TEMP}/odin"
+          echo "ODIN=${RUNNER_TEMP}/odin/odin" >> "${GITHUB_ENV}"
 
       - name: Install the pinned toolchain
         # With no arguments this installs what rust-toolchain.toml names.
