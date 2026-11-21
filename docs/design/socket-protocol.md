@@ -309,6 +309,7 @@ with an error whose `data` holds a `reason` and a `detail` for the agent, which 
 `{"code": -32000, "message": "not_allowed", "data": {"reason": "not_allowed", "detail": "The file is outside the
 folders the agent may send files from."}}`. The reasons are the eight above and `not_allowed`, which only the
 core gives. The answer can take as long as the upload; the connector's id is its own, numbered after the hello.
+A second `send_file` with the id of one still unanswered is refused as `invalid` and nothing is sent.
 The protocol version stays `marmot.agent-control.v3`: a connector that never sends the request is unchanged.
 
 ## What it replaces

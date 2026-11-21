@@ -206,6 +206,10 @@ pub struct SocketDriver {
     /// The connector's `send_file` requests the core has not answered, by the id the core was
     /// given: the connector's own id, as it wrote it.
     files: HashMap<String, Value>,
+    /// `send_file` requests that reused the id of one still unanswered, to answer `invalid`. They
+    /// are answered at the next write that is awaited to its end, never while waiting for the
+    /// next event, which may be dropped partway (D-058).
+    duplicates: Vec<Value>,
     /// The number of the next event in each session, which the core gives (D-034).
     seq: HashMap<String, u64>,
     answer_within: Duration,
@@ -269,6 +273,7 @@ impl SocketDriver {
             next_id: 0,
             held: VecDeque::new(),
             files: HashMap::new(),
+            duplicates: Vec::new(),
             seq: HashMap::new(),
             answer_within: ANSWER_WITHIN,
             gone: false,
@@ -288,6 +293,7 @@ impl SocketDriver {
         if self.gone {
             return Err(Refusal::new(Reason::Failed));
         }
+        self.answer_duplicates().await;
         self.next_id += 1;
         let id = self.next_id;
         let message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
@@ -320,6 +326,21 @@ impl SocketDriver {
         }
     }
 
+    /// Answers each `send_file` that reused an unanswered id: `invalid`, and nothing was sent.
+    async fn answer_duplicates(&mut self) {
+        for id in std::mem::take(&mut self.duplicates) {
+            if self.gone {
+                return;
+            }
+            let message = json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000,
+                "message": "invalid", "data": {"reason": "invalid",
+                "detail": "Another file with this request's id is still being sent."}}});
+            if write_line(&mut self.writer, &message).await.is_err() {
+                self.gone = true;
+            }
+        }
+    }
+
     /// What a message from the connector is for the core: an event, a file to send, or nothing.
     fn output(&mut self, envelope: &Envelope) -> Option<Output> {
         if let Some(file) = self.send_file(envelope) {
@@ -343,7 +364,9 @@ impl SocketDriver {
             .unwrap_or(Value::Null);
         let key = id.to_string();
         if self.files.contains_key(&key) {
-            return None; // the same id again, while the first is unanswered
+            // The same id again, while the first is unanswered: refused, and not sent.
+            self.duplicates.push(id);
+            return None;
         }
         self.files.insert(key.clone(), id);
         Some(SendFile {
@@ -500,6 +523,7 @@ impl Driver for SocketDriver {
     }
 
     async fn file_sent(&mut self, id: String, result: Result<(), Refusal>) {
+        self.answer_duplicates().await;
         let Some(connector_id) = self.files.remove(&id) else {
             return;
         };
@@ -772,6 +796,43 @@ mod tests {
             refused["error"]["data"]["detail"],
             "The file is outside the folders."
         );
+    }
+
+    // A second `send_file` with the id of one still unanswered is refused as invalid, not dropped:
+    // the connector's tool would otherwise wait for an answer that never comes.
+    #[tokio::test]
+    async fn a_file_request_that_reuses_an_unanswered_id_is_refused() {
+        let (core, connector) = UnixStream::pair().unwrap();
+        let (read, mut write) = connector.into_split();
+        write
+            .write_all(hello(json!(TOKEN)).as_bytes())
+            .await
+            .unwrap();
+        let mut driver = greeted(core).await;
+        let mut lines = BufReader::new(read).lines();
+        let _welcome = lines.next_line().await.unwrap();
+        for path in ["/work/a.txt", "/work/b.txt"] {
+            let ask = json!({"jsonrpc": "2.0", "id": 7, "method": "send_file",
+                "params": {"chat": "c-1", "path": path}});
+            write
+                .write_all(format!("{ask}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+        let Some(Output::SendFile(first)) = driver.next_event().await else {
+            panic!("a file to send");
+        };
+        assert_eq!(first.path, PathBuf::from("/work/a.txt"));
+        // The duplicate is read, held, and answered at the next write: here the first's answer.
+        let more = tokio::time::timeout(Duration::from_millis(200), driver.next_event()).await;
+        assert!(more.is_err(), "the duplicate is not handed to the core");
+        driver.file_sent(first.id, Ok(())).await;
+        let refused: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(refused["id"], 7);
+        assert_eq!(refused["error"]["data"]["reason"], "invalid");
+        let sent: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(sent, json!({"jsonrpc": "2.0", "id": 7, "result": {}}));
     }
 
     // The harness's own message reaches the core exactly as the connector wrote it (D-007).
