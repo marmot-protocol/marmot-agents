@@ -4,15 +4,18 @@
 #![allow(dead_code)]
 
 use cgka_traits::GroupId;
-use marmot_agent::carrier::{self, ITEM_KIND};
+use marmot_agent::carrier::{self, Asked, ITEM_KIND, Read};
 use marmot_agent::config::Config;
 use marmot_agent::marmot::Marmot;
 use marmot_agent::run::{Core, Store};
 use marmot_agent::{EventKey, PubKey};
 use marmot_agent_driver::Driver;
+use marmot_agent_events::body::{Body, Effect};
+use marmot_agent_events::{SessionId, State, TurnId};
 use marmot_app::{
     AccountSetupRequest, AppMessageQuery, AppMessageRecord, MarmotApp, MarmotAppRuntime,
 };
+use std::path::Path;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
@@ -169,5 +172,177 @@ impl Running {
     pub async fn crash(self) {
         self.task.abort();
         let _ = self.task.await;
+    }
+}
+
+// -------------------------------------------------------------------- the scenarios' chat
+
+/// How long a harness's turn may take.
+pub const TURN: u64 = 180;
+
+/// The item's first event: what an answer or a control names.
+pub fn first(event: &EventKey, read: &Read) -> EventKey {
+    read.item.first.clone().unwrap_or_else(|| event.clone())
+}
+
+pub fn lines(path: &Path) -> usize {
+    std::fs::read_to_string(path).map_or(0, |text| text.lines().count())
+}
+
+/// A chat between the person and the agent, as the scenarios drive it.
+pub struct Chat<'a> {
+    pub world: &'a World,
+    pub group: GroupId,
+    pub hex: String,
+}
+
+impl Chat<'_> {
+    /// Sends a message, and gives back its event's id.
+    pub async fn say(&self, text: &str) -> EventKey {
+        let summary = self
+            .world
+            .runtime
+            .send_message(&self.world.person, &self.group, text.as_bytes().to_vec())
+            .await
+            .unwrap();
+        EventKey(summary.message_ids[0].clone())
+    }
+
+    /// Sends an answer or a control, and gives back its event's id.
+    pub async fn ask(&self, target: Option<&EventKey>, asked: &Asked, words: &str) -> EventKey {
+        let agent = marmot_agent::PubKey(self.world.agent.clone());
+        let out = carrier::request(&agent, target, asked, words);
+        let summary = self
+            .world
+            .runtime
+            .send_custom_event(
+                &self.world.person,
+                &self.group,
+                out.kind,
+                out.tags,
+                out.content,
+            )
+            .await
+            .unwrap();
+        EventKey(summary.message_ids[0].clone())
+    }
+
+    /// Every version of every item, oldest first, each with its own event's id.
+    pub fn items(&self) -> Vec<(EventKey, Read)> {
+        self.world.items(&self.hex)
+    }
+
+    /// Each item's latest version, with its first event.
+    pub fn latest(&self) -> Vec<(EventKey, Read)> {
+        let mut latest: Vec<(EventKey, Read)> = Vec::new();
+        for (event, read) in self.items() {
+            let key = first(&event, &read);
+            match latest.iter_mut().find(|(k, _)| *k == key) {
+                Some(slot) if slot.1.item.version < read.item.version => slot.1 = read,
+                Some(_) => {}
+                None => latest.push((key, read)),
+            }
+        }
+        latest
+    }
+
+    /// The command a tool item ran, by the item's id.
+    pub fn command_of(&self, item: &str) -> Option<String> {
+        self.latest()
+            .into_iter()
+            .find_map(|(_, r)| match r.item.event.body() {
+                Body::Tool(tool) if r.item.event.header().item.as_str() == item => {
+                    tool.command.clone()
+                }
+                _ => None,
+            })
+    }
+
+    /// Approves, once, the waiting approval for a command containing `command`, and gives back
+    /// the request's event id. An approval for anything else is never answered.
+    pub async fn approve(&self, command: &str) -> EventKey {
+        println!("waiting for the approval of `{command}`");
+        let (target, read) = within(TURN, || {
+            self.latest().into_iter().find(|(_, r)| {
+                let Body::Approval(approval) = r.item.event.body() else {
+                    return false;
+                };
+                let asks_for = approval
+                    .subject
+                    .as_ref()
+                    .and_then(|subject| self.command_of(subject.as_str()))
+                    .unwrap_or_else(|| r.item.event.header().text.clone());
+                r.item.event.header().state == State::Waiting && asks_for.contains(command)
+            })
+        })
+        .await;
+        let Body::Approval(approval) = read.item.event.body() else {
+            unreachable!()
+        };
+        // The first choice that allows is "Allow once"; a standing one comes after it.
+        let once = approval
+            .choices
+            .iter()
+            .find(|c| c.effect == Effect::Allow)
+            .unwrap();
+        let asked = Asked::Choice {
+            choice: once.id.clone(),
+        };
+        self.ask(Some(&target), &asked, &once.label).await
+    }
+
+    /// Waits for a request to be settled by its effect, never by a notice saying why it had none
+    /// (D-028), and gives back the version that shows it.
+    pub async fn effect_of(&self, request: &EventKey) -> Read {
+        let read = within(TURN, || {
+            let items = self.items().into_iter().map(|(_, r)| r);
+            items.into_iter().find(|r| r.item.settles.contains(request))
+        })
+        .await;
+        assert!(
+            !matches!(read.item.event.body(), Body::Notice(_)),
+            "refused: {}",
+            read.item.event.header().text
+        );
+        read
+    }
+
+    /// The turns a message started, by turn id.
+    pub fn turns_for(&self, prompt: &EventKey) -> Vec<TurnId> {
+        let mut turns: Vec<TurnId> = self
+            .items()
+            .into_iter()
+            .filter(|(_, r)| matches!(r.item.event.body(), Body::Turn(_)))
+            .filter(|(_, r)| r.item.started_by.as_ref() == Some(prompt))
+            .filter_map(|(_, r)| r.item.event.header().turn.clone())
+            .collect();
+        turns.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        turns.dedup();
+        turns
+    }
+
+    /// Waits for a turn's latest version to stand at `state`, and gives it back.
+    pub async fn turn_at(&self, turn: &TurnId, state: State) -> Read {
+        within(TURN, || {
+            self.latest().into_iter().map(|(_, r)| r).find(|r| {
+                matches!(r.item.event.body(), Body::Turn(_))
+                    && r.item.event.header().turn.as_ref() == Some(turn)
+                    && r.item.event.header().state == state
+            })
+        })
+        .await
+    }
+
+    /// Waits for the turn a message started, and gives its id.
+    pub async fn turn_for(&self, prompt: &EventKey) -> TurnId {
+        within(TURN, || self.turns_for(prompt).into_iter().next()).await
+    }
+
+    pub fn sessions(&self) -> Vec<SessionId> {
+        self.items()
+            .into_iter()
+            .filter(|(_, r)| matches!(r.item.event.body(), Body::Session(_)))
+            .filter_map(|(_, r)| r.item.event.header().session.clone())
+            .collect()
     }
 }

@@ -67,6 +67,8 @@ about the shape is written up as the specification of the new 1201 and 1202, for
 
 ### M2: The socket, and Claude Code
 
+Done on 2026-11-21: the same scenario passes against a real Claude Code, through the socket.
+
 The local socket, with the fields of each message fixed from what Claude Code needs, and the Claude Code driver
 in TypeScript on the official SDK. **Done when** the same scenario passes with Claude Code.
 

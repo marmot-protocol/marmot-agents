@@ -57,3 +57,18 @@ or `:deny`, or `:choose` one of the choices shown; answer a question with `:answ
 the session's settings. A message that starts with a slash goes to Codex as typed.
 
 The relay keeps nothing when the client stops, so start again from step 2 with fresh folders.
+
+## With Claude Code
+
+The same steps work with Claude Code in place of Codex, through the socket. It also needs Node 24.
+
+1. In the agent's settings, replace the `[codex]` section with an empty `[connector]` section.
+2. Install the driver's packages once: `npm ci` in `packages/claude-code`.
+3. Run `marmot-agent run agent.toml` as before. It now waits for the driver.
+4. Start the driver, giving it the agent's home and the folder to work in:
+
+   ```sh
+   node packages/claude-code/src/main.ts --home /tmp/try/agent --cwd /tmp/try/work --permission-mode default
+   ```
+
+Then invite the agent and talk to it in the client as before.
