@@ -2,7 +2,7 @@
   "name": "marmot-agent-claude-code",
   "version": "0.0.0",
   "private": true,
-  "description": "The Claude Code driver for marmot-agent: Claude Code's messages as Marmot agent events",
+  "description": "The Claude Code driver for marmot-agent: runs Claude Code and connects it to the core over the local socket",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -10,7 +10,8 @@
   },
   "scripts": {
     "test": "node --test \"test/*.test.ts\"",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "start": "node src/main.ts"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
