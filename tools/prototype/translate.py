@@ -1107,7 +1107,6 @@ class Acp(Translator):
         self.streamed: dict[str, dict] = {}  # message or thinking id -> its chunks so far
         self.last_tool: dict[str, dict] = {}  # tool call id -> the last event sent for it
         self.n = collections.Counter()  # how many items a turn has made with no id of the agent's
-        self.hidden: set = set()  # tool calls that are really a question, which the form asks
         self.todos: list = []  # Cursor's to-do list in this turn, as it last stood
         self.turn_request = None  # the id of the `session/prompt` that started the turn
 
@@ -1116,7 +1115,8 @@ class Acp(Translator):
         self.streamed, self.tools, self.last_tool = {}, {}, {}
         self.n.clear()
         self.declined.clear()
-        self.hidden.clear()
+        # A request the agent made in the turn can no longer be answered.
+        self.pending = {k: v for k, v in self.pending.items() if k[0] != "s"}
         self.todos = []
         self.turn, self.turn_request, self.cancelled = None, None, False
 
@@ -1278,12 +1278,7 @@ class Acp(Translator):
         if kind == "plan":
             if self.loading is not None:
                 return self.skip("the conversation replayed by session/load")
-            entries = [{"text": e.get("content"), "state": {"pending": "pending", "in_progress": "running",
-                        "completed": "done"}.get(e.get("status"), "pending")} for e in u.get("entries") or []]
-            done = bool(entries) and all(e["state"] == "done" for e in entries)
-            text = "\n".join(f"[{'x' if e['state'] == 'done' else ' '}] {e['text']}" for e in entries)
-            return self.emit(f"plan:{self.turn}", "plan", "done" if done else "running", "Plan", text,
-                             {"entries": entries}, native_kind, p)
+            return self.plan(u.get("entries") or [], native_kind, p)
         if kind == "available_commands_update":
             self.commands = [command(c.get("name"), c.get("description"), (c.get("input") or {}).get("hint"))
                              for c in u.get("availableCommands") or []]
@@ -1300,16 +1295,16 @@ class Acp(Translator):
         tid = u.get("toolCallId")
         t = self.tools.setdefault(tid, {})
         t.update({k: v for k, v in u.items() if k not in ("sessionUpdate", "toolCallId") and v is not None})
-        if t.get("name") == "question":
+        if self.harness == "opencode" and t.get("name") == "question":
             # OpenCode's question tool asks through a form, which becomes the one question item (rule 4).
             return self.skip("tool call that is really a question (question)")
-        if (t.get("rawInput") or {}).get("_toolName") == "updateTodos":
+        if self.harness == "cursor" and (t.get("rawInput") or {}).get("_toolName") == "updateTodos":
             # Cursor's to-do tool: its list comes in `cursor/update_todos`, which becomes the plan (rule 4).
             return self.skip("tool call that is really a plan (updateTodos)")
         acp_kind = t.get("kind") or "other"
         kind = self.TOOL_KINDS.get(acp_kind, "other")
         state = self.TOOL_STATES.get(t.get("status") or "pending", "running")
-        if state == "failed" and tid in self.declined:
+        if state == "failed" and f"{p.get('sessionId')}:{tid}" in self.declined:
             state = "declined"
         elif state == "failed" and self.cancelled:
             state = "cancelled"
@@ -1332,8 +1327,9 @@ class Acp(Translator):
             body["exit_code"] = code
             if state == "done" and code not in (None, 0):
                 state = "failed"
-            if output is None and isinstance(ro.get("stdout"), str) and ro["stdout"]:
-                body["output"] = ro["stdout"]  # Cursor sends a command's output only there
+            streams = [ro[k] for k in ("stdout", "stderr") if isinstance(ro.get(k), str) and ro[k]]
+            if output is None and streams:
+                body["output"] = "\n".join(streams)  # Cursor sends a command's output only there
         elif kind == "edit":
             changes = [{"path": c.get("path"), "change": "add" if c.get("oldText") is None else "update",
                         "diff": changed_lines(c.get("oldText"), c.get("newText") or "")}
@@ -1353,7 +1349,8 @@ class Acp(Translator):
         last = self.last_tool.get(tid)
         if last is not None and (last["state"], last["title"], last["text"], last["body"]) == (state, title, text, body):
             return self.skip(f"{native_kind}, nothing new for the tool item")
-        self.last_tool[tid] = self.emit(tid, "tool", state, title, text, body, native_kind, p)
+        # A tool call's id is the agent's own for one session; the item is named after both.
+        self.last_tool[tid] = self.emit(f"{p.get('sessionId')}:{tid}", "tool", state, title, text, body, native_kind, p)
 
     def agent_request(self, m, method, p):
         rid = m.get("id")
@@ -1365,6 +1362,7 @@ class Acp(Translator):
                 effect = "allow" if str(o.get("kind")).startswith("allow") else "deny"
                 choices.append({"id": f"c{n}", "label": o.get("name"), "effect": effect})
                 native_choices[f"c{n}"] = o.get("optionId")
+            subject = f"{p.get('sessionId')}:{subject}" if subject else None  # the tool item
             item = f"approval:{subject}" if subject else f"approval:{self.turn}:{rid}"
             raw = call.get("rawInput") if isinstance(call.get("rawInput"), dict) else {}
             self.pending[("s", rid)] = {"item": item, "native_choices": native_choices}
@@ -1391,7 +1389,7 @@ class Acp(Translator):
                            "multiple": many, "allow_text": not offered or name in custom,
                            "options": [{"id": f"o{k}", "label": o.get("title") or o.get("const"),
                                         "description": o.get("description")} for k, o in enumerate(offered)]})
-            subject = p.get("toolCallId")
+            subject = f"{p.get('sessionId')}:{p['toolCallId']}" if p.get("toolCallId") else None  # the tool item
             item = f"question:{subject}" if subject else f"question:{self.turn}:{rid}"
             self.pending[("s", rid)] = {"item": item, "values": values, "custom": custom}
             return self.emit(item, "question", "waiting", "Question", qs[0]["text"] if qs else p.get("message") or "",
@@ -1410,12 +1408,17 @@ class Acp(Translator):
             self.todos = merged + [t for t in given if t.get("id") in ids]
         else:
             self.todos = given
-        entries = [{"text": t.get("content"), "state": {"pending": "pending", "in_progress": "running",
-                    "completed": "done"}.get(t.get("status"), "pending")} for t in self.todos]
+        self.plan(self.todos, f"{method} (request)", p)
+
+    def plan(self, given, native_kind, p):
+        """The turn's plan item, from ACP's plan entries or Cursor's to-dos: both have a `content` and a
+        `status`."""
+        entries = [{"text": e.get("content"), "state": {"pending": "pending", "in_progress": "running",
+                    "completed": "done"}.get(e.get("status"), "pending")} for e in given if isinstance(e, dict)]
         done = bool(entries) and all(e["state"] == "done" for e in entries)
         text = "\n".join(f"[{'x' if e['state'] == 'done' else ' '}] {e['text']}" for e in entries)
         self.emit(f"plan:{self.turn}", "plan", "done" if done else "running", "Plan", text,
-                  {"entries": entries}, f"{method} (request)", p)
+                  {"entries": entries}, native_kind, p)
 
     def response(self, m):
         method, p, owner = self.pending.pop(("c", m.get("id")), (None, {}, (None, None)))
@@ -1472,6 +1475,7 @@ class Acp(Translator):
         if self.session and sid != self.session:
             self.end_session(self.session, "another session was started")
             self.sessions.pop(f"session:{sid}", None)
+            self.sessions.pop(f"session:{self.session}", None)
             self.config, self.commands = [], []
         self.session = sid
 

@@ -200,3 +200,21 @@ fn a_failing_command_is_failed_with_its_exit_code() {
         .expect("a tool item");
     assert_eq!(last, (State::Failed, Some(1)));
 }
+
+/// A failed command shows what it wrote to its error stream: Goose sends it as text, Cursor only in
+/// `rawOutput.stderr`.
+#[test]
+fn a_failed_commands_error_output_is_kept() {
+    for agent in ["goose", "cursor"] {
+        let events = replay(&folder(agent).join("failing_command.jsonl"));
+        let output = events
+            .iter()
+            .rev()
+            .find_map(|e| match e.body() {
+                Body::Tool(t) if e.header().state == State::Failed => t.output.clone(),
+                _ => None,
+            })
+            .unwrap_or_default();
+        assert!(output.contains("No module named pytest"), "{agent}: {output:?}");
+    }
+}

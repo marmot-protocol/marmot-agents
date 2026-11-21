@@ -172,8 +172,6 @@ pub struct Translator {
     commands: Vec<Command>,
     /// Items each turn made with no id of the agent's.
     counted: HashMap<Option<String>, u64>,
-    /// Tool calls that are really a question, which the form asks.
-    hidden: HashSet<String>,
     /// The id of the `session/prompt` that started the turn, as its JSON text.
     turn_request: Option<String>,
     /// Cursor's to-do list in this turn, as it last stood.
@@ -218,7 +216,6 @@ impl Translator {
             config: Vec::new(),
             commands: Vec::new(),
             counted: HashMap::new(),
-            hidden: HashSet::new(),
             turn_request: None,
             todos: Vec::new(),
             unreadable: 0,
@@ -296,7 +293,8 @@ impl Translator {
         self.last_tool.clear();
         self.counted.clear();
         self.declined.clear();
-        self.hidden.clear();
+        // A request the agent made in the turn can no longer be answered.
+        self.asked.clear();
         self.todos.clear();
         self.turn = None;
         self.turn_request = None;
@@ -657,7 +655,8 @@ impl Translator {
                     if call.raw_output.is_some() {
                         t.raw_output = call.raw_output;
                     }
-                    self.tool(&id, "session/update [tool_call]", params, out);
+                    let session = note.session_id.0.to_string();
+                    self.tool(&session, &id, "session/update [tool_call]", params, out);
                 }
             }
             SessionUpdate::ToolCallUpdate(update) => {
@@ -695,13 +694,20 @@ impl Translator {
                     if f.raw_output.is_some() {
                         t.raw_output = f.raw_output;
                     }
-                    self.tool(&id, "session/update [tool_call_update]", params, out);
+                    let session = note.session_id.0.to_string();
+                    self.tool(
+                        &session,
+                        &id,
+                        "session/update [tool_call_update]",
+                        params,
+                        out,
+                    );
                 }
             }
             SessionUpdate::Plan(plan) => {
                 self.flush(out);
                 if !replaying {
-                    let entries: Vec<PlanEntry> = plan
+                    let entries = plan
                         .entries
                         .into_iter()
                         .map(|e| PlanEntry {
@@ -713,38 +719,7 @@ impl Translator {
                             },
                         })
                         .collect();
-                    let done = !entries.is_empty()
-                        && entries.iter().all(|e| e.state == PlanEntryState::Done);
-                    let text = entries
-                        .iter()
-                        .map(|e| {
-                            format!(
-                                "[{}] {}",
-                                if e.state == PlanEntryState::Done {
-                                    'x'
-                                } else {
-                                    ' '
-                                },
-                                e.text
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    let item = format!("plan:{}", show(self.turn.as_deref()));
-                    let state = if done { State::Done } else { State::Running };
-                    let body = Body::Plan(Plan {
-                        text: None,
-                        entries,
-                    });
-                    self.emit(
-                        out,
-                        &item,
-                        body,
-                        state,
-                        "Plan",
-                        &text,
-                        Some(native("session/update [plan]", params)),
-                    );
+                    self.plan(entries, "session/update [plan]", params, out);
                 }
             }
             SessionUpdate::AvailableCommandsUpdate(update) => {
@@ -785,20 +760,30 @@ impl Translator {
         }
     }
 
-    fn tool(&mut self, id: &str, kind_name: &str, params: &str, out: &mut Vec<AgentEvent>) {
+    fn tool(
+        &mut self,
+        session: &str,
+        id: &str,
+        kind_name: &str,
+        params: &str,
+        out: &mut Vec<AgentEvent>,
+    ) {
         let Some(t) = self.tools.get(id) else {
             return;
         };
-        if t.name.as_deref() == Some("question") {
+        // A tool call's id is the agent's own for one session; the item is named after both.
+        let item = format!("{session}:{id}");
+        if self.harness == "opencode" && t.name.as_deref() == Some("question") {
             // OpenCode's question tool asks through a form, which becomes the one question item
             // (rule 4 of the event model).
             return;
         }
-        if t.raw_input
-            .as_ref()
-            .and_then(|r| r.get("_toolName"))
-            .and_then(Value::as_str)
-            == Some("updateTodos")
+        if self.harness == "cursor"
+            && t.raw_input
+                .as_ref()
+                .and_then(|r| r.get("_toolName"))
+                .and_then(Value::as_str)
+                == Some("updateTodos")
         {
             // Cursor's to-do tool: its list comes in `cursor/update_todos`, which becomes the plan.
             return;
@@ -821,7 +806,7 @@ impl Translator {
             ToolCallStatus::Failed => State::Failed,
             _ => State::Running,
         };
-        if state == State::Failed && self.declined.contains(id) {
+        if state == State::Failed && self.declined.contains(&item) {
             state = State::Declined;
         } else if state == State::Failed && self.cancelled {
             state = State::Cancelled;
@@ -893,11 +878,12 @@ impl Translator {
                 }
                 if body.output.is_none() {
                     // Cursor sends a command's output only there.
-                    body.output = ro
-                        .and_then(|o| o.get("stdout"))
-                        .and_then(Value::as_str)
+                    let streams: Vec<&str> = ["stdout", "stderr"]
+                        .into_iter()
+                        .filter_map(|k| ro.and_then(|o| o.get(k)).and_then(Value::as_str))
                         .filter(|s| !s.is_empty())
-                        .map(str::to_string);
+                        .collect();
+                    body.output = (!streams.is_empty()).then(|| streams.join("\n"));
                 }
                 body.command.clone().unwrap_or(title_text)
             }
@@ -951,7 +937,7 @@ impl Translator {
         self.last_tool.insert(id.to_string(), now);
         self.emit(
             out,
-            id,
+            &item,
             Body::Tool(body),
             state,
             &title,
@@ -974,7 +960,8 @@ impl Translator {
                     self.unreadable += 1;
                     return;
                 };
-                let subject = p.tool_call.tool_call_id.0.to_string();
+                // The tool item, named after the session and the tool call.
+                let subject = format!("{}:{}", p.session_id.0, p.tool_call.tool_call_id.0);
                 let mut choices = Vec::new();
                 let mut options = Vec::new();
                 for (n, o) in p.options.iter().enumerate() {
@@ -1043,9 +1030,11 @@ impl Translator {
                     return;
                 };
                 let subject = match &form.scope {
-                    ElicitationScope::Session(scope) => {
-                        scope.tool_call_id.as_ref().map(|t| t.0.to_string())
-                    }
+                    // The tool item, named after the session and the tool call.
+                    ElicitationScope::Session(scope) => scope
+                        .tool_call_id
+                        .as_ref()
+                        .map(|t| format!("{}:{}", scope.session_id.0, t.0)),
                     _ => None,
                 };
                 // The fields come in the order of their names: the official types keep them in a
@@ -1229,19 +1218,27 @@ impl Translator {
                 },
             })
             .collect();
+        self.plan(entries, &format!("{method} (request)"), params, out);
+    }
+
+    /// The turn's plan item, from ACP's plan or Cursor's to-do list.
+    fn plan(
+        &mut self,
+        entries: Vec<PlanEntry>,
+        kind: &str,
+        params: &str,
+        out: &mut Vec<AgentEvent>,
+    ) {
         let done = !entries.is_empty() && entries.iter().all(|e| e.state == PlanEntryState::Done);
         let text = entries
             .iter()
             .map(|e| {
-                format!(
-                    "[{}] {}",
-                    if e.state == PlanEntryState::Done {
-                        'x'
-                    } else {
-                        ' '
-                    },
-                    e.text
-                )
+                let mark = if e.state == PlanEntryState::Done {
+                    'x'
+                } else {
+                    ' '
+                };
+                format!("[{mark}] {}", e.text)
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -1258,7 +1255,7 @@ impl Translator {
             state,
             "Plan",
             &text,
-            Some(native(&format!("{method} (request)"), params)),
+            Some(native(kind, params)),
         );
     }
 
@@ -1462,6 +1459,7 @@ impl Translator {
         {
             self.end_session(&old, out);
             self.sessions.remove(&format!("session:{sid}"));
+            self.sessions.remove(&format!("session:{old}"));
             self.config.clear();
             self.commands.clear();
         }
