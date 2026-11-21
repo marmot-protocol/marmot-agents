@@ -5,7 +5,8 @@ Status: draft. Which driver each harness gets is decided
 libraries ([D-006](../decisions.md#d-006-prefer-official-interfaces-and-libraries)), and so are the trait and
 the capability flags ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)), and so is how
 the Codex driver splits its work ([D-060](../decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes)).
-The testing approach is a proposal.
+So is how drivers are tested
+([D-074](../decisions.md#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)).
 
 ## What a driver does
 
@@ -97,7 +98,7 @@ harness's name. A driver states every flag; none is optional.
 The flags, with what Codex states for each, are in
 [D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags).
 
-## Proposed: testing with recorded sessions
+## Testing with recorded sessions
 
 Record a real session with a harness: every message in both directions. Replay it through the driver in a test
 and check the agent events that come out. When a harness changes its interface, a new recording shows the
@@ -106,8 +107,9 @@ difference.
 Hand-written test messages are a guess about what the harness sends. Recordings are what it sends.
 
 The Codex driver is tested this way: each of its recordings must give the events the prototype gives
-([`crates/marmot-agent-codex/tests/replay.rs`](../../crates/marmot-agent-codex/tests/replay.rs)). Whether every
-driver is tested so is [Q-17](../open-questions.md#q-17-how-are-drivers-tested).
+([`crates/marmot-agent-codex/tests/replay.rs`](../../crates/marmot-agent-codex/tests/replay.rs)). Every driver
+is tested so, and by one end-to-end scenario
+([D-074](../decisions.md#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)).
 
 ## The Codex driver
 

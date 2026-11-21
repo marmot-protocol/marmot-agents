@@ -218,8 +218,8 @@ harness apply to the Rust trait, whose flags are the seven in D-058, not the row
 
 A prompt is delivered at most once ([D-037](../decisions.md#d-037-a-prompt-is-delivered-at-most-once)). Running a prompt
 twice is worse than losing one, because the person can see a prompt that was lost and send it again. The rest
-of what happens on a restart is open
-([Q-27](../open-questions.md#q-27-what-happens-to-a-turn-when-the-core-or-a-driver-restarts)).
+of what happens on a restart is in
+[D-070](../decisions.md#d-070-a-restart-closes-the-turn-as-interrupted).
 
 ## Who may connect
 

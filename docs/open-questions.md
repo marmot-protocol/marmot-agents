@@ -116,7 +116,8 @@ carries answers and controls ([D-027](decisions.md#d-027-answers-and-controls-ar
 
 The kinds are Marmot events, so their definition probably belongs in the
 [Marmot specification](https://github.com/marmot-protocol/marmot), with MDK exposing them to the apps. The
-ownership, and how much is specification versus app convention, is not settled.
+ownership, and how much is specification versus app convention, is not settled. The
+[plan](plan.md) writes the specification here, from what the first end-to-end test shows, for MDK to build.
 
 ### Q-23 How does an agent send a file to the chat?
 
@@ -152,8 +153,9 @@ It may not in the first version
 ([D-042](decisions.md#d-042-an-agent-may-act-in-its-own-chat-and-may-not-change-a-group-or-the-account)).
 Raised in [issue 4](https://github.com/marmot-protocol/marmot-agents/issues/4).
 
-The project owner agreed with this direction on 2026-11-17 and chose not to fix its shape yet. It is to be
-decided when drivers are being built against real harnesses, not before.
+The project owner agreed with this direction on 2026-11-17 and chose not to fix its shape yet. Until the swap,
+standing settings live in a configuration file and nothing else administers the core
+([D-073](decisions.md#d-073-standing-settings-live-in-a-configuration-file)). The rest waits until after it.
 
 ## Conversation handling
 
@@ -212,16 +214,17 @@ how several of them run on one machine and behave in one group. This needs much 
 
 The rough shape, not decided:
 
-- **Who answers.** In a one-to-one chat the agent always answers. In a group it answers only when it is
-  mentioned or replied to. A message addressed to nobody gets no answer. The project owner has said this
-  behaviour is the right one.
+- **Who answers.** Decided: in a direct chat always, in a group only when mentioned or replied to
+  ([D-075](decisions.md#d-075-in-a-group-the-agent-answers-when-mentioned-or-replied-to-in-a-direct-chat-always)).
 - **No loops.** Agents must not answer each other, and several must not answer at once.
 - **The owner is not a required link.** Nothing forces an agent to state whose it is. An owner who wants to can
   say so in the agent's profile, for example "Max's Codex" in its name or description.
 
 Still to work out:
 
-- **One program or several.** One program on the machine could hold every identity, which is easier to run and
+- **One program or several.** Until the swap, each identity has its own process
+  ([D-072](decisions.md#d-072-one-agent-identity-per-core-process-until-the-swap)). After it, one program on
+  the machine could hold every identity, which is easier to run and
   to set up, provided each identity's keys and storage are kept apart. Or each identity could have its own
   program, as today. Leaning to one program.
 
@@ -241,32 +244,11 @@ Still to work out:
 - **Names.** The identity is per install, so Claude Code on a laptop and on a server are two contacts.
 - **Setup.** Each identity has to be created, named and invited. It should take one step, not five.
 
-### Q-27 What happens to a turn when the core or a driver restarts?
-
-People restart connectors for updates without waiting for a turn to finish, and programs crash. Whatever the
-mechanism, a restart during a turn must not:
-
-- lose the chat's saved session;
-- run a prompt twice;
-- leave the chat showing a turn that never ends.
-
-How is open. The simple version: after a restart the chat shows the turn as interrupted, and a person says
-"carry on". [Issue 9](https://github.com/marmot-protocol/marmot-agents/issues/9) proposes more: the core resumes
-the session and runs a "continuation turn" that tells the agent to check what already happened. That means the
-connector sends the model a prompt nobody wrote, which sits badly with staying true to the harness, so it is
-parked as a possible later option. It also depends on things not designed yet: whether a harness even stops when
-the core restarts depends on whether its driver is built in or a separate program.
-
-Recordings now show what the two coding harnesses do
-([`reference/harness-messages.md`](reference/harness-messages.md)). Stopped mid-turn and resumed, both keep the
-session and neither reruns anything. Codex shows the earlier turn as interrupted, with the running command
-missing from its history. Neither sends any message to say the turn ended, so the driver has to close it. That
-supports the simple version.
-
 ### Q-10 How are permissions changed from the chat?
 
 D-010 wants this later. The mechanism is open, and so is how a client learns who may prompt, so that it can show
-this before someone tries.
+this before someone tries. Not before the swap: until then permissions are set in the configuration file
+([D-073](decisions.md#d-073-standing-settings-live-in-a-configuration-file)).
 
 ### Q-25 Can something outside the chat and the harness start a turn?
 
@@ -327,39 +309,7 @@ This needs more product thinking before anything is decided, and it does not cha
   A filter in the core would sit on top of theirs, and the two should not fight.
 - **It depends on how events are carried**, which is not designed yet.
 
-### Q-13 What may be logged?
-
-This is a private messenger. The starting assumption is that logs never contain message text, prompts, model
-output, identifiers or keys. The exact rules are not written yet.
-
-What the code does today, as a starting point and not a rule: the driver crate's types print, for debugging,
-the core's own ids and the ids of the settings and actions a harness published. They never print a value: no
-text, name, answer, choice, new setting or attachment, and none of the harness's own words, such as a
-refusal's detail. They leave out a question's id too, because the agent
-writes it, and the ids of the options and the choice a person gave. That is more than "no identifiers" allows, because the core's ids are shown. The item types in
-`marmot-agent-events` still print everything, the native message included.
-
-## Streaming
-
-### Q-14 What happens to the QUIC preview stack?
-
-D-012 makes word-by-word streaming low priority. Whether to repair the QUIC stack later, replace it with
-short-lived group messages, or remove it is open.
-
 ## Drivers
-
-### Q-17 How are drivers tested?
-
-The current thinking is to record real sessions and replay them through the driver, as T3 Code does. Not decided.
-
-The recorders and 50 recordings of coding harnesses exist: [`tools/record`](../tools/record/README.md) and
-[`fixtures/recordings`](../fixtures/recordings/README.md). A prototype replays them through the proposed event
-model ([`tools/prototype`](../tools/prototype/README.md)).
-
-The Codex driver is tested this way, as the project owner asked for it: its 28 recordings are replayed through
-the driver, which must produce the events the prototype produces for each. Those are committed beside the
-recordings, in [`fixtures/recordings/codex/expected`](../fixtures/recordings/codex/expected), and CI checks that
-they are what the prototype writes. Whether every driver is tested the same way is still open.
 
 ### Q-30 How does a chat show an agent's subagents?
 

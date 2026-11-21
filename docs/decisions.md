@@ -162,6 +162,9 @@ natural public boundary once it is stable.
 
 ## D-015 Build order
 
+Replaced by [`plan.md`](plan.md) ([D-068](#d-068-work-follows-the-plan-and-the-builder-decides-what-is-internal)),
+in which Codex runs end to end before the socket is built.
+
 **Decision.**
 
 1. The event model, the socket protocol and the core program.
@@ -217,7 +220,7 @@ built on by others ([D-014](#d-014-outside-developers-can-write-connectors-later
 - v3 has a **chat section** for ordinary messages: send, edit, delete, react, send media and read history.
   Hermes and OpenClaw need it because their agents use message tools on their own initiative.
 - v3 has no live preview stream. That waits for the streaming question
-  ([Q-14](open-questions.md#q-14-what-happens-to-the-quic-preview-stack)).
+  (Q-14, since settled as [D-067](#d-067-the-quic-preview-stack-is-removed)).
 
 **Why.** Every existing client of v2 is ours and is being rewritten for the new design anyway, so compatibility
 would protect nobody. v2 is built around chat messages and administration; of its 54 request types, 17 are used
@@ -245,7 +248,6 @@ disagree. The harness already has the setting, and people already know it from u
 
 Decided 2026-11-17, in response to [issue 7](https://github.com/marmot-protocol/marmot-agents/issues/7), which
 proposed a per-chat approval mode in the core.
-
 
 ## D-022 The agent's words are ordinary chat messages
 
@@ -534,7 +536,7 @@ prompt as not delivered. It never sends it again.
 again.
 
 Decided 2026-11-18. What else happens to a turn on a restart is still open
-([Q-27](open-questions.md#q-27-what-happens-to-a-turn-when-the-core-or-a-driver-restarts)).
+(Q-27, since settled as [D-070](#d-070-a-restart-closes-the-turn-as-interrupted)).
 
 ## D-038 Each connector has its own token
 
@@ -782,7 +784,8 @@ Decided 2026-11-19.
 replaying the Codex recordings and requiring the events the prototype produces
 ([`tools/prototype`](../tools/prototype/README.md)).
 
-The plan after that, which is not fixed:
+The plan after that, which is not fixed, and is replaced by [`plan.md`](plan.md)
+([D-068](#d-068-work-follows-the-plan-and-the-builder-decides-what-is-internal)):
 
 1. MDK learns the new shapes: agent items, edits of them, and answers and controls. This can run beside the
    first step.
@@ -794,7 +797,8 @@ The plan after that, which is not fixed:
 design in real code. It also settles three open questions by doing them: which Codex library to build on
 (Q-15, since settled as [D-055](#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own)), the capability flags
 (Q-16, since settled as [D-058](#d-058-the-driver-trait-and-the-capability-flags)) and how drivers are tested
-([Q-17](open-questions.md#q-17-how-are-drivers-tested)). The core cannot send an agent item until MDK changes.
+(Q-17, since settled as [D-074](#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)). The core cannot send an agent item until MDK changes (in 1201 and 1202; the first test sends items under a
+temporary kind before then, [D-069](#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind)).
 The gateways come last because whose rules govern them is still open
 ([Q-22](open-questions.md#q-22-whose-rules-govern-a-gateway)).
 
@@ -841,7 +845,8 @@ commits, has nothing to leak and cannot be changed from outside.
 A link check of our own was written first. Three reviews each found Markdown it read wrongly. Lychee read
 the cases that were tried on it correctly.
 
-Decided 2026-11-19.
+Decided 2026-11-19. That only the project owner merges is replaced by
+[D-068](#d-068-work-follows-the-plan-and-the-builder-decides-what-is-internal).
 
 ## D-055 The Codex driver reads Codex's messages with types of its own
 
@@ -992,8 +997,8 @@ socket is designed it takes the shapes above.
 A flag is kept only when the core or an app does something different because of it before anything has
 happened. The trait needs no async runtime, so each driver picks its own.
 
-What a debug print shows is not part of this decision. See
-[Q-13](open-questions.md#q-13-what-may-be-logged).
+What a debug print shows is not part of this decision. See Q-13, since settled as
+[D-071](#d-071-what-may-be-logged).
 
 Decided 2026-11-19. The project owner accepted the trait, and then the seven flags.
 
@@ -1151,3 +1156,159 @@ on one. A harness that never answers is a driver that has stopped
 working, and ending it is the remedy.
 
 Decided 2026-11-20. The project owner accepted the recommendation.
+
+## D-067 The QUIC preview stack is removed
+
+**Decision.** Word-by-word previews over QUIC are removed: the broker, the stream crates, kind 1200, and the
+group component that sets a stream's policy. Nothing here sends previews, and the socket has no preview
+stream. An agent's activity reaches the chat as items, each sent when it starts and edited as it changes
+([D-025](#d-025-an-agent-item-is-updated-with-an-edit)), and its words as messages. If word-by-word text is
+wanted later, the agent's message item can be edited every second or two while it is written, with no side
+channel. This settles Q-14.
+
+**Why.** The stack never worked reliably, only Hermes could use it, and only when configured. The new design
+does not need it: drivers drop partial text, and a busy turn already sends a few dozen items as it works. It
+costs a broker service, crates, storage, an MLS group component and API surface in the apps. Removing it from
+MDK, the Marmot specification and the apps is the project owner's to arrange. A group that already carries the
+component must keep working when it is gone.
+
+Decided 2026-11-21. The project owner chose removal, and deprecates it in the specification.
+
+## D-068 Work follows the plan, and the builder decides what is internal
+
+**Decision.** [`plan.md`](plan.md) is the go-ahead for the work it lays out. Work moves through its milestones
+without asking for each step.
+
+- **The builder decides** whatever is internal and can be changed later, inside the decisions already made:
+  how the code is laid out, defaults, which cases to handle, how to test. A choice that others can see is
+  recorded here; the rest is not.
+- **The project owner decides** what other programs, apps or people see (event shapes, socket messages,
+  anything MDK or the apps read), privacy and security, who may do what, any change to a decision, and the
+  plan's scope and order.
+- **Questions for the owner are gathered**, normally once per milestone, each with a recommendation and the
+  reason. Meanwhile work carries on with the recommendation, marked as provisional, except on privacy or
+  security, which wait.
+- **A pull request is one piece of work that makes sense alone**, on its own branch from `master`, with every
+  commit signed and CI passing. A milestone takes several.
+- **A code change gets one round of review** by two other models. A blocker is fixed, and checked again only
+  if the fix is large. Lesser findings are fixed when cheap, or kept as issues. Decisions and documents are not
+  reviewed this way.
+- **The builder merges** a pull request once CI passes and its review left no blocker unfixed. The owner reads
+  the work at the end of each milestone, and can revert anything.
+
+The first point of [D-054](#d-054-changes-arrive-as-small-signed-pull-requests-that-ci-checks), that only the
+owner merges, is replaced by the last point here. The plan after the Codex driver in
+[D-052](#d-052-the-codex-driver-is-built-first) is replaced by [`plan.md`](plan.md).
+
+**Why.** Step by step, each step waited on the owner, and choices that follow from the design came back as
+questions. Review went round after round on cases nothing had yet shown to happen. The goal now is to replace
+MDK's connectors quickly, and that needs a runway: a plan agreed once, the owner's attention kept for what only
+the owner can decide, and real use deciding which edge cases matter.
+
+Decided 2026-11-21.
+
+## D-069 Until MDK takes the new shape, agent items travel under a temporary kind
+
+**Decision.** Until MDK supports the new shape of kinds 1201 and 1202
+([D-051](#d-051-kinds-1201-and-1202-take-the-new-shape-and-the-old-one-is-not-kept)), the core sends an agent
+item, and the test client sends an answer or a control, as an app event of a kind MDK does not reserve, chosen
+in the code. Each update of an item is a new event carrying the item's id and a higher version, in place of an
+edit; a reader keeps the highest version of each item. The agent's words are chat messages, as
+[D-022](#d-022-the-agents-words-are-ordinary-chat-messages) says. Only test groups are used this way. The
+switch to 1201, 1202 and edits is made in one place, when MDK is ready.
+
+**Why.** MDK refuses kinds 1201 and 1202 from programs and builds them only in the old shape, and it applies an
+edit only to a chat message or a comment. Waiting for MDK would hold up the first end-to-end test, and the shape
+is better specified for MDK after that test than before it. A version per item is what ordered edits need
+anyway ([the carrier](design/event-carrier.md)), so only the carrying is temporary.
+
+Decided 2026-11-21.
+
+## D-070 A restart closes the turn as interrupted
+
+**Decision.** When the core or a driver stops during a turn, the turn and every item still open are closed as
+interrupted, and every answer and control still open is settled as failed
+([D-058](#d-058-the-driver-trait-and-the-capability-flags)). A core that stopped without doing so does it when
+it starts again, from the items it kept as open. Nothing is sent again. The chat's session is kept, and the next
+prompt resumes it ([D-065](#d-065-a-prompt-names-a-session-only-to-resume-one)). The core never sends the model a prompt that nobody wrote. This settles Q-27.
+
+**Why.** The recordings show Codex and Claude Code both keep the session when stopped mid-turn, rerun nothing,
+and send nothing to say the turn ended, so someone has to close it. The simple version keeps all three things a
+restart must not break: the saved session, no prompt run twice, no turn left running forever. A continuation
+turn ([issue 9](https://github.com/marmot-protocol/marmot-agents/issues/9)) would put words in the agent's mouth,
+and can be added later.
+
+Decided 2026-11-21.
+
+## D-071 What may be logged
+
+**Decision.** A log, at any level, never holds message text, prompts, model output, a native message, a file's
+contents, keys, Nostr public keys or event ids, group ids, relay addresses, file paths, or a harness's session or
+turn ids. It may hold item types and states, kinds, counts, sizes, durations, error kinds, and the ids the core
+makes up for its own requests. What a type prints for debugging follows the same rule, so the item types in
+`marmot-agent-events` stop printing their contents. This settles Q-13.
+
+**Why.** This is a private messenger, and logs get pasted into bug reports and kept on disk. The allowed list is
+what is needed to see what the program did without seeing what anyone said. MDK's own logs work the same way,
+with a privacy-safe kind for each error.
+
+Decided 2026-11-21.
+
+## D-072 One agent identity per core process, until the swap
+
+**Decision.** Until the swap, each run of the core is one agent identity
+([D-035](#d-035-each-harness-install-is-its-own-identity-with-its-own-sessions)) with one harness, one account
+home and one configuration, as each connector is today. Several identities in one program
+([Q-08](open-questions.md#q-08-how-do-several-agent-identities-run-together)) waits until after the swap.
+
+**Why.** It is how today's installs are laid out, so moving one over maps one home to one process. Each
+identity's keys stay in their own process. Several in one program is easier to run but needs product work, and
+it is not needed to replace what exists.
+
+Decided 2026-11-21.
+
+## D-073 Standing settings live in a configuration file
+
+**Decision.** The core reads one configuration file at start: the account home, the relays, who owns the agent,
+who may prompt and who may approve ([D-010](#d-010-the-owner-sets-who-may-prompt-and-who-may-approve), the owner
+alone by default), who may invite it, and the harness with its settings, such as Codex's working folder and
+sandbox ([D-061](#d-061-a-codex-session-starts-in-a-working-folder-with-a-safe-sandbox-unless-configured)). A
+change takes effect when the core starts again. There is no administration over the socket and no changing of
+permissions from the chat before the swap. This settles the first part of
+[Q-05](open-questions.md#q-05-how-is-the-agent-administered), and defers
+[Q-10](open-questions.md#q-10-how-are-permissions-changed-from-the-chat).
+
+**Why.** It is the smallest way to set what the core needs, it is what today's connectors do with their
+environment and allow-lists, and nothing that can talk to the core can widen its own access through it.
+
+Decided 2026-11-21.
+
+## D-074 Every driver is tested by replay, and by one end-to-end scenario
+
+**Decision.** Each driver is tested three ways. Its translation replays its recordings and must produce the
+events the prototype produces for them, as the Codex driver does. The part that runs the harness is tested
+against a stand-in. And one scripted scenario runs the core, the driver and the real harness on a local relay,
+with the test client as the person. CI runs the first two. The scenario needs the harness installed and signed
+in, so it runs on demand, and must pass before a milestone closes. This settles Q-17.
+
+**Why.** Replay catches what a harness really sends, a stand-in catches the order things can arrive in, and only
+the scenario shows the pieces work together. The Codex driver was tested the first two ways, and review kept
+finding cases that only a running system could confirm or rule out.
+
+Decided 2026-11-21.
+
+## D-075 In a group the agent answers when mentioned or replied to; in a direct chat, always
+
+**Decision.** In a chat with one person, every message is for the agent. In a group, a message is for the agent
+only when it mentions the agent or replies to one of the agent's messages; any other message is not a prompt,
+and the agent says nothing about it. A message that is for the agent is then checked as any prompt is: from
+someone without the right to prompt, the core says so
+([D-010](#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)). Answers to approvals and questions, and
+controls, are not affected: each names the item or the agent it is for. The rest of how several agents share a
+group ([Q-08](open-questions.md#q-08-how-do-several-agent-identities-run-together)) is still open.
+
+**Why.** In a group people talk to each other more than to the agent, and an agent that took every message as
+a prompt would answer conversations that were not for it. A mention or a reply is how a person addresses
+anyone in a chat. In a direct chat there is nobody else to address.
+
+Decided 2026-11-21. The project owner gave this rule.

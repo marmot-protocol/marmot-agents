@@ -4,7 +4,8 @@ This page is the starting point for the design. It says what the project does, h
 out that way, and where to look for more.
 
 Status: the design is agreed in outline and the first code has started. Nothing here can be run yet. Decided
-points are in [`decisions.md`](decisions.md); everything else is a proposal until it lands there.
+points are in [`decisions.md`](decisions.md); everything else is a proposal until it lands there. What is built
+next is in [`plan.md`](plan.md).
 
 ## What it does
 
@@ -82,6 +83,7 @@ Details and reasons are in [`design/drivers.md`](design/drivers.md).
 
 | Question | Document |
 | --- | --- |
+| What is being built, and in what order? | [`plan.md`](plan.md) |
 | What have we decided, and why? | [`decisions.md`](decisions.md) |
 | What is still undecided? | [`open-questions.md`](open-questions.md) |
 | How do the parts work together, step by step? | [`design/architecture.md`](design/architecture.md) |
