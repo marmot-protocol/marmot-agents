@@ -15,7 +15,7 @@
 
 mod common;
 
-use common::{Chat, TURN, World, blossom, files_sent, lines, within};
+use common::{Chat, TURN, World, files_sent, lines, within};
 use marmot_agent::carrier::Asked;
 use marmot_agent::run::serve;
 use marmot_agent::socket::Endpoint;
@@ -50,8 +50,7 @@ async fn claude_code_end_to_end() {
         "name = \"Claude\"\nfiles_from = [\"{}\"]\n[connector]\n",
         work.path().display()
     );
-    let mut world = World::new(&settings).await;
-    world.marmot.media_server = Some(blossom().await);
+    let world = World::new(&settings).await;
     world.runtime.start().await.unwrap();
     let (listener, token) = Endpoint::in_home(home.path()).listen().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();

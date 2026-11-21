@@ -129,7 +129,6 @@ async fn run(config: &Config) -> Result<(), String> {
         app,
         label: account.label,
         agent: PubKey(account.account_id_hex),
-        media_server: None,
     };
     let stop = async {
         let _ = tokio::signal::ctrl_c().await;

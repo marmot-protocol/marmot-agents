@@ -59,13 +59,22 @@ pub struct Running {
 impl World {
     /// The person owns the agent; `settings` are added to the agent's settings.
     pub async fn new(settings: &str) -> Self {
+        Self::with_slow_files(settings, std::time::Duration::ZERO).await
+    }
+
+    /// As [`World::new`], with a Blossom server that takes `delay` to accept each file.
+    pub async fn with_slow_files(settings: &str, delay: std::time::Duration) -> Self {
         storage_sqlite::relax_storage_for_test_process();
         let home = tempfile::tempdir().unwrap();
         let relay = nostr_relay_builder::MockRelay::run().await.unwrap();
         let url = relay.url().await.to_string();
-        // As `MarmotApp::with_relay`, and with Blossom servers on this machine allowed, for the
-        // stand-in one that holds the files an agent sends.
+        // As `MarmotApp::with_relay`, with a stand-in Blossom server on this machine as where a
+        // new group keeps its files, as a deployment names its own; the agent's files go there
+        // as they would in use.
+        let mut deployment = marmot_app::MarmotDeployment::white_noise();
+        deployment.new_group_media_endpoints = vec![blossom(delay).await];
         let app_settings = marmot_app::MarmotAppConfig::white_noise()
+            .with_deployment(deployment)
             .with_allow_loopback_relay_endpoints(true)
             .with_open_ranking_provider(None, Vec::new())
             .with_allow_loopback_blob_endpoints(true);
@@ -92,7 +101,6 @@ impl World {
             app,
             label: agent.account.label.clone(),
             agent: PubKey(agent.account.account_id_hex.clone()),
-            media_server: None,
         };
         Self {
             runtime,
@@ -182,8 +190,9 @@ impl Running {
     }
 }
 
-/// A stand-in Blossom server, for the files an agent sends: it keeps each uploaded blob under its hash and serves it back.
-pub async fn blossom() -> String {
+/// A stand-in Blossom server, for the files an agent sends: it keeps each uploaded blob under its
+/// hash and serves it back, taking `delay` to accept each one.
+pub async fn blossom(delay: std::time::Duration) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -228,6 +237,7 @@ pub async fn blossom() -> String {
                 let (method, path) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
                 let (status, kind, reply) = match method {
                     "PUT" => {
+                        tokio::time::sleep(delay).await;
                         let hash = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&body));
                         let descriptor = serde_json::json!({
                             "url": format!("{base}/{hash}.bin"), "sha256": hash,

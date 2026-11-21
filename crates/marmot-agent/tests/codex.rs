@@ -12,7 +12,7 @@
 
 mod common;
 
-use common::{Chat, TURN, World, blossom, files_sent, lines, within};
+use common::{Chat, TURN, World, files_sent, lines, within};
 use marmot_agent::carrier::Asked;
 use marmot_agent_codex::Codex;
 use marmot_agent_events::State;
@@ -31,8 +31,7 @@ async fn codex_end_to_end() {
         "[codex]\ncwd = \"{}\"\napproval_policy = \"untrusted\"\n",
         work.path().display()
     );
-    let mut world = World::new(&settings).await;
-    world.marmot.media_server = Some(blossom().await);
+    let world = World::new(&settings).await;
     world.runtime.start().await.unwrap();
     let mut core = world.start(codex(&world).await);
 

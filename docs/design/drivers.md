@@ -123,22 +123,29 @@ sequenceDiagram
   argument, `path`. The model is never asked to write a path into its answer, and nothing in its words is read
   as a request to send.
 - **The driver hands the core a request.** `next_event` gives either an event or `SendFile`: the driver's own
-  id for the request, the chat, and the path. The driver makes a relative path whole against its working
-  folder; the core takes only an absolute one. The core answers through `file_sent`, with the result and, for a
+  id for the request, the chat, and the path. The driver makes a relative path whole by putting its working
+  folder in front, leaving any `..` for the core to follow; the core takes only an absolute one. The core answers through `file_sent`, with the result and, for a
   refusal, a reason and a sentence that names no path. The driver passes that back to the harness as the
   tool's result. On the socket this is the `send_file` request
   ([the messages, as built](socket-protocol.md#the-messages-as-built)).
-- **The core decides.** It follows every link in the path first and refuses a file whose real path is outside
-  the folders `files_from` lists. By default that is the working folder of a harness the core runs (Codex,
-  Pi, an ACP agent); a connector on the socket has none until the settings list one, since the core does not
-  know its folder. It also refuses a file with a second name (a hard link, which could be outside), anything
-  but an ordinary file, an empty file, and one over 64 MiB, well under the 512 MiB MDK uploads in one piece.
-  It opens the file without following a link at its end and, on Linux, checks where the opened file really is.
+- **The core decides.** It reads only from the folders `files_from` lists. By default that is the working
+  folder of a harness the core runs (Codex, Pi, an ACP agent); a connector on the socket has none until the
+  settings list one, since the core does not know its folder. The core opens each folder when it starts and
+  follows a path from that open folder one part at a time, never letting the system follow a link: a link on
+  the way is read and followed by its words by the same rule, so it may lead elsewhere inside but never out,
+  and a `..` never climbs above the folder. A folder on the way swapped for a link meanwhile cannot lead out
+  either. It also refuses a file with a second name (a hard link, which could be outside), anything but an
+  ordinary file, an empty file, and one over 64 MiB, well under the 512 MiB MDK uploads in one piece.
+- **Sending runs on the side.** Uploading can take long, so it runs as a task of its own while the chats go
+  on, and the core tells the driver once it is done. The core offers the file to MDK again only while MDK says
+  it is busy, which it says only before it has taken the file, for about half a minute. Any other failure is
+  reported as `failed` and not tried again, since MDK may have sent the file anyway, and a post cannot be
+  taken back.
 - **What people see.** The file arrives as a chat message carrying the attachment and the turn's tag, as the
   agent's words do ([D-022](../decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)), and alerts
   like an answer. The tool call shows as a `tool` item. A refused file shows as the core's refused notice
   ([D-077](../decisions.md#d-077-a-refused-notice-says-why-something-was-not-acted-on)), with the reason
-  `not_allowed`, `invalid`, `not_supported` or `failed`, and never the path
+  `not_allowed`, `invalid`, `not_supported`, `busy` or `failed`, and never the path
   ([D-071](../decisions.md#d-071-what-may-be-logged)).
 - **Who may.** Calling the tool needs nobody's approval in the chat: the Claude Code connector allows it in
   its permission callback, and Codex does not ask for a dynamic tool. The folders are the limit, as the owner set them.

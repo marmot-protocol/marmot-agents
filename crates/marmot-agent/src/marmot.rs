@@ -104,9 +104,6 @@ pub struct Marmot {
     pub label: String,
     /// The agent's public key.
     pub agent: PubKey,
-    /// A Blossom server to upload files to, in place of the group's own, for a test on this
-    /// machine. `None` uses the group's.
-    pub media_server: Option<String>,
 }
 
 impl Marmot {
@@ -255,7 +252,7 @@ impl Marmot {
             }],
             caption: None,
             send: true,
-            blossom_server: self.media_server.clone(),
+            blossom_server: None,
             message_tags: carrier::words_tags(turn, false),
         };
         let uploaded = self.runtime.upload_media(&self.label, &id, request).await?;

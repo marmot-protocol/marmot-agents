@@ -5,7 +5,8 @@
 
 mod common;
 
-use common::{World, blossom, eventually};
+use common::{Chat, World, eventually};
+use marmot_agent::carrier::Asked;
 use marmot_agent::carrier::ITEM_KIND;
 use marmot_agent_driver::{
     Answer, Capabilities, Control, Driver, Emitted, FilesIn, Harness, MidTurn, Output, Prompt,
@@ -26,18 +27,21 @@ struct Sender {
     asked: HashMap<String, Prompt>,
     /// How each file went, in order.
     results: Arc<Mutex<Vec<Result<(), Refusal>>>>,
+    /// How many controls, such as an interrupt, reached it.
+    controls: Arc<Mutex<u32>>,
     count: u64,
     seq: u64,
 }
 
 impl Sender {
-    fn new(results: Arc<Mutex<Vec<Result<(), Refusal>>>>) -> Self {
+    fn new(results: Arc<Mutex<Vec<Result<(), Refusal>>>>, controls: Arc<Mutex<u32>>) -> Self {
         let (to_self, out) = mpsc::unbounded_channel();
         Self {
             out,
             to_self,
             asked: HashMap::new(),
             results,
+            controls,
             count: 0,
             seq: 0,
         }
@@ -86,7 +90,7 @@ impl Driver for Sender {
 
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            interrupt: false,
+            interrupt: true,
             mid_turn: MidTurn::Queue,
             sessions: Sessions::Core,
             resume: false,
@@ -115,6 +119,7 @@ impl Driver for Sender {
     }
 
     async fn control(&mut self, _control: Control) -> Result<(), Refusal> {
+        *self.controls.lock().unwrap() += 1;
         Ok(())
     }
 
@@ -153,11 +158,10 @@ async fn the_agent_sends_a_file_from_its_folder_and_nothing_from_outside() {
     )
     .unwrap();
     let settings = format!("[codex]\ncwd = \"{}\"\n", work.path().display());
-    let mut world = World::new(&settings).await;
-    world.marmot.media_server = Some(blossom().await);
+    let world = World::new(&settings).await;
     world.runtime.start().await.unwrap();
     let results = Arc::new(Mutex::new(Vec::new()));
-    let core = world.start(Sender::new(results.clone()));
+    let core = world.start(Sender::new(results.clone(), Arc::default()));
     let group = world
         .runtime
         .start_direct_conversation(&world.person, &world.agent)
@@ -239,6 +243,47 @@ async fn the_agent_sends_a_file_from_its_folder_and_nothing_from_outside() {
         everything.iter().all(|m| !m.contains("not for the chat")),
         "nothing from outside reached the chat"
     );
+
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
+// A file that is slow to upload holds up nothing else: while it uploads, the person's interrupt
+// still reaches the harness, and the file's outcome reaches the harness once, when it is done.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_slow_upload_holds_up_nothing_else() {
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("notes.txt"), "hello from the agent\n").unwrap();
+    let settings = format!("[codex]\ncwd = \"{}\"\n", work.path().display());
+    let world = World::with_slow_files(&settings, std::time::Duration::from_secs(4)).await;
+    world.runtime.start().await.unwrap();
+    let results = Arc::new(Mutex::new(Vec::new()));
+    let controls = Arc::new(Mutex::new(0));
+    let core = world.start(Sender::new(results.clone(), controls.clone()));
+    let group = world
+        .runtime
+        .start_direct_conversation(&world.person, &world.agent)
+        .await
+        .unwrap();
+    let hex = world.joined(&group).await;
+    let chat = Chat {
+        world: &world,
+        group: group.clone(),
+        hex: hex.clone(),
+        turn: common::TURN,
+    };
+
+    let path = work.path().join("notes.txt").display().to_string();
+    chat.say(&path).await;
+    chat.ask(None, &Asked::Interrupt, "Stop").await;
+    eventually(|| (*controls.lock().unwrap() == 1).then_some(())).await;
+    assert!(
+        results.lock().unwrap().is_empty(),
+        "the interrupt arrived while the file was still uploading"
+    );
+    world.words(&hex, "sent 1").await;
+    assert_eq!(results.lock().unwrap().len(), 1, "one outcome for the file");
+    assert_eq!(common::files_sent(&world, &group).await.len(), 1);
 
     core.stop().await;
     world.runtime.shutdown().await;
