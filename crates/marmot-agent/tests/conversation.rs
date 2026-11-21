@@ -807,15 +807,15 @@ fn a_closed_turn_still_names_its_message() {
     assert_eq!(closed.started_by, Some(EventKey::from("e1")));
 }
 
-// A remark the harness makes while it works is marked so it does not alert; the answer is not
-// (D-078).
+// A remark the harness makes while it works is marked so it does not alert; the answer, and
+// words the harness did not mark, are not; the turn tag stays either way (D-078).
 #[test]
 fn a_remark_is_marked_and_the_answer_is_not() {
     let (mut talk, prompt) = started();
     let chat = prompt.chat.id.0.clone();
     let said = |item: &str, phase| {
         let message = Message {
-            phase: Some(phase),
+            phase,
             parent: None,
         };
         event(item, State::Done, Body::Message(message))
@@ -827,15 +827,19 @@ fn a_remark_is_marked_and_the_answer_is_not() {
         }) => remark,
         other => panic!("no words: {other:?}"),
     };
-    assert!(remark(
-        talk.emitted(emitted(&chat, said("m1", body::Phase::Commentary)))
-    ));
-    assert!(!remark(
-        talk.emitted(emitted(&chat, said("m2", body::Phase::Final)))
-    ));
-    let tags = carrier::words_tags(None, true);
+    let commentary = Some(body::Phase::Commentary);
+    assert!(remark(talk.emitted(emitted(&chat, said("m1", commentary)))));
+    let answer = Some(body::Phase::Final);
+    assert!(!remark(talk.emitted(emitted(&chat, said("m2", answer)))));
+    assert!(!remark(talk.emitted(emitted(&chat, said("m3", None)))));
+    let turn = marmot_agent_events::TurnId::from("t1");
+    let tag = |a: &str, b: &str| vec![a.to_string(), b.to_string()];
     assert_eq!(
-        tags,
-        vec![vec!["phase".to_string(), "commentary".to_string()]]
+        carrier::words_tags(Some(&turn), true),
+        vec![tag("turn", "t1"), tag("phase", "commentary")]
+    );
+    assert_eq!(
+        carrier::words_tags(Some(&turn), false),
+        vec![tag("turn", "t1")]
     );
 }
