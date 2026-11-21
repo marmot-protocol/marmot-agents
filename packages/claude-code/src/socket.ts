@@ -70,6 +70,9 @@ export interface Welcome {
 /** Serves one request from the core. It resolves once the request is taken, and throws a {@link Refusal}. */
 export type Serve = (method: string, params: Record<string, unknown>) => Promise<void>;
 
+/** The hello's id. It is the only request the connector sends. */
+const HELLO = 1;
+
 /** The hello was refused, or the connection went before the core answered it. */
 export class HelloRefused extends Error {}
 
@@ -86,8 +89,8 @@ export class CoreConnection {
     throw new Refusal("not_supported");
   };
   private queue: Promise<void> = Promise.resolve();
-  private nextId = 0;
-  private readonly waiting = new Map<number, { resolve: (r: unknown) => void; reject: (e: Error) => void }>();
+  /** The hello, the one request the connector sends, while it waits for its answer. */
+  private helloWaits: { resolve: (r: Welcome) => void; reject: (e: Error) => void } | undefined;
   private readonly closedPromise: Promise<void>;
   private closed = false;
 
@@ -96,8 +99,8 @@ export class CoreConnection {
     this.closedPromise = new Promise((resolve) => {
       socket.on("close", () => {
         this.closed = true;
-        for (const w of this.waiting.values()) w.reject(new HelloRefused("the connection closed"));
-        this.waiting.clear();
+        this.helloWaits?.reject(new HelloRefused("the connection closed"));
+        this.helloWaits = undefined;
         resolve();
       });
     });
@@ -124,13 +127,15 @@ export class CoreConnection {
   }
 
   /** Gives the hello, and sets what serves the core's requests once it is taken. */
-  async hello(hello: Hello, serve: Serve): Promise<Welcome> {
+  hello(hello: Hello, serve: Serve): Promise<Welcome> {
     this.serve = serve;
-    try {
-      return (await this.request("hello", { protocol: PROTOCOL, ...hello })) as Welcome;
-    } catch (e) {
-      throw e instanceof HelloRefused ? e : new HelloRefused("the core refused the hello");
-    }
+    return new Promise((resolve, reject) => {
+      this.helloWaits = { resolve, reject };
+      if (!this.write({ jsonrpc: "2.0", id: HELLO, method: "hello", params: { protocol: PROTOCOL, ...hello } })) {
+        this.helloWaits = undefined;
+        reject(new HelloRefused("the hello could not be sent"));
+      }
+    });
   }
 
   /** Sends a notification. One over the limit is not sent, and false says so. */
@@ -140,18 +145,6 @@ export class CoreConnection {
 
   close(): void {
     this.socket.end();
-  }
-
-  private request(method: string, params: unknown): Promise<unknown> {
-    this.nextId += 1;
-    const id = this.nextId;
-    return new Promise((resolve, reject) => {
-      this.waiting.set(id, { resolve, reject });
-      if (!this.write({ jsonrpc: "2.0", id, method, params })) {
-        this.waiting.delete(id);
-        reject(new Error("the request could not be sent"));
-      }
-    });
   }
 
   private write(message: unknown): boolean {
@@ -209,12 +202,11 @@ export class CoreConnection {
       this.queue = this.queue.then(() => this.answer(id, method, p as Record<string, unknown>));
       return;
     }
-    if (typeof id === "number") {
-      const w = this.waiting.get(id);
-      if (w === undefined) return;
-      this.waiting.delete(id);
-      if ("result" in m && !("error" in m)) w.resolve(m["result"]);
-      else w.reject(new HelloRefused("refused"));
+    const w = this.helloWaits;
+    if (id === HELLO && w !== undefined) {
+      this.helloWaits = undefined;
+      if ("result" in m && !("error" in m)) w.resolve(m["result"] as Welcome);
+      else w.reject(new HelloRefused("the core refused the hello"));
     }
   }
 
