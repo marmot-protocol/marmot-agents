@@ -7,23 +7,34 @@
 # Only those two are mounted, never the rest of the agent's home; the script waits, for two minutes at
 # most, until the core serves the socket. <work-folder> is Hermes's working folder, mounted read-write,
 # so it must not hold the agent's home or the key file, nor be inside the home: the script refuses to
-# start if it does, links resolved. The plugin is mounted from this checkout, so a change to it needs
-# no new image. <hermes-volume> is a Docker volume for Hermes's own home, so that its sessions survive
-# a restart; create it with `docker volume create`, and remove it when done. The model key is mounted
-# read-only and read at each start; it is kept nowhere, the volume included.
+# start if it does, links resolved, and likewise if it holds or is inside MARMOT_AGENT_DATA, when that
+# is set. The plugin is mounted from this checkout, so a change to it needs no new image.
+# <hermes-volume> is a Docker volume for Hermes's own home, so that its sessions survive a restart;
+# create it with `docker volume create`, and remove it when done. The model key is mounted read-only
+# and read at each start; it is kept nowhere, the volume included.
 #
 # Set HERMES_CONTAINER to name the container (to stop it: `docker rm -f <name>`), and HERMES_LOG to
 # a file to keep the plugin's own log lines. Hermes's own output is never kept, by Docker either.
 set -euo pipefail
-[ $# -ge 4 ] || { sed -n '2,16p' "$0"; exit 2; }
+[ $# -ge 4 ] || { sed -n '2,17p' "$0"; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
 home=$(realpath "$1"); work=$(realpath "$2"); volume=$3; key=$(realpath "$4")
 model=${5:-${MODEL_NAME:-z-ai/glm-5.3-flash:free}}
-image=${HERMES_IMAGE:-marmot-agents-hermes}
+# The image is built for the calling user and group, so it is named after them: another account's
+# build of it would hand Hermes a user that cannot open this one's socket.
+image=${HERMES_IMAGE:-marmot-agents-hermes-$(id -u)-$(id -g)}
 name=${HERMES_CONTAINER:-marmot-hermes-$$}
 inside() { case "$1/" in "${2%/}"/*) return 0 ;; esac; return 1; }
 if inside "$home" "$work" || inside "$key" "$work" || inside "$work" "$home"; then
     echo "error: the work folder must not hold the agent's home or the model key, nor be inside the home" >&2; exit 2
+fi
+# MARMOT_AGENT_DATA, which the installer sets, names the folder that holds every agent: the work folder
+# must neither hold it nor be inside it, so it cannot reach another agent's keys either.
+if [ -n "${MARMOT_AGENT_DATA:-}" ]; then
+    data=$(realpath -m "$MARMOT_AGENT_DATA")
+    if inside "$work" "$data" || inside "$data" "$work"; then
+        echo "error: the work folder and the agents' folder must not hold one another" >&2; exit 2
+    fi
 fi
 # The socket and the token are mounted with --mount, which fails on a missing source where -v would
 # make an empty folder in its place; a connector started with the core waits for it.

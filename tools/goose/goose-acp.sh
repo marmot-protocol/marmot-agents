@@ -5,9 +5,9 @@
 #
 # The current folder is the work folder: it is mounted at the same path inside, read-write, so the
 # paths the client and Goose name are the same. It must not hold <goose-home> or the key file, nor be
-# inside <goose-home>: the script refuses to start if it does, links resolved. Goose keeps its
-# configuration and sessions in <goose-home> (default: $HOME/.goose-acp), so a session survives the
-# container and can be resumed by the next. The key file is mounted read-only and is never copied,
+# inside <goose-home>, nor hold or be inside MARMOT_AGENT_DATA when that is set: the script refuses to
+# start if it does, links resolved. Goose keeps its configuration and sessions in <goose-home>
+# (default: $HOME/.goose-acp), so a session survives the container and can be resumed by the next. The key file is mounted read-only and is never copied,
 # printed or put on a command line. Docker keeps no log of the container: what Goose writes holds
 # the conversation.
 #
@@ -18,7 +18,7 @@
 #   GOOSE_MODE       auto (default) or approve; RECORD_ASK=1 means approve
 #   GOOSE_IMAGE      default marmot-agents-goose, built from this folder when missing
 set -eu
-[ $# -ge 1 ] || { sed -n '2,20p' "$0"; exit 2; }
+[ $# -ge 1 ] || { sed -n '2,19p' "$0"; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
 key=$(realpath "$1")
 home=$(realpath -m "${2:-$HOME/.goose-acp}")
@@ -29,6 +29,14 @@ if inside "$home" "$work" || inside "$work" "$home"; then
 fi
 if inside "$key" "$work"; then
     echo "error: the model key file must not be inside the working folder" >&2; exit 2
+fi
+# MARMOT_AGENT_DATA, which the installer sets, names the folder that holds every agent: the work folder
+# must neither hold it nor be inside it, so it cannot reach another agent's keys either.
+if [ -n "${MARMOT_AGENT_DATA:-}" ]; then
+    data=$(realpath -m "$MARMOT_AGENT_DATA")
+    if inside "$work" "$data" || inside "$data" "$work"; then
+        echo "error: the work folder and the agents' folder must not hold one another" >&2; exit 2
+    fi
 fi
 image=${GOOSE_IMAGE:-marmot-agents-goose}
 mode=${GOOSE_MODE:-auto}

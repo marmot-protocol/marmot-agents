@@ -42,11 +42,13 @@ invite it from White Noise, and runs it as a service of your account: systemd `-
 macOS. Only you may prompt it or approve what it does until you change its settings. The containerised
 harnesses also take `--model-key <file>`, the API key of an OpenAI-compatible model endpoint in a file only you
 can read; it is mounted into the container, read when the harness starts, and never copied. The work folder
-(`--cwd`) must not hold that key or the agents' folder: the script and the container scripts refuse it.
+(`--cwd`) must not hold that key or the agents' folder: the script and the container scripts refuse it. Claude
+Code must be signed in on your account (run `claude`, then `/login`): an `ANTHROPIC_API_KEY` in your shell
+does not reach the service, and the script refuses to rely on one.
 
 - `--dry-run` shows every file and command the script would write and run, and does nothing.
 - Running the script again updates `marmot-agent` and the service, and keeps the agent's settings and
-  identity.
+  identity. A `--cwd` or `--model-key` given again replaces the old one, and nothing else in the settings.
 - `--uninstall` stops and removes the service, and keeps the agent's folder.
 - `--no-service` sets up no service; run the agent with the `start` script in its folder (and `connector`, for
   Claude Code, OpenClaw and Hermes), which the service would run.

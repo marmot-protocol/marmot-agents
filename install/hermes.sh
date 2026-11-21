@@ -13,7 +13,11 @@ HARNESS_KIND=socket
 HARNESS_OPTIONS="model-key model model-url"
 HARNESS_SUPPORT="python/hermes python/marmot_hermes"
 
-volume() { printf 'marmot-agent-hermes-%s' "$NAME"; }
+# Docker's names are shared by every account on the machine, so the volume and the container are named
+# after this agent's folder too, which stays the same when the agent is installed again. The image is
+# built for this account's user and group, so it is named after them.
+volume() { printf 'marmot-agent-hermes-%s-%s' "$NAME" "$(printf '%s' "$MA_AGENT_DIR" | sha256sum | cut -c1-12)"; }
+image() { printf 'marmot-agents-hermes-%s-%s' "$(id -u)" "$(id -g)"; }
 
 harness_check() {
     linux_only
@@ -24,7 +28,7 @@ harness_check() {
 harness_prepare() {
     say "building Hermes's container image"
     act docker build -q --build-arg UID="$(id -u)" --build-arg GID="$(id -g)" \
-        -f "$MA_STAGE/python/hermes/Dockerfile" -t marmot-agents-hermes "$MA_STAGE/python"
+        -f "$MA_STAGE/python/hermes/Dockerfile" -t "$(image)" "$MA_STAGE/python"
     act docker volume create "$(volume)"
 }
 
@@ -36,6 +40,7 @@ harness_env() {
     say "MODEL_BASE_URL=${MODEL_URL:-$MA_DEFAULT_MODEL_URL}"
     [ -z "$MODEL" ] || say "MODEL_NAME=$MODEL"
     say "HERMES_CONTAINER=$(volume)"
+    say "HERMES_IMAGE=$(image)"
 }
 
 # A container left by a connector that was killed outright still holds the name; this service owns it.

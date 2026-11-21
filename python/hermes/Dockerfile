@@ -1,7 +1,9 @@
 # Hermes Agent with the Marmot plugin: what the Hermes scenario runs (crates/marmot-agent/tests/hermes.rs).
 # No Marmot keys, relays or accounts: the plugin reaches the core only through its socket, which is
-# bind-mounted at run time with the plugin's token. Build from the repository root:
-#   docker build -f python/hermes/Dockerfile -t marmot-agents-hermes python
+# bind-mounted at run time with the plugin's token. It runs as the user and group given at build time, so
+# its tag names them; build from the repository root:
+#   docker build --build-arg UID="$(id -u)" --build-arg GID="$(id -g)" -f python/hermes/Dockerfile \
+#       -t "marmot-agents-hermes-$(id -u)-$(id -g)" python
 # python/hermes/run.sh builds it when it is missing.
 FROM python:3.14.10-slim-bookworm
 
@@ -25,6 +27,7 @@ ARG UID=1000
 ARG GID=1000
 COPY marmot_hermes /opt/marmot-plugin
 COPY hermes/entrypoint.sh /usr/local/bin/hermes-entrypoint
+COPY hermes/configure.py /usr/local/lib/marmot/configure.py
 RUN chmod 0755 /usr/local/bin/hermes-entrypoint \
     && rm -rf /opt/marmot-plugin/__pycache__ \
     && groupadd --gid "$GID" agent && useradd --create-home --uid "$UID" --gid "$GID" agent \

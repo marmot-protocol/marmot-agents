@@ -319,6 +319,7 @@ publish_support() {
         rm -rf "$MA_LIB/$part.old"
     done
     rm -rf "$MA_STAGE"
+    MA_STAGED=0
     say "installed $(lib_parts | tr '\n' ' ')in $MA_LIB"
 }
 
@@ -415,9 +416,11 @@ install_core() {
     install -m 0755 "$binary" "$MA_CORE.new"
     mv -f "$MA_CORE.new" "$MA_CORE"
     say "installed $MA_CORE"
-    # The support files are prepared in a folder of this run's own and published after.
+    # The support files are prepared in a folder of this run's own and published after; the exit trap
+    # removes it if the run stops before then.
     MA_STAGE=$MA_DATA/lib.new.$$
     rm -rf "$MA_STAGE"
+    MA_STAGED=1
     # shellcheck disable=SC2046 # one part per word
     copy_support "$tree" "$MA_STAGE" $(lib_parts)
 }
@@ -438,7 +441,11 @@ owner_hex() {
 
 write_settings() {
     if [ -f "$MA_SETTINGS" ]; then
-        say "keeping the settings in $MA_SETTINGS (edit them there, or remove the agent's folder to start again)"
+        if [ "$SET_CWD" -eq 1 ] || [ -n "$SET_KEY" ]; then
+            update_settings
+        else
+            say "keeping the settings in $MA_SETTINGS (edit them there, or remove the agent's folder to start again)"
+        fi
         return 0
     fi
     local relay first=1 relays=""
@@ -468,6 +475,29 @@ EOF
     } | put "$MA_SETTINGS" 600
 }
 
+# Writes a work folder or a model key file given again into the settings that are kept, in place of
+# the one they name, and changes nothing else in them. plan_settings_update has checked that it can.
+update_settings() {
+    local cwd_line="" old="" new=""
+    [ "$SET_CWD" -eq 0 ] || cwd_line="cwd = $(toml_str "$CWD")"
+    if [ -n "$SET_KEY" ]; then
+        old=$(toml_str "$SET_KEY")
+        new=$(toml_str "$MODEL_KEY")
+    fi
+    say "keeping the settings in $MA_SETTINGS, with the work folder or the model key file given now"
+    CWD_LINE=$cwd_line OLD=$old NEW=$new awk '
+        ENVIRON["CWD_LINE"] != "" && /^cwd = / { print ENVIRON["CWD_LINE"]; next }
+        ENVIRON["OLD"] == "" { print; next }
+        {
+            out = ""; rest = $0; old = ENVIRON["OLD"]
+            while ((i = index(rest, old)) > 0) {
+                out = out substr(rest, 1, i - 1) ENVIRON["NEW"]
+                rest = substr(rest, i + length(old))
+            }
+            print out rest
+        }' "$MA_SETTINGS" | put "$MA_SETTINGS" 600
+}
+
 # Makes the agent's identity once; its public key is kept beside the settings to show again.
 init_agent() {
     if [ -s "$MA_AGENT_DIR/public-key" ]; then
@@ -485,10 +515,12 @@ init_agent() {
 }
 
 # The agent's environment, as KEY=value lines: the PATH this script runs with, so the harness finds
-# the programs it finds now, and what the harness adds.
+# the programs it finds now; the folder that holds every agent, which the container scripts refuse to
+# mount, as check_cwd does; and what the harness adds.
 service_env() {
     no_control "PATH" "$PATH"
     say "PATH=$PATH"
+    say "MARMOT_AGENT_DATA=$MA_DATA"
     if declare -F harness_env >/dev/null; then harness_env; fi
 }
 
@@ -721,7 +753,7 @@ takes() {
 parse_args() {
     DRY_RUN=0 ASSUME_YES=0 NO_SERVICE=0 NO_START=0 UNINSTALL=0 FROM_SOURCE=0
     BINARY_FROM="" VERSION="" NAME=$HARNESS DISPLAY=$HARNESS_TITLE OWNER="" RELAYS="" LOCAL_RELAY="" CWD=""
-    MODEL_KEY="" MODEL="" MODEL_URL="" PERMISSION_MODE="" GOOSE_MODE=""
+    MODEL_KEY="" MODEL="" MODEL_URL="" PERMISSION_MODE="" GOOSE_MODE="" SET_CWD=0 SET_KEY=""
     while [ $# -gt 0 ]; do
         case $1 in
             --owner | --cwd | --name | --display-name | --relay | --local-relay | --version | --binary | \
@@ -773,6 +805,8 @@ parse_args() {
     [ $count -le 1 ] || die "give one of --version, --from-source and --binary"
     if [ -n "$BINARY_FROM" ]; then BINARY_FROM=$(absolute "$BINARY_FROM"); fi
     if [ -n "$MODEL_KEY" ]; then MODEL_KEY=$(absolute "$MODEL_KEY"); fi
+    # What this run was given, before the saved choices fill in the rest.
+    CWD_GIVEN=$CWD MODEL_KEY_GIVEN=$MODEL_KEY
 }
 
 # An absolute path, without needing the file to exist.
@@ -822,6 +856,12 @@ load_choices() {
     done <"$MA_AGENT_DIR/choices"
 }
 
+# A choice as saved by the last run, or nothing.
+saved_choice() {
+    [ -f "$MA_AGENT_DIR/choices" ] || return 0
+    sed -n "s/^$1=//p" "$MA_AGENT_DIR/choices" | head -n 1
+}
+
 save_choices() {
     local key
     for key in $CHOICES; do
@@ -851,10 +891,17 @@ settle_values() {
     case $MODEL_URL in "" | http://?* | https://?*) ;; *) die "--model-url must start with http:// or https://" ;; esac
     if [ -f "$MA_SETTINGS" ]; then
         [ -z "$OWNER" ] || warn "the agent already has settings; --owner is ignored (edit $MA_SETTINGS)"
-        [ -n "$CWD" ] || CWD=$(sed -n 's/^cwd = "\(.*\)"$/\1/p' "$MA_SETTINGS" | head -n 1)
+        local settings_cwd
+        settings_cwd=$(sed -n 's/^cwd = "\(.*\)"$/\1/p' "$MA_SETTINGS" | head -n 1)
+        # A harness the core drives works where its settings say, which may have been edited since.
+        if [ "$HARNESS_KIND" = builtin ] && [ -z "$CWD_GIVEN" ] && [ -n "$settings_cwd" ]; then
+            CWD=$settings_cwd
+        fi
+        [ -n "$CWD" ] || CWD=$settings_cwd
         [ -n "$CWD" ] || die "the agent has settings but no work folder is known: give --cwd"
         CWD=$(absolute "$CWD")
         check_cwd
+        plan_settings_update
         return 0
     fi
     if [ -z "$OWNER" ] && can_ask; then
@@ -870,6 +917,29 @@ settle_values() {
     [ -n "$CWD" ] || CWD=$HOME/marmot-agent/$NAME
     CWD=$(absolute "$CWD")
     check_cwd
+}
+
+# A harness the core drives reads its work folder and its model key file from the settings, which a
+# run again keeps: one given now in place of the one they name is written into them (update_settings),
+# or, when the settings no longer say it where the installer wrote it, the run stops here, before
+# anything is changed. A harness with a connector reads both from its launcher, written each time.
+plan_settings_update() {
+    [ "$HARNESS_KIND" = builtin ] || return 0
+    local old
+    if [ -n "$CWD_GIVEN" ] && ! grep -qxF -- "cwd = $(toml_str "$CWD")" "$MA_SETTINGS"; then
+        [ "$(grep -c '^cwd = ' "$MA_SETTINGS" || true)" = 1 ] ||
+            die "$MA_SETTINGS has no single cwd line to change: write the work folder there yourself"
+        SET_CWD=1
+    fi
+    if [ -n "$MODEL_KEY_GIVEN" ]; then
+        old=$(saved_choice MODEL_KEY)
+        if [ "$old" != "$MODEL_KEY" ]; then
+            if [ -z "$old" ] || ! grep -qF -- "$(toml_str "$old")" "$MA_SETTINGS"; then
+                die "$MA_SETTINGS does not name the model key file the agent was installed with: write $MODEL_KEY there yourself"
+            fi
+            SET_KEY=$old
+        fi
+    fi
 }
 
 # The work folder is mounted read-write into a harness's container, and a harness may read anything in
@@ -894,8 +964,9 @@ main() {
     parse_args "$@"
     set_paths
     check_harness
-    MA_WORK="" MA_STAGE=""
-    trap 'if [ -n "$MA_WORK" ]; then rm -rf "$MA_WORK"; fi; case $MA_STAGE in *.new.*) rm -rf "$MA_STAGE" ;; esac' EXIT
+    # MA_STAGED says whether this run made the folder in MA_STAGE: a dry run names the installed one.
+    MA_WORK="" MA_STAGE="" MA_STAGED=0
+    trap 'if [ -n "$MA_WORK" ]; then rm -rf "$MA_WORK"; fi; if [ "$MA_STAGED" -eq 1 ]; then rm -rf "$MA_STAGE"; fi' EXIT
     if [ "$UNINSTALL" -eq 1 ]; then
         uninstall
         return 0

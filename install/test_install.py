@@ -85,6 +85,10 @@ class Machine:
         self.key = self.dir / "model.key"
         self.key.write_text("not a real key\n")
         self.key.chmod(0o600)
+        # Claude Code's stored sign-in, as `claude` keeps it on Linux after /login.
+        self.claude = self.home / ".claude"
+        self.claude.mkdir()
+        (self.claude / ".credentials.json").write_text("{}")
         self.data = self.home / ".local/share/marmot-agent"
         self.units = self.home / ".config/systemd/user"
 
@@ -123,7 +127,9 @@ class Machine:
         return self.log.read_text().splitlines()
 
     def files(self) -> list:
-        return sorted(str(p.relative_to(self.home)) for p in self.home.rglob("*"))
+        """What is in HOME, but for Claude Code's sign-in."""
+        return sorted(str(p.relative_to(self.home)) for p in self.home.rglob("*")
+                      if not p.is_relative_to(self.claude))
 
 
 class DryRun(unittest.TestCase):
@@ -320,15 +326,24 @@ class Install(unittest.TestCase):
         agent = m.data / "agents/hermes"
         env = (agent / "service.env").read_text()
         self.assertIn("MODEL_NAME='some/model:free'", env)
-        self.assertIn("HERMES_CONTAINER='marmot-agent-hermes-hermes'", env)
+        # Docker's names are shared by the machine's accounts: the volume and the container are named
+        # after the agent's folder too, and the image, built for this account's user, after that user.
+        volume = "marmot-agent-hermes-hermes-" + hashlib.sha256(os.path.realpath(agent).encode()).hexdigest()[:12]
+        image = f"marmot-agents-hermes-{os.getuid()}-{os.getgid()}"
+        self.assertIn(f"HERMES_CONTAINER='{volume}'", env)
+        self.assertIn(f"HERMES_IMAGE='{image}'", env)
+        self.assertIn(f"MARMOT_AGENT_DATA='{m.data}'", env)
         self.assertNotIn("not a real key", env)
         text = (agent / "connector").read_text()
         self.assertIn(f"'{m.data}/lib/python/hermes/run.sh' '{agent}/home' '{m.home}/work' "
-                      f"'marmot-agent-hermes-hermes' '{m.key}'", text)
+                      f"'{volume}' '{m.key}'", text)
         calls = m.calls()
-        self.assertIn("docker volume create marmot-agent-hermes-hermes", calls)
-        self.assertTrue(any(c.startswith("docker build -q --build-arg UID=") for c in calls))
+        self.assertIn(f"docker volume create {volume}", calls)
+        self.assertTrue(any(c.startswith("docker build -q --build-arg UID=") and f" -t {image} " in c for c in calls))
         self.assertNotIn("systemctl --user restart", "\n".join(calls), "--no-start starts nothing")
+        # Installed again, it keeps the same names, and so Hermes's home.
+        m.run("hermes", "--yes", "--binary", str(m.core), "--no-start")
+        self.assertIn(f"HERMES_CONTAINER='{volume}'", (agent / "service.env").read_text())
 
     def test_npub_owner(self):
         m = Machine(self)
@@ -362,6 +377,22 @@ class Install(unittest.TestCase):
         self.assertIn("missing: Codex", result.stderr)
         self.assertIn("codex login", result.stderr)
         self.assertEqual(m.files(), [])
+
+    def test_claude_code_needs_a_stored_sign_in(self):
+        m = Machine(self)
+        shutil.rmtree(m.claude)
+        result = m.run("claude-code", *m.args("claude-code", "--binary", str(m.core)),
+                       env={"ANTHROPIC_API_KEY": "not a real key"}, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing: a stored Claude Code sign-in", result.stderr)
+        self.assertIn("the agent's service does not get it", result.stderr)
+        self.assertIn("/login", result.stderr)
+        result = m.run("claude-code", *m.args("claude-code", "--binary", str(m.core)), check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing: a Claude Code sign-in", result.stderr)
+        self.assertEqual(m.files(), [])
+        self.assertNotIn("not a real key", "".join(p.read_text() for p in m.dir.rglob("*") if p.is_file()
+                                                    and p != m.key))
 
     def test_old_node(self):
         m = Machine(self)
@@ -482,6 +513,56 @@ class Boundaries(unittest.TestCase):
         self.assertEqual(m.files(), [])
         self.assertEqual([c for c in m.calls() if c != "docker info"], [])
 
+    def test_a_dry_run_leaves_a_data_folder_whose_name_has_new_in_it(self):
+        m = Machine(self)
+        data = m.dir / "data.new.1"
+        installed = data / "marmot-agent/lib/install/codex.sh"
+        installed.parent.mkdir(parents=True)
+        installed.write_text("installed\n")
+        m.run("codex", *m.args("codex", "--binary", str(m.core), "--dry-run"), env={"XDG_DATA_HOME": str(data)})
+        self.assertEqual(installed.read_text(), "installed\n")
+
+    def test_a_work_folder_or_key_given_again_is_written_into_the_kept_settings(self):
+        m = Machine(self)
+        m.run("pi", *m.args("pi", "--binary", str(m.core), "--no-service"))
+        settings = m.data / "agents/pi/settings.toml"
+        edited = settings.read_text() + "# edited\n"
+        settings.write_text(edited)
+        # Run again with nothing new: the settings are kept as they are.
+        m.run("pi", "--yes", "--binary", str(m.core), "--no-service")
+        self.assertEqual(settings.read_text(), edited)
+        # A new work folder and key file: those, and nothing else, change.
+        key = m.dir / "other.key"
+        key.write_text("another\n")
+        key.chmod(0o600)
+        out = m.run("pi", "--yes", "--binary", str(m.core), "--no-service", "--cwd", str(m.dir / "elsewhere"),
+                    "--model-key", str(key)).stdout
+        self.assertIn("with the work folder or the model key file given now", out)
+        expected = edited.replace(f'cwd = "{m.home}/work"', f'cwd = "{m.dir}/elsewhere"').replace(
+            f'"{m.key}"', f'"{key}"')
+        self.assertNotEqual(expected, edited)
+        self.assertEqual(settings.read_text(), expected)
+        self.assertIn(f"MODEL_KEY={key}", (m.data / "agents/pi/choices").read_text())
+        # Once more with nothing new: kept.
+        m.run("pi", "--yes", "--binary", str(m.core), "--no-service")
+        self.assertEqual(settings.read_text(), expected)
+
+    def test_a_key_the_settings_no_longer_name_is_refused(self):
+        m = Machine(self)
+        m.run("goose", *m.args("goose", "--binary", str(m.core), "--no-service"))
+        agent = m.data / "agents/goose"
+        settings = agent / "settings.toml"
+        settings.write_text(settings.read_text().replace(f'"{m.key}"', '"/somewhere/else.key"'))
+        before = settings.read_text(), (agent / "choices").read_text()
+        key = m.dir / "other.key"
+        key.write_text("another\n")
+        key.chmod(0o600)
+        result = m.run("goose", "--yes", "--binary", str(m.core), "--no-service", "--model-key", str(key),
+                       check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not name the model key file the agent was installed with", result.stderr)
+        self.assertEqual((settings.read_text(), (agent / "choices").read_text()), before)
+
     def test_goose_needs_x86_64(self):
         m = Machine(self)
         result = m.run("goose", *m.args("goose", "--binary", str(m.core)), env={"MARMOT_AGENT_MACHINE": "aarch64"},
@@ -512,10 +593,85 @@ class Wrappers(unittest.TestCase):
         self.work = self.m.dir / "work"
         self.work.mkdir()
 
-    def run_script(self, script: str, *args: str, timeout=30) -> subprocess.CompletedProcess:
-        env = {"PATH": f"{self.m.bin}:{SYSTEM_PATH}", "FAKE_LOG": str(self.m.log), "HOME": str(self.m.home)}
-        return subprocess.run([str(ROOT / script), *args], env=env, cwd=self.work, stdin=subprocess.DEVNULL,
-                              capture_output=True, text=True, timeout=timeout)
+    def run_script(self, script: str, *args: str, timeout=30, cwd=None, env=None) -> subprocess.CompletedProcess:
+        environment = {"PATH": f"{self.m.bin}:{SYSTEM_PATH}", "FAKE_LOG": str(self.m.log), "HOME": str(self.m.home)}
+        environment.update(env or {})
+        return subprocess.run([str(ROOT / script), *args], env=environment, cwd=cwd or self.work,
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
+
+    def serve_core(self, after=0.0):
+        """Plays the core: its token and its socket, in the agent's home, after a while."""
+        home = self.agent / "home"
+
+        def core():
+            import socket
+            import time
+            time.sleep(after)
+            (home / "connector.token").write_text("ab" * 32)
+            listener = socket.socket(socket.AF_UNIX)
+            listener.bind(str(home / "socket/marmot-agent.sock"))
+            self.addCleanup(listener.close)
+
+        import threading
+        thread = threading.Thread(target=core)
+        thread.start()
+        return thread
+
+    def wrappers(self, work: Path) -> list:
+        """Each container script, as its harness's install starts it, on a work folder."""
+        home, state = self.agent / "home", self.agent / "state"
+        return [
+            ("tools/goose/goose-acp.sh", [str(self.m.key), str(self.agent / "goose")], work),
+            ("tools/pi/pi.sh", [str(self.m.key), str(self.agent / "pi"), "--version"], work),
+            ("packages/openclaw/run.sh", [str(home), str(state), str(work), str(self.m.key)], self.work),
+            ("python/hermes/run.sh", [str(home), str(work), "v", str(self.m.key)], self.work),
+        ]
+
+    def test_the_folder_of_every_agent_is_kept_out_of_the_work_folder(self):
+        data = self.m.dir / "around/data"
+        (data / "agents/other/home").mkdir(parents=True)
+        (self.m.dir / "into-data").symlink_to(data / "agents/other")
+        env = {"MARMOT_AGENT_DATA": str(data)}
+        for work in (data / "agents/other/home", self.m.dir / "into-data/home", self.m.dir / "around"):
+            for script, args, cwd in self.wrappers(work):
+                with self.subTest(script=script, work=str(work)):
+                    result = self.run_script(script, *args, cwd=cwd, env=env)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn("the work folder and the agents' folder must not hold one another", result.stderr)
+        self.assertEqual([c for c in self.m.calls() if c.startswith("docker run")], [])
+        # A work folder beside it is fine.
+        self.serve_core().join()
+        for script, args, cwd in self.wrappers(self.work):
+            with self.subTest(script=script, work="beside"):
+                result = self.run_script(script, *args, cwd=cwd, env=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len([c for c in self.m.calls() if c.startswith("docker run")]), 4)
+
+    def test_openclaw_passes_on_the_plugins_lines_only(self):
+        import re
+        source = "".join(p.read_text() for p in sorted((ROOT / "packages/openclaw/src").glob("*.ts")))
+        calls = re.findall(r'(?:\bsay|this\.warn)\((["`])((?:(?!\1).)*)\1\)', source)
+        self.assertGreaterEqual(len(calls), 11, "the plugin's messages are found in its source")
+        lines = []
+        for _, message in calls:
+            for did in ("sent without its native message", "cut to fit"):
+                lines.append(re.sub(r"\$\{[^}]*\}", lambda m: did if "did" in m.group(0) else "a_kind/of-it.1", message))
+        plugin = sorted({f"marmot-agent-openclaw: {line}" for line in lines})
+        plugin.append("2026-11-21T10:00:00.123+00:00 marmot-agent-openclaw: OpenClaw's run of a message failed")
+        gateway = [
+            "2026-11-21T10:00:00.123Z [gateway] what someone said in the chat",
+            "marmot-agent-openclaw: what someone said in the chat",
+            "marmot-agent-openclaw: OpenClaw's run of a message failed: what someone said",
+            "marmot-agent-openclaw: OpenClaw refused a call (what someone said, in full)",
+        ]
+        output = self.m.dir / "gateway.out"
+        output.write_text("\n".join(plugin + gateway) + "\n")
+        self.m.write(self.m.bin / "docker", 'echo "docker $*" >> "$FAKE_LOG"\n[ "$1" = run ] && cat "$FAKE_OUTPUT"\nexit 0\n')
+        self.serve_core().join()
+        result = self.run_script("packages/openclaw/run.sh", str(self.agent / "home"), str(self.agent / "state"),
+                                 str(self.work), str(self.m.key), env={"FAKE_OUTPUT": str(output)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr.splitlines(), plugin)
 
     def test_a_work_folder_holding_the_state_is_refused(self):
         home, state = self.agent / "home", self.agent / "state"
@@ -536,18 +692,7 @@ class Wrappers(unittest.TestCase):
 
     def test_openclaw_waits_for_the_core(self):
         home = self.agent / "home"
-
-        def core():
-            import socket
-            import time
-            time.sleep(2)
-            (home / "connector.token").write_text("ab" * 32)
-            listener = socket.socket(socket.AF_UNIX)
-            listener.bind(str(home / "socket/marmot-agent.sock"))
-            self.addCleanup(listener.close)
-
-        import threading
-        threading.Thread(target=core).start()
+        self.serve_core(after=2)
         result = self.run_script("packages/openclaw/run.sh", str(home), str(self.agent / "state"), str(self.work),
                                  str(self.m.key))
         self.assertEqual(result.returncode, 0, result.stderr)
