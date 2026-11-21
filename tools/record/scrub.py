@@ -93,9 +93,20 @@ class Scrubber:
         return self.walk(msg)
 
     def acp(self, msg: dict) -> dict:
-        # The ACP recorder runs the agent with a throwaway home folder and no account of ours, so only
-        # paths and names need replacing.
-        return self.walk(msg)
+        # The ACP recorder runs the agent with a throwaway home folder and no account of ours. The
+        # folder's generated name, and the names OpenCode makes up for a command's output file under
+        # it, are replaced with fixed ones.
+        def homes(v):
+            if isinstance(v, dict):
+                return {k: homes(x) for k, x in v.items()}
+            if isinstance(v, list):
+                return [homes(x) for x in v]
+            if isinstance(v, str):
+                v = ACP_HOME.sub("agent-home", v)
+                return OPENCODE_OUTPUT.sub(r"\1/project/output.out", v)
+            return v
+
+        return homes(self.walk(msg))
 
     def hermes(self, msg: dict) -> dict:
         # The Hermes container holds no account of ours, so only paths and names need replacing.
@@ -127,6 +138,8 @@ class Scrubber:
 
 
 MACHINE_UPTIME = re.compile(r"system \d+[dhms](?: \d+[dhms])*")
+ACP_HOME = re.compile(r"acp-home-[A-Za-z0-9_]+")  # the ACP recorder's throwaway home folder
+OPENCODE_OUTPUT = re.compile(r"(opencode/shell)/[0-9a-f]{16,}/sh_[A-Za-z0-9]+\.out")
 
 SUSPECT = re.compile(
     r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}"  # an e-mail address
@@ -134,6 +147,7 @@ SUSPECT = re.compile(
     r"|/Users/[A-Za-z0-9_.-]+"
     r"|/mnt/|/tmp/claude|/private/var"
     r"|claude\.ai [A-Z]"  # a connected account's MCP server name
+    r"|acp-home-"  # the ACP recorder's throwaway home folder, by its generated name
 )
 
 
