@@ -168,9 +168,9 @@ What an agent may do is decided
 These are ordinary Marmot actions. A delete is an ordinary deletion of a chat message, and the tool call that
 caused it still arrives as a `tool` item.
 
-How an agent sends a file is not decided
-([Q-23](../open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)). The individual requests are not
-designed yet.
+An agent sends a file as an encrypted chat attachment, from a folder the settings allow
+([D-090](../decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)); the
+request a connector makes for it is not designed yet, nor are the other individual requests.
 
 ## Capabilities
 
