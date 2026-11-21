@@ -1573,3 +1573,31 @@ programs and people see from these drivers.
 
 Decided 2026-11-21. The project owner accepted the recommendations.
 
+## D-093 The core and the drivers are verified in layers, with TLA+ models at the top
+
+**Decision.** The core and the drivers are tested and verified as [the verification page](design/verification.md)
+lays out: the properties it lists, each owned by one layer; a conformance suite every driver passes; a
+deterministic simulator of the core with fault injection; TLA+ models checked with TLC, each with a fair
+configuration that must pass and an unfair one whose counterexample is committed as a simulator scenario; Kani
+proofs of small pure functions; property and differential tests (proptest, fast-check, hypothesis); fuzzing with
+cargo-fuzz; mutation testing with cargo-mutants; and privacy checks. None of these tools ships in the program.
+Known gaps are fixed first, each with a failing test.
+
+**Why.** Review kept finding interleavings that example tests miss. TLA+ and TLC match what MDK uses, so both
+projects share one tool and one way of working. Each check is shown to catch its bug, and a bounded result is
+stated with its bounds.
+
+Decided 2026-11-21. The project owner accepted the recommendations.
+
+## D-094 CI on a pull request stays under 15 minutes, and the rest runs nightly
+
+**Decision.** CI on a pull request stays under 15 minutes, using build caching and independent checks as parallel
+jobs. Long checks run nightly or weekly: property tests at high counts, many simulator seeds, larger model bounds,
+fuzzing, mutation testing, and the scenarios against real harnesses. Those run on numes.ai's free models, with its
+key as a CI secret, in a workflow that pull requests cannot reach.
+
+**Why.** A fast pull request keeps the work moving; the expensive checks still run every day. Keeping the key out
+of anything a pull request can trigger keeps it from code nobody reviewed.
+
+Decided 2026-11-21. The project owner accepted the recommendation, with the 15-minute ceiling.
+

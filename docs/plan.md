@@ -105,6 +105,17 @@ Built so far, provisional until the owner accepts what others can see:
   [the socket's `send_file`](design/socket-protocol.md#the-messages-as-built). Pi and the ACP agents, and the
   Hermes and OpenClaw plugins, do not offer it yet.
 
+### Verification, alongside M4
+
+The layers of [the verification page](design/verification.md)
+([D-093](decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top)), in its
+order: fix the known gaps, each with a failing test; the simulator and the `CoreLifecycle` model; the driver
+conformance suite; property tests, Kani proofs and fuzzing; trace validation, mutation testing and the nightly
+lanes. Pull-request CI stays under 15 minutes
+([D-094](decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)). **Done when**
+every property on that page has an owner that runs in CI, and each model's unfair configuration finds its
+counterexample.
+
 ## Outside this repository
 
 These are the project owner's to arrange. This repository does not change MDK.
