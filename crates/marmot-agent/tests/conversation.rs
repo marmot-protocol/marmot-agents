@@ -273,6 +273,19 @@ fn a_typed_approval_needs_the_right_to_approve() {
     the_prompt(talk.heard(mentioned));
     let owner = heard(direct(), "e3", OWNER, "/approve");
     the_prompt(talk.heard(owner));
+    // A harness reads a command in any case, and with a bot's name or punctuation after it, so
+    // those forms need the right too (D-047).
+    for (event, text) in [
+        ("e4", "/APPROVE"),
+        ("e5", "ok /Approve@agent_bot"),
+        ("e6", "/approve."),
+    ] {
+        let typed = heard(direct(), event, FRIEND, text);
+        assert!(
+            is_refused(&the_item(talk.heard(typed)).2, "not_allowed"),
+            "{text}"
+        );
+    }
 }
 
 // --------------------------------------------------------------------------------- sessions
