@@ -266,6 +266,53 @@ class ClaudeSessionItem(unittest.TestCase):
         self.assertEqual(translate.crate_shape(claude.events[0])["body"]["commands"], [{"name": "cost", "hint": ""}])
 
 
+class ClaudeApprovals(unittest.TestCase):
+    """A reply settles the approval it answers, by the callback's request id when the driver recorded
+    it, and records the choice the person made."""
+
+    @staticmethod
+    def ask(claude, request, command, suggestions=()):
+        claude.feed({"dir": "in", "via": "callback", "msg": {
+            "kind": "can_use_tool", "toolName": "Bash", "input": {"command": command},
+            "options": {"toolUseID": f"tool-{request}", "requestId": request, "suggestions": list(suggestions)}}})
+
+    @staticmethod
+    def reply(claude, request, choice, behavior="allow"):
+        claude.feed({"dir": "out", "via": "callback", "msg": {
+            "kind": "permission_result", "toolName": "Bash", "requestId": request, "choice": choice,
+            "result": {"behavior": behavior}}})
+        return translate.crate_shape(claude.events[-1])
+
+    def test_two_waiting_for_one_tool_are_answered_each_by_its_own_reply(self):
+        claude = translate.Claude()
+        self.ask(claude, "r1", "ls")
+        self.ask(claude, "r2", "pwd")
+        self.assertEqual(self.reply(claude, "r2", "c0")["item"], "approval:r2")
+        self.assertEqual(self.reply(claude, "r1", "c0")["item"], "approval:r1")
+
+    def test_a_standing_choice_is_recorded_as_that_choice(self):
+        claude = translate.Claude()
+        self.ask(claude, "r1", "ls", suggestions=[{"type": "addRules"}])
+        answered = self.reply(claude, "r1", "c1")
+        self.assertEqual(answered["body"]["answer"], {"choice": "c1"})
+        self.assertEqual(answered["text"], "Answered: Allow, and don't ask again")
+
+
+class ClaudeResumedTurns(unittest.TestCase):
+    """A driver that restarts resumes the session with a fresh translator. Its turns must not take the
+    item ids of the turns before, or they would edit those turns' rows."""
+
+    @staticmethod
+    def first_turn(uuid):
+        claude = translate.Claude()
+        claude.feed({"dir": "in", "via": "message", "msg": {
+            "type": "system", "subtype": "init", "session_id": "s1", "uuid": uuid, "claude_code_version": "9.9.9"}})
+        return next(e["item"] for e in claude.events if e["type"] == "turn")
+
+    def test_a_resumed_sessions_first_turn_has_its_own_id(self):
+        self.assertNotEqual(self.first_turn("u-before"), self.first_turn("u-after"))
+
+
 
 if __name__ == "__main__":
     unittest.main()

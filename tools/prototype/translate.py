@@ -723,7 +723,8 @@ class Claude(Translator):
         self.prompted = False  # a user prompt has been sent since the last result
         self.turn_n = 0
         self.tools: dict[str, dict] = {}  # tool_use id -> last body
-        self.approvals: dict[str, str] = {}  # tool name -> open approval item (answers carry no id)
+        self.approvals: dict[str, str] = {}  # tool name -> open approval item, for answers with no id
+        self.approval_ids: dict[str, str] = {}  # the callback's request id -> open approval item
         self.settings: dict = {}
         self.commands: list = []
         self.models = None  # model names, once the client has asked for them
@@ -763,7 +764,7 @@ class Claude(Translator):
                     self.control("interrupt", f"{method}()")
                 elif method == "setModel":
                     self.control("set model", "setModel()")
-            elif method in ("supportedCommands", "supportedModels", "initializationResult") and "response" in m:
+            elif method in ("supportedCommands", "supportedModels") and "response" in m:
                 # The client asked, which it can do before any prompt is sent.
                 r = m["response"]
                 r = {"commands": r} if method == "supportedCommands" else {"models": r} if method == "supportedModels" else r
@@ -822,7 +823,9 @@ class Claude(Translator):
     def start_turn(self, m, native_kind="system / init"):
         self.turn_n += 1
         self.session = m.get("session_id")
-        self.turn = f"{self.session}:{self.turn_n}"
+        # Named after the message that opens it, so a turn of a resumed session never takes the
+        # id of a turn from before the driver restarted.
+        self.turn = f"{self.session}:{m.get('uuid') or self.turn_n}"
         by = "user" if self.prompted else "agent"
         self.prompted = False
         self.emit(f"turn:{self.turn}", "turn", "running", "Working", body={"started_by": by},
@@ -835,7 +838,7 @@ class Claude(Translator):
         if self.turn is None:  # a failure before any turn began
             self.turn_n += 1
             self.session = m.get("session_id")
-            self.turn = f"{self.session}:{self.turn_n}"
+            self.turn = f"{self.session}:{m.get('uuid') or self.turn_n}"
         state = "done" if ok else "cancelled" if interrupted else "failed"
         title = {"done": "Finished", "cancelled": "Interrupted", "failed": "Failed"}[state]
         usage = m.get("usage") or {}
@@ -850,7 +853,8 @@ class Claude(Translator):
 
     def ensure_turn(self, m):
         if self.turn is None:  # messages that arrive after a result, from background work
-            self.start_turn({"session_id": m.get("session_id")}, "(none: a message arrived outside a turn)")
+            self.start_turn({"session_id": m.get("session_id"), "uuid": m.get("uuid")},
+                            "(none: a message arrived outside a turn)")
 
     def assistant(self, m):
         self.ensure_turn(m)
@@ -943,6 +947,7 @@ class Claude(Translator):
                   for n, q in enumerate(inp.get("questions") or [])]
             item = f"question:{opts.get('requestId')}"
             self.approvals[tool] = item
+            self.approval_ids[opts.get("requestId")] = item
             return self.emit(item, "question", "waiting", "Question", qs[0]["text"] if qs else "",
                              {"answer_via": "request", "subject": subject, "questions": qs}, "canUseTool [AskUserQuestion]", m)
         if tool == "ExitPlanMode" and inp.get("plan"):
@@ -954,13 +959,19 @@ class Claude(Translator):
         choices.append({"id": f"c{len(choices)}", "label": "Deny", "effect": "deny"})
         item = f"approval:{opts.get('requestId')}"
         self.approvals[tool] = item
+        self.approval_ids[opts.get("requestId")] = item
         text = inp.get("command") or inp.get("file_path") or opts.get("description") or tool
         what = "plan" if tool == "ExitPlanMode" else "action"
         self.emit(item, "approval", "waiting", f"Allow this {what}?", text, {"subject": subject, "choices": choices},
                   f"canUseTool [{tool}]", m)
 
     def permission_answer(self, m):
-        item = self.approvals.pop(m.get("toolName"), None)
+        # A reply names its request when the driver recorded it; recordings name only the tool.
+        item = self.approval_ids.pop(m["requestId"], None) if m.get("requestId") else None
+        if item is None:
+            item = self.approvals.pop(m.get("toolName"), None)
+        elif self.approvals.get(m.get("toolName")) == item:
+            del self.approvals[m.get("toolName")]
         prev = self.open.get(item) if item else None
         if prev is None:
             return self.skip("client: permission result")
@@ -971,8 +982,11 @@ class Claude(Translator):
                              {**prev["body"], "answer": answered(prev["body"]["questions"], answers)},
                              "permission result for AskUserQuestion", m)
         allow = res.get("behavior") == "allow"
-        chosen = "c0" if allow else prev["body"]["choices"][-1]["id"]
-        self.emit(item, "approval", "done" if allow else "declined", prev["title"], "Answered: " + ("Allow once" if allow else "Deny"),
+        # The choice the person made, when the driver recorded it, so a standing approval is not
+        # shown as a one-off; otherwise allow once, or deny.
+        chosen = m.get("choice") or ("c0" if allow else prev["body"]["choices"][-1]["id"])
+        label = next((c["label"] for c in prev["body"]["choices"] if c["id"] == chosen), "Allow once" if allow else "Deny")
+        self.emit(item, "approval", "done" if allow else "declined", prev["title"], "Answered: " + label,
                   {**prev["body"], "answer": {"choice": chosen}}, "permission result", m)
         if not allow and prev["body"].get("subject") in self.open:
             tool_ev = self.open[prev["body"]["subject"]]

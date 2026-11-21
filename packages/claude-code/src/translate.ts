@@ -296,7 +296,10 @@ export class Translator {
   private prompted = false;
   private turnN = 0;
   private readonly tools = new Map<string, Json>();
+  /** Tool name -> open approval item, for answers with no request id. */
   private readonly approvals = new Map<unknown, string>();
+  /** The callback's request id -> open approval item. */
+  private readonly approvalIds = new Map<unknown, string>();
   private settings: Json = {};
   private commands: Json[] = [];
   private models: unknown[] | null = null;
@@ -347,7 +350,7 @@ export class Translator {
           this.commands = [];
         }
       } else if (
-        (method === "supportedCommands" || method === "supportedModels" || method === "initializationResult") &&
+        (method === "supportedCommands" || method === "supportedModels") &&
         "response" in m
       ) {
         // The client asked, which it can do before any prompt is sent.
@@ -492,7 +495,9 @@ export class Translator {
   private startTurn(m: Json, nativeKind = "system / init"): void {
     this.turnN += 1;
     this.session = idOrNull(m["session_id"]);
-    this.turn = `${word(this.session)}:${this.turnN}`;
+    // Named after the message that opens it, so a turn of a resumed session never takes the id of
+    // a turn from before the driver restarted.
+    this.turn = `${word(this.session)}:${truthy(m["uuid"]) ? word(m["uuid"]) : this.turnN}`;
     const by = this.prompted ? "user" : "agent";
     this.prompted = false;
     this.emit(`turn:${this.turn}`, "turn", "running", "Working", "", { started_by: by }, nativeKind, m);
@@ -506,7 +511,7 @@ export class Translator {
       // A failure before any turn began.
       this.turnN += 1;
       this.session = idOrNull(m["session_id"]);
-      this.turn = `${word(this.session)}:${this.turnN}`;
+      this.turn = `${word(this.session)}:${truthy(m["uuid"]) ? word(m["uuid"]) : this.turnN}`;
     }
     const state: State = ok ? "done" : interrupted ? "cancelled" : "failed";
     const title = ok ? "Finished" : interrupted ? "Interrupted" : "Failed";
@@ -526,7 +531,7 @@ export class Translator {
   /** Messages that arrive after a result, from background work, start a turn the driver makes up. */
   private ensureTurn(m: Json): void {
     if (this.turn === null) {
-      this.startTurn({ session_id: m["session_id"] }, "(none: a message arrived outside a turn)");
+      this.startTurn({ session_id: m["session_id"], uuid: m["uuid"] }, "(none: a message arrived outside a turn)");
     }
   }
 
@@ -652,6 +657,7 @@ export class Translator {
       });
       const item = `question:${word(opts["requestId"])}`;
       this.approvals.set(tool, item);
+      this.approvalIds.set(opts["requestId"], item);
       return this.emit(
         item,
         "question",
@@ -680,14 +686,22 @@ export class Translator {
     choices.push({ id: `c${choices.length}`, label: "Deny", effect: "deny" });
     const item = `approval:${word(opts["requestId"])}`;
     this.approvals.set(tool, item);
+    this.approvalIds.set(opts["requestId"], item);
     const text = or(inp["command"], inp["file_path"], opts["description"], tool);
     const what = tool === "ExitPlanMode" ? "plan" : "action";
     this.emit(item, "approval", "waiting", `Allow this ${what}?`, text, { subject, choices }, `canUseTool [${word(tool)}]`, m);
   }
 
   private permissionAnswer(m: Json): void {
-    const item = this.approvals.get(m["toolName"]);
-    this.approvals.delete(m["toolName"]);
+    // A reply names its request when the driver recorded it; recordings name only the tool.
+    let item = truthy(m["requestId"]) ? this.approvalIds.get(m["requestId"]) : undefined;
+    if (item === undefined) {
+      item = this.approvals.get(m["toolName"]);
+      this.approvals.delete(m["toolName"]);
+    } else {
+      this.approvalIds.delete(m["requestId"]);
+      if (this.approvals.get(m["toolName"]) === item) this.approvals.delete(m["toolName"]);
+    }
     const prev = item ? this.open.get(item) : undefined;
     if (item === undefined || prev === undefined) return this.skip("client: permission result");
     const res = object(m["result"]);
@@ -706,13 +720,17 @@ export class Translator {
     }
     const allow = res["behavior"] === "allow";
     const choices = list(prev.body["choices"]);
-    const chosen = allow ? "c0" : object(choices.at(-1))["id"];
+    // The choice the person made, when the driver recorded it, so a standing approval is not shown
+    // as a one-off; otherwise allow once, or deny.
+    const chosen = truthy(m["choice"]) ? m["choice"] : allow ? "c0" : object(choices.at(-1))["id"];
+    const picked = choices.map(object).find((c) => c["id"] === chosen);
+    const label = picked ? word(picked["label"]) : allow ? "Allow once" : "Deny";
     this.emit(
       item,
       "approval",
       allow ? "done" : "declined",
       prev.title,
-      "Answered: " + (allow ? "Allow once" : "Deny"),
+      "Answered: " + label,
       { ...prev.body, answer: { choice: chosen } },
       "permission result",
       m,
