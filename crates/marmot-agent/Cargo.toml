@@ -21,8 +21,9 @@ hex = "0.4"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 # The connector's token.
 getrandom = "0.3"
-# Opening a file the agent sends without following a link at its end (D-090).
-libc = "0.2"
+# Opening a file the agent sends one part of its path at a time, from a folder held open, so no
+# link leads out of it (D-090).
+rustix = { version = "1", features = ["fs"] }
 # MDK, as a library (D-002). The revision moves together with the [patch] entries in the workspace
 # Cargo.toml and tools/odin/install.sh.
 marmot-app = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220" }
