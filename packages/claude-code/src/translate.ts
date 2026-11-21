@@ -278,8 +278,9 @@ const TASK_TITLES: Record<State, string> = {
  * {@link Translator.unknown}; a message left out on purpose is counted in {@link Translator.notSent}.
  *
  * When Claude Code stops, the SDK's `query()` throws, and that makes no event, as in the prototype.
- * The turn's result has already closed what was open in it, and a background task stays open until
- * Claude Code reports it when the session is resumed (`restart_mid_turn.jsonl`).
+ * The turn's result has usually closed what was open in it, and a background task stays open until
+ * Claude Code reports it when the session is resumed (`restart_mid_turn.jsonl`). When it stops in the
+ * middle of a turn, the transport calls {@link Translator.stopped}.
  */
 export class Translator {
   /** Messages with no rule, by kind. */
@@ -306,9 +307,77 @@ export class Translator {
   private version: unknown = null;
   private sessionKey: string | null = null;
 
+  /** The turn that is running, as the events name it, or null between turns. */
+  get currentTurn(): string | null {
+    return this.turn;
+  }
+
+  /** The session the events name, once Claude Code has named it. */
+  get currentSession(): string | null {
+    return this.sessionKey ?? this.session;
+  }
+
   feed(line: Line): AgentEvent[] {
     this.made = [];
     this.handle(line);
+    return this.shaped();
+  }
+
+  /**
+   * The transport ended the session itself, by closing its `query()`, as a "new session" control
+   * does. Claude Code says nothing when that happens, so the driver closes what was open: the items
+   * of a running turn and the turn as cancelled, then the session item as ended. A `query()` that
+   * starts later without `resume` then has no session left to end. Replays never call this.
+   */
+  closeSession(): AgentEvent[] {
+    this.made = [];
+    this.cancelTurn();
+    if (this.sessionKey) this.endSession(this.sessionKey, "the session was closed by the driver");
+    this.session = this.sessionKey = this.version = null;
+    this.settings = {};
+    this.commands = [];
+    return this.shaped();
+  }
+
+  /**
+   * Claude Code stopped without ending its turn: the SDK's `query()` threw, or ended, with no result.
+   * Nothing more will come for that turn, so the driver closes the turn's open items and the turn as
+   * cancelled. The session stays, to be resumed by the next `query()`. Replays never call this.
+   */
+  stopped(): AgentEvent[] {
+    this.made = [];
+    this.cancelTurn();
+    this.prompted = false;
+    return this.shaped();
+  }
+
+  /**
+   * Claude Code took a setting the transport changed: `setModel()` or `setPermissionMode()` resolved.
+   * It states the model only in its next init, which may be a long way off, so the driver shows the
+   * change itself, as an edit of the session item. Replays never call this.
+   */
+  changed(setting: "model" | "permission_mode", value: string): AgentEvent[] {
+    this.made = [];
+    this.settings[setting] = value;
+    this.announce("(none: a setting the driver changed)", {});
+    return this.shaped();
+  }
+
+  /** Closes a running turn, and what is open in it, as cancelled. */
+  private cancelTurn(): void {
+    if (this.turn === null) return;
+    const turn = this.open.get(`turn:${this.turn}`);
+    this.closeOpenItems();
+    if (turn !== undefined) {
+      this.emit(turn.item, "turn", "cancelled", "Interrupted", "", turn.body, "(none: closed by the driver)", null, [
+        turn.session,
+        turn.turn,
+      ]);
+    }
+    this.turn = null;
+  }
+
+  private shaped(): AgentEvent[] {
     const events = this.made.map(
       (e) =>
         crateShape({

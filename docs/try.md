@@ -1,6 +1,7 @@
 # Trying the core
 
-Status: describes what is built today, for M1 of the [plan](plan.md). Agent items travel under a temporary kind
+Status: describes what is built today: Codex built in, and Claude Code through the socket (M1 and M2 of the
+[plan](plan.md)). Agent items travel under a temporary kind
 until MDK takes the new shape ([D-069](decisions.md#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind)),
 so no White Noise app shows them yet. A terminal client plays the person instead.
 
@@ -57,3 +58,18 @@ or `:deny`, or `:choose` one of the choices shown; answer a question with `:answ
 the session's settings. A message that starts with a slash goes to Codex as typed.
 
 The relay keeps nothing when the client stops, so start again from step 2 with fresh folders.
+
+## With Claude Code
+
+The same steps work with Claude Code in place of Codex, through the socket. It also needs Node 24.
+
+1. In the agent's settings, replace the `[codex]` section with an empty `[connector]` section.
+2. Install the driver's packages once: `npm ci` in `packages/claude-code`.
+3. Run `marmot-agent run agent.toml` as before. It now waits for the driver.
+4. Start the driver, giving it the agent's home and the folder to work in:
+
+   ```sh
+   node packages/claude-code/src/main.ts --home /tmp/try/agent --cwd /tmp/try/work --permission-mode default
+   ```
+
+Then invite the agent and talk to it in the client as before.

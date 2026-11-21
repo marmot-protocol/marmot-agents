@@ -11,7 +11,9 @@ Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) i
 checks them: `marmot-agent-events`, the agent event and its eleven item types; `marmot-agent-driver`, the trait
 a driver implements; `marmot-agent-codex`, the Codex driver, which runs Codex and translates both ways, with
 subagents switched off for now; and `marmot-agent`, the core, which runs one agent's account through MDK and
-drives Codex, with a test that runs it end to end on MDK's test relay. No socket exists yet. What is built next, and in what order, is in
+drives Codex, with a test that runs it end to end on MDK's test relay. The core also serves a local socket, and
+`packages/claude-code` is the Claude Code driver, a TypeScript program that drives Claude Code through it. What is
+built next, and in what order, is in
 [`docs/plan.md`](docs/plan.md). The core program is called `marmot-agent`
 ([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and
 decisions under `docs/`, plus recorded harness sessions and the tools that made them. The connectors that ship
@@ -49,7 +51,8 @@ being replaced by what is designed here, not extended.
 | Work on the item types in Rust | `crates/marmot-agent-events`, after `docs/design/event-model.md` |
 | Work on the driver trait or the capability flags | `crates/marmot-agent-driver`, after `docs/design/drivers.md` |
 | Work on the Codex driver | `crates/marmot-agent-codex`, after `fixtures/recordings/codex` and its `expected/` events |
-| Work on the Claude Code driver's translation | `packages/claude-code`, after `fixtures/recordings/claude` and its `expected/` events |
+| Work on the Claude Code driver's translation | `packages/claude-code/src/translate.ts`, after `fixtures/recordings/claude` and its `expected/` events |
+| Work on the Claude Code driver's transport | `packages/claude-code/src/connector.ts`, after `docs/design/drivers.md` and `docs/design/socket-protocol.md` |
 | Work on the core | `crates/marmot-agent`, after `docs/plan.md` and `docs/design/architecture.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Change the link check | `lychee.toml` |
@@ -236,7 +239,8 @@ For any change under `packages/claude-code`, with Node 24 (CI uses the version n
 cd packages/claude-code
 npm ci
 npm run check   # tsc --noEmit
-npm test        # replays every Claude Code recording against its expected events
+npm test        # replays every Claude Code recording against its expected events, and runs the transport
+                # against a fake core and a fake SDK
 ```
 
 For a change to a diagram, which CI does not check:

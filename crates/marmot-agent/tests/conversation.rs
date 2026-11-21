@@ -843,3 +843,31 @@ fn a_remark_is_marked_and_the_answer_is_not() {
         vec![tag("turn", "t1")]
     );
 }
+
+// A session that has ended, as a new session ends the one before, is not resumed after a restart;
+// one the core closed because the driver stopped still is (D-065, D-070).
+#[test]
+fn an_ended_session_is_not_resumed_and_a_stopped_one_is() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let session = |state| event("s", state, Body::Session(session_item(false)));
+    sent(&mut talk, &chat, session(State::Running), "es");
+    let mut stopped = conversation(talk.saved().clone());
+    let _ = stopped.ended();
+    let resumed = the_prompt(conversation(stopped.saved().clone()).heard(heard(
+        direct(),
+        "e2",
+        OWNER,
+        "go on",
+    )));
+    assert_eq!(
+        resumed.session,
+        Some(SessionId::from("th1")),
+        "a stopped session is resumed"
+    );
+
+    talk.emitted(emitted(&chat, session(State::Done)));
+    let fresh =
+        the_prompt(conversation(talk.saved().clone()).heard(heard(direct(), "e3", OWNER, "new")));
+    assert_eq!(fresh.session, None, "an ended session is not");
+}
