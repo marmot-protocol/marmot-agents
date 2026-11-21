@@ -4,8 +4,8 @@ Status: decided on 2026-11-17, as [D-022](../decisions.md#d-022-the-agents-words
 to [D-026](../decisions.md#d-026-an-agent-item-is-at-most-64-kb). Who applies the size limit was decided on
 2026-11-19, as [D-057](../decisions.md#d-057-the-core-applies-the-64-kb-limit). None of it is in the Marmot
 specification yet, and all of it has to be agreed there
-([Q-03](../open-questions.md#q-03-where-are-the-event-kinds-specified)). The exact tags are not fixed; a
-proposal for them, from the first end-to-end test, is in [kinds 1201 and 1202](agent-kinds.md).
+([Q-03](../open-questions.md#q-03-where-are-the-event-kinds-specified)). The exact tags are in
+[kinds 1201 and 1202](agent-kinds.md) ([D-076](../decisions.md#d-076-the-tags-of-kinds-1201-and-1202)).
 
 [The event model](event-model.md) says what an agent event means: a set of item types, each with a state. This page
 says how one travels through a Marmot group: what kind of event it is, what it contains, and how an item that
@@ -102,7 +102,8 @@ an answer with no time limit.
 A failed turn arrives as an edit of the turn item. Edits are otherwise silent, so this is the one edit that
 alerts.
 
-Whether the agent's remarks during a turn ("I'll run the tests now") should alert like a final answer is open.
+The agent's remarks during a turn ("I'll run the tests now") do not alert: they carry a `phase` tag, and MDK does
+not alert for them ([D-078](../decisions.md#d-078-the-agents-remarks-during-a-turn-do-not-alert)).
 
 ## An item is updated with an edit
 

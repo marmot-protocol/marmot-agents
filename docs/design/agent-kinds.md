@@ -1,8 +1,9 @@
 # Kinds 1201 and 1202, as M1 used them
 
-Status: a proposal, for the project owner to accept and then hand to MDK and the Marmot specification. How an
-agent event travels is decided ([the carrier](event-carrier.md), D-022 to D-027); the exact tags were not. This
-page fixes them, from what the first end-to-end test (M1 of the [plan](../plan.md)) sent and read back, under the
+Status: decided on 2026-11-21, as [D-076](../decisions.md#d-076-the-tags-of-kinds-1201-and-1202) to
+[D-078](../decisions.md#d-078-the-agents-remarks-during-a-turn-do-not-alert), for the project to hand to MDK and
+the Marmot specification; MDK may rename a tag to fit its conventions. How an agent event travels was decided
+before ([the carrier](event-carrier.md), D-022 to D-027); the exact tags were not. This page fixes them, from what the first end-to-end test (M1 of the [plan](../plan.md)) sent and read back, under the
 temporary kinds of [D-069](../decisions.md#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind).
 The code that writes and reads them is `crates/marmot-agent/src/carrier.rs`.
 
@@ -21,8 +22,8 @@ below. What it taught:
 - **The agent's words as chat messages work,** but MDK's crash-safe way to send a chat message takes no tags, so
   the turn tag ([D-022](../decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)) and crash-safe
   sending cannot both be had today.
-- **A remark during a turn arrives as a chat message,** and alerts like the final answer. Whether it should is
-  open ([D-024](../decisions.md#d-024-who-an-agent-event-alerts)).
+- **A remark during a turn arrives as a chat message,** and alerted like the final answer. It no longer does
+  ([D-078](../decisions.md#d-078-the-agents-remarks-during-a-turn-do-not-alert)).
 
 ## Kind 1201: an agent item
 
@@ -81,7 +82,9 @@ chat messages and comments. The fields were the same.
 ## The agent's words
 
 A kind 9 chat message, as any person's, with one more tag: `["turn", <turn id>]`
-([D-022](../decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)). When the words change after they
+([D-022](../decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)). A remark made while the agent
+works, which the harness marks as one, also carries `["phase", "commentary"]`, and does not alert
+([D-078](../decisions.md#d-078-the-agents-remarks-during-a-turn-do-not-alert)). When the words change after they
 were sent, they are edited like any chat message.
 
 ## What MDK needs to do
@@ -93,13 +96,16 @@ were sent, they are edited like any chat message.
   arrives before its target.
 - Show one row per item, at its first event, ordered within a turn by `seq`; and no row for a kind 1202 event.
 - Alert for an approval or a question while it is `waiting`, and for a turn that ends `failed`; for nothing else
-  of kind 1201 or 1202 ([D-024](../decisions.md#d-024-who-an-agent-event-alerts)).
+  of kind 1201 or 1202 ([D-024](../decisions.md#d-024-who-an-agent-event-alerts)). Do not alert for a chat
+  message with `["phase", "commentary"]` (D-078).
 - Let a chat message sent crash-safely carry tags, so the agent's words keep their turn and are never sent twice.
 - Expose items, with their latest version, to the apps.
 
-## To decide
+## Decided
 
-1. The tags above, for kind 1201, its edits and kind 1202.
-2. A `refused` notice for what the core did not act on.
-3. Whether the agent's remarks during a turn alert. The proposal: no. A remark carries the tag
-   `["phase", "commentary"]`, and MDK does not alert for a chat message that has it; the final answer alerts.
+1. The tags above, for kind 1201, its edits and kind 1202
+   ([D-076](../decisions.md#d-076-the-tags-of-kinds-1201-and-1202)).
+2. A `refused` notice for what the core did not act on
+   ([D-077](../decisions.md#d-077-a-refused-notice-says-why-something-was-not-acted-on)).
+3. The agent's remarks during a turn do not alert
+   ([D-078](../decisions.md#d-078-the-agents-remarks-during-a-turn-do-not-alert)).

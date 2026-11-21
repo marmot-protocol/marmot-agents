@@ -116,7 +116,7 @@ Only the fields in `body` differ.
 | `question` | `answer_via`: `request` or `message`. `questions`: each with an `id`, the `text`, `options`, whether `multiple` selections are allowed, whether free text is allowed, and whether the answer is `secret`. Once answered: `answer` |
 | `plan` | `text`, or `entries` each with a text and a state |
 | `task` | `kind`, `description`, `subject`, and `usage` once known |
-| `notice` | `kind`: `compaction`, `waiting`, `retry`, `warning`, `model_changed`, `command_output` |
+| `notice` | `kind`: `compaction`, `waiting`, `retry`, `warning`, `model_changed`, `command_output`, and `refused`, which the core sends ([D-077](../decisions.md#d-077-a-refused-notice-says-why-something-was-not-acted-on)) |
 | `error` | What was being attempted, and the harness's error code |
 | `session` | `settings`: each with an `id`, a `label`, its `value`, the `options` it accepts when the harness says, and whether changing it needs the right to approve. `actions`: each with an `id`, a `label` and a `description`. `commands`: each with a `name`, a `description` and a `hint` |
 
