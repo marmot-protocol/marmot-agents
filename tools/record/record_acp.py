@@ -379,6 +379,30 @@ def load(a: Agent, cwd: str):
     a.prompt(s, "What did the command print? Reply with just its output.")
 
 
+def restart_mid_turn(a: Agent, cwd: str):
+    """The agent is killed while a command runs; the session is loaded, anything the agent took up on its own
+    is cancelled, and the session carries on."""
+    a.request_handler = answer_with("allow_once")
+    a.initialize()
+    s = a.new_session(cwd)
+    rid, mark = a.start_prompt(s, "Run exactly this shell command and nothing else, then reply with the word done: "
+                                  "`echo ran >> runs.txt && sleep 20`")
+    a.wait_for(lambda m: update_of(m, "tool_call") is not None
+               or (update_of(m, "tool_call_update") or {}).get("status") == "in_progress",
+               timeout=120, start=mark)
+    time.sleep(3)
+    a.restart(hard=True)
+    a.initialize()
+    a.request("session/load", {"sessionId": s, "cwd": cwd, "mcpServers": []}, timeout=120)
+    # As the ACP driver does after taking up a session: whatever the agent took up on its own stops.
+    a.notify("session/cancel", {"sessionId": s})
+    a.prompt(s, "Which shell command did you run last? Reply with only the command. Run nothing.")
+
+
+restart_mid_turn.config = ASK
+restart_mid_turn.ask = True
+
+
 SCENARIOS = {
     f.__name__: f
     for f in [
@@ -394,6 +418,7 @@ SCENARIOS = {
         new_session,
         resume,
         load,
+        restart_mid_turn,
     ]
 }
 

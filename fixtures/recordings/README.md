@@ -358,7 +358,7 @@ was not kept.
 
 ## ACP: Goose
 
-The same twelve scenarios, recorded the same way, with Goose in a throwaway container. What they show is in
+The same twelve scenarios, recorded the same way, with Goose in a throwaway container, and `restart_mid_turn`. What they show is in
 [`docs/reference/harness-messages.md`](../../docs/reference/harness-messages.md#acp-goose).
 
 | | |
@@ -376,6 +376,10 @@ What differs from OpenCode:
   session id still worked, and remembered the first turn.
 - **`approval_denied`**: the refusal did not end the turn; the model said it was not allowed.
 - **`interrupt`**: the cancelled command was never updated again; the reply to the prompt said `cancelled`.
+- **`restart_mid_turn`**, Goose only: Goose is killed while an approved command runs, the session is loaded, and
+  the client sends `session/cancel` and a prompt at once. Goose had taken up the cut-off turn by itself, and
+  refused the prompt ("session already has active run") until that ended. This is why the driver waits after
+  taking up a session.
 
 Approval scenarios run Goose in its `approve` mode; the others in `auto`, which asks for nothing.
 `acp/goose/expected/` holds the expected events.

@@ -27,7 +27,7 @@ struct Marker {
 }
 
 /// Each agent recorded over ACP, and how many recordings it has.
-const AGENTS: &[(&str, usize)] = &[("opencode", 12), ("goose", 12), ("cursor", 11)];
+const AGENTS: &[(&str, usize)] = &[("opencode", 12), ("goose", 13), ("cursor", 11)];
 
 fn folder(agent: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
