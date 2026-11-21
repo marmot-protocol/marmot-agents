@@ -30,7 +30,7 @@ It does not decide who is allowed to do anything, and it does not touch Marmot. 
 | OpenCode | ACP | Rust | `opencode acp` | `agent-client-protocol` |
 | Other ACP agents | ACP | Rust | Each agent's ACP command | `agent-client-protocol` |
 | Claude Code | Native | TypeScript | The Claude Agent SDK | `@anthropic-ai/claude-agent-sdk` |
-| Cursor | Native | TypeScript | The Cursor SDK | `@cursor/sdk` |
+| Cursor | ACP | Rust | `cursor-agent acp` | `agent-client-protocol` ([D-080](../decisions.md#d-080-cursor-is-driven-through-acp)) |
 | Hermes | Plugin | Python | Hermes's platform plugin interface | Hermes itself |
 | OpenClaw | Plugin | TypeScript | OpenClaw's channel plugin interface | OpenClaw itself |
 
@@ -45,7 +45,7 @@ ACP's standard part covers what harnesses have in common. What makes a harness d
 harness-specific extensions, or is missing. So:
 
 - **A harness gets a native driver** when it matters enough that losing features is not acceptable, or when its
-  ACP support is poor. That is Codex, Claude Code, Pi and Cursor.
+  ACP support is poor. That is Codex, Claude Code and Pi.
 - **Everything else uses the ACP driver.** Where a harness needs something the standard lacks, the ACP driver
   gets a small "flavour" for it, as Goose does for steering.
 

@@ -23,7 +23,7 @@ The agent's owner decides who in the group may talk to it and who may approve it
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/overview-dark.svg">
-  <img alt="People in a Marmot group reach agent harnesses through one core program. Codex, Pi and ACP harnesses use drivers built into the core. Claude Code, Cursor, Hermes and OpenClaw connect as separate programs over a local socket." src="images/overview-light.svg">
+  <img alt="People in a Marmot group reach agent harnesses through one core program. Codex, Pi and ACP harnesses, Cursor among them, use drivers built into the core. Claude Code, Hermes and OpenClaw connect as separate programs over a local socket." src="images/overview-light.svg">
 </picture>
 
 There is one **core program**, written in Rust. It is the agent's presence in the group: it holds the Marmot
@@ -59,7 +59,7 @@ so on. Each event also carries a plain rendering and the harness's original data
 approve, and which chat maps to which session do not depend on the harness. The core handles them once.
 
 **Some harnesses force a language, so there is a socket.** Hermes plugins are Python. OpenClaw plugins and the
-official Claude and Cursor SDKs are TypeScript. A local socket lets those run as their own programs and still use
+official Claude SDK are TypeScript. A local socket lets those run as their own programs and still use
 the same core.
 
 **A standard covers the long tail.** Many harnesses speak the Agent Client Protocol (ACP). One ACP driver gives
@@ -71,9 +71,8 @@ broad coverage cheaply; a harness gets its own driver only when it matters enoug
 | --- | --- | --- |
 | Codex | Native, Rust | Inside the core |
 | Pi | Native, Rust | Inside the core |
-| Goose, OpenCode, other ACP agents | ACP, Rust | Inside the core |
+| Goose, OpenCode, Cursor, other ACP agents | ACP, Rust | Inside the core |
 | Claude Code | Native, TypeScript | Separate program, over the socket |
-| Cursor | Native, TypeScript | Separate program, over the socket |
 | Hermes | Its own plugin, Python | Inside Hermes, over the socket |
 | OpenClaw | Its own plugin, TypeScript | Inside OpenClaw, over the socket |
 
@@ -120,7 +119,7 @@ are the planned shape, so that the code lands in the right place. The core progr
 | Path | Holds |
 | --- | --- |
 | `crates/` | The Rust core, the driver trait, and the Rust drivers (Codex, Pi, ACP) |
-| `packages/` | TypeScript: the Claude and Cursor drivers, the OpenClaw plugin, a socket client |
+| `packages/` | TypeScript: the Claude Code driver, the OpenClaw plugin, a socket client |
 | `python/` | The Hermes plugin |
 | `docs/` | Design, decisions and reference |
 | `fixtures/recordings/` | Real harness sessions, recorded message by message |

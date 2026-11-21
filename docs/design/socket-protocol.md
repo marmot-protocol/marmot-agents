@@ -22,7 +22,6 @@ language. They run as their own programs and talk to the core over a socket on t
 | Program | Language | Why it is separate |
 | --- | --- | --- |
 | Claude Code driver | TypeScript | Built on the official Claude Agent SDK |
-| Cursor driver | TypeScript | Built on the official Cursor SDK |
 | Hermes plugin | Python | Must run inside Hermes |
 | OpenClaw plugin | TypeScript | Must run inside OpenClaw |
 | Third-party connectors, later | Any | [D-014](../decisions.md#d-014-outside-developers-can-write-connectors-later) |

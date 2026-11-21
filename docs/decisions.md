@@ -73,7 +73,8 @@ See [`reference/harness-interfaces.md`](reference/harness-interfaces.md).
 
 What the Codex driver builds on is replaced by
 [D-055](#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own): types of its own, and neither
-OpenAI's protocol crates nor `codex-codes`.
+OpenAI's protocol crates nor `codex-codes`. The Cursor row is replaced by
+[D-080](#d-080-cursor-is-driven-through-acp): Cursor goes through the ACP driver.
 
 ## D-006 Prefer official interfaces and libraries
 
@@ -1368,5 +1369,21 @@ already right. Without a name in the settings, the profile is left as it is. A b
 **Why.** An agent made with `marmot-agent init` otherwise shows under a name MDK makes up, such as "Neat Pigeon".
 Publishing at every start makes a changed name take effect on the next start, with one path for the first run
 and for a rename.
+
+Decided 2026-11-21. The project owner accepted the recommendation.
+
+## D-080 Cursor is driven through ACP
+
+**Decision.** Cursor uses the ACP driver built into the core, speaking `cursor-agent acp` from Cursor's official
+command-line tool, in place of a TypeScript driver on `@cursor/sdk`. What Cursor adds beyond standard ACP is
+handled as a small flavour of the ACP driver. This replaces the Cursor row of
+[D-005](#d-005-which-driver-each-harness-gets).
+
+**Why.** When M3 started, the SDK (`@cursor/sdk` 1.4.2) could not ask for an approval in a local run: every
+tool call ran unasked, or the sandbox refused it with nobody asked. It also needed an API key even for local
+runs. `cursor-agent acp` runs on the command-line tool's own sign-in and sends real permission requests (allow
+once, allow always, reject once), and it reports models, modes and settings. It is still Cursor's own
+interface, as [D-006](#d-006-prefer-official-interfaces-and-libraries) asks, and it reuses a driver that is
+being built anyway.
 
 Decided 2026-11-21. The project owner accepted the recommendation.

@@ -143,7 +143,7 @@ def overview(theme) -> Svg:
         560,
         theme,
         "People in a Marmot group reach agent harnesses through one core program. "
-        "Codex, Pi and ACP harnesses use drivers built into the core. Claude Code, Cursor, "
+        "Codex, Pi and ACP harnesses, Cursor among them, use drivers built into the core. Claude Code, "
         "Hermes and OpenClaw connect as separate programs over a local socket.",
     )
 
@@ -174,15 +174,14 @@ def overview(theme) -> Svg:
     rows_a = [
         (104, "Codex driver", "app-server JSON-RPC", "Codex", None),
         (152, "Pi driver", "RPC mode", "Pi", None),
-        (200, "ACP driver", "Agent Client Protocol", "Goose, OpenCode", "and other ACP agents"),
+        (200, "ACP driver", "Agent Client Protocol", "Goose, OpenCode", "Cursor, other ACP agents"),
     ]
     s.text(690, 90, "Built into the core · Rust · one driver trait", size=11.5, weight=600, color="muted")
     # Separate programs over the socket.
     rows_b = [
         (296, "Claude driver", "TypeScript · official SDK", "Claude Code", None),
-        (344, "Cursor driver", "TypeScript · official SDK", "Cursor", None),
-        (392, "Hermes plugin", "Python · runs inside Hermes", "Hermes", None),
-        (440, "OpenClaw plugin", "TypeScript · runs inside it", "OpenClaw", None),
+        (344, "Hermes plugin", "Python · runs inside Hermes", "Hermes", None),
+        (392, "OpenClaw plugin", "TypeScript · runs inside it", "OpenClaw", None),
     ]
     s.text(690, 282, "Separate programs · over the local socket", size=11.5, weight=600, color="muted")
 
@@ -369,7 +368,7 @@ def socket(theme) -> Svg:
         "Keys, relays and group state stay in the core.",
     )
     s.frame(16, 30, 300, 270, "A connector, its own program")
-    s.box(32, 70, 268, 70, "The harness", ["Claude Code, Cursor, Hermes, OpenClaw"], kind="specific")
+    s.box(32, 70, 268, 70, "The harness", ["Claude Code, Hermes, OpenClaw"], kind="specific")
     s.box(32, 170, 268, 100, "Connector code", ["turns native messages into agent events,", "and answers into the harness's own calls"], kind="specific")
     s.line([(166, 140), (166, 170)], start_arrow=True)
 
