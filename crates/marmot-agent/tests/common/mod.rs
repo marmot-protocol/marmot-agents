@@ -182,6 +182,108 @@ impl Running {
     }
 }
 
+/// A stand-in Blossom server, for the files an agent sends: it keeps each uploaded blob under its hash and serves it back.
+pub async fn blossom() -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let blobs: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>> =
+        std::sync::Arc::default();
+    let base = url.clone();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let blobs = blobs.clone();
+            let base = base.clone();
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 8192];
+                let end = loop {
+                    let read = stream.read(&mut buffer).await.unwrap_or(0);
+                    if read == 0 {
+                        return;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    if let Some(at) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break at + 4;
+                    }
+                };
+                let head = String::from_utf8_lossy(&request[..end]).to_string();
+                let length: usize = head
+                    .lines()
+                    .find_map(|l| {
+                        let (name, value) = l.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse().ok())?
+                    })
+                    .unwrap_or(0);
+                while request.len() < end + length {
+                    let read = stream.read(&mut buffer).await.unwrap_or(0);
+                    if read == 0 {
+                        return;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                let body = request[end..end + length].to_vec();
+                let mut words = head.split_whitespace();
+                let (method, path) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
+                let (status, kind, reply) = match method {
+                    "PUT" => {
+                        let hash = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&body));
+                        let descriptor = serde_json::json!({
+                            "url": format!("{base}/{hash}.bin"), "sha256": hash,
+                            "size": body.len(), "type": "application/octet-stream", "uploaded": 1,
+                        });
+                        blobs.lock().unwrap().insert(hash, body);
+                        (201, "application/json", descriptor.to_string().into_bytes())
+                    }
+                    "GET" => {
+                        let hash = path.trim_start_matches('/').split('.').next().unwrap_or("");
+                        match blobs.lock().unwrap().get(hash) {
+                            Some(blob) => (200, "application/octet-stream", blob.clone()),
+                            None => (404, "text/plain", b"not found".to_vec()),
+                        }
+                    }
+                    _ => (404, "text/plain", b"not found".to_vec()),
+                };
+                let head = format!(
+                    "HTTP/1.1 {status} X\r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    reply.len()
+                );
+                let _ = stream.write_all(head.as_bytes()).await;
+                let _ = stream.write_all(&reply).await;
+            });
+        }
+    });
+    url
+}
+
+/// The files the agent sent to a group, as the person has them: each message's attachment,
+/// downloaded and decrypted, with its file name and the turn it was tagged with, oldest first.
+pub async fn files_sent(world: &World, group: &GroupId) -> Vec<(String, Vec<u8>, Option<String>)> {
+    let hex = hex::encode(group.as_slice());
+    let mut files = Vec::new();
+    for message in world.sent_by_agent(&hex, 9) {
+        let Some(imeta) = message.tags.iter().find(|t| t[0] == "imeta") else {
+            continue;
+        };
+        let turn = message
+            .tags
+            .iter()
+            .find(|t| t[0] == "turn")
+            .map(|t| t[1].clone());
+        let reference =
+            marmot_app::media_attachment_from_imeta_tag(imeta, message.source_epoch, true).unwrap();
+        let name = reference.file_name.clone();
+        let downloaded = world
+            .runtime
+            .download_media(&world.person, group, reference)
+            .await
+            .unwrap();
+        files.push((name, downloaded.plaintext, turn));
+    }
+    files
+}
+
 // -------------------------------------------------------------------- the scenarios' chat
 
 /// How long a harness's turn may take, unless a scenario gives its chat a longer limit.

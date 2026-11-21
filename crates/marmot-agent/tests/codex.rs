@@ -1,6 +1,7 @@
 //! M1's scenario, with a real Codex: through MDK's test relay, a person invites the agent, has a
 //! command approved and run, interrupts a turn, starts a new session, and has the core crash in
-//! the middle of a turn and carries on, with nothing run twice (`docs/plan.md`, D-074).
+//! the middle of a turn and carries on, with nothing run twice (`docs/plan.md`, D-074). Then the
+//! agent sends a file from its working folder, which the person downloads and reads (D-090).
 //!
 //! It approves only the exact command each step asks for, once, in a throwaway folder. It needs
 //! `codex` installed and signed in, so it runs only when asked for:
@@ -11,7 +12,7 @@
 
 mod common;
 
-use common::{Chat, TURN, World, lines, within};
+use common::{Chat, TURN, World, blossom, files_sent, lines, within};
 use marmot_agent::carrier::Asked;
 use marmot_agent_codex::Codex;
 use marmot_agent_events::State;
@@ -30,7 +31,8 @@ async fn codex_end_to_end() {
         "[codex]\ncwd = \"{}\"\napproval_policy = \"untrusted\"\n",
         work.path().display()
     );
-    let world = World::new(&settings).await;
+    let mut world = World::new(&settings).await;
+    world.marmot.media_server = Some(blossom().await);
     world.runtime.start().await.unwrap();
     let mut core = world.start(codex(&world).await);
 
@@ -113,6 +115,26 @@ async fn codex_end_to_end() {
         "the prompt started one turn"
     );
     println!("carried on after the crash");
+
+    // 5. A file from the working folder, sent with the driver's own tool, arrives as an
+    //    attachment the person can read.
+    let asked = chat
+        .say("Send the file runs.txt to the chat with your send_file tool, then reply with the word done.")
+        .await;
+    let sent = chat.turn_for(&asked).await;
+    chat.turn_at(&sent, State::Done).await;
+    let mut files = Vec::new();
+    for _ in 0..TURN {
+        files = files_sent(&world, &chat.group).await;
+        if !files.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    assert_eq!(files.len(), 1, "one file sent");
+    assert_eq!(files[0].0, "runs.txt");
+    assert_eq!(files[0].1, b"ran\n");
+    println!("sent a file");
 
     core.stop().await;
     world.runtime.shutdown().await;

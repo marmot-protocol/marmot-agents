@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{World, eventually};
+use common::{World, blossom, eventually};
 use marmot_agent::carrier::ITEM_KIND;
 use marmot_agent_driver::{
     Answer, Capabilities, Control, Driver, Emitted, FilesIn, Harness, MidTurn, Output, Prompt,
@@ -13,11 +13,8 @@ use marmot_agent_driver::{
 };
 use marmot_agent_events::body::{Body, Message, NoticeKind, StartedBy, Turn};
 use marmot_agent_events::{AgentEvent, Header, State};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
 /// A harness that, for each prompt, starts a turn and asks to send the file whose path is the
@@ -140,79 +137,6 @@ impl Driver for Sender {
     }
 }
 
-/// A stand-in Blossom server: it keeps each uploaded blob under its hash and serves it back.
-async fn blossom() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let blobs: Arc<Mutex<HashMap<String, Vec<u8>>>> = Arc::default();
-    let base = url.clone();
-    tokio::spawn(async move {
-        while let Ok((mut stream, _)) = listener.accept().await {
-            let blobs = blobs.clone();
-            let base = base.clone();
-            tokio::spawn(async move {
-                let mut request = Vec::new();
-                let mut buffer = [0u8; 8192];
-                let end = loop {
-                    let read = stream.read(&mut buffer).await.unwrap_or(0);
-                    if read == 0 {
-                        return;
-                    }
-                    request.extend_from_slice(&buffer[..read]);
-                    if let Some(at) = request.windows(4).position(|w| w == b"\r\n\r\n") {
-                        break at + 4;
-                    }
-                };
-                let head = String::from_utf8_lossy(&request[..end]).to_string();
-                let length: usize = head
-                    .lines()
-                    .find_map(|l| {
-                        let (name, value) = l.split_once(':')?;
-                        name.eq_ignore_ascii_case("content-length")
-                            .then(|| value.trim().parse().ok())?
-                    })
-                    .unwrap_or(0);
-                while request.len() < end + length {
-                    let read = stream.read(&mut buffer).await.unwrap_or(0);
-                    if read == 0 {
-                        return;
-                    }
-                    request.extend_from_slice(&buffer[..read]);
-                }
-                let body = request[end..end + length].to_vec();
-                let mut words = head.split_whitespace();
-                let (method, path) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
-                let (status, kind, reply) = match method {
-                    "PUT" => {
-                        let hash = hex::encode(Sha256::digest(&body));
-                        let descriptor = serde_json::json!({
-                            "url": format!("{base}/{hash}.bin"), "sha256": hash,
-                            "size": body.len(), "type": "application/octet-stream", "uploaded": 1,
-                        });
-                        blobs.lock().unwrap().insert(hash, body);
-                        (201, "application/json", descriptor.to_string().into_bytes())
-                    }
-                    "GET" => {
-                        let hash = path.trim_start_matches('/').split('.').next().unwrap_or("");
-                        match blobs.lock().unwrap().get(hash) {
-                            Some(blob) => (200, "application/octet-stream", blob.clone()),
-                            None => (404, "text/plain", b"not found".to_vec()),
-                        }
-                    }
-                    _ => (404, "text/plain", b"not found".to_vec()),
-                };
-                let head = format!(
-                    "HTTP/1.1 {status} X\r\ncontent-type: {kind}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-                    reply.len()
-                );
-                let _ = stream.write_all(head.as_bytes()).await;
-                let _ = stream.write_all(&reply).await;
-            });
-        }
-    });
-    url
-}
-
 // The agent sends a file from its working folder: the person receives it as an ordinary chat
 // message carrying an encrypted attachment, tagged with the turn, and can download and read it.
 // A file outside the folder, and a link in the folder that leads out of it, are refused: the
@@ -250,31 +174,27 @@ async fn the_agent_sends_a_file_from_its_folder_and_nothing_from_outside() {
     say(ask(&work.path().join("shortcut.txt"))).await.unwrap();
     world.words(&group_hex, "refused 3").await;
 
-    // The file: one chat message from the agent with an attachment, tagged with its turn.
-    let with_file: Vec<_> = world
+    // The file: one chat message from the agent with an attachment, tagged with its turn, that the
+    // person can download and read.
+    let files = common::files_sent(&world, &group).await;
+    assert_eq!(files.len(), 1, "only the file in the folder was sent");
+    let (name, bytes, turn) = &files[0];
+    assert_eq!(name, "notes.txt");
+    assert_eq!(bytes, b"hello from the agent\n");
+    assert_eq!(
+        turn.as_deref(),
+        Some("t1"),
+        "tagged with the turn it was sent in"
+    );
+    let message = world
         .sent_by_agent(&group_hex, 9)
         .into_iter()
-        .filter(|m| m.tags.iter().any(|t| t[0] == "imeta"))
-        .collect();
-    assert_eq!(with_file.len(), 1, "only the file in the folder was sent");
-    let message = &with_file[0];
-    let turn_tag = message
-        .tags
-        .iter()
-        .find(|t| t[0] == "turn")
-        .expect("a turn");
-    assert_eq!(turn_tag[1], "t1", "tagged with the turn it was sent in");
+        .find(|m| m.tags.iter().any(|t| t[0] == "imeta"))
+        .unwrap();
     let imeta = message.tags.iter().find(|t| t[0] == "imeta").unwrap();
     let reference =
         marmot_app::media_attachment_from_imeta_tag(imeta, message.source_epoch, true).unwrap();
-    assert_eq!(reference.file_name, "notes.txt");
     assert_eq!(reference.media_type, "text/plain");
-    let downloaded = world
-        .runtime
-        .download_media(&world.person, &group, reference)
-        .await
-        .unwrap();
-    assert_eq!(downloaded.plaintext, b"hello from the agent\n");
 
     // The refusals: the harness heard why, and the person saw it, without a path.
     let results = results.lock().unwrap().clone();
