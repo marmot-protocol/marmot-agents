@@ -124,24 +124,40 @@ pub struct Read {
 
 /// Writes one version of an item as an event no larger than the limit (D-026, D-057): fitted by
 /// [`fit`], or, when what is never cut is over the limit alone, a short stand-in in its place,
-/// the same item at the same version, naming its first event and settling what it settles, so
-/// nothing over the limit is ever sent.
-pub fn item(item: &Item) -> Outgoing {
-    fit(item).unwrap_or_else(|TooLarge| stand_in(item))
+/// the same item at the same version, naming its first event and settling what it settles.
+/// Nothing over the limit is ever sent: when even the stand-in is over it, as for a version that
+/// settles very many requests or whose ids are very long, this fails, and the send is refused.
+/// The conversation never queues a version that settles more than [`SETTLES_MAX`], so its own
+/// stand-ins fit.
+pub fn item(item: &Item) -> Result<Outgoing, TooLarge> {
+    fit(item).or_else(|TooLarge| {
+        let out = stand_in(item);
+        if out.size() <= LIMIT {
+            Ok(out)
+        } else {
+            Err(TooLarge)
+        }
+    })
 }
+
+/// The most requests one event settles. Each takes about 80 bytes, so this many take about 16 KB,
+/// and an event that names them still fits; the conversation spreads more over several events.
+pub const SETTLES_MAX: usize = 200;
 
 /// What is never cut in an item is over the limit alone.
 #[derive(Debug)]
 pub struct TooLarge;
 
-/// Writes one version of an item as an event, leaving out the native message and then cutting
-/// text if it would be over the limit (D-057). A session's commands lose their descriptions first
-/// and keep their names and hints (D-045). Then the largest text is cut, keeping its start and its
-/// end: the plain rendering, the title, a tool's command, output, error, diffs and input, a plan's
-/// text and steps, an approval's choices, a question's words, a task's description. Ids, names,
-/// hints, paths and the values a person's answer names are never cut. Only when no text is left
-/// to cut are a plan's steps, or an edit's changes, thinned in their middle. What was cut is said
-/// in a few `cut` tags, one for each kind of field, never one for each step.
+/// Writes one version of an item as an event, cutting it if it would be over the limit, in the
+/// order D-057 sets and then on (each step only while the event is still over the limit): the
+/// native message is left out; then a tool's output, and an edit's diffs, which are output too,
+/// are cut, keeping their start and their end; then a session's commands lose their descriptions
+/// and keep their names and hints (D-045); then the largest remaining text is cut the same way:
+/// the plain rendering, the title, a tool's command, error and input, a plan's text and steps, an
+/// approval's choices, a question's words, a task's description. Ids, names, hints, paths and the
+/// values a person's answer names are never cut. Only when no text is left to cut are a plan's
+/// steps, or an edit's changes, thinned in their middle. What was cut is said in a few `cut`
+/// tags, one for each kind of field, never one for each step.
 pub fn fit(item: &Item) -> Result<Outgoing, TooLarge> {
     let whole = write_item(item, &LeftOut::default());
     if whole.size() <= LIMIT {
@@ -159,7 +175,12 @@ pub fn fit(item: &Item) -> Result<Outgoing, TooLarge> {
         }
         // Escaping in JSON can make text count for more than its length, and the cut tags add a
         // little, so cut more than is over.
-        if !fitting.cut(over * 2 + 256) && !fitting.thin() {
+        let more = over * 2 + 256;
+        if !fitting.cut(more, true)
+            && !fitting.drop_descriptions()
+            && !fitting.cut(more, false)
+            && !fitting.thin()
+        {
             return Err(TooLarge);
         }
     }
@@ -211,6 +232,12 @@ enum Spot {
 }
 
 impl Spot {
+    /// Whether it is a tool's output, which D-057 cuts before any other text. A diff is a tool's
+    /// output too: Codex puts a file edit's whole diff there.
+    fn is_output(&self) -> bool {
+        matches!(self, Self::Output | Self::Diff(_))
+    }
+
     /// The kind of field, as a `cut` tag names it.
     fn kind(&self) -> &'static str {
         match self {
@@ -253,17 +280,7 @@ struct QuestionParts {
 
 impl Fitting {
     fn new(item: &Item) -> Self {
-        let mut body = item.event.body().clone();
-        let mut counts = Vec::new();
-        // A session's commands keep their names and hints; their descriptions drop first (D-045).
-        if let Body::Session(session) = &mut body {
-            let dropped = (session.commands.iter_mut())
-                .filter_map(|c| c.description.take())
-                .count();
-            if dropped > 0 {
-                counts.push(("descriptions", dropped));
-            }
-        }
+        let body = item.event.body().clone();
         let question = match &body {
             Body::Question(q) => Some(QuestionParts {
                 via: q.answer_via(),
@@ -279,8 +296,23 @@ impl Fitting {
             question,
             native: item.event.native().map(|n| n.payload.get().len()),
             full: std::collections::HashMap::new(),
-            counts,
+            counts: Vec::new(),
         }
+    }
+
+    /// Drops a session's commands' descriptions, keeping their names and hints (D-045). Whether
+    /// any was dropped.
+    fn drop_descriptions(&mut self) -> bool {
+        let Body::Session(session) = &mut self.body else {
+            return false;
+        };
+        let dropped = (session.commands.iter_mut())
+            .filter_map(|c| c.description.take())
+            .count();
+        if dropped > 0 {
+            self.counts.push(("descriptions", dropped));
+        }
+        dropped > 0
     }
 
     /// The event as it stands, with no native message.
@@ -412,11 +444,11 @@ impl Fitting {
         }
     }
 
-    /// Cuts the largest strings first until about `over` bytes are saved, as JSON counts them.
-    /// Whether anything was cut.
-    fn cut(&mut self, over: usize) -> bool {
+    /// Cuts the largest strings first until about `over` bytes are saved, as JSON counts them:
+    /// only a tool's output when `output`, else any. Whether anything was cut.
+    fn cut(&mut self, over: usize, output: bool) -> bool {
         let mut spots: Vec<(Spot, usize)> = (self.spots().into_iter())
-            .filter(|(_, length)| *length > WORTH_CUTTING)
+            .filter(|(spot, length)| *length > WORTH_CUTTING && (!output || spot.is_output()))
             .collect();
         spots.sort_by_key(|(_, length)| std::cmp::Reverse(*length));
         let mut left = over;
@@ -460,10 +492,23 @@ impl Fitting {
             Body::Tool(t) => drop(t.changes.drain(from..from + gone)),
             _ => {}
         }
-        // The steps or changes after the gap moved: what was noted about them is noted again,
-        // under their new places, only if they are cut again.
-        self.full
-            .retain(|spot, _| !matches!(spot, Spot::Step(at) | Spot::Diff(at) if *at >= from));
+        // What was noted of the steps or changes taken out goes with them; those after the gap
+        // moved up, and what was noted of them moves with them.
+        let place = |at: usize| match at {
+            _ if at < from => Some(at),
+            _ if at < from + gone => None,
+            _ => Some(at - gone),
+        };
+        self.full = (std::mem::take(&mut self.full).into_iter())
+            .filter_map(|(spot, full)| {
+                let spot = match spot {
+                    Spot::Step(at) => Spot::Step(place(at)?),
+                    Spot::Diff(at) => Spot::Diff(place(at)?),
+                    other => other,
+                };
+                Some((spot, full))
+            })
+            .collect();
         true
     }
 }
@@ -502,18 +547,19 @@ fn escaped(text: &str) -> usize {
 const WORTH_CUTTING: usize = MARKER_ROOM * 2;
 
 /// The agent's words, cut in their middle if the chat message they go in would be over the limit
-/// with `tags`, as an item's text is (D-057).
-pub fn fit_words(text: &str, tags: &[Vec<String>]) -> String {
+/// with `tags`, as an item's text is (D-057). Fails when cutting cannot make it fit, as with very
+/// many `settles` tags: nothing over the limit is ever sent.
+pub fn fit_words(text: &str, tags: &[Vec<String>]) -> Result<String, TooLarge> {
     let mut text = text.to_string();
     loop {
         // Room for what MDK adds to an edit, which names the message it replaces.
         let over = (event_size(9, &text, tags) + 256).saturating_sub(LIMIT);
-        if over == 0 || text.len() <= WORTH_CUTTING {
-            return text;
+        if over == 0 {
+            return Ok(text);
         }
         let shorter = cut(&text, over * 2, text.len());
-        if shorter.len() >= text.len() {
-            return text;
+        if text.len() <= WORTH_CUTTING || shorter.len() >= text.len() {
+            return Err(TooLarge);
         }
         text = shorter;
     }

@@ -60,7 +60,11 @@ Built on 2026-11-21 while fixing the known gaps of [testing and verification](ve
 - **The agent's words carry `settles`.** A chat message of the agent's words carries a `settles` tag for each
   answer or control whose effect it shows, as an item does. An edit of words cannot carry tags, so what the
   changed words settle is carried by the next version of their turn, the same as the last, sent right after the
-  edit.
+  edit. So is what final words that come again unchanged name. If MDK refuses the edit, that version settles
+  nothing, and those requests are settled as `failed`.
+- **At most 200 `settles` on one event.** An item's version, or the agent's words, that would settle more goes
+  out as several versions of the same item, the same and numbered on, each settling at most 200; words leave the
+  rest to their turn's next versions. So every event that settles fits in 64 KB.
 - **`no_effect`.** An answer the driver took whose item stopped waiting without naming it is settled at once by a
   `refused` notice with the reason `no_effect`, not left pending until the driver stops.
 - **`failed` for a send MDK refuses.** A send MDK will not take, and is not an edit of words that were removed, is
@@ -75,7 +79,8 @@ Built on 2026-11-21 while fixing the known gaps of [testing and verification](ve
 - **A stand-in for an item that cannot fit.** When what is never cut (ids, names, hints, values) is over 64 KB
   alone, the item's version goes out as a notice of kind `warning` with the reason `too_large`, keeping the
   item's id, state, version, first event and `settles`, and a `cut` tag `item` with the size of the event it
-  stands in for. Nothing over 64 KB is sent.
+  stands in for. Nothing over 64 KB is sent: a send that would be, stand-in included, is refused before MDK
+  sees it, and dropped with a `failed` notice.
 
 ## Updating an item
 

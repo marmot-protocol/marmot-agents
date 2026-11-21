@@ -218,9 +218,11 @@ When an item would be larger, the core drops parts in this order and says so in 
 1. the native message is left out, with its size noted;
 2. the output is cut, keeping the start and the end, with the full length noted.
 
-**Provisional** (2026-11-21, not yet accepted by the owner): when those two are not enough, the core goes on.
-A session's commands lose their descriptions and keep their names and hints; then the largest remaining text is
-cut, keeping its start and end; then a plan's steps or an edit's changes are thinned in their middle. When what
+**Provisional** (2026-11-21, not yet accepted by the owner): an edit's diffs are cut with the output, since a
+diff is a tool's output. When those two steps are not enough, the core goes on, each step only while the item is
+still too large: a session's commands lose their descriptions and keep their names and hints; then the largest
+remaining text is cut, keeping its start and end; then a plan's steps or an edit's changes are thinned in their
+middle. When what
 is never cut is over the limit alone, a short stand-in goes instead. The tags that say so are in
 [kinds 1201 and 1202](agent-kinds.md#provisional-additions).
 

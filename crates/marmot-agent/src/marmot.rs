@@ -281,7 +281,7 @@ impl Marmot {
         }
         let summary = match what {
             Sending::Item { item, .. } => {
-                let out = carrier::item(item);
+                let out = carrier::item(item).map_err(|_| too_large())?;
                 self.runtime
                     .send_custom_event(&self.label, &id, out.kind, out.tags, out.content)
                     .await?
@@ -291,7 +291,7 @@ impl Marmot {
                 text,
                 ..
             } => {
-                let text = carrier::fit_words(text, &[]);
+                let text = carrier::fit_words(text, &[]).map_err(|_| too_large())?;
                 self.runtime
                     .edit_message(&self.label, &id, target.as_str(), &text)
                     .await?
@@ -304,7 +304,7 @@ impl Marmot {
                 ..
             } => {
                 let tags = carrier::words_tags(turn.as_ref(), *remark, settles);
-                let text = carrier::fit_words(text, &tags);
+                let text = carrier::fit_words(text, &tags).map_err(|_| too_large())?;
                 self.runtime
                     .send_tagged_text(&self.label, &id, text, tags)
                     .await?
@@ -353,7 +353,8 @@ impl Marmot {
                 ..
             } => {
                 let tags = carrier::words_tags(turn.as_ref(), *remark, settles);
-                let text = carrier::fit_words(text, &tags);
+                // One that cannot fit was never sent.
+                let text = carrier::fit_words(text, &tags).ok()?;
                 let turn = turn.as_ref().map(|t| t.as_str().to_string());
                 let matches = move |row: &AppMessageRecord| {
                     row.plaintext == text && tag(&row.tags, "turn") == turn.as_deref()
@@ -511,6 +512,12 @@ fn tag<'a>(tags: &'a [Vec<String>], name: &str) -> Option<&'a str> {
     (tags.iter())
         .find(|t| t.len() >= 2 && t[0] == name)
         .map(|t| t[1].as_str())
+}
+
+/// What a send that cannot fit in 64 KB fails with, before it reaches MDK: a refusal, which drops
+/// it with a notice (S7).
+fn too_large() -> AppError {
+    AppError::InvalidAppMessagePayload("over the size limit".into())
 }
 
 /// The group's id, as MDK takes it.
