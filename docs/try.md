@@ -1,6 +1,7 @@
 # Trying the core
 
-Status: describes what is built today, for M1 of the [plan](plan.md). Agent items travel under a temporary kind
+Status: describes what is built today: Codex built in, and Claude Code through the socket (M1 and M2 of the
+[plan](plan.md)). Agent items travel under a temporary kind
 until MDK takes the new shape ([D-069](decisions.md#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind)),
 so no White Noise app shows them yet. A terminal client plays the person instead.
 

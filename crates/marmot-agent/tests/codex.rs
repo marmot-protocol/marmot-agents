@@ -64,7 +64,8 @@ async fn codex_end_to_end() {
     let asked = chat
         .say(&format!("{only} `echo started >> started.txt && sleep 30`"))
         .await;
-    chat.approve("sleep 30").await;
+    chat.approve("echo started >> started.txt && sleep 30")
+        .await;
     within(TURN, || {
         (lines(&work.path().join("started.txt")) > 0).then_some(())
     })
@@ -91,7 +92,7 @@ async fn codex_end_to_end() {
     let asked = chat
         .say(&format!("{only} `echo ran >> runs.txt && sleep 20`"))
         .await;
-    chat.approve("sleep 20").await;
+    chat.approve("echo ran >> runs.txt && sleep 20").await;
     within(TURN, || (lines(&runs) > 0).then_some(())).await;
     let cut_off = chat.turn_for(&asked).await;
     core.crash().await;

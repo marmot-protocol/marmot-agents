@@ -258,8 +258,8 @@ impl Chat<'_> {
             })
     }
 
-    /// Approves, once, the waiting approval for a command containing `command`, and gives back
-    /// the request's event id. An approval for anything else is never answered.
+    /// Approves, once, the waiting approval for exactly `command`, and gives back the request's
+    /// event id. An approval for anything else is never answered.
     pub async fn approve(&self, command: &str) -> EventKey {
         println!("waiting for the approval of `{command}`");
         let (target, read) = within(TURN, || {
@@ -272,7 +272,9 @@ impl Chat<'_> {
                     .as_ref()
                     .and_then(|subject| self.command_of(subject.as_str()))
                     .unwrap_or_else(|| r.item.event.header().text.clone());
-                r.item.event.header().state == State::Waiting && asks_for.contains(command)
+                // Exactly the command asked for: as typed, or as Codex wraps it in a shell.
+                let exact = asks_for == command || asks_for.ends_with(&format!(" -lc '{command}'"));
+                r.item.event.header().state == State::Waiting && exact
             })
         })
         .await;

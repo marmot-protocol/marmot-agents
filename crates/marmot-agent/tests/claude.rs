@@ -104,11 +104,15 @@ async fn claude_code_end_to_end() {
     );
     println!("interrupted");
 
-    // 3. A new session: the old one ends, and the next prompt opens another.
+    // 3. A new session: the old one ends, and the next prompt opens another, even across a restart
+    //    of the driver in between.
     let before = chat.sessions();
     let fresh = chat.ask(None, &Asked::NewSession, "New session").await;
     let ended = chat.effect_of(&fresh).await;
     assert!(matches!(ended.item.event.body(), Body::Session(_)));
+    // The driver restarts before the next prompt: the ended session must not come back.
+    claude.kill().await.unwrap();
+    claude = driver(home.path(), work.path());
     let asked = chat.say("Reply with the word fresh.").await;
     let turn = chat.turn_for(&asked).await;
     let done = chat.turn_at(&turn, State::Done).await;
@@ -122,7 +126,7 @@ async fn claude_code_end_to_end() {
     let asked = chat
         .say(&format!("{only} `echo ran >> runs.txt && sleep 20`"))
         .await;
-    chat.approve("sleep 20").await;
+    chat.approve("echo ran >> runs.txt && sleep 20").await;
     within(TURN, || (lines(&runs) > 0).then_some(())).await;
     let cut_off = chat.turn_for(&asked).await;
     claude.kill().await.unwrap();

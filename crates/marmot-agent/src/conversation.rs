@@ -566,7 +566,16 @@ impl Conversation {
             return Vec::new();
         };
         if let (Body::Session(_), Some(session)) = (emitted.event.body(), &header.session) {
-            self.saved.sessions.insert(chat.clone(), session.clone());
+            if header.state == State::Done {
+                // The session has ended, as a new session ends the one before: it is no longer
+                // the chat's to resume (D-065). One the core closed because something stopped is
+                // closed as cancelled, and stays the chat's.
+                if self.saved.sessions.get(&chat) == Some(session) {
+                    self.saved.sessions.remove(&chat);
+                }
+            } else {
+                self.saved.sessions.insert(chat.clone(), session.clone());
+            }
         }
         let key = format!("{chat}/{}", header.item.as_str());
         let started_by = match emitted.event.body() {
