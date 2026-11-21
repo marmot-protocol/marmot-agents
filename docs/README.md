@@ -3,7 +3,7 @@
 This page is the starting point for the design. It says what the project does, how it is laid out, why it is laid
 out that way, and where to look for more.
 
-Status: the design is agreed in outline and the first code has started. Nothing here can be run yet. Decided
+Status: the design is agreed in outline, and the core runs end to end with Codex ([how to try it](try.md)). Decided
 points are in [`decisions.md`](decisions.md); everything else is a proposal until it lands there. What is built
 next is in [`plan.md`](plan.md).
 

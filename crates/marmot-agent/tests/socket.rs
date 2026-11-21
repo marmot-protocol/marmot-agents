@@ -170,8 +170,9 @@ async fn a_connector_on_the_socket_drives_the_agent() {
         .await
         .unwrap();
     world.words(&hex, "echo: second").await;
-    // Each turn has its own row: the first stays interrupted, the second finished.
-    let turns: Vec<(String, State)> = {
+    // Each turn has its own row: the first stays interrupted, the second finished. The words can
+    // arrive before the turn's last version, so wait for it.
+    let turns = || -> Vec<(String, State)> {
         let mut latest = std::collections::BTreeMap::new();
         // Versions sent in the same second come back in any order: the highest one counts.
         for (_, read) in world.items(&hex) {
@@ -190,13 +191,11 @@ async fn a_connector_on_the_socket_drives_the_agent() {
             .map(|(item, (_, state))| (item, state))
             .collect()
     };
-    assert_eq!(
-        turns,
-        vec![
-            ("first-turn1".to_string(), State::Cancelled),
-            ("second-turn1".to_string(), State::Done),
-        ]
-    );
+    let want = vec![
+        ("first-turn1".to_string(), State::Cancelled),
+        ("second-turn1".to_string(), State::Done),
+    ];
+    eventually(|| (turns() == want).then_some(())).await;
 
     let _ = stop.send(());
     task.await.unwrap().unwrap();

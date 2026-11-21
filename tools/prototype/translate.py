@@ -32,8 +32,9 @@ An event carries no native message when the driver made it up, such as an item t
 because the harness never did, and when it is a secret question that is no longer waiting (D-056).
 Nothing is cut to fit a size: the core applies the 64 KB limit (D-057).
 
-    translate.py --expected <recordings-dir>           write each Codex recording's events, in the
-                                                       shape the Rust types read, under expected/
+    translate.py --expected <recordings-dir>           write each Codex or Claude Code recording's
+                                                       events, in the shape the Rust types read,
+                                                       under expected/
     translate.py --expected <recordings-dir> --check   fail if those files are not what it would write
 
 It has no dependencies.
@@ -660,6 +661,52 @@ class Codex(Translator):
 # ---------------------------------------------------------------------------- Claude
 
 
+def command(name, description=None, hint=None):
+    """A slash command as a session item lists it: always a name and a hint, the hint empty when the
+    command takes nothing (D-045). Claude Code's init message names a command and nothing more."""
+    return {"name": name, "description": description, "hint": hint or ""}
+
+
+def answered(questions, answers):
+    """The answer a question item records, from Claude Code's `answers`, which maps each question's
+    text to the label chosen, or to several labels joined by ", " when several may be chosen (D-059).
+    A label becomes the id of the option the item offered; anything that matches no label is text."""
+    out = []
+    for q in questions:
+        given = answers.get(q["text"])
+        if given is None:
+            continue
+        ids = {o["label"]: o["id"] for o in q.get("options") or []}
+        if isinstance(given, list):
+            parts = [str(x) for x in given]
+        elif str(given) in ids or not q.get("multiple"):
+            parts = [str(given)]
+        else:
+            parts = str(given).split(", ")
+        options = [ids[x] for x in parts if x in ids]
+        rest = [x for x in parts if x not in ids]
+        out.append({"question": q["id"], "options": options, "text": ", ".join(rest) if rest else None})
+    return out
+
+
+def file_change(result, path=None):
+    """One file an edit changed, as a unified diff built from Claude Code's `structuredPatch`. A new file
+    comes with no hunks and its whole content, which becomes one hunk of added lines."""
+    hunks = result.get("structuredPatch") or []
+    if not hunks and result.get("type") == "create" and result.get("content"):
+        lines = str(result["content"]).split("\n")
+        if lines[-1] == "":
+            lines.pop()
+        hunks = [{"oldStart": 0, "oldLines": 0, "newStart": 1, "newLines": len(lines), "lines": ["+" + x for x in lines]}]
+    diff = "".join(
+        f"@@ -{h.get('oldStart')},{h.get('oldLines')} +{h.get('newStart')},{h.get('newLines')} @@\n"
+        + "".join(f"{x}\n" for x in h.get("lines") or [])
+        for h in hunks
+    )
+    change = {"create": "add", "update": "update"}.get(result.get("type"))
+    return {"path": result.get("filePath") or path, "diff": diff, "change": change}
+
+
 class Claude(Translator):
     harness = "claude"
     TOOL_KINDS = {
@@ -676,12 +723,13 @@ class Claude(Translator):
         self.prompted = False  # a user prompt has been sent since the last result
         self.turn_n = 0
         self.tools: dict[str, dict] = {}  # tool_use id -> last body
-        self.approvals: dict[str, str] = {}  # tool name -> open approval item (answers carry no id)
+        self.approvals: dict[str, str] = {}  # tool name -> open approval item, for answers with no id
+        self.approval_ids: dict[str, str] = {}  # the callback's request id -> open approval item
         self.settings: dict = {}
         self.commands: list = []
         self.models = None  # model names, once the client has asked for them
-        self.session_key = None  # the driver's own id for the session item
-        self.sessions_started = 0
+        self.version = None  # Claude Code's version, from its init message
+        self.session_key = None  # the session the session item is for, once Claude Code has named it
 
     def feed(self, rec):
         m, via, out = rec["msg"], rec.get("via"), rec["dir"] == "out"
@@ -708,8 +756,7 @@ class Claude(Translator):
                         # Claude Code sends nothing to say the earlier session is over.
                         if self.session_key:
                             self.end_session(self.session_key, "a new session was started")
-                        self.sessions_started += 1
-                        self.session = self.session_key = None
+                        self.session = self.session_key = self.version = None
                         self.settings, self.commands = {}, []
                 elif method == "setPermissionMode":
                     self.control("set permission mode", "setPermissionMode()")
@@ -717,19 +764,17 @@ class Claude(Translator):
                     self.control("interrupt", f"{method}()")
                 elif method == "setModel":
                     self.control("set model", "setModel()")
-            elif method in ("supportedCommands", "supportedModels", "initializationResult") and "response" in m:
+            elif method in ("supportedCommands", "supportedModels") and "response" in m:
                 # The client asked, which it can do before any prompt is sent.
                 r = m["response"]
                 r = {"commands": r} if method == "supportedCommands" else {"models": r} if method == "supportedModels" else r
                 if isinstance(r.get("commands"), list):
-                    self.commands = [{"name": c.get("name"), "description": c.get("description"), "hint": c.get("argumentHint")}
-                                     for c in r["commands"]]
+                    self.commands = [command(c.get("name"), c.get("description"), c.get("argumentHint")) for c in r["commands"]]
                 if isinstance(r.get("models"), list):
                     self.models = [x.get("value") for x in r["models"]]
                 if r.get("current_permission_mode"):
                     self.settings["permission_mode"] = r["current_permission_mode"]
-                return self.announce(f"result of {method}()", {k: len(v) if isinstance(v, list) else v for k, v in r.items()
-                                                                  if k in ("commands", "models", "current_permission_mode")})
+                return self.announce(f"result of {method}()", m)
             return self.skip(f"client: {method}()" if out else f"result of {method}()")
         if via == "callback":
             return self.permission_answer(m) if out else self.permission_request(m)
@@ -749,14 +794,19 @@ class Claude(Translator):
     # -- turns
 
     def announce(self, native_kind, native):
+        """Send the session item, or an edit of it. A session item carries the session's id and Claude
+        Code's version (D-030), and Claude Code states both only in its init message, at the start of
+        the first turn. What the client learns before then is kept, and goes out with that message."""
+        if self.session is None or self.version is None:
+            return self.skip(f"{native_kind}, before Claude Code has named the session")
         g = self.settings.get
         before = len(self.events)
-        if self.session_key is None:  # the harness has not named the session yet
-            self.session_key = self.session or f"not-yet-named:{self.sessions_started}"
+        if self.session_key is None:
+            self.session_key = self.session
         self.session_item(self.session_key, [
             self.setting("model", "Model", g("model"), self.models),
             self.setting("permission_mode", "Permission mode", g("permission_mode"), approve=True),
-        ], native_kind, native, commands=self.commands)
+        ], native_kind, native, commands=self.commands, version=self.version)
         if len(self.events) == before:
             self.skip(f"{native_kind}, nothing new for the session item")
 
@@ -764,19 +814,22 @@ class Claude(Translator):
         """Claude Code repeats this at the start of every turn. It is the only place the model, the
         permission mode and the names of the slash commands are stated."""
         self.session = m.get("session_id")
+        self.version = m.get("claude_code_version") or self.version
         self.settings.update({"model": m.get("model"), "permission_mode": m.get("permissionMode")})
         if not self.commands:  # the init message has names only; keep fuller entries the client asked for
-            self.commands = [{"name": n} for n in m.get("slash_commands") or []]
+            self.commands = [command(n) for n in m.get("slash_commands") or []]
         self.announce("system / init", m)
 
-    def start_turn(self, m):
+    def start_turn(self, m, native_kind="system / init"):
         self.turn_n += 1
         self.session = m.get("session_id")
-        self.turn = f"{self.session}:{self.turn_n}"
+        # Named after the message that opens it, so a turn of a resumed session never takes the
+        # id of a turn from before the driver restarted.
+        self.turn = f"{self.session}:{m.get('uuid') or self.turn_n}"
         by = "user" if self.prompted else "agent"
         self.prompted = False
-        self.emit(f"turn:{self.turn}", "turn", "running", "Working", body={"started_by": by, "model": m.get("model")},
-                  native_kind="system / init", native=m)
+        self.emit(f"turn:{self.turn}", "turn", "running", "Working", body={"started_by": by},
+                  native_kind=native_kind, native=m)
 
     def result(self, st, m):
         ok = st == "success" and not m.get("is_error")
@@ -785,13 +838,13 @@ class Claude(Translator):
         if self.turn is None:  # a failure before any turn began
             self.turn_n += 1
             self.session = m.get("session_id")
-            self.turn = f"{self.session}:{self.turn_n}"
+            self.turn = f"{self.session}:{m.get('uuid') or self.turn_n}"
         state = "done" if ok else "cancelled" if interrupted else "failed"
         title = {"done": "Finished", "cancelled": "Interrupted", "failed": "Failed"}[state]
         usage = m.get("usage") or {}
         started = self.open.get(f"turn:{self.turn}", {}).get("body", {}).get("started_by", "user")
         body = {"started_by": started, "duration_ms": m.get("duration_ms"),
-                "usage": {"input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens"), "cost_usd": m.get("total_cost_usd")}}
+                "usage": {"input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens")}}
         text = "" if ok else clip("; ".join(map(str, m.get("errors") or [])) or str(m.get("result") or ""))
         self.emit(f"turn:{self.turn}", "turn", state, title, text, body, f"result / {st}", m)
         self.turn = None
@@ -800,21 +853,22 @@ class Claude(Translator):
 
     def ensure_turn(self, m):
         if self.turn is None:  # messages that arrive after a result, from background work
-            self.start_turn({"session_id": m.get("session_id"), "model": None})
+            self.start_turn({"session_id": m.get("session_id"), "uuid": m.get("uuid")},
+                            "(none: a message arrived outside a turn)")
 
     def assistant(self, m):
         self.ensure_turn(m)
         parent = m.get("parent_tool_use_id")
         for n, b in enumerate((m.get("message") or {}).get("content") or []):
             bt = b.get("type")
-            base = {"parent": parent} if parent else {}
             if bt == "text":
-                self.emit(f"{m.get('uuid')}:{n}", "message", "done", "Message", b.get("text"), base, "assistant [text]", b)
+                body = {"parent": parent} if parent else {}  # a subagent's message names the item it belongs to
+                self.emit(f"{m.get('uuid')}:{n}", "message", "done", "Message", b.get("text"), body, "assistant [text]", m)
             elif bt == "thinking":
                 if not (b.get("thinking") or "").strip():
                     self.skip("thinking block with no text")
                     continue
-                self.emit(f"{m.get('uuid')}:{n}", "reasoning", "done", "Thinking", b.get("thinking"), base, "assistant [thinking]", b)
+                self.emit(f"{m.get('uuid')}:{n}", "reasoning", "done", "Thinking", b.get("thinking"), {}, "assistant [thinking]", m)
             elif bt == "tool_use":
                 name, inp = b.get("name"), b.get("input") or {}
                 if name in self.NOT_TOOLS:
@@ -824,7 +878,7 @@ class Claude(Translator):
                     self.skip(f"tool call that is really a question or a plan ({name})")
                     continue
                 kind = "mcp" if str(name).startswith("mcp__") else self.TOOL_KINDS.get(name, "other")
-                body = {**base, "kind": kind, "name": name}
+                body = {"kind": kind, "name": name}
                 if kind == "command":
                     body["command"] = inp.get("command")
                 elif kind in ("edit", "read"):
@@ -835,7 +889,7 @@ class Claude(Translator):
                     body["input"] = clip_native(inp)
                 text = body.get("command") or body.get("path") or body.get("query") or inp.get("description") or name
                 self.tools[b.get("id")] = body
-                self.emit(b.get("id"), "tool", "running", self.tool_title(kind, "running"), text, body, f"assistant [tool_use: {name}]", b)
+                self.emit(b.get("id"), "tool", "running", self.tool_title(kind, "running"), text, body, f"assistant [tool_use: {name}]", m)
             else:
                 self.unknown(f"assistant block [{bt}]")
 
@@ -876,10 +930,10 @@ class Claude(Translator):
             body["output"] = clip(out, 2000)
             result = m.get("tool_use_result")
             if isinstance(result, dict) and body.get("kind") == "edit" and result.get("structuredPatch") is not None:
-                body["patch"] = clip_native(result.get("structuredPatch"))
+                body["changes"] = [file_change(result, body.get("path"))]
             text = (prev or {}).get("text", "")
             self.emit(tid, "tool", state, self.tool_title(body.get("kind", "other"), state), text, body,
-                      "user [tool_result]", {"block": b, "tool_use_result": result})
+                      "user [tool_result]", m)
 
     # -- approvals and questions
 
@@ -893,6 +947,7 @@ class Claude(Translator):
                   for n, q in enumerate(inp.get("questions") or [])]
             item = f"question:{opts.get('requestId')}"
             self.approvals[tool] = item
+            self.approval_ids[opts.get("requestId")] = item
             return self.emit(item, "question", "waiting", "Question", qs[0]["text"] if qs else "",
                              {"answer_via": "request", "subject": subject, "questions": qs}, "canUseTool [AskUserQuestion]", m)
         if tool == "ExitPlanMode" and inp.get("plan"):
@@ -904,25 +959,35 @@ class Claude(Translator):
         choices.append({"id": f"c{len(choices)}", "label": "Deny", "effect": "deny"})
         item = f"approval:{opts.get('requestId')}"
         self.approvals[tool] = item
+        self.approval_ids[opts.get("requestId")] = item
         text = inp.get("command") or inp.get("file_path") or opts.get("description") or tool
         what = "plan" if tool == "ExitPlanMode" else "action"
-        self.emit(item, "approval", "waiting", f"Allow this {what}?", text, {"subject": subject, "tool": tool, "choices": choices},
+        self.emit(item, "approval", "waiting", f"Allow this {what}?", text, {"subject": subject, "choices": choices},
                   f"canUseTool [{tool}]", m)
 
     def permission_answer(self, m):
-        item = self.approvals.pop(m.get("toolName"), None)
+        # A reply names its request when the driver recorded it; recordings name only the tool.
+        item = self.approval_ids.pop(m["requestId"], None) if m.get("requestId") else None
+        if item is None:
+            item = self.approvals.pop(m.get("toolName"), None)
+        elif self.approvals.get(m.get("toolName")) == item:
+            del self.approvals[m.get("toolName")]
         prev = self.open.get(item) if item else None
         if prev is None:
             return self.skip("client: permission result")
         res = m.get("result") or {}
         if prev["type"] == "question":
+            answers = (res.get("updatedInput") or {}).get("answers") or {}
             return self.emit(item, "question", "done", prev["title"], "Answered",
-                             {**prev["body"], "answer": (res.get("updatedInput") or {}).get("answers")},
-                             "permission result for AskUserQuestion", res)
+                             {**prev["body"], "answer": answered(prev["body"]["questions"], answers)},
+                             "permission result for AskUserQuestion", m)
         allow = res.get("behavior") == "allow"
-        chosen = "c0" if allow else prev["body"]["choices"][-1]["id"]
-        self.emit(item, "approval", "done" if allow else "declined", prev["title"], "Answered: " + ("Allow once" if allow else "Deny"),
-                  {**prev["body"], "answer": {"choice": chosen}}, "permission result", res)
+        # The choice the person made, when the driver recorded it, so a standing approval is not
+        # shown as a one-off; otherwise allow once, or deny.
+        chosen = m.get("choice") or ("c0" if allow else prev["body"]["choices"][-1]["id"])
+        label = next((c["label"] for c in prev["body"]["choices"] if c["id"] == chosen), "Allow once" if allow else "Deny")
+        self.emit(item, "approval", "done" if allow else "declined", prev["title"], "Answered: " + label,
+                  {**prev["body"], "answer": {"choice": chosen}}, "permission result", m)
         if not allow and prev["body"].get("subject") in self.open:
             tool_ev = self.open[prev["body"]["subject"]]
             self.emit(tool_ev["item"], "tool", "declined", self.tool_title(tool_ev["body"].get("kind", "other"), "declined"),
@@ -958,7 +1023,7 @@ class Claude(Translator):
                              "system / compact_boundary", m)
         if st == "api_retry":
             self.ensure_turn(m)
-            return self.emit(f"retry:{m.get('uuid')}", "notice", "done", "Retrying", "", {"kind": "retry", "attempt": m.get("attempt")},
+            return self.emit(f"retry:{m.get('uuid')}", "notice", "done", "Retrying", "", {"kind": "retry"},
                              "system / api_retry", m)
         if st in ("task_started", "task_progress", "task_updated", "task_notification"):
             self.ensure_turn(m)
@@ -969,7 +1034,6 @@ class Claude(Translator):
                 "kind": "subagent" if m.get("subagent_type") else body.get("kind") or m.get("task_type") or "background",
                 "subject": m.get("tool_use_id") or body.get("subject"),
                 "description": m.get("description") or body.get("description"),
-                "usage": m.get("usage") or body.get("usage"),
             }.items() if v is not None})
             state = "running"
             if st == "task_notification":
@@ -2218,16 +2282,23 @@ def crate_shape(value, key=None):
     return value
 
 
+# The harnesses whose drivers are tested against the prototype's events (D-074).
+DRIVEN = {"codex": "Codex", "claude": "Claude Code"}
+
+
 def expected(folder: Path, check_only: bool) -> int:
-    """The events the Codex driver must produce for each recording, beside it under expected/."""
+    """The events a driver must produce for each recording, beside it under expected/. Every
+    recording in the folder must be of one harness, and one that has a driver."""
     paths = sorted(folder.glob("*.jsonl"))
     out_dir = folder / "expected"
     stale = []
+    harness = None
     for path in paths:
         t = translate(path)
-        if t.harness != "codex":
-            print(f"{path}: not a Codex recording")
+        if t.harness not in DRIVEN or harness not in (None, t.harness):
+            print(f"{path}: not a {DRIVEN.get(harness, ' or '.join(DRIVEN.values()))} recording")
             return 1
+        harness = t.harness
         text = "".join(json.dumps(crate_shape(ev), ensure_ascii=False) + "\n" for ev in t.events)
         target = out_dir / path.name
         if check_only:

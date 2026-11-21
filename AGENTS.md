@@ -49,6 +49,7 @@ being replaced by what is designed here, not extended.
 | Work on the item types in Rust | `crates/marmot-agent-events`, after `docs/design/event-model.md` |
 | Work on the driver trait or the capability flags | `crates/marmot-agent-driver`, after `docs/design/drivers.md` |
 | Work on the Codex driver | `crates/marmot-agent-codex`, after `fixtures/recordings/codex` and its `expected/` events |
+| Work on the Claude Code driver's translation | `packages/claude-code`, after `fixtures/recordings/claude` and its `expected/` events |
 | Work on the core | `crates/marmot-agent`, after `docs/plan.md` and `docs/design/architecture.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Change the link check | `lychee.toml` |
@@ -228,6 +229,16 @@ install it, say so in the pull request and let CI run the check.
 The settings are in `lychee.toml`. The check covers links inside the repository, and the headings they name.
 It does not fetch web addresses; check those by hand.
 
+For any change under `packages/claude-code`, with Node 24 (CI uses the version named in
+`.github/workflows/ci.yml`):
+
+```sh
+cd packages/claude-code
+npm ci
+npm run check   # tsc --noEmit
+npm test        # replays every Claude Code recording against its expected events
+```
+
 For a change to a diagram, which CI does not check:
 
 ```sh
@@ -244,14 +255,16 @@ python3 -m unittest discover -s tools/prototype -p 'test_*.py'         # cases n
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
     fixtures/recordings/hermes fixtures/recordings/openclaw
 python3 tools/prototype/translate.py --expected fixtures/recordings/codex --check   # the Codex driver's expected events
+python3 tools/prototype/translate.py --expected fixtures/recordings/claude --check  # the Claude Code driver's
 ```
 
 The `--check` over the four folders must end with "native messages with no translation: none". If you change
 the event model, change `tools/prototype/translate.py` to match and run it again.
 
-The Codex driver is tested against `fixtures/recordings/codex/expected`, which the prototype writes. When the
-prototype's Codex output changes on purpose, write them again with
-`python3 tools/prototype/translate.py --expected fixtures/recordings/codex` and commit them. Never write them
+The Codex driver is tested against `fixtures/recordings/codex/expected`, and the Claude Code driver against
+`fixtures/recordings/claude/expected`. The prototype writes both. When the prototype's output for one harness
+changes on purpose, write them again with `python3 tools/prototype/translate.py --expected` and that folder,
+such as `fixtures/recordings/codex`, and commit them. Never write them
 again only to make the driver's test pass: when the two disagree, the recording and the event model decide
 which is wrong.
 

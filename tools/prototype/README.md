@@ -30,15 +30,19 @@ message then needs a decision: an item type, or the not-sent list.
 When the event model changes, change this script with it and run `--check` again. If the two disagree, the
 recordings decide.
 
-It also writes the events the Codex driver is tested against, beside the recordings:
+It also writes the events the Codex and Claude Code drivers are tested against, beside the recordings
+([D-074](../../docs/decisions.md#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)):
 
 ```sh
-python3 tools/prototype/translate.py --expected fixtures/recordings/codex          # write them
-python3 tools/prototype/translate.py --expected fixtures/recordings/codex --check  # fail if out of date
+python3 tools/prototype/translate.py --expected fixtures/recordings/codex           # write them
+python3 tools/prototype/translate.py --expected fixtures/recordings/codex --check   # fail if out of date
+python3 tools/prototype/translate.py --expected fixtures/recordings/claude --check  # the same for Claude Code
 ```
 
 A case that no recording holds is tested with messages written by hand, in
-[`test_translate.py`](test_translate.py). Today those are a Codex question marked secret, and a question asked in a message that outlives its turn.
+[`test_translate.py`](test_translate.py). Today those are a Codex question marked secret, a question asked in a
+message that outlives its turn, a translator that follows one thread, Claude Code's answer to a question with
+several choices or with typed text, and what Claude Code's client learns before the session has an id.
 
 ```sh
 python3 -m unittest discover -s tools/prototype -p 'test_*.py'

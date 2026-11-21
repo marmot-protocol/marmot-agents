@@ -332,9 +332,9 @@ Codex messages are JSON-RPC: a request has `id` and `method`, a notification has
 has `id` with `result` or `error`.
 
 `codex/expected/` holds, for each Codex recording, the agent events the Codex driver must produce from it, one
-per line, as the Rust item types write them. The prototype writes them
-(`python3 tools/prototype/translate.py --expected fixtures/recordings/codex`), and CI checks that they are
-current.
+per line, as the Rust item types write them. `claude/expected/` holds the same for the Claude Code driver. The
+prototype writes them (`python3 tools/prototype/translate.py --expected fixtures/recordings/codex`, and the same
+with `claude`), and CI checks that they are current.
 
 For Claude, `via` is one of:
 
