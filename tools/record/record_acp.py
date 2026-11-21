@@ -14,8 +14,9 @@ says it can neither read and write files nor run terminals for the agent, so the
 itself and asks the client only for permission.
 
 The agent runs with HOME and the XDG folders pointed at a throwaway folder, so it reads none of your
-own settings, skills, plugins or sign-ins, and its sessions stay out of your history. Give `--home`
-to keep that folder between runs; otherwise a new one is made beside the project folder and removed. `--config` is passed to
+own settings, skills, plugins or sign-ins, and its sessions stay out of your history. It gets no other
+variable of yours either, apart from PATH and the locale. Give `--home` to keep that folder between
+runs; otherwise a new one is made beside the project folder and removed. `--config` is passed to
 OpenCode as OPENCODE_CONFIG_CONTENT; the default picks a free model.
 
 The script has no dependencies. Raw recordings contain local paths. Scrub them before sharing.
@@ -41,6 +42,9 @@ PROTOCOL_VERSION = 1
 DEFAULT_CONFIG = {"model": "opencode/deepseek-v4.1-flash-free"}
 # Approval scenarios: OpenCode asks before every shell command and every edit.
 ASK = {"permission": {"bash": "ask", "edit": "ask"}}
+# The only variables the agent gets from the recorder's own environment. Everything else it is given
+# is set below: its throwaway home and its configuration. Nothing else of the machine's reaches it.
+PASSED_THROUGH = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ")
 
 
 class Agent:
@@ -408,7 +412,7 @@ def main():
     f = SCENARIOS[args.scenario]
     config = {**DEFAULT_CONFIG, **getattr(f, "config", {}), **(json.loads(args.config) if args.config else {})}
     env = {
-        **os.environ,
+        **{k: os.environ[k] for k in PASSED_THROUGH if k in os.environ},
         "HOME": str(home),
         "XDG_CONFIG_HOME": str(home / ".config"),
         "XDG_DATA_HOME": str(home / ".local/share"),
