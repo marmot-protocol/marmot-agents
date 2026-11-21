@@ -1470,6 +1470,8 @@ reasoning is the same as for Codex ([D-055](#d-055-the-codex-driver-reads-codexs
 and so is the cost: nothing fails to compile when Pi changes a record, and a new recording, replayed in CI, is
 what shows it. See [the comparison](reference/harness-interfaces.md#pi-which-library-to-build-on).
 
+Decided 2026-11-21. The project owner accepted the recommendation.
+
 ## D-087 The core settles a request whose effect never shows
 
 **Decision.** When a driver takes a control and no event that shows its effect arrives within two minutes of
@@ -1484,3 +1486,15 @@ driver can close the cases it knows, but a net in the core keeps a new driver fr
 is long enough for a slow harness to stop a turn, and short enough that a press does not look stuck.
 
 Decided 2026-11-21. The project owner accepted the recommendation.
+
+## D-088 OpenClaw's `/model status` may show the masked model key
+
+**Decision.** The OpenClaw plugin lets `/model status` through, and the chat sees the model key in the masked form
+OpenClaw prints, which keeps a few of its characters. The plugin still replaces the whole key with a marker in
+anything it sends. Recordings still never send `/model status`, so no masked form goes into the fixtures.
+
+**Why.** The owner needs to check from the chat which model and key an agent uses. The masked form does not give
+the key away, and refusing the command would hide what OpenClaw is set to.
+
+Decided 2026-11-21. The project owner decided, against the recommendation to refuse the command.
+

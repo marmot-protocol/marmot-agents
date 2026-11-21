@@ -32,7 +32,7 @@ An event carries no native message when the driver made it up, such as an item t
 because the harness never did, and when it is a secret question that is no longer waiting (D-056).
 Nothing is cut to fit a size: the core applies the 64 KB limit (D-057).
 
-    translate.py --expected <recordings-dir>           write each Codex, Claude Code or ACP recording's
+    translate.py --expected <recordings-dir>           write each Codex, Claude Code, ACP, Pi or OpenClaw recording's
                                                        events, in the shape the Rust types read,
                                                        under expected/
     translate.py --expected <recordings-dir> --check   fail if those files are not what it would write
@@ -1978,9 +1978,13 @@ class OpenClaw(Translator):
         "session_start": "a session started, which the next run also says",
         "before_reset": "the conversation that is about to be dropped",
     }
+    # The release every OpenClaw recording was made with (fixtures/recordings/README.md). OpenClaw
+    # names its version to no channel, so the plugin supplies the one it runs in (D-044).
+    VERSION = "2026.11.5"
 
-    def __init__(self):
+    def __init__(self, version=VERSION):
         super().__init__()
+        self.version = version
         self.turn_n = 0
         self.turn_body: dict = {}
         self.driver_turn = False  # the open turn was opened by the driver, not reported by OpenClaw
@@ -2166,17 +2170,24 @@ class OpenClaw(Translator):
         n = self.generation.get(key, 1)
         return key if n == 1 or key is None else f"{key}#{n}"
 
+    @staticmethod
+    def as_text(value):
+        """A setting's value as the event carries it: text. OpenClaw stores some as true or false."""
+        return value if value is None or isinstance(value, str) else json.dumps(value)
+
     def put(self, name, id_, label, value, approve=False):
-        self.known.setdefault(name, {})[id_] = self.setting(id_, label, value, self.options.get(id_), approve)
+        self.known.setdefault(name, {})[id_] = self.setting(id_, label, self.as_text(value), self.options.get(id_), approve)
 
     def send_session(self, name, native_kind, native):
         """Send the session item, if anything in it is new."""
         if name not in self.known or name in self.ended:
             return
-        for x in self.known[name].values():
-            x["options"] = self.options.get(x["id"], x["options"])
+        # A new dict, so an event already made keeps the options it was sent with.
+        for k, x in self.known[name].items():
+            self.known[name][k] = {**x, "options": self.options.get(x["id"], x["options"])}
         session, self.session = self.session, name
-        self.session_item(name, list(self.known[name].values()), native_kind, native, commands=self.command_list)
+        self.session_item(name, list(self.known[name].values()), native_kind, native, commands=self.command_list,
+                          version=self.version)
         self.session = session
 
     def session_replaced(self, key, native_kind, native):
@@ -2212,13 +2223,14 @@ class OpenClaw(Translator):
     def asked(self, method, result):
         """What the plugin SDK returned when the plugin asked for something as data."""
         if method.endswith(".listChatCommands") and isinstance(result, list):
-            self.command_list = [{"name": (c.get("textAliases") or [f"/{c.get('key')}"])[0], "description": c.get("description"),
-                                  "hint": " ".join(f"<{a.get('name')}>" for a in c.get("args") or []) or None} for c in result]
+            self.command_list = [command((c.get("textAliases") or [f"/{c.get('key')}"])[0], c.get("description"),
+                                         " ".join(f"<{a.get('name')}>" for a in c.get("args") or []))
+                                 for c in result]
             for c in result:
                 arg = (c.get("args") or [{}])[0]
                 choices = arg.get("resolvedChoices") or arg.get("choices")
                 if isinstance(choices, list) and len(c.get("args") or []) == 1:
-                    self.options[c.get("key")] = [x.get("value") if isinstance(x, dict) else x for x in choices]
+                    self.options[c.get("key")] = [self.as_text(x.get("value") if isinstance(x, dict) else x) for x in choices]
         elif method.endswith(".buildModelsProviderData") and isinstance(result, dict):
             self.options["model"] = [f"{prov}/{x}" for prov, models in (result.get("byProvider") or {}).items() for x in models]
             default = result.get("resolvedDefault") or {}
@@ -2508,7 +2520,7 @@ class OpenClaw(Translator):
             if self.last_run in self.commands:
                 self.commands.remove(self.last_run)
             ev = self.emit(f"notice:{self.seq + 1}", "notice", "done", "Directive taken", text,
-                           {"kind": "directive", "command": command}, f"{method} [{kind}, isStatusNotice]", p)
+                           {"kind": "command_output", "command": command}, f"{method} [{kind}, isStatusNotice]", p)
             self.posting = (method, ev)
             return
         if "assistantMessageIndex" in info:  # only the agent's own words carry a message index
@@ -2528,18 +2540,18 @@ class OpenClaw(Translator):
             return self.unknown("deliver [final] that is not the agent's, with no command waiting")
         command = self.commands.pop(0).split()[0]
         if command != "/stop":
-            body = {"kind": "command_output", "command": command}
+            body, title = {"kind": "command_output", "command": command}, "Command output"
             if command in ("/new", "/reset") and (p[0] or {}).get("isStatusNotice"):
                 # The session was started afresh. Without the plugin hook this reply is the only sign.
-                body["kind"] = "new_session"
+                title = "New session"
                 if not self.reset_by_hook:
                     self.session_replaced(self.route_key, f"{method} [final, isStatusNotice, reply to {command}]", p)
                 self.reset_by_hook = False
-            ev = self.emit(f"notice:{self.seq + 1}", "notice", "done", "Command output", text,
+            ev = self.emit(f"notice:{self.seq + 1}", "notice", "done", title, text,
                            body, f"{method} [final, reply to {command}]", p)
             self.posting = (method, ev)
             return
-        ev = self.emit(f"notice:{self.seq + 1}", "notice", "done", "Stopped", text, {"kind": "stopped", "command": command},
+        ev = self.emit(f"notice:{self.seq + 1}", "notice", "done", "Stopped", text, {"kind": "command_output", "command": command},
                        f"{method} [final, reply to {command}]", p)
         self.posting = (method, ev)
         if self.turn is not None:  # a stopped run reports no outcome
@@ -2556,9 +2568,9 @@ class OpenClaw(Translator):
                    for b in blk.get("buttons") or []]
         allow_text = any((b.get("action") or {}).get("intent") == "custom-input" for b in buttons)
         qs = []
-        for q in (t.get("args") or {}).get("questions") or []:
+        for n, q in enumerate((t.get("args") or {}).get("questions") or []):
             options = [o if isinstance(o, dict) else {"label": o} for o in q.get("options") or []]
-            qs.append({"id": q.get("id"), "header": q.get("header"), "text": q.get("question"), "multiple": bool(q.get("multiSelect")),
+            qs.append({"id": q.get("id") or f"q{n}", "header": q.get("header"), "text": q.get("question"), "multiple": bool(q.get("multiSelect")),
                        "allow_text": allow_text,
                        "options": [{"id": f"o{k}", "label": o.get("label"), "description": o.get("description"),
                                     "native": o.get("value", o.get("label"))} for k, o in enumerate(options)]})
@@ -2575,10 +2587,11 @@ class OpenClaw(Translator):
         prev = self.open.get(item) if item else None
         if prev is None or result.get("status") != "answered":
             return self.unknown(f"{method} result [{result.get('status')}]")
-        answer = {}
-        for q in prev["body"]["questions"]:
-            if q["id"] == result.get("questionId"):
-                answer[q["id"]] = [o["id"] for o in q["options"] if o["native"] == result.get("optionValue")] or result.get("optionValue")
+        # The press names the question as OpenClaw does, which is not the id of one of its questions:
+        # a press answers the first, as a button does.
+        q = prev["body"]["questions"][0]
+        chosen = [o["id"] for o in q["options"] if o["native"] == result.get("optionValue")]
+        answer = [{"question": q["id"], "options": chosen, "text": None if chosen else result.get("optionValue")}]
         self.emit(item, "question", "done", prev["title"], "Answered", {**prev["body"], "answer": answer}, f"result of {method}", result)
 
     # -- approvals
@@ -3138,7 +3151,7 @@ def crate_shape(value, key=None):
 # The harnesses whose drivers are tested against the prototype's events (D-074).
 DRIVEN = {
     "codex": "Codex", "claude": "Claude Code", "opencode": "OpenCode", "goose": "Goose", "cursor": "Cursor",
-    "pi": "Pi",
+    "pi": "Pi", "openclaw": "OpenClaw",
 }
 
 

@@ -298,6 +298,69 @@ Its capabilities: it can interrupt; a message sent during a turn folds into it; 
 and they can be resumed; no approvals; no files (`files_in` is `none`, provisional: Pi takes images, and
 passing them on is a later step); no approval commands.
 
+## The OpenClaw plugin
+
+A channel plugin named `marmot`, in TypeScript, that runs inside OpenClaw
+([`packages/openclaw`](../../packages/openclaw)) and connects to the core over the
+[socket](socket-protocol.md#the-messages-as-built). It is built as JavaScript and installed into OpenClaw from a
+packed archive, as a release is. OpenClaw runs in a container, never on the owner's machine directly:
+
+```sh
+packages/openclaw/run.sh <agent home> <openclaw state folder> <work folder> <model-key-file> [model]
+```
+
+The script builds the image from [`container/Dockerfile`](../../packages/openclaw/container/Dockerfile)
+(OpenClaw pinned at 2026.11.5) and runs it as the calling user, with the core's socket folder, the token
+(read-only), OpenClaw's state folder, the work folder and the model key (read-only) mounted. A Unix socket works
+across the mount. The container is named after the state folder, so Docker runs one at a time on it, and the
+entrypoint may then recover the lock that a killed gateway leaves on OpenClaw's state, which OpenClaw cannot do
+by itself across containers. The model is a free one by default, with a second free model as OpenClaw's
+fallback (`MODEL_FALLBACKS`). The core is started with a `[connector]` section, as for Claude Code. The key stays out of the
+image and out of the configuration file, and the plugin replaces its whole value with a marker in anything it
+sends. The masked form `/model status` shows is let through
+([D-088](../decisions.md#d-088-openclaws-model-status-may-show-the-masked-model-key)).
+
+It has the same two halves as the other drivers. The translator (`src/translate.ts`) is a port of the
+prototype's OpenClaw rules and is tested against the recordings. The transport (`src/connector.ts`, and
+`src/index.ts`, the one file that touches OpenClaw's plugin SDK) does what the recorder in
+[`tools/record/openclaw`](../../tools/record/README.md#openclaw) does, and writes down every call the same way, so
+the translator reads in use what it was tested on:
+
+- **A prompt** goes through OpenClaw's own receive path: the route, the verdict on the sender, the context and
+  the run. Each chat is a group to OpenClaw, so each has its own session; OpenClaw puts every direct chat in
+  one session otherwise. A reply carries the id and the quoted text. The turn that the run starts names the
+  prompt. A message sent during a turn waits, and runs as a turn of its own (`queue`).
+- **Who may prompt and approve is the core's** ([D-084](../decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)).
+  The plugin hands OpenClaw an open policy for whatever the core sends. It claims OpenClaw's approval
+  capability, so each approval arrives with its fields, and when OpenClaw asks whether a sender may approve, it
+  says yes only for a sender the core has vouched for: one whose answer to that approval the core sent, or
+  whose typed `/approve` the core checked against the right to approve. The container sets no OpenClaw owner
+  and switches `/bash` off.
+- **An answer** to an approval is a press, through OpenClaw's approval gateway, as the person who answered. A
+  question takes one option, the same way; an answer in words is refused for now.
+- **A control is typed**, as OpenClaw takes it, from the person who sent it: interrupt is `/stop`, new session
+  is `/new`, and `set` is `/model <provider/model>` or `/think <level>`. A `set` is settled when its own
+  command is over: by the session's edit if the stored entry now shows the value, otherwise by OpenClaw's
+  answer, such as a refusal or a value already in use, or by a notice the plugin makes when OpenClaw dropped
+  the command with no answer. Other settings are refused.
+- **A new session keeps OpenClaw's session key and id**, so the plugin counts sessions under each key (the
+  second is `key#2`) and keeps the count in OpenClaw's state folder, so a restart does not bring back a
+  session that ended. An id the translator makes up from a count carries a mark of the plugin's start, so it
+  is never used for another item.
+- **When the socket closes**, the core has already ended the turns on it. The plugin cancels the runs it
+  started through that connection, starts none for a message still on its way, and waits for every run to
+  end before it connects again, however long that takes, so an old run never shares a session with a new
+  one. Until then the core cannot reach the agent.
+- **The session item lists OpenClaw's commands and the models** the agent may use, asked for through the
+  plugin SDK when a chat first reaches OpenClaw, as the recorder asks for them.
+- **The agent's message tool is offered no actions**, until the socket's chat section is designed.
+
+Its capabilities: it can interrupt; a message sent during a turn waits (`queue`); OpenClaw picks the sessions
+(`own`), and they outlive a restart, in its state folder; approvals come to the chat; no files yet. Its
+approval commands are `/approve`, `/exec`, `/elevated` and `/elev` anywhere in a message, and `/config`,
+`/debug`, `/bash`, `!`, `/allowlist`, `/acp`, `/codex`, `/mcp` and `/plugins` at the start. All of this is
+provisional, for the owner's review.
+
 ## Adding a harness
 
 1. **Does it speak ACP well?** Add it as a configuration entry for the ACP driver.

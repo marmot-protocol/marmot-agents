@@ -184,9 +184,9 @@ harness states was drawn from the recordings.
 | `interrupt` | yes or no | Yes | Yes | Yes | Yes |
 | `mid_turn`: what happens to a prompt during a turn | `fold`, `restart`, `queue` | `fold` | `restart` | `fold` | `queue` |
 | `sessions`: who picks the session | `core` or `own` | `core` | `core` | `own` | `own` |
-| `resume`: a session survives a restart | yes or no | Yes | Yes | Not recorded | Not recorded |
+| `resume`: a session survives a restart | yes or no | Yes | Yes | Not recorded | Yes, in its state folder |
 | `approvals` | yes or no | Yes | Yes | Yes | Yes, if the owner switched forwarding on |
-| `files_in`: attachments on a prompt | `none`, `images` or `any` | `images` | `images` | Not recorded | Not recorded |
+| `files_in`: attachments on a prompt | `none`, `images` or `any` | `images` | `images` | Not recorded | `none`, for now |
 | `approval_commands`: typed commands that need the right to approve | a list; each entry says whether it counts anywhere in a message or only at the start | None | None | `/approve`, `/deny`, `/yolo`, `/approvals` and more | `/approve`, `/exec` anywhere in a message, `/elevated` and more |
 
 `approval_commands` exists because Hermes and OpenClaw accept an approval typed as a message. A typed message
