@@ -306,9 +306,49 @@ export class Translator {
   private version: unknown = null;
   private sessionKey: string | null = null;
 
+  /** The turn that is running, as the events name it, or null between turns. */
+  get currentTurn(): string | null {
+    return this.turn;
+  }
+
+  /** The session the events name, once Claude Code has named it. */
+  get currentSession(): string | null {
+    return this.sessionKey ?? this.session;
+  }
+
   feed(line: Line): AgentEvent[] {
     this.made = [];
     this.handle(line);
+    return this.shaped();
+  }
+
+  /**
+   * The transport ended the session itself, by closing its `query()`, as a "new session" control
+   * does. Claude Code says nothing when that happens, so the driver closes what was open: the items
+   * of a running turn and the turn as cancelled, then the session item as ended. A `query()` that
+   * starts later without `resume` then has no session left to end. Replays never call this.
+   */
+  closeSession(): AgentEvent[] {
+    this.made = [];
+    if (this.turn !== null) {
+      const turn = this.open.get(`turn:${this.turn}`);
+      this.closeOpenItems();
+      if (turn !== undefined) {
+        this.emit(turn.item, "turn", "cancelled", "Interrupted", "", turn.body, "(none: closed by the driver)", null, [
+          turn.session,
+          turn.turn,
+        ]);
+      }
+      this.turn = null;
+    }
+    if (this.sessionKey) this.endSession(this.sessionKey, "the session was closed by the driver");
+    this.session = this.sessionKey = this.version = null;
+    this.settings = {};
+    this.commands = [];
+    return this.shaped();
+  }
+
+  private shaped(): AgentEvent[] {
     const events = this.made.map(
       (e) =>
         crateShape({
