@@ -380,6 +380,31 @@ What differs from OpenCode:
 Approval scenarios run Goose in its `approve` mode; the others in `auto`, which asks for nothing.
 `acp/goose/expected/` holds the expected events.
 
+## ACP: Cursor
+
+Eleven of the same scenarios with `cursor-agent acp`, on the machine's own Cursor sign-in, as
+[D-080](../../docs/decisions.md#d-080-cursor-is-driven-through-acp) and
+[D-085](../../docs/decisions.md#d-085-cursor-recordings-keep-only-cursors-built-in-commands) say. What they show
+is in [`docs/reference/harness-messages.md`](../../docs/reference/harness-messages.md#acp-cursor).
+
+| | |
+| --- | --- |
+| Interface | `cursor-agent acp`, ACP protocol version 1 |
+| Version | Cursor Agent CLI 2026.11.19 |
+| Model | The account's default, `grok-4.7` (fast, high reasoning effort) |
+| Recorded on | 2026-11-21 |
+
+- **The command list is cut to Cursor's built-in commands** by the scrubber (D-085); the account's own skills
+  and `synced-*` entries are gone. Nothing else was changed apart from the paths.
+- **`question` was recorded and not kept.** Cursor has no question tool here; looking for one, the model read
+  files in Cursor's folder in the home directory and listed MCP resources, which does not belong in a fixture.
+- **Scenarios with no approval run `cursor-agent --force acp`**: otherwise Cursor asks before every command.
+- **`plan`**: Cursor keeps its to-do list with its own request, `cursor/update_todos`, beside a tool call.
+- **`resume`**: no `session/resume` ("Method not found"); the next prompt to that session failed with
+  "Internal error".
+
+`acp/cursor/expected/` holds the expected events.
+
 ## File format
 
 One JSON object per line.

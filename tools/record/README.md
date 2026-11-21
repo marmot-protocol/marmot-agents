@@ -162,6 +162,12 @@ say so there: what a harness does instead is the useful part.
   home in the recorder's throwaway folder, so a session survives the restart in `resume` and `load`. The key
   file is mounted read-only; the model is `z-ai/glm-5.3-flash:free` on numes.ai unless `MODEL_NAME` says
   otherwise. Approval scenarios run Goose in its `approve` mode.
+- Cursor runs on the machine's own sign-in (`--own-home`; no credential is copied), so its sessions go into
+  your Cursor history. It asks before every command unless started with `--force`, so scenarios that need no
+  approval use `--agent-auto "cursor-agent --force acp"`. Its command list names your own skills and entries
+  synced from the account; the scrubber keeps only Cursor's built-in commands
+  ([D-085](../../docs/decisions.md#d-085-cursor-recordings-keep-only-cursors-built-in-commands)). Read the
+  scrubbed output by hand all the same: a model that goes looking can read files outside the project.
 
 - The Codex recorder starts the app server with `--disable hooks`, so your own Codex hooks do not run. Threads
   are started as ephemeral, so nothing is added to your Codex history. Nine scenarios are the exception,

@@ -175,6 +175,8 @@ pub struct Translator {
     hidden: HashSet<String>,
     /// The id of the `session/prompt` that started the turn, as its JSON text.
     turn_request: Option<String>,
+    /// Cursor's to-do list in this turn, as it last stood.
+    todos: Vec<Value>,
     unreadable: u64,
     unknown: Vec<String>,
 }
@@ -186,10 +188,17 @@ impl Default for Translator {
 }
 
 impl Translator {
-    /// A translator for a new connection.
+    /// A translator for a new connection, to an agent that names itself in its reply to
+    /// `initialize`.
     pub fn new() -> Self {
+        Self::named("acp")
+    }
+
+    /// A translator for a new connection, with the driver's own name for the agent, which events
+    /// carry until the agent names itself. Cursor never does.
+    pub fn named(harness: &str) -> Self {
         Self {
-            harness: "acp".into(),
+            harness: harness.into(),
             version: None,
             session: None,
             turn: None,
@@ -210,6 +219,7 @@ impl Translator {
             counted: HashMap::new(),
             hidden: HashSet::new(),
             turn_request: None,
+            todos: Vec::new(),
             unreadable: 0,
             unknown: Vec::new(),
         }
@@ -286,6 +296,7 @@ impl Translator {
         self.counted.clear();
         self.declined.clear();
         self.hidden.clear();
+        self.todos.clear();
         self.turn = None;
         self.turn_request = None;
         self.cancelled = false;
@@ -782,6 +793,15 @@ impl Translator {
             // (rule 4 of the event model).
             return;
         }
+        if t.raw_input
+            .as_ref()
+            .and_then(|r| r.get("_toolName"))
+            .and_then(Value::as_str)
+            == Some("updateTodos")
+        {
+            // Cursor's to-do tool: its list comes in `cursor/update_todos`, which becomes the plan.
+            return;
+        }
         let acp_kind = t.kind.unwrap_or(AcpKind::Other);
         let acp_name = serde_json::to_value(acp_kind)
             .ok()
@@ -869,6 +889,14 @@ impl Translator {
                 .find_map(Value::as_i64);
                 if state == State::Done && body.exit_code.is_some_and(|c| c != 0) {
                     state = State::Failed;
+                }
+                if body.output.is_none() {
+                    // Cursor sends a command's output only there.
+                    body.output = ro
+                        .and_then(|o| o.get("stdout"))
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
                 }
                 body.command.clone().unwrap_or(title_text)
             }
@@ -1149,8 +1177,88 @@ impl Translator {
                     Some(native(&format!("{method} (request)"), params)),
                 );
             }
+            "cursor/update_todos" => self.update_todos(method, params, out),
             _ => self.unknown.push(format!("{method} (request)")),
         }
+    }
+
+    /// Cursor's to-do list, which it sends instead of ACP's plan. `merge` updates the entries it
+    /// names by id and adds new ones; otherwise the list replaces the last. The official types do
+    /// not know the method, so it is read as JSON.
+    fn update_todos(&mut self, method: &str, params: &str, out: &mut Vec<AgentEvent>) {
+        let Ok(p) = serde_json::from_str::<Value>(params) else {
+            self.unreadable += 1;
+            return;
+        };
+        let given: Vec<Value> = p
+            .get("todos")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|t| t.is_object())
+            .cloned()
+            .collect();
+        if p.get("merge").and_then(Value::as_bool).unwrap_or(false) {
+            let mut fresh = given;
+            let mut merged = Vec::new();
+            for old in std::mem::take(&mut self.todos) {
+                match fresh.iter().position(|t| t.get("id") == old.get("id")) {
+                    Some(at) => merged.push(fresh.remove(at)),
+                    None => merged.push(old),
+                }
+            }
+            merged.extend(fresh);
+            self.todos = merged;
+        } else {
+            self.todos = given;
+        }
+        let entries: Vec<PlanEntry> = self
+            .todos
+            .iter()
+            .map(|t| PlanEntry {
+                text: t
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                state: match t.get("status").and_then(Value::as_str) {
+                    Some("in_progress") => PlanEntryState::Running,
+                    Some("completed") => PlanEntryState::Done,
+                    _ => PlanEntryState::Pending,
+                },
+            })
+            .collect();
+        let done = !entries.is_empty() && entries.iter().all(|e| e.state == PlanEntryState::Done);
+        let text = entries
+            .iter()
+            .map(|e| {
+                format!(
+                    "[{}] {}",
+                    if e.state == PlanEntryState::Done {
+                        'x'
+                    } else {
+                        ' '
+                    },
+                    e.text
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let item = format!("plan:{}", show(self.turn.as_deref()));
+        let state = if done { State::Done } else { State::Running };
+        let body = Body::Plan(Plan {
+            text: None,
+            entries,
+        });
+        self.emit(
+            out,
+            &item,
+            body,
+            state,
+            "Plan",
+            &text,
+            Some(native(&format!("{method} (request)"), params)),
+        );
     }
 
     fn response(&mut self, m: &Envelope<'_>, out: &mut Vec<AgentEvent>) {

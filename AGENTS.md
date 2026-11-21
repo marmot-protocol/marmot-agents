@@ -13,7 +13,7 @@ a driver implements; `marmot-agent-codex`, the Codex driver, which runs Codex an
 subagents switched off for now; and `marmot-agent`, the core, which runs one agent's account through MDK and
 drives Codex, with a test that runs it end to end on MDK's test relay. The core also serves a local socket, and
 `packages/claude-code` is the Claude Code driver, a TypeScript program that drives Claude Code through it. `marmot-agent-acp`
-is the ACP driver, replayed against the OpenCode and Goose recordings. What is
+is the ACP driver, replayed against the OpenCode, Goose and Cursor recordings. What is
 built next, and in what order, is in
 [`docs/plan.md`](docs/plan.md). The core program is called `marmot-agent`
 ([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and
@@ -259,17 +259,19 @@ python3 tools/record/inventory.py fixtures/recordings/codex --kinds    # every f
 python3 tools/record/inventory.py fixtures/recordings/claude --kinds   # nor this
 python3 tools/record/inventory.py fixtures/recordings/acp/opencode --kinds   # nor this
 python3 tools/record/inventory.py fixtures/recordings/acp/goose --kinds      # nor this
+python3 tools/record/inventory.py fixtures/recordings/acp/cursor --kinds     # nor this
 python3 -m unittest discover -s tools/prototype -p 'test_*.py'         # cases no recording holds
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
     fixtures/recordings/hermes fixtures/recordings/openclaw fixtures/recordings/acp/opencode \
-    fixtures/recordings/acp/goose
+    fixtures/recordings/acp/goose fixtures/recordings/acp/cursor
 python3 tools/prototype/translate.py --expected fixtures/recordings/codex --check   # the Codex driver's expected events
 python3 tools/prototype/translate.py --expected fixtures/recordings/claude --check  # the Claude Code driver's
 python3 tools/prototype/translate.py --expected fixtures/recordings/acp/opencode --check  # the ACP driver's
 python3 tools/prototype/translate.py --expected fixtures/recordings/acp/goose --check     # and again
+python3 tools/prototype/translate.py --expected fixtures/recordings/acp/cursor --check    # and again
 ```
 
-The `--check` over the six folders must end with "native messages with no translation: none". If you change
+The `--check` over the seven folders must end with "native messages with no translation: none". If you change
 the event model, change `tools/prototype/translate.py` to match and run it again.
 
 The Codex driver is tested against `fixtures/recordings/codex/expected`, the Claude Code driver against

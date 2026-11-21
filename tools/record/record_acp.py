@@ -5,6 +5,8 @@ Usage:
     record_acp.py <scenario> <project-dir> <output.jsonl> [--agent "opencode acp"] [--home DIR] [--config JSON]
 
 For Goose, in a container: --agent "tools/goose/goose-acp.sh <model-key-file>".
+For Cursor, on its own sign-in:
+    --agent "cursor-agent acp" --agent-auto "cursor-agent --force acp" --own-home
     record_acp.py --list
 
 Each output line is {"t": <ms since start>, "dir": "out"|"in", "msg": <the JSON message>}.
@@ -405,6 +407,11 @@ def main():
     ap.add_argument("--agent", default="opencode acp", help="the command that starts the agent")
     ap.add_argument("--home", help="the throwaway folder the agent uses as HOME; kept after the run")
     ap.add_argument("--config", help="OpenCode configuration as JSON, merged over the scenario's")
+    ap.add_argument("--agent-auto", help="the command for scenarios that need no approval, for an agent that "
+                                         "asks unless started otherwise, such as `cursor-agent --force acp`")
+    ap.add_argument("--own-home", action="store_true",
+                    help="run the agent with your own HOME, for one signed in through its own command, such as "
+                         "Cursor; its sessions then go into your history")
     args = ap.parse_args()
     if args.list:
         for name, f in SCENARIOS.items():
@@ -418,19 +425,23 @@ def main():
     home = Path(args.home).resolve() if args.home else Path(tempfile.mkdtemp(prefix="acp-home-", dir=Path(cwd).parent))
     f = SCENARIOS[args.scenario]
     config = {**DEFAULT_CONFIG, **getattr(f, "config", {}), **(json.loads(args.config) if args.config else {})}
-    env = {
-        **{k: os.environ[k] for k in PASSED_THROUGH if k in os.environ},
+    homes = {"HOME": os.environ.get("HOME", "")} if args.own_home else {
         "HOME": str(home),
         "XDG_CONFIG_HOME": str(home / ".config"),
         "XDG_DATA_HOME": str(home / ".local/share"),
         "XDG_STATE_HOME": str(home / ".local/state"),
         "XDG_CACHE_HOME": str(home / ".cache"),
+    }
+    env = {
+        **{k: os.environ[k] for k in PASSED_THROUGH if k in os.environ},
+        **homes,
         "OPENCODE_CONFIG_CONTENT": json.dumps(config),
         "OPENCODE_DISABLE_AUTOUPDATE": "1",
         # For an agent without OpenCode's configuration: ask before every tool. Goose's wrapper reads it.
         **({"RECORD_ASK": "1"} if getattr(f, "ask", False) else {}),
     }
-    a = Agent(args.output, shlex.split(args.agent), env, cwd)
+    command = args.agent_auto if args.agent_auto and not getattr(f, "ask", False) else args.agent
+    a = Agent(args.output, shlex.split(command), env, cwd)
     try:
         f(a, cwd)
         time.sleep(1.0)  # let trailing notifications arrive

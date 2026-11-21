@@ -13,6 +13,7 @@ OpenCode sends over ACP, taken from real sessions, and how each message relates 
 | Codex's generated protocol schema | `codex app-server generate-json-schema`, codex-cli 0.169.0 | The list of methods |
 | [`fixtures/recordings/acp/opencode`](../../fixtures/recordings/README.md#acp-opencode) | 12 scripted sessions with OpenCode 2.3.2 over ACP, recorded on 2026-11-21 | Read in full, for the [ACP section](#acp-opencode) only |
 | [`fixtures/recordings/acp/goose`](../../fixtures/recordings/README.md#acp-goose) | The same 12 with Goose 1.59.2, in a container, recorded on 2026-11-21 | Read in full, for the [Goose section](#acp-goose) only |
+| [`fixtures/recordings/acp/cursor`](../../fixtures/recordings/README.md#acp-cursor) | 11 of them with the Cursor Agent CLI 2026.11.19, recorded on 2026-11-21 | Read in full, for the [Cursor section](#acp-cursor) only |
 | [`tools/prototype/translate.py`](../../tools/prototype/translate.py) | A prototype that turns every recording into proposed agent events, except the subagent recordings, which nothing translates yet | To check that nothing is left without a home |
 
 Limits of this evidence:
@@ -575,6 +576,37 @@ OpenCode above; only what differs is written here.
   translators closed the tool item as cancelled.
 - **A provider failure** (seen once, in a run that was not kept) came as an error reply to `session/prompt`,
   code -32603, with the provider's message and a request id in it, and `data.reason` `turn_failed`.
+
+## ACP: Cursor
+
+Read on 2026-11-21 from the eleven recordings in
+[`fixtures/recordings/acp/cursor`](../../fixtures/recordings/acp/cursor), made that day with the same recorder
+against the Cursor Agent CLI 2026.11.19 (`cursor-agent acp`) on the machine's own sign-in, with the account's
+default model. The command list in them was cut to Cursor's built-in commands by the scrubber
+([D-085](../decisions.md#d-085-cursor-recordings-keep-only-cursors-built-in-commands)). Only what differs from
+OpenCode is written here.
+
+- **No name.** `initialize` has no `agentInfo`, so the agent's name and version are unknown. The driver names
+  it (`cursor`), and the session item's `harness_version` is empty.
+- **Capabilities.** `loadSession`, images (no audio or embedded context), MCP over HTTP and SSE, and session
+  `list`. No `resume`: `session/resume` is answered "Method not found", and a prompt to the same session after a
+  restart got "Internal error". `authMethods` names `cursor_login`.
+- **Settings.** The reply to `session/new` has the legacy `modes` (`agent`, `plan`, `ask`) and `models`, and
+  `configOptions` `mode` (category `mode`) and `model` (49 options, the account's).
+- **Chunks have no `messageId`.** Thinking and words alternate, chunk by chunk; the translators make one item of
+  each run of the same kind.
+- **Approvals.** Without `--force`, every command asks: `session/request_permission` with `allow-once`
+  ("Allow once"), `allow-always` ("Allow always") and `reject-once` ("Reject"), and a text block such as "Not in
+  allowlist: python3". A refusal fails the tool call and the turn goes on. With `--force` nothing asks.
+- **Tool calls.** Each has a `kind` (`execute`, `read`, `edit`, `search`, `other`) and a readable title. Ids are
+  two ids joined by a line break. A command's output is only in `rawOutput` (`exitCode`, `stdout`, `stderr`);
+  the translators read both. Edits come with a diff.
+- **To-do list.** Cursor's `updateTodos` tool call comes with a request of its own, `cursor/update_todos`, with
+  the list (`id`, `content`, `status`) and `merge`. The translators make the list the turn's `plan` item and send
+  no tool item for it (rule 4). The recorder did not answer the request, and Cursor went on regardless; the
+  driver answers it with an empty result.
+- **No usage.** The reply to `session/prompt` has only `stopReason`.
+- **`session_info_update`** once per session, with a title.
 
 ## Side by side
 

@@ -18,11 +18,11 @@ python3 tools/prototype/translate.py fixtures/recordings/claude/question.jsonl
 # not sent, and anything with no rule
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
     fixtures/recordings/hermes fixtures/recordings/openclaw fixtures/recordings/acp/opencode \
-    fixtures/recordings/acp/goose
+    fixtures/recordings/acp/goose fixtures/recordings/acp/cursor
 ```
 
 It has a translator for each harness that has recordings: Codex, Claude Code, Hermes, OpenClaw, and
-any agent over ACP, recorded with OpenCode and Goose. It picks one
+any agent over ACP, recorded with OpenCode, Goose and Cursor. It picks one
 from what is in the file, not from the path. What each showed is in
 [`docs/design/event-model.md`](../../docs/design/event-model.md#checked-against-real-sessions).
 

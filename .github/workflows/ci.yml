@@ -74,7 +74,7 @@ jobs:
           python3 tools/prototype/translate.py --check
           fixtures/recordings/codex fixtures/recordings/claude
           fixtures/recordings/hermes fixtures/recordings/openclaw
-          fixtures/recordings/acp/opencode fixtures/recordings/acp/goose
+          fixtures/recordings/acp/opencode fixtures/recordings/acp/goose fixtures/recordings/acp/cursor
 
       - name: The Codex driver's expected events are what the prototype writes
         run: python3 tools/prototype/translate.py --expected fixtures/recordings/codex --check
@@ -86,6 +86,7 @@ jobs:
         run: |
           python3 tools/prototype/translate.py --expected fixtures/recordings/acp/opencode --check
           python3 tools/prototype/translate.py --expected fixtures/recordings/acp/goose --check
+          python3 tools/prototype/translate.py --expected fixtures/recordings/acp/cursor --check
 
   typescript:
     name: TypeScript

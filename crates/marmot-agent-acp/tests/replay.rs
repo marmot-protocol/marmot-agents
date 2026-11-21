@@ -27,7 +27,7 @@ struct Marker {
 }
 
 /// Each agent recorded over ACP, and how many recordings it has.
-const AGENTS: &[(&str, usize)] = &[("opencode", 12), ("goose", 12)];
+const AGENTS: &[(&str, usize)] = &[("opencode", 12), ("goose", 12), ("cursor", 11)];
 
 fn folder(agent: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -48,7 +48,13 @@ fn files(folder: &Path) -> Vec<PathBuf> {
 /// The events the translator gives for one recording.
 fn replay(path: &Path) -> Vec<AgentEvent> {
     let text = std::fs::read_to_string(path).expect("a recording");
-    let mut translator = Translator::new();
+    // The driver's name for the agent is its folder's: Cursor never names itself.
+    let agent = path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|n| n.to_str())
+        .unwrap_or("acp");
+    let mut translator = Translator::named(agent);
     let mut events = Vec::new();
     let mut arrived = String::new(); // every message so far, to find each native payload in
     for line in text.lines().filter(|l| !l.trim().is_empty()) {

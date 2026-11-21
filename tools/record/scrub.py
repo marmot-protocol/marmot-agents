@@ -92,10 +92,14 @@ class Scrubber:
             msg = {**msg, "params": neutralise(msg["params"])}
         return self.walk(msg)
 
-    def acp(self, msg: dict) -> dict:
+    def acp(self, msg: dict, agent: str = "") -> dict:
         # The ACP recorder runs the agent with a throwaway home folder and no account of ours. The
         # folder's generated name, and the names OpenCode makes up for a command's output file under
-        # it, are replaced with fixed ones.
+        # it, are replaced with fixed ones. Cursor runs on its own sign-in instead, and lists the
+        # account's own skills and synced entries among its commands; only its built-in ones are kept
+        # (D-085).
+        if agent == "cursor":
+            msg = cursor_commands(msg)
         def homes(v):
             if isinstance(v, dict):
                 return {k: homes(x) for k, x in v.items()}
@@ -137,6 +141,26 @@ class Scrubber:
         return self.walk(msg)
 
 
+# Cursor's own slash commands, as `cursor-agent` 2026.11.19 lists them: its built-in skills
+# (`~/.cursor/skills-cursor`) and the commands it adds itself. Everything else in its list is the
+# account's: personal skills, and `synced-*` entries named after account and organisation ids.
+CURSOR_BUILTIN = {
+    "agent-sdk-create-agent", "apply-worktree", "autopilot", "best-of-n", "canvas", "copy-request-id",
+    "create-hook", "create-rule", "create-skill", "create-subagent", "delete-worktree", "goal", "loop",
+    "migrate-to-skills", "multi-model-review", "new-repo", "origin", "rename-chat", "sdk", "share", "shell",
+    "split-to-prs", "statusline", "update-cli-config", "update-cursor-settings", "worktree",
+}
+
+
+def cursor_commands(msg: dict) -> dict:
+    """Cursor's command list with only its built-in commands left in."""
+    update = (msg.get("params") or {}).get("update") or {}
+    if msg.get("method") != "session/update" or update.get("sessionUpdate") != "available_commands_update":
+        return msg
+    kept = [c for c in update.get("availableCommands") or [] if c.get("name") in CURSOR_BUILTIN]
+    return {**msg, "params": {**msg["params"], "update": {**update, "availableCommands": kept}}}
+
+
 MACHINE_UPTIME = re.compile(r"system \d+[dhms](?: \d+[dhms])*")
 ACP_HOME = re.compile(r"acp-home-[A-Za-z0-9_]+")  # the ACP recorder's throwaway home folder
 OPENCODE_OUTPUT = re.compile(r"(opencode/shell)/[0-9a-f]{16,}/sh_[A-Za-z0-9]+\.out")
@@ -148,6 +172,7 @@ SUSPECT = re.compile(
     r"|/mnt/|/tmp/claude|/private/var"
     r"|claude\.ai [A-Z]"  # a connected account's MCP server name
     r"|acp-home-"  # the ACP recorder's throwaway home folder, by its generated name
+    r"|synced-[0-9a-f]{8}-"  # a Cursor command named after account and organisation ids
 )
 
 
@@ -185,7 +210,10 @@ def main() -> int:
             lines = []
             for line in src.read_text(encoding="utf-8").splitlines():
                 rec = json.loads(line)
-                rec["msg"] = getattr(s, harness)(rec["msg"])
+                if harness == "acp":
+                    rec["msg"] = s.acp(rec["msg"], rel.parts[0])
+                else:
+                    rec["msg"] = getattr(s, harness)(rec["msg"])
                 lines.append(json.dumps(rec, ensure_ascii=False, sort_keys=False))
                 for text in strings(rec["msg"]):
                     for word, _ in s.words:

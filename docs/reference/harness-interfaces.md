@@ -143,8 +143,11 @@ Read again on 2026-11-19. The newest release is 0.170.0 (2026-11-18). The record
 ### Cursor
 
 - **Native.** `@cursor/sdk` (1.4.0 on npm, updated 2026-11-15), TypeScript.
-- **ACP.** Cursor has an ACP transport. T3 Code stopped using it and moved to the SDK.
-- **Not examined directly.** This entry rests on T3 Code's choice and the package registry.
+- **ACP.** Cursor has an ACP transport, `cursor-agent acp`, which this project uses
+  ([D-080](../decisions.md#d-080-cursor-is-driven-through-acp)). T3 Code stopped using it and moved to the SDK.
+- **Run on 2026-11-21**: Cursor Agent CLI 2026.11.19 over ACP on the machine's sign-in. What it sent is in
+  [`harness-messages.md`](harness-messages.md#acp-cursor). It does not name itself in `initialize`, declares
+  only `loadSession` and session `list`, and keeps its to-do list with its own `cursor/update_todos`.
 
 ## About ACP itself
 

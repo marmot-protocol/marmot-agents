@@ -1085,7 +1085,7 @@ class Acp(Translator):
       already holds it, so nothing in the replay is sent again.
     """
 
-    harness = "acp"
+    harness = "acp"  # until the agent names itself; the driver's own name for it when it never does
     CHUNKS = {"agent_message_chunk": ("message", "Message"), "agent_thought_chunk": ("reasoning", "Thinking")}
     TOOL_KINDS = {"execute": "command", "edit": "edit", "delete": "edit", "move": "edit", "read": "read",
                   "search": "search", "fetch": "fetch"}
@@ -1108,6 +1108,7 @@ class Acp(Translator):
         self.last_tool: dict[str, dict] = {}  # tool call id -> the last event sent for it
         self.n = collections.Counter()  # how many items a turn has made with no id of the agent's
         self.hidden: set = set()  # tool calls that are really a question, which the form asks
+        self.todos: list = []  # Cursor's to-do list in this turn, as it last stood
         self.turn_request = None  # the id of the `session/prompt` that started the turn
 
     def forget_turn(self):
@@ -1116,6 +1117,7 @@ class Acp(Translator):
         self.n.clear()
         self.declined.clear()
         self.hidden.clear()
+        self.todos = []
         self.turn, self.turn_request, self.cancelled = None, None, False
 
     # -- the wire
@@ -1301,6 +1303,9 @@ class Acp(Translator):
         if t.get("name") == "question":
             # OpenCode's question tool asks through a form, which becomes the one question item (rule 4).
             return self.skip("tool call that is really a question (question)")
+        if (t.get("rawInput") or {}).get("_toolName") == "updateTodos":
+            # Cursor's to-do tool: its list comes in `cursor/update_todos`, which becomes the plan (rule 4).
+            return self.skip("tool call that is really a plan (updateTodos)")
         acp_kind = t.get("kind") or "other"
         kind = self.TOOL_KINDS.get(acp_kind, "other")
         state = self.TOOL_STATES.get(t.get("status") or "pending", "running")
@@ -1327,6 +1332,8 @@ class Acp(Translator):
             body["exit_code"] = code
             if state == "done" and code not in (None, 0):
                 state = "failed"
+            if output is None and isinstance(ro.get("stdout"), str) and ro["stdout"]:
+                body["output"] = ro["stdout"]  # Cursor sends a command's output only there
         elif kind == "edit":
             changes = [{"path": c.get("path"), "change": "add" if c.get("oldText") is None else "update",
                         "diff": changed_lines(c.get("oldText"), c.get("newText") or "")}
@@ -1389,7 +1396,26 @@ class Acp(Translator):
             self.pending[("s", rid)] = {"item": item, "values": values, "custom": custom}
             return self.emit(item, "question", "waiting", "Question", qs[0]["text"] if qs else p.get("message") or "",
                              {"answer_via": "request", "subject": subject, "questions": qs}, f"{method} (request)", p)
+        if method == "cursor/update_todos":
+            return self.update_todos(method, p)
         self.unknown(f"{method} (request)")
+
+    def update_todos(self, method, p):
+        """Cursor's to-do list, which it sends instead of ACP's plan. `merge` updates the entries it names
+        by id and adds new ones; otherwise the list replaces the last."""
+        given = [t for t in p.get("todos") or [] if isinstance(t, dict)]
+        if p.get("merge"):
+            ids = {t.get("id"): t for t in given}
+            merged = [ids.pop(t.get("id"), t) for t in self.todos]
+            self.todos = merged + [t for t in given if t.get("id") in ids]
+        else:
+            self.todos = given
+        entries = [{"text": t.get("content"), "state": {"pending": "pending", "in_progress": "running",
+                    "completed": "done"}.get(t.get("status"), "pending")} for t in self.todos]
+        done = bool(entries) and all(e["state"] == "done" for e in entries)
+        text = "\n".join(f"[{'x' if e['state'] == 'done' else ' '}] {e['text']}" for e in entries)
+        self.emit(f"plan:{self.turn}", "plan", "done" if done else "running", "Plan", text,
+                  {"entries": entries}, f"{method} (request)", p)
 
     def response(self, m):
         method, p, owner = self.pending.pop(("c", m.get("id")), (None, {}, (None, None)))
@@ -2621,6 +2647,8 @@ def translate(path: Path) -> Translator:
         t = Claude()
     elif any(r["msg"].get("jsonrpc") == "2.0" for r in recs):
         t = Acp()  # Codex leaves out the JSON-RPC version; ACP agents send it
+        if path.parent.parent.name == "acp":
+            t.harness = path.parent.name  # what the driver calls the agent, for one that never names itself
     else:
         t = Codex()
     for r in recs:
@@ -2709,7 +2737,7 @@ def crate_shape(value, key=None):
 
 
 # The harnesses whose drivers are tested against the prototype's events (D-074).
-DRIVEN = {"codex": "Codex", "claude": "Claude Code", "opencode": "OpenCode", "goose": "Goose"}
+DRIVEN = {"codex": "Codex", "claude": "Claude Code", "opencode": "OpenCode", "goose": "Goose", "cursor": "Cursor"}
 
 
 def expected(folder: Path, check_only: bool) -> int:
