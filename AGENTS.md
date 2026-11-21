@@ -7,17 +7,15 @@ duplicate it here.
 
 Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) into Marmot group chats.
 
-**Status: building towards the swap.** There is a Rust workspace under `crates/` with four crates, and CI that
-checks them: `marmot-agent-events`, the agent event and its eleven item types; `marmot-agent-driver`, the trait
-a driver implements; `marmot-agent-codex`, the Codex driver, which runs Codex and translates both ways, with
-subagents switched off for now; and `marmot-agent`, the core, which runs one agent's account through MDK and
-drives Codex, with a test that runs it end to end on MDK's test relay. The core also serves a local socket, and
-`packages/claude-code` is the Claude Code driver, a TypeScript program that drives Claude Code through it, and
-`packages/openclaw` is the OpenClaw plugin, a channel that runs inside OpenClaw, in a container, and connects to
-it; `python/marmot_hermes` is the Hermes plugin, which runs inside Hermes and connects to it the same way.
-`marmot-agent-acp` is the ACP driver, replayed against the OpenCode, Goose and Cursor recordings.
-`marmot-agent-pi` is the Pi driver, built into the core like Codex's, which runs Pi in a container from
-`tools/pi`. What is built next, and in what order, is in
+**Status: every harness is driven; building towards the swap (M4).** The Rust workspace under `crates/` has
+seven crates, and CI checks them: `marmot-agent-events`, the agent event and its eleven item types;
+`marmot-agent-driver`, the trait a driver implements; the built-in drivers `marmot-agent-codex` (Codex, with
+subagents switched off for now), `marmot-agent-acp` (OpenCode, Goose and Cursor over ACP) and `marmot-agent-pi`
+(Pi, in a container from `tools/pi`); `marmot-agent`, the core, which runs one agent's account through MDK and
+drives a built-in driver or serves a local socket; and `marmot-agent-chat`, a terminal client for trying it.
+Over the socket connect `packages/claude-code`, the Claude Code driver, `packages/openclaw`, the OpenClaw plugin,
+and `python/marmot_hermes`, the Hermes plugin; the plugins run inside their gateways, in containers. Each driver
+has a scenario that runs it end to end against the real harness on MDK's test relay. What is built next, and in what order, is in
 [`docs/plan.md`](docs/plan.md). The core program is called `marmot-agent`
 ([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and
 decisions under `docs/`, plus recorded harness sessions and the tools that made them. The connectors that ship
