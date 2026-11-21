@@ -118,8 +118,9 @@ async fn init(config: &Config) -> Result<(), String> {
 }
 
 async fn run(config: &Config) -> Result<(), String> {
-    // Listen for SIGTERM first, so a service manager's stop during start-up is heard too.
-    let stop = stopped();
+    // Listen for SIGTERM first, so a service manager's stop during start-up is heard too, and
+    // ends start-up: a harness that is slow to start is not waited for.
+    let mut stop = Box::pin(stopped());
     let (home, app, runtime) = open(config)?;
     let accounts = home
         .accounts()
@@ -132,38 +133,43 @@ async fn run(config: &Config) -> Result<(), String> {
     };
     // Subscribe before starting, so what MDK delivers while it starts is not missed.
     let events = runtime.subscribe();
-    runtime
-        .start()
-        .await
-        .map_err(|_| "MDK could not start the account")?;
+    let Some(started) = unless_stopped(&mut stop, runtime.start()).await else {
+        runtime.shutdown().await;
+        return Ok(());
+    };
+    started.map_err(|_| "MDK could not start the account")?;
     let marmot = Marmot {
         runtime: runtime.clone(),
         app,
         label: account.label,
         agent: PubKey(account.account_id_hex),
     };
+    // A harness stopped while it starts is killed: each driver's child is killed when dropped.
     match (&config.codex, &config.acp, config.pi_setup()) {
         (Some(codex), _, _) => {
             let setup = config.setup().map_err(|e| e.to_string())?;
-            let driver = Codex::start(&codex.program, setup)
-                .await
-                .map_err(|_| "Codex could not be started")?;
-            let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
-            core.run(events, stop).await;
+            if let Some(driver) =
+                unless_stopped(&mut stop, Codex::start(&codex.program, setup)).await
+            {
+                let driver = driver.map_err(|_| "Codex could not be started")?;
+                let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
+                core.run(events, stop).await;
+            }
         }
         (None, Some(acp), _) => {
-            let driver = Acp::start(&acp.command, &acp.cwd, &acp.name)
-                .await
-                .map_err(|_| "the ACP agent could not be started")?;
-            let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
-            core.run(events, stop).await;
+            let starting = Acp::start(&acp.command, &acp.cwd, &acp.name);
+            if let Some(driver) = unless_stopped(&mut stop, starting).await {
+                let driver = driver.map_err(|_| "the ACP agent could not be started")?;
+                let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
+                core.run(events, stop).await;
+            }
         }
         (None, None, Some(setup)) => {
-            let driver = Pi::start(setup)
-                .await
-                .map_err(|_| "Pi could not be started")?;
-            let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
-            core.run(events, stop).await;
+            if let Some(driver) = unless_stopped(&mut stop, Pi::start(setup)).await {
+                let driver = driver.map_err(|_| "Pi could not be started")?;
+                let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
+                core.run(events, stop).await;
+            }
         }
         (None, None, None) => {
             drop(events);
@@ -176,6 +182,17 @@ async fn run(config: &Config) -> Result<(), String> {
     }
     runtime.shutdown().await;
     Ok(())
+}
+
+/// What `work` gives, or nothing when the core is asked to stop first; `work` is then dropped.
+async fn unless_stopped<T>(
+    stop: &mut (impl std::future::Future<Output = ()> + Unpin),
+    work: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    tokio::select! {
+        done = work => Some(done),
+        () = stop => None,
+    }
 }
 
 /// Ends when the core is asked to stop: Ctrl-C in a terminal, or SIGTERM, which is how systemd
