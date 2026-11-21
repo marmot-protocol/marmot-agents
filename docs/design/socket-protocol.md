@@ -9,9 +9,10 @@ the ids a connector sees, how often a prompt is delivered, and the credential
 ([D-033](../decisions.md#d-033-the-sockets-framing-is-json-rpc-20-one-message-per-line) to
 [D-038](../decisions.md#d-038-each-connector-has-its-own-token)). They are listed [at the end](#what-was-decided).
 
-Still a draft: the exact fields of each message, and the list of capabilities. Not designed: the individual
-requests of the chat section, and administration
-([Q-05](../open-questions.md#q-05-how-is-the-agent-administered)).
+The core speaks the driver section now, with the fields in [the messages, as built](#the-messages-as-built):
+the trait's shapes ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)), provisional until
+the project owner reviews them at the end of M2. Not designed: the individual requests of the chat section, and
+administration ([Q-05](../open-questions.md#q-05-how-is-the-agent-administered)).
 
 ## What it is for
 
@@ -111,8 +112,8 @@ sees.
 This section is behind the Rust trait, which is decided
 ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)). There, each answer and control
 carries an id the core makes up, an event names the requests it settles and the chat it belongs to, and an
-answer gives one choice to an approval or one entry for each question. The socket takes the same shapes when
-it is designed.
+answer gives one choice to an approval or one entry for each question. The socket takes the same shapes: see
+[the messages, as built](#the-messages-as-built).
 
 Why each part of a prompt is there:
 
@@ -134,7 +135,7 @@ it.
 
 | Field | Meaning |
 | --- | --- |
-| `item` | The connector's own id for the item. The same id again means the item changed |
+| `item` | The connector's own id for the item. The same id again means the item changed, so an id is never reused for another item, also after the connector reconnects |
 | `type`, `state` | One of the item types, and its state |
 | `title`, `text` | The plain rendering |
 | `body` | The type's own fields |
@@ -175,11 +176,9 @@ designed yet.
 ## Capabilities
 
 The connector states in the hello what its harness can do. The core and the apps read these and never check a
-harness's name. This table is a draft, drawn from the recordings, and stays one until the socket is
-designed. The Rust drivers' flags are decided
-([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)): seven of these, leaving out
-`tool_items`, `questions` and `reasoning`, and with `files_in` as `none`, `images` or `any` rather than yes or
-no. The socket takes those when it is designed.
+harness's name. They are the seven flags of
+[D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags), every one, every time; what each
+harness states was drawn from the recordings.
 
 | Capability | Values | Codex | Claude Code | Hermes | OpenClaw |
 | --- | --- | --- | --- | --- | --- |
@@ -187,11 +186,8 @@ no. The socket takes those when it is designed.
 | `mid_turn`: what happens to a prompt during a turn | `fold`, `restart`, `queue` | `fold` | `restart` | `fold` | `queue` |
 | `sessions`: who picks the session | `core` or `own` | `core` | `core` | `own` | `own` |
 | `resume`: a session survives a restart | yes or no | Yes | Yes | Not recorded | Not recorded |
-| `tool_items`: tools reported as items | yes or no | Yes | Yes | No | Yes |
 | `approvals` | yes or no | Yes | Yes | Yes | Yes, if the owner switched forwarding on |
-| `questions`: how a question is answered | `request`, `message` or both | Both | `request` | `message` | `request` |
-| `reasoning` | yes or no | No | Yes | No | Yes, when set to stream |
-| `files_in`: attachments on a prompt | yes or no | Images | Images | Not recorded | Not recorded |
+| `files_in`: attachments on a prompt | `none`, `images` or `any` | `images` | `images` | Not recorded | Not recorded |
 | `approval_commands`: typed commands that need the right to approve | a list; each entry says whether it counts anywhere in a message or only at the start | None | None | `/approve`, `/deny`, `/yolo`, `/approvals` and more | `/approve`, `/exec` anywhere in a message, `/elevated` and more |
 
 `approval_commands` exists because Hermes and OpenClaw accept an approval typed as a message. A typed message
@@ -251,7 +247,7 @@ shortened.
 ← {"method":"event","params":{"item":"cmd-9","type":"tool","state":"running","title":"Running a command","text":"cargo test","turn":"turn-4"}}
 ← {"method":"event","params":{"item":"ap-2","type":"approval","state":"waiting","title":"Allow this command?","body":{"subject":"cmd-9","choices":[{"id":"once","label":"Allow once","effect":"allow"},{"id":"deny","label":"Deny","effect":"deny"}]},"turn":"turn-4"}}
 
-→ {"id":8,"method":"answer","params":{"item":"ap-2","by":{"id":"u-1","name":"Alice"},"choices":["once"]}}
+→ {"id":8,"method":"answer","params":{"item":"ap-2","by":{"id":"u-1","name":"Alice"},"given":{"choice":"once"}}}
 ← {"id":8,"result":{}}
 ← {"method":"event","params":{"item":"ap-2","type":"approval","state":"done","text":"Answered: Allow once","turn":"turn-4"}}
 ← {"method":"event","params":{"item":"cmd-9","type":"tool","state":"done","title":"Ran a command","body":{"exit_code":0},"turn":"turn-4"}}
@@ -260,6 +256,45 @@ shortened.
 ```
 
 In the chat this is one message from the agent, and three rows that each updated in place.
+
+## The messages, as built
+
+What `crates/marmot-agent/src/socket.rs` sends and reads. Provisional: the project owner reviews them at the end
+of M2. The socket is `socket/marmot-agent.sock` in the agent's home, in a folder only the owner can open, and the
+token is `connector.token` there, which the core writes the first time ([D-038](../decisions.md#d-038-each-connector-has-its-own-token)).
+
+**The hello**, the connector's first request:
+
+```json
+{"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {
+  "protocol": "marmot.agent-control.v3",
+  "connector": {"name": "claude-code", "version": "0.1.0"},
+  "harness": {"name": "claude-code", "version": "2.1.326"},
+  "token": "…",
+  "capabilities": {"interrupt": true, "mid_turn": "restart", "sessions": "core", "resume": true,
+                   "approvals": true, "files_in": "images", "approval_commands": []}}}
+```
+
+The seven flags of D-058, every one. The core answers `{"core": {"version"}, "agent": {"name"}}`, or an error:
+`-32001` for another protocol version, `-32002` for a token that is not this agent's, `-32600` or `-32602` for a
+hello it cannot read.
+
+**`prompt`**: `message`, `text`, `chat` (`id`, `group`, `name`), `sender` (`id`, `name`), `attachments`
+(`path`, `name`, `media_type`), and when there are any, `reply_to` (`message`, `text`, `author`) and `session`.
+
+**`answer`**: `request`, `item`, `by` (`id`, `name`) and `given`: `{"choice": <id>}` for an approval, or
+`{"questions": [{"question", "options", "text"}]}`.
+
+**`control`**: `request`, `by` and `action`, by `type`: `interrupt` (`turn`), `new_session` (`chat`,
+`session`), `set` (`session`, `setting`, `value`), `own` (`session`, `id`).
+
+A connector answers each with `{}` once it has taken it, or with an error whose `data` holds a `reason` (one of
+the eight words above) and, if it likes, a `detail` for the chat.
+
+**`event`**, a notification: an agent event as `marmot-agent-events` writes it (`item`, `type`, `state`,
+`title`, `text`, `body`, and `session`, `turn` and `native` when there are any), with three more fields: `chat`,
+the chat it belongs to; `prompts`, on a turn; and `settles`, the requests whose effect it shows. The connector
+leaves out `harness` and `seq`: the core fills them in.
 
 ## What it replaces
 

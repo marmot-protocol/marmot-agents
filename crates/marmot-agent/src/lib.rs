@@ -6,6 +6,7 @@
 //! - [`carrier`]: how items, answers and controls travel in a group, for now (D-069).
 //! - [`marmot`]: the Marmot side, through MDK.
 //! - [`run`]: the program loop that joins MDK, a driver and the conversation.
+//! - [`socket`]: a driver that is a separate program, on the local socket.
 //! - [`config`]: the standing settings (D-073).
 
 pub mod carrier;
@@ -15,6 +16,7 @@ pub mod keys;
 pub mod marmot;
 pub mod rights;
 pub mod run;
+pub mod socket;
 
 pub use conversation::{Act, Conversation, Heard, HeardQuote, HeardRequest, Saved, Sending, Where};
 pub use keys::{EventKey, GroupKey, PubKey};

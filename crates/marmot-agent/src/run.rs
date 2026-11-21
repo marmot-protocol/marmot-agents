@@ -17,6 +17,7 @@ use crate::config::Config;
 use crate::conversation::{Act, Conversation, Saved, Sending};
 use crate::keys::{EventKey, GroupKey};
 use crate::marmot::{Incoming, Marmot, Message};
+use crate::socket::SocketDriver;
 use marmot_agent_driver::Driver;
 use marmot_app::{AppError, MarmotAppEvent};
 use serde::{Deserialize, Serialize};
@@ -357,6 +358,58 @@ impl<D: Driver> Core<D> {
         };
         if self.store.save(&kept).is_err() {
             eprintln!("marmot-agent: the state file could not be written");
+        }
+    }
+}
+
+/// Serves connectors on the socket, one at a time, until `stop` resolves. Each connector that
+/// gives a good hello drives the agent until it goes; then the core closes what it left open, as
+/// for any driver that ends (D-058), and waits for the next. What arrives in between is stored by
+/// MDK, and read when the next connector has come.
+pub async fn serve(
+    marmot: Marmot,
+    config: &Config,
+    store: &Path,
+    listener: tokio::net::UnixListener,
+    token: String,
+    stop: impl std::future::Future<Output = ()>,
+) -> Result<(), String> {
+    let (stopping, stopped) = tokio::sync::watch::channel(false);
+    let agent = config.name.clone().unwrap_or_else(|| "agent".into());
+    tokio::pin!(stop);
+    loop {
+        let stream = tokio::select! {
+            accepted = listener.accept() => match accepted {
+                Ok((stream, _)) => stream,
+                Err(_) => continue,
+            },
+            () = &mut stop => return Ok(()),
+        };
+        let greeted = tokio::select! {
+            greeted = SocketDriver::greet(stream, &token, &agent) => greeted,
+            () = &mut stop => return Ok(()),
+        };
+        let driver = match greeted {
+            Ok(driver) => driver,
+            Err(why) => {
+                eprintln!("marmot-agent: {why}");
+                continue;
+            }
+        };
+        let events = marmot.runtime.subscribe();
+        let core = Core::new(marmot.clone(), driver, config, Store::new(store))?;
+        let mut until = stopped.clone();
+        let running = core.run(events, async move {
+            let _ = until.wait_for(|stopping| *stopping).await;
+        });
+        tokio::pin!(running);
+        tokio::select! {
+            () = &mut running => {}
+            () = &mut stop => {
+                let _ = stopping.send(true);
+                running.await;
+                return Ok(());
+            }
         }
     }
 }
