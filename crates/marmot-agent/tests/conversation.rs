@@ -185,7 +185,7 @@ fn started() -> (Conversation, Prompt) {
 /// Sends an item for the direct chat and records that it went out as `first`.
 fn sent(talk: &mut Conversation, chat: &str, event: AgentEvent, first: &str) -> Item {
     let (_, key, item) = the_item(talk.emitted(emitted(chat, event)));
-    talk.sent(&key, Some(EventKey::from(first)));
+    talk.sent(&key, EventKey::from(first));
     item
 }
 
@@ -369,7 +369,7 @@ fn the_agents_words_are_a_chat_message() {
         panic!("no words")
     };
     assert_eq!((text.as_str(), edit), ("the plain rendering", None));
-    talk.sent(&key, Some(EventKey::from("e-words")));
+    talk.sent(&key, EventKey::from("e-words"));
     assert!(talk.emitted(emitted(&chat, words(State::Done))).is_empty());
 }
 
@@ -583,8 +583,28 @@ fn a_stop_closes_items_and_settles_requests() {
     );
 
     let mut restarted = conversation(saved);
-    let (_, _, closed) = the_item(restarted.recover());
-    assert_eq!(closed.event.header().state, State::Cancelled);
+    let items: Vec<Item> = restarted
+        .recover()
+        .into_iter()
+        .map(|a| match a {
+            Act::Send {
+                what: Sending::Item { item, .. },
+                ..
+            } => *item,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(items.len(), 2, "the turn closed and the interrupt settled");
+    assert!(
+        items
+            .iter()
+            .any(|i| i.event.header().state == State::Cancelled)
+    );
+    assert!(
+        items
+            .iter()
+            .any(|i| is_refused(i, "failed") && i.settles == vec![EventKey::from("r1")])
+    );
     assert!(restarted.recover().is_empty());
 }
 
@@ -666,4 +686,123 @@ fn a_request_is_read_only_by_its_agent() {
     assert_eq!(target, Some(EventKey::from("es")));
     assert!(read == asked);
     assert!(carrier::read_request(&PubKey::from("other"), &out.tags).is_none());
+}
+
+// A request that points at an item acts only while that item is live: a new session aimed at a
+// finished turn reaches no driver (D-028).
+#[test]
+fn a_request_about_a_finished_item_does_nothing() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    assert_eq!(
+        the_item(talk.emitted(emitted(&chat, event("t1", State::Done, turn()))))
+            .2
+            .version,
+        2
+    );
+    let late = request(direct(), "r1", OWNER, Some("e-t1"), Asked::NewSession);
+    assert!(is_refused(&the_item(talk.asked(late)).2, "nothing_to_do"));
+    sent(
+        &mut talk,
+        &chat,
+        event("ap", State::Waiting, approval()),
+        "e-ap",
+    );
+    talk.emitted(emitted(&chat, event("ap", State::Declined, approval())));
+    let answer = request(
+        direct(),
+        "r2",
+        OWNER,
+        Some("e-ap"),
+        Asked::Choice {
+            choice: "allow".into(),
+        },
+    );
+    assert!(is_refused(&the_item(talk.asked(answer)).2, "not_waiting"));
+}
+
+// Codex puts a file edit's whole diff in the item, so a large diff is cut like large output,
+// and text that JSON escapes heavily still ends under the limit (D-057).
+#[test]
+fn a_large_diff_and_escaped_output_are_cut_to_fit() {
+    let tool = Body::Tool(body::Tool {
+        kind: body::ToolKind::Edit,
+        name: "apply_patch".into(),
+        command: None,
+        cwd: None,
+        exit_code: None,
+        duration_ms: None,
+        output: Some("\"\n".repeat(30_000)),
+        changes: vec![body::Change {
+            path: "big.txt".into(),
+            diff: format!("+{}", "line\n".repeat(30_000)),
+            change: None,
+        }],
+        query: None,
+        path: None,
+        input: None,
+        error: None,
+    });
+    let item = Item {
+        event: event("edit", State::Done, tool),
+        version: 1,
+        first: None,
+        started_by: None,
+        settles: Vec::new(),
+    };
+    let out = carrier::item(&item);
+    assert!(out.size() <= carrier::LIMIT, "{}", out.size());
+    let read = carrier::read_item(&out.content, &out.tags).unwrap();
+    assert_eq!(read.left_out.diffs, 1);
+    assert!(read.left_out.output.is_some());
+}
+
+// The first answer wins: a second one to the same item, while the first is with the driver, is
+// refused as already answered (D-028).
+#[test]
+fn a_second_answer_is_refused() {
+    let (mut talk, prompt) = started();
+    sent(
+        &mut talk,
+        &prompt.chat.id.0,
+        event("ap", State::Waiting, approval()),
+        "e-ap",
+    );
+    let allow = |event| {
+        request(
+            direct(),
+            event,
+            OWNER,
+            Some("e-ap"),
+            Asked::Choice {
+                choice: "allow".into(),
+            },
+        )
+    };
+    assert!(matches!(
+        talk.asked(allow("r1")).as_slice(),
+        [Act::Answer(_)]
+    ));
+    assert!(is_refused(
+        &the_item(talk.asked(allow("r2"))).2,
+        "already_answered"
+    ));
+}
+
+// Every version of a turn names the message that started it, the closing one too.
+#[test]
+fn a_closed_turn_still_names_its_message() {
+    let (mut talk, prompt) = started();
+    let mut started_turn = emitted(&prompt.chat.id.0, event("t1", State::Running, turn()));
+    started_turn.prompts = vec![prompt.message.clone()];
+    let (_, key, _) = the_item(talk.emitted(started_turn));
+    talk.sent(&key, EventKey::from("e-t1"));
+    let (_, _, closed) = the_item(talk.ended());
+    assert_eq!(closed.started_by, Some(EventKey::from("e1")));
 }

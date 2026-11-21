@@ -11,7 +11,7 @@
 //! (D-057).
 
 use crate::keys::{EventKey, PubKey};
-use marmot_agent_events::body::Body;
+use marmot_agent_events::body::{Body, Tool};
 use marmot_agent_events::{AgentEvent, Header, ItemId, Native, SessionId, State, TurnId};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
@@ -73,6 +73,9 @@ pub struct LeftOut {
     pub native: Option<usize>,
     /// The full length of the output, when it was cut.
     pub output: Option<usize>,
+    /// How many of an edit's diffs were cut. A diff is a tool's output too: Codex puts a file
+    /// edit's whole diff there.
+    pub diffs: usize,
 }
 
 /// An item read back from an event.
@@ -85,36 +88,64 @@ pub struct Read {
 }
 
 /// Writes one version of an item as an event, leaving out the native message and then cutting
-/// the output if it would be over the limit (D-057).
+/// the output if it would be over the limit (D-057). The output is a tool's output and each of
+/// an edit's diffs; the largest is cut first, keeping its start and its end, until the event fits.
+/// An item over the limit with nothing left to cut is sent as it is, for a relay to take or not.
 pub fn item(item: &Item) -> Outgoing {
     let whole = write_item(item, LeftOut::default());
     if whole.size() <= LIMIT {
         return whole;
     }
-    let native = item.event.native().map(|n| n.payload.get().len());
+    let mut left_out = LeftOut {
+        native: item.event.native().map(|n| n.payload.get().len()),
+        ..LeftOut::default()
+    };
+    let mut body = item.event.body().clone();
     let mut slimmer = item.clone();
-    slimmer.event = rebuild(&item.event, item.event.body().clone());
-    let left_out = LeftOut {
-        native,
-        output: None,
-    };
-    let without_native = write_item(&slimmer, left_out);
-    let over = without_native.size().saturating_sub(LIMIT);
-    let Body::Tool(tool) = item.event.body() else {
-        return without_native;
-    };
-    let Some(output) = tool.output.as_ref().filter(|_| over > 0) else {
-        return without_native;
-    };
-    let mut cut_tool = tool.clone();
-    cut_tool.output = Some(cut(output, over));
-    slimmer.event = rebuild(&item.event, Body::Tool(cut_tool));
-    let left_out = LeftOut {
-        native,
-        output: Some(output.len()),
-    };
-    write_item(&slimmer, left_out)
+    loop {
+        slimmer.event = rebuild(&item.event, body.clone());
+        let out = write_item(&slimmer, left_out);
+        let over = out.size().saturating_sub(LIMIT);
+        let Body::Tool(tool) = &mut body else {
+            return out;
+        };
+        if over == 0 || !cut_largest(tool, over, &mut left_out) {
+            return out;
+        }
+    }
 }
+
+/// Cuts the largest of a tool's output and diffs by at least `over` bytes, and notes it. `false`
+/// when nothing is left that a cut would shorten.
+fn cut_largest(tool: &mut Tool, over: usize, left_out: &mut LeftOut) -> bool {
+    // Escaping in JSON can make text count for more than its length, so cut twice as much.
+    let over = over * 2;
+    let output = tool.output.as_ref().map_or(0, String::len);
+    let diff = tool
+        .changes
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, c)| c.diff.len())
+        .map(|(at, c)| (at, c.diff.len()));
+    let worth_cutting = MARKER_ROOM * 2;
+    match diff {
+        Some((at, length)) if length > output && length > worth_cutting => {
+            let change = &mut tool.changes[at];
+            change.diff = cut(&change.diff, over);
+            left_out.diffs += 1;
+        }
+        _ if output > worth_cutting => {
+            let text = tool.output.take().unwrap_or_default();
+            left_out.output.get_or_insert(text.len());
+            tool.output = Some(cut(&text, over));
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// Room left for the marker that says where text was cut.
+const MARKER_ROOM: usize = 64;
 
 /// The event with another body and no native message: what the core sends when it leaves the
 /// native message out, cuts the output, or closes an item itself.
@@ -127,7 +158,7 @@ pub fn rebuild(event: &AgentEvent, body: Body) -> AgentEvent {
 /// and the end, with a marker where it was cut.
 fn cut(text: &str, over: usize) -> String {
     let marker = format!("\n… cut: {} bytes in all …\n", text.len());
-    let keep = text.len().saturating_sub(over + marker.len() + 64);
+    let keep = text.len().saturating_sub(over + marker.len() + MARKER_ROOM);
     let mut head = keep / 2;
     while !text.is_char_boundary(head) {
         head -= 1;
@@ -178,6 +209,9 @@ fn write_item(item: &Item, left_out: LeftOut) -> Outgoing {
     if let Some(length) = left_out.output {
         tags.push(tag(["cut", "output", &length.to_string()]));
     }
+    if left_out.diffs > 0 {
+        tags.push(tag(["cut", "diffs", &left_out.diffs.to_string()]));
+    }
     Outgoing {
         kind: ITEM_KIND,
         content: header.text.clone(),
@@ -226,6 +260,7 @@ pub fn read_item(content: &str, tags: &[Vec<String>]) -> Option<Read> {
         left_out: LeftOut {
             native: sized("native"),
             output: sized("output"),
+            diffs: sized("diffs").unwrap_or(0),
         },
     })
 }

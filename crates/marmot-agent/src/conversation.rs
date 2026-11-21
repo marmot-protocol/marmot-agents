@@ -113,7 +113,10 @@ pub enum Act {
     Answer(Answer),
     /// Hand a control to the driver, then call [`Conversation::requested`].
     Control(Control),
-    /// Send something to a group, then call [`Conversation::sent`] with the event's id.
+    /// Send something to a group, then call [`Conversation::sent`] with the event's id. The
+    /// conversation counts on every send going out, since an item's later versions, and the
+    /// requests they settle, follow from it: the program tries a failed send again until it goes
+    /// out or the core stops.
     Send {
         /// The group.
         group: GroupKey,
@@ -174,6 +177,8 @@ pub struct Saved {
     items: BTreeMap<String, Record>,
     /// The order finished items were finished in, oldest first, so the oldest are forgotten.
     finished: VecDeque<String>,
+    /// Requests handed to the driver and not settled, by the core's id for them.
+    pending: BTreeMap<String, Pending>,
     /// The next number for an id the core makes up.
     next: u64,
 }
@@ -200,6 +205,9 @@ struct Record {
     last: AgentEvent,
     /// The agent's words, sent as a chat message, and what they said when last sent.
     words: Option<String>,
+    /// For a turn: the message that started it, carried by every version.
+    #[serde(default)]
+    started_by: Option<EventKey>,
 }
 
 impl Record {
@@ -208,13 +216,18 @@ impl Record {
     }
 }
 
-/// A request the driver was handed and that is not settled yet.
+/// A request the driver was handed and that is not settled yet. Kept across a restart, so a core
+/// that stopped settles it when it starts again (D-070).
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct Pending {
     event: EventKey,
     group: GroupKey,
     chat: String,
     /// For a new session: the driver took it, so the chat's saved session is not named again.
     new_session: bool,
+    /// For an answer: the item it answers, so a second answer to it is refused.
+    #[serde(default)]
+    answers: Option<String>,
 }
 
 /// The conversation: every rule about people, sessions and items.
@@ -228,8 +241,6 @@ pub struct Conversation {
     taken: HashSet<String>,
     /// The core's id for each prompt, back to its event, so a turn can name what started it.
     messages: HashMap<String, EventKey>,
-    /// Requests handed to the driver and not settled.
-    pending: HashMap<String, Pending>,
     seen: HashSet<EventKey>,
     seen_order: VecDeque<EventKey>,
 }
@@ -252,7 +263,6 @@ impl Conversation {
             saved,
             taken: HashSet::new(),
             messages: HashMap::new(),
-            pending: HashMap::new(),
             seen: HashSet::new(),
             seen_order: VecDeque::new(),
         }
@@ -263,16 +273,17 @@ impl Conversation {
         &self.saved
     }
 
-    /// After a restart: closes as interrupted every item a stopped core left open (D-070).
+    /// After a restart: closes as interrupted every item a stopped core left open, and settles as
+    /// failed every request it left unsettled (D-070).
     pub fn recover(&mut self) -> Vec<Act> {
-        self.close_open()
+        self.ended()
     }
 
     /// The driver stopped: closes every item still open, and settles every request still open as
     /// failed (D-058, D-070).
     pub fn ended(&mut self) -> Vec<Act> {
         let mut acts = self.close_open();
-        let pending: Vec<String> = self.pending.keys().cloned().collect();
+        let pending: Vec<String> = self.saved.pending.keys().cloned().collect();
         for request in pending {
             acts.extend(self.refuse(&request, Refusal::new(Reason::Failed)));
         }
@@ -367,7 +378,28 @@ impl Conversation {
         if heard.target.is_some() && target.is_none() {
             return self.refuse_now(&heard, &chat, Refusal::new(Reason::UnknownItem));
         }
-        let target = target.map(|key| self.saved.items[&key].last.clone());
+        let answering = matches!(heard.asked, Asked::Choice { .. } | Asked::Questions { .. });
+        let answers = target.clone().filter(|_| answering);
+        let target = target.map(|key| self.saved.items[&key].clone());
+        // One that points at an item acts only while the item is live, and an answer only while
+        // its item is waiting and nobody has answered it first (D-028).
+        if let Some(record) = &target {
+            let waiting = record.last.header().state == State::Waiting;
+            let refusal = if answering && self.saved.pending.values().any(|p| p.answers == answers)
+            {
+                Some(Reason::AlreadyAnswered)
+            } else if answering && !waiting {
+                Some(Reason::NotWaiting)
+            } else if !record.open() {
+                Some(Reason::NothingToDo)
+            } else {
+                None
+            };
+            if let Some(reason) = refusal {
+                return self.refuse_now(&heard, &chat, Refusal::new(reason));
+            }
+        }
+        let target = target.map(|record| record.last);
         let by = self.person(&heard.author, heard.author_name.clone());
         let request = RequestId(self.make_id("r"));
         let (right, act) = match self.translate(&heard, &chat, target.as_ref(), &request, by) {
@@ -384,13 +416,14 @@ impl Conversation {
             )];
         }
         let new_session = matches!(heard.asked, Asked::NewSession);
-        self.pending.insert(
+        self.saved.pending.insert(
             request.0.clone(),
             Pending {
                 event: heard.event,
                 group: heard.chat.group,
                 chat: chat.id.0,
                 new_session,
+                answers,
             },
         );
         vec![act]
@@ -504,7 +537,7 @@ impl Conversation {
     pub fn requested(&mut self, request: &RequestId, result: Result<(), Refusal>) -> Vec<Act> {
         match result {
             Ok(()) => {
-                if let Some(pending) = self.pending.get(&request.0)
+                if let Some(pending) = self.saved.pending.get(&request.0)
                     && pending.new_session
                 {
                     self.taken.insert(pending.chat.clone());
@@ -532,12 +565,6 @@ impl Conversation {
         if let (Body::Session(_), Some(session)) = (emitted.event.body(), &header.session) {
             self.saved.sessions.insert(chat.clone(), session.clone());
         }
-        let settles: Vec<EventKey> = emitted
-            .settles
-            .iter()
-            .filter_map(|r| self.pending.remove(&r.0))
-            .map(|p| p.event)
-            .collect();
         let key = format!("{chat}/{}", header.item.as_str());
         let started_by = match emitted.event.body() {
             Body::Turn(_) => emitted
@@ -557,8 +584,12 @@ impl Conversation {
                 version: 0,
                 last: emitted.event.clone(),
                 words: None,
+                started_by: None,
             });
         record.last = emitted.event.clone();
+        if record.started_by.is_none() {
+            record.started_by = started_by;
+        }
         let act = if let Body::Message(message) = emitted.event.body() {
             let text = message_text(&header, message);
             if text.is_empty() || record.words.as_deref() == Some(text.as_str()) {
@@ -573,6 +604,13 @@ impl Conversation {
                 })
             }
         } else {
+            let pending = &mut self.saved.pending;
+            let settles = emitted
+                .settles
+                .iter()
+                .filter_map(|r| pending.remove(&r.0))
+                .map(|p| p.event)
+                .collect();
             record.version += 1;
             Some(Sending::Item {
                 key: key.clone(),
@@ -580,13 +618,13 @@ impl Conversation {
                     event: emitted.event.clone(),
                     version: record.version,
                     first: record.first.clone(),
-                    started_by,
+                    started_by: record.started_by.clone(),
                     settles,
                 }),
             })
         };
         let open = record.open();
-        if !open && !matches!(emitted.event.body(), Body::Session(_)) {
+        if !open {
             self.finished(key);
         }
         act.map(|what| Act::Send { group, what })
@@ -594,13 +632,13 @@ impl Conversation {
             .collect()
     }
 
-    /// Something was sent: `event` is its id, `None` when the send failed. The first event of an
-    /// item is what its later versions name.
-    pub fn sent(&mut self, key: &str, event: Option<EventKey>) {
+    /// Something was sent, and `event` is its id. The first event of an item is what its later
+    /// versions name.
+    pub fn sent(&mut self, key: &str, event: EventKey) {
         if let Some(record) = self.saved.items.get_mut(key)
             && record.first.is_none()
         {
-            record.first = event;
+            record.first = Some(event);
         }
     }
 
@@ -713,7 +751,14 @@ impl Conversation {
         }
     }
 
+    /// A finished item is kept for a while, to recognise a late request that names it, without
+    /// its native message, which nothing needs again.
     fn finished(&mut self, key: String) {
+        if let Some(record) = self.saved.items.get_mut(&key)
+            && record.last.native().is_some()
+        {
+            record.last = crate::carrier::rebuild(&record.last, record.last.body().clone());
+        }
         if self.saved.finished.contains(&key) {
             return;
         }
@@ -753,7 +798,7 @@ impl Conversation {
     }
 
     fn refuse(&mut self, request: &str, refusal: Refusal) -> Vec<Act> {
-        let Some(pending) = self.pending.remove(request) else {
+        let Some(pending) = self.saved.pending.remove(request) else {
             return Vec::new();
         };
         let chat = Chat {
