@@ -289,7 +289,7 @@ impl<D: Driver> Core<D> {
     /// Sends, trying again for as long as MDK is busy, and a few times for anything else. MDK
     /// keeps a send in the group's queue when no relay takes it, so any other failure is one that
     /// trying again will not mend; that send is given up.
-    async fn send(&self, group: &GroupKey, what: &Sending) -> Option<EventKey> {
+    async fn send(&mut self, group: &GroupKey, what: &Sending) -> Option<EventKey> {
         let mut tries = 0;
         let mut wait = Duration::from_millis(100);
         loop {
