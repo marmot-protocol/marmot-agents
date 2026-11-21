@@ -11,3 +11,15 @@ repository = "https://github.com/marmot-protocol/marmot-agents"
 publish = false
 
 # Unsafe code is forbidden for every crate in .cargo/config.toml.
+
+# MDK, which the core uses as a library (D-002), builds against these. A git dependency does not
+# bring them along, so they are copied from MDK's Cargo.toml at the revision the core depends on.
+# Change them together with that revision.
+[patch.crates-io]
+hax-lib-macros = { git = "https://github.com/cryspen/hax.git", rev = "8f9cb576e58f6cc7e9ed249a7d4439b0f7ed0da7" }
+# SQLCipher 4.17, which MDK pins: the crates.io release warns on every failed memory lock.
+libsqlite3-sys = { git = "https://github.com/rusqlite/rusqlite.git", rev = "5ae7fdf83085c595fd54f977b3a56ccacabaf16b" }
+
+# Unoptimised SQLite dominates MDK's test time, so MDK builds it optimised even in tests.
+[profile.dev.package.libsqlite3-sys]
+opt-level = 3

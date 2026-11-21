@@ -8,7 +8,23 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+marmot-agent-codex = { path = "../marmot-agent-codex" }
 marmot-agent-driver = { path = "../marmot-agent-driver" }
 marmot-agent-events = { path = "../marmot-agent-events" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
+# The standing settings are one TOML file (D-073).
+toml = "0.9"
+hex = "0.4"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+# MDK, as a library (D-002). The revision moves together with the [patch] entries in the workspace
+# Cargo.toml and tools/odin/install.sh.
+marmot-app = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220" }
+marmot-account = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220" }
+cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220" }
+
+[dev-dependencies]
+# MDK's test relay, and its storage settings for tests.
+nostr-relay-builder = "0.44"
+storage-sqlite = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220", features = ["test-support"] }
+tempfile = "3"

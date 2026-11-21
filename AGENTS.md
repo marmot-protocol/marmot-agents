@@ -10,8 +10,8 @@ Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) i
 **Status: building towards the swap.** There is a Rust workspace under `crates/` with four crates, and CI that
 checks them: `marmot-agent-events`, the agent event and its eleven item types; `marmot-agent-driver`, the trait
 a driver implements; `marmot-agent-codex`, the Codex driver, which runs Codex and translates both ways, with
-subagents switched off for now; and `marmot-agent`, the core, which so far has its rules about people,
-sessions and items and how items travel, and no Marmot side yet. No socket exists yet. What is built next, and in what order, is in
+subagents switched off for now; and `marmot-agent`, the core, which runs one agent's account through MDK and
+drives Codex, with a test that runs it end to end on MDK's test relay. No socket exists yet. What is built next, and in what order, is in
 [`docs/plan.md`](docs/plan.md). The core program is called `marmot-agent`
 ([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and
 decisions under `docs/`, plus recorded harness sessions and the tools that made them. The connectors that ship
@@ -207,6 +207,11 @@ cargo test --locked --workspace --all-features
 
 `rustup` installs the pinned compiler the first time. `--locked` fails when `Cargo.lock` is out of date: update
 it on purpose, with `cargo update` or by building once without the flag, and commit it.
+
+The core links MDK, whose markdown parser is written in Odin and needs one exact Odin release to build. Install
+it once with `bash tools/odin/install.sh <absolute folder>`, which checks its checksum, and set `ODIN` to the
+`odin` program in that folder. The MDK revision, the `[patch]` entries in `Cargo.toml` and
+`tools/odin/install.sh` move together.
 
 For any change to a Markdown file, or to a file a Markdown file links to:
 
