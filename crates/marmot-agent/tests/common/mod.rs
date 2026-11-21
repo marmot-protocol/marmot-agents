@@ -159,4 +159,11 @@ impl Running {
         let _ = self.stop.send(());
         self.task.await.unwrap();
     }
+
+    /// Ends the core as a crash does: at once, closing nothing and saving nothing more. Its
+    /// harness goes with it.
+    pub async fn crash(self) {
+        self.task.abort();
+        let _ = self.task.await;
+    }
 }

@@ -5,7 +5,6 @@
 mod common;
 
 use common::{World, eventually};
-use marmot_agent::carrier::{self, ITEM_KIND};
 use marmot_agent_driver::{
     Answer, Capabilities, Control, Driver, Emitted, FilesIn, Harness, MidTurn, Prompt, Refusal,
     Sessions,
@@ -136,13 +135,10 @@ async fn a_person_writes_to_the_agent_and_reads_its_answer() {
     let words = world.words(&group_hex, "echo: hello").await;
     assert!(words.tags.iter().any(|t| t[0] == "turn"));
     let turn = eventually(|| {
-        world
-            .sent_by_agent(&group_hex, ITEM_KIND)
-            .into_iter()
-            .find_map(|m| {
-                let read = carrier::read_item(&m.plaintext, &m.tags)?;
-                (read.item.event.header().state == State::Done).then_some(read)
-            })
+        let items = world.items(&group_hex).into_iter().map(|(_, read)| read);
+        items
+            .filter(|read| matches!(read.item.event.body(), Body::Turn(_)))
+            .find(|read| read.item.event.header().state == State::Done)
     })
     .await;
     assert_eq!(turn.item.version, 2);
