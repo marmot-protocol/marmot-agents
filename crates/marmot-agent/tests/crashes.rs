@@ -16,7 +16,7 @@ use marmot_agent_events::body::{
     Approval, Body, Choice, Effect, Message, NoticeKind, StartedBy, Turn,
 };
 use marmot_agent_events::{AgentEvent, Header, State};
-use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -157,6 +157,33 @@ async fn settled_by(chat: &Chat<'_>, request: &EventKey, seconds: u64) -> AgentE
     .await
 }
 
+/// The state as a save would write it, as JSON, to look into.
+fn json(kept: &Kept) -> serde_json::Value {
+    serde_json::to_value(kept).unwrap()
+}
+
+/// What picks the save that fails, once a test has set it.
+type Armed = Arc<Mutex<Option<Box<dyn Fn(&serde_json::Value) -> bool + Send>>>>;
+
+/// A store whose saves fail from the first one whose state the armed check matches: the fault is
+/// put at the write a test means, not at whichever write comes next. The flag says whether it
+/// has failed.
+fn armed_store(world: &World) -> (Store, Armed, Arc<AtomicBool>) {
+    let armed: Armed = Arc::default();
+    let check = armed.clone();
+    let (store, failed) = Store::failing_when(world.state.path(), move |kept| {
+        (check.lock().unwrap().as_ref()).is_some_and(|when| when(&json(kept)))
+    });
+    (store, armed, failed)
+}
+
+/// Whether a state queues a send whose token starts with `prefix`.
+fn queues(state: &serde_json::Value, prefix: &str) -> bool {
+    (state["conversation"]["outbox"].as_array()).is_some_and(|queue| {
+        (queue.iter()).any(|q| q["token"].as_str().is_some_and(|t| t.starts_with(prefix)))
+    })
+}
+
 fn refused(event: &AgentEvent) -> Option<String> {
     match event.body() {
         Body::Notice(n) if n.kind == NoticeKind::Refused => n.reason.clone(),
@@ -212,15 +239,22 @@ async fn a_prompt_whose_read_mark_cannot_be_saved_is_not_delivered() {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     world.runtime.start().await.unwrap();
     let (driver, _events, seen) = stub(false);
-    let core = world.start(driver);
+    let (store, armed, failed) = armed_store(&world);
+    let core = world.start_with(driver, store);
     let (chat, _) = a_chat(&world, &seen).await;
-    // The state file is written whole to this name and then moved into place; a folder in its
-    // way makes every save fail.
-    std::fs::create_dir(world.state.path().join("marmot-agent-state.json.new")).unwrap();
+    // The save that fails is the one that marks "second" read: past the mark "hello" left.
+    let group = GroupKey(chat.hex.clone());
+    let kept = Store::new(world.state.path()).load().unwrap();
+    let mark = kept.read[&group];
+    *armed.lock().unwrap() = Some(Box::new(move |state| {
+        state["read"][group.as_str()].as_i64() > Some(mark)
+    }));
     chat.say("second").await;
     let stopped = core.stops_within(20).await;
     assert_eq!(seen.lock().unwrap().prompts, vec!["hello".to_string()]);
     assert!(stopped, "the core stops when it cannot save");
+    assert!(failed.load(SeqCst), "the save that failed was the mark's");
+    assert!(core.ended().await.is_err(), "it says it could not save");
     world.runtime.shutdown().await;
 }
 
@@ -231,9 +265,12 @@ async fn nothing_is_sent_that_was_not_saved_first() {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     world.runtime.start().await.unwrap();
     let (driver, events, seen) = stub(false);
-    let core = world.start(driver);
+    let (store, armed, failed) = armed_store(&world);
+    let core = world.start_with(driver, store);
     let (chat, id) = a_chat(&world, &seen).await;
-    std::fs::create_dir(world.state.path().join("marmot-agent-state.json.new")).unwrap();
+    // The save that fails is the one that queues the turn's first version.
+    let first_version = format!("{}/t@1", id.0);
+    *armed.lock().unwrap() = Some(Box::new(move |state| queues(state, &first_version)));
     events
         .send(Emitted {
             event: event("t", State::Running, turn()),
@@ -245,6 +282,8 @@ async fn nothing_is_sent_that_was_not_saved_first() {
     let stopped = core.stops_within(20).await;
     assert!(chat.items().is_empty(), "nothing was sent");
     assert!(stopped, "the core stops when it cannot save");
+    assert!(failed.load(SeqCst), "the save that failed was the send's");
+    assert!(core.ended().await.is_err(), "it says it could not save");
     world.runtime.shutdown().await;
 }
 
@@ -323,14 +362,14 @@ async fn a_version_saved_but_not_sent_goes_out_after_a_restart() {
 // An answer is marked read on disk only together with what the core made of it: a request pending
 // for the driver, or a refusal queued. A crash after the mark and before the request was saved
 // would otherwise leave an answer that is never settled, since the mark says it was handled
-// (S1, D-070). The save after the mark fails here, as a crash right after it would end.
+// (S1, D-070). The save right after the one that holds the request fails here, as a crash right
+// after that one would end.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_answer_is_marked_read_only_with_its_request() {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     world.runtime.start().await.unwrap();
-    let budget = Arc::new(AtomicUsize::new(usize::MAX));
     let (driver, events, seen) = stub(false);
-    let store = Store::limited(world.state.path(), budget.clone());
+    let (store, armed, failed) = armed_store(&world);
     let core = world.start_with(driver, store);
     let (chat, id) = a_chat(&world, &seen).await;
     events
@@ -348,9 +387,22 @@ async fn an_answer_is_marked_read_only_with_its_request() {
     })
     .await;
     let target = first(&target, &read);
-    // Quiet first, so the next save is the one for the answer.
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    budget.store(1, SeqCst);
+    // The first save that marks the answer read must hold its request too, or it fails, and so
+    // does the one after it.
+    let group = GroupKey(chat.hex.clone());
+    let mark = Store::new(world.state.path()).load().unwrap().read[&group];
+    let marked = AtomicBool::new(false);
+    *armed.lock().unwrap() = Some(Box::new(move |state| {
+        if marked.load(SeqCst) {
+            return true;
+        }
+        if state["read"][group.as_str()].as_i64() <= Some(mark) {
+            return false;
+        }
+        marked.store(true, SeqCst);
+        let pending = state["conversation"]["pending"].as_object();
+        pending.is_none_or(|p| p.is_empty())
+    }));
     let choice = Asked::Choice {
         choice: "allow".into(),
     };
@@ -359,6 +411,8 @@ async fn an_answer_is_marked_read_only_with_its_request() {
         core.stops_within(20).await,
         "the core stops when it cannot save"
     );
+    assert!(failed.load(SeqCst));
+    assert!(core.ended().await.is_err(), "it says it could not save");
 
     let (driver, _events, _) = stub(false);
     let core = world.start(driver);

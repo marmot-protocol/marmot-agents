@@ -32,7 +32,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
@@ -117,27 +117,38 @@ pub struct Kept {
     pub read: BTreeMap<GroupKey, i64>,
 }
 
+/// Which save fails: one that would write a state it matches.
+type FailWhen = dyn Fn(&Kept) -> bool + Send + Sync;
+
 /// Where the kept state lives.
 pub struct Store {
     path: PathBuf,
-    /// How many more times the file may be written: always, in use. For the tests of a failed
-    /// save, as the simulator will fail one (`docs/design/verification.md`).
-    budget: Arc<AtomicUsize>,
+    /// A fault for the tests of a failed save, as the simulator will put one
+    /// (`docs/design/verification.md`): none in use.
+    fault: Option<(Arc<FailWhen>, Arc<AtomicBool>)>,
 }
 
 impl Store {
     /// The state file in `dir`.
     pub fn new(dir: &Path) -> Self {
-        Self::limited(dir, Arc::new(AtomicUsize::new(usize::MAX)))
-    }
-
-    /// The state file in `dir`, written only `budget` more times; every save after those fails,
-    /// as on a full disk.
-    pub fn limited(dir: &Path, budget: Arc<AtomicUsize>) -> Self {
         Self {
             path: dir.join("marmot-agent-state.json"),
-            budget,
+            fault: None,
         }
+    }
+
+    /// The state file in `dir`, where the first save of a state `when` matches fails, as on a
+    /// full disk, and so does every save after it. The flag given back says whether it has.
+    pub fn failing_when(
+        dir: &Path,
+        when: impl Fn(&Kept) -> bool + Send + Sync + 'static,
+    ) -> (Self, Arc<AtomicBool>) {
+        let failed = Arc::new(AtomicBool::new(false));
+        let store = Self {
+            fault: Some((Arc::new(when), failed.clone())),
+            ..Self::new(dir)
+        };
+        (store, failed)
     }
 
     /// What was kept: nothing on a first start. A file that is there and cannot be read is an
@@ -157,9 +168,11 @@ impl Store {
     /// Writes the state whole: to a file only its owner can read, flushed to disk, then put in
     /// place of the old one, so a crash leaves the old file or the new one and never half of one.
     pub fn save(&self, kept: &Kept) -> std::io::Result<()> {
-        let spend = |left: usize| left.checked_sub(1);
-        if self.budget.fetch_update(SeqCst, SeqCst, spend).is_err() {
-            return Err(std::io::Error::other("no saves left"));
+        if let Some((when, failed)) = &self.fault
+            && (failed.load(SeqCst) || when(kept))
+        {
+            failed.store(true, SeqCst);
+            return Err(std::io::Error::other("a save made to fail"));
         }
         let bytes = serde_json::to_vec(kept).map_err(std::io::Error::other)?;
         let temporary = self.path.with_extension("json.new");
