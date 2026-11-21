@@ -22,7 +22,7 @@
 //! `result` or `error` of a reply, as the exact text that arrived. An event the driver makes up
 //! carries none.
 
-use agent_client_protocol::v1::schema::{
+use agent_client_protocol_schema::v1::{
     ContentBlock, CreateElicitationRequest, CreateElicitationResponse, ElicitationAction,
     ElicitationContentValue, ElicitationMode, ElicitationScope, InitializeResponse,
     LoadSessionResponse, NewSessionResponse, PlanEntryStatus, PromptResponse,
@@ -89,10 +89,12 @@ enum Asked_ {
         item: String,
         options: Vec<(String, String)>,
     },
-    /// For each question, each option's id and the value the form takes for it.
+    /// For each question, each option's id and the value the form takes for it, and the field
+    /// that holds an answer of one's own, if the form has one.
     Question {
         item: String,
         values: HashMap<String, Vec<(String, String)>>,
+        custom: HashMap<String, String>,
     },
 }
 
@@ -130,6 +132,7 @@ struct ToolCall {
     content: Option<Vec<ToolCallContent>>,
     locations: Option<Vec<String>>,
     raw_input: Option<Value>,
+    raw_output: Option<Value>,
 }
 
 /// The session and turn an event belongs to.
@@ -168,6 +171,10 @@ pub struct Translator {
     commands: Vec<Command>,
     /// Items each turn made with no id of the agent's.
     counted: HashMap<Option<String>, u64>,
+    /// Tool calls that are really a question, which the form asks.
+    hidden: HashSet<String>,
+    /// The id of the `session/prompt` that started the turn, as its JSON text.
+    turn_request: Option<String>,
     unreadable: u64,
     unknown: Vec<String>,
 }
@@ -201,6 +208,8 @@ impl Translator {
             config: Vec::new(),
             commands: Vec::new(),
             counted: HashMap::new(),
+            hidden: HashSet::new(),
+            turn_request: None,
             unreadable: 0,
             unknown: Vec::new(),
         }
@@ -265,8 +274,21 @@ impl Translator {
         self.sent.clear();
         self.asked.clear();
         self.loading = None;
-        self.turn = None;
+        self.forget_turn();
         out
+    }
+
+    /// What only a turn needs. A session that is resumed needs none of it.
+    fn forget_turn(&mut self) {
+        self.streamed.clear();
+        self.tools.clear();
+        self.last_tool.clear();
+        self.counted.clear();
+        self.declined.clear();
+        self.hidden.clear();
+        self.turn = None;
+        self.turn_request = None;
+        self.cancelled = false;
     }
 
     // -- streamed words and thinking
@@ -388,8 +410,11 @@ impl Translator {
             );
         }
         match method {
+            // ACP v1 has no message during a turn; OpenCode refuses one. The turn stays the first's.
+            "session/prompt" if self.turn.is_some() => {}
             "session/prompt" => {
                 self.turn = Some(format!("{}:{}", show(session.as_deref()), id_text(id)));
+                self.turn_request = id.map(|id| id.get().to_string());
                 self.cancelled = false;
                 let item = format!("turn:{}", show(self.turn.as_deref()));
                 let body = Body::Turn(Turn {
@@ -476,7 +501,7 @@ impl Translator {
                     Some(native(kind, result)),
                 );
             }
-            (Asked_::Question { values, .. }, Body::Question(question)) => {
+            (Asked_::Question { values, custom, .. }, Body::Question(question)) => {
                 let Ok(reply) = serde_json::from_str::<CreateElicitationResponse>(result) else {
                     self.unreadable += 1;
                     return;
@@ -503,14 +528,17 @@ impl Translator {
                 };
                 let mut answers = Vec::new();
                 for q in question.questions() {
-                    let Some(given) = content.get(&q.id) else {
+                    // An answer of one's own comes in a field of its own.
+                    let own = custom.get(&q.id).and_then(|field| content.get(field));
+                    if !content.contains_key(&q.id) && own.is_none() {
                         continue;
-                    };
-                    let given: Vec<Value> = match given {
-                        ElicitationContentValue::StringArray(xs) => {
+                    }
+                    let given: Vec<Value> = match content.get(&q.id) {
+                        None => Vec::new(),
+                        Some(ElicitationContentValue::StringArray(xs)) => {
                             xs.iter().cloned().map(Value::String).collect()
                         }
-                        other => vec![serde_json::to_value(other).unwrap_or(Value::Null)],
+                        Some(other) => vec![serde_json::to_value(other).unwrap_or(Value::Null)],
                     };
                     let labels = values.get(&q.id).cloned().unwrap_or_default();
                     let mut options = Vec::new();
@@ -522,6 +550,11 @@ impl Translator {
                                 typed.push(x.as_str().map_or_else(|| x.to_string(), str::to_string))
                             }
                         }
+                    }
+                    if let Some(ElicitationContentValue::String(own)) = own
+                        && !own.is_empty()
+                    {
+                        typed.push(own.clone());
                     }
                     answers.push(Answered {
                         question: q.id.clone(),
@@ -609,6 +642,9 @@ impl Translator {
                     if call.raw_input.is_some() {
                         t.raw_input = call.raw_input;
                     }
+                    if call.raw_output.is_some() {
+                        t.raw_output = call.raw_output;
+                    }
                     self.tool(&id, "session/update [tool_call]", params, out);
                 }
             }
@@ -643,6 +679,9 @@ impl Translator {
                     }
                     if f.raw_input.is_some() {
                         t.raw_input = f.raw_input;
+                    }
+                    if f.raw_output.is_some() {
+                        t.raw_output = f.raw_output;
                     }
                     self.tool(&id, "session/update [tool_call_update]", params, out);
                 }
@@ -738,6 +777,11 @@ impl Translator {
         let Some(t) = self.tools.get(id) else {
             return;
         };
+        if t.name.as_deref() == Some("question") {
+            // OpenCode's question tool asks through a form, which becomes the one question item
+            // (rule 4 of the event model).
+            return;
+        }
         let acp_kind = t.kind.unwrap_or(AcpKind::Other);
         let acp_name = serde_json::to_value(acp_kind)
             .ok()
@@ -811,6 +855,20 @@ impl Translator {
                     .and_then(|r| r.get("cwd"))
                     .and_then(Value::as_str)
                     .map(str::to_string);
+                // Nor an exit code. OpenCode puts one in `rawOutput.metadata.exit`, Cursor in
+                // `rawOutput.exitCode`.
+                let ro = t.raw_output.as_ref();
+                body.exit_code = [
+                    ro.and_then(|o| o.get("metadata"))
+                        .and_then(|m| m.get("exit")),
+                    ro.and_then(|o| o.get("exitCode")),
+                ]
+                .into_iter()
+                .flatten()
+                .find_map(Value::as_i64);
+                if state == State::Done && body.exit_code.is_some_and(|c| c != 0) {
+                    state = State::Failed;
+                }
                 body.command.clone().unwrap_or(title_text)
             }
             ToolKind::Edit => {
@@ -963,14 +1021,25 @@ impl Translator {
                 // The fields come in the order of their names: the official types keep them in a
                 // sorted map.
                 let schema = serde_json::to_value(&form.requested_schema).unwrap_or(Value::Null);
+                let props = schema.get("properties").and_then(Value::as_object);
+                // OpenCode adds a free-text field `<name>_custom` beside each question with
+                // choices: an answer of one's own to that question, not a second question.
+                let custom: HashMap<String, String> = props
+                    .into_iter()
+                    .flat_map(|p| p.keys())
+                    .filter_map(|n| {
+                        let base = n.strip_suffix("_custom")?;
+                        props?
+                            .contains_key(base)
+                            .then(|| (base.to_string(), n.clone()))
+                    })
+                    .collect();
                 let mut questions = Vec::new();
                 let mut values = HashMap::new();
-                for (name, f) in schema
-                    .get("properties")
-                    .and_then(Value::as_object)
-                    .into_iter()
-                    .flatten()
-                {
+                for (name, f) in props.into_iter().flatten() {
+                    if custom.values().any(|c| c == name) {
+                        continue;
+                    }
                     let many = f.get("type").and_then(Value::as_str) == Some("array");
                     let src = if many {
                         f.get("items").cloned().unwrap_or(Value::Null)
@@ -1034,7 +1103,7 @@ impl Translator {
                         id: name.clone(),
                         header: title,
                         text,
-                        allow_text: offered.is_empty(),
+                        allow_text: offered.is_empty() || custom.contains_key(name),
                         options: offered
                             .into_iter()
                             .enumerate()
@@ -1066,6 +1135,7 @@ impl Translator {
                     Asked_::Question {
                         item: item.clone(),
                         values,
+                        custom,
                     },
                 );
                 self.emit(
@@ -1114,7 +1184,7 @@ impl Translator {
                 &message,
                 Some(native(&kind, error.get())),
             );
-            if method.as_deref() == Some("session/prompt") {
+            if method.as_deref() == Some("session/prompt") && self.turn_request == Some(id) {
                 self.end_turn(State::Failed, &message, None, &kind, error.get(), out);
             }
             return;
@@ -1177,6 +1247,8 @@ impl Translator {
                     Err(_) => self.unreadable += 1,
                 }
             }
+            // The reply to a prompt sent during a turn ends nothing.
+            Some("session/prompt") if self.turn_request.as_deref() != Some(id.as_str()) => {}
             Some("session/prompt") => match serde_json::from_str::<PromptResponse>(result) {
                 Ok(r) => {
                     let state = match r.stop_reason {
@@ -1199,7 +1271,22 @@ impl Translator {
                     });
                     self.end_turn(state, &text, usage, &kind, result, out);
                 }
-                Err(_) => self.unreadable += 1,
+                Err(_) => {
+                    // A reply the types cannot read, such as a stop reason they do not know, still
+                    // ends the turn: as failed, which is what an unknown stop reason means.
+                    self.unreadable += 1;
+                    let v: Value = serde_json::from_str(result).unwrap_or(Value::Null);
+                    let stop = v
+                        .get("stopReason")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let usage = v.get("usage").filter(|u| u.is_object()).map(|u| Usage {
+                        input_tokens: u.get("inputTokens").and_then(Value::as_u64),
+                        output_tokens: u.get("outputTokens").and_then(Value::as_u64),
+                    });
+                    let text = format!("The turn stopped: {stop}");
+                    self.end_turn(State::Failed, &text, usage, &kind, result, out);
+                }
             },
             _ => {}
         }
@@ -1252,9 +1339,7 @@ impl Translator {
             text,
             Some(native(kind, payload)),
         );
-        self.turn = None;
-        self.cancelled = false;
-        self.declined.clear();
+        self.forget_turn();
     }
 
     // -- the session

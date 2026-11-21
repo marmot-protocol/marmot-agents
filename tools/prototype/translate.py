@@ -1107,6 +1107,16 @@ class Acp(Translator):
         self.streamed: dict[str, dict] = {}  # message or thinking id -> its chunks so far
         self.last_tool: dict[str, dict] = {}  # tool call id -> the last event sent for it
         self.n = collections.Counter()  # how many items a turn has made with no id of the agent's
+        self.hidden: set = set()  # tool calls that are really a question, which the form asks
+        self.turn_request = None  # the id of the `session/prompt` that started the turn
+
+    def forget_turn(self):
+        """What only a turn needs. A session that is resumed needs none of it."""
+        self.streamed, self.tools, self.last_tool = {}, {}, {}
+        self.n.clear()
+        self.declined.clear()
+        self.hidden.clear()
+        self.turn, self.turn_request, self.cancelled = None, None, False
 
     # -- the wire
 
@@ -1148,7 +1158,8 @@ class Acp(Translator):
             self.emit(turn_item, "turn", "cancelled", "Interrupted", "The agent stopped before the turn finished.",
                       prev["body"], native_kind="(none: closed by the driver)", native={"reason": "the agent process ended"})
         self.pending.clear()
-        self.loading, self.turn = None, None
+        self.loading = None
+        self.forget_turn()
 
     # -- what the client sends
 
@@ -1156,8 +1167,12 @@ class Acp(Translator):
         rid = m.get("id")
         if "id" in m:
             self.pending[("c", rid)] = (method, p, (self.session, self.turn))
+        if method == "session/prompt" and self.turn is not None:
+            # ACP v1 has no message during a turn; OpenCode refuses one. The turn stays the first's.
+            self.control("(message during a turn)", "session/prompt")
+            return self.skip("client: session/prompt during a turn")
         if method == "session/prompt":
-            self.turn = f"{p.get('sessionId')}:{rid}"
+            self.turn, self.turn_request = f"{p.get('sessionId')}:{rid}", rid
             self.cancelled = False
             self.emit(f"turn:{self.turn}", "turn", "running", "Working", body={"started_by": "user"},
                       native_kind="(none: ACP says nothing when a turn starts)")
@@ -1204,13 +1219,16 @@ class Acp(Translator):
         answers = []
         content = result.get("content") or {}
         for q in prev["body"]["questions"]:
-            if q["id"] not in content:
+            if q["id"] not in content and req["custom"].get(q["id"]) not in content:
                 continue
-            given = content[q["id"]]
+            given = content.get(q["id"], [])
             given = given if isinstance(given, list) else [given]
             labels = {o["value"]: o["id"] for o in req["values"].get(q["id"], [])}
             chosen = [labels[x] for x in given if isinstance(x, str) and x in labels]
             typed = [x if isinstance(x, str) else json.dumps(x) for x in given if not (isinstance(x, str) and x in labels)]
+            own = content.get(req["custom"].get(q["id"]))  # the answer of one's own, in its own field
+            if isinstance(own, str) and own:
+                typed.append(own)
             answers.append({"question": q["id"], "options": chosen, "text": "\n".join(typed) if typed else None})
         self.emit(req["item"], "question", "done", prev["title"], "Answered", {**prev["body"], "answer": answers},
                   "response to elicitation/create", result)
@@ -1280,6 +1298,9 @@ class Acp(Translator):
         tid = u.get("toolCallId")
         t = self.tools.setdefault(tid, {})
         t.update({k: v for k, v in u.items() if k not in ("sessionUpdate", "toolCallId") and v is not None})
+        if t.get("name") == "question":
+            # OpenCode's question tool asks through a form, which becomes the one question item (rule 4).
+            return self.skip("tool call that is really a question (question)")
         acp_kind = t.get("kind") or "other"
         kind = self.TOOL_KINDS.get(acp_kind, "other")
         state = self.TOOL_STATES.get(t.get("status") or "pending", "running")
@@ -1298,6 +1319,13 @@ class Acp(Translator):
             # leaves to the agent; until it does, the tool call's title stands in as its text.
             body.update(command=raw.get("command"), cwd=raw.get("cwd"), output=output)
             text = body["command"] or t.get("title")
+            # Nor an exit code. OpenCode puts one in `rawOutput.metadata.exit`, Cursor in `rawOutput.exitCode`.
+            ro = t.get("rawOutput") if isinstance(t.get("rawOutput"), dict) else {}
+            code = next((c for c in ((ro.get("metadata") or {}).get("exit") if isinstance(ro.get("metadata"), dict) else None,
+                                     ro.get("exitCode")) if isinstance(c, int) and not isinstance(c, bool)), None)
+            body["exit_code"] = code
+            if state == "done" and code not in (None, 0):
+                state = "failed"
         elif kind == "edit":
             changes = [{"path": c.get("path"), "change": "add" if c.get("oldText") is None else "update",
                         "diff": changed_lines(c.get("oldText"), c.get("newText") or "")}
@@ -1338,20 +1366,26 @@ class Acp(Translator):
                              {"subject": subject, "choices": choices}, f"{method} (request)", p)
         if method == "elicitation/create" and p.get("mode") == "form":
             schema = p.get("requestedSchema") or {}
+            props = schema.get("properties") or {}
             qs, values = [], {}
+            # OpenCode adds a free-text field `<name>_custom` beside each question with choices: an answer
+            # of one's own to that question, not a second question.
+            custom = {n[: -len("_custom")]: n for n in props if n.endswith("_custom") and n[: -len("_custom")] in props}
             # In the order of their names: ACP's official Rust types keep a form's fields in a sorted map.
-            for name, f in sorted((schema.get("properties") or {}).items()):
+            for name, f in sorted(props.items()):
+                if name in custom.values():
+                    continue
                 many = f.get("type") == "array"
                 src = (f.get("items") or {}) if many else f
                 offered = src.get("oneOf") or src.get("anyOf") or [{"const": v, "title": v} for v in src.get("enum") or []]
                 values[name] = [{"id": f"o{k}", "value": o.get("const")} for k, o in enumerate(offered)]
                 qs.append({"id": name, "header": f.get("title"), "text": f.get("description") or f.get("title") or name,
-                           "multiple": many, "allow_text": not offered,
+                           "multiple": many, "allow_text": not offered or name in custom,
                            "options": [{"id": f"o{k}", "label": o.get("title") or o.get("const"),
                                         "description": o.get("description")} for k, o in enumerate(offered)]})
             subject = p.get("toolCallId")
             item = f"question:{subject}" if subject else f"question:{self.turn}:{rid}"
-            self.pending[("s", rid)] = {"item": item, "values": values}
+            self.pending[("s", rid)] = {"item": item, "values": values, "custom": custom}
             return self.emit(item, "question", "waiting", "Question", qs[0]["text"] if qs else p.get("message") or "",
                              {"answer_via": "request", "subject": subject, "questions": qs}, f"{method} (request)", p)
         self.unknown(f"{method} (request)")
@@ -1365,7 +1399,7 @@ class Acp(Translator):
             ev = self.emit(f"error:{owner[0]}:{m.get('id')}", "error", "failed", "The agent refused a request",
                            err.get("message", ""), {"request": method, "code": err.get("code")},
                            f"error response to {method}", err, owner=owner)
-            if method == "session/prompt":
+            if method == "session/prompt" and m.get("id") == self.turn_request:
                 self.end_turn("failed", err.get("message", ""), {}, f"error response to {method}", err)
             return ev
         result = m.get("result") or {}
@@ -1385,6 +1419,8 @@ class Acp(Translator):
         if method == "session/set_config_option":
             self.config = result.get("configOptions") or self.config
             return self.announce(f"response to {method}", result)
+        if method == "session/prompt" and m.get("id") != self.turn_request:
+            return self.skip("response to a session/prompt sent during a turn")
         if method == "session/prompt":
             stop = result.get("stopReason")
             state = self.STOPS.get(stop, "failed")
@@ -1399,8 +1435,7 @@ class Acp(Translator):
         if usage:
             body["usage"] = {"input_tokens": usage.get("inputTokens"), "output_tokens": usage.get("outputTokens")}
         self.emit(f"turn:{self.turn}", "turn", state, title, text, body, native_kind, native)
-        self.turn, self.cancelled = None, False
-        self.declined.clear()
+        self.forget_turn()
 
     # -- the session
 

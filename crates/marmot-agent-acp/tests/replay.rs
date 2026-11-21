@@ -4,10 +4,11 @@
 //! event model decide which is wrong.
 
 use marmot_agent_acp::{Direction, Translator};
-use marmot_agent_events::AgentEvent;
+use marmot_agent_events::{AgentEvent, Body, State};
 use serde::Deserialize;
 use serde_json::Value;
 use serde_json::value::RawValue;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// One line of a recording: which way the message went, and the message as the exact text it was.
@@ -154,4 +155,42 @@ fn the_expected_events_are_what_the_types_write() {
             }
         }
     }
+}
+
+/// OpenCode's question tool and the form it asks with are one question item, and no tool item
+/// (rule 4 of the event model). Its free-text field is the question's own answer, not a second
+/// question.
+#[test]
+fn a_question_is_one_item() {
+    let events = replay(&folder("opencode").join("question.jsonl"));
+    let questions: Vec<&AgentEvent> = events
+        .iter()
+        .filter(|e| matches!(e.body(), Body::Question(_)))
+        .collect();
+    let items: HashSet<&str> = questions.iter().map(|e| e.header().item.as_str()).collect();
+    assert_eq!(items.len(), 1, "one question item");
+    let Body::Question(q) = questions[0].body() else {
+        unreachable!()
+    };
+    assert_eq!(q.questions().len(), 1, "one question");
+    assert!(q.questions()[0].allow_text, "with a free-text answer");
+    assert!(
+        !events.iter().any(|e| matches!(e.body(), Body::Tool(_))),
+        "the question tool is not a tool item"
+    );
+}
+
+/// A command that exits with an error is failed, with its exit code, though ACP calls it completed.
+#[test]
+fn a_failing_command_is_failed_with_its_exit_code() {
+    let events = replay(&folder("opencode").join("failing_command.jsonl"));
+    let last = events
+        .iter()
+        .rev()
+        .find_map(|e| match e.body() {
+            Body::Tool(t) => Some((e.header().state, t.exit_code)),
+            _ => None,
+        })
+        .expect("a tool item");
+    assert_eq!(last, (State::Failed, Some(1)));
 }

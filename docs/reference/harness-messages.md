@@ -448,9 +448,10 @@ or `failed`, with `content` and `rawOutput`. Each update holds only the fields i
 The output is the text of the `content` entries. A diff comes as the whole old and new file; the translators
 turn it into one hunk without context, from the first changed line to the last.
 
-- **No exit code.** A command that exits with 1 is still `completed`. OpenCode adds a second text block,
-  "Exit code: 1", and puts `exit` in `rawOutput.metadata`, which ACP leaves to the agent. The item has no
-  `exit_code` and is `done`.
+- **No standard exit code.** A command that exits with 1 is still `completed`. OpenCode adds a second text
+  block, "Exit code: 1", and puts `exit` in `rawOutput.metadata`, which ACP leaves to the agent (Cursor, in a
+  probe, put `exitCode` in `rawOutput`). The translators read either number when it is there, as the item's
+  `exit_code`, and make a command that ended with any other code than 0 `failed`.
 - **A refused tool call is `failed`**, with "The user declined this tool call". The translators make it
   `declined` when the client refused its permission.
 - **A cancelled tool call is `failed`**, with `rawOutput.metadata.interrupted`. ACP has no cancelled status. The
@@ -485,10 +486,13 @@ names the tool call (`toolCallId`). The client replies `{"action": "accept", "co
 free-text field given a value wins over the choice: an earlier run, not kept, answered both, and OpenCode
 reported only the typed text.
 
-Each property becomes a question, with its options, and free text allowed when it has none. So OpenCode's one
-question is two in the item. The question tool is also a `tool` item: in standard ACP nothing marks a tool call
-as a question until the form arrives, so the translators send both, the question with the tool as its subject.
-This departs from rule 4 of the event model.
+Each property becomes a question, with its options, and free text allowed when it has none. A property named
+`<name>_custom` beside a property `<name>` is OpenCode's free-text answer to that question, not a question of
+its own: the question allows free text, and the reply's value in that field is its typed answer. So OpenCode's
+question is one question in one item. The question tool itself (its `name` is `question`, on its first
+`tool_call`) makes no `tool` item, as Claude Code's `AskUserQuestion` makes none (rule 4 of the event model);
+the question names it as its subject. In standard ACP nothing marks a tool call as a question, so this rule
+is OpenCode's alone.
 
 The official Rust types keep a form's properties in a sorted map, so the questions come in the order of their
 names, not as sent (inferred from the type, `BTreeMap`, with a note to change it in its next major version).
@@ -527,8 +531,8 @@ recorded.
 - **Commands.** A tool call's command and its exit code are the agent's own `rawInput` and `rawOutput`, not
   standard fields.
 - **Questions.** Only through an elicitation form, which the client must declare, with each question's
-  options and its free-text twin as separate fields. Nothing ties a form field to the question it belongs to,
-  and the tool call that asks is not marked as a question.
+  options and its free-text twin as separate fields. Only OpenCode's naming ties the two together, and only
+  the tool's name marks the tool call that asks as a question.
 - **Slash commands.** Listed, with descriptions, but run by sending the text as a prompt; nothing says one ran.
 - **Settings.** Configuration options say what can be set and its current value, but not what changing it
   allows, so the translators guess from the category that `mode` needs the right to approve.

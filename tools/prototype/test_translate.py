@@ -340,5 +340,35 @@ class AcpChunksWithoutIds(unittest.TestCase):
         self.assertEqual(made, [("reasoning", "Hm"), ("message", "Hi!")])
 
 
+class AcpTurns(unittest.TestCase):
+    """A turn is the `session/prompt` that started it, and ends only with the reply to that prompt."""
+
+    @staticmethod
+    def started():
+        acp = translate.Acp()
+        acp.feed({"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "method": "session/new", "params": {"cwd": "/work/demo", "mcpServers": []}}})
+        acp.feed({"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"sessionId": "s1"}}})
+        acp.feed({"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "method": "session/prompt", "params": {"sessionId": "s1", "prompt": []}}})
+        return acp
+
+    @staticmethod
+    def turns(acp):
+        return [(e["turn"], e["state"]) for e in acp.events if e["type"] == "turn"]
+
+    def test_a_prompt_during_a_turn_and_its_refusal_leave_the_turn_running(self):
+        acp = self.started()
+        acp.feed({"dir": "out", "msg": {"jsonrpc": "2.0", "id": 3, "method": "session/prompt", "params": {"sessionId": "s1", "prompt": []}}})
+        acp.feed({"dir": "in", "msg": {"jsonrpc": "2.0", "id": 3, "error": {"code": -32600, "message": "busy"}}})
+        self.assertEqual(self.turns(acp), [("s1:2", "running")])
+        self.assertEqual([e["type"] for e in acp.events][-1], "error")
+        acp.feed({"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"stopReason": "end_turn"}}})
+        self.assertEqual(self.turns(acp), [("s1:2", "running"), ("s1:2", "done")])
+
+    def test_a_reply_with_a_stop_reason_nobody_knows_ends_the_turn_as_failed(self):
+        acp = self.started()
+        acp.feed({"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"stopReason": "something_new"}}})
+        self.assertEqual(self.turns(acp), [("s1:2", "running"), ("s1:2", "failed")])
+
+
 if __name__ == "__main__":
     unittest.main()
