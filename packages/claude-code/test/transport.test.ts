@@ -360,3 +360,19 @@ test("a run that fails ends its turn cancelled, and the next prompt resumes the 
   assert.deepEqual(next["prompts"], ["m2"]);
   await done();
 });
+
+test("a prompt that asks to resume another chat's session is refused, even once that session is closed", async () => {
+  const { core, queries, done } = await start();
+  const { q } = await turn(core, queries);
+  q.say(DONE);
+  const other = { ...PROMPT, message: "m2", chat: { id: "c2", group: true, name: null }, session: "s1" };
+  const open = await core.request("prompt", other);
+  assert.equal(((open["error"] as Json)["data"] as Json)["reason"], "invalid");
+  const action = { type: "new_session", chat: { id: "c1", group: true, name: null }, session: "s1" };
+  await core.request("control", { request: "n1", by: { id: "p1", name: "Alice" }, action });
+  const closed = await core.request("prompt", { ...other, message: "m3" });
+  assert.equal(((closed["error"] as Json)["data"] as Json)["reason"], "invalid");
+  // No query was started for either.
+  assert.equal(queries.length, 1);
+  await done();
+});

@@ -182,6 +182,8 @@ export function promptText(params: Json): string {
 
 export class Connector {
   private readonly chats = new Map<string, Chat>();
+  /** The chat each session belongs to: every session seen since the connector started. */
+  private readonly owners = new Map<string, string>();
   private readonly options: ConnectorOptions;
 
   constructor(options: ConnectorOptions) {
@@ -212,11 +214,8 @@ export class Connector {
     if (message === "" || chatId === "") throw new Refusal("invalid");
     const chat = this.chat(chatId);
     const session = typeof params["session"] === "string" ? params["session"] : null;
-    if (session !== null) {
-      for (const other of this.chats.values()) {
-        if (other !== chat && other.translator.currentSession === session) throw new Refusal("invalid");
-      }
-    }
+    // A session another chat has had is never taken into this one, open or closed (D-065).
+    if (session !== null && (this.owners.get(session) ?? chatId) !== chatId) throw new Refusal("invalid");
     // A prompt names a session only to take it up again (D-065).
     if (session !== null && chat.run !== null && chat.translator.currentSession !== session) {
       this.endRun(chat, []);
@@ -249,7 +248,10 @@ export class Connector {
     };
     if (this.options.model !== undefined) options["model"] = this.options.model;
     if (this.options.permissionMode !== undefined) options["permissionMode"] = this.options.permissionMode;
-    if (resume !== null) options["resume"] = resume;
+    if (resume !== null) {
+      options["resume"] = resume;
+      this.own(resume, chat);
+    }
     chat.resumable = null;
     this.feed(chat, { dir: "out", via: "call", msg: { method: "query", options } });
     const canUseTool: CanUseTool = (toolName, input, opts) => this.permission(chat, run, toolName, input, opts);
@@ -498,6 +500,11 @@ export class Connector {
     return chat;
   }
 
+  /** Records that `session` is `chat`'s, unless another chat had it first. */
+  private own(session: string, chat: Chat): void {
+    if (!this.owners.has(session)) this.owners.set(session, chat.id);
+  }
+
   private feed(chat: Chat, line: Line): void {
     this.dispatch(chat, chat.translator.feed(line));
   }
@@ -505,6 +512,7 @@ export class Connector {
   /** Sends events to the core, naming the prompts a new turn responds to and the requests each settles. */
   private dispatch(chat: Chat, events: AgentEvent[]): void {
     for (const event of events) {
+      if (event.session !== undefined) this.own(event.session, chat);
       const settles: string[] = [];
       const take = (map: Map<string, string[]>, key: string | undefined) => {
         if (key === undefined) return;
