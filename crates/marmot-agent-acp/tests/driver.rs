@@ -343,6 +343,14 @@ async fn a_prompt_waits_for_goose_to_end_the_run_it_took_up() {
         stand.reply(&load, json!({})).await;
         let cancel = stand.next().await;
         assert_eq!(cancel["method"], "session/cancel");
+        // A permission Goose asks for in the run it took up is answered as cancelled.
+        stand.ask_permission(5, "s1", "call_resumed").await;
+        let answered = stand.next().await;
+        assert_eq!(answered["id"], 5);
+        assert_eq!(
+            answered["result"],
+            json!({"outcome": {"outcome": "cancelled"}})
+        );
         // Longer than any pause a driver might take for idle: Goose can be silent while busy.
         stand.hears_nothing(3000).await;
         let idle = json!({"sessionUpdate": "session_info_update", "_meta": {"goose": {"activeRunId": null}}});
@@ -436,6 +444,9 @@ async fn a_setting_that_changes_nothing_is_settled_by_the_reply() {
         let set = stand.next().await;
         assert_eq!(set["method"], "session/set_config_option");
         assert_eq!(set["params"]["value"], "a");
+        // Text the translator holds until something else arrives: the reply flushes it first.
+        let chunk = json!({"sessionUpdate": "agent_message_chunk", "messageId": "m", "content": {"type": "text", "text": "thinking aloud"}});
+        stand.update_in("s1", chunk).await;
         stand.reply(&set, json!({"configOptions": config})).await;
         stand
     });
@@ -460,4 +471,89 @@ async fn a_setting_that_changes_nothing_is_settled_by_the_reply() {
     assert_eq!(settled.settles, vec![RequestId::from("r-3")]);
     agent.await.unwrap();
     let _ = options;
+}
+
+/// A stand-in that, like Cursor, does not name itself.
+async fn connected_as_cursor() -> (Acp, Stand) {
+    let (driver_side, stand_side) = tokio::io::duplex(1 << 16);
+    let (read, write) = tokio::io::split(stand_side);
+    let mut stand = Stand {
+        lines: BufReader::new(read).lines(),
+        out: write,
+    };
+    let (driver_read, driver_write) = tokio::io::split(driver_side);
+    let greeting = tokio::spawn(async move {
+        let hello = stand.next().await;
+        stand
+            .reply(
+                &hello,
+                json!({"protocolVersion": 1, "agentCapabilities": {"loadSession": true}}),
+            )
+            .await;
+        stand
+    });
+    let acp = Acp::connect(driver_read, driver_write, "/work/demo", "cursor")
+        .await
+        .unwrap();
+    (acp, greeting.await.unwrap())
+}
+
+/// Cursor's to-do list comes in a request that names its tool call and no session, as in
+/// `fixtures/recordings/acp/cursor/plan.jsonl`. It goes to the chat whose session has that call.
+#[tokio::test]
+async fn cursors_to_do_list_reaches_the_chat_of_its_tool_call() {
+    let (mut acp, mut stand) = connected_as_cursor().await;
+    let call = "call-1-0\nfc_1_0";
+    let agent = tokio::spawn(async move {
+        for session in ["s1", "s2"] {
+            let new = stand.next().await;
+            stand.reply(&new, json!({"sessionId": session})).await;
+            stand.next().await; // the prompt
+        }
+        let todo = json!({"sessionUpdate": "tool_call", "toolCallId": call, "title": "Update TODOs", "kind": "other", "status": "pending", "rawInput": {"_toolName": "updateTodos"}});
+        stand.update_in("s2", todo).await;
+        stand
+            .send(
+                json!({"jsonrpc": "2.0", "id": 0, "method": "cursor/update_todos", "params": {
+                "toolCallId": call, "merge": false,
+                "todos": [{"id": "1", "content": "Read greet.py", "status": "in_progress"}]}}),
+            )
+            .await;
+        let taken = stand.next().await;
+        assert_eq!(taken, json!({"jsonrpc": "2.0", "id": 0, "result": {}}));
+        stand
+    });
+    acp.prompt(prompt_in("c-1", "m-1", None)).await.unwrap();
+    acp.prompt(prompt_in("c-2", "m-2", None)).await.unwrap();
+    let plan = loop {
+        let e = event(&mut acp).await;
+        assert!(
+            !matches!(e.event.body(), Body::Tool(_)),
+            "the to-do tool is not a tool item"
+        );
+        if matches!(e.event.body(), Body::Plan(_)) {
+            break e;
+        }
+    };
+    assert_eq!(plan.chat.as_ref().map(|c| c.as_str()), Some("c-2"));
+    assert_eq!(plan.event.header().text, "[ ] Read greet.py");
+    agent.await.unwrap();
+}
+
+/// A session request the agent never answers fails the prompt and ends the connection, so a late
+/// reply cannot install a session.
+#[tokio::test]
+async fn a_session_request_never_answered_ends_the_connection() {
+    let (mut acp, mut stand) = connected().await;
+    acp.set_patience(Duration::from_millis(200));
+    let refused = acp.prompt(prompt_in("c-1", "m-1", None)).await;
+    assert!(refused.is_err());
+    let new = stand.next().await;
+    assert_eq!(new["method"], "session/new");
+    stand.reply(&new, json!({"sessionId": "s1"})).await;
+    assert!(
+        acp.next_event().await.is_none(),
+        "no session from the late reply"
+    );
+    assert!(acp.prompt(prompt_in("c-1", "m-2", None)).await.is_err());
 }

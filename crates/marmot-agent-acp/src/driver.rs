@@ -48,8 +48,6 @@ enum Purpose {
 enum Effect {
     /// The turn it interrupted has ended.
     TurnEnded(String),
-    /// The session item shows this setting with this value.
-    Setting(String, String),
     /// A session other than this one is running.
     NewSession(Option<String>),
 }
@@ -106,6 +104,12 @@ pub struct Acp {
     /// Sessions in which Goose is running something by itself: it says so in
     /// `_meta.goose.activeRunId`, and refuses a prompt until it clears it.
     busy: HashSet<String>,
+    /// Each tool call seen, by its id, with the session it was in. Cursor's `cursor/update_todos`
+    /// names its tool call and no session.
+    calls: HashMap<String, Vec<String>>,
+    /// How long the driver waits for the agent to answer a session request, end a cancelled turn,
+    /// or end a run of its own.
+    patience: Duration,
 }
 
 impl Acp {
@@ -184,6 +188,8 @@ impl Acp {
             unrouted: 0,
             cancelling: HashSet::new(),
             busy: HashSet::new(),
+            calls: HashMap::new(),
+            patience: ENDING,
         };
         let id = acp.id();
         let hello = json!({
@@ -204,8 +210,14 @@ impl Acp {
         })
         .to_string();
         acp.write(&hello).await?;
-        let reply = loop {
-            let Some(line) = acp.reader.next_line().await? else {
+        let deadline = Instant::now() + ENDING;
+        let greeting = loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let read = tokio::time::timeout(left, acp.reader.next_line()).await;
+            let Ok(read) = read else {
+                return Err(io::Error::other("the agent did not reply in time"));
+            };
+            let Some(line) = read? else {
                 return Err(io::Error::other("the agent ended before it replied"));
             };
             let message: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
@@ -213,7 +225,7 @@ impl Acp {
                 break (line, message);
             }
         };
-        let (line, message) = reply;
+        let (line, message) = greeting;
         if let Some(error) = message.get("error") {
             // The agent's own words can hold a path, and an error may be logged (D-071).
             let code = error["code"].as_i64().map(|c| format!(" (code {c})"));
@@ -228,6 +240,11 @@ impl Acp {
         acp.resume = result["agentCapabilities"]["sessionCapabilities"]["resume"].is_object();
         acp.greeting = vec![(Direction::Out, hello), (Direction::In, line)];
         Ok(acp)
+    }
+
+    /// How long to wait for the agent before giving up on it: a minute unless set.
+    pub fn set_patience(&mut self, patience: Duration) {
+        self.patience = patience;
     }
 
     /// Messages that went to no chat.
@@ -337,7 +354,23 @@ impl Acp {
     async fn route(&mut self, line: &str) {
         let message: Value = serde_json::from_str(line).unwrap_or(Value::Null);
         if let Some(method) = message.get("method").and_then(Value::as_str) {
-            let session = message["params"]["sessionId"].as_str().map(String::from);
+            let named = message["params"]["sessionId"].as_str().map(String::from);
+            let call = message["params"]["update"]["toolCallId"].as_str();
+            if let (Some(s), Some(call)) = (&named, call) {
+                let sessions = self.calls.entry(call.to_string()).or_default();
+                if !sessions.contains(s) {
+                    sessions.push(s.clone());
+                }
+            }
+            // A request that names only its tool call is for that call's session, when only one
+            // session has a call of that id.
+            let session = named.or_else(|| {
+                let call = message["params"]["toolCallId"].as_str()?;
+                match self.calls.get(call).map(Vec::as_slice) {
+                    Some([only]) => Some(only.clone()),
+                    _ => None,
+                }
+            });
             let chat = session.as_ref().and_then(|s| self.sessions.get(s)).cloned();
             // Goose says when it runs something by itself, and when it is done.
             if let (Some(s), Some(run)) = (
@@ -348,6 +381,12 @@ impl Acp {
                     self.busy.insert(s.clone());
                 } else {
                     self.busy.remove(s);
+                    let idle = chat
+                        .as_ref()
+                        .filter(|c| self.translator(c).is_some_and(|t| t.turn().is_none()));
+                    if let Some(c) = idle.cloned() {
+                        self.cancelling.remove(&c);
+                    }
                 }
             }
             match &chat {
@@ -415,11 +454,7 @@ impl Acp {
                 }
             }
             // A setting is settled by the reply, refused or not, even one that changed nothing.
-            Purpose::Set(request) => {
-                if self.unsettled(&chat, &request) {
-                    settles.push(request);
-                }
-            }
+            Purpose::Set(request) => settles.push(request),
         }
         if let Some(c) = self.chats.get_mut(&chat)
             && c.picking == id
@@ -466,7 +501,9 @@ impl Acp {
         let events = c.translator.feed(direction, text);
         let after = c.translator.session().map(String::from);
         let turn_request = c.translator.turn_request().map(String::from);
-        if c.translator.turn().is_none() {
+        // Cancelling lasts until the turn ends, and until Goose ends a run of its own.
+        let own_run = after.as_ref().is_some_and(|s| self.busy.contains(s));
+        if c.translator.turn().is_none() && !own_run {
             self.cancelling.remove(chat);
         }
         if before != after {
@@ -478,15 +515,17 @@ impl Acp {
                 self.sessions.insert(new, chat.clone());
             }
         }
+        // What a message settles goes with the event it made itself, the last: the translator
+        // first sends any text it was holding.
         let mut settles = settles;
-        for event in events {
-            self.ready_event(
-                chat,
-                event,
-                std::mem::take(&mut settles),
-                true,
-                turn_request.as_deref(),
-            );
+        let last = events.len().saturating_sub(1);
+        for (at, event) in events.into_iter().enumerate() {
+            let settled = if at == last {
+                std::mem::take(&mut settles)
+            } else {
+                Vec::new()
+            };
+            self.ready_event(chat, event, settled, true, turn_request.as_deref());
         }
     }
 
@@ -512,8 +551,6 @@ impl Acp {
             let shown = seen
                 && match (effect, event.body()) {
                     (Effect::TurnEnded(t), Body::Turn(_)) => ended && turn.as_deref() == Some(t),
-                    (Effect::Setting(id, value), Body::Session(s)) => (s.settings.iter())
-                        .any(|setting| setting.id == *id && setting.value.as_ref() == Some(value)),
                     (Effect::NewSession(old), Body::Session(_)) => {
                         header.state == State::Running && session != *old
                     }
@@ -634,13 +671,25 @@ impl Acp {
     }
 
     /// Reads on until no session is being picked for the chat.
+    /// A session request the agent never answers ends the connection: a reply that came later
+    /// must not install a session after the prompt has failed.
     async fn picked(&mut self, chat: &ChatId) -> Result<(), Refusal> {
+        let deadline = Instant::now() + self.patience;
         while self.chats.get(chat).is_some_and(|c| c.picking.is_some()) {
-            if !self.read().await {
+            if !self.read_until(deadline).await {
+                self.end();
                 return Err(Refusal::new(Reason::Failed));
             }
         }
         Ok(())
+    }
+
+    /// Ends the connection: the agent is stopped, and each chat closes what it had open.
+    fn end(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.start_kill();
+        }
+        self.stopped();
     }
 
     /// Makes `session` the chat's session, starting a new one if it is none, and waits for the
@@ -674,7 +723,7 @@ impl Acp {
             .and_then(Translator::session)
             .map(String::from);
         match (now, session) {
-            (Some(now), Some(wanted)) if now == wanted => self.stop_what_was_taken_up(chat).await,
+            (Some(now), Some(wanted)) if now == wanted => Ok(()),
             (Some(_), None) => Ok(()),
             (_, Some(wanted)) => {
                 self.sessions.remove(wanted);
@@ -687,11 +736,11 @@ impl Acp {
         }
     }
 
-    /// After a session is taken up again: Goose carries on, by itself, with the turn a restart cut
-    /// off, says so in `_meta.goose.activeRunId`, and refuses a prompt until it clears it. A restart
-    /// closes that turn (D-070), so the driver cancels the run and waits for Goose to clear it. Other
-    /// agents say nothing of the kind, and are not waited for.
-    async fn stop_what_was_taken_up(&mut self, chat: &ChatId) -> Result<(), Refusal> {
+    /// Before every prompt: Goose carries on, by itself, with the turn a restart cut off once the
+    /// session is taken up again, says so in `_meta.goose.activeRunId`, and refuses a prompt until
+    /// it clears it. A restart closes that turn (D-070), so the driver cancels the run and waits for
+    /// Goose to clear it. Other agents say nothing of the kind, and are not waited for.
+    async fn wait_for_own_run(&mut self, chat: &ChatId) -> Result<(), Refusal> {
         let Some(session) = self
             .translator(chat)
             .and_then(Translator::session)
@@ -703,7 +752,7 @@ impl Acp {
             return Ok(());
         }
         self.cancel(chat).await?;
-        let deadline = Instant::now() + ENDING;
+        let deadline = Instant::now() + self.patience;
         while self.busy.contains(&session) {
             if !self.read_until(deadline).await {
                 return Err(Refusal::new(Reason::Failed));
@@ -785,7 +834,7 @@ impl Driver for Acp {
         // A message during a turn restarts it (`mid_turn: restart`).
         if self.translator(&chat).and_then(Translator::turn).is_some() {
             self.cancel(&chat).await?;
-            let deadline = Instant::now() + ENDING;
+            let deadline = Instant::now() + self.patience;
             while self.translator(&chat).and_then(Translator::turn).is_some() {
                 if !self.read_until(deadline).await {
                     return Err(Refusal::new(Reason::Failed));
@@ -799,6 +848,7 @@ impl Driver for Acp {
         if current.is_none() || (wanted.is_some() && wanted != current) {
             self.pick(&chat, wanted.as_deref()).await?;
         }
+        self.wait_for_own_run(&chat).await?;
         let session = self
             .translator(&chat)
             .and_then(Translator::session)
@@ -865,12 +915,6 @@ impl Driver for Acp {
             } => {
                 let chat = (self.sessions.get(session.as_str()).cloned())
                     .ok_or_else(|| Refusal::new(Reason::UnknownItem))?;
-                if let Some(c) = self.chats.get_mut(&chat) {
-                    c.effects.push((
-                        request.clone(),
-                        Effect::Setting(setting.clone(), value.clone()),
-                    ));
-                }
                 let params =
                     json!({"sessionId": session.as_str(), "configId": setting, "value": value});
                 self.request(

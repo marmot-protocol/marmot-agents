@@ -202,8 +202,8 @@ cwd = "/home/me/work"
   ([D-065](../decisions.md#d-065-a-prompt-names-a-session-only-to-resume-one)) with `session/resume` when the
   agent offers it and `session/load` otherwise; what `session/load` replays is not sent again. Goose, after taking up a
   session, carries on by itself with the turn a crash cut off, says so in `_meta.goose.activeRunId`, and
-  refuses a prompt until it clears it; the driver then cancels that run and holds the prompt until Goose
-  clears it, since a restart closes the turn
+  refuses a prompt until it clears it; before every prompt, the driver cancels such a run, answers what it
+  asks meanwhile as cancelled, and holds the prompt until Goose clears it, since a restart closes the turn
   ([D-070](../decisions.md#d-070-a-restart-closes-the-turn-as-interrupted)). Other agents are not waited for. The prompt
   is written as for Codex ([D-062](../decisions.md#d-062-what-codex-reads-for-a-chat-message)), as text only.
   A turn is named after the session and the prompt's request id; request ids start from the time, so a turn
@@ -218,6 +218,11 @@ cwd = "/home/me/work"
   is the agent's own for one session; so an answer can only reach the chat whose request it names.
 - **Writing**: each message goes whole to a task that writes it, so a call the core abandons never leaves
   half a message on the agent's input.
+- **Waiting has a limit.** A session request, the end of a cancelled turn and the end of Goose's own run are
+  each waited for up to a minute. A session request not answered by then ends the connection, so a late
+  reply cannot install a session after the prompt failed.
+- **Cursor's `cursor/update_todos`** names its tool call and no session; it goes to the chat whose session
+  has that tool call.
 - **Requests nobody is asked about** are answered at once: Cursor's `cursor/update_todos` is taken, anything
   else unknown is refused, so the agent never waits for ever.
 
