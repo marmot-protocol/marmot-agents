@@ -81,6 +81,34 @@ jobs:
       - name: The Claude Code driver's expected events are what the prototype writes
         run: python3 tools/prototype/translate.py --expected fixtures/recordings/claude --check
 
+  typescript:
+    name: TypeScript
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: packages/claude-code
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        # setup-node checks no checksum of its own; the packages are checked against
+        # package-lock.json by `npm ci`.
+        with:
+          node-version: 24.22.3
+          package-manager-cache: false
+
+      - name: Install the packages package-lock.json names
+        run: npm ci
+
+      - name: Types
+        run: npm run check
+
+      - name: The Claude Code translator replays every recording
+        run: npm test
+
   documents:
     name: Documents
     runs-on: ubuntu-24.04

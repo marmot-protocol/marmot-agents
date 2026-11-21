@@ -49,6 +49,7 @@ being replaced by what is designed here, not extended.
 | Work on the item types in Rust | `crates/marmot-agent-events`, after `docs/design/event-model.md` |
 | Work on the driver trait or the capability flags | `crates/marmot-agent-driver`, after `docs/design/drivers.md` |
 | Work on the Codex driver | `crates/marmot-agent-codex`, after `fixtures/recordings/codex` and its `expected/` events |
+| Work on the Claude Code driver's translation | `packages/claude-code`, after `fixtures/recordings/claude` and its `expected/` events |
 | Work on the core | `crates/marmot-agent`, after `docs/plan.md` and `docs/design/architecture.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Change the link check | `lychee.toml` |
@@ -227,6 +228,16 @@ install it, say so in the pull request and let CI run the check.
 
 The settings are in `lychee.toml`. The check covers links inside the repository, and the headings they name.
 It does not fetch web addresses; check those by hand.
+
+For any change under `packages/claude-code`, with Node 24 (CI uses the version named in
+`.github/workflows/ci.yml`):
+
+```sh
+cd packages/claude-code
+npm ci
+npm run check   # tsc --noEmit
+npm test        # replays every Claude Code recording against its expected events
+```
 
 For a change to a diagram, which CI does not check:
 
