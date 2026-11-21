@@ -5,9 +5,11 @@
 
 The recordings are the test of the prototype, and `translate.py --check` runs them all. This file
 covers cases that were never recorded: a Codex question marked secret, a question asked in a message
-that outlives its turn, and a translator that follows one thread. The messages below are
-written by hand, in the shape `item/tool/requestUserInput` has in
-`fixtures/recordings/codex/plan_mode.jsonl`.
+that outlives its turn, a translator that follows one thread, Claude Code's answer to a question with
+several choices or with typed text, and what Claude Code's client learns before the session has an id.
+The messages below are written by hand, in the shapes the recordings have: for Codex, the shape
+`item/tool/requestUserInput` has in `fixtures/recordings/codex/plan_mode.jsonl`; for Claude Code, the
+shapes in `fixtures/recordings/claude/question.jsonl` and `early_info.jsonl`.
 """
 
 from __future__ import annotations
@@ -205,6 +207,64 @@ class ApprovalChoices(unittest.TestCase):
         self.assertEqual(choices, [("c0", "Allow once", "allow"), ("c1", "Always allow example.org", "allow"),
                                    ("c2", "Always deny example.org", "deny"), ("c4", "Deny and stop", "deny"),
                                    ("c5", "Deny", "deny")])
+
+
+class ClaudeQuestionAnswer(unittest.TestCase):
+    """Claude Code answers a question with each question's text and the labels chosen. The item records
+    ids instead (D-059). Only a single choice is recorded, in `fixtures/recordings/claude/question.jsonl`."""
+
+    QUESTIONS = [
+        {"question": "Which files?", "header": "Files", "multiSelect": True,
+         "options": [{"label": "a.py", "description": ""}, {"label": "b.py", "description": ""}, {"label": "c.py", "description": ""}]},
+        {"question": "Which greeting?", "header": "Greeting", "multiSelect": False,
+         "options": [{"label": "Hello", "description": ""}, {"label": "Hi", "description": ""}]},
+        {"question": "Anything else?", "header": "More", "multiSelect": False, "options": [{"label": "No", "description": ""}]},
+    ]
+
+    def answer(self, answers: dict) -> list:
+        claude = translate.Claude()
+        claude.feed({"dir": "in", "via": "callback", "msg": {
+            "kind": "can_use_tool", "toolName": "AskUserQuestion", "input": {"questions": self.QUESTIONS},
+            "options": {"toolUseID": "toolu_1", "requestId": "r1"}}})
+        claude.feed({"dir": "out", "via": "callback", "msg": {
+            "kind": "permission_result", "toolName": "AskUserQuestion",
+            "result": {"behavior": "allow", "updatedInput": {"questions": self.QUESTIONS, "answers": answers}}}})
+        return translate.crate_shape(claude.events[-1])["body"]["answer"]
+
+    def test_labels_become_the_ids_of_the_options_offered(self):
+        self.assertEqual(self.answer({"Which files?": "a.py, c.py", "Which greeting?": "Hi"}),
+                         [{"question": "q0", "options": ["o0", "o2"]}, {"question": "q1", "options": ["o1"]}])
+
+    def test_what_matches_no_label_is_typed_text(self):
+        self.assertEqual(self.answer({"Which files?": "b.py, d.py", "Which greeting?": "Howdy"}),
+                         [{"question": "q0", "options": ["o1"], "text": "d.py"}, {"question": "q1", "text": "Howdy"}])
+
+
+class ClaudeSessionItem(unittest.TestCase):
+    """A session item carries the session's id (D-030). Claude Code gives it only when the first turn
+    starts, so what the client asks for before then waits for it."""
+
+    def test_nothing_is_sent_before_the_session_is_named(self):
+        claude = translate.Claude()
+        claude.feed({"dir": "out", "via": "call", "msg": {"method": "query", "options": {}}})
+        claude.feed({"dir": "in", "via": "call", "msg": {"method": "supportedCommands", "response": [
+            {"name": "compact", "description": "Compact", "argumentHint": "<instructions>"}, {"name": "cost", "description": "Cost"}]}})
+        self.assertEqual(claude.events, [])
+        claude.feed({"dir": "in", "via": "message", "msg": {
+            "type": "system", "subtype": "init", "session_id": "s1", "claude_code_version": "9.9.9",
+            "model": "m", "permissionMode": "default", "slash_commands": ["compact", "cost"]}})
+        session = translate.crate_shape(claude.events[0])
+        self.assertEqual((session["type"], session["session"]), ("session", "s1"))
+        self.assertEqual(session["body"]["harness_version"], "9.9.9")
+        self.assertEqual(session["body"]["commands"], [{"name": "compact", "description": "Compact", "hint": "<instructions>"},
+                                                       {"name": "cost", "description": "Cost", "hint": ""}])
+
+    def test_a_command_known_by_name_only_has_an_empty_hint(self):
+        claude = translate.Claude()
+        claude.feed({"dir": "in", "via": "message", "msg": {
+            "type": "system", "subtype": "init", "session_id": "s1", "claude_code_version": "9.9.9", "slash_commands": ["cost"]}})
+        self.assertEqual(translate.crate_shape(claude.events[0])["body"]["commands"], [{"name": "cost", "hint": ""}])
+
 
 
 if __name__ == "__main__":
