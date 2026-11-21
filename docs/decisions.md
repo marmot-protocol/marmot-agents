@@ -1452,3 +1452,17 @@ credential in the container.
 
 Decided 2026-11-21. The project owner accepted the recommendation.
 
+
+## D-087 The core settles a request whose effect never shows
+
+**Decision.** When a driver takes an answer or a control and no event that shows its effect arrives within two
+minutes, the core settles it with a `refused` notice whose reason is `no_effect`. An effect that arrives later
+is still shown; it just settles nothing. Each driver still settles what it can itself
+([D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)).
+
+**Why.** In M3 the same gap turned up in Pi, ACP and OpenClaw: a setting set to the value it already had, or a
+control the harness quietly dropped, produced no event, so the person's press stayed pending for good. Each
+driver can close the cases it knows, but a net in the core keeps a new driver from leaving one open. Two minutes
+is long enough for a slow harness to stop a turn, and short enough that a press does not look stuck.
+
+Decided 2026-11-21. The project owner accepted the recommendation.

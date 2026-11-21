@@ -231,7 +231,16 @@ struct Pending {
     /// For an answer: the item it answers, so a second answer to it is refused.
     #[serde(default)]
     answers: Option<String>,
+    /// The driver took it.
+    #[serde(default)]
+    taken: bool,
+    /// When the core first saw it taken, in seconds, so it is settled if no effect ever shows.
+    #[serde(default)]
+    taken_at: Option<u64>,
 }
+
+/// How long a request the driver took may wait for its effect before the core settles it.
+pub const EFFECT_LIMIT_SECS: u64 = 120;
 
 /// The conversation: every rule about people, sessions and items.
 pub struct Conversation {
@@ -427,6 +436,8 @@ impl Conversation {
                 chat: chat.id.0,
                 new_session,
                 answers,
+                taken: false,
+                taken_at: None,
             },
         );
         vec![act]
@@ -540,15 +551,55 @@ impl Conversation {
     pub fn requested(&mut self, request: &RequestId, result: Result<(), Refusal>) -> Vec<Act> {
         match result {
             Ok(()) => {
-                if let Some(pending) = self.saved.pending.get(&request.0)
-                    && pending.new_session
-                {
-                    self.taken.insert(pending.chat.clone());
+                if let Some(pending) = self.saved.pending.get_mut(&request.0) {
+                    pending.taken = true;
+                    if pending.new_session {
+                        self.taken.insert(pending.chat.clone());
+                    }
                 }
                 Vec::new()
             }
             Err(refusal) => self.refuse(&request.0, refusal),
         }
+    }
+
+    /// The time is `now`, in seconds: settles with a notice every request the driver took whose
+    /// effect has not shown for [`EFFECT_LIMIT_SECS`], as when a setting is set to the value it
+    /// already had and the harness shows nothing (D-087). Called now and then; the first call that
+    /// sees a request taken starts its clock.
+    pub fn overdue(&mut self, now: u64) -> Vec<Act> {
+        let mut late = Vec::new();
+        for (request, pending) in &mut self.saved.pending {
+            if !pending.taken {
+                continue;
+            }
+            match pending.taken_at {
+                None => pending.taken_at = Some(now),
+                Some(at) if now.saturating_sub(at) > EFFECT_LIMIT_SECS => {
+                    late.push(request.clone())
+                }
+                Some(_) => {}
+            }
+        }
+        let mut acts = Vec::new();
+        for request in late {
+            let Some(pending) = self.saved.pending.remove(&request) else {
+                continue;
+            };
+            let chat = Chat {
+                id: ChatId(pending.chat),
+                group: true,
+                name: None,
+            };
+            let notice = self.notice(
+                &pending.group,
+                &chat,
+                "no_effect",
+                "The agent took this, but nothing has come of it.".into(),
+            );
+            acts.push(self.send_notice(&pending.group, notice, None, vec![pending.event]));
+        }
+        acts
     }
 
     /// An event from the driver.

@@ -143,8 +143,13 @@ impl<D: Driver> Core<D> {
         self.consider_invitations().await;
         self.catch_up().await;
         tokio::pin!(stop);
+        let mut clock = tokio::time::interval(std::time::Duration::from_secs(10));
         loop {
             tokio::select! {
+                _ = clock.tick() => {
+                    let acts = self.conversation.overdue(crate::marmot::now());
+                    self.carry_out(acts).await;
+                }
                 event = self.driver.next_event() => match event {
                     Some(emitted) => {
                         let acts = self.conversation.emitted(emitted);

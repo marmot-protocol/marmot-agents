@@ -871,3 +871,47 @@ fn an_ended_session_is_not_resumed_and_a_stopped_one_is() {
         the_prompt(conversation(talk.saved().clone()).heard(heard(direct(), "e3", OWNER, "new")));
     assert_eq!(fresh.session, None, "an ended session is not");
 }
+
+// A request the driver took but whose effect never shows is settled by a notice once it has waited
+// too long, so nobody's press stays pending for good; one whose effect showed is left alone (D-087).
+#[test]
+fn a_request_whose_effect_never_shows_is_settled_in_the_end() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let session = event("s1", State::Running, Body::Session(session_item(false)));
+    sent(&mut talk, &chat, session, "es");
+    let set = |event: &str| {
+        request(
+            direct(),
+            event,
+            OWNER,
+            Some("es"),
+            Asked::Set {
+                setting: "model".into(),
+                value: "fast".into(),
+            },
+        )
+    };
+    let take = |talk: &mut Conversation, event: &str| {
+        let Some(Act::Control(control)) = talk.asked(set(event)).into_iter().next() else {
+            panic!("no control")
+        };
+        assert!(talk.requested(&control.request, Ok(())).is_empty());
+        control
+    };
+    take(&mut talk, "r1");
+    let seen = take(&mut talk, "r2");
+    assert!(talk.overdue(1_000).is_empty(), "the clock starts");
+    let mut effect = emitted(
+        &chat,
+        event("s1", State::Running, Body::Session(session_item(false))),
+    );
+    effect.settles = vec![seen.request.clone()];
+    talk.emitted(effect);
+
+    assert!(talk.overdue(1_000 + 60).is_empty(), "not yet");
+    let (_, _, item) = the_item(talk.overdue(1_000 + 121));
+    assert!(is_refused(&item, "no_effect"));
+    assert_eq!(item.settles, vec![EventKey::from("r1")]);
+    assert!(talk.overdue(1_000 + 500).is_empty(), "settled once");
+}
