@@ -9,7 +9,8 @@ use marmot_account::AccountHome;
 use marmot_agent::PubKey;
 use marmot_agent::config::Config;
 use marmot_agent::marmot::Marmot;
-use marmot_agent::run::{Core, Store};
+use marmot_agent::run::{Core, Store, serve};
+use marmot_agent::socket::Endpoint;
 use marmot_agent_codex::Codex;
 use marmot_app::{AccountSetupRequest, MarmotApp, MarmotAppConfig, MarmotAppRuntime};
 use std::path::Path;
@@ -114,10 +115,6 @@ async fn run(config: &Config) -> Result<(), String> {
             "the home must hold exactly one identity; run `marmot-agent init` first".into(),
         );
     };
-    let setup = config.setup().map_err(|e| e.to_string())?;
-    let driver = Codex::start(&config.codex.program, setup)
-        .await
-        .map_err(|_| "Codex could not be started")?;
     // Subscribe before starting, so what MDK delivers while it starts is not missed.
     let events = runtime.subscribe();
     runtime
@@ -130,11 +127,27 @@ async fn run(config: &Config) -> Result<(), String> {
         label: account.label,
         agent: PubKey(account.account_id_hex),
     };
-    let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
     let stop = async {
         let _ = tokio::signal::ctrl_c().await;
     };
-    core.run(events, stop).await;
+    match &config.codex {
+        Some(codex) => {
+            let setup = config.setup().map_err(|e| e.to_string())?;
+            let driver = Codex::start(&codex.program, setup)
+                .await
+                .map_err(|_| "Codex could not be started")?;
+            let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
+            core.run(events, stop).await;
+        }
+        None => {
+            drop(events);
+            let endpoint = Endpoint::in_home(&config.home);
+            let (listener, token) = endpoint
+                .listen()
+                .map_err(|_| "the socket could not be opened")?;
+            serve(marmot, config, &config.home, listener, token, stop).await?;
+        }
+    }
     runtime.shutdown().await;
     Ok(())
 }

@@ -9,9 +9,10 @@ the ids a connector sees, how often a prompt is delivered, and the credential
 ([D-033](../decisions.md#d-033-the-sockets-framing-is-json-rpc-20-one-message-per-line) to
 [D-038](../decisions.md#d-038-each-connector-has-its-own-token)). They are listed [at the end](#what-was-decided).
 
-Still a draft: the exact fields of each message, and the list of capabilities. Not designed: the individual
-requests of the chat section, and administration
-([Q-05](../open-questions.md#q-05-how-is-the-agent-administered)).
+The core speaks the driver section now, with the fields in [the messages, as built](#the-messages-as-built):
+the trait's shapes ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)), provisional until
+the project owner reviews them at the end of M2. Not designed: the individual requests of the chat section, and
+administration ([Q-05](../open-questions.md#q-05-how-is-the-agent-administered)).
 
 ## What it is for
 
@@ -260,6 +261,45 @@ shortened.
 ```
 
 In the chat this is one message from the agent, and three rows that each updated in place.
+
+## The messages, as built
+
+What `crates/marmot-agent/src/socket.rs` sends and reads. Provisional: the project owner reviews them at the end
+of M2. The socket is `socket/marmot-agent.sock` in the agent's home, in a folder only the owner can open, and the
+token is `connector.token` there, which the core writes the first time ([D-038](../decisions.md#d-038-each-connector-has-its-own-token)).
+
+**The hello**, the connector's first request:
+
+```json
+{"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {
+  "protocol": "marmot.agent-control.v3",
+  "connector": {"name": "claude-code", "version": "0.1.0"},
+  "harness": {"name": "claude-code", "version": "2.1.326"},
+  "token": "…",
+  "capabilities": {"interrupt": true, "mid_turn": "restart", "sessions": "core", "resume": true,
+                   "approvals": true, "files_in": "images", "approval_commands": []}}}
+```
+
+The seven flags of D-058, every one. The core answers `{"core": {"version"}, "agent": {"name"}}`, or an error:
+`-32001` for another protocol version, `-32002` for a token that is not this agent's, `-32600` or `-32602` for a
+hello it cannot read.
+
+**`prompt`**: `message`, `text`, `chat` (`id`, `group`, `name`), `sender` (`id`, `name`), `attachments`
+(`path`, `name`, `media_type`), and when there are any, `reply_to` (`message`, `text`, `author`) and `session`.
+
+**`answer`**: `request`, `item`, `by` (`id`, `name`) and `given`: `{"choice": <id>}` for an approval, or
+`{"questions": [{"question", "options", "text"}]}`.
+
+**`control`**: `request`, `by` and `action`, by `type`: `interrupt` (`turn`), `new_session` (`chat`,
+`session`), `set` (`session`, `setting`, `value`), `own` (`session`, `id`).
+
+A connector answers each with `{}` once it has taken it, or with an error whose `data` holds a `reason` (one of
+the eight words above) and, if it likes, a `detail` for the chat.
+
+**`event`**, a notification: an agent event as `marmot-agent-events` writes it (`item`, `type`, `state`,
+`title`, `text`, `body`, and `session`, `turn` and `native` when there are any), with three more fields: `chat`,
+the chat it belongs to; `prompts`, on a turn; and `settles`, the requests whose effect it shows. The connector
+leaves out `harness` and `seq`: the core fills them in.
 
 ## What it replaces
 

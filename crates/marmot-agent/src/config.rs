@@ -11,8 +11,8 @@
 //! white_noise = true                   # false: only the relays above, for a local try
 //! allow_loopback_relays = false        # true: relays on this machine may be used
 //!
-//! [codex]
-//! cwd = "/home/me/work"
+//! [codex]                              # Codex, built in; or, for a connector on the socket,
+//! cwd = "/home/me/work"                # an empty [connector] section in its place
 //! sandbox = "workspace-write"          # or "read-only", "danger-full-access"
 //! approval_policy = "on-request"       # or "untrusted", "on-failure", "never"
 //! ```
@@ -53,9 +53,19 @@ pub struct Config {
     /// default; off, the core uses only the relays listed, as a try against a local relay should.
     #[serde(default = "yes")]
     pub white_noise: bool,
-    /// Codex.
-    pub codex: CodexConfig,
+    /// Codex, when the agent is Codex, built in.
+    #[serde(default)]
+    pub codex: Option<CodexConfig>,
+    /// A connector on the socket, such as the Claude Code driver, when the agent is not Codex.
+    #[serde(default)]
+    pub connector: Option<ConnectorConfig>,
 }
+
+/// A connector that drives the harness from a separate program, over the socket (D-003). It
+/// needs no settings of its own here: it connects with the token the core writes.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConnectorConfig {}
 
 /// How Codex runs (D-061).
 #[derive(Clone, Deserialize)]
@@ -120,7 +130,12 @@ impl Config {
         if config.name.as_ref().is_some_and(|n| n.trim().is_empty()) {
             return Err(ConfigError::Value("name"));
         }
-        config.setup()?;
+        if config.codex.is_some() == config.connector.is_some() {
+            return Err(ConfigError::Value("codex or connector, one of them"));
+        }
+        if config.codex.is_some() {
+            config.setup()?;
+        }
         Ok(config)
     }
 
@@ -138,10 +153,11 @@ impl Config {
         *person == self.owner || self.invite.contains(person)
     }
 
-    /// Codex's setup.
+    /// Codex's setup, when the agent is Codex.
     pub fn setup(&self) -> Result<Setup, ConfigError> {
-        let mut setup = Setup::new(self.codex.cwd.clone());
-        if let Some(word) = &self.codex.sandbox {
+        let codex = self.codex.as_ref().ok_or(ConfigError::Value("codex"))?;
+        let mut setup = Setup::new(codex.cwd.clone());
+        if let Some(word) = &codex.sandbox {
             setup.sandbox = match word.as_str() {
                 "read-only" => Sandbox::ReadOnly,
                 "workspace-write" => Sandbox::WorkspaceWrite,
@@ -149,7 +165,7 @@ impl Config {
                 _ => return Err(ConfigError::Value("codex.sandbox")),
             };
         }
-        if let Some(word) = &self.codex.approval_policy {
+        if let Some(word) = &codex.approval_policy {
             setup.approval_policy = match word.as_str() {
                 "untrusted" => ApprovalPolicy::Untrusted,
                 "on-failure" => ApprovalPolicy::OnFailure,

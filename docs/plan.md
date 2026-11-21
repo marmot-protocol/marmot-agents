@@ -36,6 +36,8 @@ flowchart LR
 
 ### M1: Codex end to end, on the command line
 
+Done on 2026-11-21: the scenario passes against a real Codex, and a trial by hand with the test client worked.
+
 The core runs for real: a person in a Marmot group on a local relay talks to Codex through it, from a terminal.
 No app is involved, and MDK is used as it is today.
 
