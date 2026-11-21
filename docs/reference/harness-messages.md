@@ -1,7 +1,8 @@
-# Reference: what Codex and Claude Code actually send
+# Reference: what Codex, Claude Code and OpenCode over ACP actually send
 
-This page is detailed on purpose. It records what two harnesses send over their native interfaces, taken from
-real sessions, and how each message relates to the proposed [event model](../design/event-model.md).
+This page is detailed on purpose. It records what two harnesses send over their native interfaces, and what
+OpenCode sends over ACP, taken from real sessions, and how each message relates to the proposed
+[event model](../design/event-model.md).
 
 ## Sources
 
@@ -10,6 +11,7 @@ real sessions, and how each message relates to the proposed [event model](../des
 | [`fixtures/recordings`](../../fixtures/recordings/README.md) | 57 scripted sessions, 28 with Codex and 29 with Claude Code, recorded on 2026-11-17 and 2026-11-18, and six more Codex sessions with subagents, recorded on 2026-11-20 | Read in full. Every claim on this page about order, fields and behaviour comes from these |
 | [`data/claude-sdk-message-structures.txt`](data/claude-sdk-message-structures.txt) | The structure of 176,652 Claude Agent SDK messages from four days of real use on one developer's machine | Counts and field names only. No content was read or kept |
 | Codex's generated protocol schema | `codex app-server generate-json-schema`, codex-cli 0.169.0 | The list of methods |
+| [`fixtures/recordings/acp/opencode`](../../fixtures/recordings/README.md#acp-opencode) | 12 scripted sessions with OpenCode 2.3.2 over ACP, recorded on 2026-11-21 | Read in full, for the [ACP section](#acp-opencode) only |
 | [`tools/prototype/translate.py`](../../tools/prototype/translate.py) | A prototype that turns every recording into proposed agent events, except the subagent recordings, which nothing translates yet | To check that nothing is left without a home |
 
 Limits of this evidence:
@@ -18,7 +20,8 @@ Limits of this evidence:
   message, not typical volume.
 - The real-use counts come from one person doing long, autonomous coding sessions through T3 Code, with
   approvals switched off. They show volume and variety, but no approvals.
-- Only Codex and Claude Code are covered. Each recording is one harness version on one day.
+- Codex and Claude Code are covered here, and OpenCode over ACP in [its own section](#acp-opencode), which the
+  comparison and mapping sections below do not include. Each recording is one harness version on one day.
 
 To look at any message kind in full, run `python3 tools/record/inventory.py fixtures/recordings/codex` or
 `.../claude`.
@@ -358,6 +361,180 @@ A subagent's own messages arrive in the same stream as the main agent's. They ar
 `parent_tool_use_id` that names the tool call that started the subagent.
 
 In real use, background-task messages are about 7 per turn.
+
+## ACP: OpenCode
+
+Read on 2026-11-21 from the twelve recordings in
+[`fixtures/recordings/acp/opencode`](../../fixtures/recordings/acp/opencode), made that day with
+[`tools/record/record_acp.py`](../../tools/record/record_acp.py) against OpenCode 2.3.2 (`opencode acp`, ACP
+protocol version 1) and the free model `opencode/deepseek-v4.1-flash-free`, with no account. The recorder plays
+an ACP client that can neither read or write files nor run terminals, so OpenCode does both itself. What was
+checked: every message in the recordings, the prototype's `Acp` translator and the Rust translator in
+`crates/marmot-agent-acp`, and the official Rust types in `agent-client-protocol` 5.5.1
+(`agent-client-protocol-schema` 1.21.2). What was not: other ACP agents, images, MCP servers, slash commands,
+setting changes, steering and subagents. Claims marked "inferred" were concluded, not seen.
+
+Interface: JSON-RPC 2.0 over stdio, with `"jsonrpc": "2.0"` on every message. The client sends `initialize`,
+`session/new`, `session/load` or `session/resume`, `session/prompt` and the notification `session/cancel`. The
+agent sends `session/update` notifications, and asks the client with `session/request_permission` and
+`elicitation/create`.
+
+### What appeared in the recordings
+
+256 messages: 159 `session/update`, 44 replies from the agent, 3 requests from the agent, and 50 messages from
+the client.
+
+| `sessionUpdate` | Count | Becomes |
+| --- | --- | --- |
+| `tool_call_update` | 40 | The `tool` item, again; 9 changed nothing the item shows and are not sent |
+| `agent_thought_chunk` | 33 | Part of a `reasoning` item |
+| `agent_message_chunk` | 27 | Part of a `message` item |
+| `tool_call` | 16 | A `tool` item |
+| `available_commands_update` | 15 | The `session` item's commands |
+| `usage_update` | 15 | Not sent: the context window's size and use, and a cost of 0 |
+| `config_option_update` | 12 | The `session` item's settings |
+| `user_message_chunk` | 1 | Not sent: only in the replay of `session/load`. OpenCode never echoes a prompt |
+
+No `plan`, `current_mode_update`, `session_info_update`, `notice` or compaction update was sent.
+
+### A turn
+
+A turn has no id and no start notification. It is the client's `session/prompt`, and ends with the reply to
+it, which carries `stopReason` (`end_turn`, `cancelled`, and in the schema `max_tokens`, `max_turn_requests`,
+`refusal`) and, from OpenCode, the turn's `usage` (`inputTokens`, `outputTokens`, `totalTokens`,
+`thoughtTokens`, `cachedReadTokens`). In the official Rust types that usage is behind the unstable feature
+`unstable_end_turn_token_usage`. There is no duration. The translators name a turn after the session and the
+prompt request's id, so the driver must never reuse a request id within a session, across a restart too.
+
+`available_commands_update` and `config_option_update` arrive after every `session/prompt`, before the agent's
+first word, whether or not anything changed.
+
+### Streamed text
+
+Words and thinking arrive as chunks. Each carries a `messageId` (OpenCode's own `msg_…` id; a thought's id is
+the message's with `:reasoning:0` added), and the chunks of one message share it. Up to 12 chunks made one item
+in these recordings; a short reply is one chunk. A message and its thinking can share a turn with tool calls in
+any order, but outside the replay of `session/load` the chunks of one message were never split by another update.
+
+The event model sends whole items, never the text so far
+([D-012](../decisions.md#d-012-word-by-word-streaming-is-not-required-now), rule 11 of the event model). So the
+translators keep the chunks of one `messageId` and send one `message` or `reasoning` item, with all the text,
+when anything else arrives (another update, a request, a reply, a message from the client) or the turn ends.
+Its item id is the `messageId`. Its native message is the list of the chunks' `params`, in order, each the exact
+text that arrived; this is the first item made from more than one native message, and that shape is
+provisional. If a message's chunks were ever split by something else, the later chunks make the item be sent
+again, whole, as an edit (not seen). With no `messageId`, which ACP allows, the item is named after the turn and
+a count.
+
+ACP says nothing about whether a message is commentary or the final answer, so a message has no `phase`.
+
+### Tool calls
+
+A `tool_call` arrives first with `status: "pending"`, the tool's `name` (`shell`, `read`, `edit`, `question`) as
+its `title`, and an empty `rawInput`. A `tool_call_update` then sets `in_progress`, the real `title` (for a
+command, the command line) and `rawInput`; for a command OpenCode sends it twice, identical. A last update sets `completed`
+or `failed`, with `content` and `rawOutput`. Each update holds only the fields it changes.
+
+| ACP `kind` | Item `kind` | Read from |
+| --- | --- | --- |
+| `execute` | `command` | `rawInput.command` and `rawInput.cwd`. ACP gives a command no field of its own; this is OpenCode's convention |
+| `edit`, `delete`, `move` | `edit` | `content` entries of type `diff`, each with `path`, `oldText` and `newText` |
+| `read` | `read` | The first `locations[].path` |
+| `search` | `search` | `rawInput.pattern` or `rawInput.query` |
+| `fetch` | `fetch` | |
+| `think`, `switch_mode`, `other` | `other` | `rawInput` as the item's `input` |
+
+The output is the text of the `content` entries. A diff comes as the whole old and new file; the translators
+turn it into one hunk without context, from the first changed line to the last.
+
+- **No exit code.** A command that exits with 1 is still `completed`. OpenCode adds a second text block,
+  "Exit code: 1", and puts `exit` in `rawOutput.metadata`, which ACP leaves to the agent. The item has no
+  `exit_code` and is `done`.
+- **A refused tool call is `failed`**, with "The user declined this tool call". The translators make it
+  `declined` when the client refused its permission.
+- **A cancelled tool call is `failed`**, with `rawOutput.metadata.interrupted`. ACP has no cancelled status. The
+  translators make it `cancelled` when the client sent `session/cancel` in that turn.
+- **The interrupted command's output names a path** under OpenCode's data folder where its output was kept.
+
+### Approvals
+
+`session/request_permission` names the tool call (`toolCall`, with the same fields as an update) and offers
+`options`, each with an `optionId`, a `name` and a `kind`: OpenCode offered `once` (`allow_once`, "Allow once"),
+`always` (`allow_always`, "Always allow") and `reject` (`reject_once`, "Reject"). The client replies
+`{"outcome": {"outcome": "selected", "optionId": "once"}}`, or `{"outcome": {"outcome": "cancelled"}}`. Each
+option becomes a choice with its own id; a `kind` that starts with `allow` allows. The approval's subject is the
+tool call.
+
+With its default settings OpenCode asked for nothing. The approval scenarios set
+`{"permission": {"bash": "ask", "edit": "ask"}}`.
+
+**A rejection ends the turn.** After "Reject", OpenCode failed the tool call and replied to the prompt with
+`stopReason: "cancelled"` at once; the model said nothing more. The turn item is `cancelled`, though nobody
+interrupted it.
+
+### Questions
+
+OpenCode's `question` tool asks through `elicitation/create`, in `form` mode, only when the client's
+`initialize` declared `"elicitation": {"form": {}}`. Without it, the tool call fails with "The question couldn't
+be shown to the user in this client", and the model carries on (seen on a first attempt that was not kept).
+
+The form has a `requestedSchema` whose `properties` are the questions: `q0`, a string with `oneOf` options
+(`const`, `title`, `description`), and `q0_custom`, a free-text string, for an answer of one's own. The request
+names the tool call (`toolCallId`). The client replies `{"action": "accept", "content": {"q0": "Hello"}}`. A
+free-text field given a value wins over the choice: an earlier run, not kept, answered both, and OpenCode
+reported only the typed text.
+
+Each property becomes a question, with its options, and free text allowed when it has none. So OpenCode's one
+question is two in the item. The question tool is also a `tool` item: in standard ACP nothing marks a tool call
+as a question until the form arrives, so the translators send both, the question with the tool as its subject.
+This departs from rule 4 of the event model.
+
+The official Rust types keep a form's properties in a sorted map, so the questions come in the order of their
+names, not as sent (inferred from the type, `BTreeMap`, with a note to change it in its next major version).
+
+### Sessions
+
+The reply to `session/new` gives the `sessionId` (`ses_…`) and `configOptions`: `model` (category `model`, a
+select of 11 or 12 free models; the list changed between the reply and the first `config_option_update`),
+`effort` (category `thought_level`) and `mode` (category `mode`: `build` or `plan`). There is no legacy `modes`
+field. The session item lists them as settings; a setting of category `mode` needs the right to approve. The
+agent's name and version come from `initialize`'s `agentInfo` (`OpenCode`, `2.3.2`), and name the harness
+`opencode`.
+
+`available_commands_update` lists four commands: `init`, `review`, `goal`, `compact`, each with a description
+and no input hint. They are the session item's commands. A slash command is sent as prompt text; that was not
+recorded.
+
+- **`session/new` again** on the same connection starts a second session. Nothing says the first is over; the
+  translators end its session item.
+- **`session/resume`** after a restart replies with the configuration options and replays nothing.
+- **`session/load`** after a restart replays the conversation first, as `user_message_chunk`,
+  `tool_call` (already complete, with its real title), `tool_call_update` and `agent_message_chunk`, with the
+  original ids, then replies. The chat already holds all of it, so nothing between the request and its reply is
+  sent again, apart from command and setting updates.
+- `initialize` declared `loadSession`, `sessionCapabilities` with `resume`, `list`, `fork`, `close`, `delete`
+  and `additionalDirectories`, `promptCapabilities` with `image` and `embeddedContext`, MCP over HTTP, and in
+  `_meta` `steering: {supported: true}` and `opencode/child-session-updates`.
+
+### Where ACP falls short of what the chat needs
+
+- **Who sent a message.** A prompt is content blocks and nothing else. It has no sender and no chat. The core
+  knows who asked; the agent never will, so a group's members are one user to it (as
+  [D-005](../decisions.md#d-005-which-driver-each-harness-gets) expected).
+- **A turn's identity and length.** No turn id, no start notice, no duration.
+- **A message's phase.** Nothing says which message is the answer.
+- **Commands.** A tool call's command and its exit code are the agent's own `rawInput` and `rawOutput`, not
+  standard fields.
+- **Questions.** Only through an elicitation form, which the client must declare, with each question's
+  options and its free-text twin as separate fields. Nothing ties a form field to the question it belongs to,
+  and the tool call that asks is not marked as a question.
+- **Slash commands.** Listed, with descriptions, but run by sending the text as a prompt; nothing says one ran.
+- **Settings.** Configuration options say what can be set and its current value, but not what changing it
+  allows, so the translators guess from the category that `mode` needs the right to approve.
+- **Resume.** Standard and cheap with `session/resume`. `session/load` replays everything, which the driver must
+  recognise and drop.
+- **Steering.** Not standard; OpenCode offers it only as an extension.
+- **Ending a session.** Nothing says a session is over.
 
 ## Side by side
 

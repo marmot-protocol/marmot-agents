@@ -10,6 +10,10 @@ research.
   stated in it. The crate and package versions under "Libraries" were checked directly against crates.io, npm
   and GitHub.
 - **Versions move fast.** Most of these projects release weekly. Re-check before relying on a detail.
+- **OpenCode's ACP was run on 2026-11-21.** The OpenCode entry and the `agent-client-protocol` row under
+  "Libraries" were checked that day: OpenCode 2.3.2 was driven over `opencode acp` by a recorder, and the
+  crate was built into this workspace. What OpenCode sent is in
+  [`harness-messages.md`](harness-messages.md#acp-opencode).
 - **Codex was read again on 2026-11-19.** The Codex entry, its two rows under "Libraries" and the whole of
   [Codex: which library to build on](#codex-which-library-to-build-on) are from that day, and that section
   says how each fact was checked. Three candidate libraries were built and run on this machine. Nothing else
@@ -92,11 +96,16 @@ Read again on 2026-11-19. The newest release is 0.170.0 (2026-11-18). The record
 
 - **Native.** `opencode serve`, HTTP with server-sent events. T3 Code needs two adapters for it, one per major
   version.
-- **ACP.** Built in and vendor-maintained: v2.3.0 (2026-11-13), ACP v1.
-- **ACP covers:** load, resume, list, fork, images, thoughts, diffs, form questions, model, effort and mode
-  options, usage, MCP servers.
-- **ACP lacks:** plan updates (none found in source); undo and redo. A second prompt during a turn is an error;
-  steering exists only as the non-standard `_session/steering`. Subagent sessions are flattened into the parent.
+- **ACP.** Built in and vendor-maintained: v2.3.2 run on 2026-11-21, ACP protocol version 1. `opencode acp`
+  runs its own server; it needs no account for OpenCode's free models.
+- **ACP covers:** load, resume, list, fork, close, delete, images, thoughts, diffs, form questions, model, effort
+  and mode options, usage, MCP servers. Seen running: load (which replays the conversation), resume (which does
+  not), thoughts, diffs, permission requests, form questions, configuration options, commands, and each turn's
+  token usage in the reply to `session/prompt`.
+- **ACP lacks:** plan updates (none found in source, and 2.3.2 has no to-do tool at all); undo and redo. A second
+  prompt during a turn is an error; steering exists only as an extension, which `initialize` announces in
+  `_meta.steering`. Subagent sessions are flattened into the parent (not checked). A form question is asked only
+  if the client declares the `elicitation` capability. A command's exit code is only in `rawOutput`.
 
 ### Pi
 
@@ -159,7 +168,7 @@ Read again on 2026-11-19. The newest release is 0.170.0 (2026-11-18). The record
 
 | Library | Where | Version when checked | Notes |
 | --- | --- | --- | --- |
-| `agent-client-protocol` | crates.io | 5.3.0, 2026-11-14 | Official Rust library, widely used |
+| `agent-client-protocol` | crates.io | 5.3.0, 2026-11-14; 5.5.1 built on 2026-11-21 | Official Rust library, widely used. 5.5.1 resolves into this workspace beside MDK and adds about 70 crates. It pins `agent-client-protocol-schema` 1.21.2 and switches on `serde_json`'s `preserve_order` for every crate built with it. A turn's usage is behind its `unstable_end_turn_token_usage` feature |
 | `@anthropic-ai/claude-agent-sdk` | npm | 0.3.326, 2026-11-16 | Official |
 | `@cursor/sdk` | npm | 1.4.0, 2026-11-15 | Official |
 | `@openai/codex-sdk` | npm | 0.170.0, 2026-11-18 | Official, but wraps the JSON-lines mode |
