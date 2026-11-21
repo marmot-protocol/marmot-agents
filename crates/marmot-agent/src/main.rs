@@ -129,45 +129,51 @@ async fn run(config: &Config) -> Result<(), String> {
         app,
         label: account.label,
         agent: PubKey(account.account_id_hex),
+        faults: Default::default(),
     };
     // A harness stopped while it starts is killed: each driver's child is killed when dropped.
-    match (&config.codex, &config.acp, config.pi_setup()) {
+    let ran = match (&config.codex, &config.acp, config.pi_setup()) {
         (Some(codex), _, _) => {
             let setup = config.setup().map_err(|e| e.to_string())?;
-            if let Some(driver) =
-                unless_stopped(&mut stop, Codex::start(&codex.program, setup)).await
-            {
-                let driver = driver.map_err(|_| "Codex could not be started")?;
-                let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
-                core.run(events, stop).await;
+            match unless_stopped(&mut stop, Codex::start(&codex.program, setup)).await {
+                Some(driver) => {
+                    let driver = driver.map_err(|_| "Codex could not be started")?;
+                    let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
+                    core.run(events, stop).await
+                }
+                None => Ok(()),
             }
         }
         (None, Some(acp), _) => {
             let starting = Acp::start(&acp.command, &acp.cwd, &acp.name);
-            if let Some(driver) = unless_stopped(&mut stop, starting).await {
-                let driver = driver.map_err(|_| "the ACP agent could not be started")?;
-                let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
-                core.run(events, stop).await;
+            match unless_stopped(&mut stop, starting).await {
+                Some(driver) => {
+                    let driver = driver.map_err(|_| "the ACP agent could not be started")?;
+                    let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
+                    core.run(events, stop).await
+                }
+                None => Ok(()),
             }
         }
-        (None, None, Some(setup)) => {
-            if let Some(driver) = unless_stopped(&mut stop, Pi::start(setup)).await {
+        (None, None, Some(setup)) => match unless_stopped(&mut stop, Pi::start(setup)).await {
+            Some(driver) => {
                 let driver = driver.map_err(|_| "Pi could not be started")?;
                 let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
-                core.run(events, stop).await;
+                core.run(events, stop).await
             }
-        }
+            None => Ok(()),
+        },
         (None, None, None) => {
             drop(events);
             let endpoint = Endpoint::in_home(&config.home);
             let (listener, token) = endpoint
                 .listen()
                 .map_err(|_| "the socket could not be opened")?;
-            serve(marmot, config, &config.home, listener, token, stop).await?;
+            serve(marmot, config, &config.home, listener, token, stop).await
         }
-    }
+    };
     runtime.shutdown().await;
-    Ok(())
+    ran
 }
 
 /// What `work` gives, or nothing when the core is asked to stop first; `work` is then dropped.

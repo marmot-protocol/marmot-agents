@@ -202,3 +202,37 @@ async fn a_connector_on_the_socket_drives_the_agent() {
     second.abort();
     world.runtime.shutdown().await;
 }
+
+// The core numbers a connector's events in each session. An event it cannot read is passed over
+// and takes no number, so the numbers it gives have no gap (G12).
+#[tokio::test]
+async fn an_event_the_core_cannot_read_takes_no_number() {
+    use marmot_agent::socket::SocketDriver;
+    use marmot_agent_driver::{Driver, Output};
+    let (core_side, connector) = UnixStream::pair().unwrap();
+    let (read, mut write) = connector.into_split();
+    let connector = tokio::spawn(async move {
+        send(&mut write, hello("token")).await;
+        let mut lines = BufReader::new(read).lines();
+        let _ = lines.next_line().await;
+        let event = |state: &str| {
+            json!({"jsonrpc": "2.0", "method": "event", "params": {
+                "item": "i1", "type": "turn", "state": state, "title": "Turn", "text": "",
+                "body": {"started_by": "user"}, "session": "s1", "turn": "t1", "chat": "c-1",
+            }})
+        };
+        // No such state: the core cannot read it.
+        send(&mut write, event("sleeping")).await;
+        send(&mut write, event("running")).await;
+        (write, lines)
+    });
+    let mut driver = SocketDriver::greet(core_side, "token", "agent")
+        .await
+        .unwrap();
+    let Some(Output::Event(emitted)) = driver.next_event().await else {
+        panic!("no event")
+    };
+    assert_eq!(emitted.event.header().state, State::Running);
+    assert_eq!(emitted.event.header().seq, 1, "the first event read");
+    drop(connector.await.unwrap());
+}

@@ -387,6 +387,7 @@ async fn an_imported_codex_install_keeps_its_identity_and_its_chat() {
         app,
         label: account.label,
         agent: PubKey(account.account_id_hex),
+        faults: Default::default(),
     };
     assert!(
         marmot.groups().iter().any(|g| g.as_str() == group_hex),
@@ -434,7 +435,7 @@ async fn an_imported_codex_install_keeps_its_identity_and_its_chat() {
     assert_eq!(prompts.load(Ordering::SeqCst), 1);
 
     let _ = stop.send(());
-    task.await.unwrap();
+    task.await.unwrap().unwrap();
     runtime.shutdown().await;
     person_runtime.shutdown().await;
 }

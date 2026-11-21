@@ -4,7 +4,7 @@
 //! home = "/home/me/.local/share/marmot-agent/codex"   # the account home
 //! name = "Codex"                       # the agent's name, as people see it
 //! relays = ["wss://relay.example"]
-//! owner = "<the owner's public key, in hex>"
+//! owner = "<the owner's public key, in hex or as an npub>"
 //! prompt = "owner"                     # or "everyone", or { people = ["<hex>", ...] }
 //! approve = "owner"                    # the same choices
 //! invite = ["<hex>"]                   # besides the owner, who may add the agent to a group
@@ -37,7 +37,7 @@
 //! args = []                            # arguments for that script, before Pi's own
 //! ```
 
-use crate::keys::PubKey;
+use crate::keys::{PubKey, public_key_hex};
 use crate::rights::{Rights, Who};
 use marmot_agent_codex::{ApprovalPolicy, Sandbox, Setup};
 use serde::Deserialize;
@@ -188,7 +188,30 @@ impl Config {
 
     /// Reads the settings from their text.
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
-        let config: Self = toml::from_str(text).map_err(|_| ConfigError::Invalid)?;
+        let mut config: Self = toml::from_str(text).map_err(|_| ConfigError::Invalid)?;
+        // Every key as MDK gives it, lowercase hex, so the owner and the people listed are
+        // recognised; anything else is refused here, not left to match nobody (S6).
+        let read = |key: &mut PubKey, setting| match public_key_hex(key.as_str()) {
+            Some(hex) => {
+                *key = PubKey(hex);
+                Ok(())
+            }
+            None => Err(ConfigError::Value(setting)),
+        };
+        read(&mut config.owner, "owner")?;
+        for key in &mut config.invite {
+            read(key, "invite")?;
+        }
+        for (who, setting) in [
+            (&mut config.prompt, "prompt"),
+            (&mut config.approve, "approve"),
+        ] {
+            if let Who::People(people) = who {
+                for key in people {
+                    read(key, setting)?;
+                }
+            }
+        }
         if config.name.as_ref().is_some_and(|n| n.trim().is_empty()) {
             return Err(ConfigError::Value("name"));
         }

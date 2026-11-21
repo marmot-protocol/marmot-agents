@@ -155,7 +155,7 @@ pub struct World {
     /// The test relay's address.
     pub relay: String,
     _home: tempfile::TempDir,
-    _relay: nostr_relay_builder::MockRelay,
+    _relay: nostr_relay_builder::LocalRelay,
 }
 
 /// A running core, and how to stop it.
@@ -174,7 +174,7 @@ impl World {
     pub async fn with_slow_files(settings: &str, delay: std::time::Duration) -> Self {
         storage_sqlite::relax_storage_for_test_process();
         let home = tempfile::tempdir().unwrap();
-        let relay = nostr_relay_builder::MockRelay::run().await.unwrap();
+        let relay = relay().await;
         let url = relay.url().await.to_string();
         // As `MarmotApp::with_relay`, with a stand-in Blossom server on this machine as where a
         // new group keeps its files, as a deployment names its own; the agent's files go there
@@ -209,6 +209,7 @@ impl World {
             app,
             label: agent.account.label.clone(),
             agent: PubKey(agent.account.account_id_hex.clone()),
+            faults: Default::default(),
         };
         Self {
             runtime,
@@ -225,13 +226,21 @@ impl World {
 
     /// Starts the core with `driver`, as a restart does: from the state it kept.
     pub fn start(&self, driver: impl Driver + 'static) -> Running {
+        self.start_with(driver, Store::new(self.state.path()))
+    }
+
+    /// As [`World::start`], keeping the state in `store`.
+    pub fn start_with(&self, driver: impl Driver + 'static, store: Store) -> Running {
         let events = self.runtime.subscribe();
-        let store = Store::new(self.state.path());
         let core = Core::new(self.marmot.clone(), driver, &self.config, store).unwrap();
         let (stop, stopped) = oneshot::channel::<()>();
-        let task = tokio::spawn(core.run(events, async {
-            let _ = stopped.await;
-        }));
+        let task = tokio::spawn(async move {
+            let _ = core
+                .run(events, async {
+                    let _ = stopped.await;
+                })
+                .await;
+        });
         Running { stop, task }
     }
 
@@ -290,12 +299,37 @@ impl Running {
         self.task.await.unwrap();
     }
 
+    /// Whether the core stops by itself within `seconds`.
+    pub async fn stops_within(&self, seconds: u64) -> bool {
+        for _ in 0..seconds * 10 {
+            if self.task.is_finished() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        false
+    }
+
     /// Ends the core as a crash does: at once, closing nothing and saving nothing more. Its
     /// harness goes with it.
     pub async fn crash(self) {
         self.task.abort();
         let _ = self.task.await;
     }
+}
+
+/// MDK's test relay, without the limit it puts by default on how many events each connection may
+/// send a minute (60), as MDK's own harness relay does: a long scenario would otherwise stall on it.
+pub async fn relay() -> nostr_relay_builder::LocalRelay {
+    use nostr_relay_builder::builder::RateLimit;
+    let unlimited = RateLimit {
+        notes_per_minute: u32::MAX,
+        ..RateLimit::default()
+    };
+    let builder = nostr_relay_builder::RelayBuilder::default().rate_limit(unlimited);
+    let relay = nostr_relay_builder::LocalRelay::new(builder);
+    relay.run().await.unwrap();
+    relay
 }
 
 /// A stand-in Blossom server, for the files an agent sends: it keeps each uploaded blob under its

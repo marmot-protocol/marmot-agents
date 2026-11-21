@@ -136,3 +136,38 @@ async fn a_named_group_of_two_is_a_group_and_a_restart_repeats_nothing() {
     core.stop().await;
     world.runtime.shutdown().await;
 }
+
+// A long chat is not throttled by the test relay: MDK's mock relay takes 60 events a minute from
+// each connection by default, and a scenario that sends more must not stall on it, as MDK's own
+// harness relay does not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_long_chat_is_not_throttled_by_the_test_relay() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let prompts = Arc::new(AtomicUsize::new(0));
+    world.runtime.start().await.unwrap();
+    let core = world.start(Echo::new(prompts.clone()));
+    let group = world
+        .runtime
+        .start_direct_conversation(&world.person, &world.agent)
+        .await
+        .unwrap();
+    let group_hex = world.joined(&group).await;
+    // Each prompt makes three events: the turn, the words, and the turn again, 150 in all. On the
+    // throttled relay this took about three minutes; without the limit, a few seconds.
+    let chat = async {
+        for n in 0..50 {
+            let text = format!("n{n}");
+            world
+                .runtime
+                .send_message(&world.person, &group, text.into_bytes())
+                .await
+                .unwrap();
+            world.words(&group_hex, &format!("echo: n{n}")).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(60), chat)
+        .await
+        .expect("throttled: the chat took over a minute");
+    core.stop().await;
+    world.runtime.shutdown().await;
+}

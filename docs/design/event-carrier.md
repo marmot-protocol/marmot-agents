@@ -5,7 +5,8 @@ to [D-026](../decisions.md#d-026-an-agent-item-is-at-most-64-kb). Who applies th
 2026-11-19, as [D-057](../decisions.md#d-057-the-core-applies-the-64-kb-limit). None of it is in the Marmot
 specification yet, and all of it has to be agreed there
 ([Q-03](../open-questions.md#q-03-where-are-the-event-kinds-specified)). The exact tags are in
-[kinds 1201 and 1202](agent-kinds.md) ([D-076](../decisions.md#d-076-the-tags-of-kinds-1201-and-1202)).
+[kinds 1201 and 1202](agent-kinds.md) ([D-076](../decisions.md#d-076-the-tags-of-kinds-1201-and-1202)). What
+the core cuts beyond the two steps under "the size limit" is provisional, as noted there.
 
 [The event model](event-model.md) says what an agent event means: a set of item types, each with a state. This page
 says how one travels through a Marmot group: what kind of event it is, what it contains, and how an item that
@@ -216,6 +217,12 @@ When an item would be larger, the core drops parts in this order and says so in 
 
 1. the native message is left out, with its size noted;
 2. the output is cut, keeping the start and the end, with the full length noted.
+
+**Provisional** (2026-11-21, not yet accepted by the owner): when those two are not enough, the core goes on.
+A session's commands lose their descriptions and keep their names and hints; then the largest remaining text is
+cut, keeping its start and end; then a plan's steps or an edit's changes are thinned in their middle. When what
+is never cut is over the limit alone, a short stand-in goes instead. The tags that say so are in
+[kinds 1201 and 1202](agent-kinds.md#provisional-additions).
 
 The native message usually repeats the output, so an item with both is about twice the size of its output. The
 first step is therefore the common one: it applies to an output over about 30 KB, which is one in a thousand.

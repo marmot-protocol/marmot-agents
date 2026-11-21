@@ -17,13 +17,17 @@ use marmot_app::{
     AppError, AppMessageQuery, AppMessageRecord, MarmotApp, MarmotAppConfig, MarmotAppRuntime,
     MediaUploadAttachmentRequest, MediaUploadRequest,
 };
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The kind of a chat message.
 const CHAT: u64 = 9;
 
 /// Opens the account home the settings name: its accounts, and MDK's app and runtime on it.
-/// This is what first opens the store, which MDK upgrades forward only.
+/// This is what first opens the store, which MDK upgrades forward only. MDK holds the home for as
+/// long as the app or a runtime made from it lives, so a second core on the same home is refused
+/// here, and the two never write over each other's state, which lives in the same home.
 pub fn open(config: &Config) -> Result<(AccountHome, MarmotApp, MarmotAppRuntime), String> {
     let home = AccountHome::open(&config.home);
     let base = if config.white_noise {
@@ -139,6 +143,32 @@ pub struct Marmot {
     pub label: String,
     /// The agent's public key.
     pub agent: PubKey,
+    /// Faults put in the way of sends: none in use. For the tests of what the core does when MDK
+    /// fails, as the simulator will put them (`docs/design/verification.md`).
+    pub faults: Faults,
+}
+
+/// Faults the next sends meet, one each, oldest first.
+#[derive(Clone, Default)]
+pub struct Faults(Arc<Mutex<VecDeque<Fault>>>);
+
+/// What a send meets.
+pub enum Fault {
+    /// The send goes out, and MDK's reply is lost, as when the wait for it runs out.
+    LoseReply,
+    /// MDK refuses the send with this error, before it takes it.
+    Refuse(AppError),
+}
+
+impl Faults {
+    /// The next send meets `fault`.
+    pub fn push(&self, fault: Fault) {
+        self.0.lock().expect("never poisoned").push_back(fault);
+    }
+
+    fn next(&self) -> Option<Fault> {
+        self.0.lock().expect("never poisoned").pop_front()
+    }
 }
 
 impl Marmot {
@@ -232,9 +262,23 @@ impl Marmot {
         })
     }
 
-    /// Sends something to a group, and gives back the id of the event it became.
-    pub async fn send(&self, group: &GroupKey, what: &Sending) -> Result<EventKey, AppError> {
+    /// Sends something to a group, and gives back the id of the event it became. `token` is the
+    /// same each time this send is tried, across restarts. MDK takes no such token yet, so a send
+    /// that went out just before a crash goes out again after it, and an item's first version
+    /// then makes two rows. When MDK gives sends that are safe across a crash, the token is what
+    /// is handed to it here, and nothing else changes.
+    pub async fn send(
+        &self,
+        group: &GroupKey,
+        what: &Sending,
+        token: &str,
+    ) -> Result<EventKey, AppError> {
+        let _ = token;
         let id = group_id(group).ok_or_else(|| AppError::UnknownGroup(String::new()))?;
+        let fault = self.faults.next();
+        if let Some(Fault::Refuse(error)) = fault {
+            return Err(error);
+        }
         let summary = match what {
             Sending::Item { item, .. } => {
                 let out = carrier::item(item);
@@ -247,25 +291,87 @@ impl Marmot {
                 text,
                 ..
             } => {
+                let text = carrier::fit_words(text, &[]);
                 self.runtime
-                    .edit_message(&self.label, &id, target.as_str(), text)
+                    .edit_message(&self.label, &id, target.as_str(), &text)
                     .await?
             }
             Sending::Words {
-                text, turn, remark, ..
+                text,
+                turn,
+                remark,
+                settles,
+                ..
             } => {
-                let tags = carrier::words_tags(turn.as_ref(), *remark);
+                let tags = carrier::words_tags(turn.as_ref(), *remark, settles);
+                let text = carrier::fit_words(text, &tags);
                 self.runtime
-                    .send_tagged_text(&self.label, &id, text.clone(), tags)
+                    .send_tagged_text(&self.label, &id, text, tags)
                     .await?
             }
         };
+        if let Some(Fault::LoseReply) = fault {
+            return Err(AppError::AccountWorkerResponseTimedOut);
+        }
         summary
             .message_ids
             .into_iter()
             .next()
             .map(EventKey)
             .ok_or(AppError::UnknownGroup(String::new()))
+    }
+
+    /// The event a send became, when MDK stored it as sent by the agent: for a send whose
+    /// outcome is not known, which may have gone out. An item is matched by its id, its version
+    /// and the first event it names; the agent's words by their turn and their text, among those
+    /// not already known as the first of something (`taken`). An edit is never found: sent again,
+    /// it shows the same text, and adds nothing anyone sees.
+    pub fn find_sent(
+        &self,
+        group: &GroupKey,
+        what: &Sending,
+        taken: impl Fn(&EventKey) -> bool,
+    ) -> Option<EventKey> {
+        let (kind, wanted): (u64, Box<Matches>) = match what {
+            Sending::Item { item, .. } => {
+                let id = item.event.header().item.as_str().to_string();
+                let version = item.version.to_string();
+                let first = item.first.as_ref().map(|f| f.as_str().to_string());
+                let matches = move |row: &AppMessageRecord| {
+                    tag(&row.tags, "item_id") == Some(id.as_str())
+                        && tag(&row.tags, "v") == Some(version.as_str())
+                        && tag(&row.tags, "item") == first.as_deref()
+                };
+                (carrier::ITEM_KIND, Box::new(matches))
+            }
+            Sending::Words { edit: Some(_), .. } => return None,
+            Sending::Words {
+                text,
+                turn,
+                remark,
+                settles,
+                ..
+            } => {
+                let tags = carrier::words_tags(turn.as_ref(), *remark, settles);
+                let text = carrier::fit_words(text, &tags);
+                let turn = turn.as_ref().map(|t| t.as_str().to_string());
+                let matches = move |row: &AppMessageRecord| {
+                    row.plaintext == text && tag(&row.tags, "turn") == turn.as_deref()
+                };
+                (CHAT, Box::new(matches))
+            }
+        };
+        let query = AppMessageQuery {
+            group_id_hex: Some(group.as_str().to_string()),
+            kinds: Some(vec![kind]),
+            limit: None,
+        };
+        let rows = self.runtime.messages_with_query(&self.label, query).ok()?;
+        rows.into_iter()
+            .filter(|row| row.direction == "sent" && row.sender == self.agent.as_str())
+            .filter(|row| wanted(row))
+            .map(|row| EventKey(row.message_id_hex))
+            .find(|event| !taken(event))
     }
 
     /// Sends a file to a group as an encrypted attachment, tagged with its turn like the agent's
@@ -288,7 +394,7 @@ impl Marmot {
             caption: None,
             send: true,
             blossom_server: None,
-            message_tags: carrier::words_tags(turn, false),
+            message_tags: carrier::words_tags(turn, false, &[]),
         };
         let uploaded = self.runtime.upload_media(&self.label, &id, request).await?;
         uploaded
@@ -395,6 +501,16 @@ impl Marmot {
             .messages_with_query(&self.label, query)
             .unwrap_or_default()
     }
+}
+
+/// Whether a stored message is the one looked for.
+type Matches = dyn Fn(&AppMessageRecord) -> bool;
+
+/// The first value of the tag named `name`.
+fn tag<'a>(tags: &'a [Vec<String>], name: &str) -> Option<&'a str> {
+    (tags.iter())
+        .find(|t| t.len() >= 2 && t[0] == name)
+        .map(|t| t[1].as_str())
 }
 
 /// The group's id, as MDK takes it.
