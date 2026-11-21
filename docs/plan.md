@@ -78,8 +78,8 @@ Pi (built in, Rust), the ACP driver for Goose, OpenCode and Cursor (built in, Ru
 [D-080](decisions.md#d-080-cursor-is-driven-through-acp)), and the
 Hermes (Python) and OpenClaw (TypeScript) plugins. Each follows the Codex pattern: record scripted sessions,
 write the translation against the recordings, then the part that runs the harness, then the scenario. They are
-independent, so separate agents build them at the same time. Whose rules govern Hermes and OpenClaw
-([Q-22](open-questions.md#q-22-whose-rules-govern-a-gateway)) is decided at the start, from the recordings.
+independent, so separate agents build them at the same time. Whose rules govern Hermes and OpenClaw is
+decided: the core decides first ([D-084](decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)).
 **Done when** the scenario passes for each.
 
 ### M4: Ready to swap

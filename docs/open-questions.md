@@ -176,42 +176,13 @@ Still open:
 - **Older sessions.** How a person lists the sessions a chat has had, and goes back to one.
 - **Gateways that choose their own sessions.** Hermes keeps one session per sender, even in a group, so a
   group chat has several. OpenClaw puts every direct chat in one session unless its plugin arranges otherwise,
-  so the plugin has to arrange one per chat. Whether the core should accept Hermes's split is part of
-  [Q-22](#q-22-whose-rules-govern-a-gateway).
+  so the plugin has to arrange one per chat. Whether the core should accept Hermes's split is still open; who
+  may speak and approve in a gateway is settled
+  ([D-084](decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)).
 - **Threads.** Whether a thread inside a chat gets its own session. For a subagent's thread, the proposal in
   [subagents as threads](design/subagents.md) says it does.
 
 Raised in [issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8).
-
-### Q-22 Whose rules govern a gateway?
-
-Hermes has its own allow-list, its own sessions (one per sender, even in a group) and its own notices, and it
-drops a disallowed sender without a word. The core has the owner's settings
-([D-010](decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)) and must tell a disallowed
-person so. The current thinking is that the core checks first and Hermes is configured to allow whatever the
-core lets through. Not decided. See [`reference/hermes-messages.md`](reference/hermes-messages.md).
-
-OpenClaw was recorded on 2026-11-17, and differs on each point. This is evidence, not a decision. See
-[`reference/openclaw-messages.md`](reference/openclaw-messages.md).
-
-- **Who may speak.** OpenClaw does not drop anyone by itself. The plugin asks it for a verdict, supplying the
-  policy and the allow-lists, and gets back "run", "drop", "skip" or "pairing required" with a reason. Acting
-  on the verdict is the plugin's job, so the plugin could tell a disallowed person. The plugin could equally
-  hand OpenClaw an open policy and let the core decide first.
-- **Who may approve.** When the plugin claims OpenClaw's approval capability, OpenClaw asks the plugin whether
-  a given sender may approve. That is a place to ask the core.
-- **Sessions.** A group is one session shared by everyone in it. All direct chats share one session unless
-  the plugin or the owner arranges otherwise.
-- **Notices.** OpenClaw also speaks for itself, but marks what it says: by kind of delivery, by an error flag,
-  and by structured data on approvals and questions.
-- **What the owner must set.** An approval reaches the chat only if the owner has switched approval
-  forwarding on in OpenClaw. Left off, the command waits unseen.
-- **Each gateway has its own owner, too.** Recorded on 2026-11-18: OpenClaw refuses its owner-only commands to
-  anyone else, and drops, without a word, a message with a command from someone not on its command list.
-  Hermes, given a list of administrators, refused `/yolo`, `/approvals`, `/model`, `/new` and `/stop` to anyone
-  else. Those lists are separate from the owner's settings in the core.
-- **Hermes can approve by itself.** In its default mode a second model judged a flagged command and approved
-  it, and nobody was asked.
 
 ### Q-08 How do several agent identities run together?
 

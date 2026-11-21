@@ -375,7 +375,8 @@ Four things made the rule in D-032 too weak as it stood. The first three were de
    ([D-021](../decisions.md#d-021-approval-behaviour-belongs-to-the-harness)).
 
 Each gateway also has its own list of who may use such commands, separate from the owner's settings in the
-core ([Q-22](../open-questions.md#q-22-whose-rules-govern-a-gateway)).
+core. The plugin sets them to admit whatever the core lets through
+([D-084](../decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)).
 
 ## What is visible, and to whom
 

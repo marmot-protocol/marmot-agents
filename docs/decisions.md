@@ -802,7 +802,7 @@ design in real code. It also settles three open questions by doing them: which C
 (Q-17, since settled as [D-074](#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)). The core cannot send an agent item until MDK changes (in 1201 and 1202; the first test sends items under a
 temporary kind before then, [D-069](#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind)).
 The gateways come last because whose rules govern them is still open
-([Q-22](open-questions.md#q-22-whose-rules-govern-a-gateway)).
+(Q-22, since settled as [D-084](#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)).
 
 Decided 2026-11-19.
 
@@ -1387,3 +1387,68 @@ interface, as [D-006](#d-006-prefer-official-interfaces-and-libraries) asks, and
 being built anyway.
 
 Decided 2026-11-21. The project owner accepted the recommendation.
+
+## D-081 The socket messages as built are accepted
+
+**Decision.** The messages the core and a connector exchange over the socket are those in
+[the messages, as built](design/socket-protocol.md#the-messages-as-built): the hello with its token and the
+seven capability flags, the prompt, answer and control requests, and the event notification with its item,
+chat, prompts and settles fields. They follow the driver trait
+([D-058](#d-058-the-driver-trait-and-the-capability-flags)).
+
+**Why.** M2 drove a real Claude Code through them end to end, with an approval, an interrupt, a new session
+and a crash, and they needed nothing the trait lacks. Fixing them lets the other connectors be written against
+a stable boundary.
+
+Decided 2026-11-21. The project owner accepted the recommendation from M2.
+
+## D-082 The Claude Code driver loads no Claude Code settings files
+
+**Decision.** The Claude Code driver starts Claude Code with no settings files (the SDK's `settingSources` is
+empty). No allow rule, hook or `CLAUDE.md` from the owner's own Claude Code setup applies in a chat.
+
+**Why.** Rules written for one person at a terminal would otherwise approve or run things in a group chat
+without anyone in the chat being asked, which [D-010](#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)
+puts in the owner's settings in the core. The cost is that the agent does not read the owner's `CLAUDE.md`.
+
+Decided 2026-11-21. The project owner accepted the recommendation from M2.
+
+## D-083 The core passes no files to a harness yet
+
+**Decision.** Until files are designed ([Q-23](open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)),
+the core passes no attachments to a harness, whatever the driver's `files_in` says. The Claude Code driver
+reports `files_in` as `none`. The Codex driver reports `images`, which is what Codex accepts; it receives none
+yet.
+
+**Why.** Passing files on raises what may be read and from where, which is not designed. Text covers the
+scenarios that prove the model.
+
+Decided 2026-11-21. The project owner accepted the recommendation from M2.
+
+## D-084 The core decides first, and a gateway allows what the core lets through
+
+**Decision.** For Hermes and OpenClaw, as for every harness, the core decides who may prompt and who may approve
+from the owner's settings ([D-010](#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)), and tells a
+refused person why. Each gateway's plugin sets the gateway to allow whatever reaches it from the core: Hermes's
+allow-list and administrator list admit what the plugin delivers, and OpenClaw is handed an open policy, with
+its question whether a sender may approve answered from the core's verdict. This settles Q-22 for who may speak
+and approve. How a gateway's own sessions map to chats stays open.
+
+**Why.** One set of rules, in one place, for every harness. Hermes drops a refused sender without a word; the
+core can say why.
+
+Decided 2026-11-21. The project owner accepted the recommendation from M2.
+
+## D-085 Cursor recordings keep only Cursor's built-in commands
+
+**Decision.** When Cursor's sessions are recorded, the scrubber keeps only Cursor's built-in slash commands in
+the command list `cursor-agent acp` sends, and drops the owner's personal commands and skills and the entries
+Cursor syncs from the account (named `synced-` and ids). Recording uses the existing sign-in on the machine, and
+no Cursor credential is copied anywhere.
+
+**Why.** The command list carries the names of the owner's own commands and identifiers from the account, which
+must not go into fixtures. A separate sign-in in a container would still get the synced entries, and would put a
+credential in the container.
+
+Decided 2026-11-21. The project owner accepted the recommendation.
+
