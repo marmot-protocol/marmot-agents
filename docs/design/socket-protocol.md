@@ -100,7 +100,7 @@ does arrives as agent events.
 
 | Request | Carries |
 | --- | --- |
-| `prompt` | The message's id and text. The chat: an id, whether it is a group, its name. The sender: an id and a name. For a reply: the id of the message replied to, its text and its author. Attachments, each as a path to a file the core wrote, with a name and a type. The session, when the core chooses it |
+| `prompt` | The message's id and text. The chat: an id, whether it is a group, its name. The sender: an id and a name. For a reply: the id of the message replied to, its text and its author. Attachments, each as a path to a file the core wrote, with a name and a type. The session, only when the core resumes one ([D-065](../decisions.md#d-065-a-prompt-names-a-session-only-to-resume-one)) |
 | `answer` | The item being answered, who answered, and the choices: ids the item offered, and text where the question allows it. One answer can cover several questions |
 | `control` | The action, what it acts on, who sent it, and the action's details. See [answers and controls](answers-and-controls.md#5-controls-a-few-shared-ones-and-whatever-the-harness-offers) |
 

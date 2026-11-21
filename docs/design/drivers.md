@@ -79,11 +79,14 @@ socket does the same job as messages:
 - take a control: interrupt, new session, change a setting, or one of the harness's own actions;
 - hand back the next agent event.
 
-Three things a driver does are not operations of their own. A prompt names its session, so opening and
-resuming one happen when a prompt arrives. A message sent during a turn is a prompt like any other, so there
+Three things a driver does are not operations of their own. A prompt goes to its chat's session, and names
+one only to resume it, so opening and resuming one happen when a prompt arrives
+([D-065](../decisions.md#d-065-a-prompt-names-a-session-only-to-resume-one)). A message sent during a turn is a prompt like any other, so there
 is no "steer". And "new session" is a control.
 
-It is decided ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)).
+It is decided ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)). The core waits for
+every request to return
+([D-066](../decisions.md#d-066-the-core-finishes-every-request-it-starts)).
 
 ## Capabilities
 

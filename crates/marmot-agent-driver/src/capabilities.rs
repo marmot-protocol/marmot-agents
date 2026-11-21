@@ -46,7 +46,7 @@ pub enum MidTurn {
 /// Who picks the session a prompt goes to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Sessions {
-    /// The core names the session on each prompt.
+    /// The core keeps each chat's session, and names it on a prompt only to resume it (D-065).
     Core,
     /// The harness routes prompts to sessions by its own rules, as a gateway does.
     Own,
