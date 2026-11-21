@@ -385,7 +385,11 @@ pub async fn serve(
             },
             () = &mut stop => return Ok(()),
         };
-        let driver = match SocketDriver::greet(stream, &token, &agent).await {
+        let greeted = tokio::select! {
+            greeted = SocketDriver::greet(stream, &token, &agent) => greeted,
+            () = &mut stop => return Ok(()),
+        };
+        let driver = match greeted {
             Ok(driver) => driver,
             Err(why) => {
                 eprintln!("marmot-agent: {why}");

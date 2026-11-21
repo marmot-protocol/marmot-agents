@@ -54,8 +54,9 @@ async fn connect(socket: &Path, token: &str) -> (Value, UnixStream) {
     (answer, stream)
 }
 
-/// Runs the scripted connector on a connection until the core or the script ends it.
-async fn run_connector(stream: UnixStream, script: Script) {
+/// Runs the scripted connector on a connection until the core or the script ends it. Its item ids
+/// start with `name`, so two connections never reuse one: a reused id would edit the earlier item.
+async fn run_connector(stream: UnixStream, script: Script, name: &str) {
     let (read, mut write) = stream.into_split();
     let mut lines = BufReader::new(read).lines();
     let mut turns = 0;
@@ -74,13 +75,13 @@ async fn run_connector(stream: UnixStream, script: Script) {
         let event = |item: String, kind: &str, state: &str, text: String, body: Value| {
             json!({"jsonrpc": "2.0", "method": "event", "params": {
                 "item": item, "type": kind, "state": state, "title": kind, "text": text,
-                "body": body, "session": "s1", "turn": format!("t{turns}"),
+                "body": body, "session": "s1", "turn": format!("{name}-t{turns}"),
                 "chat": params["chat"]["id"], "prompts": [params["message"]],
             }})
         };
         let turn = json!({"started_by": "user"});
         let running = event(
-            format!("turn{turns}"),
+            format!("{name}-turn{turns}"),
             "turn",
             "running",
             "Working".into(),
@@ -93,10 +94,22 @@ async fn run_connector(stream: UnixStream, script: Script) {
         let words = format!("echo: {}", params["text"].as_str().unwrap());
         send(
             &mut write,
-            event(format!("msg{turns}"), "message", "done", words, json!({})),
+            event(
+                format!("{name}-msg{turns}"),
+                "message",
+                "done",
+                words,
+                json!({}),
+            ),
         )
         .await;
-        let done = event(format!("turn{turns}"), "turn", "done", "Done".into(), turn);
+        let done = event(
+            format!("{name}-turn{turns}"),
+            "turn",
+            "done",
+            "Done".into(),
+            turn,
+        );
         send(&mut write, done).await;
     }
 }
@@ -125,7 +138,7 @@ async fn a_connector_on_the_socket_drives_the_agent() {
 
     let (welcome, stream) = connect(&endpoint.socket, &token).await;
     assert_eq!(welcome["result"]["agent"]["name"], "Script");
-    let first = tokio::spawn(run_connector(stream, Script::Vanish));
+    let first = tokio::spawn(run_connector(stream, Script::Vanish, "first"));
     let group = world
         .runtime
         .start_direct_conversation(&world.person, &world.agent)
@@ -150,13 +163,40 @@ async fn a_connector_on_the_socket_drives_the_agent() {
 
     // The next connector carries on.
     let (_, stream) = connect(&endpoint.socket, &token).await;
-    let second = tokio::spawn(run_connector(stream, Script::Echo));
+    let second = tokio::spawn(run_connector(stream, Script::Echo, "second"));
     world
         .runtime
         .send_message(&world.person, &group, b"second".to_vec())
         .await
         .unwrap();
     world.words(&hex, "echo: second").await;
+    // Each turn has its own row: the first stays interrupted, the second finished.
+    let turns: Vec<(String, State)> = {
+        let mut latest = std::collections::BTreeMap::new();
+        // Versions sent in the same second come back in any order: the highest one counts.
+        for (_, read) in world.items(&hex) {
+            if matches!(read.item.event.body(), Body::Turn(_)) {
+                let header = read.item.event.header();
+                let entry = latest
+                    .entry(header.item.as_str().to_string())
+                    .or_insert((0, header.state));
+                if read.item.version > entry.0 {
+                    *entry = (read.item.version, header.state);
+                }
+            }
+        }
+        latest
+            .into_iter()
+            .map(|(item, (_, state))| (item, state))
+            .collect()
+    };
+    assert_eq!(
+        turns,
+        vec![
+            ("first-turn1".to_string(), State::Cancelled),
+            ("second-turn1".to_string(), State::Done),
+        ]
+    );
 
     let _ = stop.send(());
     task.await.unwrap().unwrap();
