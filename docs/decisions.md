@@ -291,7 +291,8 @@ works. A waiting approval matters most, because Codex and Claude Code wait for a
 A failed turn arrives as an edit of the turn item ([D-025](#d-025-an-agent-item-is-updated-with-an-edit)). That
 edit alerts. No other edit does.
 
-Decided 2026-11-17. Whether the agent's remarks during a turn alert is still open.
+Decided 2026-11-17. Whether the agent's remarks during a turn alert was left open, and is settled by
+[D-078](#d-078-the-agents-remarks-during-a-turn-do-not-alert).
 
 ## D-025 An agent item is updated with an edit
 
@@ -1312,3 +1313,48 @@ a prompt would answer conversations that were not for it. A mention or a reply i
 anyone in a chat. In a direct chat there is nobody else to address.
 
 Decided 2026-11-21. The project owner gave this rule.
+
+## D-076 The tags of kinds 1201 and 1202
+
+**Decision.** Agent items, their edits, and answers and controls carry the tags in
+[kinds 1201 and 1202](design/agent-kinds.md): an item's plain rendering in its content; its version, state,
+title, harness, the harness's id for it, its place in the session, and its type with its own fields as JSON, in
+tags; its session, turn, starting message, the requests it settles, the native message and what the 64 KB limit
+left out, when there are any. A later version is an edit that carries the whole item and a higher version. An
+answer or a control names its agent and its item, and says what it asks as JSON. This is what the project
+hands to MDK and the Marmot specification. MDK may rename a tag to fit its conventions; what each carries stands.
+
+**Why.** The first end-to-end test (M1) ran every step of its scenario with this shape, under a temporary kind
+([D-069](#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind)), and nothing it needed
+was missing. One JSON tag for a type's own fields keeps the specification to one set of tags for eleven types.
+
+Decided 2026-11-21. The project owner accepted the proposal from M1.
+
+## D-077 A refused notice says why something was not acted on
+
+**Decision.** The event model's notice gains a kind, `refused`: a message, an answer or a control that was not
+acted on, with a reason in a word (`not_allowed`, `busy`, `unknown_item`, `not_waiting`, `already_answered`,
+`nothing_to_do`, `not_supported`, `invalid`, `failed`) and a sentence in its text. The core sends it, settling the
+request it answers ([D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)), or
+about the message it answers ([D-010](#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)). A driver
+does not.
+
+**Why.** D-028 needs a notice that says why an answer or a control had no effect, and none of the notice kinds
+said it. With its own kind and a reason an app can read, an app can clear the pending press and say why in its
+own words.
+
+Decided 2026-11-21. The project owner accepted the proposal from M1.
+
+## D-078 The agent's remarks during a turn do not alert
+
+**Decision.** When the harness marks the agent's words as a remark made while it works, not its answer, the
+core sends them as a chat message with the tag `["phase", "commentary"]`, and MDK does not alert for a chat
+message that has it. The final answer alerts, as
+[D-024](#d-024-who-an-agent-event-alerts) says. Words the harness does not mark alert as any chat message does.
+
+**Why.** In M1, Codex said what it was about to do before doing it, and each remark alerted like the answer: a
+long task would buzz many times. A phone should buzz when a person is needed or the work is finished. The
+remarks stay chat messages ([D-022](#d-022-the-agents-words-are-ordinary-chat-messages)), so every app still
+shows them.
+
+Decided 2026-11-21. The project owner accepted the recommendation. This settles what D-024 left open.

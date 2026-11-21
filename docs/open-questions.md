@@ -117,7 +117,8 @@ carries answers and controls ([D-027](decisions.md#d-027-answers-and-controls-ar
 The kinds are Marmot events, so their definition probably belongs in the
 [Marmot specification](https://github.com/marmot-protocol/marmot), with MDK exposing them to the apps. The
 ownership, and how much is specification versus app convention, is not settled. The
-[plan](plan.md) writes the specification here, from what the first end-to-end test shows, for MDK to build.
+[plan](plan.md) writes the specification here, from what the first end-to-end test shows, for MDK to build:
+[kinds 1201 and 1202](design/agent-kinds.md) (D-076). Who owns the definition is still open.
 
 ### Q-23 How does an agent send a file to the chat?
 
