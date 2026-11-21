@@ -486,4 +486,23 @@ mod tests {
             assert!(printed.contains(shown), "{shown} not in {printed}");
         }
     }
+
+    // Each type that holds something prints none of it on its own, not only inside an event.
+    #[test]
+    fn the_parts_of_an_item_print_nothing_they_hold() {
+        let Body::Tool(tool) = a_command() else {
+            unreachable!()
+        };
+        let printed = format!("{tool:?}");
+        assert!(
+            !printed.contains("greet") && !printed.contains("/work"),
+            "{printed}"
+        );
+        let bad = body::BadQuestion::SecretAnswer {
+            question: "password".into(),
+        };
+        for printed in [format!("{bad:?}"), bad.to_string()] {
+            assert!(!printed.contains("password"), "{printed}");
+        }
+    }
 }

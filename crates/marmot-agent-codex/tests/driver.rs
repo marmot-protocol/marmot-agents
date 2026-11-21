@@ -945,3 +945,27 @@ async fn a_turn_closed_because_codex_stopped_does_not_settle_an_interrupt() {
     assert!(rest.iter().any(|e| matches!(e.event.body(), Body::Turn(_))));
     assert!(rest.iter().all(|e| e.settles.is_empty()));
 }
+
+// When Codex refuses to start, the error says so with Codex's code and none of its words, which
+// can hold a path; an error may be logged (D-071). The setup leaves out its working folder too.
+#[tokio::test]
+async fn a_refused_start_and_the_setup_print_no_path() {
+    let (driver_side, fake_side) = duplex(1 << 16);
+    let (from_driver, mut to_driver) = tokio::io::split(fake_side);
+    let (driver_reads, driver_writes) = tokio::io::split(driver_side);
+    let setup = Setup::new("/home/someone/private");
+    assert!(!format!("{setup:?}").contains("private"));
+    let codex = tokio::spawn(Codex::connect(driver_reads, driver_writes, setup));
+    let mut lines = BufReader::new(from_driver).lines();
+    let hello: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    let refusal = json!({"id": hello["id"], "error": {"code": -32600, "message": "bad config in /home/someone/private/config.toml"}});
+    to_driver
+        .write_all(format!("{refusal}\n").as_bytes())
+        .await
+        .unwrap();
+    let error = codex.await.unwrap().err().expect("refused");
+    for printed in [format!("{error:?}"), error.to_string()] {
+        assert!(!printed.contains("private"), "{printed}");
+        assert!(printed.contains("-32600"), "{printed}");
+    }
+}

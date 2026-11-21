@@ -15,12 +15,8 @@ macro_rules! id {
         #[serde(transparent)]
         pub struct $name(pub String);
 
-        /// The harness made the id, so it is not printed (D-071).
-        impl fmt::Debug for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(concat!(stringify!($name), "(..)"))
-            }
-        }
+        // The harness made the id, so it is not printed (D-071).
+        crate::opaque_debug!($name);
 
         impl $name {
             /// The id as text.
