@@ -1228,10 +1228,15 @@ class Acp(Translator):
             if content.get("type") != "text":
                 return self.unknown(f"{native_kind} with {content.get('type')} content")
             item = u.get("messageId")
-            if item is None:
-                self.n[self.turn] += 1
-                item = f"{self.turn}:{kind}:{self.n[self.turn]}"
             b = self.buffer
+            if item is None:
+                # ACP lets an agent leave the id out. Chunks with none belong to the message being
+                # streamed, if it has none either; otherwise they start a new one.
+                if b is not None and b["kind"] == kind and b["item"].startswith(f"{self.turn}:{kind}:"):
+                    item = b["item"]
+                else:
+                    self.n[self.turn] += 1
+                    item = f"{self.turn}:{kind}:{self.n[self.turn]}"
             if b is None or b["kind"] != kind or b["item"] != item:
                 self.flush()
                 # A message that goes on after something else came between its chunks is sent again
@@ -1266,8 +1271,9 @@ class Acp(Translator):
         if kind == "config_option_update":
             self.config = u.get("configOptions") or []
             return self.announce(native_kind, p)
-        if kind == "usage_update":
-            return self.skip(native_kind)  # the context window; a turn's usage comes with its reply
+        if kind in ("usage_update", "session_info_update"):
+            # The context window, whose use a turn's reply states; and the session's title.
+            return self.skip(native_kind)
         self.unknown(native_kind)
 
     def tool(self, u, native_kind, p):

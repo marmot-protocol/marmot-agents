@@ -318,9 +318,22 @@ impl Translator {
         let item = match message_id {
             Some(id) => id,
             None => {
-                let n = self.counted.entry(self.turn.clone()).or_default();
-                *n += 1;
-                format!("{}:{}:{n}", show(self.turn.as_deref()), kind.name())
+                // ACP lets an agent leave the id out. Chunks with none belong to the message being
+                // streamed, if it has none either; otherwise they start a new one.
+                let prefix = format!("{}:{}:", show(self.turn.as_deref()), kind.name());
+                match &self.buffer {
+                    Some(current)
+                        if current.starts_with(&prefix)
+                            && self.streamed.get(current).is_some_and(|s| s.kind == kind) =>
+                    {
+                        current.clone()
+                    }
+                    _ => {
+                        let n = self.counted.entry(self.turn.clone()).or_default();
+                        *n += 1;
+                        format!("{prefix}{n}")
+                    }
+                }
             }
         };
         let same = self.buffer.as_deref() == Some(item.as_str())
@@ -704,7 +717,8 @@ impl Translator {
                 self.config = update.config_options;
                 self.announce("session/update [config_option_update]", params, out);
             }
-            SessionUpdate::UsageUpdate(_) => self.flush(out), // the context window
+            // The context window, whose use a turn's reply states; and the session's title.
+            SessionUpdate::UsageUpdate(_) | SessionUpdate::SessionInfoUpdate(_) => self.flush(out),
             other => {
                 self.flush(out);
                 let kind = serde_json::to_value(&other)

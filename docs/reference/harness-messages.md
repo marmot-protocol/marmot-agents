@@ -395,7 +395,8 @@ the client.
 | `config_option_update` | 12 | The `session` item's settings |
 | `user_message_chunk` | 1 | Not sent: only in the replay of `session/load`. OpenCode never echoes a prompt |
 
-No `plan`, `current_mode_update`, `session_info_update`, `notice` or compaction update was sent.
+No `plan`, `current_mode_update`, `session_info_update`, `notice` or compaction update was sent. The translators
+would not send `session_info_update`, the session's title, either.
 
 ### A turn
 
@@ -423,8 +424,8 @@ when anything else arrives (another update, a request, a reply, a message from t
 Its item id is the `messageId`. Its native message is the list of the chunks' `params`, in order, each the exact
 text that arrived; this is the first item made from more than one native message, and that shape is
 provisional. If a message's chunks were ever split by something else, the later chunks make the item be sent
-again, whole, as an edit (not seen). With no `messageId`, which ACP allows, the item is named after the turn and
-a count.
+again, whole, as an edit (not seen). With no `messageId`, which ACP allows, chunks of the same kind in a row make
+one item, named after the turn and a count.
 
 ACP says nothing about whether a message is commentary or the final answer, so a message has no `phase`.
 

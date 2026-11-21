@@ -6,7 +6,8 @@
 The recordings are the test of the prototype, and `translate.py --check` runs them all. This file
 covers cases that were never recorded: a Codex question marked secret, a question asked in a message
 that outlives its turn, a translator that follows one thread, Claude Code's answer to a question with
-several choices or with typed text, and what Claude Code's client learns before the session has an id.
+several choices or with typed text, what Claude Code's client learns before the session has an id, and an
+ACP message streamed with no id.
 The messages below are written by hand, in the shapes the recordings have: for Codex, the shape
 `item/tool/requestUserInput` has in `fixtures/recordings/codex/plan_mode.jsonl`; for Claude Code, the
 shapes in `fixtures/recordings/claude/question.jsonl` and `early_info.jsonl`.
@@ -312,6 +313,31 @@ class ClaudeResumedTurns(unittest.TestCase):
     def test_a_resumed_sessions_first_turn_has_its_own_id(self):
         self.assertNotEqual(self.first_turn("u-before"), self.first_turn("u-after"))
 
+
+class AcpChunksWithoutIds(unittest.TestCase):
+    """ACP lets an agent stream a message with no `messageId`. Its chunks still make one item, and a
+    message after its thinking is an item of its own. The shapes are those of
+    `fixtures/recordings/acp/opencode/simple.jsonl`, with the ids left out."""
+
+    @staticmethod
+    def run_turn(chunks):
+        acp = translate.Acp()
+        acp.feed({"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "method": "session/new", "params": {"cwd": "/work/demo", "mcpServers": []}}})
+        acp.feed({"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"sessionId": "s1"}}})
+        acp.feed({"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "method": "session/prompt", "params": {"sessionId": "s1", "prompt": []}}})
+        for kind, text in chunks:
+            acp.feed({"dir": "in", "msg": {"jsonrpc": "2.0", "method": "session/update", "params": {
+                "sessionId": "s1", "update": {"sessionUpdate": kind, "content": {"type": "text", "text": text}}}}})
+        acp.feed({"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"stopReason": "end_turn"}}})
+        return [(e["type"], e["text"]) for e in acp.events if e["type"] in ("message", "reasoning")]
+
+    def test_chunks_with_no_id_make_one_item(self):
+        made = self.run_turn([("agent_message_chunk", "Hel"), ("agent_message_chunk", "lo")])
+        self.assertEqual(made, [("message", "Hello")])
+
+    def test_thinking_then_words_make_two_items(self):
+        made = self.run_turn([("agent_thought_chunk", "Hm"), ("agent_message_chunk", "Hi"), ("agent_message_chunk", "!")])
+        self.assertEqual(made, [("reasoning", "Hm"), ("message", "Hi!")])
 
 
 if __name__ == "__main__":
