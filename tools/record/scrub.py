@@ -5,7 +5,8 @@ Usage:
     scrub.py <raw-dir> <out-dir> --map <local-path>=<replacement> [--map ...]
 
 `<raw-dir>` holds one folder per harness (`codex`, `claude`, `hermes`, `openclaw`), each with `*.jsonl`
-files as written by the recorders. The same tree is written to `<out-dir>`. The script then scans its own output and exits with an error
+files as written by the recorders, and `acp`, which holds one such folder per ACP agent, such as
+`acp/opencode`. The same tree is written to `<out-dir>`. The script then scans its own output and exits with an error
 if anything that looks private is left.
 
 What it does:
@@ -91,6 +92,11 @@ class Scrubber:
             msg = {**msg, "params": neutralise(msg["params"])}
         return self.walk(msg)
 
+    def acp(self, msg: dict) -> dict:
+        # The ACP recorder runs the agent with a throwaway home folder and no account of ours, so only
+        # paths and names need replacing.
+        return self.walk(msg)
+
     def hermes(self, msg: dict) -> dict:
         # The Hermes container holds no account of ours, so only paths and names need replacing.
         return self.walk(msg)
@@ -155,11 +161,13 @@ def main() -> int:
     maps = [tuple(m.split("=", 1)) for m in args.map]
     s = Scrubber(maps)
     problems = 0
-    for harness in ("codex", "claude", "hermes", "openclaw"):
+    for harness in ("codex", "claude", "hermes", "openclaw", "acp"):
         if not (args.raw / harness).is_dir():
             continue
-        (args.out / harness).mkdir(parents=True, exist_ok=True)
-        for src in sorted((args.raw / harness).glob("*.jsonl")):
+        pattern = "*/*.jsonl" if harness == "acp" else "*.jsonl"  # acp/<agent>/<scenario>.jsonl
+        for src in sorted((args.raw / harness).glob(pattern)):
+            rel = src.relative_to(args.raw / harness)
+            (args.out / harness / rel.parent).mkdir(parents=True, exist_ok=True)
             lines = []
             for line in src.read_text(encoding="utf-8").splitlines():
                 rec = json.loads(line)
@@ -169,17 +177,17 @@ def main() -> int:
                     for word, _ in s.words:
                         if re.search(rf"(?<![A-Za-z0-9]){re.escape(word)}(?![A-Za-z0-9])", text):
                             problems += 1
-                            print(f"LEFT BEHIND in {harness}/{src.name}: the user or host name", file=sys.stderr)
+                            print(f"LEFT BEHIND in {harness}/{rel}: the user or host name", file=sys.stderr)
                     for old, _ in s.maps:
                         if old in text:
                             problems += 1
-                            print(f"LEFT BEHIND in {harness}/{src.name}: a mapped path", file=sys.stderr)
+                            print(f"LEFT BEHIND in {harness}/{rel}: a mapped path", file=sys.stderr)
                     m = next((x for x in SUSPECT.finditer(text) if x.group(0) not in ALLOWED), None)
                     if m:
                         problems += 1
-                        print(f"LEFT BEHIND in {harness}/{src.name}: {m.group(0)[:60]}", file=sys.stderr)
-            (args.out / harness / src.name).write_text("\n".join(lines) + "\n", encoding="utf-8")
-            print(f"{harness}/{src.name}: {len(lines)} messages")
+                        print(f"LEFT BEHIND in {harness}/{rel}: {m.group(0)[:60]}", file=sys.stderr)
+            (args.out / harness / rel).write_text("\n".join(lines) + "\n", encoding="utf-8")
+            print(f"{harness}/{rel}: {len(lines)} messages")
     if problems:
         print(f"{problems} problem(s). Do not commit this output.", file=sys.stderr)
         return 1

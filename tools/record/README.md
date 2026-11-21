@@ -8,6 +8,7 @@ what the harness actually sends. The recordings they produced are in
 | --- | --- |
 | `record_codex.py` | Drives `codex app-server` through a scripted scenario and saves both directions |
 | `claude/record_claude.ts` | Does the same for Claude Code through the Claude Agent SDK |
+| `record_acp.py` | Does the same for an agent that speaks ACP, such as `opencode acp` |
 | `scrub.py` | Removes paths and account details from raw recordings |
 | `inventory.py` | Lists every kind of message in a set of recordings, with field names and types |
 | `demo/` | The small project every scenario runs in |
@@ -38,6 +39,11 @@ python3 tools/record/record_codex.py approval_allowed "$work/demo" "$work/raw/co
 (cd tools/record/claude && bun install)
 bun tools/record/claude/record_claude.ts --list
 bun tools/record/claude/record_claude.ts approval_allowed "$work/demo" "$work/raw/claude/approval_allowed.jsonl"
+
+# An ACP agent: needs the agent's command, `opencode` by default. No dependencies.
+mkdir -p "$work/raw/acp/opencode"
+python3 tools/record/record_acp.py --list
+python3 tools/record/record_acp.py approval_allowed "$work/demo" "$work/raw/acp/opencode/approval_allowed.jsonl"
 ```
 
 Reset the demo project between scenarios, because some of them edit it:
@@ -141,6 +147,12 @@ same name and the same prompt where the harnesses allow it. Then record, scrub, 
 say so there: what a harness does instead is the useful part.
 
 ## Notes
+
+- The ACP recorder runs the agent with `HOME` and the XDG folders set to a throwaway folder beside the project
+  (or `--home`), so it reads none of your settings, skills, plugins or sign-ins and adds nothing to your history.
+  For OpenCode that means its free models only, which is what the recordings use. `--config` passes OpenCode a
+  configuration as JSON, and `--agent` names another agent's command. The scrubber reads ACP recordings from
+  `raw/acp/<agent>/`.
 
 - The Codex recorder starts the app server with `--disable hooks`, so your own Codex hooks do not run. Threads
   are started as ephemeral, so nothing is added to your Codex history. Nine scenarios are the exception,
