@@ -129,7 +129,7 @@ Live text previews were meant to travel over a QUIC side channel through a broke
 (`crates/transport-quic-stream`, `crates/transport-quic-broker`, `crates/agent-stream-compose`). According to
 the project owner it has never worked reliably and is not in use. Only Hermes can use it, and only when
 configured. See [D-012](../decisions.md#d-012-word-by-word-streaming-is-not-required-now) and
-[Q-14](../open-questions.md#q-14-what-happens-to-the-quic-preview-stack).
+[D-067](../decisions.md#d-067-the-quic-preview-stack-is-removed), which removes it.
 
 ## Things the new design must not lose
 

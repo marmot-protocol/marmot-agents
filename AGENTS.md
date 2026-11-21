@@ -7,12 +7,11 @@ duplicate it here.
 
 Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) into Marmot group chats.
 
-**Status: the first code.** There is a Rust workspace under `crates/` with three crates, and CI that checks
-them: `marmot-agent-events`, the agent event and its eleven item types; `marmot-agent-driver`, the trait a
-driver implements; and `marmot-agent-codex`, the Codex driver, which runs Codex and translates both ways,
-with subagents switched off for now. No socket or core exists yet. What is being built now is the item
-types, the driver trait and the Codex driver
-([D-052](docs/decisions.md#d-052-the-codex-driver-is-built-first)). The core program is called `marmot-agent`
+**Status: building towards the swap.** There is a Rust workspace under `crates/` with three crates, and CI that
+checks them: `marmot-agent-events`, the agent event and its eleven item types; `marmot-agent-driver`, the trait
+a driver implements; and `marmot-agent-codex`, the Codex driver, which runs Codex and translates both ways,
+with subagents switched off for now. No socket or core exists yet. What is built next, and in what order, is in
+[`docs/plan.md`](docs/plan.md). The core program is called `marmot-agent`
 ([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and
 decisions under `docs/`, plus recorded harness sessions and the tools that made them. The connectors that ship
 today are in the MDK repository (`integrations/`, `crates/agent-connector`, `crates/agent-control`); they are
@@ -21,13 +20,15 @@ being replaced by what is designed here, not extended.
 ## Read these first
 
 1. [`docs/README.md`](docs/README.md): the design in three minutes.
-2. [`docs/decisions.md`](docs/decisions.md): what is decided. Treat every entry as settled.
-3. [`docs/open-questions.md`](docs/open-questions.md): what is not decided.
+2. [`docs/plan.md`](docs/plan.md): what is being built, in what order, and how the work runs.
+3. [`docs/decisions.md`](docs/decisions.md): what is decided. Treat every entry as settled.
+4. [`docs/open-questions.md`](docs/open-questions.md): what is not decided.
 
 ## Where to go
 
 | Task | Start here |
 | --- | --- |
+| See what to build next | `docs/plan.md` |
 | Understand how the parts fit | `docs/design/architecture.md` |
 | Work on what agents send to the chat | `docs/design/event-model.md`, then `docs/design/event-carrier.md` |
 | Work on what people send back to an agent | `docs/design/answers-and-controls.md` |
@@ -62,18 +63,26 @@ being replaced by what is designed here, not extended.
 
 ## How we work
 
-- **The project owner decides.** When you reach a choice that is the owner's, give your recommendation and the
-  reason, and carry on with work that does not depend on it.
-- **One small pull request per step**, each on its own branch from `master`. Never merge. The owner merges.
+- **The plan is the go-ahead.** Build what [`docs/plan.md`](docs/plan.md) lays out, milestone by milestone,
+  without asking at each step. Build nothing outside it.
+- **Decide what is internal yourself**: code layout, defaults, which cases to handle, tests. Record a choice in
+  `docs/decisions.md` only when others can see it.
+- **The project owner decides** what other programs, apps or people see, privacy and security, who may do
+  what, any change to a decision, and the plan's scope and order. Gather those questions, normally once per
+  milestone, each with your recommendation and the reason. Carry on meanwhile with the recommendation, marked
+  as provisional, except on privacy or security, which wait.
+- **One pull request per piece of work that makes sense alone**, on its own branch from `master`.
+- **One round of review per code change**, by the two other models. Fix blockers, and check again only if the
+  fix is large. Fix lesser findings when cheap; otherwise open an issue. Decisions and documents need none.
+- **Merge** once CI passes and the review left no blocker unfixed. The owner reads each milestone's work at its
+  end.
 - **Sign every commit.** If signing or `gh` is not set up on the machine, stop and say so.
 - **Do not touch the MDK repository.** Read it when you need to. Changes to it are the owner's to arrange.
-- **Build only what has been asked for.** Today that is the item types, the driver trait and the Codex driver
-  ([D-052](docs/decisions.md#d-052-the-codex-driver-is-built-first)). Do not start the core, the socket or
-  another driver.
 - **Report plainly.** If a test fails or you skipped a step, say so.
 
 These are recorded as
-[D-054](docs/decisions.md#d-054-changes-arrive-as-small-signed-pull-requests-that-ci-checks).
+[D-054](docs/decisions.md#d-054-changes-arrive-as-small-signed-pull-requests-that-ci-checks) and
+[D-068](docs/decisions.md#d-068-work-follows-the-plan-and-the-builder-decides-what-is-internal).
 
 ## Rules that are settled
 
@@ -159,8 +168,8 @@ Other rules:
 ## Privacy
 
 This is a private messenger. Do not put real keys, account or group identifiers, relay addresses, message text,
-prompts or model output into documents, fixtures, tests or logs. The detailed logging rules are not written yet
-([Q-13](docs/open-questions.md#q-13-what-may-be-logged)).
+prompts or model output into documents, fixtures, tests or logs. What a log may hold is in
+[D-071](docs/decisions.md#d-071-what-may-be-logged).
 
 Recorded sessions have their own rules:
 

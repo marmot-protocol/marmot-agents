@@ -106,8 +106,9 @@ difference.
 Hand-written test messages are a guess about what the harness sends. Recordings are what it sends.
 
 The Codex driver is tested this way: each of its recordings must give the events the prototype gives
-([`crates/marmot-agent-codex/tests/replay.rs`](../../crates/marmot-agent-codex/tests/replay.rs)). Whether every
-driver is tested so is [Q-17](../open-questions.md#q-17-how-are-drivers-tested).
+([`crates/marmot-agent-codex/tests/replay.rs`](../../crates/marmot-agent-codex/tests/replay.rs)). Every driver
+is tested so, and by one end-to-end scenario
+([D-074](../decisions.md#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)).
 
 ## The Codex driver
 
