@@ -466,9 +466,9 @@ async fn a_send_whose_reply_was_lost_is_not_sent_twice() {
 }
 
 // A send that went out just before a crash, before the core marked it sent, is found in what MDK
-// stored when the core starts again, and is not sent a second time (S3).
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_send_that_went_out_before_a_crash_is_not_sent_again() {
+// stored when the core starts again, and is not sent a second time (S3). With `lookup_fails`, MDK
+// cannot be asked the first time the core looks: that is not knowing, never "not there".
+async fn went_out_before_a_crash(lookup_fails: bool) {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     world.runtime.start().await.unwrap();
     let (driver, _events, seen) = stub(false);
@@ -507,6 +507,9 @@ async fn a_send_that_went_out_before_a_crash_is_not_sent_again() {
         .unwrap();
 
     // Starting again closes the open turn: its second version names the first that went out.
+    if lookup_fails {
+        world.marmot.faults.push(Fault::LookupFails);
+    }
     let (driver, _events, _) = stub(false);
     let core = world.start(driver);
     within(20, || {
@@ -523,6 +526,16 @@ async fn a_send_that_went_out_before_a_crash_is_not_sent_again() {
     assert_eq!(second.2.as_ref(), Some(&went));
     core.stop().await;
     world.runtime.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_that_went_out_before_a_crash_is_not_sent_again() {
+    went_out_before_a_crash(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_is_not_sent_again_when_mdk_cannot_be_asked() {
+    went_out_before_a_crash(true).await;
 }
 
 /// What the agent sent to a chat, of one kind, as its own storage has it: what the core handed

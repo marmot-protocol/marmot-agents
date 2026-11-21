@@ -567,11 +567,19 @@ impl<D: Driver> Core<D> {
             };
             if let Some(settled) = self.unknown.get(&token).map(|u| u.settled) {
                 let taken = |event: &crate::keys::EventKey| self.conversation.is_first(event);
-                if let Some(event) = self.marmot.find_sent(group, &what, taken) {
-                    self.unknown.remove(&token);
-                    self.conversation.sent(&key, event);
-                    self.save()?;
-                    continue;
+                match self.marmot.find_sent(group, &what, taken) {
+                    Ok(Some(event)) => {
+                        self.unknown.remove(&token);
+                        self.conversation.sent(&key, event);
+                        self.save()?;
+                        continue;
+                    }
+                    Ok(None) => {}
+                    // Not knowing is not "not there": ask again later, never send blindly.
+                    Err(_) => {
+                        self.wait_longer(group);
+                        return Ok(());
+                    }
                 }
                 if settled > Instant::now() {
                     let wait = self.retry.get(group).map_or(Duration::ZERO, |(_, w)| *w);
@@ -617,14 +625,7 @@ impl<D: Driver> Core<D> {
                             if matches!(failed, Failed::Unknown) {
                                 eprintln!("marmot-agent: a send failed; it will be tried again");
                             }
-                            let wait = self
-                                .retry
-                                .get(group)
-                                .map_or(Duration::from_millis(100), |(_, w)| {
-                                    (*w * 2).clamp(Duration::from_millis(100), SEND_WAIT_MAX)
-                                });
-                            self.retry
-                                .insert(group.clone(), (Instant::now() + wait, wait));
+                            self.wait_longer(group);
                             return Ok(());
                         }
                     }
@@ -633,6 +634,14 @@ impl<D: Driver> Core<D> {
         }
         self.retry.remove(group);
         Ok(())
+    }
+
+    /// The group's sends wait before they are tried again, longer each time.
+    fn wait_longer(&mut self, group: &GroupKey) {
+        let wait = (self.retry.get(group)).map_or(Duration::from_millis(100), |(_, w)| {
+            (*w * 2).clamp(Duration::from_millis(100), SEND_WAIT_MAX)
+        });
+        (self.retry).insert(group.clone(), (Instant::now() + wait, wait));
     }
 
     fn save(&self) -> Result<(), Unsaved> {

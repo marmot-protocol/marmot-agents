@@ -148,7 +148,7 @@ pub struct Marmot {
     pub faults: Faults,
 }
 
-/// Faults the next sends meet, one each, oldest first.
+/// Faults the next sends, and the next lookups of a send, meet, one each, oldest first.
 #[derive(Clone, Default)]
 pub struct Faults(Arc<Mutex<VecDeque<Fault>>>);
 
@@ -158,6 +158,8 @@ pub enum Fault {
     LoseReply,
     /// MDK refuses the send with this error, before it takes it.
     Refuse(AppError),
+    /// MDK cannot be asked what it stored, the next time the core looks for a send.
+    LookupFails,
 }
 
 impl Faults {
@@ -166,8 +168,11 @@ impl Faults {
         self.0.lock().expect("never poisoned").push_back(fault);
     }
 
-    fn next(&self) -> Option<Fault> {
-        self.0.lock().expect("never poisoned").pop_front()
+    /// The oldest fault for a send, or for a lookup.
+    fn next(&self, lookup: bool) -> Option<Fault> {
+        let mut faults = self.0.lock().expect("never poisoned");
+        let at = (faults.iter()).position(|f| matches!(f, Fault::LookupFails) == lookup)?;
+        faults.remove(at)
     }
 }
 
@@ -275,7 +280,7 @@ impl Marmot {
     ) -> Result<EventKey, AppError> {
         let _ = token;
         let id = group_id(group).ok_or_else(|| AppError::UnknownGroup(String::new()))?;
-        let fault = self.faults.next();
+        let fault = self.faults.next(false);
         if let Some(Fault::Refuse(error)) = fault {
             return Err(error);
         }
@@ -326,13 +331,14 @@ impl Marmot {
     /// and the first event it names; the agent's words by their text and every tag the core
     /// gives them (the turn, the phase, what they settle), among those not already known as the
     /// first of something (`taken`). An edit is never found: sent again, it shows the same text,
-    /// and adds nothing anyone sees.
+    /// and adds nothing anyone sees. An error when MDK could not be asked: that says nothing of
+    /// whether it went out.
     pub fn find_sent(
         &self,
         group: &GroupKey,
         what: &Sending,
         taken: impl Fn(&EventKey) -> bool,
-    ) -> Option<EventKey> {
+    ) -> Result<Option<EventKey>, AppError> {
         let (kind, wanted): (u64, Box<Matches>) = match what {
             Sending::Item { item, .. } => {
                 let id = item.event.header().item.as_str().to_string();
@@ -345,7 +351,7 @@ impl Marmot {
                 };
                 (carrier::ITEM_KIND, Box::new(matches))
             }
-            Sending::Words { edit: Some(_), .. } => return None,
+            Sending::Words { edit: Some(_), .. } => return Ok(None),
             Sending::Words {
                 text,
                 turn,
@@ -355,7 +361,9 @@ impl Marmot {
             } => {
                 let tags = carrier::words_tags(turn.as_ref(), *remark, settles);
                 // One that cannot fit was never sent.
-                let text = carrier::fit_words(text, &tags).ok()?;
+                let Ok(text) = carrier::fit_words(text, &tags) else {
+                    return Ok(None);
+                };
                 let ours = |name: &str| -> Vec<Vec<String>> {
                     (tags.iter()).filter(|t| t[0] == name).cloned().collect()
                 };
@@ -378,12 +386,15 @@ impl Marmot {
             kinds: Some(vec![kind]),
             limit: None,
         };
-        let rows = self.runtime.messages_with_query(&self.label, query).ok()?;
-        rows.into_iter()
+        let rows = match self.faults.next(true) {
+            Some(_) => Err(AppError::RuntimeBusy),
+            None => self.runtime.messages_with_query(&self.label, query),
+        };
+        Ok((rows?.into_iter())
             .filter(|row| row.direction == "sent" && row.sender == self.agent.as_str())
             .filter(|row| wanted(row))
             .map(|row| EventKey(row.message_id_hex))
-            .find(|event| !taken(event))
+            .find(|event| !taken(event)))
     }
 
     /// Sends a file to a group as an encrypted attachment, tagged with its turn like the agent's

@@ -198,7 +198,7 @@ async fn the_agents_words_are_found_by_all_they_carry() {
     };
     let sent = words(true, &["e-r1", "e-r2"]);
     let went = world.marmot.send(&group, &sent, "w@1").await.unwrap();
-    let found = |what: &Sending| world.marmot.find_sent(&group, what, |_| false);
+    let found = |what: &Sending| world.marmot.find_sent(&group, what, |_| false).unwrap();
     assert_eq!(found(&sent), Some(went));
     assert_eq!(found(&words(true, &["e-r1"])), None);
     assert_eq!(found(&words(false, &["e-r1", "e-r2"])), None);
