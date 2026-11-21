@@ -58,13 +58,20 @@ impl Rights {
 /// The right a message needs: to approve when it carries one of the harness's typed commands
 /// that approve or widen what the agent may do, where that command counts (D-047), and to prompt
 /// otherwise. A harness reads a command in any case and with a bot's name after it (`/yolo@bot`),
-/// so the match ignores case and ends at anything that cannot continue a command's name.
+/// so the match ignores case and ends at anything that cannot continue a command's name. A
+/// command that counts at the start counts at the start of any line, since a harness may drop
+/// lines before it, as Hermes drops lines naming attachments.
 pub fn needed_for(text: &str, commands: &[ApprovalCommand]) -> Right {
+    if commands.is_empty() {
+        return Right::Prompt;
+    }
     let text = text.to_ascii_lowercase();
     let found = commands.iter().any(|c| {
         let command = c.command.to_ascii_lowercase();
         match c.counts {
-            Position::Start => is_word_at(text.trim_start(), 0, &command),
+            Position::Start => text
+                .lines()
+                .any(|line| is_word_at(line.trim_start(), 0, &command)),
             Position::Anywhere => text
                 .match_indices(command.as_str())
                 .any(|(at, _)| is_word_at(&text, at, &command)),
