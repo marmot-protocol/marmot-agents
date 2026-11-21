@@ -7,13 +7,17 @@
  * records it, and fed to the chat's {@link Translator}. The events it makes go to the core with the chat
  * they belong to, the prompts a turn responds to, and the requests whose effect they show (D-028, D-058).
  *
+ * Every query is given the connector's own tool, `send_file` (`files.ts`), when the connector can ask the
+ * core to send a file: Claude Code calls it, and the connector asks the core, which decides (D-090).
+ *
  * The SDK's `query` is a parameter, so tests can run the transport without Claude Code.
  */
 
 import type { AgentEvent, Line } from "./translate.ts";
 import { Translator } from "./translate.ts";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
+import { fileServer, SEND_FILE_TOOL, type FileServer } from "./files.ts";
 import { CoreConnection, MAX_MESSAGE, notificationSize, Refusal, type Capabilities, type Hello } from "./socket.ts";
 
 type Json = Record<string, unknown>;
@@ -64,6 +68,13 @@ export interface ConnectorOptions {
   permissionMode?: string;
   /** Sends one event to the core. */
   send: (event: CoreEvent) => void;
+  /**
+   * Asks the core to send a file to a chat (D-090): resolves once it is sent, or throws the core's
+   * {@link Refusal}. Without it, Claude Code is not given the tool.
+   */
+  sendFile?: (chat: string, path: string) => Promise<void>;
+  /** Makes the MCP server that offers the tool; the SDK's own by default. */
+  fileServer?: FileServer;
   /** Says what went wrong, by kind only (D-071). */
   warn?: (kind: string) => void;
 }
@@ -271,7 +282,7 @@ export class Connector {
     chat.resumable = null;
     this.feed(chat, { dir: "out", via: "call", msg: { method: "query", options } });
     const canUseTool: CanUseTool = (toolName, input, opts) => this.permission(chat, run, toolName, input, opts);
-    const q = this.options.query({ prompt: inbox, options: { ...options, canUseTool } });
+    const q = this.options.query({ prompt: inbox, options: { ...options, ...this.fileTool(chat), canUseTool } });
     const run: Run = { q, inbox, closed: false };
     chat.run = run;
     void this.read(chat, run);
@@ -285,6 +296,28 @@ export class Connector {
         () => this.warn("the models could not be listed"),
       );
     }
+  }
+
+  /**
+   * The options that give a query the tool to send a file, when the core can be asked. A relative path is
+   * made whole against the working folder; the core takes only an absolute one. What the model reads back
+   * names no path the core did not already have from it.
+   */
+  private fileTool(chat: Chat): Json {
+    const sendFile = this.options.sendFile;
+    if (sendFile === undefined) return {};
+    const send = async (path: string) => {
+      const whole = isAbsolute(path) ? path : join(this.options.cwd, path);
+      try {
+        await sendFile(chat.id, whole);
+        return { text: "Sent.", failed: false };
+      } catch (e) {
+        const detail = e instanceof Refusal ? e.detail : undefined;
+        return { text: detail === undefined ? "Not sent." : `Not sent: ${detail}`, failed: true };
+      }
+    };
+    const server = (this.options.fileServer ?? fileServer)(send);
+    return { mcpServers: { marmot: server }, allowedTools: [SEND_FILE_TOOL] };
   }
 
   private async read(chat: Chat, run: Run): Promise<void> {
@@ -667,6 +700,8 @@ export interface RunOptions {
   harnessVersion?: string;
   /** Says what went wrong, by kind only (D-071). */
   warn: (kind: string) => void;
+  /** Makes the MCP server that offers the tool to send a file; the SDK's own by default. */
+  fileServer?: FileServer;
 }
 
 /**
@@ -697,6 +732,8 @@ export async function run(options: RunOptions): Promise<void> {
       if (fitted?.did) options.warn(`an event over the size limit was ${fitted.did} (${event.type})`);
       if (fitted === null || !core.notify("event", fitted.event)) options.warn(`an event could not be sent (${event.type})`);
     },
+    sendFile: (chat, path) => core.request("send_file", { chat, path }),
+    fileServer: options.fileServer,
     warn: options.warn,
   });
   const harness: Hello["harness"] = { name: "claude-code" };

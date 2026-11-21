@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { CAPABILITIES, run, type PermissionResult, type QueryLike, type UserMessage } from "../src/connector.ts";
+import type { SendFile } from "../src/files.ts";
 
 type Json = Record<string, unknown>;
 
@@ -90,6 +91,9 @@ class FakeCore {
   private socket: Socket | undefined;
   private readonly responses = new Map<number, (m: Json) => void>();
   private nextId = 100;
+  /** The files the connector asked to send, and what the core answers each. */
+  readonly files: Json[] = [];
+  answerFile: (params: Json) => Json = () => ({ result: {} });
   readonly server: Server;
   constructor(server: Server) {
     this.server = server;
@@ -116,6 +120,10 @@ class FakeCore {
       this.socket!.write(JSON.stringify({ jsonrpc: "2.0", id: m["id"], result: { core: { version: "0" }, agent: { name: "a" } } }) + "\n");
     } else if (m["method"] === "event") {
       this.events.push(m["params"] as Json);
+    } else if (m["method"] === "send_file") {
+      this.files.push(m["params"] as Json);
+      const answer = this.answerFile(m["params"] as Json);
+      this.socket!.write(JSON.stringify({ jsonrpc: "2.0", id: m["id"], ...answer }) + "\n");
     } else if (typeof m["id"] === "number") {
       this.responses.get(m["id"])?.(m);
     }
@@ -163,6 +171,8 @@ async function start(): Promise<{
     version: "0.0.0",
     harnessVersion: "2.1.0",
     warn: (kind) => warnings.push(kind),
+    // A stand-in for the SDK's MCP server: the test calls the tool's handler itself.
+    fileServer: (send) => ({ send }),
   });
   const warnings: string[] = [];
   const done = async () => {
@@ -253,6 +263,21 @@ test("a query loads no Claude Code settings files and asks for summarized reason
   const { core, queries, done } = await start();
   const { q } = await turn(core, queries);
   assertQueryOptions(q);
+  await done();
+});
+
+test("the agent sends a file: the core is asked with the chat and a whole path, and the model hears how it went", async () => {
+  const { core, queries, done } = await start();
+  const { q } = await turn(core, queries);
+  // The tool needs nobody's approval in the chat: the core decides what may be sent (D-090).
+  assert.deepEqual(q.options["allowedTools"], ["mcp__marmot__send_file"]);
+  const { send } = (q.options["mcpServers"] as Record<string, { send: SendFile }>)["marmot"]!;
+  assert.deepEqual(await send("out/notes.txt"), { text: "Sent.", failed: false });
+  assert.deepEqual(core.files[0], { chat: "c1", path: "/nowhere/out/notes.txt" });
+  const detail = "The file is outside the folders the agent may send files from.";
+  core.answerFile = () => ({ error: { code: -32000, message: "not_allowed", data: { reason: "not_allowed", detail } } });
+  assert.deepEqual(await send("/elsewhere/secret.txt"), { text: `Not sent: ${detail}`, failed: true });
+  assert.deepEqual(core.files[1], { chat: "c1", path: "/elsewhere/secret.txt" });
   await done();
 });
 
