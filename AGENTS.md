@@ -255,18 +255,21 @@ For a change to the recordings, the recording tools, the prototype or the event 
 ```sh
 python3 tools/record/inventory.py fixtures/recordings/codex --kinds    # every file must parse; CI does not run this
 python3 tools/record/inventory.py fixtures/recordings/claude --kinds   # nor this
+python3 tools/record/inventory.py fixtures/recordings/acp/opencode --kinds   # nor this
 python3 -m unittest discover -s tools/prototype -p 'test_*.py'         # cases no recording holds
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
-    fixtures/recordings/hermes fixtures/recordings/openclaw
+    fixtures/recordings/hermes fixtures/recordings/openclaw fixtures/recordings/acp/opencode
 python3 tools/prototype/translate.py --expected fixtures/recordings/codex --check   # the Codex driver's expected events
 python3 tools/prototype/translate.py --expected fixtures/recordings/claude --check  # the Claude Code driver's
+python3 tools/prototype/translate.py --expected fixtures/recordings/acp/opencode --check  # the ACP driver's
 ```
 
-The `--check` over the four folders must end with "native messages with no translation: none". If you change
+The `--check` over the five folders must end with "native messages with no translation: none". If you change
 the event model, change `tools/prototype/translate.py` to match and run it again.
 
-The Codex driver is tested against `fixtures/recordings/codex/expected`, and the Claude Code driver against
-`fixtures/recordings/claude/expected`. The prototype writes both. When the prototype's output for one harness
+The Codex driver is tested against `fixtures/recordings/codex/expected`, the Claude Code driver against
+`fixtures/recordings/claude/expected`, and the ACP driver against `fixtures/recordings/acp/opencode/expected`.
+The prototype writes all three. When the prototype's output for one harness
 changes on purpose, write them again with `python3 tools/prototype/translate.py --expected` and that folder,
 such as `fixtures/recordings/codex`, and commit them. Never write them
 again only to make the driver's test pass: when the two disagree, the recording and the event model decide
