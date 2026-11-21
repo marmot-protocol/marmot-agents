@@ -1305,7 +1305,7 @@ class Acp(Translator):
             body.update(query=raw.get("pattern") or raw.get("query"), output=output)
             text = body["query"] or t.get("title")
         else:
-            body.update(input=t.get("rawInput"), output=output)
+            body.update({"input": t["rawInput"]} if "rawInput" in t else {}, output=output)
             text = t.get("title")
         title = Claude.tool_title(kind, state)
         last = self.last_tool.get(tid)
@@ -1333,7 +1333,8 @@ class Acp(Translator):
         if method == "elicitation/create" and p.get("mode") == "form":
             schema = p.get("requestedSchema") or {}
             qs, values = [], {}
-            for name, f in (schema.get("properties") or {}).items():
+            # In the order of their names: ACP's official Rust types keep a form's fields in a sorted map.
+            for name, f in sorted((schema.get("properties") or {}).items()):
                 many = f.get("type") == "array"
                 src = (f.get("items") or {}) if many else f
                 offered = src.get("oneOf") or src.get("anyOf") or [{"const": v, "title": v} for v in src.get("enum") or []]

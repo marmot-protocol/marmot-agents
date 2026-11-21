@@ -1,0 +1,22 @@
+[package]
+name = "marmot-agent-acp"
+description = "The ACP driver: speaks the Agent Client Protocol to OpenCode and other ACP agents, and produces agent events"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+# The official library's protocol types (D-005, D-006). Only the types: the translator does no
+# input or output. The one unstable feature reads the tokens a turn used, which OpenCode sends in
+# its reply to `session/prompt`.
+agent-client-protocol = { version = "5.5.1", default-features = false, features = ["unstable_end_turn_token_usage"] }
+marmot-agent-events = { path = "../marmot-agent-events" }
+serde = { version = "1", features = ["derive"] }
+# `raw_value` keeps the agent's own message as the exact text it arrived as.
+serde_json = { version = "1", features = ["raw_value"] }
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }

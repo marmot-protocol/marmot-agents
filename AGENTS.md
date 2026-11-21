@@ -12,7 +12,8 @@ checks them: `marmot-agent-events`, the agent event and its eleven item types; `
 a driver implements; `marmot-agent-codex`, the Codex driver, which runs Codex and translates both ways, with
 subagents switched off for now; and `marmot-agent`, the core, which runs one agent's account through MDK and
 drives Codex, with a test that runs it end to end on MDK's test relay. The core also serves a local socket, and
-`packages/claude-code` is the Claude Code driver, a TypeScript program that drives Claude Code through it. What is
+`packages/claude-code` is the Claude Code driver, a TypeScript program that drives Claude Code through it. `marmot-agent-acp`
+is the start of the ACP driver: so far only its translation, replayed against the OpenCode recordings. What is
 built next, and in what order, is in
 [`docs/plan.md`](docs/plan.md). The core program is called `marmot-agent`
 ([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and
@@ -53,6 +54,7 @@ being replaced by what is designed here, not extended.
 | Work on the Codex driver | `crates/marmot-agent-codex`, after `fixtures/recordings/codex` and its `expected/` events |
 | Work on the Claude Code driver's translation | `packages/claude-code/src/translate.ts`, after `fixtures/recordings/claude` and its `expected/` events |
 | Work on the Claude Code driver's transport | `packages/claude-code/src/connector.ts`, after `docs/design/drivers.md` and `docs/design/socket-protocol.md` |
+| Work on the ACP driver | `crates/marmot-agent-acp`, after `fixtures/recordings/acp` and its `expected/` events |
 | Work on the core | `crates/marmot-agent`, after `docs/plan.md` and `docs/design/architecture.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Change the link check | `lychee.toml` |
