@@ -244,7 +244,7 @@ Detail and evidence for each: [`../reference/harness-messages.md`](../reference/
 ## Not designed yet
 
 - **A file the agent sends to the chat.** There is no item for it. This is a known gap
-  ([Q-23](../open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)).
+  ([D-090](../decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)).
 - **How an event is carried, and size limits.** Decided; see [`event-carrier.md`](event-carrier.md). The
   exact tags are not fixed.
 - **The exact tags of an answer and of each control.** Their shape is decided; see

@@ -222,7 +222,7 @@ first step is therefore the common one: it applies to an output over about 30 KB
 
 Getting the full output afterwards is a separate problem: fetch it from the agent on request, or attach it as a
 file. Attachments exist only for chat messages today, so that needs work in the spec. It is the same question as
-an agent sending a file ([Q-23](../open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)).
+an agent sending a file ([D-090](../decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)).
 
 ## The summary line
 

@@ -169,7 +169,7 @@ These are ordinary Marmot actions. A delete is an ordinary deletion of a chat me
 caused it still arrives as a `tool` item.
 
 How an agent sends a file is not decided
-([Q-23](../open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)). The individual requests are not
+([D-090](../decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)). The individual requests are not
 designed yet.
 
 ## Capabilities

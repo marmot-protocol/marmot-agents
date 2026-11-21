@@ -126,13 +126,6 @@ ownership, and how much is specification versus app convention, is not settled. 
 [plan](plan.md) writes the specification here, from what the first end-to-end test shows, for MDK to build:
 [kinds 1201 and 1202](design/agent-kinds.md) (D-076). Who owns the definition is still open.
 
-### Q-23 How does an agent send a file to the chat?
-
-The event model has no item for a file the agent produces: a report, a patch, an image. Today's Codex connector
-can already send files back, so leaving this out would be a step backwards. To settle: the item itself, where
-the file is stored, size limits, and the rule that keeps an agent from sending files it should not read. Raised
-in [issue 4](https://github.com/marmot-protocol/marmot-agents/issues/4).
-
 ## The socket protocol
 
 ### Q-05 How is the agent administered?
@@ -313,29 +306,6 @@ parent's chat; how is [Q-30](#q-30-how-does-a-chat-show-an-agents-subagents). Wh
 arrive unasked is not known.
 
 ## The repository and the move from MDK
-
-### Q-19 How do existing installs move over?
-
-Account homes, identities, allow-lists, services and installers exist for every current connector. The cutover
-plan, and when the old code leaves MDK, are open.
-
-The leading requirement, from [issue 10](https://github.com/marmot-protocol/marmot-agents/issues/10): an install
-that moves over keeps its identity, its keys, its encryption state and every group it is in. Nobody has to
-invite an agent again. This fits the identity direction in
-[Q-08](#q-08-how-do-several-agent-identities-run-together): each existing account home is one identity, with nothing
-to merge or split.
-
-One caution about going back. Keeping the old service installed but stopped is cheap insurance, but it only
-works until the new core first opens the store. MDK's storage upgrades run forward only: once a newer version
-has upgraded a database, older programs refuse it. So a way back after that point needs a backup taken before
-the first open, not just the old program.
-
-A second caution applies to any backup and restore of an agent, not only to going back. Once a core has
-processed group messages, sent anything or started a turn, restoring an older copy of its store could reuse
-encryption keys or run a prompt twice. A restore is safe only if nothing of that kind happened in between.
-Raised in [issue 12](https://github.com/marmot-protocol/marmot-agents/issues/12).
-
-What an importer carries over, and whether each identity gets its own program, wait until cutover is planned.
 
 ### Q-28 How does someone know a release is genuine?
 

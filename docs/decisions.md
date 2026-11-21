@@ -650,7 +650,7 @@ Because these are ordinary actions, a deleted message is an ordinary deletion an
 reaction. No new item type is needed for them. The tool call itself still shows as a `tool` item.
 
 Decided 2026-11-18. How an agent sends a file is still open
-([Q-23](open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)).
+(Q-23, since settled as [D-090](#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)).
 
 ## D-043 A setting says which right it needs
 
@@ -762,7 +762,7 @@ for the Codex driver.
 **Why.** The name says what the program is and matches the repository and the socket
 (`marmot.agent-control`). It is not tied to one app, so it suits anyone who uses a Marmot client. It differs
 from today's `wn-agent`, so both can be installed while an install moves over
-([Q-19](open-questions.md#q-19-how-do-existing-installs-move-over)). The name was free on crates.io when
+(Q-19, since settled as [D-089](#d-089-an-install-moves-over-by-importing-its-account-home-in-place)). The name was free on crates.io when
 checked on 2026-11-19.
 
 Decided 2026-11-19.
@@ -1417,7 +1417,7 @@ Decided 2026-11-21. The project owner accepted the recommendation from M2.
 
 ## D-083 The core passes no files to a harness yet
 
-**Decision.** Until files are designed ([Q-23](open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)),
+**Decision.** Until files are designed (Q-23, since settled as [D-090](#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)),
 the core passes no attachments to a harness, whatever the driver's `files_in` says. The Claude Code driver
 reports `files_in` as `none`. The Codex driver reports `images`, which is what Codex accepts; it receives none
 yet.
@@ -1497,4 +1497,79 @@ anything it sends. Recordings still never send `/model status`, so no masked for
 the key away, and refusing the command would hide what OpenClaw is set to.
 
 Decided 2026-11-21. The project owner decided, against the recommendation to refuse the command.
+
+## D-089 An install moves over by importing its account home in place
+
+**Decision.** `marmot-agent import <old home>` takes over one of today's connector installs. It uses the
+existing account home where it is, so the agent keeps its identity, its keys, its encryption state and every
+group it is in, and nobody has to invite it again. Before the core first opens the store it takes a backup,
+because MDK's storage upgrades run forward only and the backup is the only way back. It turns the old
+allow-lists into the new settings, and stops and disables the old service without removing it. Each identity
+is its own program ([D-072](#d-072-one-agent-identity-per-core-process-until-the-swap)). This settles Q-19.
+
+**Why.** It meets the requirement from issue 10, with nothing to merge or split. The cost: going back after the
+first open needs that backup, and restoring an older copy of a store that has since processed messages could
+reuse keys or run a prompt twice, so a restore is only for before the new core did anything.
+
+Decided 2026-11-21. The project owner accepted the recommendation.
+
+## D-090 An agent sends a file as an encrypted attachment from an allowed folder
+
+**Decision.** A file the agent produces goes to the chat as an ordinary encrypted chat attachment, through MDK's
+media sending, tagged with its turn like the agent's words
+([D-022](#d-022-the-agents-words-are-ordinary-chat-messages)). There is no new item type. The core reads a file
+only from folders the settings list, by default the working folder, and never follows a link out of them. This
+settles Q-23 and ends what [D-083](#d-083-the-core-passes-no-files-to-a-harness-yet) says only for files the
+agent sends; files passed to a harness are still not designed.
+
+**Why.** Today's Codex connector already sends files, and an attachment is what every app already shows. The
+cost: an app cannot yet show a file as part of the agent's work, which a later item type could add.
+
+Decided 2026-11-21. The project owner accepted the recommendation.
+
+## D-091 One install script per harness, and release binaries from CI
+
+**Decision.** Each harness gets an install script that installs `marmot-agent` and what that harness needs, and
+sets the agent up as a service of the person's own account. Release binaries are built by GitHub Actions. Signed
+releases and automatic updates wait ([Q-28](open-questions.md#q-28-how-does-someone-know-a-release-is-genuine)).
+
+**Why.** It matches how today's connectors are installed, and is the smallest step that lets an install move
+over. Signing is wanted, not needed to replace what runs today.
+
+Decided 2026-11-21. The project owner accepted the recommendation.
+
+## D-092 The choices made while building M3 are accepted
+
+**Decision.** The choices the drivers were built on, marked provisional until now, stand:
+
+- **Pi.** An extension's question is a `question` item and `notify` a notice, since Pi has no approvals of its
+  own. A control Pi fails, or that a stopped Pi cut off, is settled by an error item the driver makes, and a
+  prompt Pi refuses shows as an error item. Pi runs in a container by default, each chat's state in a folder of
+  its own named from a hash of the chat id (`MARMOT_AGENT_CHAT`). After a restart a session that never held a
+  message, and one whose file was deleted, are both made again empty (issue #63). A question asked while Pi
+  starts fails the start. A second Compact while one runs is refused as busy. The default model is
+  `deepseek/deepseek-v4.1-flash:free`.
+- **ACP.** A streamed message's native message is the list of its chunks. An ACP agent reads a chat message as
+  Codex does ([D-062](#d-062-what-codex-reads-for-a-chat-message)). A message during a turn cancels it and
+  prompts (`restart`). A setting in ACP's `mode` category needs the right to approve. OpenCode's question tool
+  and Cursor's to-do tool make no tool item, so each shows once, as a question or a plan.
+- **OpenClaw.** Every chat is shown to OpenClaw as a group, so each has its own session. Its list of commands that
+  need the right to approve stands. It queues a message sent during a turn, picks its own sessions, resumes them
+  and forwards approvals. Its replies to typed commands, and a notice when it drops one, are `command_output`
+  notices. The container's defaults: commands need approval, approval forwarding is on, `/bash` is off, nobody is
+  OpenClaw's owner, and the agent's message tool has no actions. The entrypoint clears a dead gateway's state
+  lock. After the core goes, the plugin connects again only once its cancelled runs have ended.
+- **Hermes.** Hermes's approval mode is `manual`, so a person is asked about every command it flags. Its tool
+  lines and heartbeats are commentary messages, its own notices `warning`, its replies to typed commands
+  `command_output`. After a crash the plugin sends `/discard`. The model endpoint's address is removed from
+  Hermes's model answer. `/approve`, `/deny`, `/yolo`, `/approvals`, `/memory`, `/skills` and `/codex-runtime` at
+  the start of a message need the right to approve. A refused `/new` shows Hermes's reply. An answer to a
+  question skips Hermes's own check of who may answer, as approvals do
+  ([D-084](#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)). The kept log holds
+  only the plugin's own lines, so it needs no filter for the key.
+
+**Why.** Each was built, reviewed and run end to end against the real harness. Recording them settles what other
+programs and people see from these drivers.
+
+Decided 2026-11-21. The project owner accepted the recommendations.
 

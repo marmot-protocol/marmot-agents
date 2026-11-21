@@ -20,7 +20,7 @@ a driver per harness, and agent activity as durable items that are edited as the
   missed while offline, installers, and an agent sending a file to the chat
   ([what must not be lost](reference/current-connectors.md#things-the-new-design-must-not-lose)).
 - **An existing install moves over** keeping its identity, its keys, its encryption state and its groups
-  ([Q-19](open-questions.md#q-19-how-do-existing-installs-move-over)).
+  ([D-089](decisions.md#d-089-an-install-moves-over-by-importing-its-account-home-in-place)).
 - **MDK carries the new shape of kinds 1201 and 1202**, and its old connector code is deleted.
 
 ## Milestones
@@ -91,7 +91,7 @@ Known gaps are issues #63, #64 and #68.
 ### M4: Ready to swap
 
 Everything on the list above that M1 to M3 did not already do: moving installs over, installers and releases,
-an agent sending a file ([Q-23](open-questions.md#q-23-how-does-an-agent-send-a-file-to-the-chat)), sends that
+an agent sending a file ([D-090](decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)), sends that
 survive a crash, catching up after being offline, and the switch to MDK's 1201 and 1202 once MDK has them.
 **Done when** an install of each of today's connectors has moved over, on a test machine, without being
 invited again.
