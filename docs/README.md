@@ -111,8 +111,8 @@ exist so that nobody, human or agent, has to redo the research behind a decision
 
 `crates/` holds four crates so far: `marmot-agent-events`, the agent event and its item types;
 `marmot-agent-driver`, the trait a driver implements; `marmot-agent-codex`, the Codex driver; and
-`marmot-agent`, the core, being built. `packages/` and `python/` do not exist yet. They
-are the planned shape, so that the code lands in the right place. The core program is called `marmot-agent`
+`marmot-agent`, the core, being built. `packages/claude-code` is the Claude Code driver and `python/` the Hermes
+plugin; the rest of the table is the planned shape, so that the code lands in the right place. The core program is called `marmot-agent`
 ([D-050](decisions.md#d-050-the-core-program-is-called-marmot-agent)), and the Codex driver is built first
 ([D-052](decisions.md#d-052-the-codex-driver-is-built-first)).
 

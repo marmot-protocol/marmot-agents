@@ -220,6 +220,7 @@ async fn openclaw_end_to_end() {
         world: &world,
         group,
         hex,
+        turn: TURN,
     };
     let tracing = trace(&world, &chat.hex);
     let only = "Use your exec tool to run exactly this shell command and nothing else, then reply with the word done:";
