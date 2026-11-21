@@ -214,9 +214,8 @@ how several of them run on one machine and behave in one group. This needs much 
 
 The rough shape, not decided:
 
-- **Who answers.** In a one-to-one chat the agent always answers. In a group it answers only when it is
-  mentioned or replied to. A message addressed to nobody gets no answer. The project owner has said this
-  behaviour is the right one.
+- **Who answers.** Decided: in a direct chat always, in a group only when mentioned or replied to
+  ([D-075](decisions.md#d-075-in-a-group-the-agent-answers-when-mentioned-or-replied-to-in-a-direct-chat-always)).
 - **No loops.** Agents must not answer each other, and several must not answer at once.
 - **The owner is not a required link.** Nothing forces an agent to state whose it is. An owner who wants to can
   say so in the agent's profile, for example "Max's Codex" in its name or description.

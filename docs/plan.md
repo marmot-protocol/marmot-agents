@@ -43,8 +43,8 @@ No app is involved, and MDK is used as it is today.
   ([D-072](decisions.md#d-072-one-agent-identity-per-core-process-until-the-swap)), set up by a configuration
   file ([D-073](decisions.md#d-073-standing-settings-live-in-a-configuration-file)). It holds the account through
   MDK, joins a group only when the inviter is allowed, turns a chat message into a prompt when the sender may
-  prompt (in a group, only when the agent is mentioned or replied to, which the project owner has said is right
-  in [Q-08](open-questions.md#q-08-how-do-several-agent-identities-run-together)), and an answer or control into a request when the sender has the right. It keeps each chat's session
+  prompt (in a group, only when the agent is mentioned or replied to,
+  [D-075](decisions.md#d-075-in-a-group-the-agent-answers-when-mentioned-or-replied-to-in-a-direct-chat-always)), and an answer or control into a request when the sender has the right. It keeps each chat's session
   and the items still open across restarts, applies the 64 KB limit, and settles each request once.
 - **The carrier, for now.** MDK refuses kinds 1201 and 1202 from programs, and applies an edit only to a chat
   message or a comment. So until MDK takes the new shape, an agent item travels under a temporary kind, and an

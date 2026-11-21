@@ -162,6 +162,9 @@ natural public boundary once it is stable.
 
 ## D-015 Build order
 
+Replaced by [`plan.md`](plan.md) ([D-068](#d-068-work-follows-the-plan-and-the-builder-decides-what-is-internal)),
+in which Codex runs end to end before the socket is built.
+
 **Decision.**
 
 1. The event model, the socket protocol and the core program.
@@ -794,7 +797,8 @@ The plan after that, which is not fixed, and is replaced by [`plan.md`](plan.md)
 design in real code. It also settles three open questions by doing them: which Codex library to build on
 (Q-15, since settled as [D-055](#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own)), the capability flags
 (Q-16, since settled as [D-058](#d-058-the-driver-trait-and-the-capability-flags)) and how drivers are tested
-(Q-17, since settled as [D-074](#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)). The core cannot send an agent item until MDK changes.
+(Q-17, since settled as [D-074](#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)). The core cannot send an agent item until MDK changes (in 1201 and 1202; the first test sends items under a
+temporary kind before then, [D-069](#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind)).
 The gateways come last because whose rules govern them is still open
 ([Q-22](open-questions.md#q-22-whose-rules-govern-a-gateway)).
 
@@ -1226,7 +1230,7 @@ Decided 2026-11-21.
 interrupted, and every answer and control still open is settled as failed
 ([D-058](#d-058-the-driver-trait-and-the-capability-flags)). A core that stopped without doing so does it when
 it starts again, from the items it kept as open. Nothing is sent again. The chat's session is kept, and the next
-prompt resumes it. The core never sends the model a prompt that nobody wrote. This settles Q-27.
+prompt resumes it ([D-065](#d-065-a-prompt-names-a-session-only-to-resume-one)). The core never sends the model a prompt that nobody wrote. This settles Q-27.
 
 **Why.** The recordings show Codex and Claude Code both keep the session when stopped mid-turn, rerun nothing,
 and send nothing to say the turn ended, so someone has to close it. The simple version keeps all three things a
@@ -1292,3 +1296,19 @@ the scenario shows the pieces work together. The Codex driver was tested the fir
 finding cases that only a running system could confirm or rule out.
 
 Decided 2026-11-21.
+
+## D-075 In a group the agent answers when mentioned or replied to; in a direct chat, always
+
+**Decision.** In a chat with one person, every message is for the agent. In a group, a message is for the agent
+only when it mentions the agent or replies to one of the agent's messages; any other message is not a prompt,
+and the agent says nothing about it. A message that is for the agent is then checked as any prompt is: from
+someone without the right to prompt, the core says so
+([D-010](#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)). Answers to approvals and questions, and
+controls, are not affected: each names the item or the agent it is for. The rest of how several agents share a
+group ([Q-08](open-questions.md#q-08-how-do-several-agent-identities-run-together)) is still open.
+
+**Why.** In a group people talk to each other more than to the agent, and an agent that took every message as
+a prompt would answer conversations that were not for it. A mention or a reply is how a person addresses
+anyone in a chat. In a direct chat there is nobody else to address.
+
+Decided 2026-11-21. The project owner gave this rule.
