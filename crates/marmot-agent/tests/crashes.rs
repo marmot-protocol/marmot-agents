@@ -905,6 +905,108 @@ async fn a_send_tried_is_not_taken_for_an_older_one_like_it() {
     world.runtime.shutdown().await;
 }
 
+// One chat's backlog does not hold up another: a chat sends a few events before the core turns
+// to the next, however many one piece of work queues for it, as when a start closes many open
+// items at once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_chats_backlog_does_not_hold_up_another() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, _events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, id) = a_chat(&world, &seen).await;
+    let team = world
+        .runtime
+        .create_group(
+            &world.person,
+            "Team",
+            std::slice::from_ref(&world.agent),
+            None,
+        )
+        .await
+        .unwrap()
+        .operation
+        .expect("the group is made");
+    let team_hex = world.joined(&team).await;
+    core.stop().await;
+
+    // As the core left it: twenty items open in the direct chat, then one in the team's.
+    let (store, kept, mut talk) = taken_up(&world);
+    let place = Where {
+        group: GroupKey(team_hex.clone()),
+        name: None,
+        direct: false,
+        members: 2,
+    };
+    let Some(marmot_agent::Act::Prompt(prompt)) = talk
+        .heard(Heard {
+            chat: place,
+            event: EventKey::from("e-team"),
+            author: PubKey(world.person.clone()),
+            author_name: "Person".into(),
+            text: "hi".into(),
+            reply_to: None,
+            mentions_agent: true,
+            attachments: Vec::new(),
+        })
+        .into_iter()
+        .next()
+    else {
+        panic!("no prompt")
+    };
+    let team_id = prompt.chat.id;
+    assert!(
+        format!("{}/", id.0) < format!("{}/", team_id.0),
+        "closed last"
+    );
+    let mut open = |chat: &ChatId, item: &str, n: usize| {
+        talk.emitted(Emitted {
+            event: event(item, State::Running, turn()),
+            chat: Some(chat.clone()),
+            prompts: Vec::new(),
+            settles: Vec::new(),
+        });
+        let first = EventKey::from(format!("{n:064x}").as_str());
+        talk.sent(&format!("{}/{item}", chat.0), first);
+    };
+    for n in 0..20 {
+        open(&id, &format!("a{n:02}"), n);
+    }
+    open(&team_id, "b", 99);
+    let read = kept.read;
+    let conversation = talk.saved().clone();
+    store.save(&Kept { conversation, read }).unwrap();
+
+    let (driver, _events, _) = stub(false);
+    let core = world.start(driver);
+    let other = Chat {
+        world: &world,
+        group: team,
+        hex: team_hex,
+        turn: 30,
+    };
+    let closes = |chat: &Chat<'_>| -> Vec<i64> {
+        (sent_by_core(chat, marmot_agent::carrier::ITEM_KIND).into_iter())
+            .filter(|m| {
+                let read = marmot_agent::carrier::read_item(&m.plaintext, &m.tags);
+                read.is_some_and(|r| r.item.event.header().state == State::Cancelled)
+            })
+            .map(|m| m.insert_order)
+            .collect()
+    };
+    within(30, || {
+        (closes(&chat).len() == 20 && closes(&other).len() == 1).then_some(())
+    })
+    .await;
+    let last_direct = closes(&chat).into_iter().max().unwrap();
+    assert!(
+        closes(&other)[0] < last_direct,
+        "the team's close went before the direct chat's backlog was done"
+    );
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
 impl Stub {
     fn caps() -> Capabilities {
         stub(false).0.capabilities()

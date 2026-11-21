@@ -49,8 +49,8 @@ const SETTLE: Duration = Duration::from_secs(15);
 /// for once more, when MDK has settled it, and only if it is not there is it given up as refused.
 const UNKNOWN_TRIES: u32 = 10;
 
-/// How many sends one group makes before the core turns to other work, so one chat's backlog, or
-/// a slow MDK, does not hold up the others.
+/// How many sends one group makes in one turn of the core's loop, so one chat's backlog, or a slow
+/// MDK, does not hold up the others.
 const DRAIN: usize = 8;
 
 /// What a failed send means.
@@ -224,6 +224,10 @@ pub struct Core<D: Driver> {
     settle: Duration,
     /// How many times such a send is tried: [`UNKNOWN_TRIES`].
     unknown_tries: u32,
+    /// How many sends each group made in this turn of the loop, at most [`DRAIN`].
+    drained: HashMap<GroupKey, usize>,
+    /// Whether [`DRAIN`] holds: not when the core stops, which sends all it can.
+    bounded: bool,
 }
 
 impl<D: Driver> Core<D> {
@@ -264,6 +268,8 @@ impl<D: Driver> Core<D> {
                 .collect(),
             settle: SETTLE,
             unknown_tries: UNKNOWN_TRIES,
+            drained: HashMap::new(),
+            bounded: true,
         })
     }
 
@@ -307,6 +313,8 @@ impl<D: Driver> Core<D> {
         // stops is not waited for: the driver it would answer goes with the core.
         let (uploaded, mut uploads) = mpsc::unbounded_channel::<Uploaded>();
         loop {
+            // Each group may send a few more events in this turn.
+            self.drained.clear();
             let retry = self.retry.values().map(|(at, _)| *at).min();
             let retry = async move {
                 match retry {
@@ -345,7 +353,9 @@ impl<D: Driver> Core<D> {
         // twice.
         let ended = self.conversation.ended();
         self.retry.clear();
-        self.carry_out(ended).await
+        self.bounded = false;
+        self.carry_out(ended).await?;
+        self.flush_all().await
     }
 
     /// Starts sending a file the agent asked to send, as a task of its own so the chats go on
@@ -565,7 +575,7 @@ impl<D: Driver> Core<D> {
     }
 
     /// Sends what is queued for a group, oldest first, each marked sent and saved once it has
-    /// gone, a few at a time so other work goes on between. A send MDK is busy for stays queued,
+    /// gone, a few in each turn of the loop so other work and other groups go on between. A send MDK is busy for stays queued,
     /// and the group waits, longer each time, before it is tried again; the other groups go on
     /// meanwhile. A send whose outcome is not known may have gone out, so it is not sent again
     /// blindly: once MDK has had time to settle it, the core looks for it in what MDK stored, and
@@ -582,15 +592,15 @@ impl<D: Driver> Core<D> {
         {
             return Ok(());
         }
-        let mut left = DRAIN;
         while let Some((token, what)) = self.conversation.next_send(group) {
-            if left == 0 {
-                // More is queued: come back to it after other work.
+            let made = self.drained.entry(group.clone()).or_default();
+            if self.bounded && *made >= DRAIN {
+                // More is queued: come back to it in the loop's next turn, after other work.
                 let wait = self.retry.get(group).map_or(Duration::ZERO, |(_, w)| *w);
                 self.retry.insert(group.clone(), (Instant::now(), wait));
                 return Ok(());
             }
-            left -= 1;
+            *made += 1;
             let key = match &what {
                 Sending::Item { key, .. } | Sending::Words { key, .. } => key.clone(),
             };
