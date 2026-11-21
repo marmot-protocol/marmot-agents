@@ -37,6 +37,7 @@ export type Reason =
   | "failed"
   | "not_allowed";
 
+// Only the Claude Code driver sends the core requests of its own (D-090): begin
 const REASONS: ReadonlySet<string> = new Set<Reason>([
   "not_supported",
   "busy",
@@ -48,6 +49,7 @@ const REASONS: ReadonlySet<string> = new Set<Reason>([
   "failed",
   "not_allowed",
 ]);
+// end
 
 /** A request not taken. The detail is shown in the chat, to every member. */
 export class Refusal extends Error {
@@ -87,7 +89,7 @@ export interface Welcome {
 /** Serves one request from the core. It resolves once the request is taken, and throws a {@link Refusal}. */
 export type Serve = (method: string, params: Record<string, unknown>) => Promise<void>;
 
-/** The hello's id. The connector's other requests are numbered after it. */
+/** The hello's id. */
 const HELLO = 1;
 
 /** The hello was refused, or the connection went before the core answered it. */
@@ -106,11 +108,13 @@ export class CoreConnection {
     throw new Refusal("not_supported");
   };
   private queue: Promise<void> = Promise.resolve();
-  /** The hello, the one request the connector sends, while it waits for its answer. */
+  /** The hello, while it waits for its answer. */
   private helloWaits: { resolve: (r: Welcome) => void; reject: (e: Error) => void } | undefined;
+  // Only the Claude Code driver sends the core requests of its own (D-090): begin
   /** The connector's other requests, each while it waits for the core's answer. */
   private readonly waits = new Map<number, { resolve: () => void; reject: (e: Refusal) => void }>();
   private nextId = HELLO + 1;
+  // end
   private readonly closedPromise: Promise<void>;
   private closed = false;
 
@@ -121,8 +125,10 @@ export class CoreConnection {
         this.closed = true;
         this.helloWaits?.reject(new HelloRefused("the connection closed"));
         this.helloWaits = undefined;
+        // Only the Claude Code driver sends the core requests of its own (D-090): begin
         for (const w of this.waits.values()) w.reject(new Refusal("failed"));
         this.waits.clear();
+        // end
         resolve();
       });
     });
@@ -160,6 +166,7 @@ export class CoreConnection {
     });
   }
 
+  // Only the Claude Code driver sends the core requests of its own (D-090): begin
   /**
    * Sends the core a request, such as `send_file`, and resolves once the core has done it, or throws the
    * core's {@link Refusal}. One that cannot be sent, or that the connection's closing cuts off, fails.
@@ -174,6 +181,7 @@ export class CoreConnection {
       }
     });
   }
+  // end
 
   /** Sends a notification. One over the limit is not sent, and false says so. */
   notify(method: string, params: unknown): boolean {
@@ -239,6 +247,7 @@ export class CoreConnection {
       this.queue = this.queue.then(() => this.answer(id, method, p as Record<string, unknown>));
       return;
     }
+    // Only the Claude Code driver sends the core requests of its own (D-090): begin
     const waiting = typeof id === "number" ? this.waits.get(id) : undefined;
     if (waiting !== undefined) {
       this.waits.delete(id as number);
@@ -248,6 +257,7 @@ export class CoreConnection {
       const reason = typeof d["reason"] === "string" && REASONS.has(d["reason"]) ? (d["reason"] as Reason) : "failed";
       return waiting.reject(new Refusal(reason, typeof d["detail"] === "string" ? d["detail"] : undefined));
     }
+    // end
     const w = this.helloWaits;
     if (id === HELLO && w !== undefined) {
       this.helloWaits = undefined;
