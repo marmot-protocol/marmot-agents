@@ -231,15 +231,13 @@ struct Pending {
     /// For an answer: the item it answers, so a second answer to it is refused.
     #[serde(default)]
     answers: Option<String>,
-    /// The driver took it.
-    #[serde(default)]
-    taken: bool,
-    /// When the core first saw it taken, in seconds, so it is settled if no effect ever shows.
-    #[serde(default)]
-    taken_at: Option<u64>,
+    /// For a control the driver took: when it is settled if no effect has shown, on the core's
+    /// clock (D-087). Not kept across a restart, which settles every request anyway (D-070).
+    #[serde(skip)]
+    deadline: Option<u64>,
 }
 
-/// How long a request the driver took may wait for its effect before the core settles it.
+/// How long a control the driver took may wait for its effect before the core settles it.
 pub const EFFECT_LIMIT_SECS: u64 = 120;
 
 /// The conversation: every rule about people, sessions and items.
@@ -436,8 +434,7 @@ impl Conversation {
                 chat: chat.id.0,
                 new_session,
                 answers,
-                taken: false,
-                taken_at: None,
+                deadline: None,
             },
         );
         vec![act]
@@ -546,13 +543,22 @@ impl Conversation {
         })
     }
 
-    /// The driver took an answer or a control, or refused it. A refusal settles it with a notice
-    /// that says why (D-028).
-    pub fn requested(&mut self, request: &RequestId, result: Result<(), Refusal>) -> Vec<Act> {
+    /// The driver took an answer or a control, or refused it, at `now` on the core's clock, in
+    /// seconds. A refusal settles it with a notice that says why (D-028).
+    pub fn requested(
+        &mut self,
+        request: &RequestId,
+        result: Result<(), Refusal>,
+        now: u64,
+    ) -> Vec<Act> {
         match result {
             Ok(()) => {
                 if let Some(pending) = self.saved.pending.get_mut(&request.0) {
-                    pending.taken = true;
+                    // An answer keeps its place until its item stops waiting, so a second answer
+                    // is still refused (D-028); only a control is settled for want of an effect.
+                    if pending.answers.is_none() {
+                        pending.deadline = Some(now + EFFECT_LIMIT_SECS);
+                    }
                     if pending.new_session {
                         self.taken.insert(pending.chat.clone());
                     }
@@ -563,43 +569,25 @@ impl Conversation {
         }
     }
 
-    /// The time is `now`, in seconds: settles with a notice every request the driver took whose
-    /// effect has not shown for [`EFFECT_LIMIT_SECS`], as when a setting is set to the value it
-    /// already had and the harness shows nothing (D-087). Called now and then; the first call that
-    /// sees a request taken starts its clock.
+    /// The time is `now` on the core's clock, in seconds: settles with a notice one control the
+    /// driver took whose effect has not shown by its deadline, as when a setting is set to the
+    /// value it already had and the harness shows nothing (D-087). One at a time, so each is saved
+    /// as settled before the next: call again until it gives nothing.
     pub fn overdue(&mut self, now: u64) -> Vec<Act> {
-        let mut late = Vec::new();
-        for (request, pending) in &mut self.saved.pending {
-            if !pending.taken {
-                continue;
-            }
-            match pending.taken_at {
-                None => pending.taken_at = Some(now),
-                Some(at) if now.saturating_sub(at) > EFFECT_LIMIT_SECS => {
-                    late.push(request.clone())
-                }
-                Some(_) => {}
-            }
-        }
-        let mut acts = Vec::new();
-        for request in late {
-            let Some(pending) = self.saved.pending.remove(&request) else {
-                continue;
-            };
-            let chat = Chat {
-                id: ChatId(pending.chat),
-                group: true,
-                name: None,
-            };
-            let notice = self.notice(
-                &pending.group,
-                &chat,
+        let late = self
+            .saved
+            .pending
+            .iter()
+            .find(|(_, p)| p.deadline.is_some_and(|deadline| now >= deadline))
+            .map(|(request, _)| request.clone());
+        match late {
+            Some(request) => self.settle_pending(
+                &request,
                 "no_effect",
                 "The agent took this, but nothing has come of it.".into(),
-            );
-            acts.push(self.send_notice(&pending.group, notice, None, vec![pending.event]));
+            ),
+            None => Vec::new(),
         }
-        acts
     }
 
     /// An event from the driver.
@@ -862,6 +850,11 @@ impl Conversation {
     }
 
     fn refuse(&mut self, request: &str, refusal: Refusal) -> Vec<Act> {
+        self.settle_pending(request, reason_word(refusal.reason), not_acted_on(&refusal))
+    }
+
+    /// Settles a pending request with a `refused` notice giving `reason` and `text`.
+    fn settle_pending(&mut self, request: &str, reason: &str, text: String) -> Vec<Act> {
         let Some(pending) = self.saved.pending.remove(request) else {
             return Vec::new();
         };
@@ -870,12 +863,7 @@ impl Conversation {
             group: true,
             name: None,
         };
-        let notice = self.notice(
-            &pending.group,
-            &chat,
-            reason_word(refusal.reason),
-            not_acted_on(&refusal),
-        );
+        let notice = self.notice(&pending.group, &chat, reason, text);
         vec![self.send_notice(&pending.group, notice, None, vec![pending.event])]
     }
 

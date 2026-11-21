@@ -402,14 +402,16 @@ fn an_answer_is_settled_once_by_its_effect() {
     };
     assert_eq!(answer.item.as_str(), "ap");
     assert_eq!(answer.given, Given::Choice("allow".into()));
-    assert!(talk.requested(&answer.request, Ok(())).is_empty());
+    assert!(talk.requested(&answer.request, Ok(()), 0).is_empty());
+    // An answer is never settled for want of an effect: it keeps its place (D-087).
+    assert!(talk.overdue(10_000).is_empty());
 
     let mut done = emitted(&chat, event("ap", State::Done, approval()));
     done.settles = vec![answer.request.clone()];
     let (_, _, item) = the_item(talk.emitted(done));
     assert_eq!(item.settles, vec![EventKey::from("r1")]);
     assert!(
-        talk.requested(&answer.request, Err(Refusal::new(Reason::Failed)))
+        talk.requested(&answer.request, Err(Refusal::new(Reason::Failed)), 0)
             .is_empty()
     );
 }
@@ -466,7 +468,8 @@ fn a_refused_control_is_settled_by_a_notice() {
         control.action,
         Action::NewSession { session: None, .. }
     ));
-    let (_, _, item) = the_item(talk.requested(&control.request, Err(Refusal::new(Reason::Busy))));
+    let (_, _, item) =
+        the_item(talk.requested(&control.request, Err(Refusal::new(Reason::Busy)), 0));
     assert!(is_refused(&item, "busy"));
     assert_eq!(item.settles, vec![EventKey::from("r1")]);
 }
@@ -556,7 +559,7 @@ fn a_stop_closes_items_and_settles_requests() {
     let Some(Act::Control(control)) = talk.asked(interrupt).into_iter().next() else {
         panic!("no control")
     };
-    assert!(talk.requested(&control.request, Ok(())).is_empty());
+    assert!(talk.requested(&control.request, Ok(()), 0).is_empty());
     let saved = talk.saved().clone();
 
     let acts = talk.ended();
@@ -872,10 +875,11 @@ fn an_ended_session_is_not_resumed_and_a_stopped_one_is() {
     assert_eq!(fresh.session, None, "an ended session is not");
 }
 
-// A request the driver took but whose effect never shows is settled by a notice once it has waited
-// too long, so nobody's press stays pending for good; one whose effect showed is left alone (D-087).
+// A control the driver took but whose effect never shows is settled by a notice two minutes after
+// it was taken, one at a time so each is saved before the next; one whose effect showed is left
+// alone, and an answer keeps its place so a second answer is still refused (D-087, D-028).
 #[test]
-fn a_request_whose_effect_never_shows_is_settled_in_the_end() {
+fn a_control_whose_effect_never_shows_is_settled_in_the_end() {
     let (mut talk, prompt) = started();
     let chat = prompt.chat.id.0.clone();
     let session = event("s1", State::Running, Body::Session(session_item(false)));
@@ -896,12 +900,12 @@ fn a_request_whose_effect_never_shows_is_settled_in_the_end() {
         let Some(Act::Control(control)) = talk.asked(set(event)).into_iter().next() else {
             panic!("no control")
         };
-        assert!(talk.requested(&control.request, Ok(())).is_empty());
+        assert!(talk.requested(&control.request, Ok(()), 1_000).is_empty());
         control
     };
     take(&mut talk, "r1");
-    let seen = take(&mut talk, "r2");
-    assert!(talk.overdue(1_000).is_empty(), "the clock starts");
+    take(&mut talk, "r2");
+    let seen = take(&mut talk, "r3");
     let mut effect = emitted(
         &chat,
         event("s1", State::Running, Body::Session(session_item(false))),
@@ -909,9 +913,14 @@ fn a_request_whose_effect_never_shows_is_settled_in_the_end() {
     effect.settles = vec![seen.request.clone()];
     talk.emitted(effect);
 
-    assert!(talk.overdue(1_000 + 60).is_empty(), "not yet");
-    let (_, _, item) = the_item(talk.overdue(1_000 + 121));
-    assert!(is_refused(&item, "no_effect"));
-    assert_eq!(item.settles, vec![EventKey::from("r1")]);
-    assert!(talk.overdue(1_000 + 500).is_empty(), "settled once");
+    assert!(talk.overdue(1_119).is_empty(), "not yet");
+    let mut settled = Vec::new();
+    for _ in 0..2 {
+        let (_, _, item) = the_item(talk.overdue(1_120));
+        assert!(is_refused(&item, "no_effect"));
+        settled.extend(item.settles);
+    }
+    settled.sort();
+    assert_eq!(settled, vec![EventKey::from("r1"), EventKey::from("r2")]);
+    assert!(talk.overdue(5_000).is_empty(), "each settled once");
 }

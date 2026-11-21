@@ -92,6 +92,9 @@ exactly one event that points back at it ([D-028](../decisions.md#d-028-an-answe
   Alice". The turn becomes "Interrupted by Alice". The session's settings show the new model.
 - **If it had none, a notice that says why**: not allowed, not supported by this harness, nothing to act on,
   already answered, or failed.
+- **If the harness took a control and two minutes pass with nothing to show for it**, a notice with the reason
+  `no_effect` ([D-087](../decisions.md#d-087-the-core-settles-a-request-whose-effect-never-shows)). An effect
+  that shows later is still shown.
 
 So there is one place to look for the truth: the agent's own items. An app shows a press as pending until the
 agent's reply arrives. If the agent's machine is off, the press stays pending and nothing is assumed.
