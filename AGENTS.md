@@ -244,14 +244,16 @@ python3 -m unittest discover -s tools/prototype -p 'test_*.py'         # cases n
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
     fixtures/recordings/hermes fixtures/recordings/openclaw
 python3 tools/prototype/translate.py --expected fixtures/recordings/codex --check   # the Codex driver's expected events
+python3 tools/prototype/translate.py --expected fixtures/recordings/claude --check  # the Claude Code driver's
 ```
 
 The `--check` over the four folders must end with "native messages with no translation: none". If you change
 the event model, change `tools/prototype/translate.py` to match and run it again.
 
-The Codex driver is tested against `fixtures/recordings/codex/expected`, which the prototype writes. When the
-prototype's Codex output changes on purpose, write them again with
-`python3 tools/prototype/translate.py --expected fixtures/recordings/codex` and commit them. Never write them
+The Codex driver is tested against `fixtures/recordings/codex/expected`, and the Claude Code driver against
+`fixtures/recordings/claude/expected`. The prototype writes both. When the prototype's output for one harness
+changes on purpose, write them again with `python3 tools/prototype/translate.py --expected` and that folder,
+such as `fixtures/recordings/codex`, and commit them. Never write them
 again only to make the driver's test pass: when the two disagree, the recording and the event model decide
 which is wrong.
 

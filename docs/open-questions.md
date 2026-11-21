@@ -42,17 +42,19 @@ when the driver for that harness is built:
 | Decision | The prototype | The crate |
 | --- | --- | --- |
 | The answer to a secret question is never repeated ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat), [D-056](decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)) | Followed for Codex since 2026-11-19, tested with hand-written messages because no recording has a secret question. Before that it repeated the answer twice: in the item's `answer`, and in the native message, which is the client's reply to Codex's request | Cannot hold either. An answer to a secret question carries the question's id and nothing else, and a secret question that is no longer waiting cannot be built or read with a native message |
-| A session item carries the session's id ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)) | For Claude Code, a session item with no id, when the session is described before its first turn | Allows an event with no session, for any item type. See below |
+| A session item carries the session's id ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)) | Followed for Claude Code since 2026-11-21: the session item waits for the id. Before that, a session item with no id when the session was described before its first turn | Allows an event with no session, for any item type. See below |
 | A request to confirm a command is a `question` ([D-048](decisions.md#d-048-a-request-to-confirm-a-command-is-a-question)) | For Hermes, an `approval` | Not applicable: the crate does not choose an item's type |
-| A session item carries the harness's version ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)) | For Codex, Codex's `cliVersion`. For the other three, none. The page's table has none either | `harness_version`, always present |
-| What an event carries ([D-059](decisions.md#d-059-eight-points-about-what-an-agent-event-carries)) | Followed for Codex. For Claude Code, Hermes and OpenClaw, the answer on a question keeps each harness's own shape, and how much of the native message is kept was not changed | Holds D-059's shapes |
-| A command always carries its name and hint ([D-045](decisions.md#d-045-a-session-items-commands-keep-their-names-and-lose-descriptions-first)) | For Claude Code, commands with a name and nothing else, until the driver asks for more | `hint`, always present, empty when the command takes nothing |
+| A session item carries the harness's version ([D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type)) | For Codex, Codex's `cliVersion`. For Claude Code since 2026-11-21, `claude_code_version` from its init message. For Hermes and OpenClaw, none. The page's table has none either | `harness_version`, always present |
+| What an event carries ([D-059](decisions.md#d-059-eight-points-about-what-an-agent-event-carries)) | Followed for Codex, and for Claude Code since 2026-11-21: the answer names ids, the native message is the whole message the translator was handed, and a turn the driver opens itself carries none. For Hermes and OpenClaw, the answer on a question keeps each harness's own shape, and how much of the native message is kept was not changed | Holds D-059's shapes |
+| A command always carries its name and hint ([D-045](decisions.md#d-045-a-session-items-commands-keep-their-names-and-lose-descriptions-first)) | Followed for Claude Code since 2026-11-21. A command its init message names, and nothing more, has an empty hint | `hint`, always present, empty when the command takes nothing |
 
-**A session item with no session id is left open on purpose.** Claude Code describes a session before its
-first turn and gives the id only when that turn starts, so its early session item has none. D-030 says the
-item carries the id. Either the connector waits for the id, or the rule gets an exception. The project owner
-chose on 2026-11-19 to leave this until the Claude Code connector is designed. Until then the types allow the
-item. Nothing built today produces one: Codex always has a thread id.
+**A session item with no session id.** Claude Code describes a session before its first turn and gives the
+id only when that turn starts. D-030 says the item carries the id. Either the connector waits for the id, or
+the rule gets an exception. The project owner chose on 2026-11-19 to leave this until the Claude Code connector
+is designed. It is now being designed, and the prototype and its translator wait, which follows D-030 as it
+stands: what the client learns before the first turn goes out in the session item that turn's start sends.
+The types still allow an event with no session. Nothing built today produces one. Whether they should
+refuse one is the project owner's to decide.
 
 **What an event carries, for every harness.** Most of what was here is settled: the version number, how much
 of the native message is kept, events the driver makes up, `seq`, the answer on a question and a plan as steps
@@ -61,7 +63,7 @@ of the native message is kept, events the driver makes up, `seq`, the answer on 
 
 | Point | The page | The prototype | The crate, for now |
 | --- | --- | --- | --- |
-| What a task's `usage` holds | "`usage` once known" | Claude Code's three numbers: time, tools used, tokens. Not the shape a turn's usage has | Leaves `usage` off a task |
+| What a task's `usage` holds | "`usage` once known" | Left off since 2026-11-21, as the crate does. Before, Claude Code's three numbers: time, tools used, tokens, not the shape a turn's usage has. They stay in the native message | Leaves `usage` off a task |
 | A field the types do not know | Does not say | Not applicable | Passed over when an event is read, so that an older core can still show a newer driver's item |
 
 **Fields only the prototype has, that Codex produces.** The crate has them, because the recordings show a
@@ -79,16 +81,20 @@ use for each:
 `partial_answer`, are settled by D-059 and tested with hand-written messages in
 [`crates/marmot-agent-codex/tests/cases.rs`](../crates/marmot-agent-codex/tests/cases.rs).
 
-**Fields only the prototype has, from the other three harnesses.** The crate does not have them. Each is for
-the connector that produces it to bring up:
+**Fields only the prototype has, from Hermes and OpenClaw.** The crate does not have them. Each is for
+the connector that produces it to bring up. Those Claude Code had (`model` on a turn, `cost_usd` in its usage,
+`patch` and `parent` on a tool, `tool` on an approval, `usage` on a task, `attempt` on a retry, `parent` on
+reasoning) were left out on 2026-11-21, when its expected events were written: every event in
+[`fixtures/recordings/claude/expected`](../fixtures/recordings/claude/expected) is read by the item types with
+nothing passed over. An edit's change is now the crate's `changes`, with a diff built from Claude Code's hunks.
+The values are still in the native message.
 
 | Item | Field | From |
 | --- | --- | --- |
-| `turn` | `model`. `cost_usd` inside `usage` | Claude Code, OpenClaw |
+| `turn` | `model` | OpenClaw |
 | `message` | `sent_with` | OpenClaw |
-| `tool` | `patch`: an edit as numbered hunks, where the page has `changes` with a diff. `parent` | Claude Code |
 | `tool` | `action`, `target`, `called_through`, `subject` | OpenClaw |
-| `approval` | `answer_via`, `command`, `reason`, `expires_at_ms`, `subject_inferred`, `tool` | Hermes, OpenClaw, Claude Code |
+| `approval` | `answer_via`, `command`, `reason`, `expires_at_ms`, `subject_inferred` | Hermes, OpenClaw |
 | `approval`, `question` | `native` on each choice: the text to type. The page says a choice carries a label and an effect, "nothing more" | Hermes, OpenClaw |
 | `notice` | Eight more kinds: `runtime`, `activity`, `progress`, `refused`, `steered`, `new_session`, `stopped`, `directive`. A `command` field | Hermes, OpenClaw |
 | `error` | `subject` | OpenClaw |
