@@ -4,6 +4,7 @@
 //! ```text
 //! marmot-agent init <settings.toml>   make the agent's identity, and print its public key
 //! marmot-agent run <settings.toml>    run until stopped
+//! marmot-agent key <hex or npub>      print a public key in hex, or fail (for the install scripts)
 //! ```
 
 use marmot_account::AccountHome;
@@ -24,6 +25,15 @@ fn main() -> ExitCode {
     let (Some(command), Some(path)) = (args.get(1), args.get(2)) else {
         return usage();
     };
+    if command == "key" {
+        return match marmot_agent::keys::public_key_hex(path) {
+            Some(hex) => {
+                println!("{hex}");
+                ExitCode::SUCCESS
+            }
+            None => fail("not a public key in hex or as an npub"),
+        };
+    }
     let config = match Config::read(Path::new(path)) {
         Ok(config) => config,
         Err(error) => return fail(&error.to_string()),
@@ -48,7 +58,7 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: marmot-agent init|run <settings.toml>");
+    eprintln!("usage: marmot-agent init|run <settings.toml>, or marmot-agent key <hex or npub>");
     ExitCode::from(2)
 }
 
@@ -108,6 +118,8 @@ async fn init(config: &Config) -> Result<(), String> {
 }
 
 async fn run(config: &Config) -> Result<(), String> {
+    // Listen for SIGTERM first, so a service manager's stop during start-up is heard too.
+    let stop = stopped();
     let (home, app, runtime) = open(config)?;
     let accounts = home
         .accounts()
@@ -129,9 +141,6 @@ async fn run(config: &Config) -> Result<(), String> {
         app,
         label: account.label,
         agent: PubKey(account.account_id_hex),
-    };
-    let stop = async {
-        let _ = tokio::signal::ctrl_c().await;
     };
     match (&config.codex, &config.acp, config.pi_setup()) {
         (Some(codex), _, _) => {
@@ -167,4 +176,26 @@ async fn run(config: &Config) -> Result<(), String> {
     }
     runtime.shutdown().await;
     Ok(())
+}
+
+/// Ends when the core is asked to stop: Ctrl-C in a terminal, or SIGTERM, which is how systemd
+/// and launchd stop a service. Both are listened for from the call, not from the first poll.
+fn stopped() -> impl std::future::Future<Output = ()> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let term = signal(SignalKind::terminate()).ok();
+    let interrupt = signal(SignalKind::interrupt()).ok();
+    async move {
+        let next = |s: Option<tokio::signal::unix::Signal>| async move {
+            match s {
+                Some(mut s) => {
+                    s.recv().await;
+                }
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::select! {
+            _ = next(term) => {}
+            _ = next(interrupt) => {}
+        }
+    }
 }
