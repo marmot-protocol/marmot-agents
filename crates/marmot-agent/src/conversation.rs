@@ -245,6 +245,9 @@ struct Queued {
     /// so that if MDK refuses them, the version settles nothing (S1).
     #[serde(default)]
     shown_by: Option<String>,
+    /// Whether it was handed to MDK at least once: only then may it have gone out.
+    #[serde(default)]
+    attempted: bool,
 }
 
 impl Sending {
@@ -946,10 +949,25 @@ impl Conversation {
         }
     }
 
-    /// The tokens of every send still queued: after a restart, any of them may have gone out
-    /// just before the core stopped.
-    pub fn queued_tokens(&self) -> Vec<String> {
-        self.saved.outbox.iter().map(|q| q.token.clone()).collect()
+    /// The send named `token` is about to be handed to MDK. Whether that is new, and so to be
+    /// saved before it is: a send never handed to MDK cannot have gone out, and is not looked for.
+    pub fn attempting(&mut self, token: &str) -> bool {
+        match self.saved.outbox.iter_mut().find(|q| q.token == token) {
+            Some(queued) if !queued.attempted => {
+                queued.attempted = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The tokens of every send still queued that was handed to MDK: after a restart, any of
+    /// them may have gone out just before the core stopped.
+    pub fn attempted_tokens(&self) -> Vec<String> {
+        (self.saved.outbox.iter())
+            .filter(|q| q.attempted)
+            .map(|q| q.token.clone())
+            .collect()
     }
 
     /// Whether `event` is already known as the first event of an item or of the agent's words.
@@ -1028,6 +1046,7 @@ impl Conversation {
             token,
             what,
             shown_by,
+            attempted: false,
         });
         Act::Send {
             group: group.clone(),

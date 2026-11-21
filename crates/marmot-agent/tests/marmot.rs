@@ -171,3 +171,36 @@ async fn a_long_chat_is_not_throttled_by_the_test_relay() {
     core.stop().await;
     world.runtime.shutdown().await;
 }
+
+// The agent's words that went out are found in what MDK stored by all they carry, so a send whose
+// outcome was not known is not sent twice; words that differ only in what they settle, or in
+// their phase, are not taken for them (S3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_agents_words_are_found_by_all_they_carry() {
+    use marmot_agent::{EventKey, GroupKey, Sending};
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let core = world.start(Echo::new(Arc::new(AtomicUsize::new(0))));
+    let group = world
+        .runtime
+        .start_direct_conversation(&world.person, &world.agent)
+        .await
+        .unwrap();
+    let group = GroupKey(world.joined(&group).await);
+    core.stop().await;
+    let words = |remark: bool, settles: &[&str]| Sending::Words {
+        key: "w".into(),
+        text: "the words".into(),
+        turn: Some("t1".into()),
+        remark,
+        edit: None,
+        settles: settles.iter().map(|s| EventKey::from(*s)).collect(),
+    };
+    let sent = words(true, &["e-r1", "e-r2"]);
+    let went = world.marmot.send(&group, &sent, "w@1").await.unwrap();
+    let found = |what: &Sending| world.marmot.find_sent(&group, what, |_| false);
+    assert_eq!(found(&sent), Some(went));
+    assert_eq!(found(&words(true, &["e-r1"])), None);
+    assert_eq!(found(&words(false, &["e-r1", "e-r2"])), None);
+    world.runtime.shutdown().await;
+}

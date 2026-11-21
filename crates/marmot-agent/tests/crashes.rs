@@ -7,7 +7,7 @@ use common::{Chat, World, first, within};
 use marmot_agent::carrier::Asked;
 use marmot_agent::marmot::Fault;
 use marmot_agent::run::{Kept, Store};
-use marmot_agent::{Conversation, EventKey, GroupKey, Heard, PubKey, Where};
+use marmot_agent::{Conversation, EventKey, GroupKey, Heard, PubKey, Sending, Where};
 use marmot_agent_driver::{
     Answer, Capabilities, ChatId, Control, Driver, Emitted, FilesIn, Harness, MidTurn, Output,
     Prompt, Refusal, Sessions,
@@ -495,6 +495,7 @@ async fn a_send_that_went_out_before_a_crash_is_not_sent_again() {
     });
     let group = GroupKey(chat.hex.clone());
     let (token, what) = talk.next_send(&group).unwrap();
+    talk.attempting(&token);
     let went = world.marmot.send(&group, &what, &token).await.unwrap();
     // A second send of the same event in the same second would be the same event, so a later one.
     tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -658,6 +659,153 @@ async fn a_send_mdk_refuses_does_not_hold_up_the_chat() {
     })
     .await;
     within(30, || sent_item(&chat, "t").then_some(())).await;
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
+/// What the core kept when it stopped, and the conversation taken up from it, to change as the
+/// core would have before a crash.
+fn taken_up(world: &World) -> (Store, Kept, Conversation) {
+    let store = Store::new(world.state.path());
+    let kept = store.load().unwrap();
+    let talk = Conversation::new(
+        PubKey(world.agent.clone()),
+        "stub",
+        world.config.rights(),
+        Stub::caps(),
+        kept.conversation.clone(),
+    );
+    (store, kept, talk)
+}
+
+/// The agent's words `text`, done, in the turn `t1`, settling `settles`.
+fn words_done(text: &str, chat: &ChatId, settles: Vec<marmot_agent_driver::RequestId>) -> Emitted {
+    let header = Header {
+        text: text.into(),
+        ..event("w", State::Done, Body::Message(Message::default()))
+            .header()
+            .clone()
+    };
+    Emitted {
+        event: AgentEvent::new(header, Body::Message(Message::default()), None).unwrap(),
+        chat: Some(chat.clone()),
+        prompts: Vec::new(),
+        settles,
+    }
+}
+
+/// The same words as the agent's said earlier in the turn `t1`, settling nothing.
+fn said_before(text: &str) -> Sending {
+    Sending::Words {
+        key: "earlier".into(),
+        text: text.into(),
+        turn: Some("t1".into()),
+        remark: false,
+        edit: None,
+        settles: Vec::new(),
+    }
+}
+
+/// How many times the core sent the agent's words `text` to a chat.
+fn times_said(chat: &Chat<'_>, text: &str) -> usize {
+    words_in(chat).iter().filter(|w| *w == text).count()
+}
+
+// A send the core had not tried when it stopped cannot have gone out: it is sent when the core
+// starts again, not looked for, so an older message just like it is never taken for it (S1, S3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_never_tried_is_sent_and_not_looked_for() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, _events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, id) = a_chat(&world, &seen).await;
+    core.stop().await;
+
+    let group = GroupKey(chat.hex.clone());
+    let text = "the same words";
+    world
+        .marmot
+        .send(&group, &said_before(text), "x")
+        .await
+        .unwrap();
+    // A second send of the same event in the same second would be the same event.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let (store, kept, mut talk) = taken_up(&world);
+    talk.emitted(words_done(text, &id, Vec::new()));
+    let read = kept.read;
+    let conversation = talk.saved().clone();
+    store.save(&Kept { conversation, read }).unwrap();
+
+    let (driver, _events, _) = stub(false);
+    let core = world.start(driver);
+    within(20, || (times_said(&chat, text) == 2).then_some(())).await;
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
+// A send the core tried, and that may have gone out, is looked for by all it carries: an older
+// message with the same words and turn that settles nothing is not taken for words that settle a
+// request, which are sent, and settle it (S1, S3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_tried_is_not_taken_for_an_older_one_like_it() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, id) = a_chat(&world, &seen).await;
+    events
+        .send(Emitted {
+            event: event("t", State::Running, turn()),
+            chat: Some(id.clone()),
+            prompts: Vec::new(),
+            settles: Vec::new(),
+        })
+        .unwrap();
+    let (target, read) = within(30, || {
+        let items = chat.latest().into_iter();
+        items
+            .into_iter()
+            .find(|(_, r)| r.item.event.header().item.as_str() == "t")
+    })
+    .await;
+    let target = first(&target, &read);
+    let request = chat.ask(Some(&target), &Asked::Interrupt, "Stop").await;
+    let store = Store::new(world.state.path());
+    let pending = |kept: Kept| {
+        let state = json(&kept);
+        let pending = state["conversation"]["pending"].as_object().cloned();
+        pending.and_then(|p| p.keys().next().cloned())
+    };
+    let taken = within(20, || pending(store.load().unwrap())).await;
+    core.crash().await;
+
+    let group = GroupKey(chat.hex.clone());
+    let text = "the same words";
+    world
+        .marmot
+        .send(&group, &said_before(text), "x")
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let (store, kept, mut talk) = taken_up(&world);
+    let request_id = marmot_agent_driver::RequestId(taken);
+    talk.emitted(words_done(text, &id, vec![request_id]));
+    let (token, what) = talk.next_send(&group).unwrap();
+    assert!(matches!(what, Sending::Words { .. }));
+    // Tried just before the crash, and it did not go out.
+    talk.attempting(&token);
+    let read = kept.read;
+    let conversation = talk.saved().clone();
+    store.save(&Kept { conversation, read }).unwrap();
+
+    let (driver, _events, _) = stub(false);
+    let core = world.start(driver);
+    within(20, || (times_said(&chat, text) == 2).then_some(())).await;
+    let settling = sent_by_core(&chat, 9).into_iter().filter(|m| {
+        (m.tags.iter()).any(|t| t.len() >= 2 && t[0] == "settles" && t[1] == request.as_str())
+    });
+    assert_eq!(settling.count(), 1, "the words that settle went out once");
     core.stop().await;
     world.runtime.shutdown().await;
 }

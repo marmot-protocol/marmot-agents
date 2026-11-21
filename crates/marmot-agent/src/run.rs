@@ -238,7 +238,7 @@ impl<D: Driver> Core<D> {
             driver.capabilities(),
             kept.conversation,
         );
-        let conversation_tokens = conversation.queued_tokens();
+        let attempted = conversation.attempted_tokens();
         Ok(Self {
             marmot,
             driver,
@@ -249,8 +249,9 @@ impl<D: Driver> Core<D> {
             config: config.clone(),
             started: std::time::Instant::now(),
             retry: HashMap::new(),
-            // Any send left queued may have gone out just before the core stopped.
-            unknown: (conversation_tokens.into_iter())
+            // A send left queued that was handed to MDK may have gone out just before the core
+            // stopped.
+            unknown: (attempted.into_iter())
                 .map(|token| {
                     let settled = Instant::now();
                     (token, Unknown { settled, tries: 0 })
@@ -577,6 +578,10 @@ impl<D: Driver> Core<D> {
                     self.retry.insert(group.clone(), (settled, wait));
                     return Ok(());
                 }
+            }
+            // Saved as tried before MDK has it, so a crash after leaves it to be looked for.
+            if self.conversation.attempting(&token) {
+                self.save()?;
             }
             match self.marmot.send(group, &what, &token).await {
                 Ok(event) => {

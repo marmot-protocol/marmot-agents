@@ -323,9 +323,10 @@ impl Marmot {
 
     /// The event a send became, when MDK stored it as sent by the agent: for a send whose
     /// outcome is not known, which may have gone out. An item is matched by its id, its version
-    /// and the first event it names; the agent's words by their turn and their text, among those
-    /// not already known as the first of something (`taken`). An edit is never found: sent again,
-    /// it shows the same text, and adds nothing anyone sees.
+    /// and the first event it names; the agent's words by their text and every tag the core
+    /// gives them (the turn, the phase, what they settle), among those not already known as the
+    /// first of something (`taken`). An edit is never found: sent again, it shows the same text,
+    /// and adds nothing anyone sees.
     pub fn find_sent(
         &self,
         group: &GroupKey,
@@ -355,9 +356,19 @@ impl Marmot {
                 let tags = carrier::words_tags(turn.as_ref(), *remark, settles);
                 // One that cannot fit was never sent.
                 let text = carrier::fit_words(text, &tags).ok()?;
-                let turn = turn.as_ref().map(|t| t.as_str().to_string());
+                let ours = |name: &str| -> Vec<Vec<String>> {
+                    (tags.iter()).filter(|t| t[0] == name).cloned().collect()
+                };
+                let wanted = [ours("turn"), ours("phase"), ours("settles")];
                 let matches = move |row: &AppMessageRecord| {
-                    row.plaintext == text && tag(&row.tags, "turn") == turn.as_deref()
+                    let theirs = |name: &str| -> Vec<Vec<String>> {
+                        (row.tags.iter())
+                            .filter(|t| t.first().map(String::as_str) == Some(name))
+                            .cloned()
+                            .collect()
+                    };
+                    row.plaintext == text
+                        && [theirs("turn"), theirs("phase"), theirs("settles")] == wanted
                 };
                 (CHAT, Box::new(matches))
             }
