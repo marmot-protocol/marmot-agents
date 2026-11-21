@@ -89,6 +89,7 @@ Details and reasons are in [`design/drivers.md`](design/drivers.md).
 | How do the parts work together, step by step? | [`design/architecture.md`](design/architecture.md) |
 | What does an agent event contain? | [`design/event-model.md`](design/event-model.md) |
 | How does an agent event travel, and how is an item updated? | [`design/event-carrier.md`](design/event-carrier.md) |
+| What are the exact tags of kinds 1201 and 1202? (a proposal) | [`design/agent-kinds.md`](design/agent-kinds.md) |
 | How does a person answer an agent, or control it? | [`design/answers-and-controls.md`](design/answers-and-controls.md) |
 | What travels over the socket? | [`design/socket-protocol.md`](design/socket-protocol.md) |
 | How is each harness driven, and how do I add one? | [`design/drivers.md`](design/drivers.md) |
