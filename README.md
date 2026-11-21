@@ -6,9 +6,10 @@ You run an agent harness such as Claude Code, Codex or Hermes on your own machin
 end-to-end encrypted group, so you and the people you choose can talk to it from White Noise on your phone, see
 what it is doing, approve what it asks, and control it as fully as you could at the terminal.
 
-> **Status: the first code.** The design is in [`docs/`](docs/README.md). The code so far is a Rust workspace
-> under [`crates/`](crates) with the agent event, its item types, the driver trait and the first half of the
-> Codex driver. Nothing here can be run yet.
+> **Status: building towards the swap.** The design is in [`docs/`](docs/README.md). The code so far is a Rust
+> workspace under [`crates/`](crates), with the core and the Codex driver, and the Claude Code driver in
+> [`packages/claude-code`](packages/claude-code). The core runs end to end with Codex
+> ([how to try it](docs/try.md)).
 > The connectors that ship today live in [MDK](https://github.com/marmot-protocol/mdk) under `integrations/`.
 
 <picture>

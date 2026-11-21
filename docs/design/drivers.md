@@ -126,6 +126,43 @@ server is declined for now ([D-064](../decisions.md#d-064-the-codex-driver-decli
 agent, and starts it with subagents switched off until how a chat shows them is decided
 ([subagents as threads](subagents.md)).
 
+## The Claude Code driver
+
+A separate TypeScript program, [`packages/claude-code`](../../packages/claude-code), that runs Claude Code
+through the official Claude Agent SDK (pinned exactly, at 0.3.326, which runs Claude Code 2.1.326) and connects
+to the core over the [socket](socket-protocol.md#the-messages-as-built). The core is started with a
+`[connector]` section in place of `[codex]`; then:
+
+```sh
+cd packages/claude-code
+npm ci
+node src/main.ts --home <agent home> --cwd <project folder> [--model <model>] [--permission-mode default]
+```
+
+It finds the socket and its token in the agent's home, and exits when the core closes the socket. It has the
+same two halves as the Codex driver. The translator (`src/translate.ts`) turns one chat's Claude Code messages
+into agent events and is tested against the recordings. The transport (`src/connector.ts`) runs one SDK
+session per chat:
+
+- A prompt starts the chat's session if none is running, resuming the one the core names
+  ([D-065](../decisions.md#d-065-a-prompt-names-a-session-only-to-resume-one)), and goes in as a user message,
+  written as for Codex ([D-062](../decisions.md#d-062-what-codex-reads-for-a-chat-message)). The next turn
+  names the prompts sent since the last one.
+- An approval waits in Claude Code's `canUseTool` callback until the answer comes. "Allow once" allows the
+  call as asked, a standing choice allows it with the rule Claude Code suggested, and the last choice denies.
+  A question from `AskUserQuestion` is answered the same way.
+- Interrupt calls `interrupt()`. New session closes the chat's SDK session, and the next prompt starts a
+  fresh one. `set` changes the permission mode or the model.
+- The event that shows an answer's or a control's effect names it
+  ([D-028](../decisions.md#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)): the
+  approval's next edit, the end of the interrupted turn, the session item's next edit, or the end of the old
+  session.
+
+Its capabilities: it can interrupt; a message sent during a turn ends the turn and starts another (`restart`,
+[D-040](../decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness)); the core names the
+sessions, and they can be resumed; approvals come to the chat; no approval commands. It takes no files yet
+(`files_in` is `none`), which is provisional: Claude Code reads images, and passing them on is a later step.
+
 ## Adding a harness
 
 1. **Does it speak ACP well?** Add it as a configuration entry for the ACP driver.
