@@ -240,7 +240,13 @@ export class Connector {
     const inbox = new Inbox();
     // No Claude Code settings file is read: an allow rule or a hook in the owner's own settings would
     // otherwise approve or run things in a chat without the chat's approval.
-    const options: Json = { cwd: this.options.cwd, settingSources: [] };
+    // Summarized thinking, as `tools/record/claude/record_claude.ts` recorded it: without it Claude Code
+    // sends its thinking blocks empty, and a turn shows no reasoning.
+    const options: Json = {
+      cwd: this.options.cwd,
+      settingSources: [],
+      thinking: { type: "adaptive", display: "summarized" },
+    };
     if (this.options.model !== undefined) options["model"] = this.options.model;
     if (this.options.permissionMode !== undefined) options["permissionMode"] = this.options.permissionMode;
     if (resume !== null) options["resume"] = resume;

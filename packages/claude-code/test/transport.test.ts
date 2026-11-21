@@ -245,9 +245,11 @@ test("a prompt becomes a user message, and the turn it starts names it", async (
 function assertQueryOptions(q: FakeQuery): void {
   // No allow rule or hook from the owner's own settings may approve or run anything in a chat.
   assert.deepEqual(q.options["settingSources"], []);
+  // As the reasoning recording was made: without it, thinking blocks arrive empty.
+  assert.deepEqual(q.options["thinking"], { type: "adaptive", display: "summarized" });
 }
 
-test("a query loads no Claude Code settings files", async () => {
+test("a query loads no Claude Code settings files and asks for summarized reasoning", async () => {
   const { core, queries, done } = await start();
   const { q } = await turn(core, queries);
   assertQueryOptions(q);
