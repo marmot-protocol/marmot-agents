@@ -7,6 +7,8 @@
 //! prompt = "owner"                     # or "everyone", or { people = ["<hex>", ...] }
 //! approve = "owner"                    # the same choices
 //! invite = ["<hex>"]                   # besides the owner, who may add the agent to a group
+//! white_noise = true                   # false: only the relays above, for a local try
+//! allow_loopback_relays = false        # true: relays on this machine may be used
 //!
 //! [codex]
 //! cwd = "/home/me/work"
@@ -42,6 +44,10 @@ pub struct Config {
     /// Whether relays on this machine may be used, for trying the core against a local relay.
     #[serde(default)]
     pub allow_loopback_relays: bool,
+    /// Whether to use White Noise's own relays and directories as well as `relays`. On by
+    /// default; off, the core uses only the relays listed, as a try against a local relay should.
+    #[serde(default = "yes")]
+    pub white_noise: bool,
     /// Codex.
     pub codex: CodexConfig,
 }
@@ -65,6 +71,10 @@ pub struct CodexConfig {
 
 fn codex() -> String {
     "codex".into()
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Why the settings could not be used. Prints no path and no value (D-071).

@@ -55,8 +55,12 @@ fn fail(why: &str) -> ExitCode {
 
 fn open(config: &Config) -> Result<(AccountHome, MarmotApp, MarmotAppRuntime), String> {
     let home = AccountHome::open(&config.home);
-    let settings = MarmotAppConfig::white_noise()
-        .with_allow_loopback_relay_endpoints(config.allow_loopback_relays);
+    let base = if config.white_noise {
+        MarmotAppConfig::white_noise()
+    } else {
+        MarmotAppConfig::default()
+    };
+    let settings = base.with_allow_loopback_relay_endpoints(config.allow_loopback_relays);
     let app = MarmotApp::try_with_relays_and_account_home_and_config(
         &config.home,
         config.relays.clone(),
