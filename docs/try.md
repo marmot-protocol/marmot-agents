@@ -5,7 +5,9 @@ Status: describes what is built today: Codex built in, and Claude Code through t
 until MDK takes the new shape ([D-069](decisions.md#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind)),
 so no White Noise app shows them yet. A terminal client plays the person instead.
 
-Everything runs on one machine, with nothing else needed but a signed-in `codex`. Building needs the pinned Odin
+Everything runs on one machine, with nothing else needed but a signed-in `codex`. To install an agent as a
+service of your account instead, use a script in `install/`, as the [README](../README.md#installing-an-agent)
+says. Building needs the pinned Odin
 compiler that MDK uses: see "Verification" in [`AGENTS.md`](../AGENTS.md).
 
 ## Steps

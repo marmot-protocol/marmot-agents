@@ -62,6 +62,8 @@ being replaced by what is designed here, not extended.
 | Work on the Hermes plugin's translation | `python/marmot_hermes/translate.py`, after `fixtures/recordings/hermes` and its `expected/` events |
 | Work on the Hermes plugin's transport | `python/marmot_hermes/connector.py` and `adapter.py`, after `docs/design/drivers.md` and `docs/reference/hermes-messages.md` |
 | Work on the core | `crates/marmot-agent`, after `docs/plan.md` and `docs/design/architecture.md` |
+| Work on the install scripts | `install/lib.sh`, then the harness's script beside it, after `README.md` ("Installing an agent") |
+| Work on the release | `.github/workflows/release.yml` and `tools/release/package.sh` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Plan or add tests, models or proofs | `docs/design/verification.md` |
 | Change the link check | `lychee.toml` |
@@ -261,6 +263,18 @@ cd python
 python3 -m unittest discover -s tests   # replays every Hermes recording against its expected events, and
                                         # runs the transport against a fake core and a fake Hermes
 ```
+
+For any change under `install/` or `tools/release/`, with [ShellCheck](https://github.com/koalaman/shellcheck)
+at the release CI names (it is a tool, like lychee):
+
+```sh
+shellcheck -x install/*.sh tools/release/package.sh
+python3 -m unittest discover -s install -p 'test_*.py'   # runs each install script against a throwaway
+                                                         # home, with stand-ins for what it calls
+```
+
+`.github/workflows/release.yml` runs only on a version tag, so a change to it is checked by reading it, and by
+[actionlint](https://github.com/rhysd/actionlint) if you have it.
 
 For a change to a diagram, which CI does not check:
 

@@ -25,6 +25,44 @@ what it is doing, approve what it asks, and control it as fully as you could at 
    agent, and which chat belongs to which session.
 4. Harnesses that need another language connect to the core over a local socket.
 
+## Installing an agent
+
+Each harness has an install script in [`install/`](install): `codex.sh`, `claude-code.sh`, `opencode.sh`,
+`cursor.sh`, `goose.sh`, `pi.sh`, `openclaw.sh` and `hermes.sh`. It works on Linux and on macOS; Goose, Pi,
+OpenClaw and Hermes run in containers, and only on Linux for now. Install the harness first (the script says
+how if it is missing), then, from a checkout of this repository:
+
+```sh
+install/codex.sh --owner <your public key, hex or npub>
+```
+
+The script downloads `marmot-agent` from the latest release and checks it against the release's `SHA256SUMS`
+(`--from-source` builds it here instead). It makes the agent's identity and prints its public key, for you to
+invite it from White Noise, and runs it as a service of your account: systemd `--user` on Linux, launchd on
+macOS. Only you may prompt it or approve what it does until you change its settings. The containerised
+harnesses also take `--model-key <file>`, the API key of an OpenAI-compatible model endpoint in a file only you
+can read; it is mounted into the container, read when the harness starts, and never copied. The work folder
+(`--cwd`) must not hold that key or the agents' folder: the script and the container scripts refuse it. Claude
+Code must be signed in on your account (run `claude`, then `/login`): an `ANTHROPIC_API_KEY` in your shell
+does not reach the service, and the script refuses to rely on one.
+
+- `--dry-run` shows every file and command the script would write and run, and does nothing.
+- Running the script again updates `marmot-agent` and the service, and keeps the agent's settings and
+  identity. A `--cwd` or `--model-key` given again replaces the old one, and nothing else in the settings.
+- `--uninstall` stops and removes the service, and keeps the agent's folder.
+- `--no-service` sets up no service; run the agent with the `start` script in its folder (and `connector`, for
+  Claude Code, OpenClaw and Hermes), which the service would run.
+- The service is started again whenever the core stops, as when its harness exits, unless you stopped it.
+- `--help` lists the rest: the work folder, the agent's name, its relays, the model.
+
+Where things go (provisional): `marmot-agent` in `~/.local/bin`, the connectors in
+`~/.local/share/marmot-agent/lib`, and each agent in `~/.local/share/marmot-agent/agents/<name>`, with its
+`settings.toml`, its account home and its launchers. An agent's name belongs to the harness it was installed
+with. The service is `marmot-agent-<name>` (and `marmot-agent-<name>-connector`
+for Claude Code, OpenClaw and Hermes), or the launchd agent `org.marmot.marmot-agent.<name>`. Releases are built
+by [GitHub Actions](.github/workflows/release.yml) from a version tag, and are not signed yet
+([Q-28](docs/open-questions.md#q-28-how-does-someone-know-a-release-is-genuine)).
+
 ## Where to go next
 
 | You want | Read |

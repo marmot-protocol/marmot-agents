@@ -263,7 +263,10 @@ cwd = "/home/me/work"
   the image from [`tools/goose`](../../tools/goose/Dockerfile) (Goose pinned, with its checksum) and runs it
   with `docker run -i --rm`, speaking ACP on its standard input and output. The work folder is mounted at the
   same path, so the paths the core and Goose name agree; Goose's sessions live in `goose-home`, so they survive
-  the container; the model key file is mounted read-only and never copied. So the command is
+  the container; the model key file is mounted read-only and never copied. The script refuses a work folder
+  that holds `goose-home` or the key, or lies inside `goose-home`, or holds or lies inside the folder of every agent, which the installer names in `MARMOT_AGENT_DATA`,
+  links resolved, and Docker keeps no log of
+  the container, since what Goose writes holds the conversation. So the command is
   `["<repo>/tools/goose/goose-acp.sh", "<model-key-file>", "<goose-home>"]`, and `GOOSE_MODE=approve` in its
   environment makes Goose ask before every tool call.
 - **OpenCode and Cursor run on the host.** Cursor uses the machine's own sign-in.
@@ -331,7 +334,8 @@ args = ["<model key file>", "<Pi's state folder>"]
   Pi writes. Of Pi's state folder, the second argument, each chat's Pi gets only the chat's own folder, so it
   cannot read another chat's sessions: the driver names the chat in `MARMOT_AGENT_CHAT`, as a hash of its id.
   Since the working folder is mounted read-write, the script refuses to start if it holds the state folder or
-  the key file, or lies inside the state folder, links resolved. Asking Pi its version, whatever arguments come
+  the key file, or lies inside the state folder, or holds or lies inside the folder of every agent, which the installer names in `MARMOT_AGENT_DATA`, links resolved.
+  Asking Pi its version, whatever arguments come
   before `--version`, gets an empty state folder.
   Docker keeps no log of the container, since what Pi writes holds the conversation. When the driver stops a
   Pi, its standard input closes and the script gets SIGTERM, then SIGKILL after ten seconds; the script removes
@@ -380,7 +384,11 @@ packages/openclaw/run.sh <agent home> <openclaw state folder> <work folder> <mod
 The script builds the image from [`container/Dockerfile`](../../packages/openclaw/container/Dockerfile)
 (OpenClaw pinned at 2026.11.5) and runs it as the calling user, with the core's socket folder, the token
 (read-only), OpenClaw's state folder, the work folder and the model key (read-only) mounted. A Unix socket works
-across the mount. The container is named after the state folder, so Docker runs one at a time on it, and the
+across the mount. Started with the core, the script waits for its socket, and refuses a work folder that holds
+the agent's home, the state folder or the key, or lies inside the home or the state folder, or holds or lies
+inside the folder of every agent, which the installer names in `MARMOT_AGENT_DATA`, links resolved. Docker keeps no log of the container, and of the gateway's output only the
+plugin's own fixed messages, which name what happened by kind, reach the script's standard error
+([D-071](../decisions.md#d-071-what-may-be-logged)). The container is named after the state folder, so Docker runs one at a time on it, and the
 entrypoint may then recover the lock that a killed gateway leaves on OpenClaw's state, which OpenClaw cannot do
 by itself across containers. The model is a free one by default, with a second free model as OpenClaw's
 fallback (`MODEL_FALLBACKS`). The core is started with a `[connector]` section, as for Claude Code. The key stays out of the
@@ -443,9 +451,14 @@ python/hermes/run.sh <agent home> <work folder> hermes-home <model key file> [mo
 
 The image ([`python/hermes/Dockerfile`](../../python/hermes/Dockerfile)) holds Hermes at a pinned commit and
 the plugin. Only the core's socket folder and the plugin's token are mounted from the agent's home, never the
-rest of it, and Hermes runs as the user that owns them. Hermes's own home is a Docker volume, so its sessions
-survive a restart. The model key is mounted read-only and written only into Hermes's configuration in that
-volume. Hermes's own output holds what people and the model say, so neither `run.sh` nor Docker keeps any
+rest of it, and Hermes runs as the user that owns them; the script waits for the core's socket, and refuses a
+work folder that holds the agent's home or the key, or lies inside the home, or holds or lies inside the folder of every agent, which the installer names in `MARMOT_AGENT_DATA`,
+links resolved. The image is built for that user and group, so its tag names them
+(`marmot-agents-hermes-<uid>-<gid>`). Hermes's own home is a Docker volume, so its sessions survive a restart;
+the installer names it, and the container, after the agent and a hash of its folder, since Docker's names are
+shared by every account on the machine. The model key is mounted read-only and read at every start
+into Hermes's environment, which its configuration names (`key_env`); it is written into no file, the volume
+included, and Hermes keeps that variable from the commands it runs. Hermes's own output holds what people and the model say, so neither `run.sh` nor Docker keeps any
 of it (`--log-driver=none`). With `HERMES_LOG` the plugin appends its own log lines to that file, mounted
 for it alone; they name what went wrong by kind only ([D-071](../decisions.md#d-071-what-may-be-logged)).
 

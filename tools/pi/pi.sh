@@ -9,6 +9,7 @@
 # - The current folder is mounted at the same path, and Pi works there, so it must not hold the
 #   state folder or the key file, nor be inside the state folder: the script refuses to start if it
 #   does, symbolic links resolved, since that mount would hand Pi every chat's sessions and the key.
+#   Nor may it hold or be inside MARMOT_AGENT_DATA, the folder of every agent, when that is set.
 # - The state folder holds what Pi keeps between runs: its settings and its sessions. Give the
 #   same one each time for sessions to be resumed. It is created if missing. When MARMOT_AGENT_CHAT
 #   names a chat (the driver sets it, as lowercase hex), only that chat's own folder inside it is
@@ -24,7 +25,7 @@
 #
 # MODEL_BASE_URL and MODEL_NAME choose the endpoint and the model; PI_IMAGE the image.
 set -eu
-[ $# -ge 2 ] || { sed -n '2,25p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,26p' "$0"; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
 key=$(realpath "$1"); state=$(realpath -m "$2"); shift 2
 image=${PI_IMAGE:-marmot-agents-pi}
@@ -35,6 +36,14 @@ if inside "$state" "$work" || inside "$work" "$state"; then
 fi
 if inside "$key" "$work"; then
     echo "error: the model key file must not be inside the working folder" >&2; exit 2
+fi
+# MARMOT_AGENT_DATA, which the installer sets, names the folder that holds every agent: the work folder
+# must neither hold it nor be inside it, so it cannot reach another agent's keys either.
+if [ -n "${MARMOT_AGENT_DATA:-}" ]; then
+    data=$(realpath -m "$MARMOT_AGENT_DATA")
+    if inside "$work" "$data" || inside "$data" "$work"; then
+        echo "error: the work folder and the agents' folder must not hold one another" >&2; exit 2
+    fi
 fi
 run="$$-$(date +%s%N)"
 name="pi-$run"
