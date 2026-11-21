@@ -140,8 +140,8 @@ sequenceDiagram
   ([D-077](../decisions.md#d-077-a-refused-notice-says-why-something-was-not-acted-on)), with the reason
   `not_allowed`, `invalid`, `not_supported` or `failed`, and never the path
   ([D-071](../decisions.md#d-071-what-may-be-logged)).
-- **Who may.** Calling the tool needs nobody's approval in the chat: Claude Code is told the tool is allowed,
-  and Codex does not ask for a dynamic tool. The folders are the limit, as the owner set them.
+- **Who may.** Calling the tool needs nobody's approval in the chat: the Claude Code connector allows it in
+  its permission callback, and Codex does not ask for a dynamic tool. The folders are the limit, as the owner set them.
 
 Pi, the ACP driver, and the Hermes and OpenClaw plugins do not offer the tool yet. A plugin would send the
 same `send_file` request from its gateway's own message tool.
@@ -223,8 +223,8 @@ session per chat:
   (sent as soon as Claude Code takes it), or the end of the old session.
 - An event too large for a line of the socket (4 MB) goes without its native message, and if it is still too
   large, with its longest texts cut in the middle until it fits. Its `prompts` and `settles` are kept.
-- Every query gets the connector's `send_file` tool (`src/files.ts`), an in-process MCP server, allowed
-  without asking. A call sends the core a `send_file` request and tells Claude Code what the core answered
+- Every query gets the connector's `send_file` tool (`src/files.ts`), an in-process MCP server, which
+  `canUseTool` allows without asking the chat. A call sends the core a `send_file` request and tells Claude Code what the core answered
   ([sending a file](#sending-a-file)). The core needs `files_from` in its settings for a connector, normally
   the folder given as `--cwd`.
 

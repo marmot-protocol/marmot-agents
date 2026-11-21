@@ -270,7 +270,9 @@ test("the agent sends a file: the core is asked with the chat and a whole path, 
   const { core, queries, done } = await start();
   const { q } = await turn(core, queries);
   // The tool needs nobody's approval in the chat: the core decides what may be sent (D-090).
-  assert.deepEqual(q.options["allowedTools"], ["mcp__marmot__send_file"]);
+  const input = { path: "out/notes.txt" };
+  assert.deepEqual(await q.ask("mcp__marmot__send_file", input, { requestId: "r9" }), { behavior: "allow", updatedInput: input });
+  assert.equal(core.event((e) => e["type"] === "approval"), undefined, "no approval is asked in the chat");
   const { send } = (q.options["mcpServers"] as Record<string, { send: SendFile }>)["marmot"]!;
   assert.deepEqual(await send("out/notes.txt"), { text: "Sent.", failed: false });
   assert.deepEqual(core.files[0], { chat: "c1", path: "/nowhere/out/notes.txt" });

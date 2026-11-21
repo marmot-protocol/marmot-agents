@@ -317,7 +317,7 @@ export class Connector {
       }
     };
     const server = (this.options.fileServer ?? fileServer)(send);
-    return { mcpServers: { marmot: server }, allowedTools: [SEND_FILE_TOOL] };
+    return { mcpServers: { marmot: server } };
   }
 
   private async read(chat: Chat, run: Run): Promise<void> {
@@ -380,6 +380,11 @@ export class Connector {
   // -- approvals and questions
 
   private permission(chat: Chat, run: Run, toolName: string, input: Json, opts: { signal: AbortSignal } & Json): Promise<PermissionResult> {
+    // The connector's own tool needs nobody's approval in the chat: the core decides what may be sent
+    // (D-090), and the tool call shows as a tool item.
+    if (toolName === SEND_FILE_TOOL && this.options.sendFile !== undefined) {
+      return Promise.resolve({ behavior: "allow", updatedInput: input });
+    }
     const { signal, ...rest } = opts;
     const requestId = rest["requestId"];
     const kind = toolName === "AskUserQuestion" ? "question" : "approval";

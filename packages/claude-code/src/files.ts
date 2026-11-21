@@ -8,7 +8,7 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 
-/** The tool as Claude Code names it, for `allowedTools`: it needs nobody's approval, since the core decides. */
+/** The tool as Claude Code names it. The connector allows every call: the core decides what may be sent. */
 export const SEND_FILE_TOOL = "mcp__marmot__send_file";
 
 const DESCRIPTION =

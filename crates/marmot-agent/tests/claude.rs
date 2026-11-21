@@ -2,7 +2,8 @@
 //! to the core's socket, and through MDK's test relay a person invites the agent, has a command
 //! approved and run, interrupts a turn while it waits for an approval, starts a new session, and
 //! has the driver crash in the middle of a turn and carries on, with nothing run twice
-//! (`docs/plan.md`, D-074).
+//! (`docs/plan.md`, D-074). Then the agent sends a file from its working folder, which the person
+//! downloads and reads (D-090).
 //!
 //! It approves only the exact command each step asks for, once, in a throwaway folder. It needs
 //! Node 24, `npm ci` run in `packages/claude-code`, and a signed-in Claude Code, so it runs only
@@ -14,7 +15,7 @@
 
 mod common;
 
-use common::{Chat, TURN, World, lines, within};
+use common::{Chat, TURN, World, blossom, files_sent, lines, within};
 use marmot_agent::carrier::Asked;
 use marmot_agent::run::serve;
 use marmot_agent::socket::Endpoint;
@@ -44,7 +45,13 @@ fn driver(home: &Path, work: &Path) -> Child {
 async fn claude_code_end_to_end() {
     let work = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    let world = World::new("name = \"Claude\"\n[connector]\n").await;
+    // The core does not know a connector's folder, so the settings name it (D-090).
+    let settings = format!(
+        "name = \"Claude\"\nfiles_from = [\"{}\"]\n[connector]\n",
+        work.path().display()
+    );
+    let mut world = World::new(&settings).await;
+    world.marmot.media_server = Some(blossom().await);
     world.runtime.start().await.unwrap();
     let (listener, token) = Endpoint::in_home(home.path()).listen().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -147,6 +154,26 @@ async fn claude_code_end_to_end() {
         "the prompt started one turn"
     );
     println!("carried on after the crash");
+
+    // 5. A file from the working folder, sent with the connector's own tool, arrives as an
+    //    attachment the person can read.
+    let asked = chat
+        .say("Send the file runs.txt to the chat with your send_file tool, then reply with the word done.")
+        .await;
+    let sent = chat.turn_for(&asked).await;
+    chat.turn_at(&sent, State::Done).await;
+    let mut files = Vec::new();
+    for _ in 0..TURN {
+        files = files_sent(&world, &chat.group).await;
+        if !files.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    assert_eq!(files.len(), 1, "one file sent");
+    assert_eq!(files[0].0, "runs.txt");
+    assert_eq!(files[0].1, b"ran\n");
+    println!("sent a file");
 
     let _ = stop.send(());
     serving.await.unwrap().unwrap();
