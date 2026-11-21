@@ -2,7 +2,8 @@
 //!
 //! It speaks the Agent Client Protocol (ACP) as a client, the way an editor does, to an agent such
 //! as `opencode acp`, and turns what the agent says into agent events. It reads ACP's messages with
-//! the official `agent-client-protocol` crate's types (D-005, D-006).
+//! the official ACP types, from `agent-client-protocol-schema`, the crate the official library
+//! `agent-client-protocol` re-exports them from (D-005, D-006).
 //!
 //! So far it has one half. [`Translator`] reads the messages in both directions and makes the
 //! events. It does no input or output, and is tested by replaying the recordings in

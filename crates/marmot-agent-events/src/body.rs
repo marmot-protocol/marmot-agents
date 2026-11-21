@@ -12,7 +12,7 @@ use std::fmt;
 
 /// An item type together with its own fields.
 // A tool's fields are the largest, and larger still when `serde_json` keeps the order of an
-// object's keys, which the official ACP library switches on for every crate built with it. An
+// object's keys, which the official ACP types switch on for every crate built with them. An
 // event is made once per step of an agent's work, so the size does not matter.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, PartialEq, Serialize, Deserialize)]

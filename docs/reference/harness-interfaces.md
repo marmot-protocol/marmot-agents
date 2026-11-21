@@ -168,7 +168,7 @@ Read again on 2026-11-19. The newest release is 0.170.0 (2026-11-18). The record
 
 | Library | Where | Version when checked | Notes |
 | --- | --- | --- | --- |
-| `agent-client-protocol` | crates.io | 5.3.0, 2026-11-14; 5.5.1 built on 2026-11-21 | Official Rust library, widely used. 5.5.1 resolves into this workspace beside MDK and adds about 70 crates. It pins `agent-client-protocol-schema` 1.21.2 and switches on `serde_json`'s `preserve_order` for every crate built with it. A turn's usage is behind its `unstable_end_turn_token_usage` feature |
+| `agent-client-protocol` | crates.io | 5.3.0, 2026-11-14; 5.5.1 built on 2026-11-21 | Official Rust library, widely used. 5.5.1 resolves into this workspace beside MDK and adds about 70 crates. Its types are in `agent-client-protocol-schema` (1.21.2 for 5.5.1), which the ACP driver depends on alone (about 40 crates). The types switch on `serde_json`'s `preserve_order` for every crate built with it. A turn's usage is behind its `unstable_end_turn_token_usage` feature |
 | `@anthropic-ai/claude-agent-sdk` | npm | 0.3.326, 2026-11-16 | Official |
 | `@cursor/sdk` | npm | 1.4.0, 2026-11-15 | Official |
 | `@openai/codex-sdk` | npm | 0.170.0, 2026-11-18 | Official, but wraps the JSON-lines mode |
