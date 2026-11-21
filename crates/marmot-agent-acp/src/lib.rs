@@ -5,11 +5,13 @@
 //! the official ACP types, from `agent-client-protocol-schema`, the crate the official library
 //! `agent-client-protocol` re-exports them from (D-005, D-006).
 //!
-//! So far it has one half. [`Translator`] reads the messages in both directions and makes the
-//! events. It does no input or output, and is tested by replaying the recordings in
-//! `fixtures/recordings/acp` against the events the prototype makes for each. The half that runs
-//! the agent and implements the driver trait comes next.
+//! It has two halves. [`Translator`] reads the messages in both directions and makes the
+//! events, and builds the replies to the agent's requests. It does no input or output, and is tested by replaying the recordings in
+//! `fixtures/recordings/acp` against the events the prototype makes for each. [`Acp`] is the
+//! transport: it runs the agent, gives each chat a translator, and implements the driver trait.
 
+mod driver;
 mod translate;
 
+pub use driver::Acp;
 pub use translate::{Direction, Translator};

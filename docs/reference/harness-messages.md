@@ -12,7 +12,7 @@ OpenCode sends over ACP, taken from real sessions, and how each message relates 
 | [`data/claude-sdk-message-structures.txt`](data/claude-sdk-message-structures.txt) | The structure of 176,652 Claude Agent SDK messages from four days of real use on one developer's machine | Counts and field names only. No content was read or kept |
 | Codex's generated protocol schema | `codex app-server generate-json-schema`, codex-cli 0.169.0 | The list of methods |
 | [`fixtures/recordings/acp/opencode`](../../fixtures/recordings/README.md#acp-opencode) | 12 scripted sessions with OpenCode 2.3.2 over ACP, recorded on 2026-11-21 | Read in full, for the [ACP section](#acp-opencode) only |
-| [`fixtures/recordings/acp/goose`](../../fixtures/recordings/README.md#acp-goose) | The same 12 with Goose 1.59.2, in a container, recorded on 2026-11-21 | Read in full, for the [Goose section](#acp-goose) only |
+| [`fixtures/recordings/acp/goose`](../../fixtures/recordings/README.md#acp-goose) | The same 12 with Goose 1.59.2, in a container, and `restart_mid_turn`, recorded on 2026-11-21 | Read in full, for the [Goose section](#acp-goose) only |
 | [`fixtures/recordings/acp/cursor`](../../fixtures/recordings/README.md#acp-cursor) | 11 of them with the Cursor Agent CLI 2026.11.19, recorded on 2026-11-21 | Read in full, for the [Cursor section](#acp-cursor) only |
 | [`tools/prototype/translate.py`](../../tools/prototype/translate.py) | A prototype that turns every recording into proposed agent events, except the subagent recordings, which nothing translates yet | To check that nothing is left without a home |
 
@@ -545,7 +545,7 @@ recorded.
 
 ## ACP: Goose
 
-Read on 2026-11-21 from the twelve recordings in
+Read on 2026-11-21 from the thirteen recordings in
 [`fixtures/recordings/acp/goose`](../../fixtures/recordings/acp/goose), made that day with the same recorder
 against Goose 1.59.2 (`goose acp`) in a container built from [`tools/goose`](../../tools/goose/Dockerfile),
 with `z-ai/glm-5.3-flash:free` on numes.ai and only the developer extension. What was checked and how is as for
@@ -574,6 +574,11 @@ OpenCode above; only what differs is written here.
   Asked for a to-do list, it switched on its `todo` extension and wrote the list as tool calls.
 - **Cancel.** After `session/cancel` the running command was never updated; the reply said `cancelled`, and the
   translators closed the tool item as cancelled.
+- **Taking up a session carries on the cut-off turn.** In `restart_mid_turn`, after `session/load` Goose
+  started a run of its own (`_meta.goose.activeRunId` `resume_…`), refused a prompt sent at once with -32602
+  "session already has active run", and failed the cut-off tool call with "Tool approval expired" without
+  running it again. A `session/cancel` sent before the prompt ended the run, but only after the prompt was
+  refused.
 - **A provider failure** (seen once, in a run that was not kept) came as an error reply to `session/prompt`,
   code -32603, with the provider's message and a request id in it, and `data.reason` `turn_failed`.
 

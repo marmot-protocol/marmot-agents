@@ -3041,6 +3041,7 @@ dependencies = [
  "getrandom 0.3.4",
  "hex",
  "marmot-account",
+ "marmot-agent-acp",
  "marmot-agent-codex",
  "marmot-agent-driver",
  "marmot-agent-events",
@@ -3059,9 +3060,11 @@ name = "marmot-agent-acp"
 version = "0.1.0"
 dependencies = [
  "agent-client-protocol-schema",
+ "marmot-agent-driver",
  "marmot-agent-events",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

@@ -12,7 +12,14 @@ publish.workspace = true
 # re-exports them from. The translator needs only the types. The one unstable feature reads the
 # tokens a turn used, which OpenCode sends in its reply to `session/prompt`.
 agent-client-protocol-schema = { version = "1.21.2", default-features = false, features = ["unstable_end_turn_token_usage"] }
+marmot-agent-driver = { path = "../marmot-agent-driver" }
 marmot-agent-events = { path = "../marmot-agent-events" }
 serde = { version = "1", features = ["derive"] }
 # `raw_value` keeps the agent's own message as the exact text it arrived as.
 serde_json = { version = "1", features = ["raw_value"] }
+# Runs the agent and reads it without blocking the core.
+tokio = { version = "1", features = ["io-util", "process", "time"] }
+
+[dev-dependencies]
+# The transport is tested against a stand-in agent over an in-memory pipe.
+tokio = { version = "1", features = ["io-util", "macros", "rt", "sync"] }

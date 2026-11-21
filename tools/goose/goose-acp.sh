@@ -26,7 +26,11 @@ mode=${GOOSE_MODE:-auto}
 
 mkdir -p "$home"
 docker image inspect "$image" >/dev/null 2>&1 || docker build -q -t "$image" "$here" >&2
-exec docker run -i --rm \
+# One container per Goose home. One left from a client that was killed, which Docker keeps running,
+# is removed first, so two never share a home.
+name="goose-acp-$(printf '%s' "$home" | sha256sum | cut -c1-12)"
+docker rm -f "$name" >/dev/null 2>&1 || true
+exec docker run -i --rm --name "$name" \
     --user "$(id -u):$(id -g)" \
     -v "$work:$work" -w "$work" \
     -v "$home:/goose-home" -e HOME=/goose-home \

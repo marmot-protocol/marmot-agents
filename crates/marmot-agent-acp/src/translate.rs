@@ -31,6 +31,7 @@ use agent_client_protocol_schema::v1::{
     SessionConfigSelectOptions, SessionNotification, SessionUpdate, SetSessionConfigOptionResponse,
     StopReason, ToolCallContent, ToolCallStatus, ToolKind as AcpKind,
 };
+use marmot_agent_driver::{Answer, Given, Reason, Refusal};
 use marmot_agent_events::body::{
     AnswerVia, Answered, Approval, ApprovalAnswer, Asked, Change, ChangeKind, Choice, Command,
     Effect, Error, Message, Offered, Plan, PlanEntry, PlanEntryState, Question, Reasoning, Session,
@@ -38,8 +39,8 @@ use marmot_agent_events::body::{
 };
 use marmot_agent_events::{AgentEvent, Body, Header, Native, State};
 use serde::Deserialize;
-use serde_json::Value;
 use serde_json::value::RawValue;
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
 /// Which way a message went.
@@ -1640,6 +1641,123 @@ impl Translator {
             None => {}
         }
         out.push(event);
+    }
+}
+
+// -- what the driver sends
+
+/// What the transport needs from a translator to send the core's requests, and to answer the
+/// agent's requests nobody is asked about.
+impl Translator {
+    /// The turn running, if one is.
+    pub fn turn(&self) -> Option<&str> {
+        self.turn.as_deref()
+    }
+
+    /// The id of the `session/prompt` that started the turn running, as its JSON text.
+    pub fn turn_request(&self) -> Option<&str> {
+        self.turn_request.as_deref()
+    }
+
+    /// The reply to the agent's request that the answer's item is waiting on, as a JSON-RPC
+    /// message. Refused if no request of this agent's is waiting on that item, or if the answer
+    /// is not one the request takes.
+    pub fn reply(&self, answer: &Answer) -> Result<String, Refusal> {
+        let (id, asked) = self
+            .asked
+            .iter()
+            .find(|(_, a)| match a {
+                Asked_::Approval { item, .. } | Asked_::Question { item, .. } => {
+                    item == answer.item.as_str()
+                }
+            })
+            .ok_or_else(|| Refusal::new(Reason::UnknownItem))?;
+        let result = match (asked, &answer.given) {
+            (Asked_::Approval { options, .. }, Given::Choice(choice)) => {
+                let option = options
+                    .iter()
+                    .find(|(c, _)| c == choice)
+                    .map(|(_, o)| o.clone())
+                    .ok_or_else(|| Refusal::new(Reason::Invalid))?;
+                json!({"outcome": {"outcome": "selected", "optionId": option}})
+            }
+            (Asked_::Question { values, custom, .. }, Given::Questions(replies)) => {
+                let mut content = serde_json::Map::new();
+                for reply in replies {
+                    let offered = values
+                        .get(&reply.question)
+                        .ok_or_else(|| Refusal::new(Reason::Invalid))?;
+                    let chosen: Vec<Value> = reply
+                        .options
+                        .iter()
+                        .map(|o| {
+                            offered
+                                .iter()
+                                .find(|(id, _)| id == o)
+                                .map(|(_, v)| Value::String(v.clone()))
+                                .ok_or_else(|| Refusal::new(Reason::Invalid))
+                        })
+                        .collect::<Result<_, _>>()?;
+                    let many = self.multiple(&answer.item, &reply.question);
+                    if many && !chosen.is_empty() {
+                        content.insert(reply.question.clone(), Value::Array(chosen));
+                    } else if let Some(first) = chosen.into_iter().next() {
+                        content.insert(reply.question.clone(), first);
+                    }
+                    if let Some(text) = reply.text.as_ref().filter(|t| !t.is_empty()) {
+                        // Typed text goes in the question's own free-text field, or in the
+                        // question itself when it offers no choices.
+                        let field = custom.get(&reply.question).cloned();
+                        match field {
+                            Some(field) => {
+                                content.insert(field, Value::String(text.clone()));
+                            }
+                            None if offered.is_empty() => {
+                                content.insert(reply.question.clone(), Value::String(text.clone()));
+                            }
+                            None => return Err(Refusal::new(Reason::Invalid)),
+                        }
+                    }
+                }
+                json!({"action": "accept", "content": content})
+            }
+            _ => return Err(Refusal::new(Reason::Invalid)),
+        };
+        Ok(format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"result":{result}}}"#
+        ))
+    }
+
+    /// Whether a question of a waiting question item takes several choices.
+    fn multiple(&self, item: &marmot_agent_events::ItemId, question: &str) -> bool {
+        self.open
+            .iter()
+            .find(|(open, _)| open == item.as_str())
+            .and_then(|(_, e)| match e.body() {
+                Body::Question(q) => q
+                    .questions()
+                    .iter()
+                    .find(|a| a.id == question)
+                    .map(|a| a.multiple),
+                _ => None,
+            })
+            .unwrap_or(false)
+    }
+
+    /// The replies that tell the agent nobody will answer the requests still waiting: what ACP
+    /// asks of a client that cancels a turn.
+    pub fn cancel_replies(&self) -> Vec<String> {
+        self.asked
+            .iter()
+            .map(|(id, asked)| match asked {
+                Asked_::Approval { .. } => {
+                    format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{{"outcome":{{"outcome":"cancelled"}}}}}}"#)
+                }
+                Asked_::Question { .. } => {
+                    format!(r#"{{"jsonrpc":"2.0","id":{id},"result":{{"action":"cancel"}}}}"#)
+                }
+            })
+            .collect()
     }
 }
 
