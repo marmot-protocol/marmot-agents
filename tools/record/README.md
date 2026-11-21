@@ -8,6 +8,7 @@ what the harness actually sends. The recordings they produced are in
 | --- | --- |
 | `record_codex.py` | Drives `codex app-server` through a scripted scenario and saves both directions |
 | `claude/record_claude.ts` | Does the same for Claude Code through the Claude Agent SDK |
+| `record_acp.py` | Does the same for an agent that speaks ACP, such as `opencode acp`, or Goose in its container |
 | `scrub.py` | Removes paths and account details from raw recordings |
 | `inventory.py` | Lists every kind of message in a set of recordings, with field names and types |
 | `demo/` | The small project every scenario runs in |
@@ -38,6 +39,16 @@ python3 tools/record/record_codex.py approval_allowed "$work/demo" "$work/raw/co
 (cd tools/record/claude && bun install)
 bun tools/record/claude/record_claude.ts --list
 bun tools/record/claude/record_claude.ts approval_allowed "$work/demo" "$work/raw/claude/approval_allowed.jsonl"
+
+# An ACP agent: needs the agent's command, `opencode` by default. No dependencies.
+mkdir -p "$work/raw/acp/opencode"
+python3 tools/record/record_acp.py --list
+python3 tools/record/record_acp.py approval_allowed "$work/demo" "$work/raw/acp/opencode/approval_allowed.jsonl"
+
+# Goose, over ACP, in a throwaway container (needs Docker and a model key file; see tools/goose/goose-acp.sh).
+mkdir -p "$work/raw/acp/goose"
+python3 tools/record/record_acp.py approval_allowed "$work/demo" "$work/raw/acp/goose/approval_allowed.jsonl" \
+  --agent "$PWD/tools/goose/goose-acp.sh <model-key-file>"
 ```
 
 Reset the demo project between scenarios, because some of them edit it:
@@ -141,6 +152,22 @@ same name and the same prompt where the harnesses allow it. Then record, scrub, 
 say so there: what a harness does instead is the useful part.
 
 ## Notes
+
+- The ACP recorder runs the agent with `HOME` and the XDG folders set to a throwaway folder beside the project
+  (or `--home`), so it reads none of your settings, skills, plugins or sign-ins and adds nothing to your history.
+  For OpenCode that means its free models only, which is what the recordings use. `--config` passes OpenCode a
+  configuration as JSON, and `--agent` names another agent's command. The scrubber reads ACP recordings from
+  `raw/acp/<agent>/`.
+- Goose runs in a container built from `tools/goose`, with the work folder mounted at the same path and its
+  home in the recorder's throwaway folder, so a session survives the restart in `resume` and `load`. The key
+  file is mounted read-only; the model is `z-ai/glm-5.3-flash:free` on numes.ai unless `MODEL_NAME` says
+  otherwise. Approval scenarios run Goose in its `approve` mode.
+- Cursor runs on the machine's own sign-in (`--own-home`; no credential is copied), so its sessions go into
+  your Cursor history. It asks before every command unless started with `--force`, so scenarios that need no
+  approval use `--agent-auto "cursor-agent --force acp"`. Its command list names your own skills and entries
+  synced from the account; the scrubber keeps only Cursor's built-in commands
+  ([D-085](../../docs/decisions.md#d-085-cursor-recordings-keep-only-cursors-built-in-commands)). Read the
+  scrubbed output by hand all the same: a model that goes looking can read files outside the project.
 
 - The Codex recorder starts the app server with `--disable hooks`, so your own Codex hooks do not run. Threads
   are started as ephemeral, so nothing is added to your Codex history. Nine scenarios are the exception,

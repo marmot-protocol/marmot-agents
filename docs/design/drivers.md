@@ -172,6 +172,64 @@ sessions, and they can be resumed; approvals come to the chat; no approval comma
 (`files_in` is `none`, [D-083](../decisions.md#d-083-the-core-passes-no-files-to-a-harness-yet)): Claude Code reads images, and
 passing them on is a later step.
 
+## The ACP driver
+
+Built into the core, in [`crates/marmot-agent-acp`](../../crates/marmot-agent-acp), with the same two halves as
+the Codex driver. It reads ACP with the official types (`agent-client-protocol-schema`). The translator turns one
+chat's ACP session into agent events and is tested against the OpenCode, Goose and Cursor recordings; the
+transport runs one agent process for every chat of an agent, routes each message to the chat whose session it
+names, and is tested against a stand-in agent. What each agent sends is in
+[`reference/harness-messages.md`](../reference/harness-messages.md#acp-opencode).
+
+The core is started with an `[acp]` section in place of `[codex]`:
+
+```toml
+[acp]
+name = "opencode"                 # what events call the agent until it names itself; Cursor never does
+command = ["opencode", "acp"]     # or ["cursor-agent", "acp"], or Goose's container, below
+cwd = "/home/me/work"
+```
+
+- **Goose runs in a throwaway container.** `tools/goose/goose-acp.sh <model-key-file> [goose-home]` builds
+  the image from [`tools/goose`](../../tools/goose/Dockerfile) (Goose pinned, with its checksum) and runs it
+  with `docker run -i --rm`, speaking ACP on its standard input and output. The work folder is mounted at the
+  same path, so the paths the core and Goose name agree; Goose's sessions live in `goose-home`, so they survive
+  the container; the model key file is mounted read-only and never copied. So the command is
+  `["<repo>/tools/goose/goose-acp.sh", "<model-key-file>", "<goose-home>"]`, and `GOOSE_MODE=approve` in its
+  environment makes Goose ask before every tool call.
+- **OpenCode and Cursor run on the host.** Cursor uses the machine's own sign-in.
+- **A prompt** starts the chat's session if it has none (`session/new`), or takes up the one the core names
+  ([D-065](../decisions.md#d-065-a-prompt-names-a-session-only-to-resume-one)) with `session/resume` when the
+  agent offers it and `session/load` otherwise; what `session/load` replays is not sent again. Goose, after taking up a
+  session, carries on by itself with the turn a crash cut off, says so in `_meta.goose.activeRunId`, and
+  refuses a prompt until it clears it; before every prompt, the driver cancels such a run, answers what it
+  asks meanwhile as cancelled, and holds the prompt until Goose clears it, since a restart closes the turn
+  ([D-070](../decisions.md#d-070-a-restart-closes-the-turn-as-interrupted)). Other agents are not waited for. The prompt
+  is written as for Codex ([D-062](../decisions.md#d-062-what-codex-reads-for-a-chat-message)), as text only.
+  A turn is named after the session and the prompt's request id; request ids start from the time, so a turn
+  never takes the name of one from before a restart.
+- **An approval** is answered with the option of the choice made; **a question** (an elicitation form) with
+  the values of the options chosen, and typed text in the question's free-text field.
+- **Interrupt** answers the requests still waiting as cancelled, as ACP asks, then sends `session/cancel`;
+  until the turn ends, a request the agent makes is answered as cancelled at once. A message sent during a
+  turn does the same, waits up to a minute for the turn to end, then prompts (`restart`). **New
+  session** sends `session/new`, only when no turn is running. **`set`** sends `session/set_config_option`, and is settled by its reply, even one that changed nothing.
+- **Item ids** of tools, approvals and questions name the session as well as the agent's tool-call id, which
+  is the agent's own for one session; so an answer can only reach the chat whose request it names.
+- **Writing**: each message goes whole to a task that writes it, so a call the core abandons never leaves
+  half a message on the agent's input.
+- **Waiting has a limit.** A session request, the end of a cancelled turn and the end of Goose's own run are
+  each waited for up to a minute. A session request not answered by then ends the connection, so a late
+  reply cannot install a session after the prompt failed.
+- **Cursor's `cursor/update_todos`** names its tool call and no session; it goes to the chat whose session
+  has that tool call.
+- **Requests nobody is asked about** are answered at once: Cursor's `cursor/update_todos` is taken, anything
+  else unknown is refused, so the agent never waits for ever.
+
+Its capabilities: it can interrupt; a message during a turn restarts it; the core names the sessions, which
+can be resumed when the agent can load or resume them; approvals come to the chat; no approval commands; no
+files ([D-083](../decisions.md#d-083-the-core-passes-no-files-to-a-harness-yet)).
+
 ## Adding a harness
 
 1. **Does it speak ACP well?** Add it as a configuration entry for the ACP driver.

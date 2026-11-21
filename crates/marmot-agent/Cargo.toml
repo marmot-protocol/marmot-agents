@@ -8,6 +8,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+marmot-agent-acp = { path = "../marmot-agent-acp" }
 marmot-agent-codex = { path = "../marmot-agent-codex" }
 marmot-agent-driver = { path = "../marmot-agent-driver" }
 marmot-agent-events = { path = "../marmot-agent-events" }

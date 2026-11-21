@@ -272,8 +272,11 @@ impl Chat<'_> {
                     .as_ref()
                     .and_then(|subject| self.command_of(subject.as_str()))
                     .unwrap_or_else(|| r.item.event.header().text.clone());
-                // Exactly the command asked for: as typed, or as Codex wraps it in a shell.
-                let exact = asks_for == command || asks_for.ends_with(&format!(" -lc '{command}'"));
+                // Exactly the command asked for: as typed, as Codex wraps it in a shell, or as
+                // Cursor quotes it.
+                let exact = asks_for == command
+                    || asks_for.ends_with(&format!(" -lc '{command}'"))
+                    || asks_for == format!("`{command}`");
                 r.item.event.header().state == State::Waiting && exact
             })
         })
@@ -281,11 +284,17 @@ impl Chat<'_> {
         let Body::Approval(approval) = read.item.event.body() else {
             unreachable!()
         };
-        // The first choice that allows is "Allow once"; a standing one comes after it.
-        let once = approval
-            .choices
-            .iter()
-            .find(|c| c.effect == Effect::Allow)
+        // The choice that allows once: the one that says so, or else the first that allows, as
+        // Codex and Claude Code put "Allow once" first. Goose puts its standing choice first.
+        let allows = || {
+            approval
+                .choices
+                .iter()
+                .filter(|c| c.effect == Effect::Allow)
+        };
+        let once = allows()
+            .find(|c| c.label.to_lowercase().contains("once"))
+            .or_else(|| allows().next())
             .unwrap();
         let asked = Asked::Choice {
             choice: once.id.clone(),

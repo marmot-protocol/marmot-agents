@@ -32,7 +32,7 @@ An event carries no native message when the driver made it up, such as an item t
 because the harness never did, and when it is a secret question that is no longer waiting (D-056).
 Nothing is cut to fit a size: the core applies the 64 KB limit (D-057).
 
-    translate.py --expected <recordings-dir>           write each Codex or Claude Code recording's
+    translate.py --expected <recordings-dir>           write each Codex, Claude Code or ACP recording's
                                                        events, in the shape the Rust types read,
                                                        under expected/
     translate.py --expected <recordings-dir> --check   fail if those files are not what it would write
@@ -1043,6 +1043,462 @@ class Claude(Translator):
             text = m.get("summary") or body.get("description") or ""
             return self.emit(item, "task", state, title, text, body, f"system / {st}", m)
         self.unknown(f"system / {st}")
+
+
+# ---------------------------------------------------------------------------- ACP
+
+
+def changed_lines(old, new):
+    """A file an ACP agent changed, as a unified diff of one hunk with no context: the lines between
+    the longest common start and end of the old text and the new. ACP sends the whole old and new
+    text. This is simple enough to give the same diff in every driver."""
+    a = [] if old is None else old.split("\n")
+    b = new.split("\n")
+    start = 0
+    while start < len(a) and start < len(b) and a[start] == b[start]:
+        start += 1
+    end = 0
+    while end < len(a) - start and end < len(b) - start and a[-1 - end] == b[-1 - end]:
+        end += 1
+    gone, added = a[start:len(a) - end], b[start:len(b) - end]
+    if not gone and not added:
+        return ""
+    # A hunk that removes or adds nothing names the line before it, as unified diffs do.
+    old_at = start + 1 if gone else start
+    new_at = start + 1 if added else start
+    return (f"@@ -{old_at},{len(gone)} +{new_at},{len(added)} @@\n"
+            + "".join(f"-{x}\n" for x in gone) + "".join(f"+{x}\n" for x in added))
+
+
+class Acp(Translator):
+    """An agent that speaks the Agent Client Protocol, as its client sees it: OpenCode's `opencode acp`.
+
+    What only ACP brings:
+
+    - A turn is the client's `session/prompt` request, and ends with the reply to it. ACP gives a turn
+      no id, so the driver names it after the session and that request's id. The driver's request ids
+      must therefore never repeat within a session, across a restart too.
+    - The agent streams its words and its thinking in chunks. An item is sent whole, never as the text
+      so far (D-012): the chunks of one message become one `message` or `reasoning` item, sent once
+      something else arrives or the turn ends. Its native message is the list of the chunks' payloads.
+    - A `session/load` makes the agent replay the whole conversation before it replies. The chat
+      already holds it, so nothing in the replay is sent again.
+    """
+
+    harness = "acp"  # until the agent names itself; the driver's own name for it when it never does
+    CHUNKS = {"agent_message_chunk": ("message", "Message"), "agent_thought_chunk": ("reasoning", "Thinking")}
+    TOOL_KINDS = {"execute": "command", "edit": "edit", "delete": "edit", "move": "edit", "read": "read",
+                  "search": "search", "fetch": "fetch"}
+    TOOL_STATES = {"pending": "running", "in_progress": "running", "completed": "done", "failed": "failed"}
+    STOPS = {"end_turn": "done", "cancelled": "cancelled", "max_tokens": "failed", "max_turn_requests": "failed",
+             "refusal": "failed"}
+
+    def __init__(self):
+        super().__init__()
+        self.version = None  # the agent's version, from its reply to `initialize`
+        self.pending: dict = {}  # ("c" or "s", request id) -> what was asked
+        self.loading = None  # the session being replayed by `session/load`, until the reply
+        self.buffer = None  # the message or thinking being streamed: kind, id, texts, payloads
+        self.tools: dict[str, dict] = {}  # tool call id -> what the agent has said about it, merged
+        self.declined: set = set()  # tool calls whose permission was refused
+        self.cancelled = False  # the client asked to cancel the turn
+        self.config: list = []  # the session's configuration options, as the agent last stated them
+        self.commands: list = []
+        self.streamed: dict[str, dict] = {}  # message or thinking id -> its chunks so far
+        self.last_tool: dict[str, dict] = {}  # tool call id -> the last event sent for it
+        self.n = collections.Counter()  # how many items a turn has made with no id of the agent's
+        self.todos: list = []  # Cursor's to-do list in this turn, as it last stood
+        self.turn_request = None  # the id of the `session/prompt` that started the turn
+
+    def forget_turn(self):
+        """What only a turn needs. A session that is resumed needs none of it."""
+        self.streamed, self.tools, self.last_tool = {}, {}, {}
+        self.n.clear()
+        self.declined.clear()
+        # A request the agent made in the turn can no longer be answered.
+        self.pending = {k: v for k, v in self.pending.items() if k[0] != "s"}
+        self.todos = []
+        self.turn, self.turn_request, self.cancelled = None, None, False
+
+    # -- the wire
+
+    def feed(self, rec):
+        m, out = rec["msg"], rec["dir"] == "out"
+        if "_recorder" in m:
+            self.flush()
+            if "new one started" in m["_recorder"]:
+                self.harness_stopped()
+            return
+        method = m.get("method")
+        if method == "session/update" and not out:
+            return self.update(m.get("params") or {})
+        self.flush()  # anything else ends a message being streamed
+        if out:
+            if method:
+                return self.client_request(m, method, m.get("params") or {})
+            return self.client_answer(m)
+        if method:
+            return self.agent_request(m, method, m.get("params") or {})
+        return self.response(m)
+
+    def flush(self):
+        """The message or thinking being streamed is complete: send it as one item."""
+        b, self.buffer = self.buffer, None
+        if b is None:
+            return
+        type_, title = self.CHUNKS[b["kind"]]
+        self.emit(b["item"], type_, "done", title, "".join(b["texts"]), {}, f"session/update [{b['kind']}]",
+                  b["payloads"], owner=b["owner"])
+
+    def harness_stopped(self):
+        """The agent process ended. Nothing it was doing will report again, so the driver closes the
+        open items and the turn."""
+        self.close_open_items("the agent process ended")
+        turn_item = f"turn:{self.turn}"
+        if turn_item in self.open:
+            prev = self.open[turn_item]
+            self.emit(turn_item, "turn", "cancelled", "Interrupted", "The agent stopped before the turn finished.",
+                      prev["body"], native_kind="(none: closed by the driver)", native={"reason": "the agent process ended"})
+        self.pending.clear()
+        self.loading = None
+        self.forget_turn()
+
+    # -- what the client sends
+
+    def client_request(self, m, method, p):
+        rid = m.get("id")
+        if "id" in m:
+            self.pending[("c", rid)] = (method, p, (self.session, self.turn))
+        if method == "session/prompt" and self.turn is not None:
+            # ACP v1 has no message during a turn; OpenCode refuses one. The turn stays the first's.
+            self.control("(message during a turn)", "session/prompt")
+            return self.skip("client: session/prompt during a turn")
+        if method == "session/prompt":
+            self.turn, self.turn_request = f"{p.get('sessionId')}:{rid}", rid
+            self.cancelled = False
+            self.emit(f"turn:{self.turn}", "turn", "running", "Working", body={"started_by": "user"},
+                      native_kind="(none: ACP says nothing when a turn starts)")
+            return self.skip("client: session/prompt")
+        if method == "session/cancel":
+            self.cancelled = True
+            self.control("interrupt", "session/cancel")
+        elif method == "session/new":
+            self.control("new_session", "session/new")
+        elif method in ("session/load", "session/resume"):
+            self.control("(resume a session)", method)
+            if method == "session/load":
+                self.loading = p.get("sessionId")
+        elif method == "session/set_config_option":
+            self.control(f"set {p.get('configId')}", method)
+        self.skip(f"client: {method}")
+
+    def client_answer(self, m):
+        """The client answered a request from the agent."""
+        req = self.pending.pop(("s", m.get("id")), None)
+        prev = self.open.get(req["item"]) if req else None
+        if prev is None:
+            return self.skip("client: response")
+        result = m.get("result") or {}
+        if prev["type"] == "approval":
+            outcome = result.get("outcome") or {}
+            if outcome.get("outcome") != "selected":
+                return self.emit(req["item"], "approval", "cancelled", prev["title"], "Not answered: the turn was cancelled",
+                                 prev["body"], "response to session/request_permission", result)
+            chosen = next((c for c, o in req["native_choices"].items() if o == outcome.get("optionId")), None)
+            choice = next((c for c in prev["body"]["choices"] if c["id"] == chosen), None)
+            effect = choice["effect"] if choice else "deny"
+            if effect == "deny":
+                self.declined.add(prev["body"].get("subject"))
+            label = choice["label"] if choice else str(outcome.get("optionId"))
+            return self.emit(req["item"], "approval", "done" if effect == "allow" else "declined", prev["title"],
+                             f"Answered: {label}", {**prev["body"], "answer": {"choice": chosen}},
+                             "response to session/request_permission", result)
+        action = result.get("action")
+        if action != "accept":
+            state = "declined" if action == "decline" else "cancelled"
+            return self.emit(req["item"], "question", state, prev["title"], "Not answered", prev["body"],
+                             "response to elicitation/create", result)
+        answers = []
+        content = result.get("content") or {}
+        for q in prev["body"]["questions"]:
+            if q["id"] not in content and req["custom"].get(q["id"]) not in content:
+                continue
+            given = content.get(q["id"], [])
+            given = given if isinstance(given, list) else [given]
+            labels = {o["value"]: o["id"] for o in req["values"].get(q["id"], [])}
+            chosen = [labels[x] for x in given if isinstance(x, str) and x in labels]
+            typed = [x if isinstance(x, str) else json.dumps(x) for x in given if not (isinstance(x, str) and x in labels)]
+            own = content.get(req["custom"].get(q["id"]))  # the answer of one's own, in its own field
+            if isinstance(own, str) and own:
+                typed.append(own)
+            answers.append({"question": q["id"], "options": chosen, "text": "\n".join(typed) if typed else None})
+        self.emit(req["item"], "question", "done", prev["title"], "Answered", {**prev["body"], "answer": answers},
+                  "response to elicitation/create", result)
+
+    # -- what the agent sends
+
+    def update(self, p):
+        u = p.get("update") or {}
+        kind = u.get("sessionUpdate")
+        native_kind = f"session/update [{kind}]"
+        if kind in self.CHUNKS:
+            if self.loading is not None:
+                return self.skip("the conversation replayed by session/load")
+            content = u.get("content") or {}
+            if content.get("type") != "text":
+                return self.unknown(f"{native_kind} with {content.get('type')} content")
+            item = u.get("messageId")
+            b = self.buffer
+            if item is None:
+                # ACP lets an agent leave the id out. Chunks with none belong to the message being
+                # streamed, if it has none either; otherwise they start a new one.
+                if b is not None and b["kind"] == kind and b["item"].startswith(f"{self.turn}:{kind}:"):
+                    item = b["item"]
+                else:
+                    self.n[self.turn] += 1
+                    item = f"{self.turn}:{kind}:{self.n[self.turn]}"
+            if b is None or b["kind"] != kind or b["item"] != item:
+                self.flush()
+                # A message that goes on after something else came between its chunks is sent again
+                # whole, as an edit of the item already sent.
+                b = self.streamed.get(item)
+                if b is None or b["kind"] != kind:
+                    b = {"kind": kind, "item": item, "texts": [], "payloads": [], "owner": (self.session, self.turn)}
+                self.buffer = self.streamed[item] = b
+            b["texts"].append(content.get("text") or "")
+            b["payloads"].append(p)
+            return
+        self.flush()
+        if kind == "user_message_chunk":
+            return self.skip("echo of the user's message, or its replay by session/load")
+        if kind in ("tool_call", "tool_call_update"):
+            if self.loading is not None:
+                return self.skip("the conversation replayed by session/load")
+            return self.tool(u, native_kind, p)
+        if kind == "plan":
+            if self.loading is not None:
+                return self.skip("the conversation replayed by session/load")
+            return self.plan(u.get("entries") or [], native_kind, p)
+        if kind == "available_commands_update":
+            self.commands = [command(c.get("name"), c.get("description"), (c.get("input") or {}).get("hint"))
+                             for c in u.get("availableCommands") or []]
+            return self.announce(native_kind, p)
+        if kind == "config_option_update":
+            self.config = u.get("configOptions") or []
+            return self.announce(native_kind, p)
+        if kind in ("usage_update", "session_info_update"):
+            # The context window, whose use a turn's reply states; and the session's title.
+            return self.skip(native_kind)
+        self.unknown(native_kind)
+
+    def tool(self, u, native_kind, p):
+        tid = u.get("toolCallId")
+        t = self.tools.setdefault(tid, {})
+        t.update({k: v for k, v in u.items() if k not in ("sessionUpdate", "toolCallId") and v is not None})
+        if self.harness == "opencode" and t.get("name") == "question":
+            # OpenCode's question tool asks through a form, which becomes the one question item (rule 4).
+            return self.skip("tool call that is really a question (question)")
+        if self.harness == "cursor" and (t.get("rawInput") or {}).get("_toolName") == "updateTodos":
+            # Cursor's to-do tool: its list comes in `cursor/update_todos`, which becomes the plan (rule 4).
+            return self.skip("tool call that is really a plan (updateTodos)")
+        acp_kind = t.get("kind") or "other"
+        kind = self.TOOL_KINDS.get(acp_kind, "other")
+        state = self.TOOL_STATES.get(t.get("status") or "pending", "running")
+        if state == "failed" and f"{p.get('sessionId')}:{tid}" in self.declined:
+            state = "declined"
+        elif state == "failed" and self.cancelled:
+            state = "cancelled"
+        raw = t.get("rawInput") if isinstance(t.get("rawInput"), dict) else {}
+        texts = [c["content"].get("text") or "" for c in t.get("content") or []
+                 if c.get("type") == "content" and (c.get("content") or {}).get("type") == "text"]
+        output = "\n".join(texts) if texts else None
+        path = next((x.get("path") for x in t.get("locations") or [] if x.get("path")), None)
+        body = {"kind": kind, "name": t.get("name") or acp_kind}
+        if kind == "command":
+            # ACP gives a command no field of its own. OpenCode puts it in the raw input, which ACP
+            # leaves to the agent; until it does, the tool call's title stands in as its text.
+            body.update(command=raw.get("command"), cwd=raw.get("cwd"), output=output)
+            text = body["command"] or t.get("title")
+            # Nor an exit code. OpenCode puts one in `rawOutput.metadata.exit`, Cursor in `rawOutput.exitCode`,
+            # Goose in `rawOutput.exit_code`.
+            ro = t.get("rawOutput") if isinstance(t.get("rawOutput"), dict) else {}
+            code = next((c for c in ((ro.get("metadata") or {}).get("exit") if isinstance(ro.get("metadata"), dict) else None,
+                                     ro.get("exitCode"), ro.get("exit_code")) if isinstance(c, int) and not isinstance(c, bool)), None)
+            body["exit_code"] = code
+            if state == "done" and code not in (None, 0):
+                state = "failed"
+            streams = [ro[k] for k in ("stdout", "stderr") if isinstance(ro.get(k), str) and ro[k]]
+            if output is None and streams:
+                body["output"] = "\n".join(streams)  # Cursor sends a command's output only there
+        elif kind == "edit":
+            changes = [{"path": c.get("path"), "change": "add" if c.get("oldText") is None else "update",
+                        "diff": changed_lines(c.get("oldText"), c.get("newText") or "")}
+                       for c in t.get("content") or [] if c.get("type") == "diff"]
+            body.update(path=path, changes=changes, output=output)
+            text = ", ".join(c["path"] for c in changes) or path or t.get("title")
+        elif kind == "read":
+            body.update(path=path, output=output)
+            text = path or t.get("title")
+        elif kind == "search":
+            body.update(query=raw.get("pattern") or raw.get("query"), output=output)
+            text = body["query"] or t.get("title")
+        else:
+            body.update({"input": t["rawInput"]} if "rawInput" in t else {}, output=output)
+            text = t.get("title")
+        title = Claude.tool_title(kind, state)
+        last = self.last_tool.get(tid)
+        if last is not None and (last["state"], last["title"], last["text"], last["body"]) == (state, title, text, body):
+            return self.skip(f"{native_kind}, nothing new for the tool item")
+        # A tool call's id is the agent's own for one session; the item is named after both.
+        self.last_tool[tid] = self.emit(f"{p.get('sessionId')}:{tid}", "tool", state, title, text, body, native_kind, p)
+
+    def agent_request(self, m, method, p):
+        rid = m.get("id")
+        if method == "session/request_permission":
+            call = p.get("toolCall") or {}
+            subject = call.get("toolCallId")
+            choices, native_choices = [], {}
+            for n, o in enumerate(p.get("options") or []):
+                effect = "allow" if str(o.get("kind")).startswith("allow") else "deny"
+                choices.append({"id": f"c{n}", "label": o.get("name"), "effect": effect})
+                native_choices[f"c{n}"] = o.get("optionId")
+            subject = f"{p.get('sessionId')}:{subject}" if subject else None  # the tool item
+            item = f"approval:{subject}" if subject else f"approval:{self.turn}:{rid}"
+            raw = call.get("rawInput") if isinstance(call.get("rawInput"), dict) else {}
+            self.pending[("s", rid)] = {"item": item, "native_choices": native_choices}
+            what = {"execute": "command", "edit": "edit", "delete": "edit", "move": "edit"}.get(call.get("kind"), "action")
+            return self.emit(item, "approval", "waiting", f"Allow this {what}?",
+                             raw.get("command") or call.get("title") or "",
+                             {"subject": subject, "choices": choices}, f"{method} (request)", p)
+        if method == "elicitation/create" and p.get("mode") == "form":
+            schema = p.get("requestedSchema") or {}
+            props = schema.get("properties") or {}
+            qs, values = [], {}
+            # OpenCode adds a free-text field `<name>_custom` beside each question with choices: an answer
+            # of one's own to that question, not a second question.
+            custom = {n[: -len("_custom")]: n for n in props if n.endswith("_custom") and n[: -len("_custom")] in props}
+            # In the order of their names: ACP's official Rust types keep a form's fields in a sorted map.
+            for name, f in sorted(props.items()):
+                if name in custom.values():
+                    continue
+                many = f.get("type") == "array"
+                src = (f.get("items") or {}) if many else f
+                offered = src.get("oneOf") or src.get("anyOf") or [{"const": v, "title": v} for v in src.get("enum") or []]
+                values[name] = [{"id": f"o{k}", "value": o.get("const")} for k, o in enumerate(offered)]
+                qs.append({"id": name, "header": f.get("title"), "text": f.get("description") or f.get("title") or name,
+                           "multiple": many, "allow_text": not offered or name in custom,
+                           "options": [{"id": f"o{k}", "label": o.get("title") or o.get("const"),
+                                        "description": o.get("description")} for k, o in enumerate(offered)]})
+            subject = f"{p.get('sessionId')}:{p['toolCallId']}" if p.get("toolCallId") else None  # the tool item
+            item = f"question:{subject}" if subject else f"question:{self.turn}:{rid}"
+            self.pending[("s", rid)] = {"item": item, "values": values, "custom": custom}
+            return self.emit(item, "question", "waiting", "Question", qs[0]["text"] if qs else p.get("message") or "",
+                             {"answer_via": "request", "subject": subject, "questions": qs}, f"{method} (request)", p)
+        if method == "cursor/update_todos":
+            return self.update_todos(method, p)
+        self.unknown(f"{method} (request)")
+
+    def update_todos(self, method, p):
+        """Cursor's to-do list, which it sends instead of ACP's plan. `merge` updates the entries it names
+        by id and adds new ones; otherwise the list replaces the last."""
+        given = [t for t in p.get("todos") or [] if isinstance(t, dict)]
+        if p.get("merge"):
+            ids = {t.get("id"): t for t in given}
+            merged = [ids.pop(t.get("id"), t) for t in self.todos]
+            self.todos = merged + [t for t in given if t.get("id") in ids]
+        else:
+            self.todos = given
+        self.plan(self.todos, f"{method} (request)", p)
+
+    def plan(self, given, native_kind, p):
+        """The turn's plan item, from ACP's plan entries or Cursor's to-dos: both have a `content` and a
+        `status`."""
+        entries = [{"text": e.get("content"), "state": {"pending": "pending", "in_progress": "running",
+                    "completed": "done"}.get(e.get("status"), "pending")} for e in given if isinstance(e, dict)]
+        done = bool(entries) and all(e["state"] == "done" for e in entries)
+        text = "\n".join(f"[{'x' if e['state'] == 'done' else ' '}] {e['text']}" for e in entries)
+        self.emit(f"plan:{self.turn}", "plan", "done" if done else "running", "Plan", text,
+                  {"entries": entries}, native_kind, p)
+
+    def response(self, m):
+        method, p, owner = self.pending.pop(("c", m.get("id")), (None, {}, (None, None)))
+        if "error" in m:
+            err = m["error"] or {}
+            if method == "session/load":
+                self.loading = None
+            ev = self.emit(f"error:{owner[0]}:{m.get('id')}", "error", "failed", "The agent refused a request",
+                           err.get("message", ""), {"request": method, "code": err.get("code")},
+                           f"error response to {method}", err, owner=owner)
+            if method == "session/prompt" and m.get("id") == self.turn_request:
+                self.end_turn("failed", err.get("message", ""), {}, f"error response to {method}", err)
+            return ev
+        result = m.get("result") or {}
+        if method == "initialize":
+            info = result.get("agentInfo") or {}
+            self.version = info.get("version")
+            if info.get("name"):
+                self.harness = str(info["name"]).lower().replace(" ", "-")
+            return self.skip(f"response to {method}")
+        if method in ("session/new", "session/load", "session/resume"):
+            if method == "session/load":
+                self.loading = None
+            self.use_session(result.get("sessionId") or p.get("sessionId"))
+            if "configOptions" in result:
+                self.config = result.get("configOptions") or []
+            return self.announce(f"response to {method}", result)
+        if method == "session/set_config_option":
+            self.config = result.get("configOptions") or self.config
+            # The session item goes again even if nothing changed: it shows the setting as it stands.
+            self.sessions.pop(f"session:{self.session}", None)
+            return self.announce(f"response to {method}", result)
+        if method == "session/prompt" and m.get("id") != self.turn_request:
+            return self.skip("response to a session/prompt sent during a turn")
+        if method == "session/prompt":
+            stop = result.get("stopReason")
+            state = self.STOPS.get(stop, "failed")
+            text = "" if state in ("done", "cancelled") else f"The turn stopped: {stop}"
+            return self.end_turn(state, text, result.get("usage") or {}, f"response to {method}", result)
+        self.skip(f"response to {method}")
+
+    def end_turn(self, state, text, usage, native_kind, native):
+        self.close_open_items(f"the turn ended: {state}")
+        title = {"done": "Finished", "cancelled": "Interrupted", "failed": "Failed"}[state]
+        body = {"started_by": "user"}
+        if usage:
+            body["usage"] = {"input_tokens": usage.get("inputTokens"), "output_tokens": usage.get("outputTokens")}
+        self.emit(f"turn:{self.turn}", "turn", state, title, text, body, native_kind, native)
+        self.forget_turn()
+
+    # -- the session
+
+    def use_session(self, sid):
+        """A chat's session is replaced, or resumed. ACP says nothing when a session is over, so the
+        driver ends the earlier session's item."""
+        if self.session and sid != self.session:
+            self.end_session(self.session, "another session was started")
+            self.sessions.pop(f"session:{sid}", None)
+            self.sessions.pop(f"session:{self.session}", None)
+            self.config, self.commands = [], []
+        self.session = sid
+
+    def announce(self, native_kind, native):
+        """The session item: the agent's version, its configuration options and its commands."""
+        if self.session is None:
+            return self.skip(f"{native_kind}, before there is a session")
+        settings = []
+        for o in self.config:
+            flat = []
+            for x in o.get("options") or []:
+                flat += x.get("options") if isinstance(x.get("options"), list) else [x]  # options in groups
+            value = o.get("currentValue")
+            settings.append(self.setting(o.get("id"), o.get("name"), value if isinstance(value, str) else None,
+                                         [x.get("value") for x in flat] if flat else None,
+                                         approve=o.get("category") == "mode"))
+        before = len(self.events)
+        self.session_item(self.session, settings, native_kind, native, commands=self.commands,
+                          version=self.version or "")
+        if len(self.events) == before:
+            self.skip(f"{native_kind}, nothing new for the session item")
 
 
 # ---------------------------------------------------------------------------- Hermes
@@ -2195,6 +2651,10 @@ def translate(path: Path) -> Translator:
         t = Hermes()
     elif any("via" in r for r in recs):
         t = Claude()
+    elif any(r["msg"].get("jsonrpc") == "2.0" for r in recs):
+        t = Acp()  # Codex leaves out the JSON-RPC version; ACP agents send it
+        if path.parent.parent.name == "acp":
+            t.harness = path.parent.name  # what the driver calls the agent, for one that never names itself
     else:
         t = Codex()
     for r in recs:
@@ -2283,7 +2743,7 @@ def crate_shape(value, key=None):
 
 
 # The harnesses whose drivers are tested against the prototype's events (D-074).
-DRIVEN = {"codex": "Codex", "claude": "Claude Code"}
+DRIVEN = {"codex": "Codex", "claude": "Claude Code", "opencode": "OpenCode", "goose": "Goose", "cursor": "Cursor"}
 
 
 def expected(folder: Path, check_only: bool) -> int:

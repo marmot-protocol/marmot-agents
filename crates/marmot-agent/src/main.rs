@@ -11,6 +11,7 @@ use marmot_agent::config::Config;
 use marmot_agent::marmot::Marmot;
 use marmot_agent::run::{Core, Store, serve};
 use marmot_agent::socket::Endpoint;
+use marmot_agent_acp::Acp;
 use marmot_agent_codex::Codex;
 use marmot_app::{AccountSetupRequest, MarmotApp, MarmotAppConfig, MarmotAppRuntime};
 use std::path::Path;
@@ -130,8 +131,8 @@ async fn run(config: &Config) -> Result<(), String> {
     let stop = async {
         let _ = tokio::signal::ctrl_c().await;
     };
-    match &config.codex {
-        Some(codex) => {
+    match (&config.codex, &config.acp) {
+        (Some(codex), _) => {
             let setup = config.setup().map_err(|e| e.to_string())?;
             let driver = Codex::start(&codex.program, setup)
                 .await
@@ -139,7 +140,14 @@ async fn run(config: &Config) -> Result<(), String> {
             let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
             core.run(events, stop).await;
         }
-        None => {
+        (None, Some(acp)) => {
+            let driver = Acp::start(&acp.command, &acp.cwd, &acp.name)
+                .await
+                .map_err(|_| "the ACP agent could not be started")?;
+            let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
+            core.run(events, stop).await;
+        }
+        (None, None) => {
             drop(events);
             let endpoint = Endpoint::in_home(&config.home);
             let (listener, token) = endpoint

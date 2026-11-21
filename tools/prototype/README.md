@@ -17,10 +17,12 @@ python3 tools/prototype/translate.py fixtures/recordings/claude/question.jsonl
 # Every recording: how many events, the session items, which native call each control was, what was
 # not sent, and anything with no rule
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
-    fixtures/recordings/hermes fixtures/recordings/openclaw
+    fixtures/recordings/hermes fixtures/recordings/openclaw fixtures/recordings/acp/opencode \
+    fixtures/recordings/acp/goose fixtures/recordings/acp/cursor
 ```
 
-It has a translator for each harness that has recordings: Codex, Claude Code, Hermes and OpenClaw. It picks one
+It has a translator for each harness that has recordings: Codex, Claude Code, Hermes, OpenClaw, and
+any agent over ACP, recorded with OpenCode, Goose and Cursor. It picks one
 from what is in the file, not from the path. What each showed is in
 [`docs/design/event-model.md`](../../docs/design/event-model.md#checked-against-real-sessions).
 
@@ -30,13 +32,14 @@ message then needs a decision: an item type, or the not-sent list.
 When the event model changes, change this script with it and run `--check` again. If the two disagree, the
 recordings decide.
 
-It also writes the events the Codex and Claude Code drivers are tested against, beside the recordings
+It also writes the events the Codex, Claude Code and ACP drivers are tested against, beside the recordings
 ([D-074](../../docs/decisions.md#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)):
 
 ```sh
 python3 tools/prototype/translate.py --expected fixtures/recordings/codex           # write them
 python3 tools/prototype/translate.py --expected fixtures/recordings/codex --check   # fail if out of date
 python3 tools/prototype/translate.py --expected fixtures/recordings/claude --check  # the same for Claude Code
+python3 tools/prototype/translate.py --expected fixtures/recordings/acp/opencode --check  # and for ACP
 ```
 
 A case that no recording holds is tested with messages written by hand, in

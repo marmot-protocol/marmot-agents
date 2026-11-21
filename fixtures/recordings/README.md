@@ -1,6 +1,6 @@
 # Recorded harness sessions
 
-These are real sessions with Codex and Claude Code, recorded message by message in both directions. They exist
+These are real sessions with Codex, Claude Code and OpenCode, recorded message by message in both directions. They exist
 so that the event model and the drivers are checked against what the harnesses actually send, not against what
 we assume they send.
 
@@ -317,6 +317,98 @@ a stored entry, `contextTokensSource`. The recordings name the model endpoint, w
 the recorder's script. One command is deliberately not in them: `/model status` answers with
 the model key in a masked form that keeps its first and last eight characters.
 
+## ACP: OpenCode
+
+OpenCode is driven through the Agent Client Protocol (ACP), as the ACP driver will drive it. The recorder plays
+an ACP client over `opencode acp`'s standard input and output and saves both directions. It tells the agent it
+can neither read or write files nor run terminals for it, so OpenCode does both itself and asks the client only
+for permission. What the recordings show is in
+[`docs/reference/harness-messages.md`](../../docs/reference/harness-messages.md#acp-opencode).
+
+| | |
+| --- | --- |
+| Interface | `opencode acp`, ACP protocol version 1, JSON-RPC 2.0 over stdio |
+| Version | OpenCode 2.3.2 |
+| Model | `opencode/deepseek-v4.1-flash-free`, a free model that needs no account: the cheapest that worked |
+| Account | None. The agent ran with a throwaway home folder, so it read none of the machine's settings, skills or sign-ins |
+| Recorded on | 2026-11-21 |
+| Recorder | [`tools/record/record_acp.py`](../../tools/record/record_acp.py) |
+
+| Scenario | What it exercises | As scripted? |
+| --- | --- | --- |
+| `simple` | A text answer, no tools | yes |
+| `command` | A shell command | yes |
+| `file_edit` | A file edit, no approval needed | yes |
+| `failing_command` | A command that exits with an error | yes; the tool call still says `completed` |
+| `approval_allowed` | A command needs approval; allowed once | yes |
+| `approval_denied` | A command needs approval; rejected | yes; the rejection ended the turn, as `cancelled` |
+| `interrupt` | The client cancels a turn while a command runs | yes |
+| `question` | The agent asks a multiple-choice question with its question tool | yes, once the client said it can show forms |
+| `plan` | The agent is asked to keep a to-do list | no list: OpenCode 2.3.2 has no to-do tool, and said so |
+| `new_session` | A second session on the same connection, without resuming the first | yes |
+| `resume` | A session resumed with `session/resume` after the agent restarts | yes; nothing is replayed |
+| `load` | A session loaded with `session/load` after the agent restarts | yes; the conversation is replayed first |
+
+The approval scenarios run OpenCode with `{"permission": {"bash": "ask", "edit": "ask"}}`; with its defaults it
+asks for nothing. In `question`, a client that does not declare the `elicitation` capability gets no request:
+OpenCode fails the tool call with a note to the model and carries on. That was seen on a first attempt, which
+was not kept.
+
+`acp/opencode/expected/` holds the agent events the ACP driver must produce from each recording, as for Codex.
+
+## ACP: Goose
+
+The same twelve scenarios, recorded the same way, with Goose in a throwaway container, and `restart_mid_turn`. What they show is in
+[`docs/reference/harness-messages.md`](../../docs/reference/harness-messages.md#acp-goose).
+
+| | |
+| --- | --- |
+| Interface | `goose acp`, ACP protocol version 1, JSON-RPC 2.0 over stdio |
+| Version | Goose 1.59.2, in a container built from [`tools/goose`](../../tools/goose/Dockerfile) |
+| Model | `z-ai/glm-5.3-flash:free` on numes.ai's OpenAI-compatible endpoint, with the developer extension only |
+| Recorded on | 2026-11-21 |
+
+What differs from OpenCode:
+
+- **`question`**: Goose has no question tool. It looked through its extensions, then asked in its reply.
+- **`plan`**: Goose switched on its `todo` extension and kept the list through tool calls, not ACP's `plan`.
+- **`resume`**: Goose has no `session/resume`; it answered "Method not found". The next prompt to the same
+  session id still worked, and remembered the first turn.
+- **`approval_denied`**: the refusal did not end the turn; the model said it was not allowed.
+- **`interrupt`**: the cancelled command was never updated again; the reply to the prompt said `cancelled`.
+- **`restart_mid_turn`**, Goose only: Goose is killed while an approved command runs, the session is loaded, and
+  the client sends `session/cancel` and a prompt at once. Goose had taken up the cut-off turn by itself, and
+  refused the prompt ("session already has active run") until that ended. This is why the driver waits after
+  taking up a session.
+
+Approval scenarios run Goose in its `approve` mode; the others in `auto`, which asks for nothing.
+`acp/goose/expected/` holds the expected events.
+
+## ACP: Cursor
+
+Eleven of the same scenarios with `cursor-agent acp`, on the machine's own Cursor sign-in, as
+[D-080](../../docs/decisions.md#d-080-cursor-is-driven-through-acp) and
+[D-085](../../docs/decisions.md#d-085-cursor-recordings-keep-only-cursors-built-in-commands) say. What they show
+is in [`docs/reference/harness-messages.md`](../../docs/reference/harness-messages.md#acp-cursor).
+
+| | |
+| --- | --- |
+| Interface | `cursor-agent acp`, ACP protocol version 1 |
+| Version | Cursor Agent CLI 2026.11.19 |
+| Model | The account's default, `grok-4.7` (fast, high reasoning effort) |
+| Recorded on | 2026-11-21 |
+
+- **The command list is cut to Cursor's built-in commands** by the scrubber (D-085); the account's own skills
+  and `synced-*` entries are gone. Nothing else was changed apart from the paths.
+- **`question` was recorded and not kept.** Cursor has no question tool here; looking for one, the model read
+  files in Cursor's folder in the home directory and listed MCP resources, which does not belong in a fixture.
+- **Scenarios with no approval run `cursor-agent --force acp`**: otherwise Cursor asks before every command.
+- **`plan`**: Cursor keeps its to-do list with its own request, `cursor/update_todos`, beside a tool call.
+- **`resume`**: no `session/resume` ("Method not found"); the next prompt to that session failed with
+  "Internal error".
+
+`acp/cursor/expected/` holds the expected events.
+
 ## File format
 
 One JSON object per line.
@@ -332,9 +424,13 @@ Codex messages are JSON-RPC: a request has `id` and `method`, a notification has
 has `id` with `result` or `error`.
 
 `codex/expected/` holds, for each Codex recording, the agent events the Codex driver must produce from it, one
-per line, as the Rust item types write them. `claude/expected/` holds the same for the Claude Code driver. The
-prototype writes them (`python3 tools/prototype/translate.py --expected fixtures/recordings/codex`, and the same
-with `claude`), and CI checks that they are current.
+per line, as the Rust item types write them. `claude/expected/` holds the same for the Claude Code driver, and
+`acp/opencode/expected/` for the ACP driver. The prototype writes them
+(`python3 tools/prototype/translate.py --expected fixtures/recordings/codex`, and the same with `claude` and
+`acp/opencode`), and CI checks that they are current.
+
+ACP messages are JSON-RPC 2.0, like Codex's, but carry `"jsonrpc": "2.0"`. The recorder's own markers are `out`
+lines whose message is `{"_recorder": "..."}`, as in the Codex recordings.
 
 For Claude, `via` is one of:
 
@@ -372,7 +468,8 @@ again after any new recording, and read the result before committing.
 - A rate limit, an expired sign-in, and a harness crash
 - Claude Code stopped while it is in the middle of writing a reply
 - A file attachment other than an image
-- OpenCode, Pi and Goose
+- Pi; OpenCode through its own HTTP interface
+- OpenCode over ACP with an image, an MCP server, a slash command, a changed setting, steering, and a subagent
 - Hermes with media, reactions, scheduled jobs and its message tools
 - OpenClaw with media, polls, threads, scheduled jobs, subagents, plugin approvals and the pairing code exchange
 - For both gateways: resuming an older session, compacting, and a standing approval or a changed setting across

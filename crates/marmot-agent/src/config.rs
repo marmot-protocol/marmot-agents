@@ -16,6 +16,15 @@
 //! sandbox = "workspace-write"          # or "read-only", "danger-full-access"
 //! approval_policy = "on-request"       # or "untrusted", "on-failure", "never"
 //! ```
+//!
+//! An agent over ACP, built in, takes an `[acp]` section in place of `[codex]`:
+//!
+//! ```toml
+//! [acp]
+//! name = "opencode"                    # what events call the agent until it names itself
+//! command = ["opencode", "acp"]        # or ["cursor-agent", "acp"], or Goose's container wrapper
+//! cwd = "/home/me/work"
+//! ```
 
 use crate::keys::PubKey;
 use crate::rights::{Rights, Who};
@@ -59,6 +68,21 @@ pub struct Config {
     /// A connector on the socket, such as the Claude Code driver, when the agent is not Codex.
     #[serde(default)]
     pub connector: Option<ConnectorConfig>,
+    /// An agent over ACP, built in: OpenCode, Goose or Cursor.
+    #[serde(default)]
+    pub acp: Option<AcpConfig>,
+}
+
+/// How an agent over ACP runs.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcpConfig {
+    /// What events call the agent until it names itself, such as `opencode`.
+    pub name: String,
+    /// The program that speaks ACP on its standard input and output, and its arguments.
+    pub command: Vec<String>,
+    /// The working folder.
+    pub cwd: String,
 }
 
 /// A connector that drives the harness from a separate program, over the socket (D-003). It
@@ -130,8 +154,21 @@ impl Config {
         if config.name.as_ref().is_some_and(|n| n.trim().is_empty()) {
             return Err(ConfigError::Value("name"));
         }
-        if config.codex.is_some() == config.connector.is_some() {
-            return Err(ConfigError::Value("codex or connector, one of them"));
+        let drivers = [
+            config.codex.is_some(),
+            config.connector.is_some(),
+            config.acp.is_some(),
+        ];
+        if drivers.iter().filter(|d| **d).count() != 1 {
+            return Err(ConfigError::Value("codex, acp or connector, one of them"));
+        }
+        if let Some(acp) = &config.acp {
+            if acp.command.is_empty() {
+                return Err(ConfigError::Value("acp.command"));
+            }
+            if acp.name.trim().is_empty() {
+                return Err(ConfigError::Value("acp.name"));
+            }
         }
         if config.codex.is_some() {
             config.setup()?;

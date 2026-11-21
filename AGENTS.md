@@ -12,7 +12,8 @@ checks them: `marmot-agent-events`, the agent event and its eleven item types; `
 a driver implements; `marmot-agent-codex`, the Codex driver, which runs Codex and translates both ways, with
 subagents switched off for now; and `marmot-agent`, the core, which runs one agent's account through MDK and
 drives Codex, with a test that runs it end to end on MDK's test relay. The core also serves a local socket, and
-`packages/claude-code` is the Claude Code driver, a TypeScript program that drives Claude Code through it. What is
+`packages/claude-code` is the Claude Code driver, a TypeScript program that drives Claude Code through it. `marmot-agent-acp`
+is the ACP driver, replayed against the OpenCode, Goose and Cursor recordings. What is
 built next, and in what order, is in
 [`docs/plan.md`](docs/plan.md). The core program is called `marmot-agent`
 ([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and
@@ -53,6 +54,7 @@ being replaced by what is designed here, not extended.
 | Work on the Codex driver | `crates/marmot-agent-codex`, after `fixtures/recordings/codex` and its `expected/` events |
 | Work on the Claude Code driver's translation | `packages/claude-code/src/translate.ts`, after `fixtures/recordings/claude` and its `expected/` events |
 | Work on the Claude Code driver's transport | `packages/claude-code/src/connector.ts`, after `docs/design/drivers.md` and `docs/design/socket-protocol.md` |
+| Work on the ACP driver | `crates/marmot-agent-acp`, after `fixtures/recordings/acp` and its `expected/` events |
 | Work on the core | `crates/marmot-agent`, after `docs/plan.md` and `docs/design/architecture.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Change the link check | `lychee.toml` |
@@ -255,18 +257,26 @@ For a change to the recordings, the recording tools, the prototype or the event 
 ```sh
 python3 tools/record/inventory.py fixtures/recordings/codex --kinds    # every file must parse; CI does not run this
 python3 tools/record/inventory.py fixtures/recordings/claude --kinds   # nor this
+python3 tools/record/inventory.py fixtures/recordings/acp/opencode --kinds   # nor this
+python3 tools/record/inventory.py fixtures/recordings/acp/goose --kinds      # nor this
+python3 tools/record/inventory.py fixtures/recordings/acp/cursor --kinds     # nor this
 python3 -m unittest discover -s tools/prototype -p 'test_*.py'         # cases no recording holds
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
-    fixtures/recordings/hermes fixtures/recordings/openclaw
+    fixtures/recordings/hermes fixtures/recordings/openclaw fixtures/recordings/acp/opencode \
+    fixtures/recordings/acp/goose fixtures/recordings/acp/cursor
 python3 tools/prototype/translate.py --expected fixtures/recordings/codex --check   # the Codex driver's expected events
 python3 tools/prototype/translate.py --expected fixtures/recordings/claude --check  # the Claude Code driver's
+python3 tools/prototype/translate.py --expected fixtures/recordings/acp/opencode --check  # the ACP driver's
+python3 tools/prototype/translate.py --expected fixtures/recordings/acp/goose --check     # and again
+python3 tools/prototype/translate.py --expected fixtures/recordings/acp/cursor --check    # and again
 ```
 
-The `--check` over the four folders must end with "native messages with no translation: none". If you change
+The `--check` over the seven folders must end with "native messages with no translation: none". If you change
 the event model, change `tools/prototype/translate.py` to match and run it again.
 
-The Codex driver is tested against `fixtures/recordings/codex/expected`, and the Claude Code driver against
-`fixtures/recordings/claude/expected`. The prototype writes both. When the prototype's output for one harness
+The Codex driver is tested against `fixtures/recordings/codex/expected`, the Claude Code driver against
+`fixtures/recordings/claude/expected`, and the ACP driver against `expected/` in each folder under `fixtures/recordings/acp`.
+The prototype writes all three. When the prototype's output for one harness
 changes on purpose, write them again with `python3 tools/prototype/translate.py --expected` and that folder,
 such as `fixtures/recordings/codex`, and commit them. Never write them
 again only to make the driver's test pass: when the two disagree, the recording and the event model decide

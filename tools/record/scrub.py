@@ -5,7 +5,8 @@ Usage:
     scrub.py <raw-dir> <out-dir> --map <local-path>=<replacement> [--map ...]
 
 `<raw-dir>` holds one folder per harness (`codex`, `claude`, `hermes`, `openclaw`), each with `*.jsonl`
-files as written by the recorders. The same tree is written to `<out-dir>`. The script then scans its own output and exits with an error
+files as written by the recorders, and `acp`, which holds one such folder per ACP agent, such as
+`acp/opencode`. The same tree is written to `<out-dir>`. The script then scans its own output and exits with an error
 if anything that looks private is left.
 
 What it does:
@@ -91,6 +92,26 @@ class Scrubber:
             msg = {**msg, "params": neutralise(msg["params"])}
         return self.walk(msg)
 
+    def acp(self, msg: dict, agent: str = "") -> dict:
+        # The ACP recorder runs the agent with a throwaway home folder and no account of ours. The
+        # folder's generated name, and the names OpenCode makes up for a command's output file under
+        # it, are replaced with fixed ones. Cursor runs on its own sign-in instead, and lists the
+        # account's own skills and synced entries among its commands; only its built-in ones are kept
+        # (D-085).
+        if agent == "cursor":
+            msg = cursor_commands(msg)
+        def homes(v):
+            if isinstance(v, dict):
+                return {k: homes(x) for k, x in v.items()}
+            if isinstance(v, list):
+                return [homes(x) for x in v]
+            if isinstance(v, str):
+                v = ACP_HOME.sub("agent-home", v)
+                return OPENCODE_OUTPUT.sub(r"\1/project/output.out", v)
+            return v
+
+        return homes(self.walk(msg))
+
     def hermes(self, msg: dict) -> dict:
         # The Hermes container holds no account of ours, so only paths and names need replacing.
         return self.walk(msg)
@@ -120,7 +141,29 @@ class Scrubber:
         return self.walk(msg)
 
 
+# Cursor's own slash commands, as `cursor-agent` 2026.11.19 lists them: its built-in skills
+# (`~/.cursor/skills-cursor`) and the commands it adds itself. Everything else in its list is the
+# account's: personal skills, and `synced-*` entries named after account and organisation ids.
+CURSOR_BUILTIN = {
+    "agent-sdk-create-agent", "apply-worktree", "autopilot", "best-of-n", "canvas", "copy-request-id",
+    "create-hook", "create-rule", "create-skill", "create-subagent", "delete-worktree", "goal", "loop",
+    "migrate-to-skills", "multi-model-review", "new-repo", "origin", "rename-chat", "sdk", "share", "shell",
+    "split-to-prs", "statusline", "update-cli-config", "update-cursor-settings", "worktree",
+}
+
+
+def cursor_commands(msg: dict) -> dict:
+    """Cursor's command list with only its built-in commands left in."""
+    update = (msg.get("params") or {}).get("update") or {}
+    if msg.get("method") != "session/update" or update.get("sessionUpdate") != "available_commands_update":
+        return msg
+    kept = [c for c in update.get("availableCommands") or [] if c.get("name") in CURSOR_BUILTIN]
+    return {**msg, "params": {**msg["params"], "update": {**update, "availableCommands": kept}}}
+
+
 MACHINE_UPTIME = re.compile(r"system \d+[dhms](?: \d+[dhms])*")
+ACP_HOME = re.compile(r"acp-home-[A-Za-z0-9_]+")  # the ACP recorder's throwaway home folder
+OPENCODE_OUTPUT = re.compile(r"(opencode/shell)/[0-9a-f]{16,}/sh_[A-Za-z0-9]+\.out")
 
 SUSPECT = re.compile(
     r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}"  # an e-mail address
@@ -128,6 +171,8 @@ SUSPECT = re.compile(
     r"|/Users/[A-Za-z0-9_.-]+"
     r"|/mnt/|/tmp/claude|/private/var"
     r"|claude\.ai [A-Z]"  # a connected account's MCP server name
+    r"|acp-home-"  # the ACP recorder's throwaway home folder, by its generated name
+    r"|synced-[0-9a-f]{8}-"  # a Cursor command named after account and organisation ids
 )
 
 
@@ -155,31 +200,36 @@ def main() -> int:
     maps = [tuple(m.split("=", 1)) for m in args.map]
     s = Scrubber(maps)
     problems = 0
-    for harness in ("codex", "claude", "hermes", "openclaw"):
+    for harness in ("codex", "claude", "hermes", "openclaw", "acp"):
         if not (args.raw / harness).is_dir():
             continue
-        (args.out / harness).mkdir(parents=True, exist_ok=True)
-        for src in sorted((args.raw / harness).glob("*.jsonl")):
+        pattern = "*/*.jsonl" if harness == "acp" else "*.jsonl"  # acp/<agent>/<scenario>.jsonl
+        for src in sorted((args.raw / harness).glob(pattern)):
+            rel = src.relative_to(args.raw / harness)
+            (args.out / harness / rel.parent).mkdir(parents=True, exist_ok=True)
             lines = []
             for line in src.read_text(encoding="utf-8").splitlines():
                 rec = json.loads(line)
-                rec["msg"] = getattr(s, harness)(rec["msg"])
+                if harness == "acp":
+                    rec["msg"] = s.acp(rec["msg"], rel.parts[0])
+                else:
+                    rec["msg"] = getattr(s, harness)(rec["msg"])
                 lines.append(json.dumps(rec, ensure_ascii=False, sort_keys=False))
                 for text in strings(rec["msg"]):
                     for word, _ in s.words:
                         if re.search(rf"(?<![A-Za-z0-9]){re.escape(word)}(?![A-Za-z0-9])", text):
                             problems += 1
-                            print(f"LEFT BEHIND in {harness}/{src.name}: the user or host name", file=sys.stderr)
+                            print(f"LEFT BEHIND in {harness}/{rel}: the user or host name", file=sys.stderr)
                     for old, _ in s.maps:
                         if old in text:
                             problems += 1
-                            print(f"LEFT BEHIND in {harness}/{src.name}: a mapped path", file=sys.stderr)
+                            print(f"LEFT BEHIND in {harness}/{rel}: a mapped path", file=sys.stderr)
                     m = next((x for x in SUSPECT.finditer(text) if x.group(0) not in ALLOWED), None)
                     if m:
                         problems += 1
-                        print(f"LEFT BEHIND in {harness}/{src.name}: {m.group(0)[:60]}", file=sys.stderr)
-            (args.out / harness / src.name).write_text("\n".join(lines) + "\n", encoding="utf-8")
-            print(f"{harness}/{src.name}: {len(lines)} messages")
+                        print(f"LEFT BEHIND in {harness}/{rel}: {m.group(0)[:60]}", file=sys.stderr)
+            (args.out / harness / rel).write_text("\n".join(lines) + "\n", encoding="utf-8")
+            print(f"{harness}/{rel}: {len(lines)} messages")
     if problems:
         print(f"{problems} problem(s). Do not commit this output.", file=sys.stderr)
         return 1
