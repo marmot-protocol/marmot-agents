@@ -657,7 +657,8 @@ impl Driver for Codex {
             return Err(Refusal::new(Reason::Failed));
         }
         let chat = prompt.chat.id.clone();
-        let mut wanted = prompt.session.as_ref().map(|s| s.as_str().to_string());
+        // The core names a session only to resume it (D-065).
+        let wanted = prompt.session.as_ref().map(|s| s.as_str().to_string());
         // A session belongs to its chat for good: resuming another chat's would show its history
         // and activity here.
         if let Some(owner) = wanted.as_ref().and_then(|w| self.owners.get(w))
@@ -668,23 +669,15 @@ impl Driver for Codex {
         self.chat(&chat).await?;
         // A session being picked, by a control or an earlier prompt, is waited for before deciding
         // whether this prompt needs one.
-        let before = self.chats[&chat].translator.session().map(String::from);
         while self.chats[&chat].translator.picking() {
             if !self.read().await {
                 return Err(Refusal::new(Reason::Failed));
             }
         }
         let current = self.chats[&chat].translator.session().map(String::from);
-        // A prompt naming the session a new one has just replaced was sent before the core heard
-        // of the new one: it is for the new one.
-        if wanted.is_some() && wanted == before && current != before {
-            wanted = current.clone();
-        }
         if current.is_none() || (wanted.is_some() && wanted != current) {
             self.pick(&chat, wanted.as_deref()).await?;
         }
-        let mut prompt = prompt;
-        prompt.session = wanted.map(Into::into); // the session it is for, now settled
         // Built during a turn, it joins that turn: the translator builds it that way.
         let message = prompt.message.clone();
         let purpose =

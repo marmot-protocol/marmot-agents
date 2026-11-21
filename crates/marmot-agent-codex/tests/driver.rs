@@ -645,10 +645,23 @@ async fn a_chat_cannot_take_another_chats_session() {
     assert!(events.iter().all(|e| e.chat == Some("c-1".into())));
 }
 
-/// A writer that fails once it is told to, as Codex's input does when Codex has gone.
+/// How a [`Breakable`] writer fails.
+const WHOLE: u8 = 0;
+const ON_WRITE: u8 = 1;
+const ON_FLUSH: u8 = 2;
+
+/// A writer that fails once it is told to, as Codex's input does when Codex has gone: either at
+/// once, or after taking some bytes, when they are flushed.
 struct Breakable {
     inner: WriteHalf<DuplexStream>,
-    broken: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    broken: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    taken: bool,
+}
+
+impl Breakable {
+    fn mode(&self) -> u8 {
+        self.broken.load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 impl tokio::io::AsyncWrite for Breakable {
@@ -657,17 +670,27 @@ impl tokio::io::AsyncWrite for Breakable {
         cx: &mut std::task::Context<'_>,
         buf: &[u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
-        if self.broken.load(std::sync::atomic::Ordering::SeqCst) {
-            let gone = std::io::Error::from(std::io::ErrorKind::BrokenPipe);
-            return std::task::Poll::Ready(Err(gone));
+        match self.mode() {
+            WHOLE => std::pin::Pin::new(&mut self.inner).poll_write(cx, buf),
+            ON_WRITE => {
+                let gone = std::io::Error::from(std::io::ErrorKind::BrokenPipe);
+                std::task::Poll::Ready(Err(gone))
+            }
+            _ => {
+                self.taken = true; // taken, never delivered
+                std::task::Poll::Ready(Ok(buf.len()))
+            }
         }
-        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
     }
 
     fn poll_flush(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
+        if self.mode() == ON_FLUSH && self.taken {
+            let gone = std::io::Error::from(std::io::ErrorKind::BrokenPipe);
+            return std::task::Poll::Ready(Err(gone));
+        }
         std::pin::Pin::new(&mut self.inner).poll_flush(cx)
     }
 
@@ -680,16 +703,23 @@ impl tokio::io::AsyncWrite for Breakable {
 }
 
 // An answer that never reached Codex is not shown as given: when Codex has gone, the approval is
-// closed unanswered, and nothing settles the answer.
+// closed unanswered, and nothing settles the answer. Codex can be found gone when the answer is
+// written, or only when it is flushed.
 #[tokio::test]
 async fn an_answer_codex_never_received_is_not_shown_as_given() {
+    never_received(ON_WRITE).await;
+    never_received(ON_FLUSH).await;
+}
+
+async fn never_received(failure: u8) {
     let (driver_side, fake_side) = duplex(1 << 16);
     let (from_driver, to_driver) = tokio::io::split(fake_side);
     let (driver_reads, driver_writes) = tokio::io::split(driver_side);
-    let broken = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let broken = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(WHOLE));
     let writer = Breakable {
         inner: driver_writes,
         broken: broken.clone(),
+        taken: false,
     };
     let (tx, heard) = mpsc::unbounded_channel();
     tokio::spawn(async move {
@@ -717,7 +747,7 @@ async fn an_answer_codex_never_received_is_not_shown_as_given() {
     fake.say(json!({"id": 0, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "c", "command": "ls"}})).await;
     let asked = until(&mut codex, |e| matches!(e.event.body(), Body::Approval(_))).await;
     let item = asked.last().unwrap().event.header().item.clone();
-    broken.store(true, std::sync::atomic::Ordering::SeqCst);
+    broken.store(failure, std::sync::atomic::Ordering::SeqCst);
     let allow = Answer {
         request: "r-9".into(),
         item: item.clone(),
@@ -799,10 +829,10 @@ async fn a_chats_old_session_stays_its_own() {
     );
 }
 
-// Right after a new session is asked for, the core still names the old one: a prompt naming it
-// goes to the new session, and the old one is not resumed.
+// After a new session is asked for, the next prompt names none (D-065) and goes to the new one,
+// even before the core has heard of it.
 #[tokio::test]
-async fn a_prompt_naming_the_replaced_session_goes_to_the_new_one() {
+async fn a_prompt_after_a_new_session_goes_to_the_new_one() {
     let (codex, mut fake) = connect().await;
     let mut codex = idle(codex, &mut fake, "c-1", "th1").await;
     let driver = tokio::spawn(async move {
@@ -810,9 +840,7 @@ async fn a_prompt_naming_the_replaced_session_goes_to_the_new_one() {
             .control(new_session_of("c-1", Some("th1"), "r-11"))
             .await
             .unwrap();
-        let mut next = prompt("m-2", "carry on");
-        next.session = Some("th1".into());
-        codex.prompt(next).await.unwrap();
+        codex.prompt(prompt("m-2", "carry on")).await.unwrap();
         codex
     });
     fake.answer("thread/start", json!({"thread": {"id": "th2"}}))
@@ -820,10 +848,29 @@ async fn a_prompt_naming_the_replaced_session_goes_to_the_new_one() {
     let next = fake
         .answer("turn/start", json!({"turn": {"id": "t2"}}))
         .await;
-    assert_eq!(
-        next["params"]["threadId"], "th2",
-        "no thread/resume came first"
-    );
+    assert_eq!(next["params"]["threadId"], "th2");
+    driver.await.unwrap();
+}
+
+// A prompt naming a session resumes it (D-065): after a restart, the chat's session is taken up
+// again before the turn starts.
+#[tokio::test]
+async fn a_prompt_naming_a_session_resumes_it() {
+    let (mut codex, mut fake) = connect().await;
+    let driver = tokio::spawn(async move {
+        let mut again = prompt("m-1", "where were we");
+        again.session = Some("th0".into());
+        codex.prompt(again).await.unwrap();
+        codex
+    });
+    let resume = fake
+        .answer("thread/resume", json!({"thread": {"id": "th0"}}))
+        .await;
+    assert_eq!(resume["params"]["threadId"], "th0");
+    let next = fake
+        .answer("turn/start", json!({"turn": {"id": "t1"}}))
+        .await;
+    assert_eq!(next["params"]["threadId"], "th0");
     driver.await.unwrap();
 }
 
