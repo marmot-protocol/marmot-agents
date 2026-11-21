@@ -106,6 +106,8 @@ pub struct Core<D: Driver> {
     read: BTreeMap<GroupKey, i64>,
     store: Store,
     config: Config,
+    /// The core's clock, which never jumps, for how long a control has waited (D-087).
+    started: std::time::Instant,
 }
 
 impl<D: Driver> Core<D> {
@@ -127,6 +129,7 @@ impl<D: Driver> Core<D> {
             read: kept.read,
             store,
             config: config.clone(),
+            started: std::time::Instant::now(),
         })
     }
 
@@ -143,8 +146,16 @@ impl<D: Driver> Core<D> {
         self.consider_invitations().await;
         self.catch_up().await;
         tokio::pin!(stop);
+        let mut clock = tokio::time::interval(std::time::Duration::from_secs(10));
         loop {
             tokio::select! {
+                _ = clock.tick() => loop {
+                    let acts = self.conversation.overdue(self.clock());
+                    if acts.is_empty() {
+                        break;
+                    }
+                    self.carry_out(acts).await;
+                },
                 event = self.driver.next_event() => match event {
                     Some(emitted) => {
                         let acts = self.conversation.emitted(emitted);
@@ -162,6 +173,11 @@ impl<D: Driver> Core<D> {
         }
         let ended = self.conversation.ended();
         self.carry_out_whole(ended).await;
+    }
+
+    /// Seconds on the core's clock.
+    fn clock(&self) -> u64 {
+        self.started.elapsed().as_secs()
     }
 
     /// Publishes the agent's name from the settings in its profile, so people see it, keeping the
@@ -308,12 +324,12 @@ impl<D: Driver> Core<D> {
             Act::Answer(answer) => {
                 let request = answer.request.clone();
                 let result = self.driver.answer(answer).await;
-                self.conversation.requested(&request, result)
+                self.conversation.requested(&request, result, self.clock())
             }
             Act::Control(control) => {
                 let request = control.request.clone();
                 let result = self.driver.control(control).await;
-                self.conversation.requested(&request, result)
+                self.conversation.requested(&request, result, self.clock())
             }
             Act::Send { group, what } => {
                 let key = match &what {
