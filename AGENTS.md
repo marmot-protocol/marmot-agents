@@ -7,10 +7,11 @@ duplicate it here.
 
 Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) into Marmot group chats.
 
-**Status: building towards the swap.** There is a Rust workspace under `crates/` with three crates, and CI that
+**Status: building towards the swap.** There is a Rust workspace under `crates/` with four crates, and CI that
 checks them: `marmot-agent-events`, the agent event and its eleven item types; `marmot-agent-driver`, the trait
-a driver implements; and `marmot-agent-codex`, the Codex driver, which runs Codex and translates both ways,
-with subagents switched off for now. No socket or core exists yet. What is built next, and in what order, is in
+a driver implements; `marmot-agent-codex`, the Codex driver, which runs Codex and translates both ways, with
+subagents switched off for now; and `marmot-agent`, the core, which so far has its rules about people,
+sessions and items and how items travel, and no Marmot side yet. No socket exists yet. What is built next, and in what order, is in
 [`docs/plan.md`](docs/plan.md). The core program is called `marmot-agent`
 ([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and
 decisions under `docs/`, plus recorded harness sessions and the tools that made them. The connectors that ship
@@ -47,6 +48,7 @@ being replaced by what is designed here, not extended.
 | Work on the item types in Rust | `crates/marmot-agent-events`, after `docs/design/event-model.md` |
 | Work on the driver trait or the capability flags | `crates/marmot-agent-driver`, after `docs/design/drivers.md` |
 | Work on the Codex driver | `crates/marmot-agent-codex`, after `fixtures/recordings/codex` and its `expected/` events |
+| Work on the core | `crates/marmot-agent`, after `docs/plan.md` and `docs/design/architecture.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Change the link check | `lychee.toml` |
 
