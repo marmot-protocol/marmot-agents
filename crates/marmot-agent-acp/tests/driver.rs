@@ -4,7 +4,7 @@
 
 use marmot_agent_acp::Acp;
 use marmot_agent_driver::{
-    Action, Answer, Chat, Control, Driver, Emitted, Given, Person, Prompt, RequestId,
+    Action, Answer, Chat, Control, Driver, Emitted, Given, Output, Person, Prompt, RequestId,
 };
 use marmot_agent_events::{Body, State};
 use serde_json::{Value, json};
@@ -98,7 +98,10 @@ fn prompt(text: &str) -> Prompt {
 
 /// The next event the driver hands the core.
 async fn event(acp: &mut Acp) -> Emitted {
-    acp.next_event().await.expect("an event")
+    acp.next_event()
+        .await
+        .and_then(Output::into_event)
+        .expect("an event")
 }
 
 #[tokio::test]

@@ -13,9 +13,12 @@
 //! | the request `prompt` | [`Driver::prompt`] |
 //! | the request `answer` | [`Driver::answer`] |
 //! | the request `control` | [`Driver::control`] |
-//! | the notification `event` | [`Driver::next_event`] |
+//! | the notification `event` | [`Driver::next_event`], as [`Output::Event`] |
+//! | the request `send_file`, from the connector | [`Driver::next_event`], as [`Output::SendFile`] |
+//! | the core's response to `send_file` | [`Driver::file_sent`] |
 //!
-//! The trait and the capabilities are decided (`docs/decisions.md`, D-058). Nothing here
+//! The trait and the capabilities are decided (`docs/decisions.md`, D-058). Sending a file
+//! (D-090) is built on it, and is a proposal until the project owner accepts it. Nothing here
 //! says how these values are written on the socket; that is for the socket to define.
 //!
 //! This crate needs no async runtime. A driver chooses its own.
@@ -31,6 +34,7 @@ pub use request::{
 };
 use std::fmt;
 use std::future::Future;
+use std::path::PathBuf;
 
 /// A harness's name and version.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,6 +82,58 @@ impl fmt::Debug for Emitted {
             .field("chat", &self.chat)
             .field("prompts", &self.prompts)
             .field("settles", &self.settles)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What a driver hands the core next: an agent event, or a file the agent asks to send.
+// An event is by far the more common, so it is not boxed to make the rarer request smaller.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum Output {
+    /// An agent event.
+    Event(Emitted),
+    /// The agent asks the core to send a file to a chat (D-090). The core checks the file is in a
+    /// folder the settings allow, sends it as an encrypted attachment tagged with the chat's
+    /// running turn, and tells the driver how it went through [`Driver::file_sent`].
+    SendFile(SendFile),
+}
+
+impl Output {
+    /// The event, when this is one.
+    pub fn into_event(self) -> Option<Emitted> {
+        match self {
+            Self::Event(emitted) => Some(emitted),
+            Self::SendFile(_) => None,
+        }
+    }
+}
+
+impl From<Emitted> for Output {
+    fn from(emitted: Emitted) -> Self {
+        Self::Event(emitted)
+    }
+}
+
+/// A file the agent asks the core to send to a chat (D-090).
+#[derive(Clone, PartialEq, Eq)]
+pub struct SendFile {
+    /// The driver's own id for this request, handed back in [`Driver::file_sent`]. Unique among
+    /// the driver's requests that are not settled yet.
+    pub id: String,
+    /// The chat to send it to.
+    pub chat: ChatId,
+    /// The file, as an absolute path. A driver resolves a path the agent gave relative to its
+    /// working folder before handing it on. The core reads only what is in a folder its settings
+    /// allow, after following every link, so a path that leads out is refused.
+    pub path: PathBuf,
+}
+
+/// Shows the chat, and neither the path nor the driver's id, which a harness made (D-071).
+impl fmt::Debug for SendFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SendFile")
+            .field("chat", &self.chat)
             .finish_non_exhaustive()
     }
 }
@@ -137,7 +193,7 @@ impl fmt::Debug for Emitted {
 ///         Err(Refusal::new(Reason::NotSupported))
 ///     }
 ///
-///     async fn next_event(&mut self) -> Option<Emitted> {
+///     async fn next_event(&mut self) -> Option<Output> {
 ///         // Nothing to report, now or later. `None` would say the harness has gone.
 ///         std::future::pending().await
 ///     }
@@ -168,21 +224,34 @@ pub trait Driver: Send {
     /// Carry out a control.
     fn control(&mut self, control: Control) -> impl Future<Output = Result<(), Refusal>> + Send;
 
-    /// The next event, in the order the driver produced it. It waits while there is nothing to
-    /// report, however long that is.
+    /// The next event, or the next file the agent asks to send, in the order the driver
+    /// produced them. It waits while there is nothing to report, however long that is.
     ///
     /// `None` means the harness has gone and no more will come. A driver that sees its harness
     /// stop closes what it can first. When a driver ends, for any reason, the core closes the
     /// items still open, as it does when a connector's connection drops (D-034), and settles
     /// answers and controls as [`Emitted::settles`] says (D-058).
-    fn next_event(&mut self) -> impl Future<Output = Option<Emitted>> + Send;
+    fn next_event(&mut self) -> impl Future<Output = Option<Output>> + Send;
+
+    /// How a file the driver asked to send went: sent, or refused and why (D-090). The core calls
+    /// it once for every [`Output::SendFile`], after the send, and awaits it to the end. A
+    /// refusal's detail names no path. A driver whose harness cannot ask to send a file never
+    /// hands one over, and need not implement this.
+    fn file_sent(
+        &mut self,
+        id: String,
+        result: Result<(), Refusal>,
+    ) -> impl Future<Output = ()> + Send {
+        let _ = (id, result);
+        async {}
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         Action, Answer, Attachment, Chat, Control, Emitted, Given, Person, Prompt, Quoted, Reason,
-        Refusal, Reply,
+        Refusal, Reply, SendFile,
     };
     use marmot_agent_events::body::{Body, Message};
     use marmot_agent_events::{AgentEvent, Header, Native, State};
@@ -290,6 +359,13 @@ mod tests {
             media_type: "application/pdf; name=plan.pdf".into(),
         };
         shows(&format!("{attachment:?}"), &[], &["plan", "application"]);
+
+        let file = SendFile {
+            id: "call_secret".into(),
+            chat: "c-2".into(),
+            path: "/home/alice/plan.pdf".into(),
+        };
+        shows(&format!("{file:?}"), &["c-2"], &["call_secret", "plan"]);
 
         let refusal = Refusal {
             reason: Reason::Failed,

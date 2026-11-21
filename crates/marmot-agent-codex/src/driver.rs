@@ -11,16 +11,21 @@
 //! anyone in the chat doing anything: Codex has yet to answer a request before it. Otherwise the
 //! request is refused as busy, so the core can go on, for instance to answer an approval.
 //!
+//! Every session the driver starts is given one tool of the driver's own, `send_file`, so the
+//! agent can send a file to the chat (D-090). When Codex calls it, the driver hands the core the
+//! file to send, and replies to Codex once the core says how it went.
+//!
 //! Subagents are switched off when Codex starts: how a chat shows them is a proposal not yet
 //! decided (`docs/design/subagents.md`), and without them an approval from a subagent would have
 //! nowhere to go.
 
 use crate::{
-    Direction, Setup, Translator, collaboration_mode_list, initialize, initialized, model_list,
+    Direction, SEND_FILE, Setup, Translator, collaboration_mode_list, initialize, initialized,
+    model_list, tool_reply,
 };
 use marmot_agent_driver::{
     Action, Answer, Capabilities, ChatId, Control, Driver, Emitted, FilesIn, Harness, MessageId,
-    MidTurn, Prompt, Reason, Refusal, RequestId, Sessions,
+    MidTurn, Output, Prompt, Reason, Refusal, RequestId, SendFile, Sessions,
 };
 use marmot_agent_events::{AgentEvent, Body, State};
 use serde_json::Value;
@@ -111,8 +116,11 @@ pub struct Codex {
     prompts: HashMap<(ChatId, String), Vec<MessageId>>,
     /// Messages naming a thread no chat has yet, kept while a session is being picked.
     early: Vec<String>,
-    /// Events read and not yet handed to the core.
-    ready: VecDeque<Emitted>,
+    /// Events, and files to send, read and not yet handed to the core.
+    ready: VecDeque<Output>,
+    /// Codex's calls of the driver's own tool that the core has not answered yet: the chat each
+    /// came from, and Codex's id for it, by the id the core was given.
+    calls: HashMap<String, (ChatId, Value)>,
     /// Codex has gone.
     gone: bool,
     /// Messages for no chat: Codex's own bookkeeping, and anything for a thread no chat has.
@@ -169,6 +177,7 @@ impl Codex {
             prompts: HashMap::new(),
             early: Vec::new(),
             ready: VecDeque::new(),
+            calls: HashMap::new(),
             gone: false,
             unrouted: 0,
         };
@@ -327,8 +336,19 @@ impl Codex {
         if message.get("method").is_some() {
             let thread = thread_of(line);
             let thread = thread.as_deref();
+            let calls_tool = message["method"] == "item/tool/call" && message.get("id").is_some();
             match thread.and_then(|t| self.threads.get(t)).cloned() {
+                Some(chat) if calls_tool => {
+                    self.feed(&chat, Direction::In, line, Vec::new());
+                    self.tool_call(&chat, &message);
+                }
                 Some(chat) => self.feed(&chat, Direction::In, line, Vec::new()),
+                // Codex waits for a reply to its call, so one for no chat is refused.
+                None if calls_tool => {
+                    self.unrouted += 1;
+                    let refused = Err(Refusal::new(Reason::Invalid));
+                    self.queue(&tool_reply(&message["id"], &refused), None);
+                }
                 // A thread being picked can speak before the reply that picks it.
                 None if thread.is_some() && self.picking() => self.early.push(line.to_string()),
                 None => self.unrouted += 1,
@@ -383,6 +403,42 @@ impl Codex {
     /// a prompt or a control sent it.
     fn picking(&self) -> bool {
         self.chats.values().any(|c| c.translator.picking())
+    }
+
+    /// Codex calls the driver's own tool. A call to send a file goes to the core; any other is
+    /// refused at once, since Codex waits for the reply.
+    fn tool_call(&mut self, chat: &ChatId, message: &Value) {
+        let id = message["id"].clone();
+        let params = &message["params"];
+        let path = params["arguments"]["path"]
+            .as_str()
+            .filter(|p| !p.is_empty());
+        let ours = params["tool"] == SEND_FILE && params["namespace"].is_null();
+        let Some(path) = path.filter(|_| ours) else {
+            let refused = Err(Refusal {
+                reason: Reason::Invalid,
+                detail: Some("the driver has no such tool, or it was not given a path.".into()),
+            });
+            let reply = tool_reply(&id, &refused);
+            let then = Written {
+                chat: chat.clone(),
+                text: reply.clone(),
+                request: None,
+                settles: Vec::new(),
+            };
+            self.queue(&reply, Some(then));
+            return;
+        };
+        // A path the agent gives relative to its working folder is made whole here: the core
+        // takes only an absolute one. An absolute path stays as it is.
+        let path = std::path::Path::new(&self.setup.cwd).join(path);
+        let key = id.to_string();
+        self.calls.insert(key.clone(), (chat.clone(), id));
+        self.ready.push_back(Output::SendFile(SendFile {
+            id: key,
+            chat: chat.clone(),
+            path,
+        }));
     }
 
     /// Takes a control off the list of those waiting for their effect; false if it was not there.
@@ -479,12 +535,12 @@ impl Codex {
             }
             _ => Vec::new(),
         };
-        self.ready.push_back(Emitted {
+        self.ready.push_back(Output::Event(Emitted {
             event,
             chat: Some(chat.clone()),
             prompts,
             settles,
-        });
+        }));
     }
 
     /// Codex has gone: each translator closes what it can, and nothing more will come.
@@ -504,6 +560,7 @@ impl Codex {
         self.requests.clear();
         self.starting.clear();
         self.early.clear();
+        self.calls.clear(); // a reply has nobody to go to
         self.unwritten.clear(); // never written: nothing follows from them
         self.unflushed.clear();
     }
@@ -753,7 +810,7 @@ impl Driver for Codex {
         Ok(())
     }
 
-    async fn next_event(&mut self) -> Option<Emitted> {
+    async fn next_event(&mut self) -> Option<Output> {
         loop {
             if let Some(event) = self.ready.pop_front() {
                 return Some(event);
@@ -762,5 +819,14 @@ impl Driver for Codex {
                 return self.ready.pop_front();
             }
         }
+    }
+
+    async fn file_sent(&mut self, id: String, result: Result<(), Refusal>) {
+        let Some((chat, codex_id)) = self.calls.remove(&id) else {
+            return;
+        };
+        let reply = tool_reply(&codex_id, &result);
+        // A reply Codex cannot be given is lost with Codex, which `send` notes.
+        let _ = self.send(&chat, None, &reply, Vec::new()).await;
     }
 }

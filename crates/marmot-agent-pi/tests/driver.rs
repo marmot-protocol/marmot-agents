@@ -5,8 +5,8 @@
 //! when Pi refuses it or an extension cancels it, and by an error when Pi stops before acting.
 
 use marmot_agent_driver::{
-    Action, Answer, Chat, ChatId, Control, Driver, Emitted, FilesIn, Given, MidTurn, Person,
-    Prompt, Reason, Reply, Sessions,
+    Action, Answer, Chat, ChatId, Control, Driver, Emitted, FilesIn, Given, MidTurn, Output,
+    Person, Prompt, Reason, Reply, Sessions,
 };
 use marmot_agent_events::body::{Body, StartedBy};
 use marmot_agent_events::{SessionId, State, TurnId};
@@ -73,6 +73,7 @@ async fn next(pi: &mut Pi) -> Emitted {
     tokio::time::timeout(Duration::from_secs(10), pi.next_event())
         .await
         .expect("an event in time")
+        .and_then(Output::into_event)
         .expect("the driver goes on")
 }
 
@@ -326,6 +327,7 @@ async fn a_question_asked_as_pi_starts_fails_the_start_and_stops_pi() {
     // The question went nowhere: nobody could answer it.
     while let Ok(Some(event)) =
         tokio::time::timeout(Duration::from_millis(200), pi.next_event()).await
+        && let Some(event) = event.into_event()
     {
         assert!(!matches!(event.event.body(), Body::Question(_)));
     }
@@ -364,6 +366,7 @@ async fn a_failed_resume_leaves_the_chats_session_as_it_was() {
     );
     while let Ok(Some(event)) =
         tokio::time::timeout(Duration::from_millis(200), pi.next_event()).await
+        && let Some(event) = event.into_event()
     {
         assert!(
             !matches!(event.event.body(), Body::Session(_)),

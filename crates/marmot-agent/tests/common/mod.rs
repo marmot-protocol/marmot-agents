@@ -63,7 +63,13 @@ impl World {
         let home = tempfile::tempdir().unwrap();
         let relay = nostr_relay_builder::MockRelay::run().await.unwrap();
         let url = relay.url().await.to_string();
-        let app = MarmotApp::with_relay(home.path(), url.clone());
+        // As `MarmotApp::with_relay`, and with Blossom servers on this machine allowed, for the
+        // stand-in one that holds the files an agent sends.
+        let app_settings = marmot_app::MarmotAppConfig::white_noise()
+            .with_allow_loopback_relay_endpoints(true)
+            .with_open_ranking_provider(None, Vec::new())
+            .with_allow_loopback_blob_endpoints(true);
+        let app = MarmotApp::with_relay_and_config(home.path(), url.clone(), app_settings);
         let runtime = MarmotAppRuntime::new(app.clone());
         let endpoint = cgka_traits::TransportEndpoint(url.clone());
         let setup = AccountSetupRequest {
@@ -86,6 +92,7 @@ impl World {
             app,
             label: agent.account.label.clone(),
             agent: PubKey(agent.account.account_id_hex.clone()),
+            media_server: None,
         };
         Self {
             runtime,

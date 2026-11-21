@@ -325,7 +325,8 @@ impl fmt::Debug for Refusal {
     }
 }
 
-/// Why a driver did not take a request. These are the eight reasons the socket page lists.
+/// Why a driver did not take a request, or why the core did not send a file a driver asked it to.
+/// These are the reasons the socket page lists.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Reason {
     /// The harness cannot do this.
@@ -344,4 +345,7 @@ pub enum Reason {
     Invalid,
     /// The harness was asked and it failed.
     Failed,
+    /// The core does not allow it: a file outside the folders the settings allow (D-090). Only
+    /// the core gives this reason; a driver refuses with the others.
+    NotAllowed,
 }

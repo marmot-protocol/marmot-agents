@@ -4,7 +4,7 @@
 
 use marmot_agent_codex::{Codex, Sandbox, Setup};
 use marmot_agent_driver::{
-    Action, Answer, Chat, Control, Driver, Emitted, Given, Person, Prompt, Reason,
+    Action, Answer, Chat, Control, Driver, Emitted, Given, Output, Person, Prompt, Reason,
 };
 use marmot_agent_events::{Body, State};
 use serde_json::{Value, json};
@@ -107,7 +107,11 @@ fn turn(method: &str, status: &str) -> Value {
 async fn until(codex: &mut Codex, done: impl Fn(&Emitted) -> bool) -> Vec<Emitted> {
     let mut events = Vec::new();
     loop {
-        let event = codex.next_event().await.expect("an event");
+        let event = codex
+            .next_event()
+            .await
+            .and_then(Output::into_event)
+            .expect("an event");
         let stop = done(&event);
         events.push(event);
         if stop {
@@ -210,7 +214,11 @@ async fn an_answer_reaches_codex_and_its_event_settles_it() {
     codex.answer(allow.clone()).await.unwrap();
     let reply = fake.heard.recv().await.unwrap();
     assert_eq!(reply, json!({"id": 0, "result": {"decision": "accept"}}));
-    let answered = codex.next_event().await.unwrap();
+    let answered = codex
+        .next_event()
+        .await
+        .and_then(Output::into_event)
+        .unwrap();
     assert_eq!(answered.settles, ["r-1".into()]);
     assert_eq!(answered.event.header().state, State::Done);
     let again = codex.answer(allow).await.unwrap_err();
@@ -759,7 +767,7 @@ async fn never_received(failure: u8) {
         Reason::Failed
     );
     let mut rest = Vec::new();
-    while let Some(event) = codex.next_event().await {
+    while let Some(event) = codex.next_event().await.and_then(Output::into_event) {
         rest.push(event);
     }
     assert!(
@@ -906,6 +914,7 @@ async fn early_messages_keep_their_order_while_another_chat_picks() {
     let mut models = Vec::new();
     while let Ok(Some(event)) =
         tokio::time::timeout(std::time::Duration::from_millis(50), codex.next_event()).await
+        && let Some(event) = event.into_event()
     {
         if let Body::Session(s) = event.event.body()
             && event.chat == Some("c-1".into())
@@ -939,7 +948,7 @@ async fn a_turn_closed_because_codex_stopped_does_not_settle_an_interrupt() {
     assert_eq!(fake.hear().await["method"], "turn/interrupt");
     fake.to_driver.shutdown().await.unwrap();
     let mut rest = Vec::new();
-    while let Some(event) = codex.next_event().await {
+    while let Some(event) = codex.next_event().await.and_then(Output::into_event) {
         rest.push(event);
     }
     assert!(rest.iter().any(|e| matches!(e.event.body(), Body::Turn(_))));

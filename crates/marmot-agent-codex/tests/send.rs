@@ -6,15 +6,17 @@
 
 use marmot_agent_codex::{
     ApprovalPolicy, Direction, Sandbox, Setup, Translator, collaboration_mode_list, initialize,
-    initialized, model_list,
+    initialized, model_list, send_file_tool, tool_reply,
 };
-use marmot_agent_driver::{Action, Answer, Attachment, Chat, Given, Person, Prompt, Reason, Reply};
+use marmot_agent_driver::{
+    Action, Answer, Attachment, Chat, Given, Person, Prompt, Reason, Refusal, Reply,
+};
 use marmot_agent_events::body::Effect;
 use marmot_agent_events::{AgentEvent, Body, State};
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Deserialize)]
@@ -166,6 +168,8 @@ fn the_driver_sends_what_the_recorded_client_sent() {
         let mut events: Vec<AgentEvent> = Vec::new();
         let mut started: Option<Setup> = None;
         let mut started_params = json!({});
+        // Codex's calls of the driver's own tool, by Codex's id for them.
+        let mut tool_calls: HashSet<i64> = HashSet::new();
         for line in text.lines().filter(|l| !l.trim().is_empty()) {
             let line: Line<'_> = serde_json::from_str(line).expect("a recorded line");
             let message = line.msg.get();
@@ -181,6 +185,9 @@ fn the_driver_sends_what_the_recorded_client_sent() {
             } else {
                 Direction::In
             };
+            if direction == Direction::In && recorded["method"] == "item/tool/call" {
+                tool_calls.insert(recorded["id"].as_i64().expect("a numbered call"));
+            }
             if direction == Direction::Out {
                 let id = recorded.get("id").and_then(Value::as_i64).unwrap_or(-1);
                 let params = recorded.get("params").cloned().unwrap_or(json!({}));
@@ -203,9 +210,13 @@ fn the_driver_sends_what_the_recorded_client_sent() {
                         started = Some(setup);
                         started_params = params.clone();
                         // The recorder's sessions were throwaway; the driver's are kept (D-063).
-                        // `config` added the recorder's demo MCP server.
+                        // `config` added the recorder's demo MCP server. Every session the
+                        // driver starts has its own tool (D-090); only one recording gave it.
                         let mut expected = drop_keys(recorded.clone(), &["config"]);
                         expected["params"]["ephemeral"] = json!(false);
+                        if expected["params"].get("dynamicTools").is_none() {
+                            expected["params"]["dynamicTools"] = json!([send_file_tool()]);
+                        }
                         Some((json(&built), expected))
                     }
                     Some("thread/resume") => {
@@ -301,6 +312,25 @@ fn the_driver_sends_what_the_recorded_client_sent() {
                         *skipped.entry(other.to_string()).or_default() += 1;
                         None
                     }
+                    None if recorded["id"]
+                        .as_i64()
+                        .is_some_and(|id| tool_calls.remove(&id)) =>
+                    {
+                        // The driver's reply to a call of its own tool: what it says is the
+                        // core's words, not the recorder's, so only whether it worked must match.
+                        let sent = recorded["result"]["success"] == true;
+                        let result = if sent {
+                            Ok(())
+                        } else {
+                            Err(Refusal::new(Reason::NotAllowed))
+                        };
+                        let built = json(&tool_reply(&recorded["id"], &result));
+                        assert_eq!(built["id"], recorded["id"], "{name}");
+                        assert_eq!(built["result"]["success"], sent, "{name}");
+                        assert_eq!(built["result"]["contentItems"][0]["type"], "inputText");
+                        *checked.entry("a tool reply".into()).or_default() += 1;
+                        None
+                    }
                     None => {
                         let item = waiting_for(&events, &recorded["id"])
                             .unwrap_or_else(|| panic!("{name}: a reply to nothing waiting"));
@@ -326,16 +356,17 @@ fn the_driver_sends_what_the_recorded_client_sent() {
     // recordings.
     let expected = [
         ("a reply", 7),
+        ("a tool reply", 3),
         ("collaborationMode/list", 1),
-        ("initialize", 31),
-        ("initialized", 31),
+        ("initialize", 33),
+        ("initialized", 33),
         ("model/list", 2),
         ("thread/compact/start", 1),
-        ("thread/resume", 3),
+        ("thread/resume", 4),
         ("thread/settings/update", 2),
-        ("thread/start", 29),
+        ("thread/start", 30),
         ("turn/interrupt", 2),
-        ("turn/start", 36),
+        ("turn/start", 38),
         ("turn/steer", 1),
     ];
     let checked: Vec<(&str, usize)> = checked.iter().map(|(k, n)| (k.as_str(), *n)).collect();

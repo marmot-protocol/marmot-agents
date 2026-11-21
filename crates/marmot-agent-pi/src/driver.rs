@@ -20,7 +20,7 @@ use crate::translate::DIALOGS;
 use crate::{Direction, Translator};
 use marmot_agent_driver::{
     Action, Answer, Capabilities, ChatId, Control, Driver, Emitted, FilesIn, Harness, MessageId,
-    MidTurn, Prompt, Reason, Refusal, RequestId, Sessions,
+    MidTurn, Output, Prompt, Reason, Refusal, RequestId, Sessions,
 };
 use marmot_agent_events::{AgentEvent, Body, State};
 use serde_json::{Value, json};
@@ -915,10 +915,10 @@ impl Driver for Pi {
         }
     }
 
-    async fn next_event(&mut self) -> Option<Emitted> {
+    async fn next_event(&mut self) -> Option<Output> {
         loop {
             if let Some(event) = self.ready.pop_front() {
-                return Some(event);
+                return Some(event.into());
             }
             self.read().await;
         }

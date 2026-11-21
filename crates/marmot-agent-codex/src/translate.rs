@@ -368,6 +368,8 @@ impl Translator {
             }
             "item/tool/requestUserInput" => self.user_input(method, m.id.clone(), params, out),
             "mcpServer/elicitation/request" => self.elicitation(method, m.id.clone(), params, out),
+            // The driver carries out its own tool; the dynamicToolCall item shows it.
+            "item/tool/call" => {}
             "turn/plan/updated" => self.plan(method, params, out),
             "thread/compacted" => {
                 let item = format!("compaction:{}", self.made);
@@ -677,6 +679,41 @@ impl Translator {
                         Some(Value::String(e)) => Some(e),
                         _ => None,
                     };
+                }
+                let title = if started {
+                    "Using a tool"
+                } else {
+                    "Used a tool"
+                };
+                self.emit(out, &iid, Body::Tool(tool), state, title, &name, native());
+            }
+            Some("dynamicToolCall") => {
+                // A tool the driver gave the session, such as send_file (D-090). The driver
+                // carries it out on Codex's `item/tool/call`; this item shows it like any tool.
+                let state = if started {
+                    State::Running
+                } else if it.status.as_deref() == Some("failed") {
+                    State::Failed
+                } else {
+                    State::Done
+                };
+                let name = match it.namespace.as_deref() {
+                    Some(namespace) => format!("{namespace}.{}", show(it.tool.as_deref())),
+                    None => show(it.tool.as_deref()).to_string(),
+                };
+                let mut tool = tool(ToolKind::Other, &name);
+                tool.input = it.arguments.filter(|v| !v.is_null());
+                if !started {
+                    let said = (it.content_items.iter().flatten())
+                        .filter(|c| c.kind.as_deref() == Some("inputText"))
+                        .map(|c| c.text.clone().unwrap_or_default())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if it.success == Some(false) {
+                        tool.error = Some(said);
+                    } else {
+                        tool.output = Some(said);
+                    }
                 }
                 let title = if started {
                     "Using a tool"

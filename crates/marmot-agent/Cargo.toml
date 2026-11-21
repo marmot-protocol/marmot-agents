@@ -21,6 +21,8 @@ hex = "0.4"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 # The connector's token.
 getrandom = "0.3"
+# Opening a file the agent sends without following a link at its end (D-090).
+libc = "0.2"
 # MDK, as a library (D-002). The revision moves together with the [patch] entries in the workspace
 # Cargo.toml and tools/odin/install.sh.
 marmot-app = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220" }
@@ -32,5 +34,7 @@ cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf477
 nostr-relay-builder = "0.44"
 storage-sqlite = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220", features = ["test-support"] }
 tempfile = "3"
+# The stand-in Blossom server in the file test names each blob by its hash.
+sha2 = "0.10"
 # The Claude Code scenario runs the driver as a program.
 tokio = { version = "1", features = ["process"] }

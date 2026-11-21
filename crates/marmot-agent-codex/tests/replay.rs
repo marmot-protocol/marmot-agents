@@ -102,7 +102,7 @@ fn expected(path: &Path) -> Vec<Value> {
 #[test]
 fn every_recording_gives_the_prototypes_events() {
     let paths = files(&recordings());
-    assert_eq!(paths.len(), 28, "the Codex recordings");
+    assert_eq!(paths.len(), 29, "the Codex recordings");
     let mut differ = Vec::new();
     for path in &paths {
         let made: Vec<Value> = replay(path)

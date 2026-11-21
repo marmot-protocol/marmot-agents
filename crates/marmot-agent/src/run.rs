@@ -15,10 +15,11 @@
 
 use crate::config::Config;
 use crate::conversation::{Act, Conversation, Saved, Sending};
+use crate::files::Folders;
 use crate::keys::{EventKey, GroupKey};
 use crate::marmot::{Incoming, Marmot, Message};
 use crate::socket::SocketDriver;
-use marmot_agent_driver::Driver;
+use marmot_agent_driver::{Driver, Output, Reason, Refusal, SendFile};
 use marmot_app::{AppError, MarmotAppEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
@@ -106,6 +107,8 @@ pub struct Core<D: Driver> {
     read: BTreeMap<GroupKey, i64>,
     store: Store,
     config: Config,
+    /// The folders the agent may send files from (D-090).
+    folders: Folders,
     /// The core's clock, which never jumps, for how long a control has waited (D-087).
     started: std::time::Instant,
 }
@@ -128,6 +131,7 @@ impl<D: Driver> Core<D> {
             conversation,
             read: kept.read,
             store,
+            folders: Folders::new(&config.file_folders()),
             config: config.clone(),
             started: std::time::Instant::now(),
         })
@@ -157,10 +161,11 @@ impl<D: Driver> Core<D> {
                     self.carry_out(acts).await;
                 },
                 event = self.driver.next_event() => match event {
-                    Some(emitted) => {
+                    Some(Output::Event(emitted)) => {
                         let acts = self.conversation.emitted(emitted);
                         self.carry_out(acts).await;
                     }
+                    Some(Output::SendFile(file)) => self.send_file(file).await,
                     None => break,
                 },
                 event = events.recv() => match event {
@@ -173,6 +178,56 @@ impl<D: Driver> Core<D> {
         }
         let ended = self.conversation.ended();
         self.carry_out_whole(ended).await;
+    }
+
+    /// Sends a file the agent asked to send, if it may be sent, and tells the driver how it went.
+    /// A refusal is shown in the chat, naming no path (D-090).
+    async fn send_file(&mut self, file: SendFile) {
+        let result = self.try_send_file(&file).await;
+        if let Err(refusal) = &result {
+            // Its kind only: a path or a file name is never logged (D-071).
+            eprintln!("marmot-agent: a file was not sent ({:?})", refusal.reason);
+            let acts = self.conversation.file_refused(&file.chat, refusal);
+            self.carry_out(acts).await;
+        }
+        self.driver.file_sent(file.id, result).await;
+    }
+
+    async fn try_send_file(&mut self, file: &SendFile) -> Result<(), Refusal> {
+        let Some((group, turn)) = self.conversation.file_place(&file.chat) else {
+            return Err(Refusal {
+                reason: Reason::Invalid,
+                detail: Some("The agent named a chat it is not in.".into()),
+            });
+        };
+        let folders = self.folders.clone();
+        let path = file.path.clone();
+        let read = tokio::task::spawn_blocking(move || folders.read(&path)).await;
+        let outgoing = read.map_err(|_| Refusal::new(Reason::Failed))??;
+        let mut tries = 0;
+        let mut wait = Duration::from_millis(100);
+        loop {
+            match self
+                .marmot
+                .send_file(&group, &outgoing, turn.as_ref())
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(AppError::AccountWorkerBusy) => {}
+                Err(_) => {
+                    tries += 1;
+                    eprintln!("marmot-agent: a file's send failed, try {tries}");
+                    if tries == SEND_TRIES {
+                        return Err(Refusal {
+                            reason: Reason::Failed,
+                            detail: Some("It could not be uploaded or sent.".into()),
+                        });
+                    }
+                }
+            }
+            tokio::time::sleep(wait).await;
+            wait = (wait * 2).min(Duration::from_secs(10));
+        }
     }
 
     /// Seconds on the core's clock.

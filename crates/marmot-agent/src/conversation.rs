@@ -684,6 +684,32 @@ impl Conversation {
             .collect()
     }
 
+    /// Where a file the agent asks to send goes (D-090): the chat's group, and the chat's running
+    /// turn, which tags it as the agent's words are tagged. `None` for a chat the core does not know.
+    pub fn file_place(&self, chat: &ChatId) -> Option<(GroupKey, Option<TurnId>)> {
+        let group = self.group_of(&chat.0)?;
+        Some((group, self.open_turn(&chat.0)))
+    }
+
+    /// A file the agent asked to send was not sent: the chat is told why, in a refused notice
+    /// that names no path (D-071, D-077, D-090).
+    pub fn file_refused(&mut self, chat: &ChatId, refusal: &Refusal) -> Vec<Act> {
+        let Some(group) = self.group_of(&chat.0) else {
+            return Vec::new();
+        };
+        let text = match &refusal.detail {
+            Some(detail) => format!("The agent's file was not sent. {detail}"),
+            None => format!("The agent's file was not sent. {}", plain(refusal.reason)),
+        };
+        let chat = Chat {
+            id: chat.clone(),
+            group: true,
+            name: None,
+        };
+        let notice = self.notice(&group, &chat, reason_word(refusal.reason), text);
+        vec![self.send_notice(&group, notice, None, Vec::new())]
+    }
+
     /// Something was sent, and `event` is its id. The first event of an item is what its later
     /// versions name.
     pub fn sent(&mut self, key: &str, event: EventKey) {
@@ -938,6 +964,7 @@ fn reason_word(reason: Reason) -> &'static str {
         Reason::NothingToDo => "nothing_to_do",
         Reason::Invalid => "invalid",
         Reason::Failed => "failed",
+        Reason::NotAllowed => "not_allowed",
     }
 }
 
@@ -958,6 +985,7 @@ fn plain(reason: Reason) -> &'static str {
         Reason::NothingToDo => "There is nothing to act on.",
         Reason::Invalid => "That does not make sense to the agent.",
         Reason::Failed => "The agent tried and it failed.",
+        Reason::NotAllowed => "The agent may not do that.",
     }
 }
 

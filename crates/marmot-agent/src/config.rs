@@ -10,6 +10,8 @@
 //! invite = ["<hex>"]                   # besides the owner, who may add the agent to a group
 //! white_noise = true                   # false: only the relays above, for a local try
 //! allow_loopback_relays = false        # true: relays on this machine may be used
+//! files_from = ["/home/me/work/out"]   # where the agent may send files from; by default the
+//!                                      # harness's working folder, and none for a connector
 //!
 //! [codex]                              # Codex, built in; or, for a connector on the socket,
 //! cwd = "/home/me/work"                # an empty [connector] section in its place
@@ -71,6 +73,11 @@ pub struct Config {
     /// default; off, the core uses only the relays listed, as a try against a local relay should.
     #[serde(default = "yes")]
     pub white_noise: bool,
+    /// The folders the agent may send files from (D-090). By default the working folder of a
+    /// harness the core runs, and none for a connector on the socket, whose folder the core does
+    /// not know.
+    #[serde(default)]
+    pub files_from: Option<Vec<PathBuf>>,
     /// Codex, when the agent is Codex, built in.
     #[serde(default)]
     pub codex: Option<CodexConfig>,
@@ -207,6 +214,18 @@ impl Config {
             config.setup()?;
         }
         Ok(config)
+    }
+
+    /// The folders the agent may send files from: those listed, or else the harness's working
+    /// folder (D-090).
+    pub fn file_folders(&self) -> Vec<PathBuf> {
+        if let Some(listed) = &self.files_from {
+            return listed.clone();
+        }
+        let cwd = (self.codex.as_ref().map(|c| &c.cwd))
+            .or(self.acp.as_ref().map(|a| &a.cwd))
+            .or(self.pi.as_ref().map(|p| &p.cwd));
+        cwd.map(PathBuf::from).into_iter().collect()
     }
 
     /// Who may do what.

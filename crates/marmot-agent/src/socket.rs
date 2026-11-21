@@ -3,7 +3,7 @@
 //! A connector, such as the Claude Code driver, connects to the core's Unix socket and speaks
 //! JSON-RPC 2.0, one message per line. It opens with a hello carrying its token and what its
 //! harness can do; then the core sends it `prompt`, `answer` and `control` requests, and it sends
-//! the core `event` notifications. To the core it is a driver like any other: [`SocketDriver`]
+//! the core `event` notifications and, when the agent sends a file, `send_file` requests (D-090). To the core it is a driver like any other: [`SocketDriver`]
 //! implements the same trait as the Codex driver, and the messages carry the trait's shapes
 //! (D-058). The exact fields are in `docs/design/socket-protocol.md`.
 //!
@@ -13,7 +13,8 @@
 
 use marmot_agent_driver::{
     Action, Answer, ApprovalCommand, Capabilities, Control, Driver, Emitted, FilesIn, Given,
-    Harness, MessageId, MidTurn, Position, Prompt, Reason, Refusal, RequestId, Sessions,
+    Harness, MessageId, MidTurn, Output, Position, Prompt, Reason, Refusal, RequestId, SendFile,
+    Sessions,
 };
 use marmot_agent_events::AgentEvent;
 use serde::Deserialize;
@@ -199,8 +200,12 @@ pub struct SocketDriver {
     harness: Harness,
     capabilities: Capabilities,
     next_id: i64,
-    /// Events read while a request waited for its response, for the next call of `next_event`.
-    held: VecDeque<Emitted>,
+    /// Events, and files to send, read while a request waited for its response, for the next call
+    /// of `next_event`.
+    held: VecDeque<Output>,
+    /// The connector's `send_file` requests the core has not answered, by the id the core was
+    /// given: the connector's own id, as it wrote it.
+    files: HashMap<String, Value>,
     /// The number of the next event in each session, which the core gives (D-034).
     seq: HashMap<String, u64>,
     answer_within: Duration,
@@ -263,6 +268,7 @@ impl SocketDriver {
             capabilities,
             next_id: 0,
             held: VecDeque::new(),
+            files: HashMap::new(),
             seq: HashMap::new(),
             answer_within: ANSWER_WITHIN,
             gone: false,
@@ -308,10 +314,43 @@ impl SocketDriver {
                     _ => {}
                 }
             }
-            if let Some(emitted) = self.event(&envelope) {
-                self.held.push_back(emitted);
+            if let Some(output) = self.output(&envelope) {
+                self.held.push_back(output);
             }
         }
+    }
+
+    /// What a message from the connector is for the core: an event, a file to send, or nothing.
+    fn output(&mut self, envelope: &Envelope) -> Option<Output> {
+        if let Some(file) = self.send_file(envelope) {
+            return Some(Output::SendFile(file));
+        }
+        self.event(envelope).map(Output::Event)
+    }
+
+    /// A `send_file` request (D-090): the chat and the file's path. One the core cannot read is
+    /// still handed on, with what could be read, so the core answers it with a refusal: the
+    /// connector waits for an answer.
+    fn send_file(&mut self, envelope: &Envelope) -> Option<SendFile> {
+        if envelope.method.as_deref() != Some("send_file") {
+            return None;
+        }
+        let id = envelope.id.clone().filter(|id| !id.is_null())?;
+        let params: Value = envelope
+            .params
+            .as_ref()
+            .and_then(|raw| serde_json::from_str(raw.get()).ok())
+            .unwrap_or(Value::Null);
+        let key = id.to_string();
+        if self.files.contains_key(&key) {
+            return None; // the same id again, while the first is unanswered
+        }
+        self.files.insert(key.clone(), id);
+        Some(SendFile {
+            id: key,
+            chat: params["chat"].as_str().unwrap_or_default().into(),
+            path: params["path"].as_str().unwrap_or_default().into(),
+        })
     }
 
     /// The next message, or `None` once the connection is gone. A line that is not a JSON
@@ -446,17 +485,41 @@ impl Driver for SocketDriver {
         self.request("control", params).await
     }
 
-    async fn next_event(&mut self) -> Option<Emitted> {
+    async fn next_event(&mut self) -> Option<Output> {
         loop {
-            if let Some(emitted) = self.held.pop_front() {
-                return Some(emitted);
+            if let Some(output) = self.held.pop_front() {
+                return Some(output);
             }
             // Reading keeps what it has read in `self`, and nothing is written here, so this
             // future is safe to drop (D-058).
             let envelope = self.read().await?;
-            if let Some(emitted) = self.event(&envelope) {
-                return Some(emitted);
+            if let Some(output) = self.output(&envelope) {
+                return Some(output);
             }
+        }
+    }
+
+    async fn file_sent(&mut self, id: String, result: Result<(), Refusal>) {
+        let Some(connector_id) = self.files.remove(&id) else {
+            return;
+        };
+        if self.gone {
+            return;
+        }
+        let message = match result {
+            Ok(()) => json!({"jsonrpc": "2.0", "id": connector_id, "result": {}}),
+            Err(refusal) => {
+                let word = reason_word(refusal.reason);
+                let mut data = json!({"reason": word});
+                if let Some(detail) = refusal.detail {
+                    data["detail"] = detail.into();
+                }
+                json!({"jsonrpc": "2.0", "id": connector_id,
+                    "error": {"code": -32000, "message": word, "data": data}})
+            }
+        };
+        if write_line(&mut self.writer, &message).await.is_err() {
+            self.gone = true;
         }
     }
 }
@@ -497,11 +560,27 @@ fn refusal(error: &Value) -> Refusal {
         "already_answered" => Reason::AlreadyAnswered,
         "nothing_to_do" => Reason::NothingToDo,
         "invalid" => Reason::Invalid,
+        "not_allowed" => Reason::NotAllowed,
         _ => Reason::Failed,
     };
     Refusal {
         reason,
         detail: data["detail"].as_str().map(String::from),
+    }
+}
+
+/// The word for a reason, as the socket writes it.
+fn reason_word(reason: Reason) -> &'static str {
+    match reason {
+        Reason::NotSupported => "not_supported",
+        Reason::Busy => "busy",
+        Reason::UnknownItem => "unknown_item",
+        Reason::NotWaiting => "not_waiting",
+        Reason::AlreadyAnswered => "already_answered",
+        Reason::NothingToDo => "nothing_to_do",
+        Reason::Invalid => "invalid",
+        Reason::Failed => "failed",
+        Reason::NotAllowed => "not_allowed",
     }
 }
 
@@ -647,6 +726,54 @@ mod tests {
         answering.await.unwrap();
     }
 
+    // A connector asks the core to send a file, and hears back how it went: sent, or refused
+    // with the reason and the words for the agent (D-090).
+    #[tokio::test]
+    async fn a_connector_asks_to_send_a_file_and_hears_how_it_went() {
+        let (core, connector) = UnixStream::pair().unwrap();
+        let (read, mut write) = connector.into_split();
+        write
+            .write_all(hello(json!(TOKEN)).as_bytes())
+            .await
+            .unwrap();
+        let mut driver = greeted(core).await;
+        let mut lines = BufReader::new(read).lines();
+        let _welcome = lines.next_line().await.unwrap();
+        for id in [json!(7), json!("eight")] {
+            let ask = json!({"jsonrpc": "2.0", "id": id, "method": "send_file",
+                "params": {"chat": "c-1", "path": "/work/notes.txt"}});
+            write
+                .write_all(format!("{ask}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+        let mut asked = Vec::new();
+        for _ in 0..2 {
+            match driver.next_event().await {
+                Some(Output::SendFile(file)) => asked.push(file),
+                _ => panic!("a file to send"),
+            }
+        }
+        assert_eq!(asked[0].chat, "c-1".into());
+        assert_eq!(asked[0].path, PathBuf::from("/work/notes.txt"));
+        driver.file_sent(asked[0].id.clone(), Ok(())).await;
+        let refusal = Refusal {
+            reason: Reason::NotAllowed,
+            detail: Some("The file is outside the folders.".into()),
+        };
+        driver.file_sent(asked[1].id.clone(), Err(refusal)).await;
+        let sent: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(sent, json!({"jsonrpc": "2.0", "id": 7, "result": {}}));
+        let refused: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(refused["id"], "eight");
+        assert_eq!(refused["error"]["data"]["reason"], "not_allowed");
+        assert_eq!(
+            refused["error"]["data"]["detail"],
+            "The file is outside the folders."
+        );
+    }
+
     // The harness's own message reaches the core exactly as the connector wrote it (D-007).
     #[tokio::test]
     async fn a_native_message_arrives_exactly() {
@@ -664,7 +791,11 @@ mod tests {
             .write_all(format!("{event}\n").as_bytes())
             .await
             .unwrap();
-        let emitted = driver.next_event().await.expect("the event");
+        let emitted = driver
+            .next_event()
+            .await
+            .and_then(Output::into_event)
+            .expect("the event");
         assert_eq!(emitted.event.native().unwrap().payload.get(), payload);
         assert_eq!(emitted.event.header().harness, "script");
         assert_eq!(emitted.event.header().seq, 1);
