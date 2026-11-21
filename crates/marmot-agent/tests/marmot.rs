@@ -116,7 +116,7 @@ impl Driver for Echo {
 // words as a chat message and its turn as an item that names the message it answered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_person_writes_to_the_agent_and_reads_its_answer() {
-    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let world = World::new("name = \"Echo\"\n[codex]\ncwd = \"/unused\"\n").await;
     let prompts = Arc::new(AtomicUsize::new(0));
     world.runtime.start().await.unwrap();
     let core = world.start(Echo::new(prompts.clone()));
@@ -133,6 +133,8 @@ async fn a_person_writes_to_the_agent_and_reads_its_answer() {
         .unwrap();
 
     let words = world.words(&group_hex, "echo: hello").await;
+    let name = world.runtime.display_name_for_account_id(&world.agent);
+    assert_eq!(name.as_deref(), Some("Echo"), "the name from the settings");
     assert!(words.tags.iter().any(|t| t[0] == "turn"));
     let turn = eventually(|| {
         let items = world.items(&group_hex).into_iter().map(|(_, read)| read);

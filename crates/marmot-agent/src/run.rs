@@ -136,6 +136,7 @@ impl<D: Driver> Core<D> {
         mut events: tokio::sync::broadcast::Receiver<MarmotAppEvent>,
         stop: impl std::future::Future<Output = ()>,
     ) {
+        self.publish_name().await;
         let recovered = self.conversation.recover();
         self.carry_out_whole(recovered).await;
         self.consider_invitations().await;
@@ -160,6 +161,26 @@ impl<D: Driver> Core<D> {
         }
         let ended = self.conversation.ended();
         self.carry_out_whole(ended).await;
+    }
+
+    /// Publishes the agent's name from the settings as its profile, so people see it.
+    async fn publish_name(&mut self) {
+        let Some(name) = self.config.name.clone() else {
+            return;
+        };
+        let profile = marmot_app::UserProfileMetadata {
+            name: Some(name.clone()),
+            display_name: Some(name),
+            ..marmot_app::UserProfileMetadata::default()
+        };
+        let published = self
+            .marmot
+            .runtime
+            .publish_user_profile_using_account_relays(&self.marmot.label, profile)
+            .await;
+        if published.is_err() {
+            eprintln!("marmot-agent: the agent's name could not be published");
+        }
     }
 
     async fn on_marmot(&mut self, event: MarmotAppEvent) {

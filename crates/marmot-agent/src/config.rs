@@ -2,6 +2,7 @@
 //!
 //! ```toml
 //! home = "/home/me/.local/share/marmot-agent/codex"   # the account home
+//! name = "Codex"                       # the agent's name, as people see it
 //! relays = ["wss://relay.example"]
 //! owner = "<the owner's public key, in hex>"
 //! prompt = "owner"                     # or "everyone", or { people = ["<hex>", ...] }
@@ -28,6 +29,10 @@ use std::path::{Path, PathBuf};
 pub struct Config {
     /// The account home: the agent's keys and encrypted storage.
     pub home: PathBuf,
+    /// The agent's name, as people in its chats see it. Published as its profile each time the
+    /// core starts; without one, the agent keeps the name MDK made up for it.
+    #[serde(default)]
+    pub name: Option<String>,
     /// The relays the account uses.
     pub relays: Vec<String>,
     /// Who owns the agent.
