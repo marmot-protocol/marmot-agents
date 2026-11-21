@@ -64,6 +64,12 @@ impl Echo {
 
     fn emit(&mut self, prompt: &Prompt, item: &str, state: State, body: Body, text: &str) {
         self.seq += 1;
+        // Only a turn names the prompts it responds to.
+        let prompts = if matches!(body, Body::Turn(_)) {
+            vec![prompt.message.clone()]
+        } else {
+            Vec::new()
+        };
         let header = Header {
             harness: "echo".into(),
             session: Some("s1".into()),
@@ -77,7 +83,7 @@ impl Echo {
         let _ = self.to_self.send(Emitted {
             event: AgentEvent::new(header, body, None).unwrap(),
             chat: Some(prompt.chat.id.clone()),
-            prompts: vec![prompt.message.clone()],
+            prompts,
             settles: Vec::new(),
         });
     }
