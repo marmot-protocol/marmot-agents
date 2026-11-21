@@ -557,8 +557,8 @@ What only the wording holds, and the translator therefore does not have:
    the question id. Sending the answer as a prompt left the question unanswered for fifteen minutes.
 8. **Who may speak can be decided before OpenClaw, inside it, or both.** The plugin supplies the policy and
    lists that OpenClaw judges by, and receives a verdict it can act on. So the plugin can tell a disallowed
-   person, which D-010 wants. Which list governs is open
-   ([Q-22](../open-questions.md#q-22-whose-rules-govern-a-gateway)).
+   person, which D-010 wants. The core's list governs, and the
+   plugin hands OpenClaw an open policy ([D-084](../decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)).
 9. **OpenClaw decides its own sessions, and the plugin shapes them.** A group is one session. All direct
    chats share one unless the plugin or the owner arranges otherwise. A private messenger must not leave that
    default in place by accident.

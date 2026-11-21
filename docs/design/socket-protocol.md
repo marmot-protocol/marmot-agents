@@ -10,8 +10,8 @@ the ids a connector sees, how often a prompt is delivered, and the credential
 [D-038](../decisions.md#d-038-each-connector-has-its-own-token)). They are listed [at the end](#what-was-decided).
 
 The core speaks the driver section now, with the fields in [the messages, as built](#the-messages-as-built):
-the trait's shapes ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)), provisional until
-the project owner reviews them at the end of M2. Not designed: the individual requests of the chat section, and
+the trait's shapes ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)), accepted at the
+end of M2 ([D-081](../decisions.md#d-081-the-socket-messages-as-built-are-accepted)). Not designed: the individual requests of the chat section, and
 administration ([Q-05](../open-questions.md#q-05-how-is-the-agent-administered)).
 
 ## What it is for
@@ -258,8 +258,8 @@ In the chat this is one message from the agent, and three rows that each updated
 
 ## The messages, as built
 
-What `crates/marmot-agent/src/socket.rs` sends and reads. Provisional: the project owner reviews them at the end
-of M2. The socket is `socket/marmot-agent.sock` in the agent's home, in a folder only the owner can open, and the
+What `crates/marmot-agent/src/socket.rs` sends and reads. Decided at the end of M2
+([D-081](../decisions.md#d-081-the-socket-messages-as-built-are-accepted)). The socket is `socket/marmot-agent.sock` in the agent's home, in a folder only the owner can open, and the
 token is `connector.token` there, which the core writes the first time ([D-038](../decisions.md#d-038-each-connector-has-its-own-token)).
 
 **The hello**, the connector's first request:

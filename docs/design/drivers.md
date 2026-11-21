@@ -140,7 +140,8 @@ node src/main.ts --home <agent home> --cwd <project folder> [--model <model>] [-
 ```
 
 It finds the socket and its token in the agent's home, and exits when the core closes the socket. It loads no
-Claude Code settings files (the SDK's `settingSources` is empty), so no allow rule or hook in the owner's own
+Claude Code settings files (the SDK's `settingSources` is empty,
+[D-082](../decisions.md#d-082-the-claude-code-driver-loads-no-claude-code-settings-files)), so no allow rule or hook in the owner's own
 Claude Code settings approves or runs anything in a chat; a side effect is that it reads no `CLAUDE.md` either.
 It has the
 same two halves as the Codex driver. The translator (`src/translate.ts`) turns one chat's Claude Code messages
@@ -168,7 +169,8 @@ session per chat:
 Its capabilities: it can interrupt; a message sent during a turn ends the turn and starts another (`restart`,
 [D-040](../decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness)); the core names the
 sessions, and they can be resumed; approvals come to the chat; no approval commands. It takes no files yet
-(`files_in` is `none`), which is provisional: Claude Code reads images, and passing them on is a later step.
+(`files_in` is `none`, [D-083](../decisions.md#d-083-the-core-passes-no-files-to-a-harness-yet)): Claude Code reads images, and
+passing them on is a later step.
 
 ## Adding a harness
 

@@ -240,8 +240,8 @@ The events by type: 51 `notice`, 40 `turn`, 17 `message`, 10 `approval`, 2 `ques
 5. **Hermes drops a disallowed sender silently.** Decision
    [D-010](../decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve) wants that person told, so
    the core has to do it before the message reaches Hermes.
-6. **Two allow-lists exist.** Hermes has its own, and the core has the owner's. Which one governs, and how they
-   stay consistent, is open ([Q-22](../open-questions.md#q-22-whose-rules-govern-a-gateway)).
+6. **Two allow-lists exist.** Hermes has its own, and the core has the owner's. The core's governs, and Hermes's is
+   set to allow whatever the core lets through ([D-084](../decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)).
 7. **Hermes talks for itself.** Notices, heartbeats and command output arrive beside the agent's words. The
    connector has to tell them apart, and somebody has to decide which of them a group should see.
 8. **For Hermes, controls are text.** "Interrupt" from the chat becomes the message `/stop`. The connector
