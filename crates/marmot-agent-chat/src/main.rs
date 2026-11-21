@@ -2,16 +2,8 @@
 //!
 //! It holds one person's account, talks to the agent in a Marmot group, shows each of the agent's
 //! items as it changes, and sends answers and controls. How it shows an item is a plain reference
-//! for the apps. It knows the temporary carrier of D-069.
-//!
-//! A try on one machine, with nothing else running:
-//!
-//! ```text
-//! marmot-agent-chat /tmp/person --serve 7777    # a relay on port 7777, and the person's account
-//! marmot-agent init settings.toml               # relays = ["ws://127.0.0.1:7777"], owner = the
-//! marmot-agent run settings.toml                #   person's key, allow_loopback_relays = true
-//! :invite <the agent's key>                     # typed in the chat, then talk to it
-//! ```
+//! for the apps. It knows the temporary carrier of D-069. How to try the core with it is in
+//! `docs/try.md`.
 //!
 //! Typed lines are messages, sent exactly as typed, slash commands included (D-031). Lines that
 //! start with `:` are for this client:
@@ -19,8 +11,10 @@
 //! ```text
 //! :invite <key>          start a direct chat with the agent
 //! :group <name> <key>    make a named group with the agent in it
-//! :allow   :deny         answer the approval that is waiting
-//! :answer <text>         answer the question that is waiting
+//! :allow   :deny         answer the latest approval waiting in this chat, allowing once
+//! :choose <id>           answer it with the choice of that id
+//! :answer <text>         answer the question waiting in this chat with text
+//! :pick <id>             answer it with the option of that id
 //! :stop                  interrupt the running turn
 //! :new                   start a new session
 //! :set <id> <value>      change one of the session's settings
@@ -32,7 +26,7 @@ use marmot_account::AccountHome;
 use marmot_agent::carrier::{self, Asked, AskedReply, ITEM_KIND, Read};
 use marmot_agent::{EventKey, PubKey};
 use marmot_agent_events::State;
-use marmot_agent_events::body::{Body, Effect};
+use marmot_agent_events::body::{Body, Choice, Effect};
 use marmot_app::{
     AccountSetupRequest, MarmotApp, MarmotAppConfig, MarmotAppEvent, MarmotAppRuntime,
 };
@@ -48,8 +42,18 @@ struct Client {
     me: String,
     /// The chat being talked in, and the agent in it.
     chat: Option<(GroupId, PubKey)>,
-    /// Each item's latest version, by its first event.
-    items: HashMap<EventKey, Read>,
+    /// Each item's latest version, by its first event, with where it came from and when.
+    items: HashMap<EventKey, Seen>,
+    /// How many item versions have arrived, to tell the latest.
+    arrived: u64,
+}
+
+/// An item's latest version, and where and when it arrived.
+struct Seen {
+    read: Read,
+    group: String,
+    sender: String,
+    order: u64,
 }
 
 fn main() -> ExitCode {
@@ -122,6 +126,7 @@ async fn run(home: &str, options: &[String]) -> Result<(), String> {
         me,
         chat: None,
         items: HashMap::new(),
+        arrived: 0,
     };
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     loop {
@@ -156,31 +161,37 @@ impl Client {
         match words.as_slice() {
             [] => Ok(()),
             [":invite", key] => {
+                let key = marmot_app::account_id_hex_from_ref(key).map_err(|_| "not a key")?;
                 let group = self
                     .runtime
-                    .start_direct_conversation(&self.me, key)
+                    .start_direct_conversation(&self.me, &key)
                     .await
-                    .map_err(
-                        |_| "the agent could not be invited; is its key package on the relay?",
-                    )?;
-                self.chat = Some((group, PubKey::from(*key)));
+                    .map_err(|_| "the agent could not be invited; is it on the relay?")?;
+                self.chat = Some((group, PubKey(key)));
                 println!("· invited; waiting for the agent to accept");
                 Ok(())
             }
             [":group", name, key] => {
+                let key = marmot_app::account_id_hex_from_ref(key).map_err(|_| "not a key")?;
                 let made = self
                     .runtime
-                    .create_group(&self.me, name, &[key.to_string()], None)
+                    .create_group(&self.me, name, std::slice::from_ref(&key), None)
                     .await
                     .map_err(|_| "the group could not be made")?;
                 let group = made.operation.ok_or("the agent could not be added")?;
-                self.chat = Some((group, PubKey::from(*key)));
-                println!("· group made; mention the agent with nostr:<its npub> to address it");
+                let npub = marmot_app::npub_for_account_id(&key).unwrap_or_default();
+                self.chat = Some((group, PubKey(key)));
+                println!("· group made; address the agent by writing nostr:{npub}");
                 Ok(())
             }
-            [":allow"] => self.approve(Effect::Allow).await,
-            [":deny"] => self.approve(Effect::Deny).await,
-            [":answer", ..] => self.answer(line.trim_start_matches(":answer").trim()).await,
+            [":allow"] => self.approve(|c| c.effect == Effect::Allow).await,
+            [":deny"] => self.approve(|c| c.effect == Effect::Deny).await,
+            [":choose", id] => self.approve(|c| c.id == *id).await,
+            [":answer", ..] => {
+                let text = line.trim_start_matches(":answer").trim().to_string();
+                self.answer(None, Some(text)).await
+            }
+            [":pick", id] => self.answer(Some(id.to_string()), None).await,
             [":stop"] => self.ask(None, Asked::Interrupt, "Stop").await,
             [":new"] => self.ask(None, Asked::NewSession, "New session").await,
             [":set", setting, value] => {
@@ -203,35 +214,56 @@ impl Client {
         }
     }
 
-    /// Answers the approval that is waiting with its first choice of the given effect.
-    async fn approve(&mut self, effect: Effect) -> Result<(), String> {
-        let (target, choice) = self
-            .waiting()
-            .find_map(|(first, read)| match read.item.event.body() {
-                Body::Approval(a) => {
-                    let choice = a.choices.iter().find(|c| c.effect == effect)?;
-                    Some((first.clone(), choice.clone()))
-                }
-                _ => None,
-            })
-            .ok_or("no approval is waiting")?;
+    /// Answers the latest approval waiting in this chat with the first choice `wanted` picks. The
+    /// first choice that allows is "Allow once"; a standing one comes after it.
+    async fn approve(&mut self, wanted: impl Fn(&Choice) -> bool) -> Result<(), String> {
+        let (target, choice) = {
+            let (target, seen) = self
+                .waiting(|b| matches!(b, Body::Approval(_)))
+                .ok_or("no approval is waiting in this chat")?;
+            let Body::Approval(approval) = seen.read.item.event.body() else {
+                unreachable!()
+            };
+            let choice = approval
+                .choices
+                .iter()
+                .find(|c| wanted(c))
+                .ok_or("no such choice")?;
+            (target.clone(), choice.clone())
+        };
         let asked = Asked::Choice { choice: choice.id };
         self.ask(Some(target), asked, &choice.label).await
     }
 
-    /// Answers the first question of the question item that is waiting with typed text.
-    async fn answer(&mut self, text: &str) -> Result<(), String> {
-        let (target, question) = self
-            .waiting()
-            .find_map(|(first, read)| match read.item.event.body() {
-                Body::Question(q) => Some((first.clone(), q.questions().first()?.id.clone())),
-                _ => None,
-            })
-            .ok_or("no question is waiting")?;
+    /// Answers the first question of the question item waiting in this chat, with an option or
+    /// text. A secret is sent only in a two-person chat, where nobody else reads it (D-041).
+    async fn answer(&mut self, option: Option<String>, text: Option<String>) -> Result<(), String> {
+        let (target, question, secret) = {
+            let (target, seen) = self
+                .waiting(|b| matches!(b, Body::Question(_)))
+                .ok_or("no question is waiting in this chat")?;
+            let Body::Question(item) = seen.read.item.event.body() else {
+                unreachable!()
+            };
+            let asked = item
+                .questions()
+                .first()
+                .ok_or("the question asks nothing")?;
+            (target.clone(), asked.id.clone(), asked.secret)
+        };
+        if secret {
+            let (group, _) = self.chat.as_ref().ok_or("no chat yet")?;
+            let state = self.runtime.group_mls_state(&self.me, group).await;
+            if state.map_or(true, |s| s.member_count != 2) {
+                return Err(
+                    "a secret is answered only in a two-person chat; use the terminal".into(),
+                );
+            }
+        }
         let reply = AskedReply {
             question,
-            options: Vec::new(),
-            text: Some(text.to_string()),
+            options: option.into_iter().collect(),
+            text,
         };
         let asked = Asked::Questions {
             questions: vec![reply],
@@ -239,10 +271,16 @@ impl Client {
         self.ask(Some(target), asked, "Answered").await
     }
 
-    fn waiting(&self) -> impl Iterator<Item = (&EventKey, &Read)> {
+    /// The latest item waiting in this chat, from its agent, of the type `kind` picks.
+    fn waiting(&self, kind: impl Fn(&Body) -> bool) -> Option<(&EventKey, &Seen)> {
+        let (group, agent) = self.chat.as_ref()?;
+        let group = hex::encode(group.as_slice());
         self.items
             .iter()
-            .filter(|(_, r)| r.item.event.header().state == State::Waiting)
+            .filter(|(_, s)| s.group == group && s.sender == agent.as_str())
+            .filter(|(_, s)| s.read.item.event.header().state == State::Waiting)
+            .filter(|(_, s)| kind(s.read.item.event.body()))
+            .max_by_key(|(_, s)| s.order)
     }
 
     async fn ask(
@@ -264,12 +302,9 @@ impl Client {
         if message.sender == self.me {
             return;
         }
-        let name = message
-            .sender_display_name
-            .clone()
-            .unwrap_or_else(|| "agent".into());
+        let name = clean(message.sender_display_name.as_deref().unwrap_or("agent"));
         if message.kind == CHAT {
-            println!("{name}: {}", message.plaintext);
+            println!("{name}: {}", clean(&message.plaintext));
             return;
         }
         if message.kind != ITEM_KIND {
@@ -286,17 +321,36 @@ impl Client {
         if self
             .items
             .get(&first)
-            .is_some_and(|known| known.item.version >= read.item.version)
+            .is_some_and(|known| known.read.item.version >= read.item.version)
         {
             return;
         }
-        println!("{}", line_for(&read));
-        self.items.insert(first, read);
+        for line in lines_for(&read) {
+            println!("{line}");
+        }
+        self.arrived += 1;
+        let seen = Seen {
+            read,
+            group: hex::encode(message.group_id.as_slice()),
+            sender: message.sender,
+            order: self.arrived,
+        };
+        self.items.insert(first, seen);
     }
 }
 
-/// One line for an item's latest version: its type and state, title and plain rendering.
-fn line_for(read: &Read) -> String {
+/// Text from the chat as it may be printed: no control characters, so nothing received can move
+/// the cursor or overwrite what the person reads before they answer.
+fn clean(text: &str) -> String {
+    text.chars()
+        .map(|c| if c == '\n' || c == '\t' { ' ' } else { c })
+        .filter(|c| !c.is_control())
+        .collect()
+}
+
+/// The lines for an item's latest version: its type and state, title and plain rendering, and for
+/// one that waits, what can be answered.
+fn lines_for(read: &Read) -> Vec<String> {
     let event = &read.item.event;
     let header = event.header();
     let kind = match event.body() {
@@ -313,12 +367,7 @@ fn line_for(read: &Read) -> String {
         Body::Session(_) => "session",
     };
     let state = format!("{:?}", header.state).to_lowercase();
-    let hint = match event.body() {
-        Body::Approval(_) if header.state == State::Waiting => "  (:allow or :deny)",
-        Body::Question(_) if header.state == State::Waiting => "  (:answer <text>)",
-        _ => "",
-    };
-    let mut text = header.text.replace('\n', " ");
+    let mut text = clean(&header.text);
     if text.len() > 160 {
         let mut end = 160;
         while !text.is_char_boundary(end) {
@@ -327,5 +376,35 @@ fn line_for(read: &Read) -> String {
         text.truncate(end);
         text.push('…');
     }
-    format!("  [{kind} · {state}] {}: {text}{hint}", header.title)
+    let title = clean(&header.title);
+    let mut lines = vec![format!("  [{kind} · {state}] {title}: {text}")];
+    if header.state != State::Waiting {
+        return lines;
+    }
+    match event.body() {
+        Body::Approval(approval) => {
+            let choices: Vec<String> = approval
+                .choices
+                .iter()
+                .map(|c| format!("{} ({})", clean(&c.label), clean(&c.id)))
+                .collect();
+            lines.push(format!(
+                "    :allow, :deny or :choose <id>: {}",
+                choices.join(", ")
+            ));
+        }
+        Body::Question(question) => {
+            for asked in question.questions() {
+                let secret = if asked.secret { " (secret)" } else { "" };
+                lines.push(format!("    ? {}{secret}", clean(&asked.text)));
+                for option in &asked.options {
+                    let (id, label) = (clean(&option.id), clean(&option.label));
+                    lines.push(format!("      :pick {id}  {label}"));
+                }
+            }
+            lines.push("    :answer <text> answers the first question".into());
+        }
+        _ => {}
+    }
+    lines
 }

@@ -9,10 +9,11 @@ compiler that MDK uses: see "Verification" in [`AGENTS.md`](../AGENTS.md).
 
 ## Steps
 
-1. Build both programs:
+1. Build both programs, and make a folder for Codex to work in:
 
    ```sh
    cargo build -p marmot-agent -p marmot-agent-chat
+   mkdir -p /tmp/try/work
    ```
 
 2. Start the client. It runs a relay on port 7777, makes your account in the folder you give, and prints your
@@ -32,7 +33,7 @@ compiler that MDK uses: see "Verification" in [`AGENTS.md`](../AGENTS.md).
    allow_loopback_relays = true
 
    [codex]
-   cwd = "/tmp/try/work"           # where Codex works; it must exist
+   cwd = "/tmp/try/work"           # where Codex works
    approval_policy = "untrusted"   # so Codex asks before most commands
    ```
 
@@ -50,8 +51,8 @@ compiler that MDK uses: see "Verification" in [`AGENTS.md`](../AGENTS.md).
    Run `touch hello.txt` in the shell.
    ```
 
-Each of the agent's items shows on one line, again each time it changes. When it asks, type `:allow` or
-`:deny`. `:stop` interrupts a turn, `:new` starts a new session, and `:set <setting> <value>` changes one of
+Each of the agent's items shows on one line, again each time it changes. When it asks, type `:allow` (once)
+or `:deny`, or `:choose` one of the choices shown; answer a question with `:answer <text>` or `:pick` an option. `:stop` interrupts a turn, `:new` starts a new session, and `:set <setting> <value>` changes one of
 the session's settings. A message that starts with a slash goes to Codex as typed.
 
 The relay keeps nothing when the client stops, so start again from step 2 with fresh folders.

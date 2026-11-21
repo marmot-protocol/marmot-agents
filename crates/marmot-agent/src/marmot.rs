@@ -331,8 +331,12 @@ fn group_id(group: &GroupKey) -> Option<GroupId> {
 
 /// The text without the mention of the agent that addressed it, which the harness need not read.
 fn without_mention(text: &str, agent: &PubKey) -> String {
-    let mention = format!("nostr:{}", agent.as_str());
-    text.replace(&mention, "").trim().to_string()
+    let Ok(npub) = marmot_app::npub_for_account_id(agent.as_str()) else {
+        return text.to_string();
+    };
+    let mut text = text.replace(&format!("nostr:{npub}"), "");
+    text = text.replace(&format!("@{npub}"), "");
+    text.trim().to_string()
 }
 
 /// Seconds since the epoch.
