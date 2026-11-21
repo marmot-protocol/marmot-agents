@@ -96,6 +96,15 @@ survive a crash, catching up after being offline, and the switch to MDK's 1201 a
 **Done when** an install of each of today's connectors has moved over, on a test machine, without being
 invited again.
 
+Built so far, provisional until the owner accepts what others can see:
+
+- **An agent sending a file.** A driver asks the core to send a file, and the core sends it from an allowed
+  folder as an encrypted attachment tagged with its turn. Codex and Claude Code each get a `send_file` tool;
+  connectors on the socket send a `send_file` request. See
+  [sending a file](design/drivers.md#sending-a-file) and
+  [the socket's `send_file`](design/socket-protocol.md#the-messages-as-built). Pi and the ACP agents, and the
+  Hermes and OpenClaw plugins, do not offer it yet.
+
 ## Outside this repository
 
 These are the project owner's to arrange. This repository does not change MDK.

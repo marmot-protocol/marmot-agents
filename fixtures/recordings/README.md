@@ -22,7 +22,7 @@ The prompts are scripted and are in the recorder sources.
 
 ## Scenarios
 
-57 recordings of coding harnesses: 28 with Codex and 29 with Claude Code. Hermes has 27 more, OpenClaw 39 and
+58 recordings of coding harnesses: 29 with Codex and 29 with Claude Code. Hermes has 27 more, OpenClaw 39 and
 Pi 17, described below: [Hermes](#hermes), [OpenClaw](#openclaw), [Pi](#pi).
 
 | Scenario | What it exercises | Codex | Claude |
@@ -59,8 +59,11 @@ Pi 17, described below: [Hermes](#hermes), [OpenClaw](#openclaw), [Pi](#pi).
 | `resume_with_settings` | A session is resumed, with the approval policy and the sandbox sent again | yes | |
 | `permission_mode_switch` | The client changes the permission mode between two turns | | yes |
 | `early_info` | Before any prompt, the client asks what the session offers and waits five seconds | | yes |
+| `send_file` | The agent calls the client's own `send_file` tool: one call answered as sent, one refused; then the app server is restarted, the session resumed, and the tool called again | yes | |
 
-The last six rows were recorded on 2026-11-18, to check the three shared controls and the `session` item.
+The six rows before the last were recorded on 2026-11-18, to check the three shared controls and the `session`
+item. `send_file` was recorded on 2026-11-21 with codex-cli 0.169.0, for the tool the Codex driver gives every
+session ([D-090](../../docs/decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)).
 
 Things that did not go as scripted, and are useful for that reason:
 

@@ -9,7 +9,7 @@ how each message relates to the proposed [event model](../design/event-model.md)
 
 | Source | What it is | How it was used |
 | --- | --- | --- |
-| [`fixtures/recordings`](../../fixtures/recordings/README.md) | 57 scripted sessions, 28 with Codex and 29 with Claude Code, recorded on 2026-11-17 and 2026-11-18, and six more Codex sessions with subagents, recorded on 2026-11-20 | Read in full. Every claim on this page about order, fields and behaviour comes from these |
+| [`fixtures/recordings`](../../fixtures/recordings/README.md) | 58 scripted sessions, 29 with Codex and 29 with Claude Code, recorded on 2026-11-17 and 2026-11-18 (Codex's `send_file` on 2026-11-21), and six more Codex sessions with subagents, recorded on 2026-11-20 | Read in full. Every claim on this page about order, fields and behaviour comes from these |
 | [`data/claude-sdk-message-structures.txt`](data/claude-sdk-message-structures.txt) | The structure of 176,652 Claude Agent SDK messages from four days of real use on one developer's machine | Counts and field names only. No content was read or kept |
 | Codex's generated protocol schema | `codex app-server generate-json-schema`, codex-cli 0.169.0 | The list of methods |
 | [`fixtures/recordings/acp/opencode`](../../fixtures/recordings/README.md#acp-opencode) | 12 scripted sessions with OpenCode 2.3.2 over ACP, recorded on 2026-11-21 | Read in full, for the [ACP section](#acp-opencode) only |
@@ -72,6 +72,23 @@ Everything the agent does is an **item** with a stable `id`. It arrives as `item
 | `plan` | `plan_mode` | `text`: the plan as Markdown |
 | `contextCompaction` | `compact` | Start and end only |
 | `sleep` | `question` | `durationMs`. The agent waiting for something |
+| `dynamicToolCall` | `send_file` | `tool`, `namespace` (null), `arguments`, `status` (`completed`, `failed`), `contentItems` (what the client answered), `success` |
+
+### A tool the client gives the session
+
+Recorded on 2026-11-21 in `send_file`, with codex-cli 0.169.0. `thread/start` takes `dynamicTools`, a list of
+`{type: "function", name, description, inputSchema}`; the field is experimental, so the client must ask for
+`experimentalApi` in `initialize`, as the driver already does. When the model calls the tool, Codex sends
+`item/started` with a `dynamicToolCall` item, then the request `item/tool/call` (`threadId`, `turnId`, `callId`,
+`tool`, `arguments`), and waits. The client answers `{contentItems: [{type: "inputText", text}], success}`, and
+`item/completed` follows with that answer in the item and `status` `failed` when `success` was false.
+
+- The model gave a path relative to the working folder (`notes.txt`) and, asked to, an absolute one outside it.
+- After the app server was restarted, `thread/resume` took no `dynamicTools` and the resumed session still had
+  the tool: the model called it again. Codex keeps a session's tools with the session.
+- No approval was asked for a call, with the approval policy `never`. Under `untrusted` none was asked either:
+  the Codex scenario (`crates/marmot-agent/tests/codex.rs`) sent a file that way on 2026-11-21. That was seen in
+  the scenario, not recorded.
 
 ### A turn with an approval
 

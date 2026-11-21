@@ -11,8 +11,9 @@ the ids a connector sees, how often a prompt is delivered, and the credential
 
 The core speaks the driver section now, with the fields in [the messages, as built](#the-messages-as-built):
 the trait's shapes ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)), accepted at the
-end of M2 ([D-081](../decisions.md#d-081-the-socket-messages-as-built-are-accepted)). Not designed: the individual requests of the chat section, and
-administration ([Q-05](../open-questions.md#q-05-how-is-the-agent-administered)).
+end of M2 ([D-081](../decisions.md#d-081-the-socket-messages-as-built-are-accepted)). One request of the chat
+section, `send_file`, is built and is a proposal until the owner accepts it. Not designed: the other requests of
+the chat section, and administration ([Q-05](../open-questions.md#q-05-how-is-the-agent-administered)).
 
 ## What it is for
 
@@ -168,9 +169,10 @@ What an agent may do is decided
 These are ordinary Marmot actions. A delete is an ordinary deletion of a chat message, and the tool call that
 caused it still arrives as a `tool` item.
 
-An agent sends a file as an encrypted chat attachment, from a folder the settings allow
-([D-090](../decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)); the
-request a connector makes for it is not designed yet, nor are the other individual requests.
+An agent's file goes to the chat as an encrypted attachment, only from folders the settings allow
+([D-090](../decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)). The
+request for it, `send_file`, is built as a proposal: see [the messages, as built](#the-messages-as-built) and
+[sending a file](drivers.md#sending-a-file). The other requests are not designed yet.
 
 ## Capabilities
 
@@ -295,6 +297,19 @@ the eight words above) and, if it likes, a `detail` for the chat.
 `title`, `text`, `body`, and `session`, `turn` and `native` when there are any), with three more fields: `chat`,
 the chat it belongs to; `prompts`, on a turn; and `settles`, the requests whose effect it shows. The connector
 leaves out `harness` and `seq`: the core fills them in.
+
+**`send_file`**, a request from the connector, provisional: the agent sends a file to the chat.
+
+```json
+{"jsonrpc": "2.0", "id": 7, "method": "send_file", "params": {"chat": "c-1", "path": "/home/me/work/report.pdf"}}
+```
+
+`chat` is the core's id for the chat; `path` is absolute. The core answers once the file is sent, with `{}`, or
+with an error whose `data` holds a `reason` and a `detail` for the agent, which names no path:
+`{"code": -32000, "message": "not_allowed", "data": {"reason": "not_allowed", "detail": "The file is outside the
+folders the agent may send files from."}}`. The reasons are the eight above and `not_allowed`, which only the
+core gives. The answer can take as long as the upload; the connector's id is its own, numbered after the hello.
+The protocol version stays `marmot.agent-control.v3`: a connector that never sends the request is unchanged.
 
 ## What it replaces
 
