@@ -11,9 +11,12 @@ use std::fmt;
 macro_rules! id {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
-        #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
         #[serde(transparent)]
         pub struct $name(pub String);
+
+        // The harness made the id, so it is not printed (D-071).
+        crate::opaque_debug!($name);
 
         impl $name {
             /// The id as text.
@@ -62,7 +65,7 @@ id!(
 /// An event cannot be changed once it is built, because one rule ties its parts together: a
 /// question item that has a secret question carries a native message only while it is waiting
 /// for an answer (D-056). An event that breaks the rule cannot be built, and cannot be read from JSON.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "Unchecked")]
 pub struct AgentEvent {
     #[serde(flatten)]
@@ -117,7 +120,7 @@ impl AgentEvent {
 }
 
 /// The parts every item shares, whatever its type.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Header {
     /// Which harness produced the event.
     pub harness: String,
@@ -181,7 +184,7 @@ impl TryFrom<Unchecked> for AgentEvent {
 /// Two things leave it out of an event. A secret question that is no longer waiting carries
 /// none (D-056), which [`AgentEvent::new`] holds. And the core leaves it out of an item over 64 KB
 /// (D-026, D-057). A driver never leaves it out to fit that limit.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Native {
     /// What the harness calls this message, such as `item/completed`.
     pub kind: String,
@@ -192,5 +195,36 @@ pub struct Native {
 impl PartialEq for Native {
     fn eq(&self, other: &Self) -> bool {
         self.kind == other.kind && self.payload.get() == other.payload.get()
+    }
+}
+
+// What an event prints for debugging is where it stands, and nothing anyone said or did: no title
+// or text, no fields of the item, no ids the harness made, no native message (D-071).
+
+impl fmt::Debug for AgentEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AgentEvent")
+            .field("header", &self.header)
+            .field("body", &self.body)
+            .field("native", &self.native)
+            .finish()
+    }
+}
+
+impl fmt::Debug for Header {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Header")
+            .field("harness", &self.harness)
+            .field("seq", &self.seq)
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for Native {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Native")
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
     }
 }

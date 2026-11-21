@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::fmt;
 
 /// An item type together with its own fields.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "body", rename_all = "snake_case")]
 pub enum Body {
     /// A turn started or ended.
@@ -41,7 +41,7 @@ pub enum Body {
 // ---------------------------------------------------------------------------------------- turn
 
 /// A turn: who or what started it, and once it has ended, how long it took and what it used.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Turn {
     /// What started the turn.
     pub started_by: StartedBy,
@@ -79,7 +79,7 @@ pub struct Usage {
 // ------------------------------------------------------------------------------------- message
 
 /// Text the agent says. The text itself is the event's `text`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Message {
     /// Whether this is a remark made while working or the final answer, when the harness says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -111,7 +111,7 @@ pub struct Reasoning {}
 ///
 /// The fields a tool has depend on its kind, but not strictly: a command that only reads files
 /// has the kind `read` and still has a `command`. So they are all optional.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Tool {
     /// Which sort of tool it is.
     pub kind: ToolKind,
@@ -172,7 +172,7 @@ pub enum ToolKind {
 }
 
 /// One file changed by an edit.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Change {
     /// The file.
     pub path: String,
@@ -198,7 +198,7 @@ pub enum ChangeKind {
 // ------------------------------------------------------------------------------------ approval
 
 /// The agent wants permission for one action.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Approval {
     /// The item that is waiting for permission, such as the command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -214,7 +214,7 @@ pub struct Approval {
 ///
 /// The id is the driver's own. It is never the harness's value for the choice, which can be an
 /// object. The driver keeps the harness's value and looks it up by this id when an answer comes.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Choice {
     /// The id an answer names.
     pub id: String,
@@ -236,7 +236,7 @@ pub enum Effect {
 }
 
 /// How an approval was answered.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalAnswer {
     /// The id of the choice. Absent when the harness reports a decision the item did not offer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -253,7 +253,7 @@ pub struct ApprovalAnswer {
 ///
 /// The native message of the event is the other place a secret answer could be repeated.
 /// [`AgentEvent::new`](crate::AgentEvent::new) covers that (D-056).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "UncheckedQuestion")]
 pub struct Question {
     answer_via: AnswerVia,
@@ -331,7 +331,7 @@ impl Question {
 }
 
 /// Why a question item was refused.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum BadQuestion {
     /// Two questions in one item have the same id.
     SameId {
@@ -352,16 +352,12 @@ pub enum BadQuestion {
 
 impl fmt::Display for BadQuestion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SameId { question } => write!(f, "two questions have the id `{question}`"),
-            Self::NotAsked { question } => write!(f, "the question `{question}` was not asked"),
-            Self::SecretAnswer { question } => {
-                write!(
-                    f,
-                    "the answer to the secret question `{question}` must not be repeated"
-                )
-            }
-        }
+        // The question's id is left out: the agent wrote it, and an error may be logged (D-071).
+        f.write_str(match self {
+            Self::SameId { .. } => "two questions have the same id",
+            Self::NotAsked { .. } => "an answer names a question that was not asked",
+            Self::SecretAnswer { .. } => "the answer to a secret question must not be repeated",
+        })
     }
 }
 
@@ -401,7 +397,7 @@ pub enum AnswerVia {
 }
 
 /// One question in a question item.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Asked {
     /// The id an answer names.
     pub id: String,
@@ -426,7 +422,7 @@ pub struct Asked {
 }
 
 /// One answer a question offers.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Offered {
     /// The id an answer names.
     pub id: String,
@@ -441,7 +437,7 @@ pub struct Offered {
 ///
 /// It names options by the ids the item offered. For a secret question it names the question and
 /// nothing else: the answer itself is never repeated.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Answered {
     /// The id of the question.
     pub question: String,
@@ -456,7 +452,7 @@ pub struct Answered {
 // ---------------------------------------------------------------------------------------- plan
 
 /// The agent's plan, as text or as a list of steps.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Plan {
     /// The plan as text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -467,7 +463,7 @@ pub struct Plan {
 }
 
 /// One step of a plan.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanEntry {
     /// The step.
     pub text: String,
@@ -490,7 +486,7 @@ pub enum PlanEntryState {
 // ---------------------------------------------------------------------------------------- task
 
 /// Work that runs beside a turn or outlives it: a subagent, a background job.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Task {
     /// The sort of task, in the harness's own word.
     pub kind: String,
@@ -505,7 +501,7 @@ pub struct Task {
 // -------------------------------------------------------------------------------------- notice
 
 /// Something a person should know that is not the agent's own words.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Notice {
     /// What the notice is about.
     pub kind: NoticeKind,
@@ -538,7 +534,7 @@ pub enum NoticeKind {
 // --------------------------------------------------------------------------------------- error
 
 /// Something failed outside any one item.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Error {
     /// What was being attempted, such as the request the harness refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -554,7 +550,7 @@ pub struct Error {
 // ------------------------------------------------------------------------------------- session
 
 /// A session with the harness: what an app can set and do in it (D-029, D-030).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     /// The version of the harness (D-030). A driver that is not told it supplies it (D-044).
     pub harness_version: String,
@@ -570,7 +566,7 @@ pub struct Session {
 }
 
 /// One setting of a session.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Setting {
     /// The id a `set` control names.
     pub id: String,
@@ -589,7 +585,7 @@ pub struct Setting {
 }
 
 /// An action of the harness's own.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Action {
     /// The id a control names.
     pub id: String,
@@ -602,7 +598,7 @@ pub struct Action {
 
 /// One slash command. Its name and its hint are always present. A description is the first thing
 /// left out when the item would be too large (D-045).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Command {
     /// The command, without its slash.
     pub name: String,
@@ -617,4 +613,60 @@ pub struct Command {
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+// What these types print for debugging names the type and nothing it holds: no text, no ids the
+// agent wrote, no answers (D-071).
+crate::opaque_debug!(
+    Turn,
+    Message,
+    Tool,
+    Change,
+    Approval,
+    Choice,
+    ApprovalAnswer,
+    Question,
+    Asked,
+    Offered,
+    Answered,
+    Plan,
+    PlanEntry,
+    Task,
+    Notice,
+    Error,
+    Session,
+    Setting,
+    Action,
+    Command
+);
+
+/// Names the item type, and nothing it holds (D-071).
+impl fmt::Debug for Body {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            Self::Turn(_) => "turn",
+            Self::Message(_) => "message",
+            Self::Reasoning(_) => "reasoning",
+            Self::Tool(_) => "tool",
+            Self::Approval(_) => "approval",
+            Self::Question(_) => "question",
+            Self::Plan(_) => "plan",
+            Self::Task(_) => "task",
+            Self::Notice(_) => "notice",
+            Self::Error(_) => "error",
+            Self::Session(_) => "session",
+        };
+        write!(f, "Body::{name}")
+    }
+}
+
+/// Names what was wrong, and not the question's id, which the agent wrote (D-071).
+impl fmt::Debug for BadQuestion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::SameId { .. } => "BadQuestion::SameId",
+            Self::NotAsked { .. } => "BadQuestion::NotAsked",
+            Self::SecretAnswer { .. } => "BadQuestion::SecretAnswer",
+        })
+    }
 }

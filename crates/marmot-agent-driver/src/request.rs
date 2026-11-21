@@ -7,9 +7,9 @@
 //! Printing any of these for debugging shows which things a request is about, by their ids, and
 //! what kind of request it is. It never shows a value: no message text, no name, no answer, no
 //! new setting, nothing about an attachment, none of the harness's own words. A log must never
-//! hold those (AGENTS.md, "Privacy"). The ids shown are the core's own, and the ids of settings
-//! and actions that the harness published. A question's id is not shown: the agent writes it,
-//! and it can say what was asked.
+//! hold those (D-071). The ids shown are the core's own, and the ids of settings and actions that
+//! the harness published. A question's id is not shown: the agent writes it, and it can say what
+//! was asked. Nor is a session's or an item's: the harness made them.
 
 use marmot_agent_events::{ItemId, SessionId, TurnId};
 use std::fmt;

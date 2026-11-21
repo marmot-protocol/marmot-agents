@@ -10,6 +10,20 @@
 //! change. This crate knows nothing about any harness, about Marmot, or about how an event is
 //! carried.
 
+/// Implements `Debug` to print a type's name and nothing it holds (D-071).
+macro_rules! opaque_debug {
+    ($($name:ident),* $(,)?) => {
+        $(
+            impl std::fmt::Debug for $name {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    f.write_str(concat!(stringify!($name), " { .. }"))
+                }
+            }
+        )*
+    };
+}
+pub(crate) use opaque_debug;
+
 pub mod body;
 mod event;
 
@@ -347,7 +361,11 @@ mod tests {
         let error = serde_json::from_value::<body::Question>(leaking)
             .unwrap_err()
             .to_string();
-        assert!(error.contains("password"), "{error}");
+        assert!(error.contains("secret question"), "{error}");
+        assert!(
+            !error.contains("password") && !error.contains("hunter2"),
+            "{error}"
+        );
     }
 
     // An answer has to say which question it is for, or the check above could be stepped round:
@@ -447,5 +465,44 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    // What an event prints for debugging holds nothing anyone said or did, and no ids the harness
+    // made, so it can be logged (D-071).
+    #[test]
+    fn a_debug_print_shows_where_an_item_stands_and_nothing_it_holds() {
+        let printed = format!(
+            "{:?}",
+            event(
+                State::Running,
+                a_command(),
+                Some(native(r#"{"secret":"greet"}"#))
+            )
+        );
+        for held in ["greet", "/work", "Running a command", "s1", "t1", "i1"] {
+            assert!(!printed.contains(held), "{held} in {printed}");
+        }
+        for shown in ["codex", "Running", "tool", "item/started"] {
+            assert!(printed.contains(shown), "{shown} not in {printed}");
+        }
+    }
+
+    // Each type that holds something prints none of it on its own, not only inside an event.
+    #[test]
+    fn the_parts_of_an_item_print_nothing_they_hold() {
+        let Body::Tool(tool) = a_command() else {
+            unreachable!()
+        };
+        let printed = format!("{tool:?}");
+        assert!(
+            !printed.contains("greet") && !printed.contains("/work"),
+            "{printed}"
+        );
+        let bad = body::BadQuestion::SecretAnswer {
+            question: "password".into(),
+        };
+        for printed in [format!("{bad:?}"), bad.to_string()] {
+            assert!(!printed.contains("password"), "{printed}");
+        }
     }
 }

@@ -186,8 +186,11 @@ impl Codex {
             }
         };
         if let Some(error) = reply.get("error") {
+            // Codex's own words can hold a path, and an error may be logged (D-071): only its code.
+            let code = error["code"].as_i64().map(|c| format!(" (code {c})"));
             return Err(io::Error::other(format!(
-                "codex app-server refused: {error}"
+                "codex app-server refused to start{}",
+                code.unwrap_or_default()
             )));
         }
         // "codex_cli_rs/0.169.0 (…)": the version is the word after the first slash.

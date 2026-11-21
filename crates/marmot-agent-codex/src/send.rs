@@ -57,7 +57,7 @@ impl ApprovalPolicy {
 /// Where a session works and what it may do, from the core's configuration (D-061). The driver
 /// sends all three whenever it starts or resumes a session: a session resumed without them came
 /// back with a wider sandbox than it started with (rule 10 of the event model).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Setup {
     /// The working folder, an absolute path.
     pub cwd: String,
@@ -65,6 +65,16 @@ pub struct Setup {
     pub sandbox: Sandbox,
     /// When Codex asks. The default asks before anything outside the sandbox.
     pub approval_policy: ApprovalPolicy,
+}
+
+/// Leaves out the working folder: a path is not logged (D-071).
+impl std::fmt::Debug for Setup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Setup")
+            .field("sandbox", &self.sandbox)
+            .field("approval_policy", &self.approval_policy)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Setup {

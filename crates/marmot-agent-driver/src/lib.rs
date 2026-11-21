@@ -204,8 +204,9 @@ mod tests {
     }
 
     // This is a private messenger: a log must never hold what a person wrote, their name, what
-    // they answered or chose, or what the agent or the harness said. Anything a driver is handed
-    // or hands back, printed for debugging, shows which things it is about and no value.
+    // they answered or chose, what the agent or the harness said, or an id the harness made
+    // (D-071). Anything a driver is handed or hands back, printed for debugging, shows the core's
+    // own ids and no value.
     #[test]
     fn nothing_printed_for_debugging_shows_a_value() {
         let prompt = Prompt {
@@ -227,8 +228,9 @@ mod tests {
         };
         shows(
             &format!("{prompt:?}"),
-            &["m-31", "m-30", "c-2", "u-1", "s-1"],
+            &["m-31", "m-30", "c-2", "u-1"],
             &[
+                "s-1",
                 "launch code",
                 "what is the code",
                 "Alice Example",
@@ -251,13 +253,19 @@ mod tests {
         // The agent writes a question's id, so it can say what was asked.
         shows(
             &format!("{:?}", answer(Given::Questions(vec![reply]))),
-            &["r-1", "question-1", "u-1"],
-            &["password", "hunter2", "option-7", "Alice Example"],
+            &["r-1", "u-1"],
+            &[
+                "question-1",
+                "password",
+                "hunter2",
+                "option-7",
+                "Alice Example",
+            ],
         );
         shows(
             &format!("{:?}", answer(Given::Choice("choice-allow".into()))),
-            &["question-1"],
-            &["choice-allow"],
+            &["r-1"],
+            &["question-1", "choice-allow"],
         );
 
         let set = Action::Set {
@@ -272,8 +280,8 @@ mod tests {
         };
         shows(
             &format!("{control:?}"),
-            &["r-2", "s-1", "model"],
-            &["a-private-model", "Alice Example"],
+            &["r-2", "model"],
+            &["s-1", "a-private-model", "Alice Example"],
         );
 
         let attachment = Attachment {
@@ -316,8 +324,8 @@ mod tests {
         };
         shows(
             &format!("{emitted:?}"),
-            &["item-9", "c-2", "m-31", "r-2"],
-            &["launch code"],
+            &["c-2", "m-31", "r-2"],
+            &["item-9", "s-1", "t-1", "launch code"],
         );
     }
 }
