@@ -57,23 +57,37 @@ impl Rights {
 
 /// The right a message needs: to approve when it carries one of the harness's typed commands
 /// that approve or widen what the agent may do, where that command counts (D-047), and to prompt
-/// otherwise.
+/// otherwise. A harness reads a command in any case and with a bot's name after it (`/yolo@bot`),
+/// so the match ignores case and ends at anything that cannot continue a command's name. A
+/// command that counts at the start counts at the start of any line, since a harness may drop
+/// lines before it, as Hermes drops lines naming attachments.
 pub fn needed_for(text: &str, commands: &[ApprovalCommand]) -> Right {
-    let found = commands.iter().any(|c| match c.counts {
-        Position::Start => is_word_at(text.trim_start(), 0, &c.command),
-        Position::Anywhere => text
-            .match_indices(c.command.as_str())
-            .any(|(at, _)| is_word_at(text, at, &c.command)),
+    if commands.is_empty() {
+        return Right::Prompt;
+    }
+    let text = text.to_ascii_lowercase();
+    let found = commands.iter().any(|c| {
+        let command = c.command.to_ascii_lowercase();
+        match c.counts {
+            Position::Start => text
+                .lines()
+                .any(|line| is_word_at(line.trim_start(), 0, &command)),
+            Position::Anywhere => text
+                .match_indices(command.as_str())
+                .any(|(at, _)| is_word_at(&text, at, &command)),
+        }
     });
     if found { Right::Approve } else { Right::Prompt }
 }
 
-/// Whether `command` stands at `at` in `text` as a word of its own: nothing but white space
-/// after it, or the end. Before it may be anything, since a command can follow punctuation.
+/// Whether `command` stands at `at` in `text` as a command of its own: what follows cannot
+/// continue its name (a letter, a digit, `_` or `-`), so `/approve`, `/approve.` and
+/// `/approve@bot` count and `/approved` does not. Before it may be anything, since a command can
+/// follow punctuation.
 fn is_word_at(text: &str, at: usize, command: &str) -> bool {
     text[at..].starts_with(command)
         && text[at + command.len()..]
             .chars()
             .next()
-            .is_none_or(char::is_whitespace)
+            .is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == '-'))
 }
