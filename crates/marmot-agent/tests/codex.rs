@@ -44,6 +44,7 @@ async fn codex_end_to_end() {
         world: &world,
         group,
         hex,
+        turn: TURN,
     };
     let only = "Run exactly this shell command and nothing else, then reply with the word done:";
 

@@ -14,7 +14,8 @@ subagents switched off for now; and `marmot-agent`, the core, which runs one age
 drives Codex, with a test that runs it end to end on MDK's test relay. The core also serves a local socket, and
 `packages/claude-code` is the Claude Code driver, a TypeScript program that drives Claude Code through it, and
 `packages/openclaw` is the OpenClaw plugin, a channel that runs inside OpenClaw, in a container, and connects to
-it. `marmot-agent-acp` is the ACP driver, replayed against the OpenCode, Goose and Cursor recordings.
+it; `python/marmot_hermes` is the Hermes plugin, which runs inside Hermes and connects to it the same way.
+`marmot-agent-acp` is the ACP driver, replayed against the OpenCode, Goose and Cursor recordings.
 `marmot-agent-pi` is the Pi driver, built into the core like Codex's, which runs Pi in a container from
 `tools/pi`. What is built next, and in what order, is in
 [`docs/plan.md`](docs/plan.md). The core program is called `marmot-agent`
@@ -60,6 +61,8 @@ being replaced by what is designed here, not extended.
 | Work on the ACP driver | `crates/marmot-agent-acp`, after `fixtures/recordings/acp` and its `expected/` events |
 | Work on the OpenClaw plugin's translation | `packages/openclaw/src/translate.ts`, after `fixtures/recordings/openclaw` and its `expected/` events |
 | Work on the OpenClaw plugin's transport or its container | `packages/openclaw/src/connector.ts` and `src/index.ts`, after `docs/design/drivers.md` and `docs/reference/openclaw-messages.md` |
+| Work on the Hermes plugin's translation | `python/marmot_hermes/translate.py`, after `fixtures/recordings/hermes` and its `expected/` events |
+| Work on the Hermes plugin's transport | `python/marmot_hermes/connector.py` and `adapter.py`, after `docs/design/drivers.md` and `docs/reference/hermes-messages.md` |
 | Work on the core | `crates/marmot-agent`, after `docs/plan.md` and `docs/design/architecture.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Change the link check | `lychee.toml` |
@@ -250,6 +253,16 @@ npm test        # replays every recording of that harness against its expected e
                 # transport against fakes: a fake core and a fake SDK, or a fake OpenClaw
 ```
 
+For any change under `python/`, with Python 3.14 (CI uses the release named in `python/.python-version` and
+`.github/workflows/ci.yml`). The Hermes plugin uses the standard library and what Hermes provides, and nothing
+else:
+
+```sh
+cd python
+python3 -m unittest discover -s tests   # replays every Hermes recording against its expected events, and
+                                        # runs the transport against a fake core and a fake Hermes
+```
+
 For a change to a diagram, which CI does not check:
 
 ```sh
@@ -277,6 +290,7 @@ python3 tools/prototype/translate.py --expected fixtures/recordings/acp/goose --
 python3 tools/prototype/translate.py --expected fixtures/recordings/acp/cursor --check    # and again
 python3 tools/prototype/translate.py --expected fixtures/recordings/pi --check      # the Pi driver's
 python3 tools/prototype/translate.py --expected fixtures/recordings/openclaw --check  # the OpenClaw plugin's
+python3 tools/prototype/translate.py --expected fixtures/recordings/hermes --check  # the Hermes plugin's
 ```
 
 The `--check` over the eight folders must end with "native messages with no translation: none". If you change
@@ -284,8 +298,9 @@ the event model, change `tools/prototype/translate.py` to match and run it again
 
 The Codex driver is tested against `fixtures/recordings/codex/expected`, the Claude Code driver against
 `fixtures/recordings/claude/expected`, the ACP driver against `expected/` in each folder under
-`fixtures/recordings/acp`, the Pi driver against `fixtures/recordings/pi/expected`, and the OpenClaw plugin
-against `fixtures/recordings/openclaw/expected`. The prototype writes them all, and
+`fixtures/recordings/acp`, the Pi driver against `fixtures/recordings/pi/expected`, the OpenClaw plugin
+against `fixtures/recordings/openclaw/expected`, and the Hermes plugin against
+`fixtures/recordings/hermes/expected`. The prototype writes them all, and
 `crates/marmot-agent-events/tests/expected.rs` checks that the core reads every event in them. When the
 prototype's output for one harness
 changes on purpose, write them again with `python3 tools/prototype/translate.py --expected` and that folder,

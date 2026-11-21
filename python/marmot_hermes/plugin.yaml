@@ -1,0 +1,11 @@
+manifest_version: 1
+name: marmot
+label: Marmot
+kind: platform
+version: 0.1.0
+description: Connects Hermes to Marmot group chats through marmot-agent's local socket
+author: marmot-protocol
+requires_env: []
+optional_env:
+  - MARMOT_AGENT_HOME
+  - HERMES_VERSION

@@ -65,7 +65,8 @@ the core over [the socket](socket-protocol.md).
 Recordings show that Hermes hands a platform formatted text, not tool events: a line such as "Running a
 command" arrives through the same call as a reply. Only approvals and questions arrive in a structured form. So
 the Hermes connector can report messages, notices, approvals and questions, and cannot report tool calls as
-items without a change on the Hermes side. See
+items without a change on the Hermes side. The plugin sends a line about a tool, like Hermes's heartbeats, as a
+message in the commentary phase, which is how Hermes shows it on every platform (provisional). See
 [`../reference/hermes-messages.md`](../reference/hermes-messages.md).
 
 ## The driver trait
@@ -360,6 +361,74 @@ Its capabilities: it can interrupt; a message sent during a turn waits (`queue`)
 approval commands are `/approve`, `/exec`, `/elevated` and `/elev` anywhere in a message, and `/config`,
 `/debug`, `/bash`, `!`, `/allowlist`, `/acp`, `/codex`, `/mcp` and `/plugins` at the start. All of this is
 provisional, for the owner's review.
+
+## The Hermes plugin
+
+A Hermes platform plugin in Python, [`python/marmot_hermes`](../../python/marmot_hermes), that runs inside
+Hermes and connects to the core over the [socket](socket-protocol.md#the-messages-as-built). It uses the
+standard library and what Hermes provides, nothing else. Hermes sees a chat platform called `marmot`. The core
+is started with a `[connector]` section, as for Claude Code, and Hermes runs in a container:
+
+```sh
+docker volume create hermes-home
+python/hermes/run.sh <agent home> <work folder> hermes-home <model key file> [model]
+```
+
+The image ([`python/hermes/Dockerfile`](../../python/hermes/Dockerfile)) holds Hermes at a pinned commit and
+the plugin. Only the core's socket folder and the plugin's token are mounted from the agent's home, never the
+rest of it, and Hermes runs as the user that owns them. Hermes's own home is a Docker volume, so its sessions
+survive a restart. The model key is mounted read-only and written only into Hermes's configuration in that
+volume. Hermes's own output holds what people and the model say, so neither `run.sh` nor Docker keeps any
+of it (`--log-driver=none`). With `HERMES_LOG` the plugin appends its own log lines to that file, mounted
+for it alone; they name what went wrong by kind only ([D-071](../decisions.md#d-071-what-may-be-logged)).
+
+It has the same two halves as the other drivers. The translator (`translate.py`) turns one chat's Hermes calls
+into agent events and is tested against the recordings. The transport (`connector.py`, with `adapter.py` for
+the part that needs Hermes) records every call Hermes makes on the platform as a line, exactly as the recorder
+does, and feeds it to the chat's translator:
+
+- A prompt is handed to Hermes as a chat message from its sender, in its chat, with the quoted text and author
+  of a reply. Hermes keeps its own sessions, one for each chat and sender (`sessions: own`); a session the core
+  names is not used. The plugin names a session after the chat and the sender, and counts when Hermes replaces
+  it; the count is kept in Hermes's home, so a replaced session's name never comes back after a restart.
+  Because a group has a session for each sender, two senders' turns can overlap: an approval, a question, the
+  end of a turn and a reply go to the turn whose session or message they name, and Hermes's other lines, which
+  name neither, to the latest turn.
+- An approval arrives as Hermes's approval card, because the plugin claims approval buttons, and is answered
+  on the card with the choice Hermes offered, by the card's request id. A question is answered through the
+  call Hermes gives a platform for it, by the question's id, and is closed only once Hermes has taken the
+  answer. A request to confirm a typed command is answered by typing the answer, as a person would.
+- For Hermes a control is a typed command. Interrupt types `/stop` in the turn's chat as its sender, new
+  session types `/new`, and setting the model types `/model <id>`, after which the plugin asks Hermes for the
+  session's model. No other setting can be changed from the chat yet. A session's name gives its sender, so
+  after a restart too a new session is asked for as the sender whose session it is.
+- The event that shows an answer's or a control's effect names it: the approval's or question's next edit,
+  the end of the interrupted turn, the end of the old session once Hermes has replaced it (or the new session,
+  when the old one was not shown since the plugin started), or the session item that shows the new model.
+  When Hermes refuses `/new` or `/model`, the request is refused with what Hermes said.
+- The session item lists Hermes's commands, read once from Hermes's command registry, and the session's model,
+  asked for once in each session.
+- Hermes can report a turn complete and start it again a moment later, for the first message of a session. The
+  end of a turn that showed nothing is held for 10 seconds, and dropped if the turn starts again. Until then
+  the turn still counts as running, so it can be interrupted.
+- When Hermes restarts after a crash cut a turn off, it pauses that session: the next message is saved, and
+  Hermes asks for `/discard`, which drops the lost turn without running it again, or `/reset`. The core has
+  already closed that turn as interrupted
+  ([D-070](../decisions.md#d-070-a-restart-closes-the-turn-as-interrupted)), so the plugin sends `/discard`
+  itself, and the saved message is answered (provisional). In a container this takes up to five minutes more:
+  Hermes keeps a lease on a session's turn, stamped with the process's PID namespace, and a new container
+  cannot tell that the old holder is gone, so it waits for the lease to run out.
+
+The core decides who may prompt and approve, as for every harness
+([D-084](../decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)), and
+Hermes is set up to take whatever reaches it: every user is allowed, anyone in a chat may answer an approval,
+and `/new` is not confirmed a second time. Provisionally, Hermes's approval mode is `manual`, so a command
+Hermes flags is always put to a person, never decided by a second model.
+
+Its capabilities: it can interrupt; a message sent during a turn is folded into it (`fold`); Hermes keeps its
+own sessions, and they survive a restart; approvals come to the chat; it takes no files yet. Its approval
+commands, each counted at the start of a message, are `/approve`, `/deny`, `/yolo`, `/approvals`, `/memory`,
+`/skills` and `/codex-runtime`.
 
 ## Adding a harness
 

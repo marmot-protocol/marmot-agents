@@ -177,7 +177,7 @@ impl Running {
 
 // -------------------------------------------------------------------- the scenarios' chat
 
-/// How long a harness's turn may take.
+/// How long a harness's turn may take, unless a scenario gives its chat a longer limit.
 pub const TURN: u64 = 180;
 
 /// The item's first event: what an answer or a control names.
@@ -194,6 +194,8 @@ pub struct Chat<'a> {
     pub world: &'a World,
     pub group: GroupId,
     pub hex: String,
+    /// How long, in seconds, the agent may take to show what is waited for: normally `TURN`.
+    pub turn: u64,
 }
 
 impl Chat<'_> {
@@ -262,7 +264,7 @@ impl Chat<'_> {
     /// event id. An approval for anything else is never answered.
     pub async fn approve(&self, command: &str) -> EventKey {
         println!("waiting for the approval of `{command}`");
-        let (target, read) = within(TURN, || {
+        let (target, read) = within(self.turn, || {
             self.latest().into_iter().find(|(_, r)| {
                 let Body::Approval(approval) = r.item.event.body() else {
                     return false;
@@ -305,7 +307,7 @@ impl Chat<'_> {
     /// Waits for a request to be settled by its effect, never by a notice saying why it had none
     /// (D-028), and gives back the version that shows it.
     pub async fn effect_of(&self, request: &EventKey) -> Read {
-        let read = within(TURN, || {
+        let read = within(self.turn, || {
             let items = self.items().into_iter().map(|(_, r)| r);
             items.into_iter().find(|r| r.item.settles.contains(request))
         })
@@ -334,7 +336,7 @@ impl Chat<'_> {
 
     /// Waits for a turn's latest version to stand at `state`, and gives it back.
     pub async fn turn_at(&self, turn: &TurnId, state: State) -> Read {
-        within(TURN, || {
+        within(self.turn, || {
             self.latest().into_iter().map(|(_, r)| r).find(|r| {
                 matches!(r.item.event.body(), Body::Turn(_))
                     && r.item.event.header().turn.as_ref() == Some(turn)
@@ -346,7 +348,7 @@ impl Chat<'_> {
 
     /// Waits for the turn a message started, and gives its id.
     pub async fn turn_for(&self, prompt: &EventKey) -> TurnId {
-        within(TURN, || self.turns_for(prompt).into_iter().next()).await
+        within(self.turn, || self.turns_for(prompt).into_iter().next()).await
     }
 
     pub fn sessions(&self) -> Vec<SessionId> {

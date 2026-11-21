@@ -103,6 +103,7 @@ async fn pi_end_to_end() {
         world: &world,
         group,
         hex,
+        turn: TURN,
     };
     let only = "Run exactly this shell command and nothing else, then reply with the word done:";
     let lap = |what: &str| println!("{what} after {:.0} s", began.elapsed().as_secs_f64());

@@ -1,0 +1,396 @@
+"""The Marmot platform for Hermes: the part of the plugin that runs inside Hermes.
+
+Hermes sees a chat platform called `marmot`. The adapter connects to marmot-agent's local socket,
+hands Hermes each prompt as a chat message, and records every call Hermes makes on the platform as a
+line, exactly as `tools/record/hermes` records it, for the connector to translate. It sends nothing
+anywhere else.
+
+Who may prompt and who may approve is the core's to decide (D-010). The core lets a message through
+only when its sender may send it, so Hermes is set up to take whatever reaches it: every user is
+allowed, and anyone in a chat may answer its approvals (provisional, Q-22).
+
+Environment:
+    MARMOT_AGENT_HOME   where the core's socket and the plugin's token are: `socket/marmot-agent.sock`
+                        and `connector.token` (the agent's home, or a folder holding just those two)
+    HERMES_VERSION      Hermes's release, which Hermes does not report to a plugin (D-044)
+    MARMOT_LOG          optional; a file the plugin appends its own log lines to, and nothing else does
+
+It logs what went wrong by kind only: never a message, a prompt, a key or a path (D-071). Each line is
+one of the fixed descriptions written in this plugin, at most with an event's item type. They go to
+Hermes's log, and to `MARMOT_LOG` if it is set, which is the only log `python/hermes/run.sh` keeps.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import dataclasses
+import enum
+import functools
+import inspect
+import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+
+from gateway.config import Platform
+from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageType, SendResult
+
+from .connector import Connector
+from .core import CoreConnection, HelloRefused, line_of
+from .translate import VERSION
+
+PLATFORM = "marmot"
+PLUGIN_VERSION = "0.1.0"
+RECONNECT_SECONDS = 2.0
+log = logging.getLogger("marmot_hermes")
+
+# Methods of the base adapter through which Hermes hands a platform something. Each is wrapped so that
+# the call is recorded and then carried out by the base implementation. Typing calls are not recorded:
+# they are four fifths of what Hermes calls, and never become events.
+RECORDED_PREFIXES = (
+    "send", "edit_message", "delete_message", "play_tts", "begin_streaming_tts", "write_streaming_tts",
+    "finish_streaming_tts", "abort_streaming_tts", "emit_", "set_status_text", "on_processing_start",
+    "format_tool_event", "format_tool_preview", "render_message_event", "create_handoff_thread",
+)
+NOT_RECORDED = {"send_typing", "send"}
+
+# What Hermes can do, as the core and the apps read it (D-058).
+CAPABILITIES = {
+    "interrupt": True,
+    # A message sent during a turn is folded into it: Hermes steers (D-040).
+    "mid_turn": "fold",
+    # Hermes keeps its own sessions, one for each chat and sender.
+    "sessions": "own",
+    "resume": True,
+    "approvals": True,
+    "files_in": "none",
+    # Typed commands that answer an approval or change what the agent may do without asking (D-032,
+    # D-047), as read in Hermes's source at the pinned commit (`docs/reference/hermes-messages.md`).
+    "approval_commands": [{"command": c, "counts": "start"} for c in
+                          ("/approve", "/deny", "/yolo", "/approvals", "/memory", "/skills", "/codex-runtime")],
+}
+
+
+def jsonable(v, depth=0):
+    """Anything Hermes passes, as JSON: its structure kept, what cannot be kept named by its type."""
+    if depth > 6:
+        return f"<{type(v).__name__}>"
+    if v is None or isinstance(v, (bool, int, float, str)):
+        return v
+    if isinstance(v, enum.Enum):
+        return v.value
+    if isinstance(v, bytes):
+        return {"_bytes": len(v)}
+    if isinstance(v, datetime):
+        return v.isoformat()
+    if isinstance(v, Path):
+        return str(v)
+    if dataclasses.is_dataclass(v) and not isinstance(v, type):
+        return {"_type": type(v).__name__, **{f.name: jsonable(getattr(v, f.name), depth + 1) for f in dataclasses.fields(v)}}
+    if isinstance(v, dict):
+        return {str(k): jsonable(x, depth + 1) for k, x in list(v.items())[:200]}
+    if isinstance(v, (list, tuple, set, frozenset)):
+        return [jsonable(x, depth + 1) for x in list(v)[:200]]
+    if callable(v):
+        return f"<callable {getattr(v, '__name__', type(v).__name__)}>"
+    return f"<{type(v).__name__}>"
+
+
+def diagnose(kind: str) -> None:
+    """Appends one of the plugin's own log lines to `MARMOT_LOG`, when it is set."""
+    path = os.environ.get("MARMOT_LOG")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} marmot: {kind}\n")
+    except OSError:
+        pass
+
+
+def chat_of(params: dict) -> str | None:
+    """The chat a call is about: named directly, or by the message event or approval it carries."""
+    for holder in (params, params.get("event"), params.get("prompt")):
+        if isinstance(holder, dict):
+            if holder.get("chat_id"):
+                return str(holder["chat_id"])
+            source = holder.get("source")
+            if isinstance(source, dict) and source.get("chat_id"):
+                return str(source["chat_id"])
+    return None
+
+
+def fit(event: dict) -> dict | None:
+    """An event as it fits on one line of the socket (D-033): without its native message if it must,
+    then with its text cut in the middle. The core applies the 64 KB limit (D-057)."""
+    if line_of({"jsonrpc": "2.0", "method": "event", "params": event}) is not None:
+        return event
+    event = {k: v for k, v in event.items() if k != "native"}
+    for _ in range(8):
+        if line_of({"jsonrpc": "2.0", "method": "event", "params": event}) is not None:
+            return event
+        text = event.get("text") or ""
+        if len(text) < 64:
+            break
+        keep = len(text) // 4
+        event = {**event, "text": text[:keep] + "\n[… cut to fit …]\n" + text[-keep:]}
+    return None
+
+
+def recorded(name, base_fn):
+    """Wraps a base-adapter method: record the call, run the base implementation, record the result."""
+    signature = inspect.signature(base_fn)
+
+    def describe(self, args, kwargs):
+        try:
+            bound = signature.bind(self, *args, **kwargs)
+            params = {k: jsonable(v) for k, v in bound.arguments.items() if k != "self"}
+        except TypeError:
+            params = {"args": jsonable(args), "kwargs": jsonable(kwargs)}
+        chat = chat_of(params)
+        self.note({"dir": "in", "via": "hook", "msg": {"method": name, "params": params}}, chat)
+        return chat
+
+    if inspect.iscoroutinefunction(base_fn):
+        @functools.wraps(base_fn)
+        async def wrapper(self, *args, **kwargs):
+            chat = describe(self, args, kwargs)
+            result = await base_fn(self, *args, **kwargs)
+            self.note({"dir": "out", "via": "result", "msg": {"method": name, "result": jsonable(result)}}, chat)
+            return result
+    else:
+        @functools.wraps(base_fn)
+        def wrapper(self, *args, **kwargs):
+            chat = describe(self, args, kwargs)
+            result = base_fn(self, *args, **kwargs)
+            self.note({"dir": "out", "via": "result", "msg": {"method": name, "result": jsonable(result)}}, chat)
+            return result
+    return wrapper
+
+
+class MarmotAdapter(BasePlatformAdapter):
+    def __init__(self, config):
+        super().__init__(config, Platform(PLATFORM))
+        self.home = Path(os.environ.get("MARMOT_AGENT_HOME", ""))
+        hermes_home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
+        self.connector = Connector(self, self.send_to_core, os.environ.get("HERMES_VERSION") or VERSION,
+                                   generations=hermes_home / "marmot" / "sessions.json", warn=self.warn)
+        self.core: CoreConnection | None = None
+        self.loop: asyncio.AbstractEventLoop | None = None
+        self.task = None
+        self.reading: set[asyncio.Task] = set()  # reads of a session's model, kept until they end
+        self.n = 0
+
+    @staticmethod
+    def warn(kind: str) -> None:
+        log.warning("marmot: %s", kind)
+        diagnose(kind)
+
+    def note(self, line: dict, chat: str | None) -> None:
+        """Hands a line to the connector, on the event loop."""
+        loop = self.loop
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if loop is None or running is loop:
+            self.connector.record(line, chat)
+        else:
+            loop.call_soon_threadsafe(self.connector.record, line, chat)
+
+    def send_to_core(self, event: dict) -> None:
+        core = self.core
+        fitted = fit(event)
+        if fitted is not event:
+            self.warn(f"an event over the size limit was cut to fit ({event.get('type')})")
+        if core is None or fitted is None or not core.notify("event", fitted):
+            self.warn(f"an event could not be sent ({event.get('type')})")
+
+    # -- the core's socket
+
+    async def run_core(self) -> None:
+        """Keeps a connection to the core, and connects again when it goes."""
+        while True:
+            try:
+                token = (self.home / "connector.token").read_text(encoding="utf-8").strip()
+                core = await CoreConnection.open(str(self.home / "socket" / "marmot-agent.sock"))
+            except OSError:
+                self.warn("the core's socket or token could not be opened")
+                await asyncio.sleep(RECONNECT_SECONDS)
+                continue
+            try:
+                self.core = core
+                await core.hello({
+                    "connector": {"name": "marmot-agent-hermes", "version": PLUGIN_VERSION},
+                    "harness": {"name": "hermes", "version": self.connector.version},
+                    "token": token,
+                    "capabilities": CAPABILITIES,
+                }, self.connector.serve)
+                log.info("marmot: connected to the core")
+                diagnose("connected to the core")
+                await core.done()
+                self.warn("the core closed the socket")
+            except HelloRefused:
+                self.warn("the core refused the hello")
+            finally:
+                core.close()
+                self.core = None
+            await asyncio.sleep(RECONNECT_SECONDS)
+
+    # -- what a platform must implement
+
+    async def connect(self, *, is_reconnect: bool = False) -> bool:
+        self.loop = asyncio.get_running_loop()
+        if self.connector.commands is None:
+            self.read_commands()
+        self._mark_connected()
+        if self.task is None:
+            self.task = asyncio.create_task(self.run_core())
+        return True
+
+    async def disconnect(self) -> None:
+        self._mark_disconnected()
+        if self.task is not None:
+            self.task.cancel()
+            self.task = None
+        if self.core is not None:
+            self.core.close()
+
+    async def send(self, chat_id, content, reply_to=None, metadata=None, **kwargs):
+        self.n += 1
+        result = SendResult(success=True, message_id=f"out-{self.n}")
+        self.note({"dir": "in", "via": "hook", "msg": {"method": "send", "params": {
+            "chat_id": chat_id, "content": content, "reply_to": reply_to, "metadata": jsonable(metadata),
+            **jsonable(kwargs)}}}, str(chat_id))
+        self.note({"dir": "out", "via": "result", "msg": {"method": "send", "result": jsonable(result)}}, str(chat_id))
+        return result
+
+    async def get_chat_info(self, chat_id):
+        return {"name": str(chat_id), "type": "group", "chat_id": chat_id}
+
+    async def on_processing_complete(self, event, outcome):
+        message_id = getattr(event, "message_id", None)
+        self.note({"dir": "in", "via": "hook", "msg": {"method": "on_processing_complete", "params": {
+            "message_id": message_id, "outcome": jsonable(outcome)}}}, self.connector.message_chat.get(str(message_id)))
+
+    async def on_processing_start(self, event):
+        params = {"event": jsonable(event)}
+        chat = chat_of(params)
+        self.note({"dir": "in", "via": "hook", "msg": {"method": "on_processing_start", "params": params}}, chat)
+        source = getattr(event, "source", None)
+        session = source is not None and self.connector.wants_model(
+            jsonable(getattr(source, "chat_type", None)), getattr(source, "chat_id", None),
+            getattr(source, "user_id", None))
+        if session:
+            # Hermes says which model a session uses only when asked. Ask once for each session.
+            self.read_settings(source, session)
+
+    async def _send_exec_approval_prompt(self, prompt):
+        """Claims approval buttons, so that Hermes hands over an approval as a card, with an id for
+        the request and its choices, instead of as text."""
+        params = {"prompt": jsonable(prompt)}
+        chat = chat_of(params)
+        self.note({"dir": "in", "via": "hook", "msg": {"method": "_send_exec_approval_prompt", "params": params}}, chat)
+        self.n += 1
+        result = SendResult(success=True, message_id=f"out-{self.n}")
+        self.note({"dir": "out", "via": "result", "msg": {"method": "_send_exec_approval_prompt",
+                                                            "result": jsonable(result)}}, chat)
+        return result
+
+    # -- what the connector asks of Hermes
+
+    async def inject(self, chat: dict, sender: dict, message_id: str, text: str, reply_to: dict | None) -> None:
+        source = self.build_source(
+            chat_id=str(chat.get("id")), chat_name=chat.get("name") or None,
+            chat_type="group" if chat.get("group") else "dm",
+            user_id=str(sender.get("id")), user_name=sender.get("name") or None, message_id=message_id)
+        event = MessageEvent(text=text, message_type=MessageType.TEXT, source=source, raw_message=None,
+                             message_id=message_id, timestamp=datetime.now(timezone.utc))
+        if reply_to:
+            author = reply_to.get("author") if isinstance(reply_to.get("author"), dict) else {}
+            event.reply_to_message_id = reply_to.get("message")
+            event.reply_to_text = reply_to.get("text")
+            event.reply_to_author_id = author.get("id")
+            event.reply_to_author_name = author.get("name")
+        await self.handle_message(event)
+
+    def resolve_card(self, session_key: str, choice: str, request_id: str, actor: str) -> int:
+        from tools.approval import resolve_gateway_approval_card
+
+        return int(resolve_gateway_approval_card(session_key, choice, request_id, actor_id=actor) or 0)
+
+    def resolve_question(self, clarify_id: str, text: str) -> bool:
+        """Answers a question the way Hermes asks a platform to: False when it no longer waits."""
+        from tools.clarify_gateway import resolve_gateway_clarify
+
+        return bool(resolve_gateway_clarify(clarify_id, text))
+
+    def read_commands(self) -> None:
+        """Reads Hermes's slash commands once, for the session items. Hermes's own platform adapters
+        build their command menus from this registry, and a plugin runs in the same process."""
+        try:
+            from hermes_cli.commands import COMMAND_REGISTRY, _is_gateway_available
+
+            commands = [{**jsonable(c), "gateway_available": bool(_is_gateway_available(c))} for c in COMMAND_REGISTRY]
+        except Exception:
+            return self.warn("Hermes's command list could not be read")
+        self.connector.commands_read(commands)
+
+    async def read_model_settings(self, chat: dict, sender: dict) -> None:
+        source = self.build_source(chat_id=str(chat.get("id")), chat_name=chat.get("name") or None,
+                                   chat_type="group" if chat.get("group") else "dm",
+                                   user_id=str(sender.get("id")), user_name=sender.get("name") or None)
+        await self.read_settings(source)
+
+    def read_settings(self, source, session: str | None = None) -> asyncio.Task:
+        """Asks Hermes for the model of the session of `source`, in the background. The request is
+        recorded at once, and the translator applies the answer to the session Hermes names in it, if
+        that session was not replaced since. `session` is the connector's name for it, if it chose to ask."""
+        chat = str(source.chat_id)
+        method = "get_session_model_settings"
+        self.note({"dir": "out", "via": "call", "msg": {"method": method, "params": {"source": jsonable(source)}}}, chat)
+        task = asyncio.ensure_future(self.settings_of(source, chat, session))
+        self.reading.add(task)
+        task.add_done_callback(self.reading.discard)
+        return task
+
+    async def settings_of(self, source, chat: str, session: str | None) -> None:
+        method = "get_session_model_settings"
+        try:
+            result = await asyncio.to_thread(self.get_session_model_settings, source)
+        except Exception as e:
+            self.note({"dir": "in", "via": "call", "msg": {"method": method, "error": type(e).__name__}}, chat)
+            if session:
+                self.connector.model_not_read(session)
+            return
+        result = jsonable(result)
+        if isinstance(result, dict):
+            # The model's address is the owner's configuration, and the chat has no need of it.
+            result.pop("base_url", None)
+        self.note({"dir": "in", "via": "call", "msg": {"method": method, "result": result}}, chat)
+
+
+for _name in dir(BasePlatformAdapter):
+    if _name.startswith("_") or not _name.startswith(RECORDED_PREFIXES) or _name in NOT_RECORDED \
+            or _name in MarmotAdapter.__dict__:
+        continue
+    _attr = inspect.getattr_static(BasePlatformAdapter, _name)
+    if inspect.isfunction(_attr):
+        setattr(MarmotAdapter, _name, recorded(_name, _attr))
+
+
+def register(ctx):
+    """Registers the platform with Hermes."""
+    ctx.register_platform(
+        name=PLATFORM,
+        label="Marmot",
+        adapter_factory=lambda config: MarmotAdapter(config),
+        check_fn=lambda: True,
+        is_connected=lambda config: True,
+        validate_config=lambda config: True,
+        allowed_users_env="MARMOT_ALLOWED_USERS",
+        allow_all_env="MARMOT_ALLOW_ALL_USERS",
+        max_message_length=0,
+        platform_hint="You are chatting through Marmot, a private messenger. Chat and user ids are opaque.",
+        emoji="",
+    )

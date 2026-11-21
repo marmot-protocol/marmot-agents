@@ -224,6 +224,15 @@ The events by type: 51 `notice`, 40 `turn`, 17 `message`, 10 `approval`, 2 `ques
   depends on Hermes's wording. The `metadata` hint is firmer but covers less.
 - **The question was sent twice**, once structured and once as text. The translator keeps the structured one.
 
+Changed on 2026-11-21, when the Hermes plugin was built against these rules
+([`python/marmot_hermes`](../../python/marmot_hermes/translate.py)). The item types have no notice kind for
+tool activity, progress, steering or a stop, so the prototype no longer makes them: a tool line and a heartbeat
+are messages in the commentary phase, which is how Hermes shows them on every platform; Hermes's own notices
+(no home channel, steered, interrupted) are of kind `warning`; and Hermes's answer to a slash command, a refusal
+included, is of kind `command_output`, found by the command it replies to. A request to confirm a typed command
+is a `question` ([D-048](../decisions.md#d-048-a-request-to-confirm-a-command-is-a-question)). The counts above
+are from before that change.
+
 ## What this means for the design
 
 1. **The Hermes connector cannot report tool calls as items.** Hermes gives a platform formatted lines, not
@@ -577,6 +586,22 @@ What changed in the rules:
   is a notice of kind `refused`.
 
 The largest session item is the one in `control_catalog`, which carries 69 commands with their descriptions.
+
+### After a crash
+
+Seen on 2026-11-21 in the Hermes plugin's scenario (`crates/marmot-agent/tests/hermes.rs`), same Hermes commit,
+and read in `gateway/session_ingress.py`. Hermes was killed while a turn ran a command, and started again on
+the same home. The first message to that session after the restart was not run. Hermes answered it with:
+
+```text
+⏸️ This conversation is paused: a previous turn did not finish when Hermes restarted, and only you know
+whether to send it again. Your message is saved. Send /discard to drop the lost turn and continue (it is not
+re-run), or /reset to start a fresh conversation.
+```
+
+and reported the turn complete. The lost turn is never run again by itself. `/discard` lets the saved message
+run. The notice is text only; the reason (`unknown_execution`) is not handed to a platform. Also seen: the
+session was otherwise kept, under the same session key, so the session survives a restart.
 
 ### What a connector has to supply from its own knowledge
 

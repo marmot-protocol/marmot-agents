@@ -32,8 +32,8 @@ An event carries no native message when the driver made it up, such as an item t
 because the harness never did, and when it is a secret question that is no longer waiting (D-056).
 Nothing is cut to fit a size: the core applies the 64 KB limit (D-057).
 
-    translate.py --expected <recordings-dir>           write each Codex, Claude Code, ACP, Pi or OpenClaw recording's
-                                                       events, in the shape the Rust types read,
+    translate.py --expected <recordings-dir>           write the events of each recording of a
+                                                       driven harness, in the shape the Rust types read,
                                                        under expected/
     translate.py --expected <recordings-dir> --check   fail if those files are not what it would write
 
@@ -153,11 +153,12 @@ class Translator:
             self.open.pop(item, None)
         return ev
 
-    def close_open_items(self, reason, keep_message_questions=False):
+    def close_open_items(self, reason, keep_message_questions=False, keep_turns=()):
         """A turn ended. Anything still running will never report again, so close it. A question
-        answered by the person's next message is still waiting when a turn completes normally."""
+        answered by the person's next message is still waiting when a turn completes normally. What
+        belongs to another turn still running (`keep_turns`) stays open."""
         for item, ev in list(self.open.items()):
-            if ev["type"] in ("turn", "task", "session"):
+            if ev["type"] in ("turn", "task", "session") or ev["turn"] in keep_turns:
                 continue  # tasks and sessions may outlive the turn; the turn closes itself
             if keep_message_questions and ev["type"] == "question" and ev["body"].get("answer_via") == "message":
                 continue
@@ -1510,17 +1511,24 @@ class Hermes(Translator):
 
     A session is the other exception, and only if the plugin asks. Hermes will say which model a
     chat uses, and list the models and the commands, when the plugin calls for them. It reports a
-    session being replaced through a plugin hook. Everything else about a session is text."""
+    session being replaced through a plugin hook. Everything else about a session is text.
+
+    The native message of an event is the whole line the plugin recorded: the call Hermes made on
+    the adapter, the plugin hook it called, or what the plugin itself sent or asked (D-059)."""
 
     harness = "hermes"
+    # Hermes reports no version to a plugin; the connector supplies it (D-044). This is the release
+    # the recordings were made with, commit 40d1e95f.
+    VERSION = "0.23.2"
     NOT_SENT = {"send_typing", "stop_typing", "connect", "disconnect", "get_chat_info", "format_tool_preview",
                 "format_tool_event", "send_final_ledgered", "send_exec_approval", "render_message_event"}
-    # A line Hermes writes about a tool it is running. There is no structured form of this.
-    TOOL_LINE = ("💻", "🔍", "🔎", "⚙️", "🐍", "📄", "🌐", "🧠", "✏️", "📝")
-    NOTICES = [
-        ("📬", "runtime"), ("⏳", "progress"), ("↪", "steered"), ("⚡ Stopped", "stopped"),
-        ("📖", "command_output"), ("📊", "command_output"), ("⚠️ Your message was interrupted", "runtime"),
-    ]
+    # A line Hermes writes about a tool it is running, or a heartbeat during a long turn. There is no
+    # structured form of either. Hermes shows them in the chat as its own running commentary, so they
+    # are remarks: messages in the commentary phase, which alert nobody (D-078).
+    TOOL_LINE = ("💻", "🔍", "🔎", "⚙️", "🐍", "📄", "🌐", "🧠", "✏️", "📝", "⏳")
+    # What Hermes says for itself that a person should know: a warning. Its answer to a slash command
+    # is that command's output, whatever its first character.
+    WARNINGS = ("📬", "↪", "⚠️ Your message was interrupted", "⏸")
     # Plugin hooks that say nothing a platform call does not already say, or nothing the model needs.
     HOOKS_NOT_SENT = {
         "pre_command": "names a slash command that is about to run",
@@ -1531,15 +1539,23 @@ class Hermes(Translator):
         "pre_approval_request": "an approval is about to be asked, which the prompt also says",
         "post_approval_response": "an approval was answered, which the outcome message also says",
     }
-    # What a person can type to answer Hermes's request to confirm one of their own commands.
-    CONFIRM = {"/approve": "once", "/always": "always", "/cancel": "cancel"}
+    # What a person can type to answer Hermes's request to confirm one of their own commands, in the
+    # order of the options the question offers.
+    CONFIRM = ("/approve", "/always", "/cancel")
+    CONFIRM_LABELS = ("Approve once", "Always approve", "Cancel")
+    # What a person can type to answer an approval Hermes sent as text, in the order of its choices.
+    TEXT_CHOICES = [("Allow once", "allow", "/approve"), ("Allow for this session", "allow", "/approve session"),
+                    ("Always allow", "allow", "/approve always"), ("Deny", "deny", "/deny")]
     EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 
-    def __init__(self):
+    def __init__(self, version=VERSION):
         super().__init__()
+        self.version = version
+        self.msg = None  # the line being translated, which every event it makes carries as its native message
         self.sent: dict[str, dict] = {}  # Hermes's id for a message it sent -> the event it became
         self.last_send = None
         self.approval = None  # the open approval item, if any
+        self.natives: dict[str, list] = {}  # approval item -> Hermes's value for each of its choices
         self.question = None  # the open question item, if any
         self.confirm = None  # the open request to confirm a slash command, if any
         self.final_next = False
@@ -1550,10 +1566,23 @@ class Hermes(Translator):
         self.hermes_ids: dict[str, str] = {}  # Hermes's own session id -> chat and sender
         self.commands: list[dict] = []  # Hermes's command list, if the plugin asked for it
         self.typed: dict[str, tuple] = {}  # message id of a typed command -> the control it was counted as
+        self.typed_words: dict[str, str] = {}  # message id of a typed command -> the command
+        self.confirm_command = None  # the command the open confirmation is about
         self.reset_by_hook = False
+        self.turn_key: dict[str, str] = {}  # turn -> the chat and sender whose session it runs in, oldest first
+        self.questions: dict[str, str | None] = {}  # question item -> the chat and sender it asks, if known
+
+    def emit(self, item, type_, state, title, text="", body=None, native_kind="", native=None, owner=None):
+        """The native message's kind is what the line is: the method Hermes called on the adapter, the
+        plugin hook it called, the call the plugin made, or the plugin's own "inbound" or "press"."""
+        if not native_kind.startswith("(none"):
+            native_kind = self.line_kind
+        return super().emit(item, type_, state, title, text, body, native_kind, native, owner)
 
     def feed(self, rec):
         m, via = rec["msg"], rec.get("via")
+        self.msg = m
+        self.line_kind = str(m.get("hook") if via == "plugin_hook" else m.get("method") if via in ("hook", "call") else via)
         if via == "note":
             return self.skip("recorder note")
         if via == "inbound":
@@ -1607,9 +1636,21 @@ class Hermes(Translator):
             return "set (permission) write approval", f"{word} approval <on|off>, as a message"
         return "(slash command, as a message)", word
 
+    @staticmethod
+    def reply_to_question(question, text):
+        """What a typed answer to a question records (D-059): the option it names, by its number or
+        its label, or else the text as typed."""
+        options = question.get("options") or []
+        chosen = next((o for o in options if o["label"] == text), None)
+        if chosen is None and text.isascii() and text.isdigit() and 1 <= int(text) <= len(options):
+            chosen = options[int(text) - 1]
+        if chosen is not None:
+            return {"question": question["id"], "options": [chosen["id"]]}
+        return {"question": question["id"], "options": [], "text": text}
+
     def inbound(self, m):
         text = str(m.get("text") or "").strip()
-        word, *args = text.split()
+        word, *args = text.split() or [""]
         confirming = bool(self.confirm and self.confirm in self.open and word in self.CONFIRM)
         if confirming:
             self.control("(confirm a command, typed)", word)
@@ -1619,33 +1660,61 @@ class Hermes(Translator):
             self.control("(answer an approval, typed)", word + scope)
         elif word.startswith("/"):
             self.typed[m.get("message_id")] = self.typed_control(word, args)
+            self.typed_words[m.get("message_id")] = word
             self.control(*self.typed[m.get("message_id")])
         if confirming:
             return self.skip("client: answer to a command confirmation, as a slash command")
         if self.approval and word in ("/approve", "/deny"):
             return self.skip("client: answer to an approval, as a slash command")
-        if self.question and self.question in self.open:
-            prev = self.open[self.question]
-            self.emit(self.question, "question", "done", prev["title"], "Answered",
-                      {**prev["body"], "answer": text}, "inbound message, taken as the answer", m)
-            self.question = None
-            return
+        # Hermes takes a message as the answer to a question of the sender's own session, and never a
+        # slash command, which leaves the question waiting.
+        item = None if word.startswith("/") else self.question_for(m.get("chat"), m.get("user"))
+        if item is not None:
+            return self.answered(item, text, "inbound message, taken as the answer", m)
         self.skip("client: slash command" if word.startswith("/") else "client: chat message")
 
+    def question_for(self, chat, user):
+        """The latest open question a message from `user` in `chat` answers."""
+        for item in reversed(list(self.questions)):
+            key = self.questions[item]
+            if item in self.open and (key is None or key.endswith(f":{chat}:{user}")):
+                return item
+        return None
+
+    def answered(self, item, text, native_kind, native):
+        prev = self.open[item]
+        q = prev["body"]["questions"][0]
+        self.emit(item, "question", "done", prev["title"], "Answered",
+                  {**prev["body"], "answer": [self.reply_to_question(q, text)]}, native_kind, native,
+                  owner=(prev["session"], prev["turn"]))
+        self.questions.pop(item, None)
+        if self.question == item:
+            self.question = None
+
     def press(self, m):
+        """An answer the plugin handed Hermes directly, which Hermes took: a press on an approval
+        card, by its request id, or the answer to a question, by its id."""
         if "pick_model" in m:
             self.control("set model", "on_model_selected(), from the model picker")
             return self.skip("client: a pick from the model picker")
-        item = self.approval
+        if m.get("clarify_id") is not None:
+            item = f"question:{m['clarify_id']}"
+            if item not in self.open:
+                return self.skip("client: answer to a question no longer open")
+            return self.answered(item, str(m.get("text") or ""), "answer to a question", m)
+        item = f"approval:{m['request_id']}" if m.get("request_id") else self.approval
         prev = self.open.get(item) if item else None
         if prev is None:
             return self.skip("client: button press")
-        chosen = next((c for c in prev["body"]["choices"] if c.get("native") == m.get("choice")), None)
+        natives = self.natives.get(item) or []
+        chosen = next((c for c, n in zip(prev["body"]["choices"], natives) if n == m.get("choice")), None)
         allow = bool(chosen and chosen["effect"] == "allow")
         self.emit(item, "approval", "done" if allow else "declined", prev["title"],
                   "Answered: " + (chosen["label"] if chosen else str(m.get("choice"))),
-                  {**prev["body"], "answer": {"choice": chosen["id"] if chosen else None}}, "button press", m)
-        self.approval = None
+                  {**prev["body"], "answer": {"choice": chosen["id"] if chosen else None}}, "button press", m,
+                  owner=(prev["session"], prev["turn"]))
+        if self.approval == item:
+            self.approval = None
 
     # -- sessions
 
@@ -1664,7 +1733,7 @@ class Hermes(Translator):
         name = self.name(key)
         settings = list(self.settings.setdefault(name, {}).values())
         session, self.session = self.session, name
-        self.session_item(name, settings, native_kind, native, commands=self.commands)
+        self.session_item(name, settings, native_kind, native, commands=self.commands, version=self.version)
         self.session = session
 
     def put(self, key, id_, label, value, options=None, approve=False):
@@ -1696,7 +1765,7 @@ class Hermes(Translator):
                 return self.skip("on_session_start with no turn in progress")
             self.hermes_ids[p.get("session_id")] = self.key
             self.put(self.key, "model", "Model", p.get("model"))
-            self.session_changed(self.key, hook, p)
+            self.session_changed(self.key, hook, m)
             return self.skip("on_session_start, kept for the session item")
         if hook == "on_session_reset":
             # It names the old and the new session id, and again not the chat.
@@ -1705,7 +1774,7 @@ class Hermes(Translator):
                 return self.unknown("on_session_reset for a chat the driver cannot name")
             self.hermes_ids[p.get("new_session_id")] = key
             self.reset_by_hook = True
-            return self.session_replaced(key, hook, p)
+            return self.session_replaced(key, hook, m)
         if hook in self.HOOKS_NOT_SENT:
             return self.skip(f"plugin hook {hook}: {self.HOOKS_NOT_SENT[hook]}")
         self.unknown(f"plugin hook {hook}")
@@ -1722,21 +1791,21 @@ class Hermes(Translator):
             return self.skip(f"error result of {method}")
         result = m.get("result")
         if method == "hermes_cli.commands.COMMAND_REGISTRY":
-            self.commands = [{"name": f"/{c['name']}", "description": c.get("description"), "hint": c.get("args_hint") or None}
+            self.commands = [command(c.get("name"), c.get("description"), c.get("args_hint"))
                              for c in result or [] if c.get("gateway_available")]
             for key in self.generation:
-                self.session_changed(key, method, {"commands": len(self.commands)})
+                self.session_changed(key, method, m)
         elif method == "get_session_model_settings" and isinstance(result, dict):
             self.put(self.key, "model", "Model", result.get("model"))
             self.put(self.key, "provider", "Provider", result.get("provider"))
-            self.session_changed(self.key, method, result)
+            self.session_changed(self.key, method, m)
         elif method == "list_session_model_picker_providers" and isinstance(result, list):
             self.model_options(self.key, result, method)
         elif method == "on_model_selected":
             # What the picker's callback returned: text for the chat. The new model is not in it as
             # a field; the driver asks for the model settings to learn it.
             item = f"sent:{self.seq + 1}"
-            return self.emit(item, "notice", "done", "Command output", result, {"kind": "command_output", "command": "/model"},
+            return self.emit(item, "notice", "done", "Command output", result, {"kind": "command_output"},
                              f"result of {method}", m)
         self.skip(f"result of {method}")
 
@@ -1748,7 +1817,7 @@ class Hermes(Translator):
         self.put(key, "model", "Model", (known.get("model") or {}).get("value"), options)
         if current:
             self.put(key, "provider", "Provider", current.get("slug"), [p.get("slug") for p in providers])
-        self.session_changed(key, native_kind, {"providers": [{k: v for k, v in p.items() if k != "models"} for p in providers]})
+        self.session_changed(key, native_kind, self.msg)
 
     def model_picker(self, method, p):
         """The platform claimed a model picker, so Hermes hands over the models where it would
@@ -1772,45 +1841,69 @@ class Hermes(Translator):
         self.turn_command = text.split()[0] if text.startswith("/") else None
         # Hermes tells a platform nothing about a session unless the plugin asks: no id, no model, no
         # list of commands. The driver names it after the chat and the sender.
-        self.session_changed(self.key, "(none: made by the driver)", {"reason": "first turn seen for this chat and sender"})
+        self.session_changed(self.key, "(none: made by the driver)", None)
         self.turn = ev.get("message_id")
+        self.turn_key.pop(self.turn, None)
+        self.turn_key[self.turn] = self.key
         # Hermes can report a turn complete and start it again a moment later. The same item id
         # means the second start simply replaces the first "done".
-        self.emit(f"turn:{self.turn}", "turn", "running", "Working", body={"started_by": "user"}, native_kind=method, native=ev)
+        self.emit(f"turn:{self.turn}", "turn", "running", "Working", body={"started_by": "user"},
+                  native_kind=method, native=self.msg)
 
     def turn_end(self, method, p):
-        if self.turn is None:
+        """The end of the turn Hermes names by its message, or else of the latest turn. In a group
+        Hermes keeps a session for each sender, so another sender's turn may still be running."""
+        turn = p.get("message_id") if p.get("message_id") in self.turn_key else self.turn
+        if turn is None:
             return self.skip("on_processing_complete with no turn open")
+        latest = turn == self.turn
+        others = [t for t in self.turn_key if t != turn and f"turn:{t}" in self.open]
         outcome = p.get("outcome")
         state = {"success": "done", "failure": "failed", "cancelled": "cancelled"}.get(outcome, "done")
-        still = [i for i, e in self.open.items() if e["type"] not in ("turn", "task", "session")]
+        still = [i for i, e in self.open.items() if e["type"] not in ("turn", "task", "session") and e["turn"] not in others]
         if state != "done" or not still:
-            self.close_open_items(f"the turn ended with outcome {outcome}")
+            self.close_open_items(f"the turn ended with outcome {outcome}", keep_turns=others)
         title = {"done": "Finished", "failed": "Failed", "cancelled": "Interrupted"}[state]
-        self.emit(f"turn:{self.turn}", "turn", state, title, body={"started_by": "user"}, native_kind=method, native=p)
+        session = self.session if latest else self.open.get(f"turn:{turn}", {}).get("session", self.name(self.turn_key[turn]))
+        self.emit(f"turn:{turn}", "turn", state, title, body={"started_by": "user"}, native_kind=method,
+                  native=self.msg, owner=(session, turn))
+        if latest and others:
+            # Another sender's turn is still running: what follows is its.
+            self.turn, self.key = others[-1], self.turn_key[others[-1]]
+            self.session = self.open[f"turn:{self.turn}"]["session"]
+
+    def owner_of(self, turn):
+        """The session and turn to give an event of `turn` when that turn is running and is not the
+        latest, or else None: the latest turn's."""
+        ev = self.open.get(f"turn:{turn}") if turn is not None and turn != self.turn else None
+        return (ev["session"], turn) if ev is not None else None
+
+    def turn_of_session(self, session_key):
+        """The running turn of the Hermes session `session_key`, which Hermes names after the chat and
+        the sender (`agent:main:<platform>:<chat type>:<chat>:<sender>`), if one is running."""
+        for turn, key in reversed(list(self.turn_key.items())):
+            if session_key and str(session_key).endswith(":" + key) and f"turn:{turn}" in self.open:
+                return turn
+        return None
 
     # -- everything that arrives as text
 
-    def command_reply(self, item, content, p):
+    def command_reply(self, item, content, command, typed, p):
         """Hermes's own answer to a slash command. What it says exists only as wording, so a setting
         the answer confirms is read from the words, and from the command that was typed."""
-        command, typed = self.turn_command, self.typed.get(p.get("reply_to"))
-        body = {"kind": "command_output", "command": command}
+        title = "Command output"
         if content.startswith("⛔"):
             # Hermes refused: the sender is not on its own list of admins for slash commands.
-            body["kind"] = "refused"
+            title = "Not allowed"
             if typed and typed[0] != "(slash command, as a message)":
                 self.controls[typed] -= 1
                 if not self.controls[typed]:
                     del self.controls[typed]
                 self.control("(slash command, refused)", command)
-            self.last_send = self.emit(item, "notice", "done", "Not allowed", content, body, "send [refusal of a slash command]", p)
-            return
-        if content.startswith("✨"):
+        elif content.startswith("✨"):
             # A new session. Without the plugin hook this message is the only sign of it.
-            body["kind"] = "new_session"
             if not self.reset_by_hook:
-                self.session_replaced(self.key, "send [reply to /new, read from its wording]", p)
+                self.session_replaced(self.key, "send [reply to /new, read from its wording]", self.msg)
             self.reset_by_hook = False
         elif typed and typed[0].startswith("set "):
             words = content.split()
@@ -1825,29 +1918,28 @@ class Hermes(Translator):
                 what = content.split(".write_approval")[0].split()[-1]
                 self.put(self.key, f"{what}_write_approval", f"Ask before writing {what}", content.split("'")[1],
                          ["on", "off"], approve=True)
-            self.session_changed(self.key, f"send [reply to {command}, read from its wording]", p)
-        self.last_send = self.emit(item, "notice", "done", "Command output", content, body, f"send [reply to {command}]", p)
+            self.session_changed(self.key, f"send [reply to {command}, read from its wording]", self.msg)
+        self.last_send = self.emit(item, "notice", "done", title, content, {"kind": "command_output"},
+                                   f"send [reply to {command}]", self.msg)
 
     def send(self, method, p):
         content = str(p.get("content") or "")
         meta = p.get("metadata") or {}
-        self.seq_hint = None
         item = f"sent:{self.seq + 1}"
         final, self.final_next = self.final_next, False
         if meta.get("is_approval_prompt") or content.startswith("⚠️ **Hermes wants"):
-            choices = [{"id": "c0", "label": "Allow once", "effect": "allow", "native": "/approve"},
-                       {"id": "c1", "label": "Allow for this session", "effect": "allow", "native": "/approve session"},
-                       {"id": "c2", "label": "Always allow", "effect": "allow", "native": "/approve always"},
-                       {"id": "c3", "label": "Deny", "effect": "deny", "native": "/deny"}]
             self.approval = item
+            self.natives[item] = [native for _, _, native in self.TEXT_CHOICES]
+            choices = [{"id": f"c{n}", "label": label, "effect": effect}
+                       for n, (label, effect, _) in enumerate(self.TEXT_CHOICES)]
             self.last_send = self.emit(item, "approval", "waiting", "Allow this command?", content,
-                                       {"answer_via": "message", "choices": choices}, "send [approval prompt as text]", p)
+                                       {"choices": choices}, "send [approval prompt as text]", self.msg)
             return
         if content.startswith(("✅ Command approved", "❌ Command denied", "⌛ Approval timed out")) and self.approval in self.open:
             prev = self.open[self.approval]
             state = "done" if content.startswith("✅") else "declined" if content.startswith("❌") else "cancelled"
             self.last_send = self.emit(self.approval, "approval", state, prev["title"], content, prev["body"],
-                                       "send [approval outcome as text]", p)
+                                       "send [approval outcome as text]", self.msg)
             self.approval = None
             return
         if content.startswith("❓") and self.question in self.open:
@@ -1860,31 +1952,36 @@ class Hermes(Translator):
                 return self.skip("send: a command confirmation as text, already sent in structured form")
             if self.turn_command in self.CONFIRM:
                 # The answer to the confirmation. Hermes's reply is the command's own outcome.
-                choice = self.CONFIRM[self.turn_command]
-                chosen = next(c for c in prev["body"]["choices"] if c["native"] == self.turn_command)
-                self.emit(self.confirm, "approval", "declined" if choice == "cancel" else "done", prev["title"],
-                          f"Answered: {chosen['label']}", {**prev["body"], "answer": {"choice": chosen["id"]}},
-                          f"send [outcome of {prev['body']['command']}, after {self.turn_command}]", p)
-                self.confirm, self.turn_command = None, prev["body"]["command"]
+                q = prev["body"]["questions"][0]
+                chosen = q["options"][self.CONFIRM.index(self.turn_command)]
+                self.emit(self.confirm, "question", "done", prev["title"], f"Answered: {chosen['label']}",
+                          {**prev["body"], "answer": [{"question": q["id"], "options": [chosen["id"]]}]},
+                          f"send [outcome of {self.confirm_command}, after {self.turn_command}]", self.msg)
+                self.confirm, self.turn_command = None, self.confirm_command
+        # Hermes marks its answer to a slash command as it marks an agent's final reply, and names the
+        # command's message as the one it replies to. A command that runs the model was not recorded,
+        # so its reply is not told apart here.
+        typed = self.typed.get(p.get("reply_to"))
         if self.turn_command and (meta.get("notify") or final):
-            # Hermes marks its answer to a slash command as it marks an agent's final reply. A command
-            # that runs the model was not recorded, so its reply is not told apart here.
-            return self.command_reply(item, content, p)
-        for prefix, kind in self.NOTICES:
-            if content.startswith(prefix):
-                self.last_send = self.emit(item, "notice", "done", "Notice", content, {"kind": kind}, f"send [{kind} notice]", p)
-                return
-        if content.startswith(self.TOOL_LINE):
-            self.last_send = self.emit(item, "notice", "done", "Activity", content, {"kind": "activity"}, "send [tool progress line]", p)
+            return self.command_reply(item, content, self.turn_command, typed, p)
+        if typed:
+            return self.command_reply(item, content, self.typed_words[p.get("reply_to")], typed, p)
+        if content.startswith(self.WARNINGS):
+            self.last_send = self.emit(item, "notice", "done", "Notice", content, {"kind": "warning"},
+                                       "send [a notice from Hermes]", self.msg)
             return
         phase = "final" if (final or meta.get("notify")) else "commentary"
-        self.last_send = self.emit(item, "message", "done", "Message", content, {"phase": phase}, f"send [{phase} text]", p)
+        kind = "tool progress line" if content.startswith(self.TOOL_LINE) else f"{phase} text"
+        # A message names the turn it replies to only as the message that started it, if at all.
+        owner = self.owner_of(p.get("reply_to") or meta.get("reply_to_message_id"))
+        self.last_send = self.emit(item, "message", "done", "Message", content, {"phase": phase}, f"send [{kind}]", self.msg,
+                                   owner=owner)
 
     def edit(self, method, p):
         prev = self.sent.get(p.get("message_id"))
         if prev is None:
             return self.unknown("edit_message for a message that was not sent")
-        self.emit(prev["item"], prev["type"], prev["state"], prev["title"], p.get("content"), prev["body"], method, p)
+        self.emit(prev["item"], prev["type"], prev["state"], prev["title"], p.get("content"), prev["body"], method, self.msg)
 
     # -- the structured calls
 
@@ -1892,27 +1989,32 @@ class Hermes(Translator):
         qs = [{"id": "q0", "text": p.get("question"), "multiple": False, "allow_text": True,
                "options": [{"id": f"o{k}", "label": c} for k, c in enumerate(p.get("choices") or [])]}]
         self.question = f"question:{p.get('clarify_id')}"
+        turn = self.turn_of_session(p.get("session_key"))
+        self.questions[self.question] = self.turn_key.get(turn, self.key)
         self.emit(self.question, "question", "waiting", "Question", p.get("question"),
-                  {"answer_via": "message", "questions": qs}, method, p)
+                  {"answer_via": "message", "questions": qs}, method, self.msg, owner=self.owner_of(turn))
 
     def approval_card(self, method, p):
         prompt = p.get("prompt") or {}
-        choices = [{"id": f"c{n}", "label": label, "effect": "deny" if choice == "deny" else "allow", "native": choice}
-                   for n, (label, choice, _style) in enumerate(prompt.get("actions") or [])]
+        actions = prompt.get("actions") or []
         self.approval = f"approval:{prompt.get('request_id')}"
+        self.natives[self.approval] = [choice for _label, choice, _style in actions]
+        choices = [{"id": f"c{n}", "label": label, "effect": "deny" if choice == "deny" else "allow"}
+                   for n, (label, choice, _style) in enumerate(actions)]
+        owner = self.owner_of(self.turn_of_session(prompt.get("session_key")))
         self.last_send = self.emit(self.approval, "approval", "waiting", "Allow this command?", prompt.get("command"),
-                                   {"answer_via": "request", "reason": prompt.get("description"), "choices": choices}, method, prompt)
+                                   {"choices": choices}, method, self.msg, owner=owner)
 
     def confirm_card(self, method, p):
-        """Hermes asks the person to confirm one of their own slash commands, such as /new. It is an
-        approval of what a person asked for, not of what the agent wants to do. A platform without
-        buttons gets the same text through send straight after, and the answer is a typed command."""
-        choices = [{"id": "c0", "label": "Approve once", "effect": "allow", "native": "/approve"},
-                   {"id": "c1", "label": "Always approve", "effect": "allow", "native": "/always"},
-                   {"id": "c2", "label": "Cancel", "effect": "deny", "native": "/cancel"}]
+        """Hermes asks the person to confirm one of their own slash commands, such as /new. That is a
+        question (D-048). A platform without buttons gets the same text through send straight after,
+        and the answer is a typed command."""
+        options = [{"id": f"o{n}", "label": label} for n, label in enumerate(self.CONFIRM_LABELS)]
         self.confirm = f"confirm:{p.get('confirm_id')}"
-        self.emit(self.confirm, "approval", "waiting", "Confirm this command?", p.get("message"),
-                  {"answer_via": "message", "subject": "command", "command": p.get("title"), "choices": choices}, method, p)
+        self.confirm_command = p.get("title")
+        qs = [{"id": "q0", "text": p.get("message"), "multiple": False, "allow_text": False, "options": options}]
+        self.emit(self.confirm, "question", "waiting", "Confirm this command?", p.get("message"),
+                  {"answer_via": "message", "questions": qs}, method, self.msg)
 
 
 # ---------------------------------------------------------------------------- OpenClaw
@@ -3151,7 +3253,7 @@ def crate_shape(value, key=None):
 # The harnesses whose drivers are tested against the prototype's events (D-074).
 DRIVEN = {
     "codex": "Codex", "claude": "Claude Code", "opencode": "OpenCode", "goose": "Goose", "cursor": "Cursor",
-    "pi": "Pi", "openclaw": "OpenClaw",
+    "pi": "Pi", "openclaw": "OpenClaw", "hermes": "Hermes",
 }
 
 
