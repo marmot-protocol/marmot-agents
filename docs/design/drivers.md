@@ -139,7 +139,10 @@ npm ci
 node src/main.ts --home <agent home> --cwd <project folder> [--model <model>] [--permission-mode default]
 ```
 
-It finds the socket and its token in the agent's home, and exits when the core closes the socket. It has the
+It finds the socket and its token in the agent's home, and exits when the core closes the socket. It loads no
+Claude Code settings files (the SDK's `settingSources` is empty), so no allow rule or hook in the owner's own
+Claude Code settings approves or runs anything in a chat; a side effect is that it reads no `CLAUDE.md` either.
+It has the
 same two halves as the Codex driver. The translator (`src/translate.ts`) turns one chat's Claude Code messages
 into agent events and is tested against the recordings. The transport (`src/connector.ts`) runs one SDK
 session per chat:

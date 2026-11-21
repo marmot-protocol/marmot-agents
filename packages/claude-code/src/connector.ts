@@ -238,7 +238,9 @@ export class Connector {
   /** Starts the chat's `query()`, resuming `resume` when it is given. */
   private start(chat: Chat, resume: string | null): void {
     const inbox = new Inbox();
-    const options: Json = { cwd: this.options.cwd };
+    // No Claude Code settings file is read: an allow rule or a hook in the owner's own settings would
+    // otherwise approve or run things in a chat without the chat's approval.
+    const options: Json = { cwd: this.options.cwd, settingSources: [] };
     if (this.options.model !== undefined) options["model"] = this.options.model;
     if (this.options.permissionMode !== undefined) options["permissionMode"] = this.options.permissionMode;
     if (resume !== null) options["resume"] = resume;

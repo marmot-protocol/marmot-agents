@@ -6,7 +6,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import { CAPABILITIES, run, type PermissionResult, type QueryLike, type UserMessage } from "../src/connector.ts";
 
 type Json = Record<string, unknown>;
@@ -26,6 +26,11 @@ class FakeQuery implements QueryLike {
   readonly received: UserMessage[] = [];
   interrupts = 0;
   closed = false;
+  /** The settings asked for through `setModel` and `setPermissionMode`. */
+  readonly sets: string[] = [];
+  /** When set, `setModel` and `setPermissionMode` wait for it. */
+  hold: Promise<void> | undefined;
+  private error: Error | undefined;
   private out: unknown[] = [];
   private wake: (() => void) | undefined;
   readonly options: Json;
@@ -45,9 +50,15 @@ class FakeQuery implements QueryLike {
     const canUseTool = this.options["canUseTool"] as (t: string, i: Json, o: Json) => Promise<PermissionResult>;
     return canUseTool(toolName, input, { signal: new AbortController().signal, ...options });
   }
+  /** Claude Code stops: the SDK's iterator throws. */
+  fail(error: Error): void {
+    this.error = error;
+    this.wake?.();
+  }
   async *[Symbol.asyncIterator](): AsyncIterator<unknown> {
     for (;;) {
       while (this.out.length > 0) yield this.out.shift();
+      if (this.error !== undefined) throw this.error;
       if (this.closed) return;
       await new Promise<void>((r) => (this.wake = r));
     }
@@ -56,11 +67,13 @@ class FakeQuery implements QueryLike {
     this.interrupts += 1;
     return Promise.resolve(undefined);
   }
-  setPermissionMode(): Promise<void> {
-    return Promise.resolve();
+  setPermissionMode(mode: string): Promise<void> {
+    this.sets.push(`permission_mode=${mode}`);
+    return this.hold ?? Promise.resolve();
   }
-  setModel(): Promise<void> {
-    return Promise.resolve();
+  setModel(model?: string): Promise<void> {
+    this.sets.push(`model=${model}`);
+    return this.hold ?? Promise.resolve();
   }
   close(): void {
     this.closed = true;
@@ -72,6 +85,8 @@ class FakeQuery implements QueryLike {
 class FakeCore {
   hello: Json | undefined;
   readonly events: Json[] = [];
+  /** The size of every line the connector sent, in bytes, without its newline. */
+  readonly lines: number[] = [];
   private socket: Socket | undefined;
   private readonly responses = new Map<number, (m: Json) => void>();
   private nextId = 100;
@@ -80,15 +95,18 @@ class FakeCore {
     this.server = server;
     server.on("connection", (socket) => {
       this.socket = socket;
-      let pending = "";
-      socket.on("data", (chunk) => {
-        pending += chunk.toString("utf8");
+      let pending: Buffer[] = [];
+      socket.on("data", (data: Buffer) => {
+        let chunk = data;
         let at;
-        while ((at = pending.indexOf("\n")) !== -1) {
-          const m = JSON.parse(pending.slice(0, at)) as Json;
-          pending = pending.slice(at + 1);
-          this.read(m);
+        while ((at = chunk.indexOf(0x0a)) !== -1) {
+          const line = Buffer.concat([...pending, chunk.subarray(0, at)]);
+          pending = [];
+          chunk = chunk.subarray(at + 1);
+          this.lines.push(line.length);
+          this.read(JSON.parse(line.toString("utf8")) as Json);
         }
+        if (chunk.length > 0) pending.push(chunk);
       });
     });
   }
@@ -118,7 +136,13 @@ class FakeCore {
   }
 }
 
-async function start(): Promise<{ core: FakeCore; queries: FakeQuery[]; running: Promise<void>; done: () => Promise<void> }> {
+async function start(): Promise<{
+  core: FakeCore;
+  queries: FakeQuery[];
+  running: Promise<void>;
+  warnings: string[];
+  done: () => Promise<void>;
+}> {
   const home = mkdtempSync(join(tmpdir(), "marmot-agent-claude-test-"));
   mkdirSync(join(home, "socket"));
   writeFileSync(join(home, "connector.token"), `${TOKEN}\n`);
@@ -129,6 +153,7 @@ async function start(): Promise<{ core: FakeCore; queries: FakeQuery[]; running:
   const running = run({
     home,
     cwd: "/nowhere",
+    model: "model-x",
     permissionMode: "default",
     query: ({ prompt, options }) => {
       const q = new FakeQuery(options, prompt);
@@ -137,20 +162,25 @@ async function start(): Promise<{ core: FakeCore; queries: FakeQuery[]; running:
     },
     version: "0.0.0",
     harnessVersion: "2.1.0",
-    warn: () => {},
+    warn: (kind) => warnings.push(kind),
   });
-  await until(() => core.hello !== undefined, "the hello");
-  return {
-    core,
-    queries,
-    running,
-    done: async () => {
-      core.close();
-      await running;
-      rmSync(home, { recursive: true, force: true });
-    },
+  const warnings: string[] = [];
+  const done = async () => {
+    stopping.delete(done);
+    core.close();
+    await running;
+    rmSync(home, { recursive: true, force: true });
   };
+  // A test that fails before it stops the connector must not keep the others waiting.
+  stopping.add(done);
+  await until(() => core.hello !== undefined, "the hello");
+  return { core, queries, running, warnings, done };
 }
+
+const stopping = new Set<() => Promise<void>>();
+afterEach(async () => {
+  for (const done of [...stopping]) await done();
+});
 
 const PROMPT = { message: "m1", text: "list the files", chat: { id: "c1", group: true, name: null }, sender: { id: "p1", name: "Alice" }, attachments: [] };
 
@@ -208,6 +238,19 @@ test("a prompt becomes a user message, and the turn it starts names it", async (
   q.say(DONE);
   await until(() => core.event((e) => e["type"] === "turn" && e["state"] === "done") !== undefined, "the turn's end");
   assert.equal("prompts" in core.event((e) => e["type"] === "turn" && e["state"] === "done")!, false);
+  await done();
+});
+
+/** What every query must be given, fresh or resumed. */
+function assertQueryOptions(q: FakeQuery): void {
+  // No allow rule or hook from the owner's own settings may approve or run anything in a chat.
+  assert.deepEqual(q.options["settingSources"], []);
+}
+
+test("a query loads no Claude Code settings files", async () => {
+  const { core, queries, done } = await start();
+  const { q } = await turn(core, queries);
+  assertQueryOptions(q);
   await done();
 });
 
