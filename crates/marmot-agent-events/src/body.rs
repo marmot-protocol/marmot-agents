@@ -508,7 +508,8 @@ pub struct Notice {
     /// For `waiting`: how long the agent will wait.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
-    /// For `model_changed`: why, when the harness says.
+    /// For `model_changed`: why, when the harness says. For `refused`: why, in a word such as
+    /// `not_allowed` or `busy`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -529,6 +530,9 @@ pub enum NoticeKind {
     ModelChanged,
     /// The output of a command the harness ran itself.
     CommandOutput,
+    /// A message, an answer or a control was not acted on, and why, in `reason` (D-010, D-028).
+    /// The core sends it; a driver does not.
+    Refused,
 }
 
 // --------------------------------------------------------------------------------------- error
