@@ -281,12 +281,25 @@ export class Connector {
         this.feed(chat, { dir: "in", via: "call", msg: { method: "query", error: String((e as Error)?.message ?? e) } });
       }
     }
-    if (chat.run === run && !run.closed) {
-      // Claude Code went without being asked to. The next prompt takes the session up again.
-      chat.run = null;
-      chat.resumable = chat.translator.currentSession;
-      this.dropWaiting(chat);
-    }
+    if (chat.run === run && !run.closed) this.failed(chat, run);
+  }
+
+  /**
+   * Claude Code went without being asked to: it crashed, or was killed. Its running turn ends cancelled,
+   * and the next prompt takes the session up again, in a turn of its own.
+   */
+  private failed(chat: Chat, run: Run): void {
+    this.stop(run);
+    chat.run = null;
+    chat.resumable = chat.translator.currentSession;
+    this.dropWaiting(chat);
+    this.dispatch(chat, chat.translator.stopped());
+    // Nothing that run would have shown can come now: what still waits for it never settles, and the
+    // prompts it took belong to no turn.
+    chat.prompts = [];
+    chat.byItem.clear();
+    chat.byTurn.clear();
+    chat.bySession.clear();
   }
 
   /** Closes a query: its input first, then the process. */

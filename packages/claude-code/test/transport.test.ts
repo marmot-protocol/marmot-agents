@@ -331,3 +331,32 @@ test("an answer to an item the connector does not know is refused, as is an unkn
   assert.equal(((own["error"] as Json)["data"] as Json)["reason"], "not_supported");
   await done();
 });
+
+test("a run that fails ends its turn cancelled, and the next prompt resumes the session in a turn of its own", async () => {
+  const { core, queries, done } = await start();
+  const { q, turn: id } = await turn(core, queries);
+  const asked = q.ask("Bash", BASH, { suggestions: [SUGGESTION], toolUseID: "t1", requestId: "r1" });
+  await until(() => core.event((e) => e["item"] === "approval:r1") !== undefined, "the approval");
+  // Claude Code crashes, or is killed, in the middle of the turn. The connector stays.
+  q.fail(new Error("exited"));
+  assert.equal((await asked).behavior, "deny");
+  await until(() => core.event((e) => e["type"] === "turn" && e["state"] === "cancelled") !== undefined, "the turn's end");
+  assert.equal(core.event((e) => e["type"] === "turn" && e["state"] === "cancelled")!["turn"], id);
+  assert.ok(core.event((e) => e["item"] === "approval:r1" && e["state"] === "cancelled"));
+  // The session is not over: it is taken up again.
+  assert.equal(core.event((e) => e["type"] === "session" && e["state"] === "done"), undefined);
+  assert.deepEqual((await core.request("prompt", { ...PROMPT, message: "m2" }))["result"], {});
+  assert.equal(queries.length, 2);
+  const resumed = queries[1]!;
+  assert.equal(resumed.options["resume"], "s1");
+  assertQueryOptions(resumed);
+  await until(() => resumed.received.length === 1, "the user message");
+  // No turn is running, so the message does not try to end one.
+  assert.equal(resumed.received[0]!.priority, undefined);
+  resumed.say(init("u2"));
+  await until(() => core.event((e) => e["type"] === "turn" && e["turn"] === "s1:u2") !== undefined, "the new turn");
+  const next = core.event((e) => e["type"] === "turn" && e["turn"] === "s1:u2")!;
+  assert.equal(next["state"], "running");
+  assert.deepEqual(next["prompts"], ["m2"]);
+  await done();
+});
