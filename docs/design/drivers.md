@@ -150,7 +150,9 @@ session per chat:
 - A prompt starts the chat's session if none is running, resuming the one the core names
   ([D-065](../decisions.md#d-065-a-prompt-names-a-session-only-to-resume-one)), and goes in as a user message,
   written as for Codex ([D-062](../decisions.md#d-062-what-codex-reads-for-a-chat-message)). The next turn
-  names the prompts sent since the last one.
+  names the prompts sent since the last one. Only a fresh session takes `--model` and `--permission-mode`; a
+  resumed one keeps the model and permission mode it last showed. If Claude Code stops in the middle of a
+  turn, the turn ends cancelled and the next prompt resumes the session.
 - An approval waits in Claude Code's `canUseTool` callback until the answer comes. "Allow once" allows the
   call as asked, a standing choice allows it with the rule Claude Code suggested, and the last choice denies.
   A question from `AskUserQuestion` is answered the same way.

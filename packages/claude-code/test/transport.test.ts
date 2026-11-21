@@ -376,3 +376,34 @@ test("a prompt that asks to resume another chat's session is refused, even once 
   assert.equal(queries.length, 1);
   await done();
 });
+
+test("a resumed session gets the model and permission mode its item last showed", async () => {
+  const { core, queries, done } = await start();
+  await core.request("prompt", PROMPT);
+  const q = queries[0]!;
+  q.say({ ...init("u1"), model: "model-b", permissionMode: "acceptEdits" });
+  await until(() => core.event((e) => e["type"] === "turn") !== undefined, "the turn");
+  q.fail(new Error("exited"));
+  await until(() => core.event((e) => e["type"] === "turn" && e["state"] === "cancelled") !== undefined, "the turn's end");
+  await core.request("prompt", { ...PROMPT, message: "m2" });
+  const resumed = queries[1]!;
+  assert.equal(resumed.options["resume"], "s1");
+  assert.equal(resumed.options["model"], "model-b");
+  assert.equal(resumed.options["permissionMode"], "acceptEdits");
+  await done();
+});
+
+test("a session this connector has not seen is resumed with its own settings, and a fresh one gets the startup ones", async () => {
+  const { core, queries, done } = await start();
+  await core.request("prompt", { ...PROMPT, session: "s9" });
+  const resumed = queries[0]!;
+  assert.equal(resumed.options["resume"], "s9");
+  assert.equal("model" in resumed.options, false);
+  assert.equal("permissionMode" in resumed.options, false);
+  await core.request("prompt", { ...PROMPT, message: "m2", chat: { id: "c2", group: true, name: null } });
+  const fresh = queries[1]!;
+  assert.equal("resume" in fresh.options, false);
+  assert.equal(fresh.options["model"], "model-x");
+  assert.equal(fresh.options["permissionMode"], "default");
+  await done();
+});

@@ -246,9 +246,17 @@ export class Connector {
       settingSources: [],
       thinking: { type: "adaptive", display: "summarized" },
     };
-    if (this.options.model !== undefined) options["model"] = this.options.model;
-    if (this.options.permissionMode !== undefined) options["permissionMode"] = this.options.permissionMode;
-    if (resume !== null) {
+    if (resume === null) {
+      if (this.options.model !== undefined) options["model"] = this.options.model;
+      if (this.options.permissionMode !== undefined) options["permissionMode"] = this.options.permissionMode;
+    } else {
+      // A resumed session goes on as its item last showed it. One this process never saw keeps its
+      // own settings: the startup ones are for fresh sessions only.
+      const shown = chat.settings.get(resume);
+      const model = shown?.get("model");
+      const mode = shown?.get("permission_mode");
+      if (typeof model === "string" && model !== "") options["model"] = model;
+      if (typeof mode === "string" && mode !== "") options["permissionMode"] = mode;
       options["resume"] = resume;
       this.own(resume, chat);
     }
