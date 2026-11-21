@@ -82,7 +82,11 @@ independent, so separate agents build them at the same time. Whose rules govern 
 decided: the core decides first ([D-084](decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)).
 **Done when** the scenario passes for each.
 
-- **Pi**: the scenario passes against a real Pi 1.6.0, run in a container (2026-11-21).
+Done on 2026-11-21: the scenario passes against a real Pi, OpenCode, Goose, Cursor, OpenClaw and Hermes. Pi,
+Goose, OpenClaw and Hermes ran in throwaway containers on free models; OpenCode and Cursor on this machine. Cursor
+goes through the ACP driver ([D-080](decisions.md#d-080-cursor-is-driven-through-acp)), and Pi's driver reads
+Pi's messages itself ([D-086](decisions.md#d-086-the-pi-driver-reads-pis-rpc-messages-with-types-of-its-own)).
+Known gaps are issues #63, #64 and #68.
 
 ### M4: Ready to swap
 
