@@ -1319,10 +1319,11 @@ class Acp(Translator):
             # leaves to the agent; until it does, the tool call's title stands in as its text.
             body.update(command=raw.get("command"), cwd=raw.get("cwd"), output=output)
             text = body["command"] or t.get("title")
-            # Nor an exit code. OpenCode puts one in `rawOutput.metadata.exit`, Cursor in `rawOutput.exitCode`.
+            # Nor an exit code. OpenCode puts one in `rawOutput.metadata.exit`, Cursor in `rawOutput.exitCode`,
+            # Goose in `rawOutput.exit_code`.
             ro = t.get("rawOutput") if isinstance(t.get("rawOutput"), dict) else {}
             code = next((c for c in ((ro.get("metadata") or {}).get("exit") if isinstance(ro.get("metadata"), dict) else None,
-                                     ro.get("exitCode")) if isinstance(c, int) and not isinstance(c, bool)), None)
+                                     ro.get("exitCode"), ro.get("exit_code")) if isinstance(c, int) and not isinstance(c, bool)), None)
             body["exit_code"] = code
             if state == "done" and code not in (None, 0):
                 state = "failed"
@@ -2708,7 +2709,7 @@ def crate_shape(value, key=None):
 
 
 # The harnesses whose drivers are tested against the prototype's events (D-074).
-DRIVEN = {"codex": "Codex", "claude": "Claude Code", "opencode": "OpenCode"}
+DRIVEN = {"codex": "Codex", "claude": "Claude Code", "opencode": "OpenCode", "goose": "Goose"}
 
 
 def expected(folder: Path, check_only: bool) -> int:

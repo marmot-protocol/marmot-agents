@@ -3,6 +3,8 @@
 
 Usage:
     record_acp.py <scenario> <project-dir> <output.jsonl> [--agent "opencode acp"] [--home DIR] [--config JSON]
+
+For Goose, in a container: --agent "tools/goose/goose-acp.sh <model-key-file>".
     record_acp.py --list
 
 Each output line is {"t": <ms since start>, "dir": "out"|"in", "msg": <the JSON message>}.
@@ -44,7 +46,8 @@ DEFAULT_CONFIG = {"model": "opencode/deepseek-v4.1-flash-free"}
 ASK = {"permission": {"bash": "ask", "edit": "ask"}}
 # The only variables the agent gets from the recorder's own environment. Everything else it is given
 # is set below: its throwaway home and its configuration. Nothing else of the machine's reaches it.
-PASSED_THROUGH = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ")
+# MODEL_* choose the model of an agent run in a container, such as Goose by `tools/goose/goose-acp.sh`.
+PASSED_THROUGH = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "MODEL_HOST", "MODEL_BASE_PATH", "MODEL_NAME")
 
 
 class Agent:
@@ -293,6 +296,7 @@ def approval_allowed(a: Agent, cwd: str):
 
 
 approval_allowed.config = ASK
+approval_allowed.ask = True
 
 
 def approval_denied(a: Agent, cwd: str):
@@ -304,6 +308,7 @@ def approval_denied(a: Agent, cwd: str):
 
 
 approval_denied.config = ASK
+approval_denied.ask = True
 
 
 def interrupt(a: Agent, cwd: str):
@@ -311,7 +316,9 @@ def interrupt(a: Agent, cwd: str):
     a.initialize()
     s = a.new_session(cwd)
     rid, mark = a.start_prompt(s, "Run `sleep 60` and then tell me it finished.")
-    a.wait_for(lambda m: (update_of(m, "tool_call") or update_of(m, "tool_call_update") or {}).get("status") == "in_progress",
+    # A tool call has started: OpenCode says `in_progress`; Goose sends the call with no status at all.
+    a.wait_for(lambda m: update_of(m, "tool_call") is not None
+               or (update_of(m, "tool_call_update") or {}).get("status") == "in_progress",
                timeout=120, start=mark)
     time.sleep(2)
     a.notify("session/cancel", {"sessionId": s})
@@ -420,6 +427,8 @@ def main():
         "XDG_CACHE_HOME": str(home / ".cache"),
         "OPENCODE_CONFIG_CONTENT": json.dumps(config),
         "OPENCODE_DISABLE_AUTOUPDATE": "1",
+        # For an agent without OpenCode's configuration: ask before every tool. Goose's wrapper reads it.
+        **({"RECORD_ASK": "1"} if getattr(f, "ask", False) else {}),
     }
     a = Agent(args.output, shlex.split(args.agent), env, cwd)
     try:

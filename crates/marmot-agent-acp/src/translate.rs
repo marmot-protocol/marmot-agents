@@ -856,12 +856,13 @@ impl Translator {
                     .and_then(Value::as_str)
                     .map(str::to_string);
                 // Nor an exit code. OpenCode puts one in `rawOutput.metadata.exit`, Cursor in
-                // `rawOutput.exitCode`.
+                // `rawOutput.exitCode`, Goose in `rawOutput.exit_code`.
                 let ro = t.raw_output.as_ref();
                 body.exit_code = [
                     ro.and_then(|o| o.get("metadata"))
                         .and_then(|m| m.get("exit")),
                     ro.and_then(|o| o.get("exitCode")),
+                    ro.and_then(|o| o.get("exit_code")),
                 ]
                 .into_iter()
                 .flatten()

@@ -356,6 +356,30 @@ was not kept.
 
 `acp/opencode/expected/` holds the agent events the ACP driver must produce from each recording, as for Codex.
 
+## ACP: Goose
+
+The same twelve scenarios, recorded the same way, with Goose in a throwaway container. What they show is in
+[`docs/reference/harness-messages.md`](../../docs/reference/harness-messages.md#acp-goose).
+
+| | |
+| --- | --- |
+| Interface | `goose acp`, ACP protocol version 1, JSON-RPC 2.0 over stdio |
+| Version | Goose 1.59.2, in a container built from [`tools/goose`](../../tools/goose/Dockerfile) |
+| Model | `z-ai/glm-5.3-flash:free` on numes.ai's OpenAI-compatible endpoint, with the developer extension only |
+| Recorded on | 2026-11-21 |
+
+What differs from OpenCode:
+
+- **`question`**: Goose has no question tool. It looked through its extensions, then asked in its reply.
+- **`plan`**: Goose switched on its `todo` extension and kept the list through tool calls, not ACP's `plan`.
+- **`resume`**: Goose has no `session/resume`; it answered "Method not found". The next prompt to the same
+  session id still worked, and remembered the first turn.
+- **`approval_denied`**: the refusal did not end the turn; the model said it was not allowed.
+- **`interrupt`**: the cancelled command was never updated again; the reply to the prompt said `cancelled`.
+
+Approval scenarios run Goose in its `approve` mode; the others in `auto`, which asks for nothing.
+`acp/goose/expected/` holds the expected events.
+
 ## File format
 
 One JSON object per line.
@@ -415,7 +439,7 @@ again after any new recording, and read the result before committing.
 - A rate limit, an expired sign-in, and a harness crash
 - Claude Code stopped while it is in the middle of writing a reply
 - A file attachment other than an image
-- Pi and Goose; OpenCode through its own HTTP interface
+- Pi; OpenCode through its own HTTP interface
 - OpenCode over ACP with an image, an MCP server, a slash command, a changed setting, steering, and a subagent
 - Hermes with media, reactions, scheduled jobs and its message tools
 - OpenClaw with media, polls, threads, scheduled jobs, subagents, plugin approvals and the pairing code exchange

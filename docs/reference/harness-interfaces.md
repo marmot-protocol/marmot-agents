@@ -118,7 +118,9 @@ Read again on 2026-11-19. The newest release is 0.170.0 (2026-11-18). The record
 ### Goose
 
 - **Native is ACP.** `goose acp` over stdio; `goose serve` for network use. Goose's own desktop app uses it.
-  v1.59.2 (2026-11-16), ACP v1.
+  v1.59.2 (2026-11-16), ACP v1. Run on 2026-11-21 in a container built from `tools/goose`; what it sent is in
+  [`harness-messages.md`](harness-messages.md#acp-goose). It declares no `session/resume` and answers it with
+  "Method not found". Its tool calls carry no `kind` and no `name`, and its edits no diff.
 - **Standard surface:** load, list, close, delete, images, thoughts, tool calls, permissions, questions, session
   options, usage. No plan or diff output was found.
 - **Everything else is non-standard:** about 111 methods under `_goose/unstable/`, including steering.

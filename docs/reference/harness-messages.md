@@ -12,6 +12,7 @@ OpenCode sends over ACP, taken from real sessions, and how each message relates 
 | [`data/claude-sdk-message-structures.txt`](data/claude-sdk-message-structures.txt) | The structure of 176,652 Claude Agent SDK messages from four days of real use on one developer's machine | Counts and field names only. No content was read or kept |
 | Codex's generated protocol schema | `codex app-server generate-json-schema`, codex-cli 0.169.0 | The list of methods |
 | [`fixtures/recordings/acp/opencode`](../../fixtures/recordings/README.md#acp-opencode) | 12 scripted sessions with OpenCode 2.3.2 over ACP, recorded on 2026-11-21 | Read in full, for the [ACP section](#acp-opencode) only |
+| [`fixtures/recordings/acp/goose`](../../fixtures/recordings/README.md#acp-goose) | The same 12 with Goose 1.59.2, in a container, recorded on 2026-11-21 | Read in full, for the [Goose section](#acp-goose) only |
 | [`tools/prototype/translate.py`](../../tools/prototype/translate.py) | A prototype that turns every recording into proposed agent events, except the subagent recordings, which nothing translates yet | To check that nothing is left without a home |
 
 Limits of this evidence:
@@ -540,6 +541,40 @@ recorded.
   recognise and drop.
 - **Steering.** Not standard; OpenCode offers it only as an extension.
 - **Ending a session.** Nothing says a session is over.
+
+## ACP: Goose
+
+Read on 2026-11-21 from the twelve recordings in
+[`fixtures/recordings/acp/goose`](../../fixtures/recordings/acp/goose), made that day with the same recorder
+against Goose 1.59.2 (`goose acp`) in a container built from [`tools/goose`](../../tools/goose/Dockerfile),
+with `z-ai/glm-5.3-flash:free` on numes.ai and only the developer extension. What was checked and how is as for
+OpenCode above; only what differs is written here.
+
+- **Sessions.** Ids are a date and a count (`20261121_1`), counted per Goose home, so two homes can make the same
+  id. `initialize` declares `loadSession` and `sessionCapabilities` `list`, `delete` and `close`, no `resume`;
+  `session/resume` is answered with "Method not found" (-32601). A prompt to the same session id after a restart
+  still worked without a load. `session/load` replays the conversation as OpenCode's does.
+- **Settings.** The reply to `session/new` has the legacy `modes` (`auto`, `approve`, `smart_approve`, `chat`)
+  and `configOptions`: `provider` (90 options, no category), `mode` (category `mode`), `model` (40 options) and
+  `thinking_effort` (category `thought_level`). The session item takes the configuration options.
+- **Commands.** Eleven: `prompts`, `prompt`, `compact`, `clear`, `skills`, `doctor`, `goal`, `grind`, `status`,
+  `goose-doc-guide`, `web-search`.
+- **Extra updates.** `session_info_update` before and after each turn, some only with
+  `_meta.goose.activeRunId`, one with a title after the reply, and two or three `usage_update` per turn. None
+  is sent to the chat. Every chunk carries a `messageId` and Goose's own `_meta`.
+- **Tool calls carry no `kind` and no `name`.** The title is `shell · <command>`, `edit · <path>` or
+  `<extension>: <tool>`; the tool name is only in `_meta.goose.toolCall`. So every tool item is of kind `other`,
+  with the raw input as its `input`. A `tool_call` arrives with no status; `in_progress` and `completed` follow.
+  A command's output has `stdout`, `stderr` and `exit_code` in `rawOutput`. An edit sends text, not a diff.
+- **Approvals.** In `approve` mode every tool call asks. The options are `allow_always`, `allow_once`,
+  `reject_once` and `reject_always`, and each option's `name` is its kind, so the choices read that way. A
+  refusal fails the tool call ("The user has declined to run this tool") and the turn goes on.
+- **No question tool, and no ACP plan.** Asked for a question, Goose searched its extensions and asked in text.
+  Asked for a to-do list, it switched on its `todo` extension and wrote the list as tool calls.
+- **Cancel.** After `session/cancel` the running command was never updated; the reply said `cancelled`, and the
+  translators closed the tool item as cancelled.
+- **A provider failure** (seen once, in a run that was not kept) came as an error reply to `session/prompt`,
+  code -32603, with the provider's message and a request id in it, and `data.reason` `turn_failed`.
 
 ## Side by side
 
