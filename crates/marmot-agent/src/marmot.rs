@@ -213,8 +213,10 @@ impl Marmot {
                     .edit_message(&self.label, &id, target.as_str(), text)
                     .await?
             }
-            Sending::Words { text, turn, .. } => {
-                let tags = carrier::words_tags(turn.as_ref());
+            Sending::Words {
+                text, turn, remark, ..
+            } => {
+                let tags = carrier::words_tags(turn.as_ref(), *remark);
                 self.runtime
                     .send_tagged_text(&self.label, &id, text.clone(), tags)
                     .await?

@@ -348,10 +348,17 @@ pub fn read_request(agent: &PubKey, tags: &[Vec<String>]) -> Option<(Option<Even
     Some((value(tags, "e").map(EventKey::from), asked))
 }
 
-/// The tags of the agent's words, a chat message (D-022): the turn it belongs to.
-pub fn words_tags(turn: Option<&TurnId>) -> Vec<Vec<String>> {
-    turn.map(|t| vec![tag(["turn", t.as_str()])])
-        .unwrap_or_default()
+/// The tags of the agent's words, a chat message (D-022): the turn they belong to, and for a remark
+/// made while the agent works, the phase that keeps it from alerting (D-078).
+pub fn words_tags(turn: Option<&TurnId>, remark: bool) -> Vec<Vec<String>> {
+    let mut tags: Vec<Vec<String>> = turn
+        .map(|t| tag(["turn", t.as_str()]))
+        .into_iter()
+        .collect();
+    if remark {
+        tags.push(tag(["phase", "commentary"]));
+    }
+    tags
 }
 
 fn tag<const N: usize>(parts: [&str; N]) -> Vec<String> {
