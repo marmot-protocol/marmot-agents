@@ -126,7 +126,7 @@ async fn run(config: &Config) -> Result<(), String> {
         label: account.label,
         agent: PubKey(account.account_id_hex),
     };
-    let core = Core::new(marmot, driver, config, Store::new(&config.home));
+    let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
     let stop = async {
         let _ = tokio::signal::ctrl_c().await;
     };

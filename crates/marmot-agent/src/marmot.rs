@@ -36,6 +36,9 @@ pub struct Message {
     pub tags: Vec<Vec<String>>,
     /// When the sender says it was sent, in seconds.
     pub recorded_at: u64,
+    /// Its place in this machine's storage, which only grows: the order messages arrived in here,
+    /// whatever their senders' clocks say. Known for a stored message; a live one is looked up.
+    pub order: Option<i64>,
 }
 
 /// Prints the kind and nothing else (D-071).
@@ -58,6 +61,7 @@ impl From<AppMessageRecord> for Message {
             content: record.plaintext,
             tags: record.tags,
             recorded_at: record.recorded_at,
+            order: Some(record.insert_order),
         }
     }
 }
@@ -73,6 +77,7 @@ impl From<marmot_app::ReceivedMessage> for Message {
             content: message.plaintext,
             tags: message.tags,
             recorded_at: message.recorded_at,
+            order: None,
         }
     }
 }
@@ -157,7 +162,8 @@ impl Marmot {
         Some(Where {
             group: group.clone(),
             name: None,
-            direct: state.member_count == 2,
+            // MDK marks a direct chat: no name and two members. A named group of two is a group.
+            direct: record.direct_member_ids_hex.is_some(),
             members: state.member_count,
         })
     }
@@ -272,9 +278,41 @@ impl Marmot {
             .collect()
     }
 
-    /// The chat messages, answers and controls stored for a group, oldest first, up to the most
-    /// recent [`CATCH_UP`].
-    pub fn stored(&self, group: &GroupKey) -> Vec<Message> {
+    /// The chat messages, answers and controls others sent to a group that arrived here after
+    /// `after` in storage order, in that order, from the most recent [`CATCH_UP`].
+    pub fn stored(&self, group: &GroupKey, after: i64) -> Vec<Message> {
+        let mut rows: Vec<AppMessageRecord> = self
+            .recent(group)
+            .into_iter()
+            .filter(|r| r.insert_order > after && r.direction == "received" && !r.invalidated)
+            .collect();
+        rows.sort_by_key(|r| r.insert_order);
+        rows.into_iter().map(Message::from).collect()
+    }
+
+    /// The latest place in storage order for a group: where a group the core has never seen
+    /// starts, so its history is not read as prompts.
+    pub fn latest(&self, group: &GroupKey) -> i64 {
+        self.recent(group)
+            .iter()
+            .map(|r| r.insert_order)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// A message's place in storage order. `None` when it is not stored, as for one MDK removed.
+    pub fn order_of(&self, message: &Message) -> Option<i64> {
+        if message.order.is_some() {
+            return message.order;
+        }
+        self.runtime
+            .message_by_id(&self.label, message.group.as_str(), message.event.as_str())
+            .ok()
+            .flatten()
+            .map(|r| r.insert_order)
+    }
+
+    fn recent(&self, group: &GroupKey) -> Vec<AppMessageRecord> {
         let query = AppMessageQuery {
             group_id_hex: Some(group.as_str().to_string()),
             kinds: Some(vec![CHAT, REQUEST_KIND]),
@@ -283,10 +321,6 @@ impl Marmot {
         self.runtime
             .messages_with_query(&self.label, query)
             .unwrap_or_default()
-            .into_iter()
-            .filter(|r| r.direction == "received" && !r.invalidated)
-            .map(Message::from)
-            .collect()
     }
 }
 
