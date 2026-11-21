@@ -6,19 +6,54 @@
 //! turn (D-022).
 
 use crate::carrier::{self, REQUEST_KIND};
+use crate::config::Config;
 use crate::conversation::{Heard, HeardQuote, HeardRequest, Sending, Where};
 use crate::files::Outgoing;
 use crate::keys::{EventKey, GroupKey, PubKey};
 use cgka_traits::GroupId;
+use marmot_account::{AccountHome, AccountSummary};
 use marmot_agent_events::TurnId;
 use marmot_app::{
-    AppError, AppMessageQuery, AppMessageRecord, MarmotApp, MarmotAppRuntime,
+    AppError, AppMessageQuery, AppMessageRecord, MarmotApp, MarmotAppConfig, MarmotAppRuntime,
     MediaUploadAttachmentRequest, MediaUploadRequest,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The kind of a chat message.
 const CHAT: u64 = 9;
+
+/// Opens the account home the settings name: its accounts, and MDK's app and runtime on it.
+/// This is what first opens the store, which MDK upgrades forward only.
+pub fn open(config: &Config) -> Result<(AccountHome, MarmotApp, MarmotAppRuntime), String> {
+    let home = AccountHome::open(&config.home);
+    let base = if config.white_noise {
+        MarmotAppConfig::white_noise()
+    } else {
+        MarmotAppConfig::default()
+    };
+    let settings = base.with_allow_loopback_relay_endpoints(config.allow_loopback_relays);
+    let app = MarmotApp::try_with_relays_and_account_home_and_config(
+        &config.home,
+        config.relays.clone(),
+        home.clone(),
+        settings,
+    )
+    .map_err(|_| "the account home could not be opened; is another core running on it?")?;
+    let runtime = MarmotAppRuntime::new(app.clone());
+    Ok((home, app, runtime))
+}
+
+/// The home's one identity: one agent identity per core (D-072).
+pub fn identity(home: &AccountHome) -> Result<AccountSummary, String> {
+    let accounts = home
+        .accounts()
+        .map_err(|_| "the account home could not be read")?;
+    let mut signing = accounts.into_iter().filter(|a| a.local_signing);
+    match (signing.next(), signing.next()) {
+        (Some(account), None) => Ok(account),
+        _ => Err("the home must hold exactly one identity; run `marmot-agent init` first".into()),
+    }
+}
 
 /// One message as the Marmot side gets it, live or from storage.
 #[derive(Clone)]

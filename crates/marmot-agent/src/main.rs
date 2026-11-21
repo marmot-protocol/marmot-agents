@@ -5,19 +5,22 @@
 //! marmot-agent init <settings.toml>   make the agent's identity, and print its public key
 //! marmot-agent run <settings.toml>    run until stopped
 //! marmot-agent key <hex or npub>      print a public key in hex, or fail (for the install scripts)
+//! marmot-agent import <old home> [--harness <name>] [--owner <key>] [--cwd <folder>]
+//!                     [--settings <file>] [--leave-running <service>]... [--dry-run]
+//!                                     take over one of today's connector installs (D-089)
 //! ```
 
-use marmot_account::AccountHome;
 use marmot_agent::PubKey;
 use marmot_agent::config::Config;
-use marmot_agent::marmot::Marmot;
+use marmot_agent::import::{self, Options, Places};
+use marmot_agent::marmot::{self, Marmot};
 use marmot_agent::run::{Core, Store, serve};
 use marmot_agent::socket::Endpoint;
 use marmot_agent_acp::Acp;
 use marmot_agent_codex::Codex;
 use marmot_agent_pi::Pi;
-use marmot_app::{AccountSetupRequest, MarmotApp, MarmotAppConfig, MarmotAppRuntime};
-use std::path::Path;
+use marmot_app::AccountSetupRequest;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -32,6 +35,12 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
             None => fail("not a public key in hex or as an npub"),
+        };
+    }
+    if command == "import" {
+        return match import(path, &args[3..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(why) => fail(&why),
         };
     }
     let config = match Config::read(Path::new(path)) {
@@ -59,6 +68,10 @@ fn main() -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!("usage: marmot-agent init|run <settings.toml>, or marmot-agent key <hex or npub>");
+    eprintln!(
+        "       marmot-agent import <old home> [--harness <name>] [--owner <key>] \
+         [--cwd <folder>] [--settings <file>] [--leave-running <service>]... [--dry-run]"
+    );
     ExitCode::from(2)
 }
 
@@ -67,29 +80,10 @@ fn fail(why: &str) -> ExitCode {
     ExitCode::FAILURE
 }
 
-fn open(config: &Config) -> Result<(AccountHome, MarmotApp, MarmotAppRuntime), String> {
-    let home = AccountHome::open(&config.home);
-    let base = if config.white_noise {
-        MarmotAppConfig::white_noise()
-    } else {
-        MarmotAppConfig::default()
-    };
-    let settings = base.with_allow_loopback_relay_endpoints(config.allow_loopback_relays);
-    let app = MarmotApp::try_with_relays_and_account_home_and_config(
-        &config.home,
-        config.relays.clone(),
-        home.clone(),
-        settings,
-    )
-    .map_err(|_| "the account home could not be opened; is another core running on it?")?;
-    let runtime = MarmotAppRuntime::new(app.clone());
-    Ok((home, app, runtime))
-}
-
 /// Makes the agent's identity in its home: keys, relay lists and a key package, so it can be
 /// invited.
 async fn init(config: &Config) -> Result<(), String> {
-    let (home, _, runtime) = open(config)?;
+    let (home, _, runtime) = marmot::open(config)?;
     if home
         .accounts()
         .is_ok_and(|a| a.iter().any(|a| a.local_signing))
@@ -121,16 +115,8 @@ async fn run(config: &Config) -> Result<(), String> {
     // Listen for SIGTERM first, so a service manager's stop during start-up is heard too, and
     // ends start-up: a harness that is slow to start is not waited for.
     let mut stop = Box::pin(stopped());
-    let (home, app, runtime) = open(config)?;
-    let accounts = home
-        .accounts()
-        .map_err(|_| "the account home could not be read")?;
-    let mut signing = accounts.into_iter().filter(|a| a.local_signing);
-    let (Some(account), None) = (signing.next(), signing.next()) else {
-        return Err(
-            "the home must hold exactly one identity; run `marmot-agent init` first".into(),
-        );
-    };
+    let (home, app, runtime) = marmot::open(config)?;
+    let account = marmot::identity(&home)?;
     // Subscribe before starting, so what MDK delivers while it starts is not missed.
     let events = runtime.subscribe();
     let Some(started) = unless_stopped(&mut stop, runtime.start()).await else {
@@ -215,4 +201,48 @@ fn stopped() -> impl std::future::Future<Output = ()> {
             _ = next(interrupt) => {}
         }
     }
+}
+
+/// Takes over one of today's connector installs: plans, prints the plan, and carries it out
+/// unless `--dry-run` is given.
+fn import(home: &str, rest: &[String]) -> Result<(), String> {
+    let mut options = Options {
+        home: std::path::absolute(home).map_err(|_| "the old home's path could not be read")?,
+        harness: None,
+        owner: None,
+        cwd: None,
+        settings: None,
+        leave_running: Vec::new(),
+        places: Places::of_this_user()?,
+        now: std::time::SystemTime::now(),
+    };
+    let mut dry_run = false;
+    let mut rest = rest.iter();
+    while let Some(flag) = rest.next() {
+        // An option where a value belongs is a mistake, never the value: `--settings --dry-run`
+        // must not write the settings to `--dry-run` and carry the import out.
+        let mut value = || match rest.next() {
+            Some(value) if !value.starts_with('-') => Ok(value.clone()),
+            _ => Err(format!("`{flag}` needs a value; nothing was changed")),
+        };
+        match flag.as_str() {
+            "--harness" => options.harness = Some(value()?),
+            "--owner" => options.owner = Some(value()?),
+            "--cwd" => options.cwd = Some(value()?),
+            "--settings" => options.settings = Some(PathBuf::from(value()?)),
+            "--leave-running" => options.leave_running.push(value()?),
+            "--dry-run" => dry_run = true,
+            _ => return Err(format!("`{flag}` is not an option of import")),
+        }
+    }
+    let plan = import::plan(&options)?;
+    let mut out = std::io::stdout();
+    plan.print(&mut out)
+        .map_err(|_| "the plan could not be printed")?;
+    if dry_run {
+        println!("\nDry run: nothing was changed.");
+        return Ok(());
+    }
+    println!();
+    import::carry_out(&plan, &mut import::services::System, &mut out)
 }

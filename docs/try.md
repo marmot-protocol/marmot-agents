@@ -81,3 +81,7 @@ The same steps work with Claude Code in place of Codex, through the socket. It a
    ```
 
 Then invite the agent and talk to it in the client as before.
+
+## Moving an existing install
+
+To move one of today's connector installs over, keeping its identity and its chats, see [`move.md`](move.md).
