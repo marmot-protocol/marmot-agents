@@ -16,6 +16,11 @@ export const PROTOCOL = "marmot.agent-control.v3";
 /** The largest line either side may send (D-033). */
 export const MAX_MESSAGE = 4 * 1024 * 1024;
 
+/** The size of a notification's line in bytes, without its newline, as {@link CoreConnection.notify} writes it. */
+export function notificationSize(method: string, params: unknown): number {
+  return Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", method, params }));
+}
+
 /** The eight reasons a request may be refused (`crates/marmot-agent-driver`, `Reason`). */
 export type Reason =
   | "not_supported"

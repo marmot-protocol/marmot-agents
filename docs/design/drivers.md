@@ -162,6 +162,8 @@ session per chat:
   ([D-028](../decisions.md#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)): the
   approval's next edit, the end of the interrupted turn, the session item's edit that shows the new setting
   (sent as soon as Claude Code takes it), or the end of the old session.
+- An event too large for a line of the socket (4 MB) goes without its native message, and if it is still too
+  large, with its longest texts cut in the middle until it fits. Its `prompts` and `settles` are kept.
 
 Its capabilities: it can interrupt; a message sent during a turn ends the turn and starts another (`restart`,
 [D-040](../decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness)); the core names the

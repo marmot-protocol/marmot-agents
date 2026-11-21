@@ -14,7 +14,7 @@ import type { AgentEvent, Line } from "./translate.ts";
 import { Translator } from "./translate.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { CoreConnection, Refusal, type Capabilities, type Hello } from "./socket.ts";
+import { CoreConnection, MAX_MESSAGE, notificationSize, Refusal, type Capabilities, type Hello } from "./socket.ts";
 
 type Json = Record<string, unknown>;
 
@@ -574,6 +574,75 @@ export class Connector {
   }
 }
 
+/** What is put where text was cut to fit the socket. */
+const CUT = "\n[… cut to fit …]\n";
+const CUT_BYTES = Buffer.byteLength(JSON.stringify(CUT)) - 2;
+
+/** Whether the UTF-16 unit at `i` starts or ends a pair, which a cut must not split. */
+function high(s: string, i: number): boolean {
+  const c = s.charCodeAt(i);
+  return c >= 0xd800 && c <= 0xdbff;
+}
+function low(s: string, i: number): boolean {
+  const c = s.charCodeAt(i);
+  return c >= 0xdc00 && c <= 0xdfff;
+}
+
+/** Where a string is: the object or list that holds it, and its key there. */
+interface Spot {
+  owner: Record<string | number, unknown>;
+  key: string | number;
+  length: number;
+}
+
+/** The longest string in `value`, or in `best` if that is longer. */
+function longest(value: unknown, at: Spot | null = null): Spot | null {
+  let best = at;
+  const visit = (owner: Record<string | number, unknown>, key: string | number, v: unknown) => {
+    if (typeof v === "string") {
+      if (best === null || v.length > best.length) best = { owner, key, length: v.length };
+    } else if (typeof v === "object" && v !== null) {
+      best = longest(v, best);
+    }
+  };
+  if (typeof value === "object" && value !== null) {
+    for (const [k, v] of Object.entries(value)) visit(value as Record<string, unknown>, Array.isArray(value) ? Number(k) : k, v);
+  }
+  return best;
+}
+
+/**
+ * An event as it fits on one line of the socket (D-033). One over the limit goes without its native
+ * message; if it is still over, its longest texts are cut in the middle, keeping their start and end
+ * with a mark between, until it fits. Only `title`, `text` and `body` are cut: the event's ids, state,
+ * `prompts` and `settles` stay as they are. This is the socket's limit, not the item's 64 KB, which the
+ * core applies (D-057). Says what it did, or returns null when nothing could make it fit.
+ */
+export function fitEvent(event: CoreEvent, size: (e: CoreEvent) => number, limit: number): { event: CoreEvent; did: string | null } | null {
+  if (size(event) <= limit) return { event, did: null };
+  const { native: _native, ...rest } = event;
+  let out = rest as CoreEvent;
+  if (size(out) <= limit) return { event: out, did: "sent without its native message" };
+  out = structuredClone(out);
+  const parts: Json = { title: out.title, text: out.text, body: out.body };
+  for (;;) {
+    const over = size(out) - limit;
+    if (over <= 0) return { event: out, did: "cut to fit" };
+    const at = longest(parts);
+    if (at === null || at.length <= 2 * CUT.length) return null;
+    const s = at.owner[at.key] as string;
+    // Removing a UTF-16 unit removes at least a byte, so this many go, at least.
+    const keep = Math.max(0, s.length - over - CUT_BYTES);
+    let head = Math.ceil(keep / 2);
+    let tail = s.length - (keep - head);
+    if (head > 0 && high(s, head - 1)) head -= 1;
+    if (tail < s.length && low(s, tail)) tail += 1;
+    at.owner[at.key] = s.slice(0, head) + CUT + s.slice(tail);
+    out.title = parts["title"] as string;
+    out.text = parts["text"] as string;
+  }
+}
+
 /** What Claude Code can do, as the core and the apps read it (D-058). */
 export const CAPABILITIES: Capabilities = {
   interrupt: true,
@@ -624,7 +693,9 @@ export async function run(options: RunOptions): Promise<void> {
     model: options.model,
     permissionMode: options.permissionMode,
     send: (event) => {
-      if (!core.notify("event", event)) options.warn(`an event over the size limit was not sent (${event.type})`);
+      const fitted = fitEvent(event, (e) => notificationSize("event", e), MAX_MESSAGE);
+      if (fitted?.did) options.warn(`an event over the size limit was ${fitted.did} (${event.type})`);
+      if (fitted === null || !core.notify("event", fitted.event)) options.warn(`an event could not be sent (${event.type})`);
     },
     warn: options.warn,
   });

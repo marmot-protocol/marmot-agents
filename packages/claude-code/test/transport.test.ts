@@ -452,3 +452,52 @@ test("a model switch between turns shows and settles at once", async () => {
   assert.equal(shown["state"], "running");
   await done();
 });
+
+const LIMIT = 4 * 1024 * 1024;
+
+test("an approval too large for the socket goes without its native message, cut to fit, and can still be answered", async () => {
+  const { core, queries, warnings, done } = await start();
+  const { q } = await turn(core, queries);
+  const huge = { command: `${"a".repeat(3 * 1024 * 1024)}${"z".repeat(3 * 1024 * 1024)}`, description: "make a file" };
+  const asked = q.ask("Bash", huge, { suggestions: [SUGGESTION], toolUseID: "t1", requestId: "r1" });
+  await until(() => core.event((e) => e["item"] === "approval:r1") !== undefined, "the approval");
+  const waiting = core.event((e) => e["item"] === "approval:r1")!;
+  assert.equal(waiting["state"], "waiting");
+  assert.equal("native" in waiting, false);
+  // The command is the approval's text: its start and its end are kept, with a mark where it was cut.
+  const text = waiting["text"] as string;
+  assert.ok(text.startsWith("aaaa") && text.endsWith("zzzz") && text.includes("cut"), "cut in the middle");
+  assert.ok(text.length < huge.command.length);
+  assert.equal(((waiting["body"] as Json)["choices"] as Json[]).length, 3);
+  assert.ok(Math.max(...core.lines) <= LIMIT, "every line within the limit");
+  assert.ok(warnings.length > 0);
+  // Claude Code still gets the whole command back when it is allowed.
+  await core.request("answer", { request: "a1", item: "approval:r1", by: ALICE, given: { choice: "c0" } });
+  assert.deepEqual(await asked, { behavior: "allow", updatedInput: huge });
+  await until(() => core.event((e) => e["item"] === "approval:r1" && e["state"] === "done") !== undefined, "the answer");
+  const answered = core.event((e) => e["item"] === "approval:r1" && e["state"] === "done")!;
+  assert.deepEqual(answered["settles"], ["a1"]);
+  assert.equal("native" in answered, false);
+  assert.ok(Math.max(...core.lines) <= LIMIT, "every line within the limit");
+  await done();
+});
+
+test("a turn too large for the socket keeps its prompts and what it settles", async () => {
+  const { core, queries, done } = await start();
+  await core.request("prompt", PROMPT);
+  const q = queries[0]!;
+  // A field the translator does not read makes the native message, and nothing else, too large.
+  q.say({ ...init("u1"), padding: "p".repeat(LIMIT) });
+  await until(() => core.event((e) => e["type"] === "turn") !== undefined, "the turn");
+  const opened = core.event((e) => e["type"] === "turn")!;
+  assert.deepEqual(opened["prompts"], ["m1"]);
+  assert.equal("native" in opened, false);
+  await core.request("control", { request: "i1", by: ALICE, action: { type: "interrupt", turn: opened["turn"] } });
+  q.say({ ...DONE, subtype: "error_during_execution", is_error: true, errors: ["e".repeat(2 * LIMIT)] });
+  await until(() => core.event((e) => e["type"] === "turn" && e["state"] === "cancelled") !== undefined, "the turn's end");
+  const ended = core.event((e) => e["type"] === "turn" && e["state"] === "cancelled")!;
+  assert.deepEqual(ended["settles"], ["i1"]);
+  assert.ok((ended["text"] as string).includes("cut"));
+  assert.ok(Math.max(...core.lines) <= LIMIT, "every line within the limit");
+  await done();
+});
