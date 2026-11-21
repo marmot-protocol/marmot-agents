@@ -14,8 +14,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The kind of a chat message.
 const CHAT: u64 = 9;
-/// How many stored messages a group's catch-up reads at most.
-const CATCH_UP: usize = 500;
 
 /// One message as the Marmot side gets it, live or from storage.
 #[derive(Clone)]
@@ -281,10 +279,10 @@ impl Marmot {
     }
 
     /// The chat messages, answers and controls others sent to a group that arrived here after
-    /// `after` in storage order, in that order, from the most recent [`CATCH_UP`].
+    /// `after` in storage order, in that order, however many there are.
     pub fn stored(&self, group: &GroupKey, after: i64) -> Vec<Message> {
         let mut rows: Vec<AppMessageRecord> = self
-            .recent(group)
+            .stored_all(group)
             .into_iter()
             .filter(|r| r.insert_order > after && r.direction == "received" && !r.invalidated)
             .collect();
@@ -295,7 +293,7 @@ impl Marmot {
     /// The latest place in storage order for a group: where a group the core has never seen
     /// starts, so its history is not read as prompts.
     pub fn latest(&self, group: &GroupKey) -> i64 {
-        self.recent(group)
+        self.stored_all(group)
             .iter()
             .map(|r| r.insert_order)
             .max()
@@ -314,11 +312,14 @@ impl Marmot {
             .map(|r| r.insert_order)
     }
 
-    fn recent(&self, group: &GroupKey) -> Vec<AppMessageRecord> {
+    /// Every chat message, answer and control stored for the group. Not only the most recent: MDK
+    /// picks those by the time their senders gave, not by when they arrived here, so a message that
+    /// arrived late with an earlier time could fall outside the window and never be read.
+    fn stored_all(&self, group: &GroupKey) -> Vec<AppMessageRecord> {
         let query = AppMessageQuery {
             group_id_hex: Some(group.as_str().to_string()),
             kinds: Some(vec![CHAT, REQUEST_KIND]),
-            limit: Some(CATCH_UP),
+            limit: None,
         };
         self.runtime
             .messages_with_query(&self.label, query)
