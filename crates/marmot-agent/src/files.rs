@@ -93,6 +93,27 @@ fn unreadable() -> Refusal {
     refused(Reason::Failed, "The file could not be read.")
 }
 
+/// Checks the folders the settings list for sending files against the account home, which holds
+/// the agent's keys: none may be the home, hold it or lie inside it. Each is compared by its real
+/// path, links followed, as [`Folders::new`] opens it; one that is not there allows nothing
+/// anyway. The refusal names no path (D-071).
+pub fn apart_from_home(folders: &[PathBuf], home: &Path) -> Result<(), String> {
+    let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    for folder in folders {
+        let Ok(real) = std::fs::canonicalize(folder) else {
+            continue;
+        };
+        if real.starts_with(&home) || home.starts_with(&real) {
+            return Err(
+                "a folder in `files_from` is the account home, holds it or lies inside it, and \
+                 the home holds the agent's keys; take that folder out of the settings"
+                    .into(),
+            );
+        }
+    }
+    Ok(())
+}
+
 impl Folders {
     /// The folders, each opened now. One that does not exist, or cannot be opened, allows
     /// nothing.
@@ -543,6 +564,26 @@ mod tests {
         big.set_len(MAX_FILE + 1).unwrap();
         let out = folders(dir.path()).read(&dir.path().join("big.bin"));
         assert_eq!(reason(out), Reason::NotSupported);
+    }
+
+    #[test]
+    fn no_listed_folder_is_holds_or_lies_inside_the_home() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let out = root.path().join("out");
+        std::fs::create_dir_all(home.join("dev")).unwrap();
+        std::fs::create_dir(&out).unwrap();
+        std::os::unix::fs::symlink(&home, root.path().join("link")).unwrap();
+        for bad in [
+            home.clone(),
+            home.join("dev"),
+            root.path().to_path_buf(),
+            root.path().join("link/dev"),
+        ] {
+            let why = apart_from_home(&[out.clone(), bad], &home).unwrap_err();
+            assert!(!why.contains('/'), "{why}");
+        }
+        apart_from_home(&[out, root.path().join("missing")], &home).unwrap();
     }
 
     #[test]

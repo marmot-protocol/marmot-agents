@@ -130,6 +130,11 @@ impl<D: Driver> Core<D> {
     /// A core for the agent on `marmot`, driving `driver`, with the settings in `config`, keeping
     /// its state in `store`.
     pub fn new(marmot: Marmot, driver: D, config: &Config, store: Store) -> Result<Self, String> {
+        // The working folder, the default, is the person's to choose; a listed folder is
+        // checked, since an import or a hand may have put one in the wrong place.
+        if let Some(listed) = &config.files_from {
+            crate::files::apart_from_home(listed, &config.home)?;
+        }
         let kept = store.load()?;
         let conversation = Conversation::new(
             marmot.agent.clone(),

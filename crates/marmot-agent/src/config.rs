@@ -75,7 +75,8 @@ pub struct Config {
     pub white_noise: bool,
     /// The folders the agent may send files from (D-090). By default the working folder of a
     /// harness the core runs, and none for a connector on the socket, whose folder the core does
-    /// not know.
+    /// not know. A folder listed here may not be the account home, hold it or lie inside it: the
+    /// core refuses to start on one.
     #[serde(default)]
     pub files_from: Option<Vec<PathBuf>>,
     /// Codex, when the agent is Codex, built in.
