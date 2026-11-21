@@ -18,7 +18,7 @@ use marmot_agent_driver::{
 };
 use marmot_agent_events::{AgentEvent, Body, State};
 use serde_json::{Value, json};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -26,7 +26,10 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 use tokio::process::{Child, Command};
 
 type Reader = Lines<BufReader<Box<dyn AsyncRead + Unpin + Send>>>;
-type Writer = Box<dyn AsyncWrite + Unpin + Send>;
+
+/// How long the driver waits for the agent to end a turn it was asked to cancel, or a run it took
+/// up by itself, before it gives up.
+const ENDING: Duration = Duration::from_secs(60);
 
 /// What a request the driver sent is for.
 enum Purpose {
@@ -36,6 +39,8 @@ enum Purpose {
     Prompt(MessageId),
     /// A control, settled by its effect or by the agent refusing it.
     Control(RequestId),
+    /// A setting changed: settled by the agent's reply, whatever it changed.
+    Set(RequestId),
 }
 
 /// What shows that a control has had its effect.
@@ -60,7 +65,9 @@ struct Chat {
 /// The ACP driver: one agent process, serving every chat of one agent.
 pub struct Acp {
     reader: Reader,
-    writer: Writer,
+    /// Each message for the agent goes whole to a task that writes it, so a future the core drops
+    /// never leaves half a message on the agent's input.
+    writer: tokio::sync::mpsc::UnboundedSender<String>,
     /// The process, when the driver started it. It is killed when the driver is dropped.
     child: Option<Child>,
     /// The driver's name for the agent, until the agent names itself.
@@ -93,6 +100,12 @@ pub struct Acp {
     gone: bool,
     /// Messages for no chat.
     unrouted: u64,
+    /// Chats whose turn the driver asked the agent to cancel, until the turn ends. A request the
+    /// agent makes meanwhile is answered as cancelled at once.
+    cancelling: HashSet<ChatId>,
+    /// Sessions in which Goose is running something by itself: it says so in
+    /// `_meta.goose.activeRunId`, and refuses a prompt until it clears it.
+    busy: HashSet<String>,
 }
 
 impl Acp {
@@ -129,6 +142,20 @@ impl Acp {
         name: &str,
     ) -> io::Result<Self> {
         let output: Box<dyn AsyncRead + Unpin + Send> = Box::new(output);
+        let (writer, mut lines) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let mut input = input;
+        tokio::spawn(async move {
+            while let Some(line) = lines.recv().await {
+                let written = async {
+                    input.write_all(line.as_bytes()).await?;
+                    input.write_all(b"\n").await?;
+                    input.flush().await
+                };
+                if written.await.is_err() {
+                    break; // the agent's input is closed: the driver learns it from the next send
+                }
+            }
+        });
         // Request ids start from the time, so a turn, which is named after the request that
         // started it, never takes the name of a turn from before a restart.
         let millis = SystemTime::now()
@@ -136,7 +163,7 @@ impl Acp {
             .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(0));
         let mut acp = Self {
             reader: BufReader::new(output).lines(),
-            writer: Box::new(input),
+            writer,
             child: None,
             name: name.to_string(),
             version: None,
@@ -155,6 +182,8 @@ impl Acp {
             ready: VecDeque::new(),
             gone: false,
             unrouted: 0,
+            cancelling: HashSet::new(),
+            busy: HashSet::new(),
         };
         let id = acp.id();
         let hello = json!({
@@ -213,9 +242,9 @@ impl Acp {
     }
 
     async fn write(&mut self, text: &str) -> io::Result<()> {
-        self.writer.write_all(text.as_bytes()).await?;
-        self.writer.write_all(b"\n").await?;
-        self.writer.flush().await
+        self.writer
+            .send(text.to_string())
+            .map_err(|_| io::Error::other("the agent's input is closed"))
     }
 
     /// Sends a message for a chat and feeds it to that chat's translator; the events it makes
@@ -283,6 +312,26 @@ impl Acp {
         }
     }
 
+    /// Reads one message, giving up at `deadline`. False once the agent has gone or the time is up.
+    async fn read_until(&mut self, deadline: Instant) -> bool {
+        if self.gone {
+            return false;
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        // Reading a line is safe to give up on: nothing of a line is lost.
+        match tokio::time::timeout(left, self.reader.next_line()).await {
+            Err(_) => false,
+            Ok(Ok(Some(line))) => {
+                self.route(&line).await;
+                true
+            }
+            Ok(_) => {
+                self.stopped();
+                false
+            }
+        }
+    }
+
     /// Gives a message from the agent to the chat it is for, and answers the agent's requests
     /// that nobody in the chat is asked about.
     async fn route(&mut self, line: &str) {
@@ -290,8 +339,19 @@ impl Acp {
         if let Some(method) = message.get("method").and_then(Value::as_str) {
             let session = message["params"]["sessionId"].as_str().map(String::from);
             let chat = session.as_ref().and_then(|s| self.sessions.get(s)).cloned();
-            match chat {
-                Some(chat) => self.feed(&chat, Direction::In, line, Vec::new()),
+            // Goose says when it runs something by itself, and when it is done.
+            if let (Some(s), Some(run)) = (
+                &session,
+                message["params"]["update"]["_meta"]["goose"].get("activeRunId"),
+            ) {
+                if run.is_string() {
+                    self.busy.insert(s.clone());
+                } else {
+                    self.busy.remove(s);
+                }
+            }
+            match &chat {
+                Some(chat) => self.feed(chat, Direction::In, line, Vec::new()),
                 // A session being picked can speak before the reply that picks it.
                 None if session.is_some() && self.picking() => {
                     self.early.push(line.to_string());
@@ -320,6 +380,16 @@ impl Acp {
                 {
                     self.stopped();
                 }
+                // A turn being cancelled asks nobody: what it asks now is answered as cancelled.
+                if let Some(chat) = chat.filter(|c| self.cancelling.contains(c)) {
+                    let replies = self
+                        .translator(&chat)
+                        .map(Translator::cancel_replies)
+                        .unwrap_or_default();
+                    for reply in replies {
+                        let _ = self.send(&chat, None, &reply, Vec::new()).await;
+                    }
+                }
             }
             return;
         }
@@ -341,6 +411,12 @@ impl Acp {
             // effect already did.
             Purpose::Control(request) => {
                 if refused && self.unsettled(&chat, &request) {
+                    settles.push(request);
+                }
+            }
+            // A setting is settled by the reply, refused or not, even one that changed nothing.
+            Purpose::Set(request) => {
+                if self.unsettled(&chat, &request) {
                     settles.push(request);
                 }
             }
@@ -390,6 +466,9 @@ impl Acp {
         let events = c.translator.feed(direction, text);
         let after = c.translator.session().map(String::from);
         let turn_request = c.translator.turn_request().map(String::from);
+        if c.translator.turn().is_none() {
+            self.cancelling.remove(chat);
+        }
         if before != after {
             if let Some(old) = before {
                 self.sessions.remove(&old);
@@ -595,10 +674,7 @@ impl Acp {
             .and_then(Translator::session)
             .map(String::from);
         match (now, session) {
-            (Some(now), Some(wanted)) if now == wanted => {
-                self.stop_what_was_taken_up(chat).await;
-                Ok(())
-            }
+            (Some(now), Some(wanted)) if now == wanted => self.stop_what_was_taken_up(chat).await,
             (Some(_), None) => Ok(()),
             (_, Some(wanted)) => {
                 self.sessions.remove(wanted);
@@ -611,27 +687,29 @@ impl Acp {
         }
     }
 
-    /// After a session is taken up again: an agent can carry on, on its own, with the turn a
-    /// restart cut off (Goose does, and then refuses a prompt until it ends). A restart closes that
-    /// turn (D-070), so the driver cancels whatever the agent took up and reads on until it has been
-    /// quiet for a moment. ACP has no message that says a session is idle.
-    async fn stop_what_was_taken_up(&mut self, chat: &ChatId) {
-        if self.cancel(chat).await.is_err() {
-            return;
+    /// After a session is taken up again: Goose carries on, by itself, with the turn a restart cut
+    /// off, says so in `_meta.goose.activeRunId`, and refuses a prompt until it clears it. A restart
+    /// closes that turn (D-070), so the driver cancels the run and waits for Goose to clear it. Other
+    /// agents say nothing of the kind, and are not waited for.
+    async fn stop_what_was_taken_up(&mut self, chat: &ChatId) -> Result<(), Refusal> {
+        let Some(session) = self
+            .translator(chat)
+            .and_then(Translator::session)
+            .map(String::from)
+        else {
+            return Ok(());
+        };
+        if !self.busy.contains(&session) {
+            return Ok(());
         }
-        let quiet = Duration::from_secs(2);
-        let deadline = Instant::now() + Duration::from_secs(20);
-        while Instant::now() < deadline {
-            // Reading a line is safe to give up on: nothing of a line is lost.
-            match tokio::time::timeout(quiet, self.reader.next_line()).await {
-                Err(_) => return,
-                Ok(Ok(Some(line))) => self.route(&line).await,
-                Ok(_) => {
-                    self.stopped();
-                    return;
-                }
+        self.cancel(chat).await?;
+        let deadline = Instant::now() + ENDING;
+        while self.busy.contains(&session) {
+            if !self.read_until(deadline).await {
+                return Err(Refusal::new(Reason::Failed));
             }
         }
+        Ok(())
     }
 
     /// Cancels the chat's turn: tells the agent nobody will answer what it is waiting on, then
@@ -641,6 +719,7 @@ impl Acp {
             return Err(Refusal::new(Reason::NothingToDo));
         };
         let (replies, session) = (t.cancel_replies(), t.session().map(String::from));
+        self.cancelling.insert(chat.clone());
         for reply in replies {
             self.send(chat, None, &reply, Vec::new()).await?;
         }
@@ -706,8 +785,9 @@ impl Driver for Acp {
         // A message during a turn restarts it (`mid_turn: restart`).
         if self.translator(&chat).and_then(Translator::turn).is_some() {
             self.cancel(&chat).await?;
+            let deadline = Instant::now() + ENDING;
             while self.translator(&chat).and_then(Translator::turn).is_some() {
-                if !self.read().await {
+                if !self.read_until(deadline).await {
                     return Err(Refusal::new(Reason::Failed));
                 }
             }
@@ -797,7 +877,7 @@ impl Driver for Acp {
                     &chat,
                     "session/set_config_option",
                     params,
-                    Purpose::Control(request),
+                    Purpose::Set(request),
                 )
                 .await?;
                 Ok(())

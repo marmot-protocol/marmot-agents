@@ -18,8 +18,8 @@ serde = { version = "1", features = ["derive"] }
 # `raw_value` keeps the agent's own message as the exact text it arrived as.
 serde_json = { version = "1", features = ["raw_value"] }
 # Runs the agent and reads it without blocking the core.
-tokio = { version = "1", features = ["io-util", "process", "time"] }
+tokio = { version = "1", features = ["io-util", "process", "rt", "sync", "time"] }
 
 [dev-dependencies]
 # The transport is tested against a stand-in agent over an in-memory pipe.
-tokio = { version = "1", features = ["io-util", "macros", "rt", "sync"] }
+tokio = { version = "1", features = ["io-util", "macros", "rt", "sync", "time"] }

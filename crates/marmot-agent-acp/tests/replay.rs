@@ -215,6 +215,9 @@ fn a_failed_commands_error_output_is_kept() {
                 _ => None,
             })
             .unwrap_or_default();
-        assert!(output.contains("No module named pytest"), "{agent}: {output:?}");
+        assert!(
+            output.contains("No module named pytest"),
+            "{agent}: {output:?}"
+        );
     }
 }

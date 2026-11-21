@@ -200,18 +200,24 @@ cwd = "/home/me/work"
 - **OpenCode and Cursor run on the host.** Cursor uses the machine's own sign-in.
 - **A prompt** starts the chat's session if it has none (`session/new`), or takes up the one the core names
   ([D-065](../decisions.md#d-065-a-prompt-names-a-session-only-to-resume-one)) with `session/resume` when the
-  agent offers it and `session/load` otherwise; what `session/load` replays is not sent again. After taking a
-  session up, the driver cancels whatever the agent carried on with by itself (Goose resumes the turn a crash
-  cut off, and refuses a prompt until it ends) and waits until the agent has been quiet for two seconds: a
-  restart closes the turn ([D-070](../decisions.md#d-070-a-restart-closes-the-turn-as-interrupted)). The prompt
+  agent offers it and `session/load` otherwise; what `session/load` replays is not sent again. Goose, after taking up a
+  session, carries on by itself with the turn a crash cut off, says so in `_meta.goose.activeRunId`, and
+  refuses a prompt until it clears it; the driver then cancels that run and holds the prompt until Goose
+  clears it, since a restart closes the turn
+  ([D-070](../decisions.md#d-070-a-restart-closes-the-turn-as-interrupted)). Other agents are not waited for. The prompt
   is written as for Codex ([D-062](../decisions.md#d-062-what-codex-reads-for-a-chat-message)), as text only.
   A turn is named after the session and the prompt's request id; request ids start from the time, so a turn
   never takes the name of one from before a restart.
 - **An approval** is answered with the option of the choice made; **a question** (an elicitation form) with
   the values of the options chosen, and typed text in the question's free-text field.
-- **Interrupt** answers the requests still waiting as cancelled, as ACP asks, then sends `session/cancel`.
-  A message sent during a turn does the same, waits for the turn to end, then prompts (`restart`). **New
-  session** sends `session/new`, only when no turn is running. **`set`** sends `session/set_config_option`.
+- **Interrupt** answers the requests still waiting as cancelled, as ACP asks, then sends `session/cancel`;
+  until the turn ends, a request the agent makes is answered as cancelled at once. A message sent during a
+  turn does the same, waits up to a minute for the turn to end, then prompts (`restart`). **New
+  session** sends `session/new`, only when no turn is running. **`set`** sends `session/set_config_option`, and is settled by its reply, even one that changed nothing.
+- **Item ids** of tools, approvals and questions name the session as well as the agent's tool-call id, which
+  is the agent's own for one session; so an answer can only reach the chat whose request it names.
+- **Writing**: each message goes whole to a task that writes it, so a call the core abandons never leaves
+  half a message on the agent's input.
 - **Requests nobody is asked about** are answered at once: Cursor's `cursor/update_todos` is taken, anything
   else unknown is refused, so the agent never waits for ever.
 

@@ -8,6 +8,7 @@ use marmot_agent_driver::{
 };
 use marmot_agent_events::{Body, State};
 use serde_json::{Value, json};
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, Lines, WriteHalf};
 
 /// The stand-in's side of the pipe.
@@ -215,4 +216,248 @@ async fn an_approval_is_answered_and_an_interrupt_settled_by_the_turn_ending() {
     agent.await.unwrap();
     assert_eq!(ended.event.header().state, State::Cancelled);
     assert_eq!(ended.settles, vec![RequestId::from("r-2")]);
+}
+
+/// A stand-in over a pipe that holds only `buffer` bytes, so a write can be left waiting.
+async fn connected_with(buffer: usize) -> (Acp, Stand) {
+    let (driver_side, stand_side) = tokio::io::duplex(buffer);
+    let (read, write) = tokio::io::split(stand_side);
+    let mut stand = Stand {
+        lines: BufReader::new(read).lines(),
+        out: write,
+    };
+    let (driver_read, driver_write) = tokio::io::split(driver_side);
+    let greeting = tokio::spawn(async move {
+        let hello = stand.next().await;
+        let agent = json!({"protocolVersion": 1, "agentCapabilities": {"loadSession": true},
+                           "agentInfo": {"name": "Stand In", "version": "1.0.0"}});
+        stand.reply(&hello, agent).await;
+        stand
+    });
+    let acp = Acp::connect(driver_read, driver_write, "/work/demo", "standin")
+        .await
+        .unwrap();
+    (acp, greeting.await.unwrap())
+}
+
+impl Stand {
+    async fn update_in(&mut self, session: &str, update: Value) {
+        self.send(json!({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session, "update": update}}))
+            .await;
+    }
+
+    async fn ask_permission(&mut self, id: u64, session: &str, call: &str) {
+        self.update_in(session, json!({"sessionUpdate": "tool_call", "toolCallId": call, "title": "ls", "kind": "execute", "status": "pending", "rawInput": {"command": "ls"}})).await;
+        self.send(json!({"jsonrpc": "2.0", "id": id, "method": "session/request_permission", "params": {
+            "sessionId": session, "toolCall": {"toolCallId": call, "title": "ls", "kind": "execute", "rawInput": {"command": "ls"}},
+            "options": [{"optionId": "once", "name": "Allow once", "kind": "allow_once"},
+                        {"optionId": "reject", "name": "Reject", "kind": "reject_once"}]}}))
+            .await;
+    }
+
+    /// Asserts that the driver sends nothing for `millis` milliseconds.
+    async fn hears_nothing(&mut self, millis: u64) {
+        let next =
+            tokio::time::timeout(Duration::from_millis(millis), self.lines.next_line()).await;
+        assert!(next.is_err(), "the driver sent {next:?}");
+    }
+}
+
+fn prompt_in(chat: &str, message: &str, session: Option<&str>) -> Prompt {
+    Prompt {
+        message: message.into(),
+        chat: Chat {
+            id: chat.into(),
+            group: false,
+            name: None,
+        },
+        session: session.map(Into::into),
+        ..prompt("hello")
+    }
+}
+
+/// Two sessions can name their tool calls alike. An approval is named after its session too, so
+/// an answer in one chat never answers the other chat's request.
+#[tokio::test]
+async fn the_same_tool_call_in_two_chats_is_two_approvals() {
+    let (mut acp, mut stand) = connected().await;
+    let agent = tokio::spawn(async move {
+        for session in ["s1", "s2"] {
+            let new = stand.next().await;
+            stand.reply(&new, json!({"sessionId": session})).await;
+            let asked = stand.next().await;
+            assert_eq!(asked["params"]["sessionId"], session);
+        }
+        stand.ask_permission(10, "s1", "call_001").await;
+        stand.ask_permission(20, "s2", "call_001").await;
+        let answered = stand.next().await;
+        assert_eq!(
+            answered["id"], 10,
+            "the answer goes to the first chat's request"
+        );
+        stand
+    });
+    acp.prompt(prompt_in("c-1", "m-1", None)).await.unwrap();
+    acp.prompt(prompt_in("c-2", "m-2", None)).await.unwrap();
+    let mut approvals = Vec::new();
+    while approvals.len() < 2 {
+        let e = event(&mut acp).await;
+        if let Body::Approval(a) = e.event.body() {
+            approvals.push((
+                e.chat.clone(),
+                e.event.header().item.clone(),
+                a.choices[0].id.clone(),
+            ));
+        }
+    }
+    assert_ne!(approvals[0].1, approvals[1].1, "two items");
+    let (_, item, choice) = approvals
+        .iter()
+        .find(|(chat, _, _)| chat.as_ref().map(|c| c.as_str()) == Some("c-1"))
+        .cloned()
+        .unwrap();
+    let answer = Answer {
+        request: RequestId::from("r-1"),
+        item,
+        by: person(),
+        given: Given::Choice(choice),
+    };
+    acp.answer(answer).await.unwrap();
+    let answered = event(&mut acp).await;
+    assert_eq!(answered.chat.as_ref().map(|c| c.as_str()), Some("c-1"));
+    assert_eq!(answered.settles, vec![RequestId::from("r-1")]);
+    agent.await.unwrap();
+}
+
+/// After a session is loaded, Goose runs the cut-off turn by itself, says so in
+/// `_meta.goose.activeRunId`, and refuses a prompt until it clears it. The driver cancels the run
+/// and holds the prompt until then.
+#[tokio::test]
+async fn a_prompt_waits_for_goose_to_end_the_run_it_took_up() {
+    let (mut acp, mut stand) = connected().await;
+    let agent = tokio::spawn(async move {
+        let load = stand.next().await;
+        assert_eq!(load["method"], "session/load");
+        let busy = json!({"sessionUpdate": "session_info_update", "_meta": {"goose": {"activeRunId": "resume_1"}}});
+        stand.update_in("s1", busy).await;
+        stand.reply(&load, json!({})).await;
+        let cancel = stand.next().await;
+        assert_eq!(cancel["method"], "session/cancel");
+        // Longer than any pause a driver might take for idle: Goose can be silent while busy.
+        stand.hears_nothing(3000).await;
+        let idle = json!({"sessionUpdate": "session_info_update", "_meta": {"goose": {"activeRunId": null}}});
+        stand.update_in("s1", idle).await;
+        let asked = stand.next().await;
+        assert_eq!(asked["method"], "session/prompt");
+        stand
+    });
+    acp.prompt(prompt_in("c-1", "m-1", Some("s1")))
+        .await
+        .unwrap();
+    agent.await.unwrap();
+}
+
+/// What the driver answers by itself goes whole to the agent, even when the core gives up waiting
+/// for an event while the answer is still being written.
+#[tokio::test]
+async fn a_dropped_wait_leaves_no_half_message() {
+    let (mut acp, stand) = connected_with(48).await;
+    let Stand { mut lines, mut out } = stand;
+    // The stand-in writes from a task of its own: the pipe holds less than one message.
+    let writing = tokio::spawn(async move {
+        for id in [1, 2] {
+            let ask = json!({"jsonrpc": "2.0", "id": id, "method": "cursor/update_todos", "params": {"todos": []}});
+            out.write_all(format!("{ask}\n").as_bytes()).await.unwrap();
+        }
+        out
+    });
+    for _ in 0..4 {
+        let waited = tokio::time::timeout(Duration::from_millis(50), acp.next_event()).await;
+        assert!(waited.is_err(), "no event comes");
+    }
+    for id in [1, 2] {
+        // A whole message, or this fails to read.
+        let line = lines.next_line().await.unwrap().expect("a reply");
+        let reply: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(reply["id"], id);
+        assert_eq!(reply["result"], json!({}));
+    }
+    writing.await.unwrap();
+}
+
+/// A message during a turn cancels it. A permission the agent asks for after the cancel is
+/// answered as cancelled at once, so the turn can end and the new prompt go.
+#[tokio::test]
+async fn a_permission_asked_while_cancelling_is_answered_as_cancelled() {
+    let (mut acp, mut stand) = connected().await;
+    let agent = tokio::spawn(async move {
+        let new = stand.next().await;
+        stand.reply(&new, json!({"sessionId": "s1"})).await;
+        let first = stand.next().await;
+        let cancel = stand.next().await;
+        assert_eq!(cancel["method"], "session/cancel");
+        stand.ask_permission(9, "s1", "call_late").await;
+        let answered = stand.next().await;
+        assert_eq!(answered["id"], 9);
+        assert_eq!(
+            answered["result"],
+            json!({"outcome": {"outcome": "cancelled"}})
+        );
+        stand
+            .reply(&first, json!({"stopReason": "cancelled"}))
+            .await;
+        let second = stand.next().await;
+        assert_eq!(second["method"], "session/prompt");
+        assert_eq!(second["params"]["prompt"][0]["text"], "again");
+        stand
+    });
+    acp.prompt(prompt_in("c-1", "m-1", None)).await.unwrap();
+    let again = Prompt {
+        text: "again".into(),
+        ..prompt_in("c-1", "m-2", None)
+    };
+    acp.prompt(again).await.unwrap();
+    agent.await.unwrap();
+}
+
+/// A setting changed to the value it has is settled by the agent's reply.
+#[tokio::test]
+async fn a_setting_that_changes_nothing_is_settled_by_the_reply() {
+    let (mut acp, mut stand) = connected().await;
+    let options = json!([{"id": "model", "name": "Model", "category": "model", "type": "select",
+                          "currentValue": "a", "options": [{"value": "a", "name": "A"}, {"value": "b", "name": "B"}]}]);
+    let config = options.clone();
+    let agent = tokio::spawn(async move {
+        let new = stand.next().await;
+        stand
+            .reply(&new, json!({"sessionId": "s1", "configOptions": config}))
+            .await;
+        stand.next().await; // the prompt
+        let set = stand.next().await;
+        assert_eq!(set["method"], "session/set_config_option");
+        assert_eq!(set["params"]["value"], "a");
+        stand.reply(&set, json!({"configOptions": config})).await;
+        stand
+    });
+    acp.prompt(prompt_in("c-1", "m-1", None)).await.unwrap();
+    let set = Control {
+        request: RequestId::from("r-3"),
+        by: person(),
+        action: Action::Set {
+            session: "s1".into(),
+            setting: "model".into(),
+            value: "a".into(),
+        },
+    };
+    acp.control(set).await.unwrap();
+    let settled = loop {
+        let e = event(&mut acp).await;
+        if !e.settles.is_empty() {
+            break e;
+        }
+    };
+    assert!(matches!(settled.event.body(), Body::Session(_)));
+    assert_eq!(settled.settles, vec![RequestId::from("r-3")]);
+    agent.await.unwrap();
+    let _ = options;
 }

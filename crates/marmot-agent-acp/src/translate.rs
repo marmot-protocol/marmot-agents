@@ -1349,6 +1349,11 @@ impl Translator {
                         if !r.config_options.is_empty() {
                             self.config = r.config_options;
                         }
+                        // The session item goes again even if nothing changed: it shows the
+                        // setting as it stands, and settles the request.
+                        if let Some(sid) = &self.session {
+                            self.sessions.remove(&format!("session:{sid}"));
+                        }
                         self.announce(&kind, result, out);
                     }
                     Err(_) => self.unreadable += 1,

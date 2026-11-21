@@ -1448,6 +1448,8 @@ class Acp(Translator):
             return self.announce(f"response to {method}", result)
         if method == "session/set_config_option":
             self.config = result.get("configOptions") or self.config
+            # The session item goes again even if nothing changed: it shows the setting as it stands.
+            self.sessions.pop(f"session:{self.session}", None)
             return self.announce(f"response to {method}", result)
         if method == "session/prompt" and m.get("id") != self.turn_request:
             return self.skip("response to a session/prompt sent during a turn")
