@@ -131,6 +131,69 @@ the project owner it has never worked reliably and is not in use. Only Hermes ca
 configured. See [D-012](../decisions.md#d-012-word-by-word-streaming-is-not-required-now) and
 [D-067](../decisions.md#d-067-the-quic-preview-stack-is-removed), which removes it.
 
+## Where an install keeps what
+
+Read at MDK commit `bf4778a` on 2026-11-21, in `scripts/install-terminal-harness-marmot.sh`,
+`scripts/install-hermes-marmot.sh`, `scripts/install-openclaw-marmot.sh`, `crates/agent-connector/src/allowlist.rs`,
+`crates/agent-connector/src/invite_policy.rs`, `crates/agent-connector/src/lib.rs`,
+`crates/agent-connector/src/bin/wn-agent.rs`, `integrations/terminal-harness/src/config.rs`,
+`integrations/openclaw/marmot/src/sender-policy.ts` and `integrations/hermes/marmot/{adapter,diagnostics,doctor}.py`.
+This is what `marmot-agent import` reads
+([D-089](../decisions.md#d-089-an-install-moves-over-by-importing-its-account-home-in-place)). Not checked
+against a real install; the import test runs `agent-connector` itself at that commit.
+
+| Installer | Home | Account label | `wn-agent` service (systemd / launchd) | Harness service |
+| --- | --- | --- | --- | --- |
+| Claude Code | `~/.marmot-agents/claude` | `claude-harness-agent` | `wn-agent-claude` / `org.marmot.wn-agent.claude` | `wn-claude` / `org.marmot.wn-claude` |
+| Codex | `~/.marmot-agents/codex` | `codex-harness-agent` | `wn-agent-codex` / `org.marmot.wn-agent.codex` | `wn-codex` / `org.marmot.wn-codex` |
+| OpenCode | `~/.marmot-agents/harnesses` | `terminal-harness-agent` | `wn-agent-harnesses` / `org.marmot.wn-agent.harnesses` | `wn-opencode` / `org.marmot.wn-opencode` |
+| Pi | `~/.marmot-agents/pi` | `pi-harness-agent` | `wn-agent-pi` / `org.marmot.wn-agent.pi` | `wn-pi` / `org.marmot.wn-pi` |
+| Goose | `~/.marmot-agents/goose` | `goose-harness-agent` | `wn-agent-goose` / `org.marmot.wn-agent.goose` | `wn-goose` / `org.marmot.wn-goose` |
+| Hermes | `~/.marmot-agents/hermes` | `hermes-agent` | `wn-agent-hermes` / `org.marmot.wn-agent.hermes` | none: the plugin runs in Hermes's gateway |
+| OpenClaw | `~/.marmot-agents/openclaw` | `openclaw-agent` | `wn-agent-openclaw` / `org.marmot.wn-agent.openclaw` | none: the plugin runs in OpenClaw's gateway |
+| `wn-agent` alone | `~/.marmot-agents/standalone` | `standalone-agent` | `wn-agent-standalone` / `org.marmot.wn-agent.standalone` | none |
+
+Every name above can be changed when installing (`MARMOT_HOME`, `MARMOT_AGENT_LABEL`,
+`MARMOT_AGENT_SERVICE_NAME` and others), so the import finds services by the home they run on, not by name.
+
+- **The home** is an MDK account home, opened by `wn-agent` exactly as the core opens one:
+  `MarmotApp::try_with_relays_and_account_home_and_config` with `AccountHome::open(home)` and
+  `MarmotAppConfig::white_noise()`. One identity per home by default. Opening it takes MDK's root runtime
+  lease (`MarmotRootRuntimeLease`, a lock on `.marmot-runtime.lock` in the home), held while `wn-agent` runs.
+- **Relays** are not in the home. They are `--relay` arguments on the `wn-agent` service's command line, each
+  split at commas, then `MARMOT_RELAYS` (or the older `MARMOT_RELAY` when `MARMOT_RELAYS` is not set), then
+  `wss://relay.eu.whitenoise.chat` and `wss://relay.us.whitenoise.chat`. With `--no-default-relays` and none
+  named, `wn-agent` runs with no relays at all, offline, which its help calls "Offline/test only"
+  (`resolve_relays` in `crates/agent-connector/src/bootstrap.rs`). The import refuses such an install, since
+  the core needs relays.
+- **Files `wn-agent` may send** come only from its `--media-allowed-root` folders, which may be repeated. With
+  none, it sends no file. The installers set none.
+- **The invite allow-list** is `dev/agent-allowlist/<account id>.json` in the home: `account_id_hex`,
+  `invite_policy` (`deny`, `allowlist`, `any_authenticated_direct` or `any_authenticated`, `allowlist` by
+  default) and `welcomer_account_ids_hex`, which must be there. A damaged record, or one naming another account,
+  is read as empty, which lets nobody invite. An entry counts only if it is the welcomer's key exactly, in
+  lowercase hex; an npub never matches. `allowlist` lets the listed people invite into any group;
+  `any_authenticated_direct` lets anyone invite into a group of two and ignores the list;
+  `any_authenticated` lets anyone invite.
+- **Who may prompt a terminal harness** is `WN_<HARNESS>_ALLOWED_SENDERS_HEX` (for OpenCode also the older
+  `WN_OPENCODE_ADMIN_HEX`) in the harness's environment. The installer writes it into the harness service
+  (`Environment=` lines, or `EnvironmentVariables` in the LaunchAgent) and into `dev/wn-<harness>.env` in the
+  home, which is only for running the harness by hand. It sets it to the welcomers unless told otherwise. The
+  harness refuses to start when it is missing, empty or holds any entry that is not 64 hex digits (either
+  case); npubs are not taken. The same environment holds the harness program (`WN_<HARNESS>_BIN`), the
+  execution profile (`MARMOT_HARNESS_EXECUTION_PROFILE`, `inherit` by default) and time and reply limits.
+- **Who may write to Hermes** is `MARMOT_ALLOWED_USERS` and `MARMOT_ALLOW_ALL_USERS` in `$HERMES_HOME/.env`
+  (`~/.hermes` by default), which Hermes loads over its own environment. Hermes also reads `allowed_users`,
+  `allowed_users_hex` and `allow_all_users` from its `config.yaml`, and combines the two; the import does not
+  follow that and treats such a config as unclear.
+- **Who may write to OpenClaw** is `channels.marmot.senderPolicy` (`allowedUsers`, `allowAll`) in
+  `$OPENCLAW_HOME/.openclaw/openclaw.json` (`$HOME` by default), and otherwise the same two variables in the
+  gateway's environment. The plugin parses it strictly: any field besides those two, an `allowAll` that is not
+  a boolean, or any `allowedUsers` entry that is not 64 hex digits makes the whole policy invalid, which denies
+  every sender, even with `allowAll: true`. An empty list without `allowAll` denies everyone too.
+- **The socket** is `dev/wn-agent.sock` in the home, and its token `control.token`. The core's own are
+  `socket/marmot-agent.sock` and `connector.token`, so the two never collide.
+
 ## Things the new design must not lose
 
 These work today and are easy to forget.

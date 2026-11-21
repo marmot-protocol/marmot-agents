@@ -9,14 +9,20 @@ use marmot_agent::config::Config;
 use marmot_agent::marmot::Marmot;
 use marmot_agent::run::{Core, Store};
 use marmot_agent::{EventKey, PubKey};
-use marmot_agent_driver::Driver;
-use marmot_agent_events::body::{Body, Effect};
-use marmot_agent_events::{SessionId, State, TurnId};
+use marmot_agent_driver::{
+    Answer, Capabilities, Control, Driver, Emitted, FilesIn, Harness, MidTurn, Output, Prompt,
+    Refusal, Sessions,
+};
+use marmot_agent_events::body::{Body, Effect, Message, StartedBy, Turn};
+use marmot_agent_events::{AgentEvent, Header, SessionId, State, TurnId};
 use marmot_app::{
     AccountSetupRequest, AppMessageQuery, AppMessageRecord, MarmotApp, MarmotAppRuntime,
 };
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
@@ -34,6 +40,108 @@ pub async fn within<T>(seconds: u64, mut found: impl FnMut() -> Option<T>) -> T 
 /// Waits, up to 30 seconds, for `found` to give something.
 pub async fn eventually<T>(found: impl FnMut() -> Option<T>) -> T {
     within(30, found).await
+}
+
+/// A harness that answers every prompt with "echo: " and the prompt's text, in one turn, and
+/// counts the prompts it was given.
+pub struct Echo {
+    events: mpsc::UnboundedReceiver<Emitted>,
+    to_self: mpsc::UnboundedSender<Emitted>,
+    prompts: Arc<AtomicUsize>,
+    seq: u64,
+}
+
+impl Echo {
+    pub fn new(prompts: Arc<AtomicUsize>) -> Self {
+        let (to_self, events) = mpsc::unbounded_channel();
+        Self {
+            events,
+            to_self,
+            prompts,
+            seq: 0,
+        }
+    }
+
+    fn emit(&mut self, prompt: &Prompt, item: &str, state: State, body: Body, text: &str) {
+        self.seq += 1;
+        // Only a turn names the prompts it responds to.
+        let prompts = if matches!(body, Body::Turn(_)) {
+            vec![prompt.message.clone()]
+        } else {
+            Vec::new()
+        };
+        let header = Header {
+            harness: "echo".into(),
+            session: Some("s1".into()),
+            turn: Some(format!("t{}", self.prompts.load(Ordering::SeqCst)).into()),
+            item: format!("{item}{}", self.prompts.load(Ordering::SeqCst)).into(),
+            seq: self.seq,
+            state,
+            title: item.into(),
+            text: text.into(),
+        };
+        let _ = self.to_self.send(Emitted {
+            event: AgentEvent::new(header, body, None).unwrap(),
+            chat: Some(prompt.chat.id.clone()),
+            prompts,
+            settles: Vec::new(),
+        });
+    }
+}
+
+impl Driver for Echo {
+    fn harness(&self) -> Harness {
+        Harness {
+            name: "echo".into(),
+            version: None,
+        }
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            interrupt: false,
+            mid_turn: MidTurn::Queue,
+            sessions: Sessions::Core,
+            resume: false,
+            approvals: false,
+            files_in: FilesIn::None,
+            approval_commands: Vec::new(),
+        }
+    }
+
+    async fn prompt(&mut self, prompt: Prompt) -> Result<(), Refusal> {
+        self.prompts.fetch_add(1, Ordering::SeqCst);
+        let turn = || {
+            Body::Turn(Turn {
+                started_by: StartedBy::User,
+                duration_ms: None,
+                usage: None,
+            })
+        };
+        self.emit(&prompt, "turn", State::Running, turn(), "Working");
+        let words = format!("echo: {}", prompt.text);
+        self.emit(
+            &prompt,
+            "words",
+            State::Done,
+            Body::Message(Message::default()),
+            &words,
+        );
+        self.emit(&prompt, "turn", State::Done, turn(), "Done");
+        Ok(())
+    }
+
+    async fn answer(&mut self, _answer: Answer) -> Result<(), Refusal> {
+        Ok(())
+    }
+
+    async fn control(&mut self, _control: Control) -> Result<(), Refusal> {
+        Ok(())
+    }
+
+    async fn next_event(&mut self) -> Option<Output> {
+        self.events.recv().await.map(Output::from)
+    }
 }
 
 /// A person and an agent on MDK's test relay, in one runtime.

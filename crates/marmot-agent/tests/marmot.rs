@@ -4,112 +4,11 @@
 
 mod common;
 
-use common::{World, eventually};
-use marmot_agent_driver::{
-    Answer, Capabilities, Control, Driver, Emitted, FilesIn, Harness, MidTurn, Output, Prompt,
-    Refusal, Sessions,
-};
-use marmot_agent_events::body::{Body, Message, StartedBy, Turn};
-use marmot_agent_events::{AgentEvent, Header, State};
+use common::{Echo, World, eventually};
+use marmot_agent_events::State;
+use marmot_agent_events::body::Body;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::sync::mpsc;
-
-/// A harness that answers every prompt with "echo: " and the prompt's text, in one turn, and
-/// counts the prompts it was given.
-struct Echo {
-    events: mpsc::UnboundedReceiver<Emitted>,
-    to_self: mpsc::UnboundedSender<Emitted>,
-    prompts: Arc<AtomicUsize>,
-    seq: u64,
-}
-
-impl Echo {
-    fn new(prompts: Arc<AtomicUsize>) -> Self {
-        let (to_self, events) = mpsc::unbounded_channel();
-        Self {
-            events,
-            to_self,
-            prompts,
-            seq: 0,
-        }
-    }
-
-    fn emit(&mut self, prompt: &Prompt, item: &str, state: State, body: Body, text: &str) {
-        self.seq += 1;
-        let header = Header {
-            harness: "echo".into(),
-            session: Some("s1".into()),
-            turn: Some(format!("t{}", self.prompts.load(Ordering::SeqCst)).into()),
-            item: format!("{item}{}", self.prompts.load(Ordering::SeqCst)).into(),
-            seq: self.seq,
-            state,
-            title: item.into(),
-            text: text.into(),
-        };
-        let _ = self.to_self.send(Emitted {
-            event: AgentEvent::new(header, body, None).unwrap(),
-            chat: Some(prompt.chat.id.clone()),
-            prompts: vec![prompt.message.clone()],
-            settles: Vec::new(),
-        });
-    }
-}
-
-impl Driver for Echo {
-    fn harness(&self) -> Harness {
-        Harness {
-            name: "echo".into(),
-            version: None,
-        }
-    }
-
-    fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            interrupt: false,
-            mid_turn: MidTurn::Queue,
-            sessions: Sessions::Core,
-            resume: false,
-            approvals: false,
-            files_in: FilesIn::None,
-            approval_commands: Vec::new(),
-        }
-    }
-
-    async fn prompt(&mut self, prompt: Prompt) -> Result<(), Refusal> {
-        self.prompts.fetch_add(1, Ordering::SeqCst);
-        let turn = || {
-            Body::Turn(Turn {
-                started_by: StartedBy::User,
-                duration_ms: None,
-                usage: None,
-            })
-        };
-        self.emit(&prompt, "turn", State::Running, turn(), "Working");
-        let words = format!("echo: {}", prompt.text);
-        self.emit(
-            &prompt,
-            "words",
-            State::Done,
-            Body::Message(Message::default()),
-            &words,
-        );
-        self.emit(&prompt, "turn", State::Done, turn(), "Done");
-        Ok(())
-    }
-
-    async fn answer(&mut self, _answer: Answer) -> Result<(), Refusal> {
-        Ok(())
-    }
-
-    async fn control(&mut self, _control: Control) -> Result<(), Refusal> {
-        Ok(())
-    }
-
-    async fn next_event(&mut self) -> Option<Output> {
-        self.events.recv().await.map(Output::from)
-    }
-}
 
 // A person who owns the agent invites it to a direct chat and writes to it. The core accepts the
 // invitation, hands the message to the harness as a prompt, and the person receives the agent's

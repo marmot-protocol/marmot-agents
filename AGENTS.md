@@ -64,6 +64,7 @@ being replaced by what is designed here, not extended.
 | Work on the core | `crates/marmot-agent`, after `docs/plan.md` and `docs/design/architecture.md` |
 | Work on the install scripts | `install/lib.sh`, then the harness's script beside it, after `README.md` ("Installing an agent") |
 | Work on the release | `.github/workflows/release.yml` and `tools/release/package.sh` |
+| Work on moving an install over | `crates/marmot-agent/src/import`, after `docs/move.md` and `docs/reference/current-connectors.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Plan or add tests, models or proofs | `docs/design/verification.md` |
 | Change the link check | `lychee.toml` |

@@ -90,7 +90,8 @@ Known gaps are issues #63, #64 and #68.
 
 ### M4: Ready to swap
 
-Everything on the list above that M1 to M3 did not already do: moving installs over, installers and releases,
+Everything on the list above that M1 to M3 did not already do: moving installs over (`marmot-agent import`,
+built: [how](move.md)), installers and releases,
 an agent sending a file ([D-090](decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)), sends that
 survive a crash, catching up after being offline, and the switch to MDK's 1201 and 1202 once MDK has them.
 **Done when** an install of each of today's connectors has moved over, on a test machine, without being
