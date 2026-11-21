@@ -23,7 +23,10 @@ export function notificationSize(method: string, params: unknown): number {
   return Buffer.byteLength(JSON.stringify({ jsonrpc: "2.0", method, params }));
 }
 
-/** The eight reasons a request may be refused (`crates/marmot-agent-driver`, `Reason`). */
+/**
+ * The reasons a request may be refused (`crates/marmot-agent-driver`, `Reason`). Only the core refuses with
+ * `not_allowed`: a file outside the folders the agent may send from (D-090).
+ */
 export type Reason =
   | "not_supported"
   | "busy"
@@ -32,7 +35,8 @@ export type Reason =
   | "already_answered"
   | "nothing_to_do"
   | "invalid"
-  | "failed";
+  | "failed"
+  | "not_allowed";
 
 /** A request not taken. The detail is shown in the chat, to every member. */
 export class Refusal extends Error {
@@ -72,7 +76,7 @@ export interface Welcome {
 /** Serves one request from the core. It resolves once the request is taken, and throws a {@link Refusal}. */
 export type Serve = (method: string, params: Record<string, unknown>) => Promise<void>;
 
-/** The hello's id. It is the only request the connector sends. */
+/** The hello's id. */
 const HELLO = 1;
 
 /** The hello was refused, or the connection went before the core answered it. */
@@ -91,7 +95,7 @@ export class CoreConnection {
     throw new Refusal("not_supported");
   };
   private queue: Promise<void> = Promise.resolve();
-  /** The hello, the one request the connector sends, while it waits for its answer. */
+  /** The hello, while it waits for its answer. */
   private helloWaits: { resolve: (r: Welcome) => void; reject: (e: Error) => void } | undefined;
   private readonly closedPromise: Promise<void>;
   private closed = false;

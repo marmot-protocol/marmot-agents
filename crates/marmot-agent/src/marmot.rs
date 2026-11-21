@@ -7,9 +7,14 @@
 
 use crate::carrier::{self, REQUEST_KIND};
 use crate::conversation::{Heard, HeardQuote, HeardRequest, Sending, Where};
+use crate::files::Outgoing;
 use crate::keys::{EventKey, GroupKey, PubKey};
 use cgka_traits::GroupId;
-use marmot_app::{AppError, AppMessageQuery, AppMessageRecord, MarmotApp, MarmotAppRuntime};
+use marmot_agent_events::TurnId;
+use marmot_app::{
+    AppError, AppMessageQuery, AppMessageRecord, MarmotApp, MarmotAppRuntime,
+    MediaUploadAttachmentRequest, MediaUploadRequest,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The kind of a chat message.
@@ -224,6 +229,36 @@ impl Marmot {
             .message_ids
             .into_iter()
             .next()
+            .map(EventKey)
+            .ok_or(AppError::UnknownGroup(String::new()))
+    }
+
+    /// Sends a file to a group as an encrypted attachment, tagged with its turn like the agent's
+    /// words (D-022, D-090), and gives back the id of the chat message it became.
+    pub async fn send_file(
+        &self,
+        group: &GroupKey,
+        file: &Outgoing,
+        turn: Option<&TurnId>,
+    ) -> Result<EventKey, AppError> {
+        let id = group_id(group).ok_or_else(|| AppError::UnknownGroup(String::new()))?;
+        let request = MediaUploadRequest {
+            attachments: vec![MediaUploadAttachmentRequest {
+                file_name: file.name.clone(),
+                media_type: file.media_type.clone(),
+                plaintext: file.bytes.clone(),
+                dim: None,
+                thumbhash: None,
+            }],
+            caption: None,
+            send: true,
+            blossom_server: None,
+            message_tags: carrier::words_tags(turn, false),
+        };
+        let uploaded = self.runtime.upload_media(&self.label, &id, request).await?;
+        uploaded
+            .sent
+            .and_then(|sent| sent.message_ids.into_iter().next())
             .map(EventKey)
             .ok_or(AppError::UnknownGroup(String::new()))
     }

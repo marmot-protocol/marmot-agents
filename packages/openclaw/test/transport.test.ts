@@ -657,13 +657,19 @@ test("an event still too large without its native message is cut to fit, keeping
   assert.equal(event.text, huge);
 });
 
-test("the socket client is the Claude Code driver's, with only its opening comment changed", () => {
-  // Each package stands alone, so the client is copied, not shared (packages/openclaw/src/socket.ts).
+test("the socket client is the Claude Code driver's, with its opening comment and the Claude Code driver's own requests left out", () => {
+  // Each package stands alone, so the client is copied, not shared (packages/openclaw/src/socket.ts). Only the
+  // Claude Code driver sends the core requests of its own, to send a file (D-090); those parts of its copy are
+  // marked, and this plugin's copy leaves them out.
+  const own = /[ \t]*\/\/ Only the Claude Code driver sends the core requests of its own \(D-090\): begin\n[\s\S]*?[ \t]*\/\/ end\n/g;
   const code = (path: string) => {
     const file = readFileSync(new URL(path, import.meta.url), "utf8");
-    return file.slice(file.indexOf("*/"));
+    return file.slice(file.indexOf("*/")).replace(own, "").replace(/\n{3,}/g, "\n\n");
   };
+  const claude = readFileSync(new URL("../../claude-code/src/socket.ts", import.meta.url), "utf8");
+  assert.equal(claude.match(own)?.length, 5, "the Claude Code driver's own parts are marked");
   assert.equal(code("../src/socket.ts"), code("../../claude-code/src/socket.ts"));
+  assert.ok(!readFileSync(new URL("../src/socket.ts", import.meta.url), "utf8").includes("request(method"));
 });
 
 test("a live payload reaches the core whole: no entry and no level is left out", async () => {

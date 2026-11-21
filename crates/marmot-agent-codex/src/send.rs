@@ -110,10 +110,44 @@ pub fn initialized() -> String {
     json!({"method": "initialized"}).to_string()
 }
 
+/// The name of the driver's own tool, which sends a file to the chat (D-090).
+pub const SEND_FILE: &str = "send_file";
+
+/// The tool every session the driver starts is given, so the agent can send a file to the chat
+/// (D-090). Codex keeps it with the session, so a resumed session has it too.
+pub fn send_file_tool() -> Value {
+    json!({
+        "type": "function",
+        "name": SEND_FILE,
+        "description": "Send a file from the working folder to the chat, as an attachment the people in the chat can open. Give its path, relative to the working folder or absolute.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": "The file to send."}},
+            "required": ["path"],
+            "additionalProperties": false,
+        },
+    })
+}
+
+/// The driver's reply to Codex's call of its own tool: whether the file was sent, and if not, why,
+/// in words the model reads.
+pub fn tool_reply(id: &Value, result: &Result<(), Refusal>) -> String {
+    let (text, success) = match result {
+        Ok(()) => ("Sent.".to_string(), true),
+        Err(refusal) => match &refusal.detail {
+            Some(detail) => (format!("Not sent: {detail}"), false),
+            None => ("Not sent.".to_string(), false),
+        },
+    };
+    let content = json!([{"type": "inputText", "text": text}]);
+    json!({"id": id, "result": {"contentItems": content, "success": success}}).to_string()
+}
+
 /// A new session. Codex keeps it on disk, so it can be resumed after a restart (D-063).
 pub(crate) fn thread_start(id: i64, setup: &Setup) -> String {
     let mut params = setup.params();
     params.insert("ephemeral".into(), false.into());
+    params.insert("dynamicTools".into(), json!([send_file_tool()]));
     request(id, "thread/start", params.into())
 }
 

@@ -8,6 +8,10 @@ the Codex driver splits its work ([D-060](../decisions.md#d-060-a-codex-translat
 So is how drivers are tested
 ([D-074](../decisions.md#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)), and what the
 Pi driver builds on ([D-086](../decisions.md#d-086-the-pi-driver-reads-pis-rpc-messages-with-types-of-its-own)).
+That an agent's file goes to the chat as an attachment from an allowed folder is decided
+([D-090](../decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)); how a
+driver asks for it, in [sending a file](#sending-a-file), is a proposal: built, and provisional until the
+owner accepts it.
 
 ## What a driver does
 
@@ -80,7 +84,8 @@ socket does the same job as messages:
 - take a prompt;
 - take an answer to a waiting request;
 - take a control: interrupt, new session, change a setting, or one of the harness's own actions;
-- hand back the next agent event.
+- hand back the next agent event, or a file the agent asks to send, and hear how that file went
+  ([sending a file](#sending-a-file)).
 
 Three things a driver does are not operations of their own. A prompt goes to its chat's session, and names
 one only to resume it, so opening and resuming one happen when a prompt arrives
@@ -90,6 +95,63 @@ is no "steer". And "new session" is a control.
 It is decided ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)). The core waits for
 every request to return
 ([D-066](../decisions.md#d-066-the-core-finishes-every-request-it-starts)).
+
+## Sending a file
+
+A proposal, built and provisional. What is decided is the outcome
+([D-090](../decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)): the
+file goes to the chat as an ordinary encrypted attachment, tagged with its turn, and only from folders the
+settings allow.
+
+```mermaid
+sequenceDiagram
+    participant H as Harness
+    participant D as Driver
+    participant C as Core
+    participant M as MDK
+    H->>D: calls send_file(path)
+    D->>C: SendFile { chat, absolute path }
+    C->>C: in an allowed folder? an ordinary file? under 64 MiB?
+    C->>M: upload and send, tagged with the turn
+    C->>D: file_sent: sent, or refused and why
+    D->>H: the tool's result
+```
+
+- **The harness asks with a tool the driver gives it.** Codex gets a dynamic tool, `send_file`, on every
+  session the driver starts, and Codex keeps it when a session is resumed. Claude Code gets an in-process MCP
+  server from the Agent SDK with the same tool, which Claude Code calls `mcp__marmot__send_file`. Both take one
+  argument, `path`. The model is never asked to write a path into its answer, and nothing in its words is read
+  as a request to send.
+- **The driver hands the core a request.** `next_event` gives either an event or `SendFile`: the driver's own
+  id for the request, the chat, and the path. The driver makes a relative path whole by putting its working
+  folder in front, leaving any `..` for the core to follow; the core takes only an absolute one. The core answers through `file_sent`, with the result and, for a
+  refusal, a reason and a sentence that names no path. The driver passes that back to the harness as the
+  tool's result. On the socket this is the `send_file` request
+  ([the messages, as built](socket-protocol.md#the-messages-as-built)).
+- **The core decides.** It reads only from the folders `files_from` lists. By default that is the working
+  folder of a harness the core runs (Codex, Pi, an ACP agent); a connector on the socket has none until the
+  settings list one, since the core does not know its folder. The core opens each folder when it starts and
+  follows a path from that open folder one part at a time, never letting the system follow a link: a link on
+  the way is read and followed by its words by the same rule, so it may lead elsewhere inside but never out,
+  and a `..` never climbs above the folder. A folder on the way swapped for a link meanwhile cannot lead out
+  either. It also refuses a file with a second name (a hard link, which could be outside), anything but an
+  ordinary file, an empty file, and one over 64 MiB, well under the 512 MiB MDK uploads in one piece.
+- **Sending runs on the side.** Uploading can take long, so it runs as a task of its own while the chats go
+  on, and the core tells the driver once it is done. The core offers the file to MDK again only while MDK says
+  it is busy, which it says only before it has taken the file, for about half a minute. Any other failure is
+  reported as `failed` and not tried again, since MDK may have sent the file anyway, and a post cannot be
+  taken back.
+- **What people see.** The file arrives as a chat message carrying the attachment and the turn's tag, as the
+  agent's words do ([D-022](../decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)), and alerts
+  like an answer. The tool call shows as a `tool` item. A refused file shows as the core's refused notice
+  ([D-077](../decisions.md#d-077-a-refused-notice-says-why-something-was-not-acted-on)), with the reason
+  `not_allowed`, `invalid`, `not_supported`, `busy` or `failed`, and never the path
+  ([D-071](../decisions.md#d-071-what-may-be-logged)).
+- **Who may.** Calling the tool needs nobody's approval in the chat: the Claude Code connector allows it in
+  its permission callback, and Codex does not ask for a dynamic tool. The folders are the limit, as the owner set them.
+
+Pi, the ACP driver, and the Hermes and OpenClaw plugins do not offer the tool yet. A plugin would send the
+same `send_file` request from its gateway's own message tool.
 
 ## Capabilities
 
@@ -126,7 +188,8 @@ resumed ([D-063](../decisions.md#d-063-codex-keeps-a-session-so-it-can-be-resume
 server is declined for now ([D-064](../decisions.md#d-064-the-codex-driver-declines-an-mcp-servers-form-until-forms-are-designed)). Both halves are written
 ([`crates/marmot-agent-codex`](../../crates/marmot-agent-codex)). The transport runs one Codex for every chat of an
 agent, and starts it with subagents switched off until how a chat shows them is decided
-([subagents as threads](subagents.md)).
+([subagents as threads](subagents.md)). Every session it starts gets the driver's `send_file` tool
+([sending a file](#sending-a-file)); a call becomes a `tool` item, of kind `other`, like any tool.
 
 ## The Claude Code driver
 
@@ -167,6 +230,10 @@ session per chat:
   (sent as soon as Claude Code takes it), or the end of the old session.
 - An event too large for a line of the socket (4 MB) goes without its native message, and if it is still too
   large, with its longest texts cut in the middle until it fits. Its `prompts` and `settles` are kept.
+- Every query gets the connector's `send_file` tool (`src/files.ts`), an in-process MCP server, which
+  `canUseTool` allows without asking the chat. A call sends the core a `send_file` request and tells Claude Code what the core answered
+  ([sending a file](#sending-a-file)). The core needs `files_from` in its settings for a connector, normally
+  the folder given as `--cwd`.
 
 Its capabilities: it can interrupt; a message sent during a turn ends the turn and starts another (`restart`,
 [D-040](../decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness)); the core names the

@@ -415,6 +415,48 @@ def mcp_tool(s: AppServer, cwd: str):
     s.turn(t, "Use the define_word tool from the demo MCP server to define 'marmot', then tell me the definition.")
 
 
+# The tool the Codex driver gives every session it starts, so the agent can send a file to the chat (D-090).
+SEND_FILE_TOOL = {
+    "type": "function",
+    "name": "send_file",
+    "description": "Send a file from the working folder to the chat, as an attachment the people in the chat "
+    "can open. Give its path, relative to the working folder or absolute.",
+    "inputSchema": {
+        "type": "object",
+        "properties": {"path": {"type": "string", "description": "The file to send."}},
+        "required": ["path"],
+        "additionalProperties": False,
+    },
+}
+
+
+def send_file(s: AppServer, cwd: str):
+    """The agent sends a file to the chat through the driver's own tool; one call is accepted and one
+    refused. The app server is then restarted and the thread resumed, to see whether the tool survives."""
+
+    def handler(msg: dict):
+        if msg.get("method") != "item/tool/call":
+            return None
+        path = str(msg.get("params", {}).get("arguments", {}).get("path", ""))
+        if path.endswith("notes.txt"):
+            return {"contentItems": [{"type": "inputText", "text": "Sent."}], "success": True}
+        text = "Not sent: the file is outside the folders the agent may send from."
+        return {"contentItems": [{"type": "inputText", "text": text}], "success": False}
+
+    s.request_handler = handler
+    s.initialize()
+    t = s.start_thread(cwd, approval="never", ephemeral=False, dynamicTools=[SEND_FILE_TOOL])
+    s.turn(
+        t,
+        "Write the line 'hello from the demo' to a file named notes.txt, then send notes.txt to the chat "
+        "with your send_file tool. Then try to send /etc/hostname the same way. Say what happened in one line.",
+    )
+    s.restart()
+    s.initialize()
+    s.request("thread/resume", {"threadId": t, "cwd": cwd, "approvalPolicy": "never", "sandbox": "workspace-write"})
+    s.turn(t, "Send notes.txt to the chat again with your send_file tool, then say done.")
+
+
 def compact(s: AppServer, cwd: str):
     """The client asks for the conversation to be compacted between two turns."""
     s.initialize()
@@ -739,6 +781,7 @@ SCENARIOS = {
         web_search,
         image,
         mcp_tool,
+        send_file,
         compact,
         model_switch,
         bad_model,

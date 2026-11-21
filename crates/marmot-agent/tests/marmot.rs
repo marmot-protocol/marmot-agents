@@ -6,8 +6,8 @@ mod common;
 
 use common::{World, eventually};
 use marmot_agent_driver::{
-    Answer, Capabilities, Control, Driver, Emitted, FilesIn, Harness, MidTurn, Prompt, Refusal,
-    Sessions,
+    Answer, Capabilities, Control, Driver, Emitted, FilesIn, Harness, MidTurn, Output, Prompt,
+    Refusal, Sessions,
 };
 use marmot_agent_events::body::{Body, Message, StartedBy, Turn};
 use marmot_agent_events::{AgentEvent, Header, State};
@@ -106,8 +106,8 @@ impl Driver for Echo {
         Ok(())
     }
 
-    async fn next_event(&mut self) -> Option<Emitted> {
-        self.events.recv().await
+    async fn next_event(&mut self) -> Option<Output> {
+        self.events.recv().await.map(Output::from)
     }
 }
 

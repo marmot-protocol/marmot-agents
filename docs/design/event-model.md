@@ -243,8 +243,11 @@ Detail and evidence for each: [`../reference/harness-messages.md`](../reference/
 
 ## Not designed yet
 
-- **A file the agent sends to the chat.** There is no item for it. This is a known gap
+- **A file as part of the agent's work.** A file the agent sends goes to the chat as an ordinary attachment,
+  tagged with its turn, and has no item
   ([D-090](../decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)).
+  The tool call that sent it shows as a `tool` item. An item that shows the file within the agent's work is
+  not designed.
 - **How an event is carried, and size limits.** Decided; see [`event-carrier.md`](event-carrier.md). The
   exact tags are not fixed.
 - **The exact tags of an answer and of each control.** Their shape is decided; see

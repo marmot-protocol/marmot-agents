@@ -17,6 +17,7 @@ mod translate;
 
 pub use driver::Codex;
 pub use send::{
-    ApprovalPolicy, Sandbox, Setup, collaboration_mode_list, initialize, initialized, model_list,
+    ApprovalPolicy, SEND_FILE, Sandbox, Setup, collaboration_mode_list, initialize, initialized,
+    model_list, send_file_tool, tool_reply,
 };
 pub use translate::{Direction, NOT_SENT, Translator};

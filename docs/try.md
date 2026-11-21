@@ -59,11 +59,17 @@ the session's settings. A message that starts with a slash goes to Codex as type
 
 The relay keeps nothing when the client stops, so start again from step 2 with fresh folders.
 
+The agent can send a file from its working folder with its `send_file` tool. The encrypted file goes to the
+Blossom servers the group names, which the app that made the group chose. Sending one has not been tried by
+hand with this client; if the group names none, the chat shows the file refused as failed.
+
 ## With Claude Code
 
 The same steps work with Claude Code in place of Codex, through the socket. It also needs Node 24.
 
-1. In the agent's settings, replace the `[codex]` section with an empty `[connector]` section.
+1. In the agent's settings, replace the `[codex]` section with an empty `[connector]` section. To let the agent
+   send files from its folder, add `files_from = ["/tmp/try/work"]` above it: the core does not know a
+   connector's folder, so it allows none until told.
 2. Install the driver's packages once: `npm ci` in `packages/claude-code`.
 3. Run `marmot-agent run agent.toml` as before. It now waits for the driver.
 4. Start the driver, giving it the agent's home and the folder to work in:

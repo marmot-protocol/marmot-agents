@@ -317,6 +317,9 @@ class Codex(Translator):
             "error": self.error_notification,
             "warning": self.warning,
         }.get(method)
+        if method == "item/tool/call":
+            # The client carries out a tool it gave the session; the dynamicToolCall item shows it.
+            return self.skip("the client's own tool, shown by its item (item/tool/call)")
         if handler is None:
             return self.unknown(method)
         if self.for_another_thread(p.get("threadId")):
@@ -423,6 +426,19 @@ class Codex(Translator):
                 # Codex sends a failed call's error as an object with a message. The item takes the
                 # message; the object stays in the native message.
                 body["error"] = err.get("message") if isinstance(err, dict) else err
+            return self.emit(iid, "tool", state, "Using a tool" if started else "Used a tool", name, body, native_kind, p)
+        if kind == "dynamicToolCall":
+            # A tool the client gave the session, such as the driver's send_file (D-090). The client
+            # carries it out on Codex's `item/tool/call`; this item shows it like any other tool.
+            state = "running" if started else {"completed": "done", "failed": "failed"}.get(it.get("status"), "done")
+            name = f"{it['namespace']}.{it.get('tool')}" if it.get("namespace") else it.get("tool")
+            body = {"kind": "other", "name": name, "input": it.get("arguments")}
+            if not started:
+                said = "\n".join(c.get("text") or "" for c in it.get("contentItems") or [] if c.get("type") == "inputText")
+                if it.get("success") is False:
+                    body["error"] = said
+                else:
+                    body["output"] = said
             return self.emit(iid, "tool", state, "Using a tool" if started else "Used a tool", name, body, native_kind, p)
         if kind == "webSearch":
             state = "running" if started else "done"

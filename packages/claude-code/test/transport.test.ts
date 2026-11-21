@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { CAPABILITIES, run, type PermissionResult, type QueryLike, type UserMessage } from "../src/connector.ts";
+import type { SendFile } from "../src/files.ts";
 
 type Json = Record<string, unknown>;
 
@@ -90,6 +91,9 @@ class FakeCore {
   private socket: Socket | undefined;
   private readonly responses = new Map<number, (m: Json) => void>();
   private nextId = 100;
+  /** The files the connector asked to send, and what the core answers each. */
+  readonly files: Json[] = [];
+  answerFile: (params: Json) => Json = () => ({ result: {} });
   readonly server: Server;
   constructor(server: Server) {
     this.server = server;
@@ -116,6 +120,10 @@ class FakeCore {
       this.socket!.write(JSON.stringify({ jsonrpc: "2.0", id: m["id"], result: { core: { version: "0" }, agent: { name: "a" } } }) + "\n");
     } else if (m["method"] === "event") {
       this.events.push(m["params"] as Json);
+    } else if (m["method"] === "send_file") {
+      this.files.push(m["params"] as Json);
+      const answer = this.answerFile(m["params"] as Json);
+      this.socket!.write(JSON.stringify({ jsonrpc: "2.0", id: m["id"], ...answer }) + "\n");
     } else if (typeof m["id"] === "number") {
       this.responses.get(m["id"])?.(m);
     }
@@ -136,7 +144,7 @@ class FakeCore {
   }
 }
 
-async function start(): Promise<{
+async function start(cwd = "/nowhere"): Promise<{
   core: FakeCore;
   queries: FakeQuery[];
   running: Promise<void>;
@@ -152,7 +160,7 @@ async function start(): Promise<{
   const queries: FakeQuery[] = [];
   const running = run({
     home,
-    cwd: "/nowhere",
+    cwd,
     model: "model-x",
     permissionMode: "default",
     query: ({ prompt, options }) => {
@@ -163,6 +171,8 @@ async function start(): Promise<{
     version: "0.0.0",
     harnessVersion: "2.1.0",
     warn: (kind) => warnings.push(kind),
+    // A stand-in for the SDK's MCP server: the test calls the tool's handler itself.
+    fileServer: (send) => ({ send }),
   });
   const warnings: string[] = [];
   const done = async () => {
@@ -253,6 +263,34 @@ test("a query loads no Claude Code settings files and asks for summarized reason
   const { core, queries, done } = await start();
   const { q } = await turn(core, queries);
   assertQueryOptions(q);
+  await done();
+});
+
+test("the agent sends a file: the core is asked with the chat and a whole path, and the model hears how it went", async () => {
+  const { core, queries, done } = await start();
+  const { q } = await turn(core, queries);
+  // The tool needs nobody's approval in the chat: the core decides what may be sent (D-090).
+  const input = { path: "out/notes.txt" };
+  assert.deepEqual(await q.ask("mcp__marmot__send_file", input, { requestId: "r9" }), { behavior: "allow", updatedInput: input });
+  assert.equal(core.event((e) => e["type"] === "approval"), undefined, "no approval is asked in the chat");
+  const { send } = (q.options["mcpServers"] as Record<string, { send: SendFile }>)["marmot"]!;
+  assert.deepEqual(await send("out/notes.txt"), { text: "Sent.", failed: false });
+  assert.deepEqual(core.files[0], { chat: "c1", path: "/nowhere/out/notes.txt" });
+  const detail = "The file is outside the folders the agent may send files from.";
+  core.answerFile = () => ({ error: { code: -32000, message: "not_allowed", data: { reason: "not_allowed", detail } } });
+  assert.deepEqual(await send("/elsewhere/secret.txt"), { text: `Not sent: ${detail}`, failed: true });
+  assert.deepEqual(core.files[1], { chat: "c1", path: "/elsewhere/secret.txt" });
+  await done();
+});
+
+test("a file named relative to a working folder given as `.` reaches the core as a whole path, its `..` kept", async () => {
+  const { core, queries, done } = await start(".");
+  const { q } = await turn(core, queries);
+  assert.equal(q.options["cwd"], process.cwd(), "Claude Code is given the folder whole");
+  const { send } = (q.options["mcpServers"] as Record<string, { send: SendFile }>)["marmot"]!;
+  await send("link/../notes.txt");
+  // Not shortened to `notes.txt`: if `link` leads elsewhere, `..` leads elsewhere too, and the core follows it.
+  assert.deepEqual(core.files[0], { chat: "c1", path: `${process.cwd()}/link/../notes.txt` });
   await done();
 });
 

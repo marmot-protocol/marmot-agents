@@ -4,7 +4,9 @@
 //! whichever comes first, a group message or a driver event, hands it to the conversation, and
 //! carries out the acts that come back one at a time, telling the conversation how each went. A
 //! driver request is always awaited to the end (D-066); only the wait for the driver's next event
-//! is dropped when a group message comes first, which the trait allows (D-058).
+//! is dropped when a group message comes first, which the trait allows (D-058). The one piece of
+//! work done on the side is a file the agent sends (D-090): uploading it can take long, so it runs
+//! as a task of its own, and how it went comes back to this one, which tells the driver.
 //!
 //! What the core keeps across a restart is one file, written after every change: the
 //! conversation's state, and for each group how far it has read, in the order messages arrived
@@ -15,10 +17,11 @@
 
 use crate::config::Config;
 use crate::conversation::{Act, Conversation, Saved, Sending};
+use crate::files::Folders;
 use crate::keys::{EventKey, GroupKey};
 use crate::marmot::{Incoming, Marmot, Message};
 use crate::socket::SocketDriver;
-use marmot_agent_driver::Driver;
+use marmot_agent_driver::{Driver, Output, Reason, Refusal, SendFile};
 use marmot_app::{AppError, MarmotAppEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
@@ -26,9 +29,20 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::mpsc;
 
 /// How many times a send that failed for any reason but MDK being busy is tried again.
 const SEND_TRIES: u32 = 5;
+
+/// How many times a file is offered to MDK while MDK says it is busy, about half a minute in all.
+const FILE_BUSY_TRIES: u32 = 10;
+
+/// How a file the agent asked to send went, for the driver.
+struct Uploaded {
+    id: String,
+    chat: marmot_agent_driver::ChatId,
+    result: Result<(), Refusal>,
+}
 
 /// What the core keeps across a restart.
 #[derive(Default, Serialize, Deserialize)]
@@ -106,6 +120,8 @@ pub struct Core<D: Driver> {
     read: BTreeMap<GroupKey, i64>,
     store: Store,
     config: Config,
+    /// The folders the agent may send files from (D-090).
+    folders: Folders,
     /// The core's clock, which never jumps, for how long a control has waited (D-087).
     started: std::time::Instant,
 }
@@ -128,6 +144,7 @@ impl<D: Driver> Core<D> {
             conversation,
             read: kept.read,
             store,
+            folders: Folders::new(&config.file_folders()),
             config: config.clone(),
             started: std::time::Instant::now(),
         })
@@ -147,6 +164,9 @@ impl<D: Driver> Core<D> {
         self.catch_up().await;
         tokio::pin!(stop);
         let mut clock = tokio::time::interval(std::time::Duration::from_secs(10));
+        // Files being uploaded say here how they went. A file still uploading when the core
+        // stops is not waited for: the driver it would answer goes with the core.
+        let (uploaded, mut uploads) = mpsc::unbounded_channel::<Uploaded>();
         loop {
             tokio::select! {
                 _ = clock.tick() => loop {
@@ -157,12 +177,14 @@ impl<D: Driver> Core<D> {
                     self.carry_out(acts).await;
                 },
                 event = self.driver.next_event() => match event {
-                    Some(emitted) => {
+                    Some(Output::Event(emitted)) => {
                         let acts = self.conversation.emitted(emitted);
                         self.carry_out(acts).await;
                     }
+                    Some(Output::SendFile(file)) => self.send_file(file, &uploaded).await,
                     None => break,
                 },
+                Some(done) = uploads.recv() => self.file_done(done).await,
                 event = events.recv() => match event {
                     Ok(event) => self.on_marmot(event).await,
                     Err(RecvError::Lagged(_)) => self.catch_up().await,
@@ -173,6 +195,37 @@ impl<D: Driver> Core<D> {
         }
         let ended = self.conversation.ended();
         self.carry_out_whole(ended).await;
+    }
+
+    /// Starts sending a file the agent asked to send, as a task of its own so the chats go on
+    /// meanwhile. Where it goes, the chat's group and running turn, is taken now (D-090).
+    async fn send_file(&mut self, file: SendFile, uploaded: &mpsc::UnboundedSender<Uploaded>) {
+        let SendFile { id, chat, path } = file;
+        let Some((group, turn)) = self.conversation.file_place(&chat) else {
+            let result = Err(Refusal {
+                reason: Reason::Invalid,
+                detail: Some("The agent named a chat it is not in.".into()),
+            });
+            self.file_done(Uploaded { id, chat, result }).await;
+            return;
+        };
+        let (marmot, folders, uploaded) =
+            (self.marmot.clone(), self.folders.clone(), uploaded.clone());
+        tokio::spawn(async move {
+            let result = upload(&marmot, folders, path, &group, turn).await;
+            let _ = uploaded.send(Uploaded { id, chat, result });
+        });
+    }
+
+    /// Tells the driver how a file went. A refusal is shown in the chat, naming no path (D-090).
+    async fn file_done(&mut self, done: Uploaded) {
+        if let Err(refusal) = &done.result {
+            // Its kind only: a path or a file name is never logged (D-071).
+            eprintln!("marmot-agent: a file was not sent ({:?})", refusal.reason);
+            let acts = self.conversation.file_refused(&done.chat, refusal);
+            self.carry_out(acts).await;
+        }
+        self.driver.file_sent(done.id, done.result).await;
     }
 
     /// Seconds on the core's clock.
@@ -376,6 +429,42 @@ impl<D: Driver> Core<D> {
             eprintln!("marmot-agent: the state file could not be written");
         }
     }
+}
+
+/// Reads a file from the allowed folders and sends it to `group`. It is offered to MDK again only
+/// while MDK says it is busy, which MDK says only before it has taken the file. Any other failure
+/// may have come after MDK took it, such as a wait for MDK that ran out while the send went on, so
+/// it is not tried again: that could post the file twice, and a post cannot be taken back.
+async fn upload(
+    marmot: &Marmot,
+    folders: Folders,
+    path: PathBuf,
+    group: &GroupKey,
+    turn: Option<marmot_agent_events::TurnId>,
+) -> Result<(), Refusal> {
+    let read = tokio::task::spawn_blocking(move || folders.read(&path)).await;
+    let outgoing = read.map_err(|_| Refusal::new(Reason::Failed))??;
+    let mut wait = Duration::from_millis(100);
+    for _ in 0..FILE_BUSY_TRIES {
+        match marmot.send_file(group, &outgoing, turn.as_ref()).await {
+            Ok(_) => return Ok(()),
+            Err(AppError::AccountWorkerBusy) => {}
+            Err(_) => {
+                // MDK's own words can name a group, so they are not printed (D-071).
+                eprintln!("marmot-agent: a file's send failed");
+                return Err(Refusal {
+                    reason: Reason::Failed,
+                    detail: Some("It could not be uploaded or sent.".into()),
+                });
+            }
+        }
+        tokio::time::sleep(wait).await;
+        wait = (wait * 2).min(Duration::from_secs(10));
+    }
+    Err(Refusal {
+        reason: Reason::Busy,
+        detail: Some("The agent's account stayed busy. Try again later.".into()),
+    })
 }
 
 /// Serves connectors on the socket, one at a time, until `stop` resolves. Each connector that

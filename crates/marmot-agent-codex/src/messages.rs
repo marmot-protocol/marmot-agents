@@ -185,6 +185,20 @@ pub(crate) struct Item<'a> {
     pub error: Option<Value>,
     pub query: Option<String>,
     pub path: Option<String>,
+    /// A client's own tool: the namespace it was given in, what it said back, and whether it
+    /// worked.
+    pub namespace: Option<String>,
+    pub content_items: Option<Vec<ContentItem>>,
+    pub success: Option<bool>,
+}
+
+/// One part of what a client's own tool said back to Codex.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct ContentItem {
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    pub text: Option<String>,
 }
 
 /// A question that arrives as a field of an ordinary message.

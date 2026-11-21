@@ -8,10 +8,12 @@
 //! - [`run`]: the program loop that joins MDK, a driver and the conversation.
 //! - [`socket`]: a driver that is a separate program, on the local socket.
 //! - [`config`]: the standing settings (D-073).
+//! - [`files`]: which files the agent may send, and reading them (D-090).
 
 pub mod carrier;
 pub mod config;
 pub mod conversation;
+pub mod files;
 pub mod keys;
 pub mod marmot;
 pub mod rights;
