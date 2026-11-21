@@ -71,18 +71,26 @@ Reading the core and the drivers found these, all **inferred from the code and n
 a failing test first, then a fix, and later a counterexample the model must find. Those marked **fixed** were
 fixed on 2026-11-21, each with a test that failed first.
 
-- **Crash windows in the run loop** (S1, S3). **Fixed.** A version sent but not yet saved is sent again with the
-  same number and a new first event after a restart, and the request it settled is settled again as failed. A
-  request the core took but had not saved is never settled, including one whose read mark was saved before the
-  request was. A failed save of the read mark is ignored, so a crash can run a prompt twice (S4). Closing
-  everything on a stop and then crashing sends the closes again.
+- **Crash windows in the run loop** (S1, S3). **Fixed.** A version sent but not yet saved was sent again with the
+  same number and a new first event after a restart, and the request it settled was settled again as failed. A
+  request the core took but had not saved was never settled, including one whose read mark was saved before the
+  request was. A failed save of the read mark was ignored, so a crash could run a prompt twice (S4). Closing
+  everything on a stop and then crashing sent the closes again. A group accepted just before a failed save
+  started, after the restart, at its latest message, skipping what had arrived.
 - **Sends that give up** (S1, S3). **Fixed, as far as the core can.** The core stopped trying a send after five
-  failures, which lost settles and started a new row for the next version. A send whose outcome is not known,
-  as when the wait for MDK runs out, may have gone out, and was sent again blindly. Now a send is kept until it
-  goes; one whose outcome is not known is looked for in what MDK stored before it is sent again, at once after a
-  restart and after 15 seconds while running; one MDK refuses is dropped with a notice. A crash between MDK
-  storing a send and the core saving it still relies on that lookup, until MDK's crash-safe sends take tagged
-  events.
+  failures, which lost settles and started a new row for the next version. A send whose outcome was not known,
+  as when the wait for MDK ran out, may have gone out, and was sent again blindly. Now a send is kept until it
+  goes. One the core handed to MDK, and whose outcome is not known, is looked for in what MDK stored before it is
+  sent again: at once after a restart, and after 15 seconds while running; when MDK cannot be asked, the core
+  asks again later. After its tenth try it is looked for once more, and only then given up. One MDK refuses is
+  dropped with a notice.
+
+  **What a restart still cannot recover.** A crash between MDK storing a send and the core saving that it went
+  leaves the core to find it by looking. An item's version is found by its id, its version and its first
+  event. The agent's words are found by their text and tags; when an earlier message of the agent's is the same
+  in both, the core cannot tell the two apart. When the lookup cannot identify the earlier send, the send goes
+  out again, and the chat shows a duplicate first event. That ends when MDK's crash-safe sends take tagged
+  events, and the token each send keeps is handed to MDK.
 - **Settles carried by a message are dropped** (S1). **Fixed.** The core read `settles` only from items that are
   not messages. A pending answer whose approval ends without naming it stayed pending until the driver stopped.
   A driver's event could settle another chat's request.
@@ -115,9 +123,13 @@ for a refused send, the `cut` tags and the stand-in. Besides those:
   read as hex in either case or as an npub; anything else stops the core at start, naming the setting.
 - **A failed save stops the core**, as a crash would, and the next start takes up what is on disk.
 - **The state file** (`marmot-agent-state.json` in the home) keeps, besides what it kept before: the sends not
-  yet made, oldest first, each with a token that stays the same across tries; where recently forgotten items
-  stood; for a turn, the message that started it; and for the agent's words, the requests they settle, held
-  until a message carries them.
+  yet made, oldest first, each with a token that stays the same across tries, whether it was handed to MDK, and,
+  for a turn's version that settles what the agent's words showed, the send of those words; where recently
+  forgotten items stood; for a turn, the message that started it; and for the agent's words, the requests they
+  settle, held until a message carries them.
+- **A group's read mark is saved before the agent accepts the group.**
+- **One chat sends at most eight events in each turn of the core's loop**, then the others go; a stop sends all
+  it can.
 
 ## The layers
 
