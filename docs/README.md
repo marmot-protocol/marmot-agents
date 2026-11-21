@@ -84,6 +84,7 @@ Details and reasons are in [`design/drivers.md`](design/drivers.md).
 | Question | Document |
 | --- | --- |
 | What is being built, and in what order? | [`plan.md`](plan.md) |
+| How do I try what is built? | [`try.md`](try.md) |
 | What have we decided, and why? | [`decisions.md`](decisions.md) |
 | What is still undecided? | [`open-questions.md`](open-questions.md) |
 | How do the parts work together, step by step? | [`design/architecture.md`](design/architecture.md) |
