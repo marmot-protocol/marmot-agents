@@ -41,6 +41,8 @@ pub struct World {
     pub agent: String,
     pub config: Config,
     pub state: tempfile::TempDir,
+    /// The test relay's address.
+    pub relay: String,
     _home: tempfile::TempDir,
     _relay: nostr_relay_builder::MockRelay,
 }
@@ -60,7 +62,7 @@ impl World {
         let url = relay.url().await.to_string();
         let app = MarmotApp::with_relay(home.path(), url.clone());
         let runtime = MarmotAppRuntime::new(app.clone());
-        let endpoint = cgka_traits::TransportEndpoint(url);
+        let endpoint = cgka_traits::TransportEndpoint(url.clone());
         let setup = AccountSetupRequest {
             default_relays: vec![endpoint.clone()],
             bootstrap_relays: vec![endpoint],
@@ -73,8 +75,9 @@ impl World {
             .unwrap();
         let person = runtime.create_identity(setup).await.unwrap();
         let person_key = person.account.account_id_hex.clone();
-        let settings =
-            format!("home = \"/unused\"\nrelays = []\nowner = \"{person_key}\"\n{settings}");
+        let settings = format!(
+            "home = \"/unused\"\nrelays = [\"{url}\"]\nowner = \"{person_key}\"\n{settings}"
+        );
         let marmot = Marmot {
             runtime: runtime.clone(),
             app,
@@ -88,6 +91,7 @@ impl World {
             agent: agent.account.account_id_hex,
             config: Config::parse(&settings).unwrap(),
             state: tempfile::tempdir().unwrap(),
+            relay: url,
             _home: home,
             _relay: relay,
         }

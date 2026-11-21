@@ -1358,3 +1358,15 @@ remarks stay chat messages ([D-022](#d-022-the-agents-words-are-ordinary-chat-me
 shows them.
 
 Decided 2026-11-21. The project owner accepted the recommendation. This settles what D-024 left open.
+
+## D-079 The settings name the agent
+
+**Decision.** The settings file may give the agent a name. The core publishes it as the agent's name and
+display name each time it starts, keeping the rest of its profile, and publishes nothing when the name is
+already right. Without a name in the settings, the profile is left as it is. A blank name is refused.
+
+**Why.** An agent made with `marmot-agent init` otherwise shows under a name MDK makes up, such as "Neat Pigeon".
+Publishing at every start makes a changed name take effect on the next start, with one path for the first run
+and for a rename.
+
+Decided 2026-11-21. The project owner accepted the recommendation.

@@ -2,6 +2,7 @@
 //!
 //! ```toml
 //! home = "/home/me/.local/share/marmot-agent/codex"   # the account home
+//! name = "Codex"                       # the agent's name, as people see it
 //! relays = ["wss://relay.example"]
 //! owner = "<the owner's public key, in hex>"
 //! prompt = "owner"                     # or "everyone", or { people = ["<hex>", ...] }
@@ -28,6 +29,10 @@ use std::path::{Path, PathBuf};
 pub struct Config {
     /// The account home: the agent's keys and encrypted storage.
     pub home: PathBuf,
+    /// The agent's name, as people in its chats see it. Published in its profile each time the
+    /// core starts, the rest of the profile kept; without one, the profile is left as it is.
+    #[serde(default)]
+    pub name: Option<String>,
     /// The relays the account uses.
     pub relays: Vec<String>,
     /// Who owns the agent.
@@ -112,6 +117,9 @@ impl Config {
     /// Reads the settings from their text.
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
         let config: Self = toml::from_str(text).map_err(|_| ConfigError::Invalid)?;
+        if config.name.as_ref().is_some_and(|n| n.trim().is_empty()) {
+            return Err(ConfigError::Value("name"));
+        }
         config.setup()?;
         Ok(config)
     }

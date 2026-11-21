@@ -116,9 +116,19 @@ impl Driver for Echo {
 // words as a chat message and its turn as an item that names the message it answered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_person_writes_to_the_agent_and_reads_its_answer() {
-    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let world = World::new("name = \"Echo\"\n[codex]\ncwd = \"/unused\"\n").await;
     let prompts = Arc::new(AtomicUsize::new(0));
     world.runtime.start().await.unwrap();
+    let before = marmot_app::UserProfileMetadata {
+        name: Some("Old name".into()),
+        about: Some("kept".into()),
+        ..marmot_app::UserProfileMetadata::default()
+    };
+    world
+        .runtime
+        .publish_user_profile_using_account_relays(&world.marmot.label, before)
+        .await
+        .unwrap();
     let core = world.start(Echo::new(prompts.clone()));
     let group = world
         .runtime
@@ -133,6 +143,23 @@ async fn a_person_writes_to_the_agent_and_reads_its_answer() {
         .unwrap();
 
     let words = world.words(&group_hex, "echo: hello").await;
+    let relays = vec![cgka_traits::TransportEndpoint(world.relay.clone())];
+    let profile = world
+        .runtime
+        .fetch_current_user_profile_for_account_id(&world.agent, relays)
+        .await
+        .unwrap()
+        .expect("a profile on the relay");
+    assert_eq!(
+        profile.name.as_deref(),
+        Some("Echo"),
+        "the name from the settings"
+    );
+    assert_eq!(
+        profile.about.as_deref(),
+        Some("kept"),
+        "the rest of the profile kept"
+    );
     assert!(words.tags.iter().any(|t| t[0] == "turn"));
     let turn = eventually(|| {
         let items = world.items(&group_hex).into_iter().map(|(_, read)| read);

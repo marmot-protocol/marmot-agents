@@ -136,6 +136,7 @@ impl<D: Driver> Core<D> {
         mut events: tokio::sync::broadcast::Receiver<MarmotAppEvent>,
         stop: impl std::future::Future<Output = ()>,
     ) {
+        self.publish_name().await;
         let recovered = self.conversation.recover();
         self.carry_out_whole(recovered).await;
         self.consider_invitations().await;
@@ -160,6 +161,45 @@ impl<D: Driver> Core<D> {
         }
         let ended = self.conversation.ended();
         self.carry_out_whole(ended).await;
+    }
+
+    /// Publishes the agent's name from the settings in its profile, so people see it, keeping the
+    /// rest of the profile as it is. Nothing is published when the name is already right.
+    async fn publish_name(&mut self) {
+        let Some(name) = self.config.name.clone() else {
+            return;
+        };
+        let relays = self
+            .config
+            .relays
+            .iter()
+            .map(|r| cgka_traits::TransportEndpoint(r.clone()))
+            .collect();
+        let current = self
+            .marmot
+            .runtime
+            .fetch_current_user_profile_for_account_id(self.marmot.agent.as_str(), relays)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if current.name.as_deref() == Some(&name) && current.display_name.as_deref() == Some(&name)
+        {
+            return;
+        }
+        let profile = marmot_app::UserProfileMetadata {
+            name: Some(name.clone()),
+            display_name: Some(name),
+            ..current
+        };
+        let published = self
+            .marmot
+            .runtime
+            .publish_user_profile_using_account_relays(&self.marmot.label, profile)
+            .await;
+        if published.is_err() {
+            eprintln!("marmot-agent: the agent's name could not be published");
+        }
     }
 
     async fn on_marmot(&mut self, event: MarmotAppEvent) {

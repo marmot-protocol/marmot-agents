@@ -27,6 +27,7 @@ compiler that MDK uses: see "Verification" in [`AGENTS.md`](../AGENTS.md).
 
    ```toml
    home = "/tmp/try/agent"
+   name = "Codex"                  # what you will see it called
    relays = ["ws://127.0.0.1:7777"]
    owner = "<your key>"
    white_noise = false             # only the relay above
