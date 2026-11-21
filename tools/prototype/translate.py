@@ -2640,6 +2640,397 @@ class OpenClaw(Translator):
             self.denied.add(prev["body"]["subject"])
 
 
+# ---------------------------------------------------------------------------- Pi
+
+
+class Pi(Translator):
+    """Pi's RPC mode: commands go in, and a response to each and session events come out, as JSON
+    lines. A recording is one Pi process at a time, serving one chat; the recorder notes when it
+    started another.
+
+    Pi has no turn id. A turn here is a run, from `agent_start` to `agent_settled`, which covers
+    Pi's automatic retries and any message steered into it. It is named after the first message
+    the run reports, which is normally the person's, by the session and that message's timestamp,
+    so a resumed session never reuses the id of a turn from before Pi restarted."""
+
+    harness = "pi"
+    # Records that never become an event of their own.
+    NOT_SENT = {
+        "turn_start": "one model call started",
+        "turn_end": "one model call ended; its message was already sent",
+        "agent_end": "a low-level run ended; agent_settled ends the turn",
+        "queue_update": "the queue of steered messages changed",
+        "entry_appended": "an entry was added to the session file",
+        "message_update": "partial text and tool arguments",
+        "tool_execution_update": "partial tool output",
+        "session_info_changed": "the session's display name changed",
+        "auto_retry_end": "a retry ended; the turn says how",
+        "bash_execution_update": "output of a command the client ran itself",
+    }
+    # Tools Pi ships, and the kind of each. Anything else is `other`.
+    TOOL_KINDS = {"bash": "command", "edit": "edit", "write": "edit", "read": "read",
+                  "grep": "search", "find": "search", "ls": "search"}
+    # The extension UI requests that wait for an answer.
+    DIALOGS = {"select", "confirm", "input", "editor"}
+    # Extension UI requests that only decorate a terminal.
+    DECORATIONS = {"setStatus", "setWidget", "setTitle", "set_editor_text"}
+
+    def __init__(self):
+        super().__init__()
+        self.version = None  # Pi's version, which the driver asks for once, from `pi --version`
+        self.sent: dict = {}  # command id -> the command, until Pi responds
+        self.prompted = False  # Pi started a run for a prompt since the last turn started
+        self.starting = False  # a run has started and its turn is not yet named
+        self.turn_body: dict = {}
+        self.failure = None  # the last model call's error, until a call succeeds
+        self.usage = None  # [input, output] tokens of the open turn
+        self.settings: dict = {}
+        self.models = None
+        self.levels = None
+        self.commands = None
+        self.ready = False  # the driver has asked for everything a session item shows
+        self.questions: dict[str, dict] = {}  # extension UI request id -> its question's options
+        self.compaction_n = 0
+        self.aborting = False  # the client asked Pi to abort the running turn
+
+    def feed(self, rec):
+        m, out = rec["msg"], rec["dir"] == "out"
+        if "_recorder" in m:
+            if m["_recorder"] == "pi --version":
+                self.version = m.get("version")
+            elif "new one started" in m["_recorder"]:
+                self.harness_stopped()
+            return
+        t = m.get("type")
+        if out:
+            return self.command(t, m)
+        if t == "response":
+            return self.response(m)
+        if t in self.NOT_SENT:
+            return self.skip(f"{t}: {self.NOT_SENT[t]}")
+        handler = {
+            "agent_start": self.agent_start,
+            "agent_settled": self.agent_settled,
+            "message_start": self.message_start,
+            "message_end": self.message_end,
+            "tool_execution_start": self.tool_start,
+            "tool_execution_end": self.tool_end,
+            "auto_retry_start": self.retry,
+            "compaction_start": self.compaction_start,
+            "compaction_end": self.compaction_end,
+            "thinking_level_changed": self.thinking_changed,
+            "extension_ui_request": self.extension_ui,
+            "extension_error": self.extension_error,
+        }.get(t)
+        if handler is None:
+            return self.unknown(str(t))
+        handler(m)
+
+    # -- what the client sent
+
+    def command(self, t, m):
+        if "id" in m:
+            self.sent[m["id"]] = m
+        if t == "prompt":
+            text = m.get("message") or ""
+            if text.startswith("/"):
+                self.control("(slash command, as a message)", text.split()[0])
+            if self.turn is not None or self.starting:
+                self.control("(message during a turn)", "prompt with streamingBehavior steer")
+            return self.skip("client: prompt")
+        if t == "extension_ui_response":
+            return self.answered(m)
+        if t == "abort" and (self.turn is not None or self.starting):
+            self.aborting = True
+        self.control(*{"abort": ("interrupt", "abort"), "new_session": ("new_session", "new_session"),
+                       "set_model": ("set model", "set_model"),
+                       "set_thinking_level": ("set thinking", "set_thinking_level"),
+                       "compact": ("(action) compact", "compact")}.get(t, (f"(client) {t}", t)))
+        self.skip(f"client: {t}")
+
+    def response(self, m):
+        self.sent.pop(m.get("id"), None)
+        command, data = m.get("command"), m.get("data") or {}
+        if not m.get("success"):
+            if command == "compact" and f"compaction:{self.session}:{self.compaction_n}" not in self.open \
+                    and self.compaction_n:
+                return self.skip("response to compact, refused: the compaction notice already says why")
+            # Pi refused a command. The turn is not affected; the chat is told.
+            return self.emit(f"refused:{m.get('id')}", "error", "failed", "Pi refused a request", m.get("error") or "",
+                             {"request": command}, f"response to {command}", m)
+        if command == "get_state":
+            sid = data.get("sessionId")
+            if self.session is not None and sid != self.session:
+                self.end_session(self.session, "a new session was started")
+                self.ready = False
+            self.session = sid
+            model = data.get("model") or {}
+            self.settings["model"] = f"{model['provider']}/{model['id']}" if model else None
+            self.settings["thinking"] = data.get("thinkingLevel")
+        elif command == "get_available_models":
+            self.models = [f"{x.get('provider')}/{x.get('id')}" for x in data.get("models") or []]
+        elif command == "get_available_thinking_levels":
+            self.levels = list(data.get("levels") or [])
+        elif command == "get_commands":
+            self.commands = [command_entry(c.get("name"), c.get("description")) for c in data.get("commands") or []]
+            self.ready = True
+        elif command == "set_model":
+            if data.get("provider"):
+                self.settings["model"] = f"{data['provider']}/{data.get('id')}"
+        elif command == "set_thinking_level":
+            # Pi says the level it set, which can differ from the one asked for, in
+            # thinking_level_changed, before it responds; and nothing if the level is unchanged.
+            return self.skip("response to set_thinking_level")
+        elif command == "new_session" and data.get("cancelled"):
+            # An extension kept the session. Nothing changed; the chat is told.
+            return self.emit(f"refused:{m.get('id')}", "error", "failed", "Pi refused a request",
+                             "An extension cancelled the new session.", {"request": command},
+                             f"response to {command}", m)
+        elif command == "prompt":
+            # A run Pi started for a prompt: its turn was started by the person. Pi says so before
+            # the run reports anything, and only after the run before it has ended.
+            if data.get("disposition") == "started":
+                self.prompted = True
+            return self.skip("response to prompt")
+        elif command == "new_session":
+            if self.session is not None:
+                self.end_session(self.session, "a new session was started")
+                self.session, self.ready = None, False
+            return self.skip("response to new_session")
+        else:
+            return self.skip(f"response to {command}")
+        self.announce(f"response to {command}", m)
+
+    def announce(self, native_kind, native):
+        """Send the session item, or an edit of it, once the driver has asked for everything it
+        shows. Pi does not say its own version over RPC; the driver asks `pi --version` once."""
+        if self.session is None or not self.ready:
+            return self.skip(f"{native_kind}, before the session item is complete")
+        g = self.settings.get
+        before = len(self.events)
+        self.session_item(self.session, [
+            self.setting("model", "Model", g("model"), self.models),
+            self.setting("thinking", "Thinking", g("thinking"), self.levels),
+        ], native_kind, native,
+            actions=[{"id": "compact", "label": "Compact",
+                      "description": "Summarise the conversation so far, to free up context"}],
+            commands=self.commands or [], version=self.version or "")
+        if len(self.events) == before:
+            self.skip(f"{native_kind}, nothing new for the session item")
+
+    # -- turns
+
+    def agent_start(self, m):
+        if self.turn is None:
+            self.starting = True  # named by the first message the run reports
+        self.skip("agent_start: the turn is named by its first message")
+
+    def open_turn(self, m, timestamp):
+        self.starting = False
+        self.turn = f"{self.session}:{timestamp}"
+        self.turn_body = {"started_by": "user" if self.prompted else "agent"}
+        self.prompted = False
+        self.failure, self.usage = None, [0, 0]
+        self.emit(f"turn:{self.turn}", "turn", "running", "Working", body=self.turn_body,
+                  native_kind=m.get("type"), native=m)
+
+    def ensure_turn(self, m):
+        if self.turn is None:
+            stamp = (m.get("message") or {}).get("timestamp")
+            self.open_turn(m, stamp if stamp is not None else f"seq{self.seq + 1}")
+
+    def agent_settled(self, m):
+        if self.turn is None:
+            self.starting = False
+            return self.skip("agent_settled after a run that reported nothing")
+        aborted = m.get("aborted")
+        self.close_open_items("the turn ended" + (" because it was aborted" if aborted else ""))
+        state = "cancelled" if aborted else "failed" if self.failure else "done"
+        title = {"done": "Finished", "cancelled": "Interrupted", "failed": "Failed"}[state]
+        body = {**self.turn_body, "usage": {"input_tokens": self.usage[0], "output_tokens": self.usage[1]}}
+        self.emit(f"turn:{self.turn}", "turn", state, title, (self.failure or "") if state == "failed" else "",
+                  body, "agent_settled", m)
+        self.turn, self.aborting = None, False
+
+    def harness_stopped(self):
+        """Pi ended. Nothing it was doing will report again: close the open items and the turn."""
+        self.close_open_items("the harness process ended")
+        item = f"turn:{self.turn}"
+        if item in self.open:
+            self.emit(item, "turn", "cancelled", "Interrupted", "The harness stopped before the turn finished.",
+                      self.open[item]["body"], "(none: closed by the driver)", {"reason": "the harness process ended"})
+        self.turn, self.starting, self.prompted, self.aborting = None, False, False, False
+        self.sent.clear()
+        self.questions.clear()
+
+    # -- messages
+
+    def message_start(self, m):
+        msg = m.get("message") or {}
+        if self.starting and msg.get("role") == "user":
+            return self.open_turn(m, msg.get("timestamp"))
+        self.skip(f"message_start ({msg.get('role')}): the message is sent when it ends")
+
+    def message_end(self, m):
+        msg = m.get("message") or {}
+        role = msg.get("role")
+        if role != "assistant":
+            return self.skip({"user": "echo of the person's message", "system": "the system prompt",
+                              "toolResult": "a tool's result, also in tool_execution_end"}.get(role, f"message ({role})"))
+        self.ensure_turn(m)
+        usage = msg.get("usage") or {}
+        self.usage[0] += usage.get("input") or 0
+        self.usage[1] += usage.get("output") or 0
+        stop = msg.get("stopReason")
+        self.failure = (msg.get("errorMessage") or "The model call failed.") if stop == "error" else None
+        for n, b in enumerate(msg.get("content") or []):
+            bt = b.get("type")
+            item = f"{msg.get('timestamp')}:{n}"
+            if bt == "text":
+                if not (b.get("text") or "").strip():
+                    self.skip("an empty text block")
+                    continue
+                self.emit(item, "message", "done", "Message", b.get("text"), {}, "message_end", m)
+            elif bt == "thinking":
+                if not (b.get("thinking") or "").strip():
+                    self.skip("an empty thinking block")
+                    continue
+                self.emit(item, "reasoning", "done", "Thinking", b.get("thinking"), {}, "message_end", m)
+            elif bt == "toolCall":
+                self.skip("a tool call, sent when it runs (tool_execution_start)")
+            else:
+                self.unknown(f"message_end block [{bt}]")
+
+    # -- tools
+
+    @staticmethod
+    def tool_title(kind, state):
+        return Claude.tool_title(kind, state)
+
+    def tool_start(self, m):
+        self.ensure_turn(m)
+        name, args = m.get("toolName"), m.get("args") or {}
+        kind = self.TOOL_KINDS.get(name, "other")
+        body = {"kind": kind, "name": name}
+        if kind == "command":
+            body["command"] = args.get("command")
+        elif kind in ("edit", "read"):
+            body["path"] = args.get("path")
+        elif kind == "search":
+            body["query"] = args.get("pattern") or args.get("path")
+        else:
+            body["input"] = args
+        text = body.get("command") or body.get("path") or body.get("query") or name
+        self.emit(m.get("toolCallId"), "tool", "running", self.tool_title(kind, "running"), text, body,
+                  "tool_execution_start", m)
+
+    def tool_end(self, m):
+        item = m.get("toolCallId")
+        prev = self.open.get(item)
+        if prev is None:
+            return self.skip("tool_execution_end for a tool that never started")
+        result = m.get("result") or {}
+        body = dict(prev["body"])
+        out = "".join(c.get("text", "") for c in result.get("content") or [] if c.get("type") == "text")
+        # A tool Pi stops because the client aborted the turn ends as an error: it was cancelled.
+        state = ("cancelled" if self.aborting else "failed") if m.get("isError") else "done"
+        structured = result.get("structuredContent")
+        if isinstance(structured, dict) and structured.get("exit_code") is not None:
+            body["exit_code"] = structured["exit_code"]
+        if m.get("durationMs") is not None:
+            body["duration_ms"] = m["durationMs"]
+        patch = (result.get("details") or {}).get("patch")
+        if body["kind"] == "edit" and patch and state == "done":
+            change = "add" if m.get("toolName") == "write" else "update"
+            body["changes"] = [{"path": body.get("path"), "diff": patch, "change": change}]
+        if state != "done" and body["kind"] != "command":
+            body["error"] = out  # what went wrong; a command's output and exit code say it themselves
+        else:
+            body["output"] = out
+        self.emit(item, "tool", state, self.tool_title(body["kind"], state), prev["text"], body,
+                  "tool_execution_end", m)
+
+    # -- notices
+
+    def retry(self, m):
+        self.ensure_turn(m)
+        self.emit(f"retry:{self.turn}:{m.get('attempt')}", "notice", "done", "Retrying", m.get("errorMessage") or "",
+                  {"kind": "retry"}, "auto_retry_start", m)
+
+    def compaction_start(self, m):
+        self.compaction_n += 1
+        self.emit(f"compaction:{self.session}:{self.compaction_n}", "notice", "running", "Compacting the conversation",
+                  "", {"kind": "compaction"}, "compaction_start", m)
+
+    def compaction_end(self, m):
+        item = f"compaction:{self.session}:{self.compaction_n}"
+        state = "cancelled" if m.get("aborted") else "failed" if m.get("errorMessage") else "done"
+        title = {"done": "Conversation compacted", "cancelled": "Compaction stopped", "failed": "Compaction failed"}[state]
+        self.emit(item, "notice", state, title, m.get("errorMessage") or "", {"kind": "compaction"}, "compaction_end", m)
+
+    def thinking_changed(self, m):
+        self.settings["thinking"] = m.get("level")
+        self.announce("thinking_level_changed", m)
+
+    def extension_error(self, m):
+        self.emit(f"extension-error:{self.seq + 1}", "error", "failed", "An extension failed", m.get("error") or "",
+                  {"request": m.get("event")}, "extension_error", m)
+
+    # -- what an extension asks
+
+    def extension_ui(self, m):
+        method = m.get("method")
+        if method in self.DECORATIONS:
+            return self.skip(f"extension_ui_request ({method}): decorates a terminal")
+        if method == "notify":
+            # What a command an extension ran has to say, or a warning.
+            kind = "command_output" if m.get("notifyType", "info") == "info" else "warning"
+            return self.emit(f"notify:{m.get('id')}", "notice", "done", "Notice", m.get("message") or "",
+                             {"kind": kind}, "extension_ui_request (notify)", m)
+        if method not in self.DIALOGS:
+            return self.unknown(f"extension_ui_request ({method})")
+        if method == "select":
+            labels = [str(o) for o in m.get("options") or []]
+        elif method == "confirm":
+            labels = ["Yes", "No"]
+        else:
+            labels = []
+        options = [{"id": f"o{n}", "label": label} for n, label in enumerate(labels)]
+        title = m.get("title") or ""
+        text = f"{title}\n\n{m['message']}" if m.get("message") else title
+        question = {"id": "q0", "text": text, "options": options, "multiple": False,
+                    "allow_text": method in ("input", "editor"), "secret": False}
+        item = f"question:{m.get('id')}"
+        self.questions[m.get("id")] = {"method": method, "labels": labels}
+        self.emit(item, "question", "waiting", "Question", text, {"answer_via": "request", "questions": [question]},
+                  f"extension_ui_request ({method})", m)
+
+    def answered(self, m):
+        asked = self.questions.pop(m.get("id"), None)
+        item = f"question:{m.get('id')}"
+        prev = self.open.get(item)
+        if asked is None or prev is None:
+            return self.skip("client: extension_ui_response to nothing waiting")
+        if m.get("cancelled"):
+            return self.emit(item, "question", "cancelled", prev["title"], "Not answered", prev["body"],
+                             "extension_ui_response", m)
+        if "confirmed" in m:
+            chosen = "Yes" if m["confirmed"] else "No"
+        else:
+            chosen = m.get("value")
+        answer = {"question": "q0", "options": [], "text": None}
+        if chosen in asked["labels"]:
+            answer["options"] = [f"o{asked['labels'].index(chosen)}"]
+        else:
+            answer["text"] = chosen
+        self.emit(item, "question", "done", prev["title"], "Answered", {**prev["body"], "answer": [answer]},
+                  "extension_ui_response", m)
+
+
+def command_entry(name, description=None):
+    return {"name": name, "description": description, "hint": ""}
+
+
 # ---------------------------------------------------------------------------- driver
 
 
@@ -2655,6 +3046,8 @@ def translate(path: Path) -> Translator:
         t = Acp()  # Codex leaves out the JSON-RPC version; ACP agents send it
         if path.parent.parent.name == "acp":
             t.harness = path.parent.name  # what the driver calls the agent, for one that never names itself
+    elif any(r["msg"].get("type") == "response" for r in recs):
+        t = Pi()  # Pi's records have a type; Codex's are JSON-RPC
     else:
         t = Codex()
     for r in recs:
@@ -2743,7 +3136,10 @@ def crate_shape(value, key=None):
 
 
 # The harnesses whose drivers are tested against the prototype's events (D-074).
-DRIVEN = {"codex": "Codex", "claude": "Claude Code", "opencode": "OpenCode", "goose": "Goose", "cursor": "Cursor"}
+DRIVEN = {
+    "codex": "Codex", "claude": "Claude Code", "opencode": "OpenCode", "goose": "Goose", "cursor": "Cursor",
+    "pi": "Pi",
+}
 
 
 def expected(folder: Path, check_only: bool) -> int:

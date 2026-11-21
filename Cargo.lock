@@ -3045,6 +3045,7 @@ dependencies = [
  "marmot-agent-codex",
  "marmot-agent-driver",
  "marmot-agent-events",
+ "marmot-agent-pi",
  "marmot-app",
  "nostr-relay-builder",
  "serde",
@@ -3106,6 +3107,20 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "marmot-agent-pi"
+version = "0.1.0"
+dependencies = [
+ "marmot-agent-driver",
+ "marmot-agent-events",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

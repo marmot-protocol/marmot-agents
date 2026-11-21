@@ -6,7 +6,8 @@ libraries ([D-006](../decisions.md#d-006-prefer-official-interfaces-and-librarie
 the capability flags ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)), and so is how
 the Codex driver splits its work ([D-060](../decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes)).
 So is how drivers are tested
-([D-074](../decisions.md#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)).
+([D-074](../decisions.md#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)), and what the
+Pi driver builds on ([D-086](../decisions.md#d-086-the-pi-driver-reads-pis-rpc-messages-with-types-of-its-own)).
 
 ## What a driver does
 
@@ -25,7 +26,7 @@ It does not decide who is allowed to do anything, and it does not touch Marmot. 
 | Harness | Driver | Language | Interface it speaks | Builds on |
 | --- | --- | --- | --- | --- |
 | Codex | Native | Rust | `codex app-server`, JSON-RPC over stdio | Types of its own, with Codex's schema as the reference ([D-055](../decisions.md#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own)) |
-| Pi | Native | Rust | `pi --mode rpc`, JSON lines over stdio | `pi-codes` |
+| Pi | Native | Rust | `pi --mode rpc`, JSON lines over stdio | Pi's records read as JSON in its own code, not `pi-codes` ([D-086](../decisions.md#d-086-the-pi-driver-reads-pis-rpc-messages-with-types-of-its-own)) |
 | Goose | ACP, with a small Goose flavour | Rust | `goose acp` | `agent-client-protocol` |
 | OpenCode | ACP | Rust | `opencode acp` | `agent-client-protocol` |
 | Other ACP agents | ACP | Rust | Each agent's ACP command | `agent-client-protocol` |
@@ -229,6 +230,73 @@ cwd = "/home/me/work"
 Its capabilities: it can interrupt; a message during a turn restarts it; the core names the sessions, which
 can be resumed when the agent can load or resume them; approvals come to the chat; no approval commands; no
 files ([D-083](../decisions.md#d-083-the-core-passes-no-files-to-a-harness-yet)).
+
+## The Pi driver
+
+Built in, in [`crates/marmot-agent-pi`](../../crates/marmot-agent-pi), with the same two halves as the Codex
+driver. The translator turns one Pi's records into agent events and is tested against
+[the recordings](../../fixtures/recordings/README.md#pi); the transport runs Pi and implements the trait. The
+core is started with a `[pi]` section in place of `[codex]`:
+
+```toml
+[pi]
+cwd = "/home/me/work"
+program = "tools/pi/pi.sh"           # or "pi", for a Pi installed on the machine
+args = ["<model key file>", "<Pi's state folder>"]
+```
+
+- **One Pi per chat.** Pi in RPC mode holds one session at a time, so each chat gets its own Pi process,
+  started as `program args… --mode rpc` in `cwd` when the chat first needs it. A session is resumed by
+  starting Pi with `--session <id>`: when the core names one ([D-065](../decisions.md#d-065-a-prompt-names-a-session-only-to-resume-one)),
+  and when the chat's Pi has stopped. Pi writes a session's file only once it holds a message, so a session
+  that never did, such as a new one the core was restarted after, has none: then the driver starts Pi with
+  `--session-id <id>`, which makes it again, empty, with the same id. A session the driver has seen hold a
+  message is not made again if its file has gone; the prompt is refused. Before the first prompt the driver
+  asks for the state, the models, the thinking levels and the commands, which the session item shows, and
+  once, at start, for `pi --version`. Pi 1.6.0 reads nothing until its extensions' start-up handlers have
+  finished, so a question one asks then could never be answered: the driver treats it as a failed start, as
+  it does a Pi that has not answered within a minute or comes up in another session, and stops that Pi.
+- **In a container.** [`tools/pi/pi.sh`](../../tools/pi/pi.sh) runs Pi in a throwaway Docker container built
+  from [`tools/pi/Dockerfile`](../../tools/pi/Dockerfile), Pi pinned at 1.6.0, on standard input and output.
+  The working folder is mounted at the same path, and the model key file from the first argument, read-only.
+  Pi reads the key from that file when it calls the model, so it is in no image, environment variable or file
+  Pi writes. Of Pi's state folder, the second argument, each chat's Pi gets only the chat's own folder, so it
+  cannot read another chat's sessions: the driver names the chat in `MARMOT_AGENT_CHAT`, as a hash of its id.
+  Since the working folder is mounted read-write, the script refuses to start if it holds the state folder or
+  the key file, or lies inside the state folder, links resolved. Asking Pi its version, whatever arguments come
+  before `--version`, gets an empty state folder.
+  Docker keeps no log of the container, since what Pi writes holds the conversation. When the driver stops a
+  Pi, its standard input closes and the script gets SIGTERM, then SIGKILL after ten seconds; the script removes
+  the container, so a command it was running is killed, and nothing after it runs. It waits for one Docker is
+  still creating, and removes that too. A chat's container is named
+  after the chat's state folder, so one left running when the core itself was killed outright is removed the
+  next time that chat's Pi starts.
+- **A turn** is a Pi run, from `agent_start` to `agent_settled`, so Pi's own retries and steered messages
+  stay in it. Pi gives turns no id; the driver names one after the session and the timestamp of its first
+  message.
+- **A prompt** goes as Pi's `prompt` command, always with `streamingBehavior: steer`, written as for Codex
+  ([D-062](../decisions.md#d-062-what-codex-reads-for-a-chat-message)). During a turn Pi delivers it after the
+  running tool calls, before its next model call, in the same turn (`fold`). A slash command naming an
+  extension's command runs at once and starts no turn. A request returns once its record is written to Pi,
+  without waiting for Pi to respond: Pi responds to a prompt only after an extension's handler has finished,
+  and the handler may be waiting for the chat's answer to a question. Pi's response, read in turn with its
+  other records, says which turn responds to the prompt: the next one (`started`), the running one (`queued`),
+  or none. If Pi refuses it, the error item that makes says so.
+- **Interrupt** sends `abort`; the end of the turn settles it. **New session** sends `new_session`, and the new
+  session item settles it. **`set`** changes `model` (`provider/id`) or `thinking`; the session item's edit
+  settles it, made again if the setting kept its value, since Pi then says nothing. The one action,
+  `compact`, is settled by the end of the compaction it asked for, not one Pi starts of its own accord; a
+  second one while it runs is refused as busy, since Pi would abort the first. Pi's refusal of any of them, or an extension cancelling a
+  new session, is an error item that settles it. If Pi stops before a control has had its effect, an error
+  item the driver makes settles it as failed; the items the driver closes for a stopped Pi settle nothing.
+- **Approvals.** Pi has none: it asks nobody before a tool runs, so `approvals` is no. An extension can ask
+  through Pi's extension UI. A `select`, `confirm`, `input` or `editor` request becomes a question item,
+  answered by the label chosen or the text typed; `notify` becomes a notice. With Pi's example permission
+  gate loaded (`--extension …/permission-gate.ts` in `args`), a dangerous command asks the chat first.
+
+Its capabilities: it can interrupt; a message sent during a turn folds into it; the core names the sessions,
+and they can be resumed; no approvals; no files (`files_in` is `none`, provisional: Pi takes images, and
+passing them on is a later step); no approval commands.
 
 ## Adding a harness
 

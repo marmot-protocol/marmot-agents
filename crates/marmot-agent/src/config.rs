@@ -25,6 +25,15 @@
 //! command = ["opencode", "acp"]        # or ["cursor-agent", "acp"], or Goose's container wrapper
 //! cwd = "/home/me/work"
 //! ```
+//!
+//! Pi, built in, takes a `[pi]` section in place of `[codex]`:
+//!
+//! ```toml
+//! [pi]
+//! cwd = "/home/me/work"
+//! program = "pi"                       # or a script that runs Pi elsewhere, such as tools/pi/pi.sh
+//! args = []                            # arguments for that script, before Pi's own
+//! ```
 
 use crate::keys::PubKey;
 use crate::rights::{Rights, Who};
@@ -65,6 +74,9 @@ pub struct Config {
     /// Codex, when the agent is Codex, built in.
     #[serde(default)]
     pub codex: Option<CodexConfig>,
+    /// Pi, when the agent is Pi, built in.
+    #[serde(default)]
+    pub pi: Option<PiConfig>,
     /// A connector on the socket, such as the Claude Code driver, when the agent is not Codex.
     #[serde(default)]
     pub connector: Option<ConnectorConfig>,
@@ -81,6 +93,20 @@ pub struct AcpConfig {
     pub name: String,
     /// The program that speaks ACP on its standard input and output, and its arguments.
     pub command: Vec<String>,
+    /// The working folder.
+    pub cwd: String,
+}
+
+/// How Pi runs. Each chat gets a Pi of its own, started as `program args... --mode rpc` in `cwd`.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PiConfig {
+    /// The program, `pi` by default, or a script that runs Pi elsewhere, such as in a container.
+    #[serde(default = "pi")]
+    pub program: String,
+    /// Arguments for the program, before Pi's own.
+    #[serde(default)]
+    pub args: Vec<String>,
     /// The working folder.
     pub cwd: String,
 }
@@ -110,6 +136,10 @@ pub struct CodexConfig {
 
 fn codex() -> String {
     "codex".into()
+}
+
+fn pi() -> String {
+    "pi".into()
 }
 
 fn yes() -> bool {
@@ -158,9 +188,12 @@ impl Config {
             config.codex.is_some(),
             config.connector.is_some(),
             config.acp.is_some(),
+            config.pi.is_some(),
         ];
         if drivers.iter().filter(|d| **d).count() != 1 {
-            return Err(ConfigError::Value("codex, acp or connector, one of them"));
+            return Err(ConfigError::Value(
+                "codex, acp, pi or connector, one of them",
+            ));
         }
         if let Some(acp) = &config.acp {
             if acp.command.is_empty() {
@@ -188,6 +221,16 @@ impl Config {
     /// Whether `person` may add the agent to a group: the owner, and the people listed.
     pub fn may_invite(&self, person: &PubKey) -> bool {
         *person == self.owner || self.invite.contains(person)
+    }
+
+    /// Pi's setup, when the agent is Pi.
+    pub fn pi_setup(&self) -> Option<marmot_agent_pi::Setup> {
+        let pi = self.pi.as_ref()?;
+        Some(marmot_agent_pi::Setup {
+            program: pi.program.clone(),
+            args: pi.args.clone(),
+            cwd: pi.cwd.clone().into(),
+        })
     }
 
     /// Codex's setup, when the agent is Codex.

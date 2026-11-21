@@ -1,8 +1,9 @@
-# Reference: what Codex, Claude Code and OpenCode over ACP actually send
+# Reference: what Codex, Claude Code, ACP agents and Pi actually send
 
-This page is detailed on purpose. It records what two harnesses send over their native interfaces, and what
-OpenCode sends over ACP, taken from real sessions, and how each message relates to the proposed
-[event model](../design/event-model.md).
+This page is detailed on purpose. It records what two harnesses send over their native interfaces, what
+OpenCode, Goose and Cursor send over ACP, and what Pi sends over its RPC mode, taken from real sessions, and
+how each message relates to the proposed [event model](../design/event-model.md). Pi was added on
+2026-11-21, in [its own section](#pi).
 
 ## Sources
 
@@ -612,6 +613,124 @@ OpenCode is written here.
   driver answers it with an empty result.
 - **No usage.** The reply to `session/prompt` has only `stopReason`.
 - **`session_info_update`** once per session, with a title.
+
+## Pi
+
+Read from the 17 Pi recordings of 2026-11-21 ([`fixtures/recordings/pi`](../../fixtures/recordings/README.md#pi)),
+Pi 1.6.0 in RPC mode, and Pi's own documentation in the same package (`docs/rpc.md`, `docs/rpc-commands.md`,
+`docs/json.md`, `docs/rpc-extension-ui.md`). Where a claim comes from the documentation and no recording shows
+it, it says so.
+
+### The protocol
+
+`pi --mode rpc` reads commands on standard input and writes records on standard output, one JSON object per
+line, split on LF only. A command has a `type` and an optional `id`; Pi answers each with one record of
+`"type": "response"`, the same `id`, the `command` and `success`, and data or an error. Everything else is a
+session event, with a `type` and no id. Diagnostics go to standard error. There is no greeting, and no version:
+the driver asks `pi --version` once, separately.
+
+One Pi holds one session at a time. `new_session` replaces it; `switch_session` takes a session file's path; a
+session is opened by id only when Pi starts, with `--session <id>`. `get_state` names the session (`sessionId`,
+a UUID v7, and `sessionFile`), the model and the thinking level.
+
+Read in Pi 1.6.0's published code (`dist/`, in the image `tools/pi/Dockerfile` builds) on 2026-11-21, not seen
+in a recording:
+
+- `--session <id>` exits if no session file has that id. `--session-id <id>` opens that session if its file
+  exists, and otherwise starts an empty session with that id (`main.js`, `createSessionManager`).
+- A session's file is written only once the session holds a user or assistant message
+  (`core/session-manager.js`, `_persist`), so a new session nobody has written in has no file.
+- In RPC mode Pi binds its extensions, awaiting their `session_start` handlers, before it reads standard input
+  (`modes/rpc/rpc-mode.js`). A dialog an extension opens in that handler is written out, but Pi cannot read
+  the answer, nor any command, until the handler returns.
+
+### A turn
+
+A prompt's response comes first, with `disposition`: `started`, `queued` or `handled`. Then:
+
+| Record | Meaning |
+| --- | --- |
+| `agent_start` | A low-level run started |
+| `turn_start`, `turn_end` | One model call, and the tool calls it made |
+| `message_start`, `message_end` | A whole message: the system prompt (role `system`, at the start of each run), the person's (`user`), the model's (`assistant`), a tool's result (`toolResult`) |
+| `message_update` | Partial text, thinking and tool arguments |
+| `tool_execution_start`, `_update`, `_end` | A tool runs, by `toolCallId` |
+| `agent_end` | The low-level run ended; `willRetry` says whether Pi will try again |
+| `agent_settled` | Pi will do nothing more by itself; `aborted` says whether the run was stopped |
+
+Pi gives no id to a turn or to a message. Messages carry a `timestamp` in milliseconds. The prototype and the
+driver take a turn to be everything from `agent_start` to `agent_settled`, which covers retries and messages
+steered in, and name it after the first message's timestamp.
+
+An assistant message's `content` is a list of `text`, `thinking` and `toolCall` blocks. Its `stopReason` is
+`stop`, `toolUse`, `error` (with `errorMessage`) or `aborted`. Its `usage` counts `input` and `output` tokens
+for that one call.
+
+### Tools
+
+Pi's default tools are `read`, `bash`, `edit` and `write`. A tool's `args` are the model's; its `result` has
+`content` (text blocks), and per tool:
+
+- `bash`: `structuredContent` with `output`, `exit_code` and `wall_time_seconds`. A command that exits non-zero
+  ends with `isError: true`, and the output ends with "Command exited with code 1".
+- `edit`: `details` with `diff` (numbered lines), `patch` (a unified diff) and `firstChangedLine`.
+- `read`: `structuredContent` is the file's text.
+
+Models call several tools in one message, and Pi runs them at once: `steer` shows two `tool_execution_start`
+before either ends.
+
+### Controls
+
+| Control | What Pi did |
+| --- | --- |
+| `abort` during a command | The command ended with `isError: true` and the text "Command aborted"; an empty assistant message with `stopReason: aborted`; `agent_settled` with `aborted: true`; and only then the response to `abort` |
+| `prompt` with `streamingBehavior: steer` during a turn | Accepted as `queued`; `queue_update` listed it; it was delivered as a `user` message after the running tool calls, in the same run (`fold`) |
+| `new_session` | Response `{"cancelled": false}`. Nothing else: `get_state` then names the new session |
+| `set_thinking_level` | A `thinking_level_changed` event, then the response |
+| `set_model` with an unknown model | `success: false`, "Model not found: …" |
+| `compact` on a short session | `compaction_start`, then `compaction_end` with `errorMessage`, then a refused response |
+| A prompt starting with `/` that names an extension command | Run at once, `disposition: handled`, no run. Pi's own terminal commands are not commands in RPC mode, and `get_commands` does not list them (documented) |
+
+When Pi responds, read in Pi 1.6.0's own code (`dist/modes/rpc/rpc-mode.js` and
+`dist/core/agent-session.js` in the npm package, 2026-11-21; not recorded unless a recording is named):
+
+- **Pi takes each line as it comes**, and does not wait for one command to finish before it reads the next.
+  A `get_state` sent right after `new_session` can answer for the old session.
+- **A prompt's response waits for the extensions.** For a slash command that names an extension's command,
+  `handled` comes only once the command's handler has returned; an `input` handler runs before any
+  response. A handler that asks the person through the extension UI therefore holds the response back until
+  the answer arrives.
+- **`started` comes after the run before it has ended**: a prompt sent while `agent_settled` is being sent
+  waits for it. It comes before the new run's `agent_start` (every recording). `queued` means the run going on
+  takes the message.
+- **`set_thinking_level`** sends `thinking_level_changed` only if the level changes, and with the level set,
+  which can be a lower one than asked for, when the model does not have it. The response says neither.
+- **`new_session`** answers `{"cancelled": true}` with `success: true` when an extension keeps the session.
+- **Standard input closing** ends Pi, which disposes of its session and exits. Measured with Pi in
+  `tools/pi/pi.sh`'s container: with a `bash` command running, the container was gone within a second when
+  standard input closed and the script was left running, or got SIGTERM. When the script was killed with
+  SIGKILL, the container ran on until the command ended.
+
+Pi restarted with `--session <id>` after a kill mid-command (`restart_mid_turn`): the killed Pi sent nothing
+more, and the resumed session went on; the command was not run again. The same with an orderly restart
+(`resume`) kept the conversation.
+
+### Approvals and questions
+
+Pi has none of its own: it runs every tool without asking. An extension can ask the person through Pi's
+extension UI: an `extension_ui_request` with a `method` of `select`, `confirm`, `input` or `editor` waits for an
+`extension_ui_response` with the same `id`, carrying `value`, `confirmed` or `cancelled`. `notify`,
+`setStatus`, `setWidget`, `setTitle` and `set_editor_text` expect no answer. Pi's example permission gate asks
+with `select`, the title "⚠️ Dangerous command: … Allow?" and the options `Yes` and `No`, before a matching
+`bash` call (`gate_allowed`, `gate_denied`). Denied, the tool ends with `isError: true` and "Blocked by user".
+A dialog with a `timeout` resolves by itself when it passes (documented; not recorded).
+
+### Failures
+
+The model endpoint's 503s and 520s show as an assistant message with `stopReason: error`, then
+`agent_end` with `willRetry: true`, `auto_retry_start` with the attempt and the error, an `entry_appended` that
+drops the failed message from the context, and a new `agent_start`. After the last attempt, `auto_retry_end`
+with `success: false` and `agent_settled` (`retry_failed`).
 
 ## Side by side
 

@@ -13,7 +13,8 @@ a driver implements; `marmot-agent-codex`, the Codex driver, which runs Codex an
 subagents switched off for now; and `marmot-agent`, the core, which runs one agent's account through MDK and
 drives Codex, with a test that runs it end to end on MDK's test relay. The core also serves a local socket, and
 `packages/claude-code` is the Claude Code driver, a TypeScript program that drives Claude Code through it. `marmot-agent-acp`
-is the ACP driver, replayed against the OpenCode, Goose and Cursor recordings. What is
+is the ACP driver, replayed against the OpenCode, Goose and Cursor recordings. `marmot-agent-pi` is the Pi
+driver, built into the core like Codex's, which runs Pi in a container from `tools/pi`. What is
 built next, and in what order, is in
 [`docs/plan.md`](docs/plan.md). The core program is called `marmot-agent`
 ([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and
@@ -42,7 +43,7 @@ being replaced by what is designed here, not extended.
 | Add or change a harness driver | `docs/design/drivers.md`, then `docs/reference/harness-interfaces.md` |
 | Check what today's MDK connectors do | `docs/reference/current-connectors.md` |
 | See how T3 Code, Buzz and ACP solve this | `docs/reference/prior-art.md` |
-| See what Codex and Claude Code really send | `docs/reference/harness-messages.md`, then `fixtures/recordings/` |
+| See what Codex, Claude Code and Pi really send | `docs/reference/harness-messages.md`, then `fixtures/recordings/` |
 | See what Hermes hands a platform plugin | `docs/reference/hermes-messages.md` |
 | See what MDK supports for several identities in one program | `docs/reference/mdk-multiple-identities.md` |
 | See what OpenClaw hands a channel plugin | `docs/reference/openclaw-messages.md` |
@@ -52,6 +53,7 @@ being replaced by what is designed here, not extended.
 | Work on the item types in Rust | `crates/marmot-agent-events`, after `docs/design/event-model.md` |
 | Work on the driver trait or the capability flags | `crates/marmot-agent-driver`, after `docs/design/drivers.md` |
 | Work on the Codex driver | `crates/marmot-agent-codex`, after `fixtures/recordings/codex` and its `expected/` events |
+| Work on the Pi driver | `crates/marmot-agent-pi`, after `fixtures/recordings/pi`, its `expected/` events and the Pi section of `docs/design/drivers.md` |
 | Work on the Claude Code driver's translation | `packages/claude-code/src/translate.ts`, after `fixtures/recordings/claude` and its `expected/` events |
 | Work on the Claude Code driver's transport | `packages/claude-code/src/connector.ts`, after `docs/design/drivers.md` and `docs/design/socket-protocol.md` |
 | Work on the ACP driver | `crates/marmot-agent-acp`, after `fixtures/recordings/acp` and its `expected/` events |
@@ -260,23 +262,26 @@ python3 tools/record/inventory.py fixtures/recordings/claude --kinds   # nor thi
 python3 tools/record/inventory.py fixtures/recordings/acp/opencode --kinds   # nor this
 python3 tools/record/inventory.py fixtures/recordings/acp/goose --kinds      # nor this
 python3 tools/record/inventory.py fixtures/recordings/acp/cursor --kinds     # nor this
+python3 tools/record/inventory.py fixtures/recordings/pi --kinds             # nor this
 python3 -m unittest discover -s tools/prototype -p 'test_*.py'         # cases no recording holds
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
     fixtures/recordings/hermes fixtures/recordings/openclaw fixtures/recordings/acp/opencode \
-    fixtures/recordings/acp/goose fixtures/recordings/acp/cursor
+    fixtures/recordings/acp/goose fixtures/recordings/acp/cursor fixtures/recordings/pi
 python3 tools/prototype/translate.py --expected fixtures/recordings/codex --check   # the Codex driver's expected events
 python3 tools/prototype/translate.py --expected fixtures/recordings/claude --check  # the Claude Code driver's
 python3 tools/prototype/translate.py --expected fixtures/recordings/acp/opencode --check  # the ACP driver's
 python3 tools/prototype/translate.py --expected fixtures/recordings/acp/goose --check     # and again
 python3 tools/prototype/translate.py --expected fixtures/recordings/acp/cursor --check    # and again
+python3 tools/prototype/translate.py --expected fixtures/recordings/pi --check      # the Pi driver's
 ```
 
-The `--check` over the seven folders must end with "native messages with no translation: none". If you change
+The `--check` over the eight folders must end with "native messages with no translation: none". If you change
 the event model, change `tools/prototype/translate.py` to match and run it again.
 
 The Codex driver is tested against `fixtures/recordings/codex/expected`, the Claude Code driver against
-`fixtures/recordings/claude/expected`, and the ACP driver against `expected/` in each folder under `fixtures/recordings/acp`.
-The prototype writes all three. When the prototype's output for one harness
+`fixtures/recordings/claude/expected`, the ACP driver against `expected/` in each folder under
+`fixtures/recordings/acp`, and the Pi driver against `fixtures/recordings/pi/expected`. The prototype writes all
+four. When the prototype's output for one harness
 changes on purpose, write them again with `python3 tools/prototype/translate.py --expected` and that folder,
 such as `fixtures/recordings/codex`, and commit them. Never write them
 again only to make the driver's test pass: when the two disagree, the recording and the event model decide

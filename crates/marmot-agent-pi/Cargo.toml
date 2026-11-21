@@ -1,0 +1,26 @@
+[package]
+name = "marmot-agent-pi"
+description = "The Pi driver: speaks pi --mode rpc and produces agent events"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+marmot-agent-driver = { path = "../marmot-agent-driver" }
+marmot-agent-events = { path = "../marmot-agent-events" }
+# `raw_value` keeps Pi's own record as the exact text it arrived as.
+serde_json = { version = "1", features = ["raw_value"] }
+# Asks a Pi to stop with SIGTERM, which a script that runs Pi elsewhere cleans up on.
+rustix = { version = "1", default-features = false, features = ["process", "std"] }
+# Names each chat's own state by a hash of its id.
+sha2 = "0.10"
+# Runs Pi and reads it without blocking the core.
+tokio = { version = "1", features = ["io-util", "process", "rt", "sync", "time"] }
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+tempfile = "3"
+serde_json = { version = "1", features = ["raw_value"] }
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }

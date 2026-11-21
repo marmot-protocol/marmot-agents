@@ -82,6 +82,8 @@ independent, so separate agents build them at the same time. Whose rules govern 
 decided: the core decides first ([D-084](decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)).
 **Done when** the scenario passes for each.
 
+- **Pi**: the scenario passes against a real Pi 1.6.0, run in a container (2026-11-21).
+
 ### M4: Ready to swap
 
 Everything on the list above that M1 to M3 did not already do: moving installs over, installers and releases,

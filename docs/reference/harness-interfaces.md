@@ -16,8 +16,10 @@ research.
   [`harness-messages.md`](harness-messages.md#acp-opencode).
 - **Codex was read again on 2026-11-19.** The Codex entry, its two rows under "Libraries" and the whole of
   [Codex: which library to build on](#codex-which-library-to-build-on) are from that day, and that section
-  says how each fact was checked. Three candidate libraries were built and run on this machine. Nothing else
-  on this page was re-checked.
+  says how each fact was checked. Three candidate libraries were built and run on this machine.
+- **Pi was read again on 2026-11-21.** Its entry, its part of the `pi-codes` row under "Libraries" and
+  [Pi: which library to build on](#pi-which-library-to-build-on) are from that day. Nothing else on this page
+  was re-checked.
 
 ## Summary
 
@@ -109,11 +111,19 @@ Read again on 2026-11-19. The newest release is 0.170.0 (2026-11-18). The record
 
 ### Pi
 
-- **Native.** `pi --mode rpc`, strict JSON lines over stdio, with prompt, steer and follow-up commands. Pi has
-  no tool-approval gate of its own.
-- **ACP.** Third party only (`pi-acp` v0.0.34, last commit 2026-10-06, about a hundred open issues). It supports
-  only new, load, list and delete. Pi's own project closed its ACP pull requests.
-- **Rust.** The community crate `pi-codes` drives RPC mode, including steering.
+Re-checked on 2026-11-21, by installing Pi 1.6.0 in a container, running its RPC mode, and reading the
+documentation in its npm package and the source of `pi-codes` 1.6.0. The recordings of that day are in
+[`fixtures/recordings/pi`](../../fixtures/recordings/README.md#pi).
+
+- **Native.** `pi --mode rpc`, strict JSON lines over stdio: commands in (`prompt`, `steer`, `follow_up`,
+  `abort`, `new_session`, `switch_session`, `get_state`, `set_model`, `set_thinking_level`, `compact` and
+  more), a response to each and session events out. A prompt sent during a run must say whether it steers the
+  run or follows it. Pi has no tool-approval gate of its own; an extension can ask the client through Pi's
+  extension UI records. The package is `@earendil-works/pi-coding-agent`, 1.6.0, published 2026-11-20.
+- **ACP.** Third party only (`pi-acp`, 0.0.35 on npm, published 2026-11-21; its issue count was not checked
+  again). It supports only new, load, list and delete. Pi's own project closed its ACP pull requests.
+- **Rust.** The community crate `pi-codes` drives RPC mode, including steering. See
+  [Pi: which library to build on](#pi-which-library-to-build-on).
 
 ### Goose
 
@@ -178,7 +188,7 @@ Read again on 2026-11-19. The newest release is 0.170.0 (2026-11-18). The record
 | `@cursor/sdk` | npm | 1.4.0, 2026-11-15 | Official |
 | `@openai/codex-sdk` | npm | 0.170.0, 2026-11-18 | Official, but wraps the JSON-lines mode |
 | `codex-app-server-protocol`, `codex-app-server-client` | `openai/codex` on GitHub | Unpublished. Tried at `rust-v0.169.0`; the newest tag, `rust-v0.170.0` of 2026-11-18, was not built | Official Rust crates. At `rust-v0.169.0` the protocol crate does not build as a git dependency without OpenAI's lock file and patches, and cannot be linked beside MDK at `6f6d2017d`. See [the trial](#codex-which-library-to-build-on) |
-| `claude-codes`, `codex-codes`, `pi-codes`, `opencode-codes` | crates.io, `meawoppl/rust-code-agent-sdks` | `codex-codes` 0.169.6, 2026-11-18; `claude-codes` 2.1.327, 2026-11-17 | Community. Each version names the CLI release it was tested against. One maintainer wrote 668 of 674 commits; 30 stars |
+| `claude-codes`, `codex-codes`, `pi-codes`, `opencode-codes` | crates.io, `meawoppl/rust-code-agent-sdks` | `codex-codes` 0.169.6, 2026-11-18; `claude-codes` 2.1.327, 2026-11-17; `pi-codes` 1.6.0, 2026-11-20 | Community. Each version names the CLI release it was tested against. One maintainer wrote 668 of 674 commits; 30 stars |
 
 Other Rust crates for Claude Code on crates.io were stale when checked. One named `claude-agent-sdk` lists an
 Anthropic repository that does not exist, so it is not official.
@@ -448,6 +458,30 @@ What C costs:
 - The requests and replies the driver sends are built by hand, which is why the three checks above matter.
 - If the driver comes to read far more of the protocol, this choice should be looked at again.
 
+## Pi: which library to build on
+
+Checked on 2026-11-21, against Pi 1.6.0. Nothing here was measured beyond reading `pi-codes` 1.6.0's source
+and changelog and running Pi.
+
+`pi-codes` keeps up with Pi: its 1.6.0 was published the day Pi 1.6.0 was, and each release says which Pi it was
+tested against and what changed on the wire. It was still not used, for reasons like Codex's
+([D-055](../decisions.md#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own)):
+
+- **Its client runs only `pi` found on the path.** The driver runs Pi through a script that starts a
+  container, and one Pi per chat, so it needs its own process handling anyway.
+- **Its client reads one command at a time**, buffering events while it waits, has no way to answer Pi's
+  extension UI requests, and pipes Pi's standard error without reading it, which can stall Pi once the pipe
+  fills (inferred from the source; not seen).
+- **Its types decode a record into Rust values**, so the record's exact text, which the event's native message
+  must be ([D-059](../decisions.md#d-059-eight-points-about-what-an-agent-event-carries)), has to be kept
+  beside them anyway, and an extension UI request is not modelled.
+- **The translation reads few fields**, and reading them from the JSON is as short as mapping its types.
+
+So the driver reads Pi's records as JSON, with nothing between. This changes what
+[D-005](../decisions.md#d-005-which-driver-each-harness-gets) says the Pi driver builds on; the project owner
+accepted it as [D-086](../decisions.md#d-086-the-pi-driver-reads-pis-rpc-messages-with-types-of-its-own). The cost is the same as for Codex: nothing fails to compile when Pi changes a record,
+and a new recording, replayed in CI, is what shows it.
+
 ## Sources
 
 - <https://github.com/agentclientprotocol/agent-client-protocol> (specification, releases, v2 draft)
@@ -456,6 +490,9 @@ What C costs:
 - <https://github.com/openai/codex> (`codex-rs/app-server-protocol`, `sdk/typescript`)
 - <https://github.com/anomalyco/opencode>
 - <https://github.com/earendil-works/pi> and <https://github.com/svkozak/pi-acp>
+- `@earendil-works/pi-coding-agent` 1.6.0 from npm: its `docs/rpc.md`, `docs/rpc-commands.md`, `docs/json.md`
+  and `docs/rpc-extension-ui.md`, and Pi itself in a container (2026-11-21)
+- <https://crates.io/crates/pi-codes> 1.6.0, its source and changelog (2026-11-21)
 - <https://github.com/aaif-goose/goose>
 - <https://github.com/NousResearch/hermes-agent>
 - <https://github.com/openclaw/openclaw>

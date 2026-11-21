@@ -6,11 +6,13 @@
 The recordings are the test of the prototype, and `translate.py --check` runs them all. This file
 covers cases that were never recorded: a Codex question marked secret, a question asked in a message
 that outlives its turn, a translator that follows one thread, Claude Code's answer to a question with
-several choices or with typed text, what Claude Code's client learns before the session has an id, and an
-ACP message streamed with no id.
+several choices or with typed text, what Claude Code's client learns before the session has an id, an
+ACP message streamed with no id, and for Pi, a prompt sent as a turn ends and a new session an extension
+cancels.
 The messages below are written by hand, in the shapes the recordings have: for Codex, the shape
 `item/tool/requestUserInput` has in `fixtures/recordings/codex/plan_mode.jsonl`; for Claude Code, the
-shapes in `fixtures/recordings/claude/question.jsonl` and `early_info.jsonl`.
+shapes in `fixtures/recordings/claude/question.jsonl` and `early_info.jsonl`; for Pi, the shapes in
+`fixtures/recordings/pi/two_turns.jsonl` and `new_session.jsonl`.
 """
 
 from __future__ import annotations
@@ -372,3 +374,42 @@ class AcpTurns(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def pi_turn(stamp: int) -> list[dict]:
+    """The start of a Pi run for a prompt, as `fixtures/recordings/pi/two_turns.jsonl` has it."""
+    user = {"role": "user", "content": [{"type": "text", "text": "hi"}], "timestamp": stamp}
+    return [{"dir": "in", "msg": {"type": "agent_start"}},
+            {"dir": "in", "msg": {"type": "message_start", "message": user}}]
+
+
+class PiTurnBoundary(unittest.TestCase):
+    """Pi says a run started for a prompt only after the run before it has ended. A prompt sent
+    before the client read that end still starts the next turn, as the person's."""
+
+    def test_the_next_turn_is_started_by_the_person(self):
+        pi = translate.Pi()
+        for record in [{"dir": "out", "msg": {"id": "1", "type": "prompt", "message": "hi"}},
+                       {"dir": "in", "msg": {"id": "1", "type": "response", "command": "prompt", "success": True,
+                                             "data": {"disposition": "started"}}},
+                       *pi_turn(1),
+                       {"dir": "out", "msg": {"id": "2", "type": "prompt", "message": "hi", "streamingBehavior": "steer"}},
+                       {"dir": "in", "msg": {"type": "agent_settled", "aborted": False}},
+                       {"dir": "in", "msg": {"id": "2", "type": "response", "command": "prompt", "success": True,
+                                             "data": {"disposition": "started"}}},
+                       *pi_turn(2)]:
+            pi.feed(record)
+        turns = [e for e in pi.events if e["type"] == "turn" and e["state"] == "running"]
+        self.assertEqual([t["body"]["started_by"] for t in turns], ["user", "user"])
+
+
+class PiCancelledNewSession(unittest.TestCase):
+    def test_an_extension_that_keeps_the_session_is_an_error_and_the_session_stays(self):
+        pi = translate.Pi()
+        pi.session = "s1"
+        pi.feed({"dir": "out", "msg": {"id": "1", "type": "new_session"}})
+        pi.feed({"dir": "in", "msg": {"id": "1", "type": "response", "command": "new_session", "success": True,
+                                      "data": {"cancelled": True}}})
+        [error] = pi.events
+        self.assertEqual((error["type"], error["state"], error["body"]), ("error", "failed", {"request": "new_session"}))
+        self.assertEqual(pi.session, "s1")

@@ -9,6 +9,7 @@ what the harness actually sends. The recordings they produced are in
 | `record_codex.py` | Drives `codex app-server` through a scripted scenario and saves both directions |
 | `claude/record_claude.ts` | Does the same for Claude Code through the Claude Agent SDK |
 | `record_acp.py` | Does the same for an agent that speaks ACP, such as `opencode acp`, or Goose in its container |
+| `record_pi.py` | Does the same for `pi --mode rpc`, with Pi in a container; see [Pi](#pi) |
 | `scrub.py` | Removes paths and account details from raw recordings |
 | `inventory.py` | Lists every kind of message in a set of recordings, with field names and types |
 | `demo/` | The small project every scenario runs in |
@@ -143,6 +144,31 @@ tools/record/openclaw/record.sh tools/record/openclaw/scenarios/simple.json out/
 - **To see why a run failed**, set `RECORD_LOG` to a file. The gateway's own log is written there.
 
 Scrub the output like any other recording, with the files in a folder named `openclaw`.
+
+## Pi
+
+Pi is recorded through its RPC mode, with Pi in a throwaway container built from
+[`tools/pi`](../pi/Dockerfile), the same one the Pi driver runs. Nothing is installed on the machine.
+
+```sh
+python3 tools/record/record_pi.py --list
+python3 tools/record/record_pi.py command "$work/demo" "$work/raw/pi/command.jsonl" <model-key-file>
+```
+
+- **What it needs.** Docker, and a file holding an API key for an OpenAI-compatible model endpoint.
+  `MODEL_BASE_URL` sets the endpoint and `MODEL_NAME` the model; the defaults are in
+  [`tools/pi/pi.sh`](../pi/pi.sh).
+- **The key is mounted read-only when the container starts.** Pi reads it from that file whenever it calls the
+  model; it is never built into the image, put in an environment variable or written anywhere.
+- **Every recording starts from zero.** Pi's state, its settings and its sessions, is a fresh temporary folder
+  for each recording, removed afterwards. `resume` and `restart_mid_turn` start a second Pi on the same folder.
+- **The recorder opens a session as the driver does**, so the driver's translation can be checked against what
+  it really sends: `get_state`, `get_available_models`, `get_available_thinking_levels` and `get_commands`
+  before the first prompt, and after a new session. It notes `pi --version` first.
+- **A message sent during a turn** goes as a `prompt` with `streamingBehavior: steer`, as the driver sends it.
+- **The `gate_*` scenarios** load Pi's example permission-gate extension, which is in the image.
+
+Scrub the output like any other recording, with the files in a folder named `pi`.
 
 ## Adding a scenario
 
