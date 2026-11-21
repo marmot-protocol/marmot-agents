@@ -144,7 +144,7 @@ class FakeCore {
   }
 }
 
-async function start(): Promise<{
+async function start(cwd = "/nowhere"): Promise<{
   core: FakeCore;
   queries: FakeQuery[];
   running: Promise<void>;
@@ -160,7 +160,7 @@ async function start(): Promise<{
   const queries: FakeQuery[] = [];
   const running = run({
     home,
-    cwd: "/nowhere",
+    cwd,
     model: "model-x",
     permissionMode: "default",
     query: ({ prompt, options }) => {
@@ -280,6 +280,17 @@ test("the agent sends a file: the core is asked with the chat and a whole path, 
   core.answerFile = () => ({ error: { code: -32000, message: "not_allowed", data: { reason: "not_allowed", detail } } });
   assert.deepEqual(await send("/elsewhere/secret.txt"), { text: `Not sent: ${detail}`, failed: true });
   assert.deepEqual(core.files[1], { chat: "c1", path: "/elsewhere/secret.txt" });
+  await done();
+});
+
+test("a file named relative to a working folder given as `.` reaches the core as a whole path, its `..` kept", async () => {
+  const { core, queries, done } = await start(".");
+  const { q } = await turn(core, queries);
+  assert.equal(q.options["cwd"], process.cwd(), "Claude Code is given the folder whole");
+  const { send } = (q.options["mcpServers"] as Record<string, { send: SendFile }>)["marmot"]!;
+  await send("link/../notes.txt");
+  // Not shortened to `notes.txt`: if `link` leads elsewhere, `..` leads elsewhere too, and the core follows it.
+  assert.deepEqual(core.files[0], { chat: "c1", path: `${process.cwd()}/link/../notes.txt` });
   await done();
 });
 

@@ -16,7 +16,7 @@
 import type { AgentEvent, Line } from "./translate.ts";
 import { Translator } from "./translate.ts";
 import { readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve, sep } from "node:path";
 import { fileServer, SEND_FILE_TOOL, type FileServer } from "./files.ts";
 import { CoreConnection, MAX_MESSAGE, notificationSize, Refusal, type Capabilities, type Hello } from "./socket.ts";
 
@@ -300,14 +300,17 @@ export class Connector {
 
   /**
    * The options that give a query the tool to send a file, when the core can be asked. A relative path is
-   * made whole against the working folder; the core takes only an absolute one. What the model reads back
-   * names no path the core did not already have from it.
+   * made whole by putting the working folder, whole since the start, in front of it, and nothing more: a
+   * `..` in it is left for the core to follow, since only following it on disk says where it leads. The
+   * core takes only an absolute path. What the model reads back names no path the core did not already have
+   * from it.
    */
   private fileTool(chat: Chat): Json {
     const sendFile = this.options.sendFile;
     if (sendFile === undefined) return {};
     const send = async (path: string) => {
-      const whole = isAbsolute(path) ? path : join(this.options.cwd, path);
+      const cwd = this.options.cwd;
+      const whole = isAbsolute(path) ? path : cwd.endsWith(sep) ? cwd + path : cwd + sep + path;
       try {
         await sendFile(chat.id, whole);
         return { text: "Sent.", failed: false };
@@ -729,7 +732,8 @@ export async function run(options: RunOptions): Promise<void> {
   }
   const connector = new Connector({
     query: options.query,
-    cwd: options.cwd,
+    // Whole once, here, so Claude Code and a file it names start from the same folder.
+    cwd: resolve(options.cwd),
     model: options.model,
     permissionMode: options.permissionMode,
     send: (event) => {
