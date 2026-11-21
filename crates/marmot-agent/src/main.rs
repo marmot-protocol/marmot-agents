@@ -1,4 +1,5 @@
-//! `marmot-agent`: one agent's member of Marmot groups, driving Codex (D-072).
+//! `marmot-agent`: one agent's member of Marmot groups, driving Codex or Pi built in, or a
+//! connector on the socket (D-072).
 //!
 //! ```text
 //! marmot-agent init <settings.toml>   make the agent's identity, and print its public key
@@ -13,6 +14,7 @@ use marmot_agent::run::{Core, Store, serve};
 use marmot_agent::socket::Endpoint;
 use marmot_agent_acp::Acp;
 use marmot_agent_codex::Codex;
+use marmot_agent_pi::Pi;
 use marmot_app::{AccountSetupRequest, MarmotApp, MarmotAppConfig, MarmotAppRuntime};
 use std::path::Path;
 use std::process::ExitCode;
@@ -131,8 +133,8 @@ async fn run(config: &Config) -> Result<(), String> {
     let stop = async {
         let _ = tokio::signal::ctrl_c().await;
     };
-    match (&config.codex, &config.acp) {
-        (Some(codex), _) => {
+    match (&config.codex, &config.acp, config.pi_setup()) {
+        (Some(codex), _, _) => {
             let setup = config.setup().map_err(|e| e.to_string())?;
             let driver = Codex::start(&codex.program, setup)
                 .await
@@ -140,14 +142,21 @@ async fn run(config: &Config) -> Result<(), String> {
             let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
             core.run(events, stop).await;
         }
-        (None, Some(acp)) => {
+        (None, Some(acp), _) => {
             let driver = Acp::start(&acp.command, &acp.cwd, &acp.name)
                 .await
                 .map_err(|_| "the ACP agent could not be started")?;
             let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
             core.run(events, stop).await;
         }
-        (None, None) => {
+        (None, None, Some(setup)) => {
+            let driver = Pi::start(setup)
+                .await
+                .map_err(|_| "Pi could not be started")?;
+            let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
+            core.run(events, stop).await;
+        }
+        (None, None, None) => {
             drop(events);
             let endpoint = Endpoint::in_home(&config.home);
             let (listener, token) = endpoint

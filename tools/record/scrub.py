@@ -4,14 +4,14 @@
 Usage:
     scrub.py <raw-dir> <out-dir> --map <local-path>=<replacement> [--map ...]
 
-`<raw-dir>` holds one folder per harness (`codex`, `claude`, `hermes`, `openclaw`), each with `*.jsonl`
+`<raw-dir>` holds one folder per harness (`codex`, `claude`, `hermes`, `openclaw`, `pi`), each with `*.jsonl`
 files as written by the recorders, and `acp`, which holds one such folder per ACP agent, such as
 `acp/opencode`. The same tree is written to `<out-dir>`. The script then scans its own output and exits with an error
 if anything that looks private is left.
 
 What it does:
 
-- Replaces local paths, and the dash-encoded form of each that Claude Code uses for folder
+- Replaces local paths, and the dash-encoded form of each that Claude Code and Pi use for folder
   names. Give the most specific first, for example
   `--map /tmp/rec/demo=/work/demo --map /home/alice=/home/user`.
 - Replaces the machine's host name and the current user name.
@@ -128,6 +128,10 @@ class Scrubber:
 
         return uptime(self.walk(msg))
 
+    def pi(self, msg: dict) -> dict:
+        # Pi runs in a container that holds no account of ours: only paths and names need replacing.
+        return self.walk(msg)
+
     def claude(self, msg: dict) -> dict:
         if msg.get("type") in NEUTRALISE_CLAUDE_TYPES:
             keep = {k: msg[k] for k in ("type", "uuid", "session_id") if k in msg}
@@ -200,7 +204,7 @@ def main() -> int:
     maps = [tuple(m.split("=", 1)) for m in args.map]
     s = Scrubber(maps)
     problems = 0
-    for harness in ("codex", "claude", "hermes", "openclaw", "acp"):
+    for harness in ("codex", "claude", "hermes", "openclaw", "acp", "pi"):
         if not (args.raw / harness).is_dir():
             continue
         pattern = "*/*.jsonl" if harness == "acp" else "*.jsonl"  # acp/<agent>/<scenario>.jsonl

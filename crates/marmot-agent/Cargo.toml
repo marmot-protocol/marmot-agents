@@ -12,6 +12,7 @@ marmot-agent-acp = { path = "../marmot-agent-acp" }
 marmot-agent-codex = { path = "../marmot-agent-codex" }
 marmot-agent-driver = { path = "../marmot-agent-driver" }
 marmot-agent-events = { path = "../marmot-agent-events" }
+marmot-agent-pi = { path = "../marmot-agent-pi" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 # The standing settings are one TOML file (D-073).

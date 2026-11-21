@@ -22,8 +22,8 @@ The prompts are scripted and are in the recorder sources.
 
 ## Scenarios
 
-57 recordings of coding harnesses: 28 with Codex and 29 with Claude Code. Hermes has 27 more and OpenClaw 39,
-described below: [Hermes](#hermes), [OpenClaw](#openclaw).
+57 recordings of coding harnesses: 28 with Codex and 29 with Claude Code. Hermes has 27 more, OpenClaw 39 and
+Pi 17, described below: [Hermes](#hermes), [OpenClaw](#openclaw), [Pi](#pi).
 
 | Scenario | What it exercises | Codex | Claude |
 | --- | --- | --- | --- |
@@ -409,6 +409,56 @@ is in [`docs/reference/harness-messages.md`](../../docs/reference/harness-messag
 
 `acp/cursor/expected/` holds the expected events.
 
+## Pi
+
+Pi is recorded through its RPC mode, `pi --mode rpc`, in a container. The recorder starts Pi the way the Pi
+driver does: it asks for the state, the models, the thinking levels and the commands before the first prompt,
+and again after a new session, and it asks `pi --version` once, since RPC does not say the version.
+What the recordings show is in [`docs/reference/harness-messages.md`](../../docs/reference/harness-messages.md#pi).
+
+| | |
+| --- | --- |
+| Runtime | Pi 1.6.0 (`@earendil-works/pi-coding-agent`), in the container in [`tools/pi`](../../tools/pi/Dockerfile) |
+| Model | `deepseek/deepseek-v4.1-flash:free` through an OpenAI-compatible endpoint, thinking `low`; `retry_failed` used `z-ai/glm-5.3-flash:free` |
+| Recorded on | 2026-11-21 |
+| Recorder | [`tools/record/record_pi.py`](../../tools/record/record_pi.py) |
+
+| Scenario | What it exercises |
+| --- | --- |
+| `simple` | A text answer, no tools |
+| `command` | A shell command |
+| `file_edit` | A file read, edited and run |
+| `failing_command` | A command that exits with an error |
+| `two_turns` | Two turns in one session |
+| `interrupt` | The user interrupts a running command (`abort`) |
+| `steer` | The user sends a message mid-turn, as a prompt that steers the running turn |
+| `new_session` | A turn, then `new_session`, then a turn in the new session |
+| `resume` | A session resumed in a new Pi, started with `--session` |
+| `restart_mid_turn` | Pi is killed while a command runs, then the session is resumed |
+| `settings` | The thinking level is changed between turns |
+| `bad_model` | A model that does not exist is asked for |
+| `compact` | The conversation is compacted between turns |
+| `slash_command` | `/mcp`, a command of one of Pi's built-in extensions, then a turn |
+| `gate_allowed`, `gate_denied` | Pi's example permission-gate extension asks before `rm -rf build`; allowed, and denied |
+| `retry_failed` | The model endpoint failed three times in a row, and Pi gave up |
+
+Things that did not go as scripted, and are useful for that reason:
+
+- **Pi has no approvals of its own.** It asks nobody before a tool runs. An extension can ask, through Pi's
+  extension UI: the `gate_*` scenarios load the permission gate Pi ships as an example, and its question
+  arrives as an `extension_ui_request` of method `select`, with the labels `Yes` and `No`.
+- **`retry_failed`.** Recorded as `command`, on the first day's model, which answered 503 four times in a row.
+  Pi retried three times and ended the run with the error. It was recorded before the recorder noted Pi's
+  version, so it has no version note.
+- **The free model's 503s.** Several other recordings hold one to three retries that then succeeded.
+  `gate_denied` was recorded again, once, because all its retries failed.
+- **`compact`.** Pi refused: the session was too small. It reports this twice, as a failed `compaction_end`
+  and as a refused response.
+- **`slash_command`.** `/mcp` ran at once, as an extension command, and its only output is a notification.
+  Pi's own commands, such as `/model`, exist only in its terminal interface and are not in `get_commands`.
+- **`restart_mid_turn`.** The killed Pi said nothing more. In the resumed session the agent named the command
+  as the last it ran, and did not run it again.
+
 ## File format
 
 One JSON object per line.
@@ -423,11 +473,15 @@ One JSON object per line.
 Codex messages are JSON-RPC: a request has `id` and `method`, a notification has `method` only, and a response
 has `id` with `result` or `error`.
 
+Pi's records are its RPC records as they are: a command has a `type` and an `id`, Pi's response to it has
+`"type": "response"` and the same `id`, and everything else Pi sends is a session event with a `type`. A line
+whose message has `_recorder` is a note the recorder wrote: Pi's version, or that it started Pi again.
+
 `codex/expected/` holds, for each Codex recording, the agent events the Codex driver must produce from it, one
-per line, as the Rust item types write them. `claude/expected/` holds the same for the Claude Code driver, and
-`acp/opencode/expected/` for the ACP driver. The prototype writes them
-(`python3 tools/prototype/translate.py --expected fixtures/recordings/codex`, and the same with `claude` and
-`acp/opencode`), and CI checks that they are current.
+per line, as the Rust item types write them. `claude/expected/` holds the same for the Claude Code driver,
+`expected/` under each `acp` folder for the ACP driver, and `pi/expected/` for the Pi driver. The prototype writes
+them (`python3 tools/prototype/translate.py --expected fixtures/recordings/codex`, and the same with the other
+folders), and CI checks that they are current.
 
 ACP messages are JSON-RPC 2.0, like Codex's, but carry `"jsonrpc": "2.0"`. The recorder's own markers are `out`
 lines whose message is `{"_recorder": "..."}`, as in the Codex recordings.
@@ -468,8 +522,10 @@ again after any new recording, and read the result before committing.
 - A rate limit, an expired sign-in, and a harness crash
 - Claude Code stopped while it is in the middle of writing a reply
 - A file attachment other than an image
-- Pi; OpenCode through its own HTTP interface
+- OpenCode through its own HTTP interface
 - OpenCode over ACP with an image, an MCP server, a slash command, a changed setting, steering, and a subagent
+- Pi with images, a tool other than its four default ones, a change of model, and an extension that asks for
+  text
 - Hermes with media, reactions, scheduled jobs and its message tools
 - OpenClaw with media, polls, threads, scheduled jobs, subagents, plugin approvals and the pairing code exchange
 - For both gateways: resuming an older session, compacting, and a standing approval or a changed setting across

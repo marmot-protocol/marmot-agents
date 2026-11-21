@@ -71,6 +71,19 @@ class Node:
 def kind_of(rec: dict) -> str:
     m = rec["msg"]
     arrow = "client to harness" if rec["dir"] == "out" else "harness to client"
+    if "via" not in rec and "type" in m:  # Pi's RPC records
+        name = str(m["type"])
+        if m["type"] == "response":
+            name += f" to {m.get('command')}" + ("" if m.get("success") else " (refused)")
+        elif m["type"] in ("message_start", "message_end") and isinstance(m.get("message"), dict):
+            name += f" [{m['message'].get('role')}]"
+        elif m["type"] == "message_update":
+            name += f" [{(m.get('assistantMessageEvent') or {}).get('type')}]"
+        elif m["type"] in ("extension_ui_request", "extension_ui_response"):
+            name += f" [{m.get('method', 'answer')}]"
+        return f"{arrow}: {name}"
+    if "_recorder" in m:
+        return f"{arrow}: recorder note"
     if "method" in m and "via" not in rec:  # Codex JSON-RPC
         item = (m.get("params") or {}).get("item") if isinstance(m.get("params"), dict) else None
         name = m["method"] + (f" [{item['type']}]" if isinstance(item, dict) and item.get("type") else "")

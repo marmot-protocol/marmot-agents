@@ -74,7 +74,9 @@ See [`reference/harness-interfaces.md`](reference/harness-interfaces.md).
 What the Codex driver builds on is replaced by
 [D-055](#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own): types of its own, and neither
 OpenAI's protocol crates nor `codex-codes`. The Cursor row is replaced by
-[D-080](#d-080-cursor-is-driven-through-acp): Cursor goes through the ACP driver.
+[D-080](#d-080-cursor-is-driven-through-acp): Cursor goes through the ACP driver. What the Pi driver builds on
+is replaced by [D-086](#d-086-the-pi-driver-reads-pis-rpc-messages-with-types-of-its-own): Pi's records read
+with types of its own, not `pi-codes`.
 
 ## D-006 Prefer official interfaces and libraries
 
@@ -1452,6 +1454,21 @@ credential in the container.
 
 Decided 2026-11-21. The project owner accepted the recommendation.
 
+
+## D-086 The Pi driver reads Pi's RPC messages with types of its own
+
+**Decision.** The Pi driver keeps each record from `pi --mode rpc` as the text it arrived as, and reads it as
+JSON in this repository's own code, with no library between. It does not link `pi-codes`. The interface is
+still Pi's own RPC mode. This replaces what the Pi row of [D-005](#d-005-which-driver-each-harness-gets) says
+the driver builds on.
+
+**Why.** `pi-codes` 1.6.0 keeps up with Pi, but its client runs only a `pi` found on the path, where the driver
+runs Pi through a script that starts a container, one per chat. It sends one command at a time, cannot answer
+Pi's extension UI requests, and never reads Pi's standard error. Its typed records lose the exact text that each
+event's native message must carry ([D-059](#d-059-eight-points-about-what-an-agent-event-carries)). The
+reasoning is the same as for Codex ([D-055](#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own)),
+and so is the cost: nothing fails to compile when Pi changes a record, and a new recording, replayed in CI, is
+what shows it. See [the comparison](reference/harness-interfaces.md#pi-which-library-to-build-on).
 
 ## D-087 The core settles a request whose effect never shows
 
