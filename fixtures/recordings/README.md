@@ -479,9 +479,10 @@ whose message has `_recorder` is a note the recorder wrote: Pi's version, or tha
 
 `codex/expected/` holds, for each Codex recording, the agent events the Codex driver must produce from it, one
 per line, as the Rust item types write them. `claude/expected/` holds the same for the Claude Code driver,
-`expected/` under each `acp` folder for the ACP driver, and `pi/expected/` for the Pi driver. The prototype writes
+`expected/` under each `acp` folder for the ACP driver, `pi/expected/` for the Pi driver, and
+`openclaw/expected/` for the OpenClaw plugin. The prototype writes
 them (`python3 tools/prototype/translate.py --expected fixtures/recordings/codex`, and the same with the other
-folders), and CI checks that they are current.
+folders), and CI checks that they are current and that the core reads every event in them.
 
 ACP messages are JSON-RPC 2.0, like Codex's, but carry `"jsonrpc": "2.0"`. The recorder's own markers are `out`
 lines whose message is `{"_recorder": "..."}`, as in the Codex recordings.

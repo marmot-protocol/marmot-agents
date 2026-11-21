@@ -1,0 +1,22 @@
+{
+  "id": "marmot",
+  "name": "Marmot",
+  "description": "Marmot group chats, through marmot-agent.",
+  "activation": { "onStartup": true, "onChannels": ["marmot"] },
+  "channels": ["marmot"],
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} },
+  "channelConfigs": {
+    "marmot": {
+      "label": "Marmot",
+      "description": "Marmot group chats, through the marmot-agent core on this machine.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "home": { "type": "string", "description": "The agent's home, which holds the core's socket and the connector's token" }
+        }
+      }
+    }
+  }
+}

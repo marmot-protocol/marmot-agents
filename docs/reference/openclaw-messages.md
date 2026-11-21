@@ -867,3 +867,26 @@ Two points for the people deciding, not for the connector:
   OpenClaw's `commands.allowFrom`. Whether that is acceptable is the owner's choice of OpenClaw configuration,
   under [D-021](../decisions.md#d-021-approval-behaviour-belongs-to-the-harness). A connector's installer
   would have to know it.
+
+## Found while building the plugin
+
+Added on 2026-11-21, while the plugin in [`packages/openclaw`](../../packages/openclaw) was made to pass its
+end-to-end scenario, with the same release, 2026.11.5. These were seen in that scenario's runs, and read in the
+plugin's debug file and OpenClaw's own log. They are not in a committed recording.
+
+- **A command with `&&` or `>>` is refused, not asked about**, under `tools.exec.mode: ask` with approvals
+  forwarded. `echo ran >> runs.txt && sleep 30` failed at once with `Exec denied (SYSTEM_RUN_DENIED: approval
+  cannot safely bind this command)`, and no approval was raised. `sh slow.sh` was asked about as usual.
+- **A gateway that was killed keeps its state locked against a gateway in another container.** OpenClaw
+  recovers a dead owner's lock by itself only in the same PID namespace or after a reboot; a new container has
+  neither, and waits for `openclaw gateway recover-lock`. The plugin's `run.sh` names the container after its
+  state folder, so Docker allows one at a time, and its entrypoint then recovers the lock.
+- **Onboarding names the main agent's workspace too**, under `agents.entries.main.workspace`, and that wins over
+  `agents.defaults.workspace`.
+- **The press's result says which way it went.** `resolveApprovalOverGateway` returned `applied`, and an
+  `approval` with `status: "allowed"` and `decision: "allow-once"`, then OpenClaw called `buildResolvedPayload`
+  and sent the resolved text through `message.send.payload`.
+- **When the plugin answers `authorizeActorAction` with `authorized: true`**, the press is applied; the plugin
+  answers so only for the sender whose answer the core sent.
+- **The free model endpoint refused often** with 503 and 522, which OpenClaw reports as `overloaded`. It then
+  tries the fallback models in `agents.defaults.model.fallbacks`, and the turn went on.

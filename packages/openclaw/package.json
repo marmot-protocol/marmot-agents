@@ -1,0 +1,48 @@
+{
+  "name": "marmot-agent-openclaw",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The OpenClaw plugin for marmot-agent: a channel inside OpenClaw that connects it to the core over the local socket",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\"",
+    "check": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ],
+    "channel": {
+      "id": "marmot",
+      "label": "Marmot",
+      "blurb": "Marmot group chats, through marmot-agent."
+    },
+    "install": {
+      "minHostVersion": ">=2026.11.5"
+    },
+    "compat": {
+      "pluginApi": ">=2026.11.5"
+    }
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json"
+  ],
+  "peerDependencies": {
+    "openclaw": ">=2026.11.5"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2"
+  }
+}

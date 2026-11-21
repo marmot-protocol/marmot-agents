@@ -12,10 +12,11 @@ checks them: `marmot-agent-events`, the agent event and its eleven item types; `
 a driver implements; `marmot-agent-codex`, the Codex driver, which runs Codex and translates both ways, with
 subagents switched off for now; and `marmot-agent`, the core, which runs one agent's account through MDK and
 drives Codex, with a test that runs it end to end on MDK's test relay. The core also serves a local socket, and
-`packages/claude-code` is the Claude Code driver, a TypeScript program that drives Claude Code through it. `marmot-agent-acp`
-is the ACP driver, replayed against the OpenCode, Goose and Cursor recordings. `marmot-agent-pi` is the Pi
-driver, built into the core like Codex's, which runs Pi in a container from `tools/pi`. What is
-built next, and in what order, is in
+`packages/claude-code` is the Claude Code driver, a TypeScript program that drives Claude Code through it, and
+`packages/openclaw` is the OpenClaw plugin, a channel that runs inside OpenClaw, in a container, and connects to
+it. `marmot-agent-acp` is the ACP driver, replayed against the OpenCode, Goose and Cursor recordings.
+`marmot-agent-pi` is the Pi driver, built into the core like Codex's, which runs Pi in a container from
+`tools/pi`. What is built next, and in what order, is in
 [`docs/plan.md`](docs/plan.md). The core program is called `marmot-agent`
 ([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and
 decisions under `docs/`, plus recorded harness sessions and the tools that made them. The connectors that ship
@@ -57,6 +58,8 @@ being replaced by what is designed here, not extended.
 | Work on the Claude Code driver's translation | `packages/claude-code/src/translate.ts`, after `fixtures/recordings/claude` and its `expected/` events |
 | Work on the Claude Code driver's transport | `packages/claude-code/src/connector.ts`, after `docs/design/drivers.md` and `docs/design/socket-protocol.md` |
 | Work on the ACP driver | `crates/marmot-agent-acp`, after `fixtures/recordings/acp` and its `expected/` events |
+| Work on the OpenClaw plugin's translation | `packages/openclaw/src/translate.ts`, after `fixtures/recordings/openclaw` and its `expected/` events |
+| Work on the OpenClaw plugin's transport or its container | `packages/openclaw/src/connector.ts` and `src/index.ts`, after `docs/design/drivers.md` and `docs/reference/openclaw-messages.md` |
 | Work on the core | `crates/marmot-agent`, after `docs/plan.md` and `docs/design/architecture.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Change the link check | `lychee.toml` |
@@ -236,15 +239,15 @@ install it, say so in the pull request and let CI run the check.
 The settings are in `lychee.toml`. The check covers links inside the repository, and the headings they name.
 It does not fetch web addresses; check those by hand.
 
-For any change under `packages/claude-code`, with Node 24 (CI uses the version named in
-`.github/workflows/ci.yml`):
+For any change under `packages/claude-code` or `packages/openclaw`, in that package, with Node 24 (CI uses the
+version named in `.github/workflows/ci.yml`):
 
 ```sh
-cd packages/claude-code
+cd packages/claude-code   # or packages/openclaw
 npm ci
 npm run check   # tsc --noEmit
-npm test        # replays every Claude Code recording against its expected events, and runs the transport
-                # against a fake core and a fake SDK
+npm test        # replays every recording of that harness against its expected events, and runs the
+                # transport against fakes: a fake core and a fake SDK, or a fake OpenClaw
 ```
 
 For a change to a diagram, which CI does not check:
@@ -273,6 +276,7 @@ python3 tools/prototype/translate.py --expected fixtures/recordings/acp/opencode
 python3 tools/prototype/translate.py --expected fixtures/recordings/acp/goose --check     # and again
 python3 tools/prototype/translate.py --expected fixtures/recordings/acp/cursor --check    # and again
 python3 tools/prototype/translate.py --expected fixtures/recordings/pi --check      # the Pi driver's
+python3 tools/prototype/translate.py --expected fixtures/recordings/openclaw --check  # the OpenClaw plugin's
 ```
 
 The `--check` over the eight folders must end with "native messages with no translation: none". If you change
@@ -280,8 +284,10 @@ the event model, change `tools/prototype/translate.py` to match and run it again
 
 The Codex driver is tested against `fixtures/recordings/codex/expected`, the Claude Code driver against
 `fixtures/recordings/claude/expected`, the ACP driver against `expected/` in each folder under
-`fixtures/recordings/acp`, and the Pi driver against `fixtures/recordings/pi/expected`. The prototype writes all
-four. When the prototype's output for one harness
+`fixtures/recordings/acp`, the Pi driver against `fixtures/recordings/pi/expected`, and the OpenClaw plugin
+against `fixtures/recordings/openclaw/expected`. The prototype writes them all, and
+`crates/marmot-agent-events/tests/expected.rs` checks that the core reads every event in them. When the
+prototype's output for one harness
 changes on purpose, write them again with `python3 tools/prototype/translate.py --expected` and that folder,
 such as `fixtures/recordings/codex`, and commit them. Never write them
 again only to make the driver's test pass: when the two disagree, the recording and the event model decide

@@ -92,13 +92,20 @@ jobs:
       - name: The Pi driver's expected events are what the prototype writes
         run: python3 tools/prototype/translate.py --expected fixtures/recordings/pi --check
 
+      - name: The OpenClaw plugin's expected events are what the prototype writes
+        run: python3 tools/prototype/translate.py --expected fixtures/recordings/openclaw --check
+
   typescript:
-    name: TypeScript
+    name: TypeScript (${{ matrix.package }})
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [claude-code, openclaw]
     defaults:
       run:
-        working-directory: packages/claude-code
+        working-directory: packages/${{ matrix.package }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -127,7 +134,7 @@ jobs:
       - name: Types
         run: npm run check
 
-      - name: The Claude Code translator replays every recording
+      - name: The translator replays every recording, and the transport runs against fakes
         run: npm test
 
   documents:
