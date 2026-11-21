@@ -581,6 +581,45 @@ async fn a_send_is_looked_for_before_it_is_given_up() {
     world.runtime.shutdown().await;
 }
 
+// A group the agent accepts is read from its start, and the mark that says so is on disk before
+// the agent accepts: a save that fails stops the core before it accepts, and a message sent to the
+// group meanwhile still reaches the driver once the core starts again, never skipped as history.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_group_is_read_from_its_start_after_a_failed_save() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, _events, _) = stub(false);
+    // The save that fails is the first that marks a group to be read from its start.
+    let (store, failed) = Store::failing_when(world.state.path(), |kept| {
+        kept.read.values().any(|&m| m == 0)
+    });
+    let core = world.start_with(driver, store);
+    let group = world
+        .runtime
+        .start_direct_conversation(&world.person, &world.agent)
+        .await
+        .unwrap();
+    assert!(
+        core.stops_within(20).await,
+        "the core stops when it cannot save"
+    );
+    assert!(failed.load(SeqCst));
+    assert!(core.ended().await.is_err());
+    world
+        .runtime
+        .send_message(&world.person, &group, b"hello".to_vec())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let (driver, _events, seen) = stub(false);
+    let core = world.start(driver);
+    let prompts = || seen.lock().unwrap().prompts.clone();
+    within(20, || (prompts() == ["hello"]).then_some(())).await;
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
 /// What the agent sent to a chat, of one kind, as its own storage has it: what the core handed
 /// MDK, whether or not the person has it yet.
 fn sent_by_core(chat: &Chat<'_>, kind: u64) -> Vec<marmot_app::AppMessageRecord> {

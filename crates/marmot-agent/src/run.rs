@@ -445,18 +445,32 @@ impl<D: Driver> Core<D> {
 
     /// Accepts an invitation from someone who may add the agent, and declines the rest. A group
     /// the agent has just joined is read from its start: the agent cannot read anything sent
-    /// before it joined, so everything stored is for it.
+    /// before it joined, so everything stored is for it. The mark that says so is saved before
+    /// the agent accepts, so a crash in between never leaves a group accepted with no mark, which
+    /// would start it at its latest message and skip what arrived meanwhile.
     async fn consider_invitations(&mut self) -> Result<(), Unsaved> {
-        let mut joined = false;
-        for (group, welcomer) in self.marmot.invitations() {
-            let allowed = welcomer.as_ref().is_some_and(|w| self.config.may_invite(w));
-            if self.marmot.decide(&group, allowed).await.is_ok() && allowed {
-                self.read.insert(group, 0);
-                joined = true;
+        let invitations: Vec<(GroupKey, bool)> = (self.marmot.invitations().into_iter())
+            .map(|(group, welcomer)| {
+                let allowed = welcomer.as_ref().is_some_and(|w| self.config.may_invite(w));
+                (group, allowed)
+            })
+            .collect();
+        let accepting: Vec<&GroupKey> = (invitations.iter())
+            .filter(|(_, allowed)| *allowed)
+            .map(|(group, _)| group)
+            .collect();
+        if !accepting.is_empty() {
+            for group in accepting {
+                self.read.insert(group.clone(), 0);
             }
+            self.save()?;
+        }
+        let mut joined = false;
+        for (group, allowed) in invitations {
+            // A mark left for an invitation not accepted is never read: only accepted groups are.
+            joined |= self.marmot.decide(&group, allowed).await.is_ok() && allowed;
         }
         if joined {
-            self.save()?;
             self.catch_up().await?;
         }
         Ok(())
