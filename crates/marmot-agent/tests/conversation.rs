@@ -806,3 +806,36 @@ fn a_closed_turn_still_names_its_message() {
     let (_, _, closed) = the_item(talk.ended());
     assert_eq!(closed.started_by, Some(EventKey::from("e1")));
 }
+
+// A remark the harness makes while it works is marked so it does not alert; the answer is not
+// (D-078).
+#[test]
+fn a_remark_is_marked_and_the_answer_is_not() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let said = |item: &str, phase| {
+        let message = Message {
+            phase: Some(phase),
+            parent: None,
+        };
+        event(item, State::Done, Body::Message(message))
+    };
+    let remark = |acts: Vec<Act>| match acts.into_iter().next() {
+        Some(Act::Send {
+            what: Sending::Words { remark, .. },
+            ..
+        }) => remark,
+        other => panic!("no words: {other:?}"),
+    };
+    assert!(remark(
+        talk.emitted(emitted(&chat, said("m1", body::Phase::Commentary)))
+    ));
+    assert!(!remark(
+        talk.emitted(emitted(&chat, said("m2", body::Phase::Final)))
+    ));
+    let tags = carrier::words_tags(None, true);
+    assert_eq!(
+        tags,
+        vec![vec!["phase".to_string(), "commentary".to_string()]]
+    );
+}

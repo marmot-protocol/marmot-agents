@@ -142,6 +142,9 @@ pub enum Sending {
         text: String,
         /// The turn they belong to.
         turn: Option<TurnId>,
+        /// Whether the harness marked them as a remark made while it works, which does not
+        /// alert (D-078).
+        remark: bool,
         /// The message they replace, when the words changed after they were sent.
         edit: Option<EventKey>,
     },
@@ -600,6 +603,7 @@ impl Conversation {
                     key: key.clone(),
                     text,
                     turn: header.turn.clone(),
+                    remark: message.phase == Some(marmot_agent_events::body::Phase::Commentary),
                     edit: record.first.clone(),
                 })
             }
