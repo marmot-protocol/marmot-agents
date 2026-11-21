@@ -7,7 +7,9 @@
 //!
 //! Nothing half done is ever under a final name: the copy is made in a private folder beside the
 //! home, put on disk, checked, and only then renamed into place, never over anything already
-//! there. The settings file is published the same way.
+//! there; where the file system cannot rename without the risk of replacing, a file is put in
+//! place by a link that is made only where nothing is, and a folder is not put in place at all.
+//! The settings file is published the same way.
 
 use std::fs;
 use std::io::{self, Read, Write};
@@ -28,6 +30,24 @@ pub struct Copied {
     pub left_out: u64,
 }
 
+/// Why a backup or a file could not be put in place.
+#[derive(Debug)]
+pub enum Failed {
+    /// Nothing is under the final name, and what was made on the way is removed.
+    NotMade(io::Error),
+    /// It is in place under its final name, but whether that reached the disk could not be
+    /// confirmed.
+    Unconfirmed(io::Error),
+}
+
+impl std::fmt::Display for Failed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotMade(e) | Self::Unconfirmed(e) => write!(f, "{e}"),
+        }
+    }
+}
+
 /// Where the backup of `home` goes: beside it, named after it and the time, such as
 /// `codex.backup-20261121T093000Z`.
 pub fn place_for(home: &Path, at: SystemTime) -> PathBuf {
@@ -39,15 +59,17 @@ pub fn place_for(home: &Path, at: SystemTime) -> PathBuf {
 }
 
 /// Copies `home` to `to`, which must not exist, owner-only, and checks the copy. The copy is
-/// made beside `to` under a name of its own, and removed if anything fails.
-pub fn take(home: &Path, to: &Path) -> io::Result<Copied> {
+/// made beside `to` under a name of its own, and removed if anything fails before it is in place.
+pub fn take(home: &Path, to: &Path) -> Result<Copied, Failed> {
     if fs::symlink_metadata(to).is_ok() {
-        return Err(io::Error::new(
+        return Err(Failed::NotMade(io::Error::new(
             io::ErrorKind::AlreadyExists,
             "the backup folder is already there",
-        ));
+        )));
     }
-    let partial = partial_beside(to)?;
+    let partial = partial_beside(to).map_err(Failed::NotMade)?;
+    // Opened before anything is put in place, so the one step left afterwards is the sync.
+    let folder = folder_of(to).map_err(Failed::NotMade)?;
     let made = (|| {
         let mut copied = Copied::default();
         copy_folder(home, &partial, &mut copied)?;
@@ -55,20 +77,22 @@ pub fn take(home: &Path, to: &Path) -> io::Result<Copied> {
         if checked != copied {
             return Err(io::Error::other("the backup does not match the home"));
         }
-        rename_new(&partial, to)?;
-        sync_parent(to)?;
+        rename_new(&partial, to, true)?;
         Ok(copied)
     })();
-    if made.is_err() {
+    let copied = made.map_err(|e| {
         let _ = fs::remove_dir_all(&partial);
-    }
-    made
+        Failed::NotMade(e)
+    })?;
+    folder.sync_all().map_err(Failed::Unconfirmed)?;
+    Ok(copied)
 }
 
 /// Writes `bytes` to `to`, owner-only, through a file of its own beside it that is put on disk
 /// first, and never over a file already there.
-pub fn publish_file(to: &Path, bytes: &[u8]) -> io::Result<()> {
-    let partial = partial_beside(to)?;
+pub fn publish_file(to: &Path, bytes: &[u8]) -> Result<(), Failed> {
+    let partial = partial_beside(to).map_err(Failed::NotMade)?;
+    let folder = folder_of(to).map_err(Failed::NotMade)?;
     let made = (|| {
         let mut file = fs::OpenOptions::new()
             .write(true)
@@ -77,13 +101,13 @@ pub fn publish_file(to: &Path, bytes: &[u8]) -> io::Result<()> {
             .open(&partial)?;
         file.write_all(bytes)?;
         file.sync_all()?;
-        rename_new(&partial, to)?;
-        sync_parent(to)
+        rename_new(&partial, to, false)
     })();
-    if made.is_err() {
+    made.map_err(|e| {
         let _ = fs::remove_file(&partial);
-    }
-    made
+        Failed::NotMade(e)
+    })?;
+    folder.sync_all().map_err(Failed::Unconfirmed)
 }
 
 /// What a partial copy of `to` is called: hidden, beside it, and unique to this run, so one an
@@ -120,29 +144,43 @@ pub fn partials_of(home: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// Renames `from` to `to`, failing if `to` is there.
-fn rename_new(from: &Path, to: &Path) -> io::Result<()> {
+/// Renames `from`, a folder when `folder` is set and a file otherwise, to `to`, failing if `to`
+/// is there.
+fn rename_new(from: &Path, to: &Path, folder: bool) -> io::Result<()> {
     use rustix::fs::{CWD, RenameFlags, renameat_with};
     match renameat_with(CWD, from, CWD, to, RenameFlags::NOREPLACE) {
         Ok(()) => Ok(()),
-        // A file system that cannot refuse to replace: look first. A folder is never renamed
-        // over one that holds anything.
+        // A file system, or a system, that cannot refuse to replace.
         Err(e) if e == rustix::io::Errno::INVAL || e == rustix::io::Errno::NOSYS => {
-            if fs::symlink_metadata(to).is_ok() {
-                return Err(io::ErrorKind::AlreadyExists.into());
-            }
-            fs::rename(from, to)
+            put_in_place_without_rename(from, to, folder)
         }
         Err(e) => Err(e.into()),
     }
 }
 
-/// Puts the entry for `path` in its folder on disk.
-fn sync_parent(path: &Path) -> io::Result<()> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::other("the path has no folder"))?;
-    fs::File::open(parent)?.sync_all()
+/// Where renaming cannot refuse to replace: looking first and then renaming would replace what
+/// appeared in between, so a file is put in place by a link, which is made only where nothing
+/// is, and a folder is not put in place at all.
+fn put_in_place_without_rename(from: &Path, to: &Path, folder: bool) -> io::Result<()> {
+    if folder {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this file system cannot rename a folder without the risk of replacing another",
+        ));
+    }
+    fs::hard_link(from, to)?;
+    // In place already; a partial name left behind is only untidy.
+    let _ = fs::remove_file(from);
+    Ok(())
+}
+
+/// The folder `path` is in, open; `.` for a bare name.
+fn folder_of(path: &Path) -> io::Result<fs::File> {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => fs::File::open(parent),
+        Some(_) => fs::File::open("."),
+        None => Err(io::Error::other("the path has no folder")),
+    }
 }
 
 fn new_private_folder(path: &Path) -> io::Result<()> {
@@ -204,24 +242,30 @@ fn check_folder(home: &Path, copy: &Path, seen: &mut Copied) -> io::Result<()> {
     if fs::symlink_metadata(copy)?.permissions().mode() & 0o077 != 0 {
         return Err(differs("a folder others can read"));
     }
-    let originals = sorted_entries(home)?;
-    let mut copies: Vec<_> = sorted_entries(copy)?
-        .into_iter()
-        .map(|e| e.file_name())
-        .collect();
-    for entry in originals {
+    // What the copy should hold, everything but special files, against what it holds: both in
+    // name order, so one pass finds an entry missing or added.
+    let mut kept = Vec::new();
+    for entry in sorted_entries(home)? {
+        let kind = fs::symlink_metadata(entry.path())?.file_type();
+        if kind.is_symlink() || kind.is_dir() || kind.is_file() {
+            kept.push((entry, kind));
+        } else {
+            seen.left_out += 1;
+        }
+    }
+    let copies = sorted_entries(copy)?;
+    if kept.len() != copies.len()
+        || kept
+            .iter()
+            .zip(&copies)
+            .any(|((a, _), b)| a.file_name() != b.file_name())
+    {
+        return Err(differs("an entry missing, or one the home does not have"));
+    }
+    for (entry, kind) in kept {
         let source = entry.path();
         let target = copy.join(entry.file_name());
-        let kind = fs::symlink_metadata(&source)?.file_type();
-        let special = !(kind.is_symlink() || kind.is_dir() || kind.is_file());
-        if special {
-            seen.left_out += 1;
-            continue;
-        }
-        copies.retain(|name| *name != entry.file_name());
-        let target_kind = fs::symlink_metadata(&target)
-            .map_err(|_| differs("a missing entry"))?
-            .file_type();
+        let target_kind = fs::symlink_metadata(&target)?.file_type();
         if kind.is_symlink() {
             if !target_kind.is_symlink() || fs::read_link(&source)? != fs::read_link(&target)? {
                 return Err(differs("a link"));
@@ -242,9 +286,6 @@ fn check_folder(home: &Path, copy: &Path, seen: &mut Copied) -> io::Result<()> {
             seen.bytes += same_bytes(&source, &target)?;
             seen.files += 1;
         }
-    }
-    if !copies.is_empty() {
-        return Err(differs("an entry the home does not have"));
     }
     Ok(())
 }
@@ -402,10 +443,60 @@ mod tests {
             fs::metadata(&to).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        let again = publish_file(&to, b"two").unwrap_err();
+        let Failed::NotMade(again) = publish_file(&to, b"two").unwrap_err() else {
+            panic!("published over the file");
+        };
         assert_eq!(again.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(fs::read(&to).unwrap(), b"one");
         let left: Vec<_> = fs::read_dir(root.path()).unwrap().collect();
         assert_eq!(left.len(), 1, "no partial file is left");
+    }
+
+    /// Where renaming cannot refuse to replace, nothing already there is replaced: a file goes
+    /// in by a link, which fails on anything there, and a folder does not go in at all.
+    #[test]
+    fn without_a_safe_rename_nothing_is_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let (from, to) = (root.path().join("partial"), root.path().join("final"));
+        fs::write(&from, b"new").unwrap();
+        fs::write(&to, b"there first").unwrap();
+        let err = put_in_place_without_rename(&from, &to, false).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&to).unwrap(), b"there first");
+        fs::remove_file(&to).unwrap();
+        put_in_place_without_rename(&from, &to, false).unwrap();
+        assert_eq!(fs::read(&to).unwrap(), b"new");
+        assert!(!from.exists());
+
+        let (from, to) = (root.path().join("dir.partial"), root.path().join("dir"));
+        fs::create_dir(&from).unwrap();
+        let err = put_in_place_without_rename(&from, &to, true).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+        assert!(!to.exists());
+    }
+
+    /// A bare file name is in the working folder, which is what is put on disk after it.
+    #[test]
+    fn a_bare_name_is_in_the_working_folder() {
+        assert!(folder_of(Path::new("imported.toml")).is_ok());
+        assert!(folder_of(Path::new("/")).is_err());
+    }
+
+    #[test]
+    fn a_copy_with_an_entry_missing_or_added_fails_the_check() {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("codex");
+        fs::create_dir(&home).unwrap();
+        fs::write(home.join("a"), b"a").unwrap();
+        fs::write(home.join("b"), b"b").unwrap();
+        let to = place_for(&home, UNIX_EPOCH);
+        take(&home, &to).unwrap();
+        fs::write(to.join("c"), b"c").unwrap();
+        fs::set_permissions(to.join("c"), fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(check(&home, &to).is_err(), "an entry added");
+        fs::remove_file(to.join("c")).unwrap();
+        check(&home, &to).unwrap();
+        fs::remove_file(to.join("b")).unwrap();
+        assert!(check(&home, &to).is_err(), "an entry missing");
     }
 }

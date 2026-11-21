@@ -328,8 +328,9 @@ struct Senders {
     from: Vec<String>,
 }
 
-/// Reads the old install, changing nothing, and works out what the import will do.
-pub fn plan(options: &Options) -> Result<Plan, String> {
+/// Reads the old install, changing nothing, and works out what the import will do. `services`
+/// is asked how the old services ran.
+pub fn plan(options: &Options, services: &mut dyn Services) -> Result<Plan, String> {
     let home = &options.home;
     if !home.is_dir() {
         return Err("the old home is not a folder".into());
@@ -362,7 +363,17 @@ pub fn plan(options: &Options) -> Result<Plan, String> {
         &places.systemd_units,
         &places.launch_agents,
         &places.user_home,
+        services,
     );
+    if let Some((name, doubt)) = found
+        .iter()
+        .filter(|s| s.role != Role::Other)
+        .find_map(|s| Some((&s.name, s.doubt.as_ref()?)))
+    {
+        return Err(format!(
+            "{name} runs the old connector on this home, but how it ran cannot be read for              certain: {doubt}. Write its settings out plainly in its unit (no `$` references or              patterns, every environment file readable), run `systemctl --user daemon-reload` and              restart it, then run the import again; or remove it if it is not in use. Nothing              was changed"
+        ));
+    }
     let (others, services): (Vec<Service>, Vec<Service>) =
         found.into_iter().partition(|s| s.role == Role::Other);
     let unnamed: Vec<&str> = others
@@ -537,7 +548,9 @@ pub fn plan(options: &Options) -> Result<Plan, String> {
                 .collect();
             let mut from = "the old service's command line";
             if relays.is_empty()
-                && let Some(list) = service.env("MARMOT_RELAYS")
+                && let Some(list) = service
+                    .env("MARMOT_RELAYS")
+                    .or_else(|| service.env("MARMOT_RELAY"))
             {
                 relays = csv(list);
                 from = "the old service's environment";
@@ -559,7 +572,10 @@ pub fn plan(options: &Options) -> Result<Plan, String> {
         }
     };
     if relays.is_empty() {
-        return Err("the old service ran with no relays".into());
+        return Err(
+            "the old service ran with no relays (`--no-default-relays` and none named), so it              was offline; the core needs relays. Nothing was changed"
+                .into(),
+        );
     }
 
     let backup = backup::place_for(home, options.now);
@@ -631,8 +647,9 @@ pub fn plan(options: &Options) -> Result<Plan, String> {
 }
 
 /// The folders the agent may send files from: the old connector's `--media-allowed-root`
-/// folders, never the working folder by default, and never one that holds the account home or
-/// its backup, or lies inside the home (D-090).
+/// folders, never the working folder by default, and never one that is, holds or lies inside
+/// the account home or its backup (D-090). Each is found as `wn-agent` found it: its `..` taken
+/// away by the words first, then its links followed; one `wn-agent` could not find is left out.
 fn files_from(
     service: Option<&Service>,
     home: &Path,
@@ -655,7 +672,11 @@ fn files_from(
             refused += 1;
             continue;
         }
-        let path = resolve(path);
+        // `link/../out` is `out` beside the link, not beside where the link leads.
+        let Ok(path) = std::fs::canonicalize(lexical(path)) else {
+            refused += 1;
+            continue;
+        };
         let overlaps = |other: &Path| path.starts_with(other) || other.starts_with(&path);
         if overlaps(&home) || overlaps(&backup) {
             refused += 1;
@@ -680,11 +701,28 @@ fn files_from(
     }
     if refused > 0 {
         not_mapped.push(format!(
-            "{refused} of the old connector's media folders were left out, being relative, or \
-             holding the account home or its backup, or lying inside the home"
+            "{refused} of the old connector's media folders were left out, being relative, not \
+             there, or being, holding or lying inside the account home or its backup"
         ));
     }
     kept
+}
+
+/// A path with `.` and `..` taken away by the words alone, as `wn-agent` takes them away before
+/// it follows any link.
+fn lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 /// Which connector the home belongs to, and how that was told.
@@ -1017,13 +1055,9 @@ fn read_senders(
             // Every place the harness's settings are kept: each service that runs it, as it
             // ran, and the env file in the home. Only who all of them allow is kept.
             let mut sources: Vec<(String, Result<BTreeSet<PubKey>, &'static str>)> = Vec::new();
+            // A service whose environment could not be read in full has stopped the plan.
             for service in services.iter().filter(|s| runs_harness(s, terminal)) {
-                let read = if service.env_unreadable {
-                    Err("needs an environment file that cannot be read")
-                } else {
-                    read(&service.env)
-                };
-                sources.push((format!("the service {}", service.name), read));
+                sources.push((format!("the service {}", service.name), read(&service.env)));
             }
             let file = home.join(format!("dev/wn-{}.env", terminal.name()));
             if let Ok(text) = std::fs::read_to_string(&file) {
@@ -1204,13 +1238,31 @@ fn settings_text(plan: &Plan, now: SystemTime) -> String {
     text + "\n" + &plan.section
 }
 
+/// `text` as one word for a POSIX shell: as it is when that is safe, else in single quotes.
+fn shell(text: &str) -> String {
+    let plain = !text.is_empty()
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_./:=@%+,-".contains(&b));
+    if plain {
+        text.to_string()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
+
+fn shell_path(path: &Path) -> String {
+    shell(&path.to_string_lossy())
+}
+
 fn next_steps(plan: &Plan, cwd: &str) -> Vec<String> {
-    let run = format!("marmot-agent run {}", plan.settings.display());
+    let run = format!("marmot-agent run {}", shell_path(&plan.settings));
     let mut next = vec![format!("start the agent: `{run}`")];
     match plan.connector {
         Connector::Claude => next.push(format!(
-            "start the Claude Code driver: `node packages/claude-code/src/main.ts --home {} --cwd {cwd}`",
-            plan.home.display()
+            "start the Claude Code driver: `node packages/claude-code/src/main.ts --home {} --cwd {}`",
+            shell_path(&plan.home),
+            shell(cwd)
         )),
         Connector::Hermes => next.push(
             "put the new Hermes plugin (python/marmot_hermes) in Hermes in place of the old \
@@ -1288,10 +1340,12 @@ impl Plan {
     }
 }
 
-/// Carries out the plan: stops and disables the old services, takes the home's runtime lease,
+/// Carries out the plan made from `options`: stops and disables the old services, takes the
+/// home's runtime lease, reads the old install again and checks it still makes the same plan,
 /// backs up the home and writes the settings, saying what it did as it goes. Stops at the first
 /// step that fails, and says what was done.
 pub fn carry_out(
+    options: &Options,
     plan: &Plan,
     services: &mut dyn Services,
     out: &mut dyn Write,
@@ -1302,10 +1356,15 @@ pub fn carry_out(
     let mut stopped = Vec::new();
     for service in &plan.services {
         if let Err(why) = services.stop_and_disable(service) {
+            // It may be stopped or disabled in part, so it is started again with the rest.
+            let mut touched = stopped.clone();
+            touched.push(service);
             return Err(format!(
-                "{} could not be stopped and disabled: {why}. {}Nothing was copied or written",
+                "{} could not be stopped and disabled: {why}; it may be stopped or disabled in \
+                 part. {}To run the old install again, {}. Nothing was copied or written",
                 service.name,
-                stopped_so_far(&stopped)
+                already(&stopped),
+                start_again(touched)
             ));
         }
         say(
@@ -1343,11 +1402,35 @@ pub fn carry_out(
             stopped_so_far(&stopped)
         ));
     }
-    let copied = backup::take(&plan.home, &plan.backup).map_err(|e| {
+    // The old programs could change what they allow as they stop, such as the welcomers wn-agent
+    // keeps in the home; read with them stopped and the home held, it must make the same plan.
+    let again = self::plan(options, services).map_err(|why| {
         format!(
-            "the backup failed ({e}), and what was copied is removed. {}Nothing was written",
+            "read again with the old services stopped, the install does not make a plan: {why}. \
+             {}Nothing was copied or written",
             stopped_so_far(&stopped)
         )
+    })?;
+    if again.settings_text != plan.settings_text || again.services != plan.services {
+        return Err(format!(
+            "the old install changed while its services stopped, so it no longer makes the plan \
+             shown. {}Run the import again to see the plan it makes now; nothing was copied or \
+             written",
+            stopped_so_far(&stopped)
+        ));
+    }
+    let copied = backup::take(&plan.home, &plan.backup).map_err(|failed| match failed {
+        backup::Failed::NotMade(e) => format!(
+            "the backup failed ({e}), and what was copied is removed. {}Nothing was written",
+            stopped_so_far(&stopped)
+        ),
+        backup::Failed::Unconfirmed(e) => format!(
+            "the backup is in place in {}, but whether it reached the disk could not be \
+             confirmed ({e}). {}The settings were not written; run the import again, which \
+             takes a new backup",
+            plan.backup.display(),
+            stopped_so_far(&stopped)
+        ),
     })?;
     say(
         out,
@@ -1358,13 +1441,22 @@ pub fn carry_out(
             copied.bytes
         ),
     );
-    backup::publish_file(&plan.settings, plan.settings_text.as_bytes()).map_err(|e| {
-        format!(
-            "the settings could not be written ({}); the backup is kept in {}. {}",
-            e.kind(),
-            plan.backup.display(),
-            stopped_so_far(&stopped)
-        )
+    backup::publish_file(&plan.settings, plan.settings_text.as_bytes()).map_err(|failed| {
+        match failed {
+            backup::Failed::NotMade(e) => format!(
+                "the settings could not be written ({}); the backup is kept in {}. {}",
+                e.kind(),
+                plan.backup.display(),
+                stopped_so_far(&stopped)
+            ),
+            backup::Failed::Unconfirmed(e) => format!(
+                "the settings are written to {}, but whether they reached the disk could not be \
+                 confirmed ({}); run `sync` before starting the core. The backup is in {}",
+                plan.settings.display(),
+                e.kind(),
+                plan.backup.display()
+            ),
+        }
     })?;
     say(
         out,
@@ -1394,11 +1486,13 @@ fn start_again(services: Vec<&Service>) -> String {
         .iter()
         .rev()
         .map(|s| match s.manager {
-            services::Manager::Systemd => format!("`systemctl --user enable --now {}`", s.name),
+            services::Manager::Systemd => {
+                format!("`systemctl --user enable --now {}`", shell(&s.name))
+            }
             services::Manager::Launchd => format!(
                 "`launchctl enable gui/$(id -u)/{0}` and `launchctl bootstrap gui/$(id -u) {1}`",
-                s.name,
-                s.file.display()
+                shell(&s.name),
+                shell_path(&s.file)
             ),
         })
         .collect();
@@ -1409,14 +1503,22 @@ fn start_again(services: Vec<&Service>) -> String {
     }
 }
 
-fn stopped_so_far(stopped: &[&Service]) -> String {
+/// The services already stopped and disabled, as a sentence; nothing when there are none.
+fn already(stopped: &[&Service]) -> String {
     if stopped.is_empty() {
         return String::new();
     }
     let names: Vec<&str> = stopped.iter().map(|s| s.name.as_str()).collect();
+    format!("Already stopped and disabled: {}. ", names.join(", "))
+}
+
+fn stopped_so_far(stopped: &[&Service]) -> String {
+    if stopped.is_empty() {
+        return String::new();
+    }
     format!(
-        "Already stopped and disabled: {}; to run the old install again, {}. ",
-        names.join(", "),
+        "{}To run the old install again, {}. ",
+        already(stopped),
         start_again(stopped.to_vec())
     )
 }
@@ -1489,6 +1591,11 @@ mod tests {
         let path = root.join("units").join(name);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, text).unwrap();
+    }
+
+    /// The plan, with no systemd to ask: the units' files are read.
+    fn plan(options: &Options) -> Result<Plan, String> {
+        super::plan(options, &mut Noted(Vec::new()))
     }
 
     fn plan_err(options: &Options) -> String {
@@ -1694,7 +1801,7 @@ mod tests {
         assert!(plan_err(&options(root.path(), &home)).contains("--owner"));
         let mut named = options(root.path(), &home);
         named.owner = Some(p[0].clone());
-        let voided = super::plan(&named).unwrap();
+        let voided = self::plan(&named).unwrap();
         assert_eq!(voided.prompt, Who::Owner);
         assert!(
             voided
@@ -1734,7 +1841,114 @@ mod tests {
                 .any(|l| l.starts_with("3 of the old"))
         );
         let config = Config::parse(&plan.settings_text).unwrap();
-        assert_eq!(config.file_folders(), [out]);
+        assert_eq!(config.file_folders(), std::slice::from_ref(&out));
+
+        // wn-agent takes `..` away by the words before it follows a link: `link/../out` is the
+        // `out` beside the link, never one beside where the link leads, and `link/../codex/dev`
+        // is inside the home wherever the link leads.
+        let elsewhere = root.path().join("elsewhere");
+        std::fs::create_dir_all(elsewhere.join("sub")).unwrap();
+        std::fs::create_dir_all(elsewhere.join("out")).unwrap();
+        std::fs::create_dir_all(elsewhere.join("codex/dev")).unwrap();
+        std::os::unix::fs::symlink(elsewhere.join("sub"), root.path().join("link")).unwrap();
+        std::fs::remove_dir_all(home.join("dev/agent-allowlist")).ok();
+        welcomers(&home, &ids[0], "allowlist", &p);
+        unit(
+            root.path(),
+            "wn-agent-codex.service",
+            &format!(
+                "[Service]\nExecStart=/x/wn-agent --home {h} --relay wss://a \
+                 --media-allowed-root {r}/link/../out --media-allowed-root {r}/link/../codex/dev \
+                 --media-allowed-root {r}/link/../missing\n"
+            ),
+        );
+        let plan = self::plan(&options(root.path(), &home)).unwrap();
+        assert_eq!(plan.files_from, [out.to_string_lossy()]);
+        assert!(
+            plan.not_mapped
+                .iter()
+                .any(|l| l.starts_with("2 of the old"))
+        );
+    }
+
+    /// A service of the old connector whose settings systemd fills in only as it starts it, or
+    /// that cannot be read in full, stops the plan, saying what to do.
+    #[test]
+    fn a_doubtful_service_stops_the_plan() {
+        let root = tempfile::tempdir().unwrap();
+        let (home, ids) = home_with(root.path(), "codex", &["codex-harness-agent"]);
+        let p = people(root.path(), 1);
+        welcomers(&home, &ids[0], "allowlist", &p);
+        codex_env(&home, &p);
+        let h = home.display();
+        for text in [
+            format!("ExecStart=/x/wn-agent --home {h} --media-allowed-root ${{MEDIA}}"),
+            "ExecStart=/x/wn-agent --home ${HOME_DIR}".to_string(),
+            format!("Environment=MARMOT_HOME={h}\nEnvironmentFile=%h/*.env\nExecStart=/x/wn-codex"),
+            format!(
+                "Environment=MARMOT_HOME={h}\nEnvironmentFile=%h/gone.env\nExecStart=/x/wn-codex"
+            ),
+        ] {
+            unit(root.path(), "wn-x.service", &format!("[Service]\n{text}\n"));
+            let why = plan_err(&options(root.path(), &home));
+            assert!(
+                why.contains("wn-x.service") && why.contains("daemon-reload"),
+                "{text}: {why}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_offline_connector_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let (home, ids) = home_with(root.path(), "codex", &["codex-harness-agent"]);
+        let p = people(root.path(), 1);
+        welcomers(&home, &ids[0], "allowlist", &p);
+        codex_env(&home, &p);
+        let h = home.display();
+        unit(
+            root.path(),
+            "wn-agent-codex.service",
+            &format!("[Service]\nExecStart=/x/wn-agent --home {h} --no-default-relays\n"),
+        );
+        assert!(plan_err(&options(root.path(), &home)).contains("no relays"));
+        // `MARMOT_RELAY`, the older name, still names relays.
+        unit(
+            root.path(),
+            "wn-agent-codex.service",
+            &format!(
+                "[Service]\nEnvironment=MARMOT_RELAY=wss://old\n\
+                 ExecStart=/x/wn-agent --home {h} --no-default-relays\n"
+            ),
+        );
+        assert_eq!(
+            plan(&options(root.path(), &home)).unwrap().relays,
+            ["wss://old"]
+        );
+    }
+
+    #[test]
+    fn printed_commands_quote_their_paths() {
+        assert_eq!(shell("/a/b-c_d.toml"), "/a/b-c_d.toml");
+        assert_eq!(shell("/my agents/it's"), "'/my agents/it'\\''s'");
+        assert_eq!(shell(""), "''");
+        let root = tempfile::tempdir().unwrap();
+        let (home, _) = home_with(root.path(), "my claude", &["claude-harness-agent"]);
+        let mut asked = options(root.path(), &home);
+        asked.owner = Some(people(root.path(), 1).remove(0));
+        asked.cwd = Some("/w $x".into());
+        let plan = plan(&asked).unwrap();
+        let h = home.display();
+        assert!(
+            plan.next[0].ends_with(&format!("run '{h}/marmot-agent.toml'`")),
+            "{:?}",
+            plan.next
+        );
+        assert!(
+            plan.next[1].contains(&format!("--home '{h}' --cwd '/w $x'")),
+            "{:?}",
+            plan.next
+        );
     }
 
     #[test]
@@ -1797,13 +2011,17 @@ mod tests {
         assert!(plan_err(&unknown).contains("--harness"));
     }
 
-    /// The services the tests stop: none really, each noted.
+    /// The services the tests stop: none really, each noted. There is no systemd to ask.
     struct Noted(Vec<String>);
 
     impl Services for Noted {
         fn stop_and_disable(&mut self, service: &Service) -> Result<(), String> {
             self.0.push(service.name.clone());
             Ok(())
+        }
+
+        fn systemd_unit(&mut self, _: &str) -> Option<Result<services::Loaded, String>> {
+            None
         }
     }
 
@@ -1816,16 +2034,121 @@ mod tests {
         let plan = plan(&asked).unwrap();
         // Held as wn-agent or a core holds it, with no socket to find it by.
         let held = marmot_app::MarmotRootRuntimeLease::try_acquire(&home).unwrap();
-        let why = carry_out(&plan, &mut Noted(Vec::new()), &mut Vec::new()).unwrap_err();
+        let why = carry_out(&asked, &plan, &mut Noted(Vec::new()), &mut Vec::new()).unwrap_err();
         assert!(why.contains("runtime lease"), "{why}");
         assert!(!plan.backup.exists() && !plan.settings.exists());
         assert!(backup::partials_of(&home).is_empty());
 
         drop(held);
-        carry_out(&plan, &mut Noted(Vec::new()), &mut Vec::new()).unwrap();
+        carry_out(&asked, &plan, &mut Noted(Vec::new()), &mut Vec::new()).unwrap();
         assert!(plan.backup.is_dir() && plan.settings.is_file());
         // Released once done, for the core.
         drop(marmot_app::MarmotRootRuntimeLease::try_acquire(&home).unwrap());
+    }
+
+    /// Stops services as told, and as the first one stops, changes what the install allows, as
+    /// wn-agent could on its way down.
+    struct Changing {
+        stopped: Vec<String>,
+        fail: Option<&'static str>,
+        on_stop: Option<Box<dyn FnMut()>>,
+    }
+
+    impl Services for Changing {
+        fn stop_and_disable(&mut self, service: &Service) -> Result<(), String> {
+            if self.fail == Some(service.name.as_str()) {
+                return Err("systemd does not report it stopped".into());
+            }
+            self.stopped.push(service.name.clone());
+            if let Some(mut change) = self.on_stop.take() {
+                change();
+            }
+            Ok(())
+        }
+
+        fn systemd_unit(&mut self, _: &str) -> Option<Result<services::Loaded, String>> {
+            None
+        }
+    }
+
+    /// A Codex install with both its services, for carrying out.
+    fn installed(root: &Path) -> (PathBuf, Vec<String>, Vec<String>) {
+        let (home, ids) = home_with(root, "codex", &["codex-harness-agent"]);
+        let p = people(root, 2);
+        welcomers(&home, &ids[0], "allowlist", &p[..1]);
+        codex_env(&home, &p[..1]);
+        let h = home.display();
+        unit(
+            root,
+            "wn-agent-codex.service",
+            &format!("[Service]\nExecStart=/x/wn-agent --home {h} --relay wss://a\n"),
+        );
+        unit(
+            root,
+            "wn-codex.service",
+            &format!(
+                "[Service]\nEnvironment=MARMOT_HOME={h}\n\
+                 Environment=WN_CODEX_ALLOWED_SENDERS_HEX={}\nExecStart=/x/wn-codex\n",
+                p[0]
+            ),
+        );
+        (home, ids, p)
+    }
+
+    #[test]
+    fn an_install_that_changes_as_it_stops_is_not_carried_out() {
+        let root = tempfile::tempdir().unwrap();
+        let (home, ids, p) = installed(root.path());
+        let asked = options(root.path(), &home);
+        let plan = plan(&asked).unwrap();
+        let (home2, agent, person) = (home.clone(), ids[0].clone(), p[1].clone());
+        let mut services = Changing {
+            stopped: Vec::new(),
+            fail: None,
+            on_stop: Some(Box::new(move || {
+                welcomers(&home2, &agent, "allowlist", std::slice::from_ref(&person));
+            })),
+        };
+        let why = carry_out(&asked, &plan, &mut services, &mut Vec::new()).unwrap_err();
+        assert!(why.contains("enable --now wn-agent-codex.service"), "{why}");
+        assert!(why.contains("Nothing was copied"), "{why}");
+        assert!(!plan.backup.exists() && !plan.settings.exists());
+
+        // Unchanged, it goes ahead.
+        welcomers(&home, &ids[0], "allowlist", &p[..1]);
+        let mut services = Changing {
+            stopped: Vec::new(),
+            fail: None,
+            on_stop: None,
+        };
+        carry_out(&asked, &plan, &mut services, &mut Vec::new()).unwrap();
+        assert!(plan.settings.is_file());
+    }
+
+    /// A service that may be stopped or disabled in part is started again with the rest.
+    #[test]
+    fn a_service_that_fails_to_stop_is_in_the_restart_steps() {
+        let root = tempfile::tempdir().unwrap();
+        let (home, _, _) = installed(root.path());
+        let asked = options(root.path(), &home);
+        let plan = plan(&asked).unwrap();
+        let mut services = Changing {
+            stopped: Vec::new(),
+            fail: Some("wn-agent-codex.service"),
+            on_stop: None,
+        };
+        let why = carry_out(&asked, &plan, &mut services, &mut Vec::new()).unwrap_err();
+        assert!(
+            why.contains(
+                "`systemctl --user enable --now wn-agent-codex.service`, then \
+                 `systemctl --user enable --now wn-codex.service`"
+            ),
+            "{why}"
+        );
+        assert!(
+            why.contains("Already stopped and disabled: wn-codex.service"),
+            "{why}"
+        );
     }
 
     #[test]

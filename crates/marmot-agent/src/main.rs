@@ -20,7 +20,7 @@ use marmot_agent_acp::Acp;
 use marmot_agent_codex::Codex;
 use marmot_agent_pi::Pi;
 use marmot_app::AccountSetupRequest;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
@@ -229,13 +229,19 @@ fn import(home: &str, rest: &[String]) -> Result<(), String> {
             "--harness" => options.harness = Some(value()?),
             "--owner" => options.owner = Some(value()?),
             "--cwd" => options.cwd = Some(value()?),
-            "--settings" => options.settings = Some(PathBuf::from(value()?)),
+            "--settings" => {
+                // Whole, so the commands printed afterwards work from any folder.
+                let settings = std::path::absolute(value()?)
+                    .map_err(|_| "the settings' path could not be read")?;
+                options.settings = Some(settings);
+            }
             "--leave-running" => options.leave_running.push(value()?),
             "--dry-run" => dry_run = true,
             _ => return Err(format!("`{flag}` is not an option of import")),
         }
     }
-    let plan = import::plan(&options)?;
+    let mut services = import::services::System::default();
+    let plan = import::plan(&options, &mut services)?;
     let mut out = std::io::stdout();
     plan.print(&mut out)
         .map_err(|_| "the plan could not be printed")?;
@@ -244,5 +250,5 @@ fn import(home: &str, rest: &[String]) -> Result<(), String> {
         return Ok(());
     }
     println!();
-    import::carry_out(&plan, &mut import::services::System, &mut out)
+    import::carry_out(&options, &plan, &mut services, &mut out)
 }

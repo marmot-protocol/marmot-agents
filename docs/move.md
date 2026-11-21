@@ -2,8 +2,9 @@
 
 Status: describes `marmot-agent import` as built
 ([D-089](decisions.md#d-089-an-install-moves-over-by-importing-its-account-home-in-place)). How the old
-allow-lists become the new settings, who becomes the owner unasked, `files_from`, `--leave-running`, and what
-the import does with a home that holds several identities, are proposals until the project owner accepts them.
+allow-lists become the new settings, who becomes the owner unasked, `files_from` (and the core refusing to
+start when one overlaps the home), `--leave-running`, and what the import does with a home that holds several
+identities, are proposals until the project owner accepts them.
 
 One of today's connectors (installed by MDK's `install-*-marmot.sh`) moves to the core without anyone inviting
 the agent again. The core uses the old account home where it is, so the agent keeps its identity, its keys, its
@@ -41,8 +42,12 @@ encryption state and its chats.
 
    It stops only services that run the old connector's own programs (`wn-agent` and the `wn-<harness>`
    programs), whatever the unit is called. Anything else that names the home, such as a backup job, is listed
-   and the import refuses to go on until you stop it yourself or say it may keep running with
-   `--leave-running <name>`.
+   and the import refuses to go on until you say it may keep running with `--leave-running <name>`. The import
+   finds services by their unit files, not by whether they run, so stopping such a service yourself is not
+   enough: pass `--leave-running <name>` for it as well, or remove its unit file.
+
+   Before it copies anything, with the old services stopped and the home held, it reads the install again; if
+   the old allow-lists changed as the services stopped, it stops there and says how to start them again.
 
 3. Start the core with those settings, as the import tells you: `marmot-agent run
    ~/.marmot-agents/codex/marmot-agent.toml`. For Claude Code, start its driver too; for Hermes and OpenClaw,
@@ -70,8 +75,13 @@ the last message for that reason. Do not import while people are writing to the 
 
 The rule is that nobody may do more afterwards than the old install let them:
 
-- The settings are read as the old programs ran with them: a systemd unit with its drop-ins and the files its
-  `EnvironmentFile=` lines name, and each list parsed as the old program parsed it. A list the old program
+- The settings are read as the old programs ran with them: a systemd unit as systemd itself has it loaded
+  (asked through `busctl --user`, so every drop-in, continued line and `UnsetEnvironment=` counts), with the
+  files its `EnvironmentFile=` lines name, and each list parsed as the old program parsed it. A unit whose
+  command line has `$` references, which systemd fills in only as it starts the service, one that names an
+  environment file by a pattern or needs one that cannot be read, and one whose files changed since systemd
+  read them, stop the import: make it plain, run `systemctl --user daemon-reload`, restart it, and import
+  again. A list the old program
   would have refused, such as a harness list with an npub in it or an OpenClaw policy with one bad entry,
   allowed nobody, and so does the import.
 - Where a list is kept in several places, such as the harness service and `dev/wn-<harness>.env`, only the
@@ -82,8 +92,10 @@ The rule is that nobody may do more afterwards than the old install let them:
   install let exactly that one person both invite and prompt the agent; otherwise it asks for `--owner`, and
   says what the named owner may now do that they could not before. The same key given once in hex and once
   as an npub is one person.
-- `files_from` lists only the old media folders, and never one that holds the home or its backup, or lies
-  inside the home. The working folder is never allowed by default.
+- `files_from` lists only the old media folders, each found as `wn-agent` found it (`..` taken away before
+  links are followed), and never one that is, holds or lies inside the home or its backup. The working folder
+  is never allowed by default. The core checks `files_from` against the home again each time it starts, and
+  refuses to start if a folder has come to overlap it.
 
 Who may approve is the owner alone, the default
 ([D-010](decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)). The harness works in one

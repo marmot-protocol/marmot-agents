@@ -10,7 +10,7 @@ use common::{Echo, eventually, within};
 use marmot_account::AccountHome;
 use marmot_agent::PubKey;
 use marmot_agent::config::Config;
-use marmot_agent::import::services::{Service, Services};
+use marmot_agent::import::services::{Loaded, Service, Services};
 use marmot_agent::import::{self, Connector, Options, Places};
 use marmot_agent::marmot::{self, Marmot};
 use marmot_agent::rights::Who;
@@ -27,6 +27,7 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 
 /// The service managers, as the tests see them: each service stopped and disabled is noted.
+/// There is no systemd to ask, so the units' files are read.
 #[derive(Default)]
 struct Noted(Vec<String>);
 
@@ -34,6 +35,10 @@ impl Services for Noted {
     fn stop_and_disable(&mut self, service: &Service) -> Result<(), String> {
         self.0.push(service.name.clone());
         Ok(())
+    }
+
+    fn systemd_unit(&mut self, _: &str) -> Option<Result<Loaded, String>> {
+        None
     }
 }
 
@@ -139,18 +144,40 @@ async fn old_connector() {
     agent_connector::serve_socket(config).await.unwrap();
 }
 
-/// One request to the old connector's socket, as its clients make them, and its answer.
-async fn ask(socket: &Path, request: AgentControlRequest) -> Option<AgentControlResponse> {
-    let stream = tokio::net::UnixStream::connect(socket).await.ok()?;
+/// Why a request to the old connector has no answer.
+#[derive(Debug)]
+enum Unanswered {
+    /// Nothing listens on the socket yet: the request was never sent.
+    NotListening,
+    /// It was sent, and no answer came in time: what it asked may or may not have been done.
+    NoAnswer,
+}
+
+/// One request to the old connector's socket, as its clients make them, and its answer, waited
+/// for up to 30 seconds.
+async fn ask(
+    socket: &Path,
+    request: AgentControlRequest,
+) -> Result<AgentControlResponse, Unanswered> {
+    let stream = tokio::net::UnixStream::connect(socket)
+        .await
+        .map_err(|_| Unanswered::NotListening)?;
     let (read, mut write) = stream.into_split();
     let envelope = AgentControlEnvelope::request(Some("1".into()), request);
-    agent_control::write_frame(&mut write, &envelope)
+    let exchange = async {
+        agent_control::write_frame(&mut write, &envelope)
+            .await
+            .ok()?;
+        let mut read = tokio::io::BufReader::new(read);
+        let answer: AgentControlEnvelope<AgentControlResponse> =
+            agent_control::read_envelope(&mut read).await.ok()??;
+        Some(answer.payload)
+    };
+    tokio::time::timeout(Duration::from_secs(30), exchange)
         .await
-        .ok()?;
-    let mut read = tokio::io::BufReader::new(read);
-    let answer: AgentControlEnvelope<AgentControlResponse> =
-        agent_control::read_envelope(&mut read).await.ok()??;
-    Some(answer.payload)
+        .ok()
+        .flatten()
+        .ok_or(Unanswered::NoAnswer)
 }
 
 /// The texts of the chat as the old connector has stored them, once it is in the chat.
@@ -163,7 +190,7 @@ async fn timeline(socket: &Path, agent: &str, group: &str) -> Option<Vec<String>
         before_inclusive: false,
         limit: Some(50),
     };
-    match ask(socket, request).await? {
+    match ask(socket, request).await.ok()? {
         AgentControlResponse::TimelinePage { messages, .. } => {
             Some(messages.into_iter().filter_map(|m| m.text).collect())
         }
@@ -207,10 +234,16 @@ async fn an_imported_codex_install_keeps_its_identity_and_its_chat() {
     };
     let mut agent = None;
     for _ in 0..600 {
-        if let Some(AgentControlResponse::AccountCreated { account }) = ask(&socket, create()).await
-        {
-            agent = Some(account.account_id_hex);
-            break;
+        match ask(&socket, create()).await {
+            Ok(AgentControlResponse::AccountCreated { account }) => {
+                agent = Some(account.account_id_hex);
+                break;
+            }
+            // Not listening yet, or refused outright: nothing was made, so it may be asked again.
+            Ok(_) | Err(Unanswered::NotListening) => {}
+            // Sent and not answered: an identity may have been made, and a second would make the
+            // home one the core refuses. Never asked again.
+            Err(Unanswered::NoAnswer) => panic!("the old connector did not answer AccountCreate"),
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -221,7 +254,7 @@ async fn an_imported_codex_install_keeps_its_identity_and_its_chat() {
     };
     assert!(matches!(
         ask(&socket, allow).await,
-        Some(AgentControlResponse::Allowlist { .. })
+        Ok(AgentControlResponse::Allowlist { .. })
     ));
 
     // The person starts a chat with it; it accepts, as the person is on its allow-list, and
@@ -288,7 +321,7 @@ async fn an_imported_codex_install_keeps_its_identity_and_its_chat() {
         places: places(root.path()),
         now: std::time::SystemTime::now(),
     };
-    let plan = import::plan(&options).unwrap();
+    let plan = import::plan(&options, &mut Noted::default()).unwrap();
     assert_eq!(plan.connector, Connector::Codex);
     assert_eq!(plan.owner.as_str(), person, "the one person allowed");
     assert_eq!(plan.prompt, Who::Owner, "the owner was the only sender");
@@ -306,7 +339,7 @@ async fn an_imported_codex_install_keeps_its_identity_and_its_chat() {
     // Carried out: the services stopped, harness first, the home backed up, the settings written.
     let mut services = Noted::default();
     let mut said = Vec::new();
-    import::carry_out(&plan, &mut services, &mut said).unwrap();
+    import::carry_out(&options, &plan, &mut services, &mut said).unwrap();
     assert_eq!(services.0, ["wn-codex.service", "wn-agent-codex.service"]);
     let units = root.path().join(".config/systemd/user");
     assert!(units.join("wn-agent-codex.service").exists(), "kept");
@@ -339,7 +372,7 @@ async fn an_imported_codex_install_keeps_its_identity_and_its_chat() {
         "the old connector sent no files"
     );
     // A second import of the same home is refused: its settings are there.
-    assert!(import::plan(&options).is_err());
+    assert!(import::plan(&options, &mut Noted::default()).is_err());
 
     // The core runs on the home in place, as the same identity, already in the chat. White
     // Noise's own relays are out of reach in a test.

@@ -161,8 +161,11 @@ Every name above can be changed when installing (`MARMOT_HOME`, `MARMOT_AGENT_LA
   `MarmotAppConfig::white_noise()`. One identity per home by default. Opening it takes MDK's root runtime
   lease (`MarmotRootRuntimeLease`, a lock on `.marmot-runtime.lock` in the home), held while `wn-agent` runs.
 - **Relays** are not in the home. They are `--relay` arguments on the `wn-agent` service's command line, each
-  split at commas, then `MARMOT_RELAYS`, then `wss://relay.eu.whitenoise.chat` and
-  `wss://relay.us.whitenoise.chat`.
+  split at commas, then `MARMOT_RELAYS` (or the older `MARMOT_RELAY` when `MARMOT_RELAYS` is not set), then
+  `wss://relay.eu.whitenoise.chat` and `wss://relay.us.whitenoise.chat`. With `--no-default-relays` and none
+  named, `wn-agent` runs with no relays at all, offline, which its help calls "Offline/test only"
+  (`resolve_relays` in `crates/agent-connector/src/bootstrap.rs`). The import refuses such an install, since
+  the core needs relays.
 - **Files `wn-agent` may send** come only from its `--media-allowed-root` folders, which may be repeated. With
   none, it sends no file. The installers set none.
 - **The invite allow-list** is `dev/agent-allowlist/<account id>.json` in the home: `account_id_hex`,
