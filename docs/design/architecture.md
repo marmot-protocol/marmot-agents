@@ -13,7 +13,7 @@ responsible for, and what happens during a turn.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../images/overview-dark.svg">
-  <img alt="People in a Marmot group reach agent harnesses through one core program. Codex, Pi and ACP harnesses use drivers built into the core. Claude Code, Cursor, Hermes and OpenClaw connect as separate programs over a local socket." src="../images/overview-light.svg">
+  <img alt="People in a Marmot group reach agent harnesses through one core program. Codex, Pi and ACP harnesses, Cursor among them, use drivers built into the core. Claude Code, Hermes and OpenClaw connect as separate programs over a local socket." src="../images/overview-light.svg">
 </picture>
 
 ### The core program
@@ -58,7 +58,7 @@ interface.
 
 Drivers written in Rust are compiled into the core. Everything else connects over a local socket:
 
-- the Claude Code and Cursor drivers, which are TypeScript programs built on the vendors' official SDKs;
+- the Claude Code driver, a TypeScript program built on Anthropic's official SDK;
 - the Hermes and OpenClaw plugins, which run inside those runtimes;
 - later, connectors written by other people.
 

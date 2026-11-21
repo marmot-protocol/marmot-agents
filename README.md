@@ -14,7 +14,7 @@ what it is doing, approve what it asks, and control it as fully as you could at 
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/overview-dark.svg">
-  <img alt="People in a Marmot group reach agent harnesses through one core program. Codex, Pi and ACP harnesses use drivers built into the core. Claude Code, Cursor, Hermes and OpenClaw connect as separate programs over a local socket." src="docs/images/overview-light.svg">
+  <img alt="People in a Marmot group reach agent harnesses through one core program. Codex, Pi and ACP harnesses, Cursor among them, use drivers built into the core. Claude Code, Hermes and OpenClaw connect as separate programs over a local socket." src="docs/images/overview-light.svg">
 </picture>
 
 ## The idea in four sentences

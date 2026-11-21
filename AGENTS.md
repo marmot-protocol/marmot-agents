@@ -62,9 +62,9 @@ being replaced by what is designed here, not extended.
 - One Rust **core program** holds the Marmot side (through MDK as a library) and the conversation handling.
 - Each harness has a **driver**: it speaks the harness's own interface and translates to shared Marmot agent
   events.
-- Rust drivers (Codex, Pi, ACP) are built into the core behind one trait. Claude Code and Cursor drivers are
-  TypeScript programs; Hermes and OpenClaw are plugins inside those runtimes. All four connect to the core over
-  a **local socket**.
+- Rust drivers (Codex, Pi, ACP) are built into the core behind one trait; Cursor uses the ACP one. The Claude
+  Code driver is a TypeScript program; Hermes and OpenClaw are plugins inside those runtimes. All three connect
+  to the core over a **local socket**.
 - Every agent event carries an item type from a shared vocabulary, a plain rendering, and the harness's native
   payload.
 

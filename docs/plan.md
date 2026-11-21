@@ -74,7 +74,8 @@ in TypeScript on the official SDK. **Done when** the same scenario passes with C
 
 ### M3: Every other harness, in parallel
 
-Pi (built in, Rust), the ACP driver for Goose and OpenCode (built in, Rust), Cursor (TypeScript), and the
+Pi (built in, Rust), the ACP driver for Goose, OpenCode and Cursor (built in, Rust,
+[D-080](decisions.md#d-080-cursor-is-driven-through-acp)), and the
 Hermes (Python) and OpenClaw (TypeScript) plugins. Each follows the Codex pattern: record scripted sessions,
 write the translation against the recordings, then the part that runs the harness, then the scenario. They are
 independent, so separate agents build them at the same time. Whose rules govern Hermes and OpenClaw
