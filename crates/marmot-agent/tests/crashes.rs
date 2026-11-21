@@ -538,6 +538,49 @@ async fn a_send_is_not_sent_again_when_mdk_cannot_be_asked() {
     went_out_before_a_crash(true).await;
 }
 
+// A send whose outcome is never known is given up in the end, but only after the core has looked
+// for its last try in what MDK stored: one that went out is taken as sent, and the chat is not
+// also told it failed (S1, S3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_is_looked_for_before_it_is_given_up() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, events, seen) = stub(false);
+    let store = Store::new(world.state.path());
+    let core = world.core(driver, store);
+    let core = world.run(core.unknown_sends(2, Duration::from_millis(300)));
+    let (chat, id) = a_chat(&world, &seen).await;
+    // The first try fails before MDK has it, without saying so; the last goes out, and MDK's
+    // reply is lost.
+    let timed_out = marmot_app::AppError::AccountWorkerResponseTimedOut;
+    world.marmot.faults.push(Fault::Refuse(timed_out));
+    world.marmot.faults.push(Fault::LoseReply);
+    let emit = |state| Emitted {
+        event: event("t", state, turn()),
+        chat: Some(id.clone()),
+        prompts: Vec::new(),
+        settles: Vec::new(),
+    };
+    events.send(emit(State::Running)).unwrap();
+    events.send(emit(State::Done)).unwrap();
+    within(30, || {
+        versions(&chat, "t").iter().find(|v| v.1 == 2).cloned()
+    })
+    .await;
+    let versions = versions(&chat, "t");
+    let firsts: Vec<&EventKey> = (versions.iter())
+        .filter(|v| v.1 == 1)
+        .map(|v| &v.0)
+        .collect();
+    assert_eq!(firsts.len(), 1, "the first version went out once");
+    let second = versions.iter().find(|v| v.1 == 2).unwrap();
+    assert_eq!(second.2.as_ref(), Some(firsts[0]), "and the next names it");
+    let failed = (chat.items().into_iter()).filter(|(_, r)| refused(&r.item.event).is_some());
+    assert_eq!(failed.count(), 0, "nothing said to have failed");
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
 /// What the agent sent to a chat, of one kind, as its own storage has it: what the core handed
 /// MDK, whether or not the person has it yet.
 fn sent_by_core(chat: &Chat<'_>, kind: u64) -> Vec<marmot_app::AppMessageRecord> {

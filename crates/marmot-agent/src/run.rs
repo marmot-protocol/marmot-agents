@@ -45,7 +45,8 @@ const SEND_WAIT_MAX: Duration = Duration::from_secs(10);
 /// it in what MDK stored and, not finding it, sends it again.
 const SETTLE: Duration = Duration::from_secs(15);
 
-/// How many times a send whose outcome is never known is tried before it is given up as refused.
+/// How many times a send whose outcome is never known is tried. After the last try it is looked
+/// for once more, when MDK has settled it, and only if it is not there is it given up as refused.
 const UNKNOWN_TRIES: u32 = 10;
 
 /// How many sends one group makes before the core turns to other work, so one chat's backlog, or
@@ -219,6 +220,10 @@ pub struct Core<D: Driver> {
     retry: HashMap<GroupKey, (Instant, Duration)>,
     /// Sends, by token, whose outcome is not known: they may have gone out.
     unknown: HashMap<String, Unknown>,
+    /// How long MDK is given to settle a send whose outcome is not known: [`SETTLE`].
+    settle: Duration,
+    /// How many times such a send is tried: [`UNKNOWN_TRIES`].
+    unknown_tries: u32,
 }
 
 impl<D: Driver> Core<D> {
@@ -257,7 +262,17 @@ impl<D: Driver> Core<D> {
                     (token, Unknown { settled, tries: 0 })
                 })
                 .collect(),
+            settle: SETTLE,
+            unknown_tries: UNKNOWN_TRIES,
         })
+    }
+
+    /// Sends whose outcome is not known are looked for after `settle`, and tried `tries` times:
+    /// for the tests, as the simulator will set them (`docs/design/verification.md`).
+    pub fn unknown_sends(mut self, tries: u32, settle: Duration) -> Self {
+        self.unknown_tries = tries;
+        self.settle = settle;
+        self
     }
 
     /// Runs until the driver ends or `stop` resolves. MDK's runtime must already have been
@@ -565,7 +580,7 @@ impl<D: Driver> Core<D> {
             let key = match &what {
                 Sending::Item { key, .. } | Sending::Words { key, .. } => key.clone(),
             };
-            if let Some(settled) = self.unknown.get(&token).map(|u| u.settled) {
+            if let Some(&Unknown { settled, tries }) = self.unknown.get(&token) {
                 let taken = |event: &crate::keys::EventKey| self.conversation.is_first(event);
                 match self.marmot.find_sent(group, &what, taken) {
                     Ok(Some(event)) => {
@@ -586,6 +601,12 @@ impl<D: Driver> Core<D> {
                     self.retry.insert(group.clone(), (settled, wait));
                     return Ok(());
                 }
+                if tries >= self.unknown_tries {
+                    // Tried as often as it is tried, and its last try is not in what MDK
+                    // stored: given up, as MDK refused it.
+                    self.give_up(&token, false)?;
+                    continue;
+                }
             }
             // Saved as tried before MDK has it, so a crash after leaves it to be looked for.
             if self.conversation.attempting(&token) {
@@ -599,28 +620,16 @@ impl<D: Driver> Core<D> {
                     self.save()?;
                 }
                 Err(error) => {
-                    let failed = match failed(&error) {
-                        Failed::Unknown => {
-                            let tries = self.unknown.get(&token).map_or(0, |u| u.tries) + 1;
-                            let settled = Instant::now() + SETTLE;
-                            self.unknown
-                                .insert(token.clone(), Unknown { settled, tries });
-                            if tries < UNKNOWN_TRIES {
-                                Failed::Unknown
-                            } else {
-                                Failed::Refused { gone: false }
-                            }
-                        }
-                        other => other,
-                    };
+                    let failed = failed(&error);
+                    if let Failed::Unknown = failed {
+                        // Looked for once MDK has settled it, and given up only after that.
+                        let tries = self.unknown.get(&token).map_or(0, |u| u.tries) + 1;
+                        let settled = Instant::now() + self.settle;
+                        self.unknown
+                            .insert(token.clone(), Unknown { settled, tries });
+                    }
                     match failed {
-                        Failed::Refused { gone } => {
-                            // MDK's own words can name a group, so they are not printed (D-071).
-                            eprintln!("marmot-agent: a send was refused; the chat is told");
-                            self.unknown.remove(&token);
-                            self.conversation.refused(&token, gone);
-                            self.save()?;
-                        }
+                        Failed::Refused { gone } => self.give_up(&token, gone)?,
                         Failed::Busy | Failed::Unknown => {
                             if matches!(failed, Failed::Unknown) {
                                 eprintln!("marmot-agent: a send failed; it will be tried again");
@@ -634,6 +643,16 @@ impl<D: Driver> Core<D> {
         }
         self.retry.remove(group);
         Ok(())
+    }
+
+    /// The send named `token` will not go out: the conversation drops it with a notice, or sends
+    /// an edit whose message is `gone` as a new message.
+    fn give_up(&mut self, token: &str, gone: bool) -> Result<(), Unsaved> {
+        // MDK's own words can name a group, so they are not printed (D-071).
+        eprintln!("marmot-agent: a send was refused; the chat is told");
+        self.unknown.remove(token);
+        self.conversation.refused(token, gone);
+        self.save()
     }
 
     /// The group's sends wait before they are tried again, longer each time.
