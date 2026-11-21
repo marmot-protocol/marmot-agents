@@ -63,6 +63,7 @@ being replaced by what is designed here, not extended.
 | Work on the Hermes plugin's transport | `python/marmot_hermes/connector.py` and `adapter.py`, after `docs/design/drivers.md` and `docs/reference/hermes-messages.md` |
 | Work on the core | `crates/marmot-agent`, after `docs/plan.md` and `docs/design/architecture.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
+| Plan or add tests, models or proofs | `docs/design/verification.md` |
 | Change the link check | `lychee.toml` |
 
 ## The shape, in brief
