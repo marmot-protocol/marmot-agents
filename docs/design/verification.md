@@ -1,8 +1,11 @@
 # Testing and verification
 
-Status: proposal, 2026-11-21, for the project owner. Nothing on this page is decided yet. The questions for the
-owner are [at the end](#for-the-owner-to-decide). It comes from reading all the code after M3 and the M4 work in
-progress, and from how MDK tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules).
+Status: the approach is decided
+([D-093](../decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top)), and
+so is the CI budget ([D-094](../decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)),
+on 2026-11-21. The property list, the models and the layers below are the plan; their details are internal and
+change as the work goes. It comes from reading all the code after M3 and the M4 work in progress, and from how MDK
+tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules).
 
 ## Why
 
@@ -183,10 +186,14 @@ The scenarios against real harnesses stay, and run nightly instead of only by ha
 
 ## In CI
 
+Pull requests keep CI under 15 minutes, by caching builds and running independent checks as parallel jobs
+([D-094](../decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)). Today it
+takes about 8 to 10.
+
 | When | What |
 | --- | --- |
-| Every pull request | Everything that runs today, the conformance suite, property tests at normal counts, the simulator on a fixed set of seeds, TLC on small bounds, Kani on the small proofs, the privacy scan |
-| Nightly | Property tests at high counts, the simulator on many new seeds, TLC on larger bounds, fuzzing, mutation testing, the real-harness scenarios |
+| Every pull request | Everything that runs today, the conformance suite, property tests at normal counts, the simulator on a fixed set of seeds, TLC on small bounds, Kani on the small proofs, the privacy scan, each in its own job |
+| Nightly | Property tests at high counts, the simulator on many new seeds, TLC on larger bounds, fuzzing, mutation testing, and the real-harness scenarios on numes.ai's free models, in a workflow that pull requests cannot reach |
 | Weekly | Long simulator campaigns |
 
 ## In what order
@@ -198,13 +205,13 @@ The scenarios against real harnesses stay, and run nightly instead of only by ha
 4. **Property tests, Kani proofs and fuzzing.**
 5. **Trace validation, mutation testing, the nightly lanes.**
 
-## For the owner to decide
+## Decided
 
-1. **TLA+ and TLC.** Recommended, to match MDK. The alternative is Quint, which has friendlier tooling and makes
-   traces for testing more easily, at the cost of a second tool across the two projects.
-2. **New development tools:** proptest, Kani, cargo-fuzz (which needs the nightly compiler, in its own CI job),
-   cargo-mutants, fast-check and hypothesis. None ships in the program. Recommended.
-3. **Running real harnesses nightly in CI** needs the numes key, and a Cursor or Claude Code sign-in, as CI
-   secrets. Recommended for the numes key only, in a separate workflow that pull requests cannot reach.
-4. **CI time:** about 15 more minutes on each pull request, and an hour or two each night. Recommended.
-5. **The order above,** with fixing what is known first. Recommended.
+1. TLA+ with TLC for the models, as MDK uses
+   ([D-093](../decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top)).
+2. The development tools: proptest, Kani, cargo-fuzz (on the nightly compiler, in its own job), cargo-mutants,
+   fast-check and hypothesis. None ships in the program.
+3. The real-harness scenarios run nightly on numes.ai, with its key as a CI secret in a workflow pull requests
+   cannot reach ([D-094](../decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)).
+4. Pull-request CI under 15 minutes, with caching and parallel jobs.
+5. The order above, fixing what is known first.
