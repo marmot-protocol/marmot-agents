@@ -160,8 +160,8 @@ session per chat:
   fresh one. `set` changes the permission mode or the model.
 - The event that shows an answer's or a control's effect names it
   ([D-028](../decisions.md#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)): the
-  approval's next edit, the end of the interrupted turn, the session item's next edit, or the end of the old
-  session.
+  approval's next edit, the end of the interrupted turn, the session item's edit that shows the new setting
+  (sent as soon as Claude Code takes it), or the end of the old session.
 
 Its capabilities: it can interrupt; a message sent during a turn ends the turn and starts another (`restart`,
 [D-040](../decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness)); the core names the

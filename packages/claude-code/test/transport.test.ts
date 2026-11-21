@@ -407,3 +407,48 @@ test("a session this connector has not seen is resumed with its own settings, an
   assert.equal(fresh.options["permissionMode"], "default");
   await done();
 });
+
+/** The value a session event shows for one setting. */
+function shows(e: Json, setting: string): unknown {
+  const settings = (e["body"] as Json)["settings"] as Json[];
+  return settings.find((s) => s["id"] === setting)?.["value"];
+}
+
+const ALICE = { id: "p1", name: "Alice" };
+
+test("a set settles on the session edit that shows its value, and not on an unrelated edit", async () => {
+  const { core, queries, done } = await start();
+  const { q } = await turn(core, queries);
+  let release!: () => void;
+  q.hold = new Promise((r) => (release = r));
+  const action = { type: "set", session: "s1", setting: "model", value: "model-b" };
+  const taken = core.request("control", { request: "x1", by: ALICE, action });
+  await until(() => q.sets.length === 1, "the switch");
+  // While the switch is under way the permission mode changes: the session item is edited.
+  q.say({ type: "system", subtype: "status", status: null, permissionMode: "acceptEdits", session_id: "s1", uuid: "u9" });
+  const unrelated = (e: Json) => e["type"] === "session" && shows(e, "permission_mode") === "acceptEdits";
+  await until(() => core.event(unrelated) !== undefined, "the unrelated edit");
+  assert.equal("settles" in core.event(unrelated)!, false);
+  release();
+  assert.deepEqual((await taken)["result"], {});
+  const switched = (e: Json) => e["type"] === "session" && shows(e, "model") === "model-b";
+  await until(() => core.event(switched) !== undefined, "the switch shown");
+  assert.deepEqual(core.event(switched)!["settles"], ["x1"]);
+  await done();
+});
+
+test("a model switch between turns shows and settles at once", async () => {
+  const { core, queries, done } = await start();
+  const { q } = await turn(core, queries);
+  q.say(DONE);
+  await until(() => core.event((e) => e["type"] === "turn" && e["state"] === "done") !== undefined, "the turn's end");
+  const action = { type: "set", session: "s1", setting: "model", value: "model-b" };
+  assert.deepEqual((await core.request("control", { request: "x2", by: ALICE, action }))["result"], {});
+  assert.deepEqual(q.sets, ["model=model-b"]);
+  const switched = (e: Json) => e["type"] === "session" && shows(e, "model") === "model-b";
+  await until(() => core.event(switched) !== undefined, "the switch shown");
+  const shown = core.event(switched)!;
+  assert.deepEqual(shown["settles"], ["x2"]);
+  assert.equal(shown["state"], "running");
+  await done();
+});

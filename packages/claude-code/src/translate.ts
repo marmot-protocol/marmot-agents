@@ -351,6 +351,18 @@ export class Translator {
     return this.shaped();
   }
 
+  /**
+   * Claude Code took a setting the transport changed: `setModel()` or `setPermissionMode()` resolved.
+   * It states the model only in its next init, which may be a long way off, so the driver shows the
+   * change itself, as an edit of the session item. Replays never call this.
+   */
+  changed(setting: "model" | "permission_mode", value: string): AgentEvent[] {
+    this.made = [];
+    this.settings[setting] = value;
+    this.announce("(none: a setting the driver changed)", {});
+    return this.shaped();
+  }
+
   /** Closes a running turn, and what is open in it, as cancelled. */
   private cancelTurn(): void {
     if (this.turn === null) return;

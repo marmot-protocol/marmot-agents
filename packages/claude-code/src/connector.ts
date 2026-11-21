@@ -113,6 +113,14 @@ interface Waiting {
   resolve: (result: PermissionResult) => void;
 }
 
+/** A `set` control on its way. */
+interface PendingSet {
+  request: string;
+  session: string;
+  setting: "model" | "permission_mode";
+  value: string;
+}
+
 /** One chat: its translator, its session, and what waits for an effect. */
 class Chat {
   readonly translator = new Translator();
@@ -130,8 +138,8 @@ class Chat {
   readonly byItem = new Map<string, string[]>();
   /** Interrupts, settled by the event that ends the turn. */
   readonly byTurn = new Map<string, string[]>();
-  /** Settings changed, settled by the next edit of the session's item. */
-  readonly bySession = new Map<string, string[]>();
+  /** Settings asked for, each settled by the first session event that shows that setting at that value. */
+  sets: PendingSet[] = [];
   /** New sessions with no session to end, settled by the next session item. */
   nextSession: string[] = [];
   /** Each session's settings, as its item last showed them. */
@@ -309,7 +317,7 @@ export class Connector {
     chat.prompts = [];
     chat.byItem.clear();
     chat.byTurn.clear();
-    chat.bySession.clear();
+    chat.sets = [];
   }
 
   /** Closes a query: its input first, then the process. */
@@ -478,17 +486,21 @@ export class Connector {
     // A setting that already has the value would show no change, and so nothing would settle it.
     if (chat.settings.get(session)?.get(setting) === value) throw new Refusal("nothing_to_do");
     const run = chat.run!;
-    if (request !== "") push(chat.bySession, session, request);
+    const pending: PendingSet = { request, session, setting, value };
+    if (request !== "") chat.sets.push(pending);
     const msg = setting === "model" ? { method: "setModel", model: value } : { method: "setPermissionMode", mode: value };
     this.feed(chat, { dir: "out", via: "call", msg });
     try {
       if (setting === "model") await run.q.setModel(value);
       else await run.q.setPermissionMode(value);
     } catch {
-      this.unsettle(chat.bySession, session, request);
+      chat.sets = chat.sets.filter((s) => s !== pending);
       throw new Refusal("failed");
     }
-    if (chat.run === run) this.feed(chat, { dir: "in", via: "call", msg: { method: msg.method, response: null } });
+    if (chat.run !== run) return;
+    this.feed(chat, { dir: "in", via: "call", msg: { method: msg.method, response: null } });
+    // Claude Code took it. Show it now: between turns nothing else would until the next one starts.
+    this.dispatch(chat, chat.translator.changed(setting, value));
   }
 
   private unsettle(map: Map<string, string[]>, key: string, request: string): void {
@@ -534,8 +546,11 @@ export class Connector {
       const open = event.state === "running" || event.state === "waiting";
       if (event.type === "turn" && !open) take(chat.byTurn, event.turn);
       if (event.type === "session") {
-        take(chat.bySession, event.session);
-        if (event.session !== undefined) chat.settings.set(event.session, settingValues(event.body));
+        const values = settingValues(event.body);
+        const shown = (s: PendingSet) => s.session === event.session && values.get(s.setting) === s.value;
+        settles.push(...chat.sets.filter(shown).map((s) => s.request));
+        chat.sets = chat.sets.filter((s) => !shown(s));
+        if (event.session !== undefined) chat.settings.set(event.session, values);
         settles.push(...chat.nextSession);
         chat.nextSession = [];
       }
