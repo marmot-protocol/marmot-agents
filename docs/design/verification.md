@@ -10,7 +10,8 @@ tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules)
 and waiting for the owner. Of the models, `CoreLifecycle` is built (2026-11-22); the others are planned. The
 conformance suite's first phase, for the built-in drivers, is built (2026-11-22); its second, for the socket
 connectors, is designed. The core's sends went over to MDK 0.19.0's token-based sends on 2026-11-22, which ends
-the duplicate a restart could make; how often a send is tried is provisional.
+the duplicate a restart could make; how often a send is tried is decided
+([D-109](../decisions.md#d-109-how-the-cores-sends-survive-a-crash-as-built)).
 
 ## Why
 
@@ -112,8 +113,8 @@ fixed on 2026-11-21, each with a test that failed first.
   is given up as not known, with a `failed` notice that says it may not have been delivered. The period read is
   the group's now; a period made longer after a send went out, while its outcome was not known, is not seen,
   and such a send could go out twice. That needs a lost answer or a crash, a restart later than the old period,
-  and the period changed in between; it is accepted as a limit, as a proposal for the owner, like those in
-  [D-096](../decisions.md#d-096-four-limits-of-the-core-that-the-simulator-and-the-model-accept).
+  and the period changed in between; it is accepted as a limit
+  ([D-109](../decisions.md#d-109-how-the-cores-sends-survive-a-crash-as-built)).
 
   **What a restart could not recover, until MDK 0.19.0.** Before, the core looked a send whose outcome was not
   known for in what MDK stored, by its id, version and first event for an item, and by its text and tags for the
