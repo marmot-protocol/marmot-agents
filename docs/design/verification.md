@@ -156,10 +156,12 @@ fixed on 2026-11-21, each with a test that failed first.
   history stored after a new prompt reached the driver; the second was taken only once the harness was up, so a
   prompt that came while it started was dropped; and a read that succeeded after failing jumped the mark past a
   prompt it had found, whose announcement then came too late. The simulator does not reach this: its groups always
-  start from an invitation, with a mark. The import test's check that the agent answers after the move now waits for
-  MDK: on an imported home, MDK at the revision the core uses delivers nothing sent once the core has started, even
-  after the pause meant to avoid [MDK #3602](https://github.com/marmot-protocol/mdk/issues/3602), and the check
-  passed before only because its message arrived in the second the core started, which is now history.
+  start from an invitation, with a mark. The import test's check that the agent answers after the move waited for
+  MDK: on an imported home, MDK up to 0.19.0 delivered nothing sent once the core had started, even after the pause
+  meant to avoid [MDK #3602](https://github.com/marmot-protocol/mdk/issues/3602), and the check passed before only
+  because its message arrived in the second the core started, which is now history. MDK's fix for #3602 is in the
+  revision the core uses since 2026-11-22 (`7f7dcc6ca`): the check passed 15 runs of 15 there and runs again, as do
+  the two tests of a core stopped just after, or five seconds after, a message (`tests/stop.rs`, each 15 of 15).
 - **A live notice could move the mark past a message** (S10, L3). **Fixed** on 2026-11-22, on MDK master after
   0.19.0 (`7f7dcc6ca`), which can page a chat forward from a saved place in the order messages were stored here
   ([MDK #3603](https://github.com/marmot-protocol/mdk/issues/3603)). The core moved a chat's read mark to the place of

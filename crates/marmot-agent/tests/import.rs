@@ -203,13 +203,11 @@ async fn an_imported_codex_install_keeps_its_identity_and_its_chat() {
     imported(false).await;
 }
 
-// As above, and then the person writes in the chat again, and the agent answers. MDK at the
-// revision the core uses delivers nothing sent to that chat once the core has started on the
-// home: in 7 runs of 7, waiting up to 300 s, with a pause of 5 s or 15 s before the old connector
-// stopped, and with the core before 2026-11-22 too. A message sent in the very second the core
-// started reaches it, some 20 s late, but that second is history to the core.
+// As above, and then the person writes in the chat again, and the agent answers. Up to MDK
+// 0.19.0, MDK delivered nothing sent to that chat once the core had started on the home (7 runs
+// of 7, waiting up to 300 s), for MDK #3602. On MDK's fix (#3608), in the revision the core uses
+// since 2026-11-22, it passed 15 runs of 15.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "MDK #3602: an imported home hears nothing sent after the core starts"]
 async fn an_imported_codex_install_answers_in_its_chat() {
     imported(true).await;
 }

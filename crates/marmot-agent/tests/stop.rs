@@ -1,7 +1,7 @@
 //! The core program stops when its service manager stops it, even while its harness is still
 //! starting: a stop during start-up is not left waiting for the harness to answer. A core stopped
 //! after a message arrives hears the chat again when it is started on the same home; stopped just
-//! after one, it does not yet, for MDK's #3602.
+//! after one, or just after one, does too, since MDK's fix for its #3602.
 
 mod common;
 
@@ -310,21 +310,19 @@ fn stored(dir: &Path, group_hex: &str) -> Vec<String> {
 
 // MDK's #3602: a home stopped just after a message arrives was deaf to that chat for the next
 // program that opened it, as seen with `wn-agent`. The core, stopped by SIGTERM the moment its
-// harness has a message, must hear the next one after it starts again. It does not, in a third
-// to a half of the runs (2 of 7 through `marmot-agent run`; 8 of 14 earlier through the core run
-// in a test program; MDK at the revision the core uses; 5 of 12 on MDK 0.19.0, on 2026-11-22):
-// the restarted home never stores the person's next message, so it never reaches the core.
+// harness has a message, must hear the next one after it starts again. Up to MDK 0.19.0 it did
+// not, in a third to a half of the runs (5 of 12 on MDK 0.19.0): the restarted home never stored
+// the person's next message. MDK's fix (#3608) is in the revision the core uses since 2026-11-22,
+// and the test passed 15 runs of 15 on it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "MDK #3602: a home stopped just after a message is deaf to that chat after a restart, in some runs"]
 async fn a_core_stopped_just_after_a_message_hears_the_next() {
     restarted_after(Duration::ZERO).await;
 }
 
-// As above, stopped five seconds after the message, which `wn-agent` survived. Locally the core
-// did too (7 runs of 7 through `marmot-agent run`; 11 of 11 earlier), but on CI it missed the next
-// message twice (#96), so the pause does not avoid MDK's bug on a loaded machine either.
+// As above, stopped five seconds after the message, which `wn-agent` survived. Up to MDK 0.19.0
+// the core missed the next message on CI twice all the same (#96); on MDK's fix it passed 15 runs
+// of 15.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "MDK #3602: also seen with a 5 s pause on CI (#96)"]
 async fn a_core_stopped_a_while_after_a_message_hears_the_next() {
     restarted_after(Duration::from_secs(5)).await;
 }
