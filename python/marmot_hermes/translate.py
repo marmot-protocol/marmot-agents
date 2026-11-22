@@ -27,7 +27,10 @@ import json
 VERSION = "0.23.2"
 
 NOT_SENT = {"send_typing", "stop_typing", "connect", "disconnect", "get_chat_info", "format_tool_preview",
-            "format_tool_event", "send_final_ledgered", "send_exec_approval", "render_message_event"}
+            "format_tool_event", "send_final_ledgered", "send_exec_approval", "render_message_event",
+            # A file Hermes hands the platform to send. The core sends it, and the chat sees the file
+            # itself, or the core's notice that it was refused (D-090); a caption is sent as a message.
+            "send_document", "send_image_file", "send_video", "send_voice", "send_multiple_images"}
 # What Hermes says for itself that a person should know. Its answer to a slash command is that
 # command's output instead, whatever its first character.
 WARNINGS = ("📬", "↪", "⚠️ Your message was interrupted", "⏸")

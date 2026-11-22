@@ -4,6 +4,7 @@ goes. Hermes's `gateway` module is replaced by a stand-in that holds only what t
 import asyncio
 import dataclasses
 import enum
+import json
 import logging
 import os
 import sys
@@ -27,6 +28,10 @@ def stand_in_for_gateway():
         def __init__(self, config, platform):
             self.config, self.platform = config, platform
 
+        async def send_image(self, chat_id, image_url, caption=None, reply_to=None, metadata=None):
+            # Hermes's own: the address as text.
+            return await self.send(chat_id=chat_id, content=image_url, reply_to=reply_to, metadata=metadata)
+
     class MessageType(enum.Enum):
         TEXT = "text"
 
@@ -43,6 +48,8 @@ def stand_in_for_gateway():
     class SendResult:
         success: bool
         message_id: str | None = None
+        error: str | None = None
+        raw_response: object = None
 
     config.Platform = Platform
     base.BasePlatformAdapter, base.MessageType, base.MessageEvent, base.SendResult = (
@@ -56,6 +63,7 @@ def stand_in_for_gateway():
 stand_in_for_gateway()
 from gateway.platforms.base import MessageEvent, MessageType  # noqa: E402
 from marmot_hermes.adapter import MarmotAdapter  # noqa: E402
+from marmot_hermes.core import CoreConnection  # noqa: E402
 
 
 @dataclasses.dataclass
@@ -139,6 +147,111 @@ class ModelReads(unittest.IsolatedAsyncioTestCase):
         await self.answered("u-1")
         self.assertEqual(self.shown("group:c-2:u-1#2"), "")
         self.assertTrue(connector.wants_model("group", "c-2", "u-1"))
+
+
+class FakeCore:
+    """The core's side of the socket, on a real Unix socket: it takes the hello, and answers each
+    `send_file` with `answer(path)`, None for sent or a (reason, detail) refusal."""
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.asked = []
+
+    async def serve(self, reader, writer):
+        hello = json.loads(await reader.readline())
+        writer.write(json.dumps({"jsonrpc": "2.0", "id": hello["id"], "result": {}}).encode() + b"\n")
+        while line := await reader.readline():
+            m = json.loads(line)
+            if m.get("method") != "send_file":
+                continue
+            self.asked.append(m["params"])
+            no = self.answer(m["params"]["path"])
+            reply = {"jsonrpc": "2.0", "id": m["id"], "result": {}} if no is None else {
+                "jsonrpc": "2.0", "id": m["id"], "error": {"code": -32000, "message": no[0], "data": {
+                    "reason": no[0], "detail": no[1]}}}
+            writer.write(json.dumps(reply).encode() + b"\n")
+
+
+class Files(unittest.IsolatedAsyncioTestCase):
+    """What Hermes hands a platform to send a file (`send_document`, `send_image_file`, `send_video`,
+    `send_voice`, `send_multiple_images`) becomes the core's `send_file`, one request for each file, and
+    the answer goes back to Hermes as its SendResult (D-090). The core decides what may be sent."""
+
+    OUTSIDE = ("not_allowed", "The file is outside the folders the agent may send files from.")
+
+    async def asyncSetUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        with mock.patch.dict("os.environ", {"HERMES_HOME": self.folder.name}):
+            self.adapter = MarmotAdapter({})
+        self.adapter.loop = asyncio.get_running_loop()
+        self.sent = []
+        self.adapter.connector.send_event = self.sent.append
+        self.fake = FakeCore(lambda path: self.OUTSIDE if path.startswith("/etc/") else None)
+        socket = str(Path(self.folder.name) / "core.sock")
+        self.server = await asyncio.start_unix_server(self.fake.serve, socket)
+        self.adapter.core = self.core = await CoreConnection.open(socket)
+        await self.adapter.core.hello({"token": "t", "capabilities": {}}, self.adapter.connector.serve)
+
+    async def asyncTearDown(self):
+        self.core.close()
+        await self.core.done()
+        self.server.close()
+        await self.server.wait_closed()
+        self.folder.cleanup()
+
+    def words(self):
+        return [e["text"] for e in self.sent if e["type"] == "message"]
+
+    async def test_a_file_is_sent_and_hermes_is_told(self):
+        result = await self.adapter.send_document(chat_id="c-1", file_path="/work/report.pdf")
+        self.assertEqual(self.fake.asked, [{"chat": "c-1", "path": "/work/report.pdf"}])
+        self.assertTrue(result.success)
+        self.assertEqual(self.words(), [])
+
+    async def test_a_refused_file_fails_with_the_cores_reason_and_hermes_adds_no_notice_of_its_own(self):
+        result = await self.adapter.send_image_file(chat_id="c-1", image_path="/etc/passwd")
+        self.assertFalse(result.success)
+        self.assertEqual(result.error, self.OUTSIDE[1])
+        # The core shows its own refused notice in the chat; Hermes's would name the file.
+        self.assertEqual(result.raw_response, {"failure_notice_sent": True})
+
+    async def test_a_batch_sends_each_file_once_with_one_caption_as_the_agents_words(self):
+        images = [("file:///work/one%20chart.png", ""), ("file:///work/two.png", "Two charts"),
+                  ("file:///etc/three.png", "Another caption")]
+        result = await self.adapter.send_multiple_images(chat_id="c-1", images=images)
+        self.assertEqual([a["path"] for a in self.fake.asked], ["/work/one chart.png", "/work/two.png", "/etc/three.png"])
+        # One sent is enough for Hermes to count the batch delivered.
+        self.assertTrue(result.success)
+        self.assertEqual(self.words(), ["Two charts"])
+
+    async def test_a_relative_path_is_made_whole_from_where_hermes_works(self):
+        with mock.patch.dict("os.environ", {"TERMINAL_CWD": "/work/project"}):
+            await self.adapter.send_video(chat_id="c-1", video_path="out/clip.mp4", caption="The clip")
+            await self.adapter.send_voice(chat_id="c-1", audio_path="~/notes.ogg")
+        self.assertEqual([a["path"] for a in self.fake.asked],
+                         ["/work/project/out/clip.mp4", str(Path("~/notes.ogg").expanduser())])
+        self.assertEqual(self.words(), ["The clip"])
+
+    async def test_an_image_on_the_web_is_left_to_hermes(self):
+        result = await self.adapter.send_multiple_images(chat_id="c-1", images=[("https://example.invalid/a.png", "")])
+        self.assertEqual(self.fake.asked, [])
+        self.assertTrue(result.success)
+        self.assertEqual(self.words(), ["https://example.invalid/a.png"])
+
+    async def test_with_no_core_nothing_is_sent_and_hermes_says_so(self):
+        self.adapter.core.close()
+        self.adapter.core = None
+        result = await self.adapter.send_document(chat_id="c-1", file_path="/work/report.pdf")
+        self.assertFalse(result.success)
+        self.assertNotEqual(result.raw_response, {"failure_notice_sent": True})
+
+    async def test_a_send_from_another_thread_reaches_the_core(self):
+        def elsewhere():
+            return asyncio.run(self.adapter.send_document(chat_id="c-1", file_path="/work/a.txt"))
+
+        result = await asyncio.to_thread(elsewhere)
+        self.assertTrue(result.success)
+        self.assertEqual(self.fake.asked, [{"chat": "c-1", "path": "/work/a.txt"}])
 
 
 class Diagnostics(unittest.TestCase):

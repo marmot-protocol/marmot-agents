@@ -5,6 +5,13 @@ hands Hermes each prompt as a chat message, and records every call Hermes makes 
 line, exactly as `tools/record/hermes` records it, for the connector to translate. It sends nothing
 anywhere else.
 
+A file Hermes hands the platform to send (`send_document`, `send_image_file`, `send_video`,
+`send_voice`, `send_multiple_images`: a `MEDIA:` path in the agent's answer, or a file another part of
+Hermes delivers) becomes the core's `send_file`, one request for each file. The core decides whether it
+may be sent, from the folders its settings allow (D-090, D-099), and sends it to the chat as an
+encrypted attachment. A caption is sent first, as the agent's words; a batch keeps one caption, its
+first, as today's connector does.
+
 Who may prompt and who may approve is the core's to decide (D-010). The core lets a message through
 only when its sender may send it, so Hermes is set up to take whatever reaches it: every user is
 allowed, and anyone in a chat may answer its approvals (provisional, Q-22).
@@ -33,12 +40,13 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from gateway.config import Platform
 from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageType, SendResult
 
 from .connector import Connector
-from .core import CoreConnection, HelloRefused, line_of
+from .core import CoreConnection, HelloRefused, Refused, line_of
 from .translate import VERSION
 
 PLATFORM = "marmot"
@@ -108,6 +116,23 @@ def diagnose(kind: str) -> None:
             f.write(f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} marmot: {kind}\n")
     except OSError:
         pass
+
+
+def whole(path) -> str:
+    """A path Hermes gave, made whole for the core, which takes only an absolute one: `~` is the home,
+    and a relative path is taken from where Hermes's tools work. A `..` is left for the core to follow."""
+    p = os.path.expanduser(str(path))
+    if not os.path.isabs(p):
+        p = os.path.join(os.environ.get("TERMINAL_CWD") or os.getcwd(), p)
+    return p
+
+
+def local_file(url) -> str | None:
+    """The path of a `file://` address, or None for any other."""
+    parts = urlsplit(str(url))
+    if parts.scheme != "file" or parts.netloc not in ("", "localhost"):
+        return None
+    return unquote(parts.path)
 
 
 def chat_of(params: dict) -> str | None:
@@ -300,6 +325,91 @@ class MarmotAdapter(BasePlatformAdapter):
         self.note({"dir": "out", "via": "result", "msg": {"method": "_send_exec_approval_prompt",
                                                             "result": jsonable(result)}}, chat)
         return result
+
+    # -- files the agent sends (D-090)
+
+    async def send_document(self, chat_id, file_path, caption=None, file_name=None, reply_to=None, metadata=None,
+                            **kwargs):
+        return await self.send_files("send_document", chat_id, [file_path], caption, reply_to, metadata, {
+            "file_path": file_path, "file_name": file_name, **kwargs})
+
+    async def send_image_file(self, chat_id, image_path, caption=None, reply_to=None, metadata=None, **kwargs):
+        return await self.send_files("send_image_file", chat_id, [image_path], caption, reply_to, metadata, {
+            "image_path": image_path, **kwargs})
+
+    async def send_video(self, chat_id, video_path, caption=None, reply_to=None, metadata=None, **kwargs):
+        return await self.send_files("send_video", chat_id, [video_path], caption, reply_to, metadata, {
+            "video_path": video_path, **kwargs})
+
+    async def send_voice(self, chat_id, audio_path, caption=None, reply_to=None, metadata=None, **kwargs):
+        return await self.send_files("send_voice", chat_id, [audio_path], caption, reply_to, metadata, {
+            "audio_path": audio_path, **kwargs})
+
+    async def send_multiple_images(self, chat_id, images, metadata=None, human_delay=0.0):
+        """Local images go to the core; an image on the web is left to Hermes's own way, which sends its
+        address as text. The batch keeps one caption: the first a local image has."""
+        files, others = [], []
+        for url, alt in images or []:
+            path = local_file(url)
+            if path is None:
+                others.append((url, alt))
+            else:
+                files.append((path, alt))
+        caption = next((alt for _, alt in files if str(alt or "").strip()), None)
+        result = None
+        if files:
+            result = await self.send_files("send_multiple_images", chat_id, [p for p, _ in files], caption, None,
+                                           metadata, {"images": images, "human_delay": human_delay})
+        delivered = result is not None and result.success
+        for url, alt in others:
+            other = await self.send_image(chat_id=chat_id, image_url=url, caption=alt or None, metadata=metadata)
+            delivered = delivered or bool(getattr(other, "success", False))
+        if not images:
+            return SendResult(success=False, error="no images to send")
+        if delivered:
+            return SendResult(success=True, message_id=result.message_id if result and result.success else None)
+        return result if result is not None else SendResult(success=False, error="all images failed to send")
+
+    async def send_files(self, method, chat_id, paths, caption, reply_to, metadata, params) -> SendResult:
+        """Asks the core to send each file, in turn, after the caption. Sent when at least one went, as
+        Hermes counts a batch. A refusal the core answered is shown in the chat by the core, naming no
+        path, so Hermes is told not to add its own notice, which would name the file."""
+        chat = str(chat_id)
+        self.note({"dir": "in", "via": "hook", "msg": {"method": method, "params": {
+            "chat_id": chat_id, "caption": caption, "reply_to": reply_to, "metadata": jsonable(metadata),
+            **jsonable(params)}}}, chat)
+        if caption is not None and str(caption).strip():
+            await self.send(chat_id, str(caption), reply_to=reply_to, metadata=metadata)
+        sent, refused = 0, None
+        for path in paths:
+            try:
+                await self.ask_core("send_file", {"chat": chat, "path": whole(path)})
+                sent += 1
+            except Refused as e:
+                self.warn(f"a file was not sent ({e.reason})")
+                refused = refused or e
+        if sent:
+            self.n += 1
+            result = SendResult(success=True, message_id=f"out-{self.n}")
+        else:
+            result = SendResult(success=False, error=(refused.detail if refused else None) or "The file was not sent.")
+            if refused is not None and refused.answered:
+                result.raw_response = {"failure_notice_sent": True}
+        self.note({"dir": "out", "via": "result", "msg": {"method": method, "result": jsonable(result)}}, chat)
+        return result
+
+    async def ask_core(self, method: str, params: dict) -> None:
+        """A request to the core, from whichever event loop Hermes calls on: it runs on the connection's."""
+        core = self.core
+        if core is None or core.closed:
+            raise Refused("failed", "The agent is not connected to its core.")
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is core.loop:
+            return await core.request(method, params)
+        return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(core.request(method, params), core.loop))
 
     # -- what the connector asks of Hermes
 
