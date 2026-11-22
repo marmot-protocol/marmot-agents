@@ -35,7 +35,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -82,11 +82,12 @@ impl fmt::Debug for Setup {
 }
 
 impl Setup {
-    fn command(&self, chat: &ChatId) -> Command {
+    /// The command that runs a chat's Pi in `folder`, the chat's, or else the setup's own (D-101).
+    fn command(&self, chat: &ChatId, folder: Option<&Path>) -> Command {
         let mut command = Command::new(&self.program);
         command
             .args(&self.args)
-            .current_dir(&self.cwd)
+            .current_dir(folder.unwrap_or(&self.cwd))
             .env(CHAT_VARIABLE, chat_key(chat))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -250,6 +251,8 @@ struct Chat {
     opening: bool,
     /// The starting Pi asked a question.
     asked_at_start: bool,
+    /// The folder the chat's Pi was started in, when the chat chose one (D-101).
+    folder: Option<PathBuf>,
 }
 
 impl Chat {
@@ -330,8 +333,9 @@ impl Pi {
         chat: &ChatId,
         session: Option<&str>,
         resume: Resume,
+        folder: Option<&Path>,
     ) -> Result<(), Unstarted> {
-        let mut command = self.setup.command(chat);
+        let mut command = self.setup.command(chat, folder);
         command.args(["--mode", "rpc"]);
         if let Some(session) = session {
             let flag = match resume {
@@ -378,6 +382,7 @@ impl Pi {
         });
         c.opening = true;
         c.asked_at_start = false;
+        c.folder = folder.map(Path::to_path_buf);
         let opened = tokio::time::timeout(STARTUP_LIMIT, self.open(chat, session)).await;
         let opened = opened.unwrap_or(Err(Unstarted::Failed));
         if opened.is_err() {
@@ -736,8 +741,14 @@ impl Pi {
     }
 
     /// Makes sure the chat has a Pi on the session it should have: `wanted` if the core names one
-    /// to resume, or else the chat's own, started again if its Pi stopped.
-    async fn ready_for(&mut self, chat: &ChatId, wanted: Option<&str>) -> Result<(), Refusal> {
+    /// to resume, or else the chat's own, started again if its Pi stopped. A Pi started here works
+    /// in `folder`, the chat's (D-101).
+    async fn ready_for(
+        &mut self,
+        chat: &ChatId,
+        wanted: Option<&str>,
+        folder: Option<&Path>,
+    ) -> Result<(), Refusal> {
         let c = self.chats.entry(chat.clone()).or_default();
         let current = c.translator.session().map(String::from);
         if c.process.is_some() {
@@ -750,15 +761,15 @@ impl Pi {
             }
         }
         let Some(resume) = wanted.map(String::from).or(current) else {
-            return (self.spawn(chat, None, Resume::Open).await)
+            return (self.spawn(chat, None, Resume::Open, folder).await)
                 .map_err(|_| Refusal::new(Reason::Failed));
         };
         // Pi writes a session's file only once it holds a message. A session that never did, such
         // as a new one the core restarted after, is made again, empty, with its id. One known to
         // have held a message is not: its history is gone.
-        let mut started = self.spawn(chat, Some(&resume), Resume::Open).await;
+        let mut started = self.spawn(chat, Some(&resume), Resume::Open, folder).await;
         if started == Err(Unstarted::Exited) && !self.held.contains(&resume) {
-            started = self.spawn(chat, Some(&resume), Resume::Create).await;
+            started = (self.spawn(chat, Some(&resume), Resume::Create, folder)).await;
         }
         started.map_err(|_| Refusal::new(Reason::Failed))
     }
@@ -876,6 +887,10 @@ impl Driver for Pi {
         }
     }
 
+    fn folder(&self) -> Option<PathBuf> {
+        Some(self.setup.cwd.clone())
+    }
+
     async fn prompt(&mut self, prompt: Prompt) -> Result<(), Refusal> {
         let chat = prompt.chat.id.clone();
         if !prompt.attachments.is_empty() {
@@ -889,7 +904,9 @@ impl Driver for Pi {
         {
             return Err(Refusal::new(Reason::Invalid));
         }
-        self.ready_for(&chat, wanted.as_deref()).await?;
+        let folder = prompt.chat.folder.clone();
+        self.ready_for(&chat, wanted.as_deref(), folder.as_deref())
+            .await?;
         let id = self.id();
         // Steering is ignored while Pi is idle, and needed while it runs: always ask for it, so
         // a prompt sent as a run starts or ends is never refused.
@@ -936,17 +953,24 @@ impl Driver for Pi {
                 (self.effect(&chat, &request, effect, record, Then::Nothing)).await
             }
             Action::NewSession { chat, session } => {
+                let folder = chat.folder.clone();
                 let chat = chat.id.clone();
                 let old = session.as_ref().map(|s| s.as_str().to_string());
                 let c = self.chats.entry(chat.clone()).or_default();
                 if c.process.is_some() && c.translator.running() {
                     return Err(Refusal::new(Reason::Busy));
                 }
+                // Pi works where it was started: a session in another folder needs a new Pi
+                // there (D-101). The Pi it replaces is let go, as one that stopped.
+                if c.process.is_some() && c.folder != folder {
+                    self.stopped(&chat);
+                }
+                let c = self.chats.get_mut(&chat).expect("a chat");
                 let effect = Effect::NewSession(old);
                 if c.process.is_none() {
                     // No Pi to ask: a new one starts a new session.
                     c.effects.push((request.clone(), effect));
-                    let started = self.spawn(&chat, None, Resume::Open).await;
+                    let started = (self.spawn(&chat, None, Resume::Open, folder.as_deref())).await;
                     if started.is_err() {
                         let c = self.chats.get_mut(&chat).expect("a chat");
                         c.unsettled(&request);

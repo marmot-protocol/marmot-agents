@@ -20,6 +20,7 @@ use marmot_agent_events::{AgentEvent, Body, State};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, Lines};
@@ -740,9 +741,17 @@ impl Acp {
     /// Makes `session` the chat's session, starting a new one if it is none, and waits for the
     /// agent. A session is taken up with `session/resume` when the agent offers it, which replays
     /// nothing, and otherwise with `session/load`, whose replay the translator does not send again.
-    async fn pick(&mut self, chat: &ChatId, session: Option<&str>) -> Result<(), Refusal> {
+    ///
+    /// The session works in `folder`, the chat's, or else the driver's own (D-101).
+    async fn pick(
+        &mut self,
+        chat: &ChatId,
+        session: Option<&str>,
+        folder: Option<&Path>,
+    ) -> Result<(), Refusal> {
+        let cwd = self.cwd_for(folder);
         let params = |id: Option<&str>| {
-            let mut p = json!({"cwd": self.cwd, "mcpServers": []});
+            let mut p = json!({"cwd": cwd, "mcpServers": []});
             if let Some(id) = id {
                 p["sessionId"] = id.into();
             }
@@ -779,6 +788,11 @@ impl Acp {
             }
             (None, None) => Err(Refusal::new(Reason::Failed)),
         }
+    }
+
+    /// The folder a session works in: the chat's, or else the driver's own (D-101).
+    fn cwd_for(&self, folder: Option<&Path>) -> String {
+        folder.map_or_else(|| self.cwd.clone(), |f| f.to_string_lossy().into_owned())
     }
 
     /// Before every prompt: Goose carries on, by itself, with the turn a restart cut off once the
@@ -858,6 +872,10 @@ impl Driver for Acp {
         }
     }
 
+    fn folder(&self) -> Option<PathBuf> {
+        Some(PathBuf::from(&self.cwd))
+    }
+
     async fn prompt(&mut self, prompt: Prompt) -> Result<(), Refusal> {
         if self.gone {
             return Err(Refusal::new(Reason::Failed));
@@ -891,7 +909,9 @@ impl Driver for Acp {
             .and_then(Translator::session)
             .map(String::from);
         if current.is_none() || (wanted.is_some() && wanted != current) {
-            self.pick(&chat, wanted.as_deref()).await?;
+            let folder = prompt.chat.folder.clone();
+            self.pick(&chat, wanted.as_deref(), folder.as_deref())
+                .await?;
         }
         self.wait_for_own_run(&chat).await?;
         let session = self
@@ -937,6 +957,7 @@ impl Driver for Acp {
                 self.cancel(&chat).await
             }
             Action::NewSession { chat, session } => {
+                let chat_folder = chat.folder.clone();
                 let chat = chat.id.clone();
                 self.chat(&chat);
                 self.picked(&chat).await?;
@@ -948,7 +969,8 @@ impl Driver for Acp {
                 if let Some(c) = self.chats.get_mut(&chat) {
                     c.effects.push((request.clone(), Effect::NewSession(old)));
                 }
-                let params = json!({"cwd": self.cwd, "mcpServers": []});
+                let cwd = self.cwd_for(chat_folder.as_deref());
+                let params = json!({"cwd": cwd, "mcpServers": []});
                 self.request(&chat, "session/new", params, Purpose::Control(request))
                     .await?;
                 Ok(())
