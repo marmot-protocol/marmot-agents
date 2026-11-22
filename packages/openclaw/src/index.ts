@@ -273,18 +273,20 @@ function receipt(kind: string): Json {
 }
 
 function buildPlugin(): unknown {
-  // Nothing is ever posted by these: what OpenClaw sends reaches the chat as the events it becomes.
+  // Nothing is ever posted by these: what OpenClaw sends reaches the chat as the events it becomes, and a
+  // file through the core.
   const message = defineChannelMessageAdapter({
     id: ID,
     durableFinal: { capabilities: { text: true, media: true, payload: true, replyTo: true } },
     send: {
       text: adapter("message.send.text", async () => receipt("text")),
-      // Its file goes to the core, as a file in a reply does.
-      media: adapter("message.send.media", async (params) => {
-        const p = object(params);
-        await current?.sendMedia(String(p["to"] ?? "").replace(/^marmot:/, ""), p["mediaUrl"]);
-        return receipt("media");
-      }),
+      // Its caption goes as the agent's words, then its file to the core, as a file in a reply does. The
+      // receipt waits for the core: a refusal, or no core, is a failed send.
+      media: async (params: unknown) => {
+        const connector = current;
+        if (connector === null) throw new Error("marmot: not connected to the core");
+        return connector.sendMedia(params, () => receipt("media"));
+      },
       payload: adapter("message.send.payload", async () => receipt("text")),
     },
     receive: { defaultAckPolicy: "after_agent_dispatch", supportedAckPolicies: ["after_agent_dispatch", "manual"] },

@@ -2168,6 +2168,7 @@ class OpenClaw(Translator):
             "onReasoningEnd": self.reasoning_end,
             "deliver": self.deliver,
             "message.send.payload": self.send_payload,
+            "message.send.media": self.send_media,
             "approvalCapability.render.exec.buildPendingPayload": self.approval_card,
             "approvalCapability.render.exec.buildResolvedPayload": self.approval_card_resolved,
             "actions.handleAction": self.handle_action,
@@ -2732,6 +2733,14 @@ class OpenClaw(Translator):
     def approval_card_resolved(self, method, p):
         resolved = p.get("resolved") or {}
         self.approval_resolved(resolved.get("id"), method, p, resolved.get("decision"))
+
+    def send_media(self, method, p):
+        """Media OpenClaw sends outside a reply: its caption is the agent's words. Its file goes to the
+        core apart (D-090)."""
+        if not str(p.get("text") or "").strip():
+            return self.skip("message.send.media with no caption: its file goes to the core")
+        ev = self.emit(f"message:{self.seq + 1}", "message", "done", "Message", p.get("text"), {}, f"{method} [caption]", p)
+        self.posting = (method, ev)
 
     def send_payload(self, method, p):
         """A message OpenClaw sends outside a reply. In the recordings every one is an approval."""

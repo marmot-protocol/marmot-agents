@@ -790,8 +790,11 @@ test("media on a tool's delivery is not sent again, and with no core to ask noth
   await bare.openclaw.last().deliver({ text: "x", mediaUrl: "/work/a.png" }, { kind: "final", assistantMessageIndex: 0 });
 });
 
-test("media OpenClaw sends to a chat outside a run goes to the core too", async () => {
-  const { connector, asked } = withFiles();
-  await connector.sendMedia("c-9", "file:///work/generated.png");
+test("media OpenClaw sends to a chat outside a run goes to the core too, after its caption", async () => {
+  const { connector, asked, events } = withFiles();
+  const receipt = { receipt: { primaryPlatformMessageId: "out-1" } };
+  const sent = await connector.sendMedia({ to: "marmot:c-9", text: "Generated", mediaUrl: "file:///work/generated.png" }, () => receipt);
+  assert.equal(sent, receipt);
   assert.deepEqual(asked, [["c-9", "/work/generated.png"]]);
+  assert.deepEqual(events.map((e) => [e.chat, e.type, e.text]), [["c-9", "message", "Generated"]]);
 });

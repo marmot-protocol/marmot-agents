@@ -191,11 +191,14 @@ each file, as today's connectors turn it into `send_media`.
   its own notice, which would name the file: the chat has the core's.
 - **OpenClaw** hands a reply's files to the channel with the reply, as `mediaUrl` and `mediaUrls`. The plugin
   asks the core for each local one once the reply's text is on its way, and does the same for media OpenClaw
-  sends to a chat through the channel's outbound adapter. The channel now says it takes media. A relative path
+  sends to a chat through the channel's outbound adapter, whose caption goes first as the agent's words. That
+  send fails when the core refuses the file or cannot be asked, and has a receipt only once the core sent
+  it. The channel now says it takes media. A relative path
   is taken from the agent's workspace, as OpenClaw takes it; an address on the web, or a stored inbound
   attachment, is not sent.
 - **A caption goes as the agent's words**, before the files, since `send_file` carries none. A batch keeps one
-  caption, its first, as today's Hermes connector does. In OpenClaw the caption is the reply's own text.
+  caption, its first, as today's Hermes connector does. In OpenClaw the caption is the reply's own text, or the
+  outbound send's.
 - **The folder is the gateway's.** A plugin states no folder in its hello, so the installer lists the folder
   the gateway's agent works in as `files_from`: Hermes's `terminal.cwd`, or OpenClaw's agent workspace
   (`~/.openclaw/workspace` by default). It lists none when that folder is the whole home, as Hermes's default

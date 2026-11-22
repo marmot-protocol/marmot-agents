@@ -909,33 +909,53 @@ export class Connector {
   }
 
   /**
-   * Media OpenClaw sends to a chat outside a run, through the channel's outbound adapter: its file goes
-   * to the core as a file in a reply does. Its text is not sent, as a text OpenClaw sends that way is not.
+   * Media OpenClaw sends to a chat through the channel's outbound adapter, outside a run. Its caption goes
+   * first, as the agent's words, then its file to the core. Resolves with the receipt only once the core
+   * has sent the file; throws when the core refused it or cannot be asked, or the file is not on this
+   * machine, so OpenClaw counts the send as failed.
    */
-  async sendMedia(to: string, mediaUrl: unknown): Promise<void> {
-    await this.sendFiles(to, this.chats.get(to)?.route ?? null, mediaOf({ mediaUrl }));
+  async sendMedia(params: unknown, receipt: () => Json): Promise<Json> {
+    const method = "message.send.media";
+    const p = object(params);
+    const to = text(p["to"]).replace(/^marmot:/, "");
+    if (to === "") throw new Error("marmot: media for no chat");
+    const chat = this.chat(to);
+    this.feed(chat, { dir: "in", via: "hook", msg: { method, params: jsonable(params) } });
+    const failure = await this.sendFiles(chat.id, chat.route, mediaOf(p));
+    if (failure !== null) throw failure;
+    const result = receipt();
+    this.feed(chat, { dir: "out", via: "result", msg: { method, result: jsonable(result) } });
+    return result;
   }
 
   /**
-   * Asks the core to send each file, in turn. A refusal or a failure is said by kind only: the core shows
-   * its own notice in the chat, naming no path, and the next file still goes.
+   * Asks the core to send each file, in turn, and gives back the first failure, or null when every file
+   * went. A refusal or a failure is said by kind only: the core shows its own notice in the chat, naming
+   * no path, and the next file still goes.
    */
-  private async sendFiles(chat: string, route: Json | null, media: string[]): Promise<void> {
-    if (media.length === 0) return;
+  private async sendFiles(chat: string, route: Json | null, media: string[]): Promise<Error | null> {
+    if (media.length === 0) return null;
     const send = this.options.sendFile;
-    if (send === undefined || this.closed) return this.warn("a file was not sent: the core cannot be asked");
+    if (send === undefined || this.closed) {
+      this.warn("a file was not sent: the core cannot be asked");
+      return new Refusal("failed", "The agent is not connected to its core.");
+    }
+    let failure: Error | null = null;
     for (const url of media) {
       const path = this.localPath(url, route);
       if (path === null) {
         this.warn("a file not on this machine was not sent");
+        failure ??= new Refusal("invalid", "The file is not on this machine.");
         continue;
       }
       try {
         await send(chat, path);
       } catch (e) {
         this.warn(`a file was not sent (${e instanceof Refusal ? e.reason : "failed"})`);
+        failure ??= e instanceof Error ? e : new Refusal("failed");
       }
     }
+    return failure;
   }
 
   /**
