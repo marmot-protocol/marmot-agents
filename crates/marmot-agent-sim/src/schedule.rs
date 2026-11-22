@@ -18,7 +18,8 @@ pub enum Family {
     Crash,
     /// Sends MDK is busy for, whose outcome is not known, or that it refuses; lookups that fail.
     Sends,
-    /// A live stream that lags, and live messages that come late.
+    /// A live stream that lags, live messages that come late, and reads of what arrived that fail
+    /// for a moment.
     Live,
     /// A driver that refuses, is slow, hangs, never settles, or stops.
     Driver,
@@ -79,10 +80,12 @@ impl Family {
     /// The generator's version for the family. A change to what a seed generates raises it, so
     /// an old name never stands for a new schedule. Version 2 of `live`, `driver` and `mixed`:
     /// a message heard live takes the ones stored before it off the list still to be heard, and
-    /// a `Hang` goes ahead of the moves still queued.
+    /// a `Hang` goes ahead of the moves still queued. Version 3 of `live` and `mixed`: reads that
+    /// fail for a moment (`ReadFails`).
     pub fn version(self) -> u32 {
         match self {
-            Family::Live | Family::Driver | Family::Mixed => 2,
+            Family::Live | Family::Mixed => 3,
+            Family::Driver => 2,
             _ => 1,
         }
     }
@@ -118,6 +121,7 @@ impl Family {
                 lag: 4,
                 late_hear: 6,
                 crash: 1,
+                read: 4,
                 ..none
             },
             Family::Driver => Mix {
@@ -139,6 +143,7 @@ impl Family {
                 lookup: 1,
                 lag: 1,
                 late_hear: 2,
+                read: 1,
                 refuse: 1,
                 slow: 1,
                 hang: 1,
@@ -280,6 +285,20 @@ pub enum Outcome {
     },
 }
 
+/// Which read of what arrived fails, as a passing failure of MDK.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadStep {
+    /// Where a message's group is, as when its state cannot be read for a moment.
+    Place,
+    /// A live message's place in storage order.
+    Order,
+    /// What was stored after the read mark, in a catch-up.
+    Stored,
+    /// Which groups the agent is in, as a catch-up begins.
+    Groups,
+}
+
 /// One step of a run. The names are the shared vocabulary's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action")]
@@ -333,6 +352,11 @@ pub enum Action {
     },
     /// The next lookup of a send fails (`Lookup(send)`: `Error`).
     Lookup,
+    /// The next read of this kind fails, for a moment (`ReadFails`).
+    ReadFails {
+        /// Which read.
+        at: ReadStep,
+    },
     /// The next save fails (`SaveFails`); the core stops.
     SaveFails,
     /// The process dies (`Crash`): at once when `after` is 0, else just before the `after`-th
@@ -422,6 +446,7 @@ struct Mix {
     ambiguous: u32,
     refused: u32,
     lookup: u32,
+    read: u32,
     lag: u32,
     late_hear: u32,
     refuse: u32,
@@ -493,6 +518,7 @@ pub fn generate(name: &RunName) -> Schedule {
             mix.ignore,
             mix.driver_stops,
             mix.late,
+            mix.read,
             2, // a restart, which does nothing while the core runs
         ];
         let mut down = |rng: &mut Rng| restart_in = Some(rng.below(4) as u32);
@@ -617,6 +643,14 @@ pub fn generate(name: &RunName) -> Schedule {
             18 => steps.push(Action::Send {
                 outcome: Outcome::Late {
                     ms: rng.pick(&[20_000, 40_000, 90_000]),
+                },
+            }),
+            19 => steps.push(Action::ReadFails {
+                at: match rng.weighted(&[2, 1, 1, 1]) {
+                    0 => ReadStep::Place,
+                    1 => ReadStep::Order,
+                    2 => ReadStep::Stored,
+                    _ => ReadStep::Groups,
                 },
             }),
             _ => steps.push(Action::Restart),

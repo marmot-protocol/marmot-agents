@@ -1,5 +1,6 @@
-//! The core across a crash and a failed save, end to end through MDK: what reaches the driver,
-//! what is sent, and what is settled once the core starts again (S1, S3, S4).
+//! The core across a crash, a failed save and a passing failure of MDK, end to end through MDK:
+//! what reaches the driver, what is sent, and what is settled once the core starts again (S1, S3,
+//! S4, S10, L3).
 
 mod common;
 
@@ -428,6 +429,63 @@ fn versions(chat: &Chat<'_>, item: &str) -> Vec<(EventKey, u64, Option<EventKey>
         .filter(|(_, r)| r.item.event.header().item.as_str() == item)
         .map(|(event, r)| (event, r.item.version, r.item.first))
         .collect()
+}
+
+// A message MDK cannot place for a moment, as when its group's state cannot be read, is not skipped:
+// it is read again once the failure passes, and reaches the driver once, before the message after
+// it (S10, L3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_that_cannot_be_read_for_a_moment_is_read_after() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, _events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, _) = a_chat(&world, &seen).await;
+    world.marmot.faults.push(Fault::PlaceFails);
+    chat.say("second").await;
+    chat.say("third").await;
+    let third = |seen: &Seen| seen.prompts.iter().any(|p| p == "third");
+    within(30, || third(&seen.lock().unwrap()).then_some(())).await;
+    // A message read again, and anything read twice, would come by now.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let prompts = seen.lock().unwrap().prompts.clone();
+    assert_eq!(prompts, ["hello", "second", "third"]);
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
+// A group the core has never seen, as on an imported account's first run, starts after what is
+// stored in it. When MDK cannot say where that is for a while, a message that arrives meanwhile is
+// still read, once, and what was there before is not (L3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_that_arrives_while_a_new_group_cannot_be_read_is_read() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, _events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, _) = a_chat(&world, &seen).await;
+    core.stop().await;
+    chat.say("while away").await;
+    let group = GroupKey(chat.hex.clone());
+    let stored = || world.marmot.stored(&group, 0).ok().filter(|m| m.len() == 2);
+    within(30, || stored().map(|_| ())).await;
+    // The core has never seen the group, and MDK cannot say where it ends for about six seconds.
+    let store = Store::new(world.state.path());
+    let mut kept = store.load().unwrap();
+    kept.read.remove(&group);
+    store.save(&kept).unwrap();
+    for _ in 0..6 {
+        world.marmot.faults.push(Fault::LatestFails);
+    }
+    let (driver, _events, seen) = stub(false);
+    let core = world.start(driver);
+    chat.say("new").await;
+    within(30, || seen.lock().unwrap().prompts.first().cloned()).await;
+    // A message read twice, or history read as a prompt, would come by now.
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    assert_eq!(seen.lock().unwrap().prompts, ["new"]);
+    core.stop().await;
+    world.runtime.shutdown().await;
 }
 
 // A send whose reply from MDK was lost may have gone out. The core looks in what MDK stored before

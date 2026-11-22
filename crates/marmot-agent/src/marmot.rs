@@ -124,6 +124,11 @@ impl From<marmot_app::ReceivedMessage> for Message {
     }
 }
 
+/// MDK could not be read now, for a passing failure: what it was asked for is asked again later,
+/// and nothing is taken as read meanwhile. Not "not there", which is an answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NotNow;
+
 /// What a message is for the conversation.
 pub enum Incoming {
     /// A chat message.
@@ -148,7 +153,8 @@ pub struct Marmot {
     pub faults: Faults,
 }
 
-/// Faults the next sends, and the next lookups of a send, meet, one each, oldest first.
+/// Faults the next sends, the next lookups of a send, and the next readings of where a group is,
+/// or of where its messages end, meet, one each, oldest first.
 #[derive(Clone, Default)]
 pub struct Faults(Arc<Mutex<VecDeque<Fault>>>);
 
@@ -160,6 +166,11 @@ pub enum Fault {
     Refuse(AppError),
     /// MDK cannot be asked what it stored, the next time the core looks for a send.
     LookupFails,
+    /// MDK cannot say where a group is, the next time a message is read: a passing failure, as
+    /// when the group's state cannot be read for a moment.
+    PlaceFails,
+    /// MDK cannot say where a group's messages end, the next time the core asks.
+    LatestFails,
 }
 
 impl Faults {
@@ -168,30 +179,46 @@ impl Faults {
         self.0.lock().expect("never poisoned").push_back(fault);
     }
 
-    /// The oldest fault for a send, or for a lookup.
-    fn next(&self, lookup: bool) -> Option<Fault> {
+    /// The oldest fault for a send, one that is neither of the others.
+    fn next_send(&self) -> Option<Fault> {
+        self.next(|f| {
+            !matches!(
+                f,
+                Fault::LookupFails | Fault::PlaceFails | Fault::LatestFails
+            )
+        })
+    }
+
+    /// The oldest fault `which` picks.
+    fn next(&self, which: impl Fn(&Fault) -> bool) -> Option<Fault> {
         let mut faults = self.0.lock().expect("never poisoned");
-        let at = (faults.iter()).position(|f| matches!(f, Fault::LookupFails) == lookup)?;
+        let at = faults.iter().position(which)?;
         faults.remove(at)
     }
 }
 
 impl Marmot {
     /// What a message is for the conversation, if anything: a chat message or an answer or a
-    /// control for this agent, from someone else, in a group the agent has accepted.
-    pub async fn incoming(&self, message: Message) -> Option<Incoming> {
+    /// control for this agent, from someone else, in a group the agent has accepted. [`NotNow`]
+    /// when MDK could not say where its group is, or what it quotes, for a passing failure: the
+    /// message is read again later, never taken as one that is not for the agent.
+    pub async fn incoming(&self, message: Message) -> Result<Option<Incoming>, NotNow> {
         if message.sender == self.agent {
-            return None;
+            return Ok(None);
         }
         let is_request = message.kind == REQUEST_KIND;
         if message.kind != CHAT && !is_request {
-            return None;
+            return Ok(None);
         }
-        let chat = self.place(&message.group).await?;
+        let Some(chat) = self.place(&message.group).await? else {
+            return Ok(None);
+        };
         let author_name = self.name(&message.sender, message.sender_name.clone());
         if is_request {
-            let (target, asked) = carrier::read_request(&self.agent, &message.tags)?;
-            return Some(Incoming::Asked(HeardRequest {
+            let Some((target, asked)) = carrier::read_request(&self.agent, &message.tags) else {
+                return Ok(None);
+            };
+            return Ok(Some(Incoming::Asked(HeardRequest {
                 chat,
                 event: message.event,
                 author: message.sender,
@@ -199,14 +226,14 @@ impl Marmot {
                 age_secs: now().saturating_sub(message.recorded_at),
                 target,
                 asked,
-            }));
+            })));
         }
         let mentions_agent = message
             .tags
             .iter()
             .any(|t| t.len() >= 2 && t[0] == "p" && t[1] == self.agent.as_str());
-        let reply_to = self.quoted(&message).await;
-        Some(Incoming::Heard(Heard {
+        let reply_to = self.quoted(&message)?;
+        Ok(Some(Incoming::Heard(Heard {
             chat,
             event: message.event,
             author: message.sender,
@@ -215,30 +242,46 @@ impl Marmot {
             reply_to,
             mentions_agent,
             attachments: Vec::new(),
-        }))
+        })))
     }
 
     /// Where a group is: whether it is a direct chat, and how many members it has. `None` for a
-    /// group the agent has not accepted.
-    async fn place(&self, group: &GroupKey) -> Option<Where> {
-        let id = group_id(group)?;
-        let record = self
-            .app
-            .groups(&self.label)
-            .ok()?
+    /// group the agent has not accepted, or one MDK no longer has; [`NotNow`] when MDK could not
+    /// be read.
+    async fn place(&self, group: &GroupKey) -> Result<Option<Where>, NotNow> {
+        let Some(id) = group_id(group) else {
+            return Ok(None);
+        };
+        let groups = self.app.groups(&self.label).map_err(|_| NotNow)?;
+        let Some(record) = groups
             .into_iter()
-            .find(|g| g.group_id_hex == group.as_str())?;
+            .find(|g| g.group_id_hex == group.as_str())
+        else {
+            return Ok(None);
+        };
         if record.pending_confirmation || record.archived {
-            return None;
+            return Ok(None);
         }
-        let state = self.runtime.group_mls_state(&self.label, &id).await.ok()?;
-        Some(Where {
+        if self
+            .faults
+            .next(|f| matches!(f, Fault::PlaceFails))
+            .is_some()
+        {
+            return Err(NotNow);
+        }
+        let state = match self.runtime.group_mls_state(&self.label, &id).await {
+            Ok(state) => state,
+            // Gone for good: there is no one to answer.
+            Err(AppError::UnknownGroup(_) | AppError::GroupRemoved(_)) => return Ok(None),
+            Err(_) => return Err(NotNow),
+        };
+        Ok(Some(Where {
             group: group.clone(),
             name: None,
             // MDK marks a direct chat: no name and two members. A named group of two is a group.
             direct: record.direct_member_ids_hex.is_some(),
             members: state.member_count,
-        })
+        }))
     }
 
     fn name(&self, person: &PubKey, given: Option<String>) -> String {
@@ -247,24 +290,30 @@ impl Marmot {
             .unwrap_or_else(|| "Someone".into())
     }
 
-    /// The message a chat message replies to: the first `e` tag, read from storage.
-    async fn quoted(&self, message: &Message) -> Option<HeardQuote> {
-        let target = message
-            .tags
-            .iter()
+    /// The message a chat message replies to: the first `e` tag, read from storage. `None` when
+    /// it replies to nothing, or to a message not stored here; [`NotNow`] when storage could not be
+    /// read.
+    fn quoted(&self, message: &Message) -> Result<Option<HeardQuote>, NotNow> {
+        let Some(target) = (message.tags.iter())
             .find(|t| t.len() >= 2 && t[0] == "e")
-            .map(|t| t[1].clone())?;
+            .map(|t| t[1].clone())
+        else {
+            return Ok(None);
+        };
         let record = self
             .runtime
             .message_by_id(&self.label, message.group.as_str(), &target)
-            .ok()??;
+            .map_err(|_| NotNow)?;
+        let Some(record) = record else {
+            return Ok(None);
+        };
         let author = PubKey(record.sender.clone());
-        Some(HeardQuote {
+        Ok(Some(HeardQuote {
             event: EventKey(target),
             author_name: self.name(&author, None),
             author,
             text: record.plaintext,
-        })
+        }))
     }
 
     /// Sends something to a group, and gives back the id of the event it became. `token` is the
@@ -280,7 +329,7 @@ impl Marmot {
     ) -> Result<EventKey, AppError> {
         let _ = token;
         let id = group_id(group).ok_or_else(|| AppError::UnknownGroup(String::new()))?;
-        let fault = self.faults.next(false);
+        let fault = self.faults.next_send();
         if let Some(Fault::Refuse(error)) = fault {
             return Err(error);
         }
@@ -348,7 +397,7 @@ impl Marmot {
             kinds: Some(vec![wanted.kind()]),
             limit: None,
         };
-        let rows = match self.faults.next(true) {
+        let rows = match self.faults.next(|f| matches!(f, Fault::LookupFails)) {
             Some(_) => Err(AppError::RuntimeBusy),
             None => self.runtime.messages_with_query(&self.label, query),
         };
@@ -428,63 +477,63 @@ impl Marmot {
         Err(AppError::AccountWorkerBusy)
     }
 
-    /// The groups the agent has accepted.
-    pub fn groups(&self) -> Vec<GroupKey> {
-        self.app
-            .groups(&self.label)
-            .unwrap_or_default()
-            .into_iter()
+    /// The groups the agent has accepted; [`NotNow`] when MDK could not list them, which is not
+    /// an account with none.
+    pub fn groups(&self) -> Result<Vec<GroupKey>, NotNow> {
+        let groups = self.app.groups(&self.label).map_err(|_| NotNow)?;
+        Ok((groups.into_iter())
             .filter(|g| !g.pending_confirmation && !g.archived)
             .map(|g| GroupKey(g.group_id_hex))
-            .collect()
+            .collect())
     }
 
     /// The chat messages, answers and controls others sent to a group that arrived here after
     /// `after` in storage order, in that order, however many there are.
-    pub fn stored(&self, group: &GroupKey, after: i64) -> Vec<Message> {
-        let mut rows: Vec<AppMessageRecord> = self
-            .stored_all(group)
-            .into_iter()
+    pub fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow> {
+        let mut rows: Vec<AppMessageRecord> = (self.stored_all(group)?.into_iter())
             .filter(|r| r.insert_order > after && r.direction == "received" && !r.invalidated)
             .collect();
         rows.sort_by_key(|r| r.insert_order);
-        rows.into_iter().map(Message::from).collect()
+        Ok(rows.into_iter().map(Message::from).collect())
     }
 
     /// The latest place in storage order for a group: where a group the core has never seen
     /// starts, so its history is not read as prompts.
-    pub fn latest(&self, group: &GroupKey) -> i64 {
-        self.stored_all(group)
-            .iter()
-            .map(|r| r.insert_order)
-            .max()
-            .unwrap_or(0)
+    pub fn latest(&self, group: &GroupKey) -> Result<i64, NotNow> {
+        if (self.faults)
+            .next(|f| matches!(f, Fault::LatestFails))
+            .is_some()
+        {
+            return Err(NotNow);
+        }
+        let rows = self.stored_all(group)?;
+        Ok(rows.iter().map(|r| r.insert_order).max().unwrap_or(0))
     }
 
     /// A message's place in storage order. `None` when it is not stored, as for one MDK removed.
-    pub fn order_of(&self, message: &Message) -> Option<i64> {
+    pub fn order_of(&self, message: &Message) -> Result<Option<i64>, NotNow> {
         if message.order.is_some() {
-            return message.order;
+            return Ok(message.order);
         }
-        self.runtime
+        let record = self
+            .runtime
             .message_by_id(&self.label, message.group.as_str(), message.event.as_str())
-            .ok()
-            .flatten()
-            .map(|r| r.insert_order)
+            .map_err(|_| NotNow)?;
+        Ok(record.map(|r| r.insert_order))
     }
 
     /// Every chat message, answer and control stored for the group. Not only the most recent: MDK
     /// picks those by the time their senders gave, not by when they arrived here, so a message that
     /// arrived late with an earlier time could fall outside the window and never be read.
-    fn stored_all(&self, group: &GroupKey) -> Vec<AppMessageRecord> {
+    fn stored_all(&self, group: &GroupKey) -> Result<Vec<AppMessageRecord>, NotNow> {
         let query = AppMessageQuery {
             group_id_hex: Some(group.as_str().to_string()),
             kinds: Some(vec![CHAT, REQUEST_KIND]),
             limit: None,
         };
-        self.runtime
+        (self.runtime)
             .messages_with_query(&self.label, query)
-            .unwrap_or_default()
+            .map_err(|_| NotNow)
     }
 }
 
@@ -631,11 +680,15 @@ pub trait Side: Clone + Send + Sync + 'static {
     /// Publishes the agent's name in its profile, unless it is already right.
     fn publish_name(&self, name: &str, relays: &[String]) -> impl Future<Output = ()> + Send;
 
-    /// What a message is for the conversation, if anything.
-    fn incoming(&self, message: Message) -> impl Future<Output = Option<Incoming>> + Send;
+    /// What a message is for the conversation, if anything; [`NotNow`] when that could not be
+    /// told for a passing failure.
+    fn incoming(
+        &self,
+        message: Message,
+    ) -> impl Future<Output = Result<Option<Incoming>, NotNow>> + Send;
 
     /// A message's place in storage order, `None` when it is not stored.
-    fn order_of(&self, message: &Message) -> Option<i64>;
+    fn order_of(&self, message: &Message) -> Result<Option<i64>, NotNow>;
 
     /// The invitations waiting for a decision, each with who sent it.
     fn invitations(&self) -> Vec<(GroupKey, Option<PubKey>)>;
@@ -643,14 +696,14 @@ pub trait Side: Clone + Send + Sync + 'static {
     /// Accepts or declines an invitation; whether that was done.
     fn decide(&self, group: &GroupKey, accept: bool) -> impl Future<Output = bool> + Send;
 
-    /// The groups the agent has accepted.
-    fn groups(&self) -> Vec<GroupKey>;
+    /// The groups the agent has accepted; [`NotNow`] when they could not be listed.
+    fn groups(&self) -> Result<Vec<GroupKey>, NotNow>;
 
     /// The latest place in storage order for a group.
-    fn latest(&self, group: &GroupKey) -> i64;
+    fn latest(&self, group: &GroupKey) -> Result<i64, NotNow>;
 
     /// What others sent to a group that was stored after `after`, in storage order.
-    fn stored(&self, group: &GroupKey, after: i64) -> Vec<Message>;
+    fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow>;
 
     /// Sends something to a group, and gives back the id of the event it became.
     fn send(
@@ -791,11 +844,14 @@ impl Side for Marmot {
         }
     }
 
-    fn incoming(&self, message: Message) -> impl Future<Output = Option<Incoming>> + Send {
+    fn incoming(
+        &self,
+        message: Message,
+    ) -> impl Future<Output = Result<Option<Incoming>, NotNow>> + Send {
         Marmot::incoming(self, message)
     }
 
-    fn order_of(&self, message: &Message) -> Option<i64> {
+    fn order_of(&self, message: &Message) -> Result<Option<i64>, NotNow> {
         Marmot::order_of(self, message)
     }
 
@@ -807,15 +863,15 @@ impl Side for Marmot {
         Marmot::decide(self, group, accept).await.is_ok()
     }
 
-    fn groups(&self) -> Vec<GroupKey> {
+    fn groups(&self) -> Result<Vec<GroupKey>, NotNow> {
         Marmot::groups(self)
     }
 
-    fn latest(&self, group: &GroupKey) -> i64 {
+    fn latest(&self, group: &GroupKey) -> Result<i64, NotNow> {
         Marmot::latest(self, group)
     }
 
-    fn stored(&self, group: &GroupKey, after: i64) -> Vec<Message> {
+    fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow> {
         Marmot::stored(self, group, after)
     }
 

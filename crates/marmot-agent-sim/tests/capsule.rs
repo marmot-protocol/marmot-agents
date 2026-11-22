@@ -1,7 +1,10 @@
 //! A run is reproducible: the same schedule gives the same trace, a capsule replays exactly, and
 //! the shrinker cuts a failing schedule down to one that fails the same way.
 
-use marmot_agent_sim::{Capsule, Family, RunName, generate, run, shrink};
+use marmot_agent_sim::{
+    Action, BugSet, Capsule, Family, Faults, Posted, ReadStep, RunName, Schedule, What, generate,
+    run, shrink,
+};
 
 #[test]
 fn the_same_schedule_gives_the_same_trace() {
@@ -17,6 +20,42 @@ fn the_same_schedule_gives_the_same_trace() {
                 schedule.name
             );
         }
+    }
+}
+
+// Two groups that MDK cannot read in the same catch-up wait until the same moment on the virtual
+// clock. They are read again in the same order every time, or a capsule would not replay.
+#[test]
+fn groups_read_again_at_the_same_moment_give_the_same_trace() {
+    let prompt = |chat| Posted {
+        chat,
+        what: What::Prompt { approval: false },
+    };
+    let fails = Action::ReadFails {
+        at: ReadStep::Stored,
+    };
+    let schedule = Schedule {
+        name: RunName::new(Family::Live, 0, 0),
+        chats: 2,
+        bugs: BugSet::default(),
+        faults: Faults::default(),
+        messages: vec![prompt(0), prompt(1)],
+        steps: vec![
+            Action::Invite { chat: 0 },
+            Action::Invite { chat: 1 },
+            fails,
+            fails,
+            Action::Store { msg: 0 },
+            Action::Store { msg: 1 },
+            Action::Lag,
+        ],
+    };
+    let first = run(&schedule);
+    assert!(first.failure.is_none(), "{:?}", first.failure);
+    let failed = (first.trace.iter()).filter(|t| t.what == "Stored: Error");
+    assert_eq!(failed.count(), 2, "both groups wait");
+    for _ in 0..16 {
+        assert_eq!(run(&schedule).trace, first.trace);
     }
 }
 

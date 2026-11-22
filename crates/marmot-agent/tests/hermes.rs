@@ -200,7 +200,7 @@ async fn hermes_end_to_end() {
     // The core takes the invitation once the plugin has connected, which waits for Hermes to start.
     let group_hex = hex::encode(group.as_slice());
     within(TURN, || {
-        let groups = world.marmot.groups();
+        let groups = world.marmot.groups().unwrap_or_default();
         groups.iter().any(|g| g.as_str() == group_hex).then_some(())
     })
     .await;

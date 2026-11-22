@@ -27,7 +27,7 @@ pub mod world;
 
 pub use capsule::{Capsule, shrink, write_schedule};
 pub use schedule::{
-    Action, BugSet, Family, Faults, Outcome, Posted, RunName, Schedule, What, generate,
+    Action, BugSet, Family, Faults, Outcome, Posted, ReadStep, RunName, Schedule, What, generate,
 };
 pub use sim::{Report, run};
 
@@ -53,7 +53,7 @@ pub struct Campaign {
 }
 
 /// The kinds of event a campaign counts, each with what marks it in a trace entry.
-pub const MARKS: [(&str, &str); 21] = [
+pub const MARKS: [(&str, &str); 25] = [
     ("harness takes", "), Take"),
     ("crash before a save", "Crash(before Save)"),
     ("crash before a send", "Crash(before Send)"),
@@ -69,6 +69,10 @@ pub const MARKS: [(&str, &str); 21] = [
     ("lookup found", "Lookup: Found"),
     ("lookup absent", "Lookup: Absent"),
     ("lookup error", "Lookup: Error"),
+    ("place error", "Place: Error"),
+    ("order error", "Order: Error"),
+    ("stored error", "Stored: Error"),
+    ("groups error", "Groups: Error"),
     ("lag", "Lag("),
     ("harness refuses", "), Refuse"),
     ("harness slow", " ms"),

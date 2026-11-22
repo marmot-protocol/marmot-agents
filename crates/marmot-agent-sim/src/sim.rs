@@ -347,6 +347,7 @@ impl<'a> Sim<'a> {
             Action::DriverStops => lock(&self.world).driver_stops(),
             Action::Send { outcome } => lock(&self.world).outcomes.push_back(outcome),
             Action::Lookup => lock(&self.world).lookup_errors += 1,
+            Action::ReadFails { at } => lock(&self.world).read_errors.push_back(at),
             Action::SaveFails => lock(&self.world).save_fails = true,
             Action::Crash { after: 0 } => {
                 if up {
@@ -379,6 +380,7 @@ impl<'a> Sim<'a> {
             world.note("Fair");
             world.outcomes.clear();
             world.lookup_errors = 0;
+            world.read_errors.clear();
             world.save_fails = false;
             world.crash_after = None;
             world.harness.moves.clear();
