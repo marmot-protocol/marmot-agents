@@ -230,6 +230,10 @@ struct Record {
     /// chat message, which carries them (D-028).
     #[serde(default)]
     held: Vec<String>,
+    /// Whether the latest version of it that went out closed it: then a later final version
+    /// that is dropped leaves the chat showing it closed, and the core does not close it again.
+    #[serde(default)]
+    closed_in_chat: bool,
 }
 
 /// Something queued to be sent to a group.
@@ -253,6 +257,10 @@ struct Queued {
     /// refuses everything for, as one that is gone, ends the chain there.
     #[serde(default)]
     last_resort: bool,
+    /// Whether it is a `failed` notice that tells the chat of a dropped send: one that is dropped
+    /// in turn is replaced once, even when it settles nothing, so the chat is told of the gap.
+    #[serde(default)]
+    tells: bool,
 }
 
 impl Sending {
@@ -727,6 +735,7 @@ impl Conversation {
                 words: None,
                 started_by: None,
                 held: Vec::new(),
+                closed_in_chat: false,
             });
         let was_waiting = record.last.header().state == State::Waiting;
         record.last = emitted.event.clone();
@@ -926,12 +935,14 @@ impl Conversation {
     /// it was an edit of words whose message is gone (`gone`), the words go as a new message
     /// instead. Anything else is dropped, and the chat is told in a `failed` notice that settles,
     /// as failed, what it settled, and what a turn's version queued to settle for it would have
-    /// (S1). When it was an item's closing version, with nothing later queued for the item, the
-    /// item is closed in the chat all the same, by a version of the core's own (S2). When it was
-    /// a notice that settled requests, a `failed` notice settles them in its place (L1). What
-    /// stands in for a dropped send is as small as the core can make it, so MDK has no size to
-    /// refuse again, and is the last: when it is dropped too, as in a group that is gone, nothing
-    /// takes its place, so nothing loops. Everything is queued for the same group.
+    /// (S1). When it was an item's closing version, with nothing later queued for the item and
+    /// no earlier close of it in the chat, the item is closed in the chat all the same, by a
+    /// version of the core's own (S2). When it was a notice that settled requests, or a `failed`
+    /// notice that told of a dropped send, a `failed` notice takes its place, settling what it
+    /// settled (L1, S3). What stands in for a dropped send is as small as the core can make it,
+    /// leaving out the session and turn the driver chose when they are what is too large, so MDK
+    /// has no size to refuse again, and is the last: when it is dropped too, as in a group that is
+    /// gone, nothing takes its place, so nothing loops. Everything is queued for the same group.
     pub fn refused(&mut self, token: &str, gone: bool) {
         let Some(at) = self.saved.outbox.iter().position(|q| q.token == token) else {
             return;
@@ -973,8 +984,9 @@ impl Conversation {
         if item && !notice {
             self.close_undelivered(&key, &queued.group);
         }
-        // A notice that settled nothing only told the chat something: it is not told again.
-        if notice && settles.is_empty() {
+        // A notice that settled nothing only told the chat something: it is not told again,
+        // unless what it told of was a dropped send, which the chat is told of once more.
+        if notice && settles.is_empty() && !queued.tells {
             return;
         }
         let chat = (self.saved.items.get(&key).map(|r| r.chat.clone()))
@@ -991,22 +1003,38 @@ impl Conversation {
             chunks.push(Vec::new());
         }
         for settles in chunks {
+            // Without the chat's session, which the driver chose and which may be what made the
+            // dropped send too large: nothing the notice needs.
             let event = self.notice(&queued.group, &chat, "failed", NOT_DELIVERED.into());
+            let header = Header {
+                session: None,
+                ..event.header().clone()
+            };
+            let event = AgentEvent::new(header, event.body().clone(), None)
+                .expect("a notice repeats no secret");
             let what = notice_item(event, None, settles);
             // In place of a notice, the last resort; in place of anything else, a notice like any.
             self.queue_as(&queued.group, what, None, notice);
+            if let Some(queued) = self.saved.outbox.back_mut() {
+                queued.tells = true;
+            }
         }
     }
 
     /// Closes in the chat the item named `key`, whose closing version was dropped: when the core
-    /// holds it closed and nothing later of it is queued, its next version is queued, in its
-    /// final state, as small as it can be: its ids, state and version, a `warning` notice in
-    /// place of its body, with no native message and settling nothing.
+    /// holds it closed, the chat does not already show it closed, and nothing later of it is
+    /// queued, its next version is queued, in its final state, as small as it can be: its ids,
+    /// state and version, a `warning` notice in place of its body, with no native message and
+    /// settling nothing. When its session or turn id, which the driver chose, would make even
+    /// that too large, they are left out: the item's id, first event, version and state stay.
     fn close_undelivered(&mut self, key: &str, group: &GroupKey) {
         let Some(record) = self.saved.items.get(key) else {
             return;
         };
-        if record.open() || (self.saved.outbox.iter()).any(|q| q.what.key() == key) {
+        if record.open()
+            || record.closed_in_chat
+            || (self.saved.outbox.iter()).any(|q| q.what.key() == key)
+        {
             return;
         }
         let header = Header {
@@ -1019,18 +1047,35 @@ impl Conversation {
             duration_ms: None,
             reason: Some("not_delivered".into()),
         });
-        let event = AgentEvent::new(header, body, None).expect("a notice repeats no secret");
+        let event = AgentEvent::new(header.clone(), body.clone(), None)
+            .expect("a notice repeats no secret");
+        let mut item = Item {
+            event,
+            version: record.version + 1,
+            // As it will go: naming the item's first event, filled in when it is sent.
+            first: Some(
+                record
+                    .first
+                    .clone()
+                    .unwrap_or_else(|| EventKey("0".repeat(64))),
+            ),
+            started_by: record.started_by.clone(),
+            settles: Vec::new(),
+        };
+        if crate::carrier::item(&item).is_err() {
+            let header = Header {
+                session: None,
+                turn: None,
+                ..header
+            };
+            item.event = AgentEvent::new(header, body, None).expect("a notice repeats no secret");
+        }
+        item.first = record.first.clone();
         let record = self.saved.items.get_mut(key).expect("found");
-        record.version += 1;
+        record.version = item.version;
         let what = Sending::Item {
             key: key.to_string(),
-            item: Box::new(Item {
-                event,
-                version: record.version,
-                first: record.first.clone(),
-                started_by: record.started_by.clone(),
-                settles: Vec::new(),
-            }),
+            item: Box::new(item),
         };
         self.queue_as(group, what, None, true);
     }
@@ -1109,13 +1154,23 @@ impl Conversation {
     /// The oldest send queued for the item named `key` went out, and `event` is its id. The first
     /// event of an item is what its later versions name.
     pub fn sent(&mut self, key: &str, event: EventKey) {
+        let mut closed = None;
         if let Some(at) = self.saved.outbox.iter().position(|q| q.what.key() == key) {
-            self.saved.outbox.remove(at);
+            let queued = self.saved.outbox.remove(at).expect("found");
+            if let Sending::Item { item, .. } = &queued.what {
+                closed = Some(!matches!(
+                    item.event.header().state,
+                    State::Running | State::Waiting
+                ));
+            }
         }
-        if let Some(record) = self.saved.items.get_mut(key)
-            && record.first.is_none()
-        {
-            record.first = Some(event);
+        if let Some(record) = self.saved.items.get_mut(key) {
+            if record.first.is_none() {
+                record.first = Some(event);
+            }
+            if let Some(closed) = closed {
+                record.closed_in_chat = closed;
+            }
         }
         self.forget_old();
     }
@@ -1146,6 +1201,7 @@ impl Conversation {
             shown_by,
             attempted: false,
             last_resort,
+            tells: false,
         });
         Act::Send {
             group: group.clone(),
