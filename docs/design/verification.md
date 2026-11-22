@@ -49,7 +49,7 @@ The properties come from the decisions. Each gets an id that the models, tests a
 | --- | --- | --- |
 | S1 | Every answer and control is settled exactly once: by the event that shows its effect, by a refusal, by the core's `no_effect` net, or as failed when the driver or core stops | D-028, D-070, D-087 |
 | S2 | No item is left open after the driver stops or the core restarts | D-058, D-070 |
-| S3 | An item's versions rise by one, and every later version names its first event | D-025, D-069 |
+| S3 | An item's versions rise by one, and every later version is an edit of its first event; MDK reads each one | D-025, D-112 |
 | S4 | A prompt reaches the harness at most once, across any crash | D-037, D-070 |
 | S5 | An event, an answer or a file reaches only the chat it belongs to | D-060 |
 | S6 | Nobody prompts, approves or sets something without the right to, in any form the harness reads | D-010, D-032, D-047, D-084 |
@@ -314,7 +314,8 @@ clock, from a seed. It owns S1 to S4, S10, L1 to L3 for the core.
 `marmot::Side`, which the real `Marmot` implements; the clock is tokio's, paused in a run; the run loop looks at
 what it waits for in turn rather than at random, so a schedule replays exactly. It checks S1, S3, S4, S5, S10 and
 S12 after every step, and L1, L2, L3 and S2 at the end within 900 s of virtual time, from what the simulated MDK
-stored and what the harness saw. Runs are named `family/vVERSION/SEED/INDEX`; a failure leaves a capsule that
+stored and what the harness saw. Its MDK refuses an item that MDK's own reading of an item refuses
+(`cgka_traits::agent_events`, at the revision the core depends on), and S3 fails on any such send. Runs are named `family/vVERSION/SEED/INDEX`; a failure leaves a capsule that
 replays exactly, shrunk greedily. Seven families form the gate and run on every pull request. One more shows
 what lies beyond an assumption: `disorder` (a message heard before MDK stores it, which MDK does not do) lost
 messages until the core read every chat from its mark on its tick, and loses none since. `late` (a send that lands long after it was handed over) found the accepted duplicate
@@ -363,7 +364,7 @@ proptest for Rust, fast-check for TypeScript, hypothesis for Python.
   a final state, and the native message is unchanged.
 - **Differential:** each translator against the prototype on the same changed recordings, so Rust, TypeScript and
   Python agree with one reference.
-- The carrier: an item read back equals the item sent, and fits whenever it can.
+- The carrier: an item read back equals the item sent, fits whenever it can, and is one MDK reads.
 - File confinement against the real file system on generated trees.
 
 Failing cases are committed (`.proptest-regressions`), and a list records each property's normal and nightly case

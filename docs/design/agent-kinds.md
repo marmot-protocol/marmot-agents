@@ -1,11 +1,15 @@
-# Kinds 1201 and 1202, as M1 used them
+# Kinds 1201 and 1202
 
 Status: decided on 2026-11-21, as [D-076](../decisions.md#d-076-the-tags-of-kinds-1201-and-1202) to
 [D-078](../decisions.md#d-078-the-agents-remarks-during-a-turn-do-not-alert), for the project to hand to MDK and
-the Marmot specification; MDK may rename a tag to fit its conventions. How an agent event travels was decided
-before ([the carrier](event-carrier.md), D-022 to D-027); the exact tags were not. This page fixes them, from what the first end-to-end test (M1 of the [plan](../plan.md)) sent and read back, under the
-temporary kinds of [D-069](../decisions.md#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind).
-The code that writes and reads them is `crates/marmot-agent/src/carrier.rs`. The section
+the Marmot specification. MDK took this shape on 2026-11-22 (MDK pull request 3613), renaming one tag, which
+D-076 allows: a turn's message is `started_by`, not `e`
+([D-112](../decisions.md#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by)).
+The core has sent these kinds on MDK since. How an agent event travels was decided before
+([the carrier](event-carrier.md), D-022 to D-027); the exact tags were not. This page fixes them, from what the
+first end-to-end test (M1 of the [plan](../plan.md)) sent and read back, under the temporary kinds of
+[D-069](../decisions.md#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind). The code
+that writes and reads them is `crates/marmot-agent/src/carrier.rs`. The section
 [provisional additions](#provisional-additions) is a proposal, built and waiting for the owner.
 
 ## What M1 showed
@@ -43,7 +47,7 @@ nothing about agents shows.
 | `fields` | The item type and its own fields, as JSON: `{"type": "tool", "body": {...}}` | Yes |
 | `session` | The harness's session | When there is one |
 | `turn` | The turn it belongs to | When there is one |
-| `e` | On a turn: the chat message that started it | When there is one |
+| `started_by` | On a turn: the chat message that started it. The design named it `e`; MDK keeps `e` for an edit's target (D-112) | When there is one |
 | `settles` | An answer or a control whose effect this version shows; one tag each ([D-028](../decisions.md#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)) | When there are any |
 | `native` | The harness's own message: its kind, then the message itself | Unless left out |
 | `left_out` | `native` and the size left out, when the item was over 64 KB ([D-057](../decisions.md#d-057-the-core-applies-the-64-kb-limit)) | When it happened |
@@ -96,15 +100,33 @@ Built on 2026-11-21 while fixing the known gaps of [testing and verification](ve
   session. Each of these is the last: if MDK refuses it too, as in a group that is gone, nothing more is sent for
   it.
 
+- **A place in the session for the core's own notices** (2026-11-22). MDK reads a `seq` only from 1, so a
+  notice the core makes itself (`refused`, `failed`) carries the highest `seq` its chat's items have shown, or 1
+  when they have shown none, not 0 as before: it sorts after what came before it.
+- **A notice about a message names it with `started_by`** (2026-11-22). The core's `refused` notice about a chat
+  message it did not act on, a prompt from someone without the right or one the driver refused, names that
+  message with the tag a turn names its message with, now `started_by`.
+- **An item begun under the temporary kind** (2026-11-22). A state file from a core that sent items under the
+  temporary kind of D-069 is taken up once: MDK applies no edit to such an event, so each of its items' next
+  version goes out as a new kind 1201 event, the item's first from then on, with its version going on rising. What
+  the state file kept of forgotten items is dropped.
+
 ## Updating an item
 
 A later version is an edit (kind 1009), as decided
-([D-025](../decisions.md#d-025-an-agent-item-is-updated-with-an-edit)). It names the item's first event with an
-`e` tag, and carries the whole item again: content and every tag above, with a higher `v`. A client keeps the
-version with the highest `v`, and holds an edit whose first event it has not received yet.
+([D-025](../decisions.md#d-025-an-agent-item-is-updated-with-an-edit)). It names the item's first event with its
+one `e` tag, and carries the whole item again: content and every tag above, with a higher `v`. A client keeps the
+version with the highest `v`, and holds an edit whose first event it has not received yet. Only the sender of the
+first event may edit it.
 
-M1 sent each later version as a new event with an `item` tag naming the first, because MDK applies edits only to
-chat messages and comments. The fields were the same.
+The core sends the first event with MDK's `submit_custom_event`, and each later version with
+`submit_tagged_edit_for_local_send`, naming the token the first event went under; MDK places the `e` tag from it.
+Both are crash-safe sends ([D-109](../decisions.md#d-109-how-the-cores-sends-survive-a-crash-as-built)). MDK keeps
+one row per item, at its first event, holding the latest version's content and tags and the version it read
+(`TimelineMessageRecord::agent_item`): an app reads the item from there, and need not follow the edits itself.
+
+M1 sent each later version as a new event with an `item` tag naming the first, because MDK applied edits only to
+chat messages and comments then. The fields were the same.
 
 ## Kind 1202: an answer or a control
 
@@ -134,6 +156,9 @@ were sent, they are edited like any chat message.
 
 ## What MDK needs to do
 
+Done in MDK pull request 3613, on 2026-11-22, except where a point says otherwise. What MDK's review left over is
+MDK issue 3612; none of it holds up the core.
+
 - Accept kinds 1201 and 1202 in this shape from a program, in place of the old shape
   ([D-051](../decisions.md#d-051-kinds-1201-and-1202-take-the-new-shape-and-the-old-one-is-not-kept)), and refuse
   neither.
@@ -145,8 +170,11 @@ were sent, they are edited like any chat message.
   message with `["phase", "commentary"]` (D-078).
 - Let a chat message sent crash-safely carry tags, so the agent's words keep their turn and are never sent twice.
   Done in MDK 0.19.0 (`submit_tagged_text`, `submit_tagged_edit_for_local_send`, `submit_custom_event`); a file
-  sent crash-safely (`upload_media_with_client_token`) still carries no tags.
+  sent crash-safely (`upload_media_with_client_token`) still carries no tags: that part is not done.
 - Expose items, with their latest version, to the apps.
+- Let a chat message carry up to 200 `settles` tags, as the provisional additions below send. MDK still caps a chat
+  message at 64 tags and 16 KB of them, so the agent's words that settle more than about 60 requests are refused.
+  **Not done.**
 
 ## Decided
 

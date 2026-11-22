@@ -91,8 +91,8 @@ off in most configurations only to keep them small.
 | --- | --- | --- | --- |
 | S1 | Every request is settled at most once in its chat | invariant `S1` | D-028, D-070, D-087 |
 | S2 | A stop or restart leaves nothing open; an item a chat shows open is open in the state file or has a later version queued there | invariant `S2` | D-058, D-070 |
-| S3 | An item's versions rise by one (the only gaps are versions MDK refused or the core gave up) and every later version names the first event | invariant `S3` | D-025, D-069 |
-| S3 | ...and the chat is told of each gap: every version dropped in a live group is eventually told of in a failed notice posted to the chat, unless it went out after all | `~>`, `S3Told` | D-025, D-069 |
+| S3 | An item's versions rise by one (the only gaps are versions MDK refused or the core gave up) and every later version names the first event | invariant `S3` | D-025, D-112 |
+| S3 | ...and the chat is told of each gap: every version dropped in a live group is eventually told of in a failed notice posted to the chat, unless it went out after all | `~>`, `S3Told` | D-025, D-112 |
 | S4 | A prompt reaches the driver at most once, across crashes | invariant `S4` | D-037, D-070 |
 | S10 | Everything up to a mark was handled, nothing twice, in memory and on disk | invariant `S10` | D-037 |
 | S12 | A prompt names a session only when the driver took no prompt for the chat since it started, and never one the core saw end | invariant `S12` | D-065 |
