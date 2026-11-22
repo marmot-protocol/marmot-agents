@@ -426,13 +426,16 @@ pub fn liveness(world: &World) -> Vec<Failure> {
         }
     }
     // A send MDK refuses for good is answered by a `failed` notice that settles what it
-    // settled; a notice it refuses is dropped, so nothing loops, and what that notice settled
-    // stays unsettled, by design (`Conversation::refused`). Only that: a request whose other send
-    // was refused must still be settled, by the notice.
-    let refused: BTreeSet<&EventKey> = (world.refused.iter())
-        .filter(|r| r.notice)
-        .flat_map(|r| &r.settles)
-        .collect();
+    // settled, and a notice it refuses by one in its place, which is the last: when MDK refuses
+    // that too, the core takes the group as one MDK refuses everything for, as a gone one, and
+    // stops there, so nothing loops (`Conversation::refused`). Only then is a request let off:
+    // when two notices that settled it were refused, the notice and the one in its place.
+    let mut refused_notices: BTreeMap<&EventKey, usize> = BTreeMap::new();
+    for r in (world.refused.iter()).filter(|r| r.notice.is_some()) {
+        for request in &r.settles {
+            *refused_notices.entry(request).or_default() += 1;
+        }
+    }
     let versions = versions(world);
     let about: BTreeSet<&EventKey> = versions
         .iter()
@@ -456,7 +459,8 @@ pub fn liveness(world: &World) -> Vec<Failure> {
             continue;
         }
         if m.posted.is_request() {
-            if settled.get(&m.event).copied().unwrap_or(0) == 1 || refused.contains(&m.event) {
+            let chain_ended = refused_notices.get(&m.event).is_some_and(|n| *n >= 2);
+            if settled.get(&m.event).copied().unwrap_or(0) == 1 || chain_ended {
                 continue;
             }
             // A request that names nothing and was older than five minutes when the core
@@ -500,8 +504,11 @@ pub fn liveness(world: &World) -> Vec<Failure> {
     }
     // The latest thing the running driver emitted of each item reaches the chat (L2): a turn
     // ends where people see it, and nothing waits in the outbox for good; unless MDK refused the
-    // very version that carried it. Each emission is known by its `seq`, which the core keeps.
+    // very version that carried it while the item was open. A closing version MDK refused is
+    // followed by the core's own close of the item, which keeps its `seq`. Each emission is known
+    // by its `seq`, which the core keeps.
     let refused: BTreeSet<(&str, u64)> = (world.refused.iter())
+        .filter(|r| !r.state.is_some_and(final_state) || closed_by_core(r))
         .filter_map(|r| Some((r.item.as_ref()?.0.as_str(), r.seq?)))
         .collect();
     if world.harness.out.is_some() {
@@ -551,16 +558,22 @@ pub fn liveness(world: &World) -> Vec<Failure> {
     failures
 }
 
-/// The last version of each item, leaving out an item whose closing version MDK refused: the
-/// core gives up on that version with a notice, by design, and has nothing left to send, so the
-/// chat may show the item open (S2 and L2 assume MDK takes what it does not refuse for good). An
-/// item MDK refused an open version of is still to be closed.
+/// Whether a refused send was the core's own close of an item whose closing version was
+/// dropped: the last thing sent for it.
+fn closed_by_core(refused: &crate::world::RefusedSend) -> bool {
+    refused.item.is_some() && refused.notice.as_deref() == Some("not_delivered")
+}
+
+/// The last version of each item, as the chat last saw it. A closing version MDK refused is
+/// followed by the core's own close, so the item does not stay open (S2, L2); only when MDK
+/// refused that close too is the item left out: the close is the last, so nothing loops, and the
+/// core takes the group as one MDK refuses everything for, as a gone one.
 fn last_versions<'a>(
     world: &World,
     versions: &'a [Version<'a>],
 ) -> BTreeMap<(usize, String), &'a Version<'a>> {
     let refused: BTreeSet<(usize, &str)> = (world.refused.iter())
-        .filter(|r| r.state.is_some_and(final_state))
+        .filter(|r| closed_by_core(r))
         .filter_map(|r| r.item.as_ref().map(|(id, _)| (r.chat, id.as_str())))
         .collect();
     let mut last = BTreeMap::new();

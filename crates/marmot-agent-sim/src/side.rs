@@ -320,9 +320,14 @@ fn send(
     let (state, notice) = match what {
         Sending::Item { item, .. } => (
             Some(item.event.header().state),
-            matches!(item.event.body(), Body::Notice(n) if n.kind == NoticeKind::Refused),
+            match item.event.body() {
+                Body::Notice(n) if matches!(n.kind, NoticeKind::Refused | NoticeKind::Warning) => {
+                    n.reason.clone()
+                }
+                _ => None,
+            },
         ),
-        Sending::Words { .. } => (None, false),
+        Sending::Words { .. } => (None, None),
     };
     let Ok((kind, content, tags, edits)) = built else {
         world.refused.push(RefusedSend {

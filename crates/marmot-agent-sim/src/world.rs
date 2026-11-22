@@ -112,9 +112,11 @@ pub struct RefusedSend {
     pub state: Option<State>,
     /// For an item: the `seq` of the emission the refused version showed.
     pub seq: Option<u64>,
-    /// Whether it was a notice of the core's own, such as the `failed` notice that answers a
-    /// refused send: the core drops a refused notice, so nothing loops.
-    pub notice: bool,
+    /// For a notice of the core's own, its reason: `failed` for the notice that answers a
+    /// dropped send, `not_delivered` for the core's close of an item whose closing version was
+    /// dropped. What stands in for a dropped send is the last: one refused in its turn is not
+    /// answered again, so nothing loops.
+    pub notice: Option<String>,
 }
 
 /// A send that goes out later than the core looked for it.

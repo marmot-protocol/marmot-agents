@@ -2026,3 +2026,64 @@ fn a_refused_edit_leaves_its_turn_version_settling_nothing() {
     }
     assert_eq!(failed, vec![EventKey::from("r2")]);
 }
+
+// In a group MDK refuses everything for, as one that is gone, a dropped send is followed by what
+// stands in for it, once: the item's close of the core's own, and a `failed` notice in place of
+// one that settled a request. Those are the last; when they are dropped too, nothing takes their
+// place, so nothing loops (S2, L1).
+#[test]
+fn what_stands_in_for_a_dropped_send_is_the_last() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    let request = interrupt_taken(&mut talk, "r1");
+    let mut done = emitted(&chat, event("t1", State::Done, turn()));
+    done.settles = vec![request];
+    talk.emitted(done);
+    let group = direct().group;
+    let mut dropped = Vec::new();
+    while let Some((token, what)) = talk.next_send(&group) {
+        assert!(dropped.len() < 10, "it loops");
+        let Sending::Item { item, .. } = what else {
+            panic!("no words were queued")
+        };
+        let header = item.event.header();
+        let reason = match item.event.body() {
+            Body::Notice(n) => n.reason.clone(),
+            _ => None,
+        };
+        dropped.push((
+            header.item.as_str().starts_with("core-"),
+            item.version,
+            header.state,
+            reason,
+            item.settles.clone(),
+        ));
+        talk.refused(&token, false);
+    }
+    let r1 = vec![EventKey::from("r1")];
+    let failed = Some("failed".to_string());
+    assert_eq!(
+        dropped,
+        vec![
+            (false, 2, State::Done, None, r1.clone()),
+            // The item's close, as small as it can be, and the notice that tells of the drop.
+            (
+                false,
+                3,
+                State::Done,
+                Some("not_delivered".into()),
+                Vec::new()
+            ),
+            (true, 1, State::Done, failed.clone(), r1.clone()),
+            // In place of that notice, which settled r1: the last.
+            (true, 1, State::Done, failed, r1),
+        ]
+    );
+    assert!(talk.queued(&group).is_empty());
+}
