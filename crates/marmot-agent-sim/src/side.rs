@@ -193,23 +193,6 @@ impl Side for SimSide {
             .collect())
     }
 
-    fn latest(&self, group: &GroupKey) -> Result<i64, NotNow> {
-        let mut world = lock(&self.world);
-        world.land();
-        let Some(chat) = world.chat_of(group) else {
-            return Ok(0);
-        };
-        Ok((world.rows.iter())
-            .filter(|r| r.chat == chat && (r.kind == CHAT || r.kind == REQUEST_KIND))
-            .map(|r| r.order)
-            .max()
-            .unwrap_or(0))
-    }
-
-    fn now(&self) -> u64 {
-        lock(&self.world).secs()
-    }
-
     fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow> {
         let mut world = lock(&self.world);
         world.land();

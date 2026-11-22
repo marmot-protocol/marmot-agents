@@ -16,6 +16,7 @@ use crate::schedule::{Action, Schedule};
 use crate::side::{Shared, SimEvents, SimSide, lock};
 use crate::world::{Move, Trace, World};
 use marmot_agent::config::Config;
+use marmot_agent::marmot::Subscribed;
 use marmot_agent::run::{Core, Store};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -226,7 +227,13 @@ impl<'a> Sim<'a> {
             "this schedule puts bugs back: build with the `bugs` feature"
         );
         let (stop, stopped) = oneshot::channel::<()>();
-        let task = tokio::spawn(core.run(SimEvents, async {
+        // Subscribed as it starts: the simulated harness starts at once.
+        let since = lock(&self.world).secs();
+        let live = Subscribed {
+            events: SimEvents,
+            since,
+        };
+        let task = tokio::spawn(core.run(live, async {
             let _ = stopped.await;
         }));
         self.core = Some(Running {

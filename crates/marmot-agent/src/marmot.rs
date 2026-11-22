@@ -179,8 +179,8 @@ pub enum Fault {
     /// MDK cannot say where a group is, the next time a message is read: a passing failure, as
     /// when the group's state cannot be read for a moment.
     PlaceFails,
-    /// MDK cannot say where a group's messages end, the next time the core asks.
-    LatestFails,
+    /// MDK cannot give what it stored for a group, the next time the core reads it.
+    StoredFails,
     /// MDK takes the send and keeps it queued this long before its engine takes it, as when the
     /// engine is held up: until then MDK says it is queued.
     Held(Duration),
@@ -194,7 +194,7 @@ impl Faults {
 
     /// The oldest fault for a send, one that is neither of the others.
     fn next_send(&self) -> Option<Fault> {
-        self.next(|f| !matches!(f, Fault::PlaceFails | Fault::LatestFails))
+        self.next(|f| !matches!(f, Fault::PlaceFails | Fault::StoredFails))
     }
 
     /// Keeps the send under `token` queued for `long`, from its first try.
@@ -551,24 +551,17 @@ impl Marmot {
     /// The chat messages, answers and controls others sent to a group that arrived here after
     /// `after` in storage order, in that order, however many there are.
     pub fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow> {
+        if (self.faults)
+            .next(|f| matches!(f, Fault::StoredFails))
+            .is_some()
+        {
+            return Err(NotNow);
+        }
         let mut rows: Vec<AppMessageRecord> = (self.stored_all(group)?.into_iter())
             .filter(|r| r.insert_order > after && r.direction == "received" && !r.invalidated)
             .collect();
         rows.sort_by_key(|r| r.insert_order);
         Ok(rows.into_iter().map(Message::from).collect())
-    }
-
-    /// The latest place in storage order for a group: where a group the core has never seen
-    /// starts, so its history is not read as prompts.
-    pub fn latest(&self, group: &GroupKey) -> Result<i64, NotNow> {
-        if (self.faults)
-            .next(|f| matches!(f, Fault::LatestFails))
-            .is_some()
-        {
-            return Err(NotNow);
-        }
-        let rows = self.stored_all(group)?;
-        Ok(rows.iter().map(|r| r.insert_order).max().unwrap_or(0))
     }
 
     /// A message's place in storage order. `None` when it is not stored, as for one MDK removed.
@@ -670,12 +663,6 @@ pub trait Side: Clone + Send + Sync + 'static {
     /// The groups the agent has accepted; [`NotNow`] when they could not be listed.
     fn groups(&self) -> Result<Vec<GroupKey>, NotNow>;
 
-    /// The latest place in storage order for a group.
-    fn latest(&self, group: &GroupKey) -> Result<i64, NotNow>;
-
-    /// This machine's clock, in whole seconds since the epoch, as a message's `received_at` is.
-    fn now(&self) -> u64;
-
     /// What others sent to a group that was stored after `after`, in storage order.
     fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow>;
 
@@ -695,6 +682,28 @@ pub trait Side: Clone + Send + Sync + 'static {
         file: &Outgoing,
         turn: Option<&TurnId>,
     ) -> impl Future<Output = Result<EventKey, FileFailed>> + Send;
+}
+
+/// Live events, and when they were subscribed to: what a group the core has no read mark for
+/// received by then is its history (L3).
+pub struct Subscribed<E> {
+    /// The events, from the moment they were subscribed to.
+    pub events: E,
+    /// That moment, by this machine's clock in whole seconds, as a message's `received_at` is.
+    pub since: u64,
+}
+
+/// Subscribes to MDK's live events, noting when. A core subscribes before MDK starts, so it
+/// misses nothing MDK announces while it starts, and before its harness starts, so what arrives
+/// while a slow harness starts is not taken as history.
+pub fn subscribe(
+    runtime: &MarmotAppRuntime,
+) -> Subscribed<tokio::sync::broadcast::Receiver<MarmotAppEvent>> {
+    let events = runtime.subscribe();
+    Subscribed {
+        events,
+        since: now(),
+    }
 }
 
 /// A live event, as the core takes it.
@@ -862,14 +871,6 @@ impl Side for Marmot {
 
     fn groups(&self) -> Result<Vec<GroupKey>, NotNow> {
         Marmot::groups(self)
-    }
-
-    fn latest(&self, group: &GroupKey) -> Result<i64, NotNow> {
-        Marmot::latest(self, group)
-    }
-
-    fn now(&self) -> u64 {
-        now()
     }
 
     fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow> {
