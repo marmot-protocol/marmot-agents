@@ -152,6 +152,9 @@ pub struct Acp {
     /// Whether the agent takes MCP servers over HTTP, and which chats its tokens may send for.
     takes_http: bool,
     scope: Scope,
+    /// Whether the agent names, in every call of its tool, the session that made it (OpenCode,
+    /// Goose): a call of such an agent that names none is refused.
+    names_caller: bool,
     /// The driver's MCP server, once the settings switch file sending on and the agent takes it,
     /// and the token for it of each chat and folder.
     mcp: Option<Server>,
@@ -248,6 +251,7 @@ impl Acp {
             patience: ENDING,
             takes_http: false,
             scope: Scope::Chat,
+            names_caller: false,
             mcp: None,
             tokens: Tokens::default(),
             issued: HashMap::new(),
@@ -304,10 +308,13 @@ impl Acp {
         // OpenCode, Goose and Cursor take MCP servers over HTTP; an agent that does not is given
         // none, and has no tool to send a file.
         acp.takes_http = result["agentCapabilities"]["mcpCapabilities"]["http"] == true;
-        let opencode = result["agentInfo"]["name"].as_str();
-        if opencode.is_some_and(|n| n.eq_ignore_ascii_case("opencode")) {
+        let name = result["agentInfo"]["name"].as_str().unwrap_or_default();
+        if name.eq_ignore_ascii_case("opencode") {
             acp.scope = Scope::Folder;
         }
+        acp.names_caller = ["opencode", "goose"]
+            .iter()
+            .any(|n| name.eq_ignore_ascii_case(n));
         acp.greeting = vec![(Direction::Out, hello), (Direction::In, line)];
         Ok(acp)
     }
@@ -460,7 +467,8 @@ impl Acp {
     /// must be the chat the call's token was given to, or, for OpenCode, a chat whose session works
     /// in the token's folder: OpenCode keeps one server for every session in a folder, so its
     /// calls carry whichever chat's token came last there, and must name their session. A call that
-    /// names none goes to the chat of its token (Cursor). A call naming a session no chat has, or
+    /// names none goes to the chat of its token, for an agent that never names it (Cursor); Goose
+    /// and OpenCode always do, so one of theirs that names none is refused. A call naming a session no chat has, or
     /// another chat's, or naming it in a shape the driver cannot read, is refused, never guessed. A
     /// relative path is made whole from the chat's folder; the core takes only an absolute one,
     /// and follows any `..` itself.
@@ -479,8 +487,8 @@ impl Acp {
                     Scope::Folder => self.folder_of(owner) == call.owner.folder,
                 })
             }
-            (Named::Nothing, Scope::Chat) => Some(call.owner.chat.clone()),
-            (Named::Nothing, Scope::Folder) | (Named::Malformed, _) => None,
+            (Named::Nothing, Scope::Chat) if !self.names_caller => Some(call.owner.chat.clone()),
+            (Named::Nothing, _) | (Named::Malformed, _) => None,
         };
         let Some(chat) = chat.filter(|c| self.chats.contains_key(c)) else {
             return refuse(call, "the driver cannot tell which chat asked.");

@@ -54,17 +54,7 @@ impl Server {
         stream.write_all(request.as_bytes()).await?;
         let mut raw = Vec::new();
         stream.read_to_end(&mut raw).await?;
-        let raw = String::from_utf8_lossy(&raw).into_owned();
-        let (head, rest) = raw.split_once("\r\n\r\n").ok_or_else(|| bad("no answer"))?;
-        let status = (head.split(' ').nth(1))
-            .and_then(|s| s.parse().ok())
-            .ok_or_else(|| bad("no status"))?;
-        let text = if head.to_lowercase().contains("transfer-encoding: chunked") {
-            unchunk(rest)
-        } else {
-            rest.to_string()
-        };
-        Ok((status, serde_json::from_str(&text).unwrap_or(Value::Null)))
+        answer(&raw)
     }
 
     /// One request that must be answered with 200: its JSON.
@@ -120,15 +110,59 @@ impl Server {
     }
 }
 
-fn unchunk(mut rest: &str) -> String {
-    let mut text = String::new();
-    while let Some((size, after)) = rest.split_once("\r\n") {
-        let size = usize::from_str_radix(size.trim(), 16).unwrap_or(0);
+/// An HTTP answer, as it came: its status and its JSON, `null` when it has none. The body is read
+/// as text only once it is whole, since a chunk may end inside a character.
+fn answer(raw: &[u8]) -> io::Result<(u16, Value)> {
+    let bad = |what: &str| io::Error::other(what.to_string());
+    let (head, rest) = split(raw, b"\r\n\r\n").ok_or_else(|| bad("no answer"))?;
+    let head = String::from_utf8_lossy(head);
+    let status = (head.split(' ').nth(1))
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| bad("no status"))?;
+    let body = if head.to_lowercase().contains("transfer-encoding: chunked") {
+        unchunk(rest)
+    } else {
+        rest.to_vec()
+    };
+    Ok((status, serde_json::from_slice(&body).unwrap_or(Value::Null)))
+}
+
+/// What comes before the first `at`, and what after it.
+fn split<'a>(bytes: &'a [u8], at: &[u8]) -> Option<(&'a [u8], &'a [u8])> {
+    let i = bytes.windows(at.len()).position(|w| w == at)?;
+    Some((&bytes[..i], &bytes[i + at.len()..]))
+}
+
+/// A chunked body, its framing taken off.
+fn unchunk(mut rest: &[u8]) -> Vec<u8> {
+    let mut body = Vec::new();
+    while let Some((size, after)) = split(rest, b"\r\n") {
+        let size = std::str::from_utf8(size).unwrap_or_default().trim();
+        let size = usize::from_str_radix(size, 16).unwrap_or(0);
         if size == 0 || after.len() < size {
             break;
         }
-        text.push_str(&after[..size]);
+        body.extend_from_slice(&after[..size]);
         rest = after.get(size + 2..).unwrap_or_default();
     }
-    text
+    body
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A chunk counts bytes, and may end inside a character.
+    #[test]
+    fn a_character_split_between_chunks_is_read_whole() {
+        let body = "{\"x\":\"\u{e9}\"}".as_bytes();
+        let mut raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+        for chunk in [&body[..7], &body[7..]] {
+            raw.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
+            raw.extend_from_slice(chunk);
+            raw.extend_from_slice(b"\r\n");
+        }
+        raw.extend_from_slice(b"0\r\n\r\n");
+        assert_eq!(answer(&raw).unwrap(), (200, json!({"x": "\u{e9}"})));
+    }
 }

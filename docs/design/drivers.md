@@ -443,12 +443,13 @@ send_files = true                 # provisional, off unless set until Q-31 is de
   server of a name for every session in a folder, the one handed over last, so its calls carry whichever
   chat's token came last there, and the token alone would send one chat's file to another. A call that names
   no session goes to the chat whose token it carries (Cursor, which keeps a server for each session); from
-  OpenCode it is refused. A call naming a session no chat has (such as one of OpenCode's subagents), another
+  OpenCode or Goose, which always name it, it is refused. A call naming a session no chat has (such as one of OpenCode's subagents), another
   chat's session, or a session in a shape the driver cannot read, is refused, never guessed. A relative path
   is made whole from the chat's folder, which changes only once the agent has opened a session in the new
   one. While a file waits for the core's word, a prompt to that chat that would restart its turn is refused
   as busy: the turn waits on the tool's result, which the core can give only once the prompt returns. When
-  the driver stops, a call in flight is answered as not sent. An agent that takes no MCP server over HTTP is
+  the driver stops, a call in flight is answered as not sent, and a connection still sending its request is
+  closed within two seconds. An agent that takes no MCP server over HTTP is
   given none, and has no tool. Goose in its container cannot reach the loopback address, so it has no
   tool there; on the host it has. What each agent does was read in its source or seen on the wire
   ([harness interfaces](../reference/harness-interfaces.md#mcp-servers-from-the-client-over-acp)).

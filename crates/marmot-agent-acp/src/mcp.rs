@@ -40,6 +40,11 @@ pub const SERVER: &str = "marmot";
 /// 2.3.2 and Goose 1.59.2, read in their sources and seen on the wire 2026-11-22.
 const SESSION_KEYS: [&str; 2] = ["ai.opencode/sessionID", "agent-session-id"];
 
+/// How long a connection may take, once the server stops, to finish what it was given. A call
+/// whose whole request has arrived is answered in that time; one still waiting for the rest of its
+/// request is cut off.
+const DRAIN: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Who a token was given to: a chat, for a session it opened in a folder.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Owner {
@@ -181,11 +186,12 @@ async fn serve(
                 hyper::server::conn::http1::Builder::new().serve_connection(io, guarded);
             let mut connection = std::pin::pin!(connection);
             // Once stopped, a call in flight is still answered, as not sent: the driver that
-            // would have answered it has gone. Then the connection closes.
+            // would have answered it has gone. Then the connection closes, by `DRAIN` at the
+            // latest, even when its request never arrives whole.
             tokio::select! {
                 () = stop.cancelled() => {
                     connection.as_mut().graceful_shutdown();
-                    let _ = connection.await;
+                    let _ = tokio::time::timeout(DRAIN, connection).await;
                 }
                 _ = connection.as_mut() => {}
             }

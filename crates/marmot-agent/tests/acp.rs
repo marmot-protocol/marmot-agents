@@ -213,10 +213,8 @@ async fn scenario(agent: Agent) {
         .say("Send the file runs.txt to the chat with your send_file tool, then reply with the word done.")
         .await;
     let mut allowed = false;
-    let mut files = Vec::new();
     for _ in 0..TURN {
-        files = files_sent(&world, &chat.group).await;
-        if !files.is_empty() {
+        if !files_sent(&world, &chat.group).await.is_empty() {
             break;
         }
         let turn = chat.turns_for(&asked).into_iter().next();
@@ -227,16 +225,18 @@ async fn scenario(agent: Agent) {
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
     }
+    // Counted once the turn is over, so a second file sent later in it is seen.
+    let sent = chat.turn_for(&asked).await;
+    chat.turn_at(&sent, State::Done).await;
+    let files = files_sent(&world, &chat.group).await;
     assert_eq!(files.len(), 1, "one file sent");
     assert_eq!(files[0].0, "runs.txt");
     assert_eq!(files[0].1, b"ran\n");
-    let sent = chat.turn_for(&asked).await;
     assert_eq!(
         files[0].2.as_deref(),
         Some(sent.as_str()),
         "tagged with its turn"
     );
-    chat.turn_at(&sent, State::Done).await;
     println!("sent a file");
 
     core.stop().await;

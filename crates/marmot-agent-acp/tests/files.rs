@@ -75,6 +75,12 @@ const OPENCODE: Agent = Agent {
     serve: true,
 };
 
+const GOOSE: Agent = Agent {
+    http: true,
+    name: "goose",
+    serve: true,
+};
+
 async fn connected(agent: Agent) -> (Acp, Stand) {
     let (driver_side, stand_side) = tokio::io::duplex(1 << 16);
     let (read, write) = tokio::io::split(stand_side);
@@ -342,15 +348,17 @@ async fn opencode_calls_outside_the_tokens_folder_or_without_a_session_are_refus
 
 // Goose keeps a server for each session and names the session in `_meta["agent-session-id"]`: the
 // session must be the token's chat's own. A call through one chat's server naming another chat's
-// session is refused.
+// session is refused, and so is one naming none, which Goose always names.
 #[tokio::test]
 async fn goose_calls_must_name_a_session_of_the_tokens_chat() {
-    let (mut acp, stand) = connected(STAND_IN).await;
+    let (mut acp, stand) = connected(GOOSE).await;
     let (_stand, [first, second]) = two_chats(&mut acp, stand, None).await;
     let (one, _) = server_of(&first);
     let (two, _) = server_of(&second);
-    refused(&mut acp, one, json!({"agent-session-id": "s2"})).await;
+    refused(&mut acp, one.clone(), json!({"agent-session-id": "s2"})).await;
     refused(&mut acp, two.clone(), json!({"agent-session-id": 2})).await;
+    refused(&mut acp, one, Value::Null).await;
+    refused(&mut acp, two.clone(), json!({"progressToken": 2})).await;
     let meta = json!({"agent-session-id": "s2", "agent-working-dir": "/somewhere/else"});
     let call = tokio::spawn(async move { call_tool(&two, "notes.txt", meta).await });
     let file = next_file(&mut acp).await;
@@ -499,4 +507,31 @@ async fn a_call_the_driver_can_no_longer_answer_is_not_sent() {
             "{cut_off}"
         ),
     }
+}
+
+// A client that sends part of a call and then nothing does not hold the server open once the
+// driver has gone: the connection is closed within a few seconds.
+#[tokio::test]
+async fn a_call_cut_off_halfway_does_not_hold_the_server_open() {
+    let (mut acp, stand) = connected(STAND_IN).await;
+    let (_stand, [first, _]) = two_chats(&mut acp, stand, None).await;
+    let (server, token) = server_of(&first);
+    let rest = server.url.strip_prefix("http://").unwrap();
+    let (address, path) = rest.split_at(rest.find('/').unwrap());
+    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
+    let head = format!(
+        "POST {path} HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\n\
+         Content-Type: application/json\r\nAccept: application/json, text/event-stream\r\n\
+         Content-Length: 100\r\n\r\n{{\"jsonrpc\""
+    );
+    stream.write_all(head.as_bytes()).await.unwrap();
+    settle(&mut acp).await;
+    drop(acp);
+    let mut rest = Vec::new();
+    let closed = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut rest),
+    )
+    .await;
+    assert!(closed.is_ok(), "the connection is still open");
 }
