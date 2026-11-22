@@ -9,7 +9,7 @@
 //! `--session <id>` takes up a session that has one and exits otherwise, and `--session-id <id>`
 //! takes it up or starts an empty one with that id.
 
-use super::{FILE, Fake, Heard, Outbox, Protocol, Script, fresh};
+use super::{Fake, Heard, Outbox, Protocol, Script, file_for, fresh};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -187,7 +187,7 @@ impl Pi {
         if script == Script::File && self.sends_files {
             // The extension's tool asks the driver, in its dialog, and waits for the answer.
             let call = fresh("call");
-            let args = json!({"path": FILE});
+            let args = json!({"path": file_for(text)});
             assistant(
                 json!([{"type": "toolCall", "id": call, "name": "send_file", "arguments": args}]),
                 "toolUse",

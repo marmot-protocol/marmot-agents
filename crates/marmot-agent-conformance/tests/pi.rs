@@ -122,8 +122,10 @@ async fn faults_are_caught() {
         Fault::TakeUnhanded,
         Fault::SwallowPrompt,
         Fault::FileWrongChat,
+        Fault::FileToWrongChat,
         Fault::FileOwnFolder,
         Fault::FileUnanswered,
+        Fault::LoseFileResult,
     ] {
         let found = faults::caught(subject(), fault, None).await;
         if !fault.caught_as(&found) {

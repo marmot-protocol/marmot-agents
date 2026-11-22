@@ -122,6 +122,14 @@ impl<P: Protocol> Protocol for Replay<P> {
     fn ended(&mut self) {
         self.fallback.ended();
     }
+
+    fn waker(&self) -> Option<Arc<tokio::sync::Notify>> {
+        self.fallback.waker()
+    }
+
+    fn woken(&mut self, out: &mut Outbox, heard: &mut Vec<Heard>) {
+        self.fallback.woken(out, heard);
+    }
 }
 
 /// Whether a message from the driver answers a request of the harness's own: a JSON-RPC reply, or

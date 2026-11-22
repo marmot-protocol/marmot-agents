@@ -9,8 +9,15 @@
 //!   itself, after a load, with a turn a crash cut off, until it is cancelled.
 //! - **Cursor** offers only `session/load`, gives no name or version, and asks the client to take
 //!   its to-do list (`cursor/update_todos`) naming only the tool call.
+//!
+//! Each takes MCP servers over HTTP from the client, as the real ones do, and calls the driver's
+//! `send_file` on `#file` the way each was seen to (2026-11-22): **OpenCode** keeps one server of a
+//! name for every session in a folder, the one handed over last, and names the calling session in
+//! `_meta["ai.opencode/sessionID"]`; **Goose** keeps the servers of each session and names it in
+//! `_meta["agent-session-id"]`; **Cursor** keeps the servers of each session and names none.
 
-use super::{Heard, Outbox, Protocol, Script, fresh};
+use super::mcp::Server;
+use super::{Heard, Outbox, Protocol, Script, file_for, fresh};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -34,6 +41,10 @@ pub struct Store {
 /// A shared store, for every process the fake starts.
 pub type Shared = Arc<Mutex<Store>>;
 
+/// Tool calls come back over HTTP, by session, with whether they worked and the words the model
+/// reads.
+type Called = Arc<Mutex<Vec<(String, Option<(bool, String)>)>>>;
+
 struct Turn {
     prompt: Value,
     text: String,
@@ -55,6 +66,15 @@ pub struct Acp {
     own_runs: HashSet<String>,
     asked: HashMap<i64, Asked>,
     next_request: i64,
+    /// The MCP servers each session was handed, and each session's folder: OpenCode keeps them by
+    /// folder instead, the last handed over for a folder serving every session there.
+    servers: HashMap<String, Vec<Server>>,
+    by_folder: HashMap<String, Vec<Server>>,
+    folders: HashMap<String, String>,
+    /// Tool calls that have come back over HTTP, by session: whether the server said it worked,
+    /// or `None` when it could not be used.
+    called: Called,
+    waker: Arc<tokio::sync::Notify>,
 }
 
 fn update(session: &str, update: Value) -> Value {
@@ -76,7 +96,65 @@ impl Acp {
             own_runs: HashSet::new(),
             asked: HashMap::new(),
             next_request: 0,
+            servers: HashMap::new(),
+            by_folder: HashMap::new(),
+            folders: HashMap::new(),
+            called: Arc::default(),
+            waker: Arc::default(),
         }
+    }
+
+    /// Keeps the MCP servers a session request handed over, as the flavour does.
+    fn keep_servers(&mut self, session: &str, params: &Value) {
+        let servers = Server::from_params(params);
+        let folder = params["cwd"].as_str().unwrap_or_default().to_string();
+        self.folders.insert(session.to_string(), folder.clone());
+        if self.flavor == Flavor::OpenCode {
+            if !servers.is_empty() {
+                self.by_folder.insert(folder, servers);
+            }
+        } else {
+            self.servers.insert(session.to_string(), servers);
+        }
+    }
+
+    /// The server the session's `send_file` call reaches, if it was given one.
+    fn server_for(&self, session: &str) -> Option<Server> {
+        let servers = match self.flavor {
+            Flavor::OpenCode => self.by_folder.get(self.folders.get(session)?)?,
+            _ => self.servers.get(session)?,
+        };
+        servers.first().cloned()
+    }
+
+    /// Calls `send_file` over HTTP, off the pipe; the result comes back through [`Protocol::woken`].
+    fn send_file(&mut self, session: &str, text: &str, call: &str, out: &mut Outbox) -> bool {
+        let Some(server) = self.server_for(session) else {
+            return false;
+        };
+        let path = file_for(text);
+        out.say(update(
+            session,
+            json!({"sessionUpdate": "tool_call", "toolCallId": call, "title": "marmot: send_file",
+            "kind": "other", "status": "in_progress", "rawInput": {"path": path}}),
+        ));
+        let meta = match self.flavor {
+            Flavor::OpenCode => Some(json!({"ai.opencode/sessionID": session, "progressToken": 2})),
+            Flavor::Goose => Some(json!({"agent-session-id": session})),
+            Flavor::Cursor => None,
+        };
+        let (called, waker, session) =
+            (self.called.clone(), self.waker.clone(), session.to_string());
+        tokio::spawn(async move {
+            let result = server.call("send_file", json!({"path": path}), meta).await;
+            let result = result.map(|r| {
+                let text = r["content"][0]["text"].as_str().unwrap_or_default();
+                (r["isError"] != true, text.to_string())
+            });
+            called.lock().unwrap().push((session, result));
+            waker.notify_one();
+        });
+        true
     }
 
     fn reply(id: &Value, result: Value, out: &mut Outbox) {
@@ -168,6 +246,19 @@ impl Acp {
             call: None,
         };
         let script = Script::of(text);
+        if script == Script::File {
+            let call = fresh("call");
+            turn.call = Some(call.clone());
+            self.sessions.insert(session.to_string(), Some(turn));
+            if !self.send_file(session, text, &call, out) {
+                // Given no tool, the agent says so and the turn ends.
+                if let Some(Some(turn)) = self.sessions.get_mut(session) {
+                    turn.call = None;
+                }
+                self.finish(session, Some("no such tool"), "end_turn", out);
+            }
+            return;
+        }
         if matches!(script, Script::Ask | Script::Sleep | Script::Die) {
             let call = fresh("call");
             let status = if script == Script::Ask {
@@ -185,8 +276,7 @@ impl Acp {
         let call = turn.call.clone();
         self.sessions.insert(session.to_string(), Some(turn));
         match script {
-            // The ACP driver gives the agent no tool to send a file yet.
-            Script::Reply | Script::File => self.finish(session, Some("ok"), "end_turn", out),
+            Script::Reply => self.finish(session, Some("ok"), "end_turn", out),
             Script::Ask => {
                 if self.flavor == Flavor::Cursor {
                     let params = json!({"toolCallId": call, "merge": false,
@@ -213,7 +303,7 @@ impl Acp {
                 };
                 self.ask("elicitation/create", params, asked, out);
             }
-            Script::Sleep => {}
+            Script::Sleep | Script::File => {}
             Script::Die => {
                 self.store.lock().unwrap().cut.insert(session.to_string());
                 out.die();
@@ -266,19 +356,23 @@ impl Protocol for Acp {
             "initialize" => {
                 let result = match self.flavor {
                     Flavor::OpenCode => json!({"protocolVersion": 1,
-                        "agentCapabilities": {"loadSession": true, "sessionCapabilities": {"resume": {}}},
+                        "agentCapabilities": {"loadSession": true, "sessionCapabilities": {"resume": {}},
+                            "mcpCapabilities": {"http": true, "sse": false}},
                         "agentInfo": {"name": "opencode", "version": "0.0.0-fake"}}),
                     Flavor::Goose => json!({"protocolVersion": 1,
-                        "agentCapabilities": {"loadSession": true, "sessionCapabilities": {}},
+                        "agentCapabilities": {"loadSession": true, "sessionCapabilities": {},
+                            "mcpCapabilities": {"http": true, "sse": false}},
                         "agentInfo": {"name": "goose", "version": "0.0.0-fake"}}),
                     Flavor::Cursor => json!({"protocolVersion": 1,
-                        "agentCapabilities": {"loadSession": true, "sessionCapabilities": {"list": {}}}}),
+                        "agentCapabilities": {"loadSession": true, "sessionCapabilities": {"list": {}},
+                            "mcpCapabilities": {"http": true, "sse": true}}}),
                 };
                 Self::reply(id, result, out);
             }
             "session/new" => {
                 let session = self.new_session();
                 self.sessions.insert(session.clone(), None);
+                self.keep_servers(&session, params);
                 Self::reply(
                     id,
                     json!({"sessionId": session, "configOptions": config("m1")}),
@@ -313,6 +407,7 @@ impl Protocol for Acp {
                     }
                 }
                 self.sessions.insert(session.clone(), None);
+                self.keep_servers(&session, params);
                 // Goose carries on by itself with a turn a crash cut off.
                 let cut = self.store.lock().unwrap().cut.remove(&session);
                 if self.flavor == Flavor::Goose && cut {
@@ -369,6 +464,30 @@ impl Protocol for Acp {
                 out.reply(json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "Method not found"}}));
             }
             _ => {}
+        }
+    }
+
+    fn waker(&self) -> Option<Arc<tokio::sync::Notify>> {
+        Some(self.waker.clone())
+    }
+
+    fn woken(&mut self, out: &mut Outbox, heard: &mut Vec<Heard>) {
+        let called = std::mem::take(&mut *self.called.lock().unwrap());
+        for (session, result) in called {
+            // A server it could not use is a tool that failed: nothing is heard of a result.
+            if let Some((sent, text)) = &result {
+                heard.push(Heard::FileResult {
+                    session: session.clone(),
+                    sent: *sent,
+                    text: text.clone(),
+                });
+            }
+            let words = match result {
+                Some((true, _)) => "sent",
+                Some((false, _)) => "not sent",
+                None => "the tool failed",
+            };
+            self.finish(&session, Some(words), "end_turn", out);
         }
     }
 

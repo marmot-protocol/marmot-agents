@@ -66,6 +66,10 @@ impl Subject for OnFake {
         true
     }
 
+    fn sends_files(&self) -> bool {
+        true
+    }
+
     fn setting(&self) -> (String, String) {
         ("model".into(), "m2".into())
     }
@@ -119,10 +123,10 @@ macro_rules! conformance {
 marmot_agent_conformance::with_scenarios!(conformance!(OpenCode));
 
 // Goose and Cursor differ from OpenCode in how a session is taken up again, in Goose's runs of its
-// own, and in Cursor's to-do list: they run the scenarios that reach those, and the answer to an
-// agent that has gone. The rest go through the same code as OpenCode's.
+// own, in Cursor's to-do list, and in how each keeps the driver's tool server and names the session
+// that calls it: they run the scenarios that reach those, and the answer to an agent that has gone. The rest go through the same code as OpenCode's.
 conformance!(Goose:
-    run: [two_chats, answered_once, answer_after_death, dies_mid_turn, restart, new_session, folder];
+    run: [two_chats, answered_once, answer_after_death, dies_mid_turn, restart, new_session, folder, send_file];
     left_out: [
         one_turn,
         dies_with_requests_pending,
@@ -133,12 +137,11 @@ conformance!(Goose:
         stops_reading,
         late_replies,
         settings,
-        send_file,
     ]
 );
 
 conformance!(Cursor:
-    run: [two_chats, answered_once, answer_after_death, restart];
+    run: [two_chats, answered_once, answer_after_death, restart, send_file];
     left_out: [
         one_turn,
         dies_mid_turn,
@@ -152,7 +155,6 @@ conformance!(Cursor:
         new_session,
         folder,
         settings,
-        send_file,
     ]
 );
 
@@ -220,5 +222,28 @@ async fn a_replay_stops_on_another_answer() {
         };
         let found = scenarios::replay_refused(subject, "as recorded", &progress).await;
         found.unwrap_or_else(|wrong| panic!("{folder}: {wrong}"));
+    }
+}
+
+// A file handed over for the wrong chat, from the wrong folder, or a result that never reaches the
+// agent, is caught on every flavour: each keeps the driver's tool server and names the calling
+// session its own way.
+#[tokio::test]
+async fn the_file_faults_are_caught() {
+    use marmot_agent_conformance::faults::{self, Fault};
+    for flavor in [Flavor::OpenCode, Flavor::Goose, Flavor::Cursor] {
+        for fault in [
+            Fault::FileWrongChat,
+            Fault::FileToWrongChat,
+            Fault::FileOwnFolder,
+            Fault::FileUnanswered,
+            Fault::LoseFileResult,
+        ] {
+            let found = faults::caught(subject(flavor), fault, None).await;
+            assert!(
+                fault.caught_as(&found),
+                "{flavor:?}, {fault:?}: not caught as it should be: {found:?}"
+            );
+        }
     }
 }

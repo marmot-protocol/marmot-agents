@@ -7,7 +7,7 @@ of its harness. A checker looks at every step and names the property a failure b
 Status: phase one is built (2026-11-22): the suite, fakes for Codex, ACP and Pi, the three built-in drivers run against
 it, and deliberate faults that show each check catches its bug. Two reviews' findings are fixed (2026-11-22), and so
 is the Pi driver's stall on a Pi that stops reading (2026-11-22). Files the agent sends (`send_file`) are covered for
-Codex and Pi (2026-11-22).
+Codex, Pi and the three ACP shapes (2026-11-22).
 Phase two, the socket connectors, is a design, below. Everything here is internal: it ships in no program.
 
 ## How it fits
@@ -28,7 +28,8 @@ The checker knows nothing of any harness. A prompt's text carries its chat's mar
 a fake echoes the prompt in what it says, so what reaches a chat can be traced to the chat it came from. A fake reads
 the same words in every harness: `#ask` (an approval; Pi, which has none, asks a question), `#quiz` (a question),
 `#sleep` (runs until interrupted), `#die` (starts a command, then dies), `#file` (calls the driver's own tool to
-send `out/report.txt`, D-090, and goes on once told how it went); anything else is answered in words.
+send a file, D-090, with a relative path that carries the prompt's mark, and goes on once told how it went); anything
+else is answered in words.
 
 ## The properties
 
@@ -39,7 +40,7 @@ Checked here for drivers; each id is the plan's, so a search finds the property,
 | S1 | every step, and at the end | Each answer and control is settled at most once: by a refusal, or by one event of its own chat that is not a message. An event the driver made up, with no native message (D-059, point 3), such as an item it closes when the harness stops, settles nothing, unless it is an error settling it as failed. At the end every request the driver took is settled, unless the driver ended (the core then settles it). A request from before a restart is never settled after it |
 | S2 | after a stop | Every item of the chats whose harness stopped is closed, but the session's own item: a session outlives its harness (Pi's driver takes it up in a new Pi), and when a driver ends the core closes what is left (D-034) |
 | S4 | at each checkpoint | No prompt reaches the harness twice; a copy the harness refused, as when the session is busy, reached it all the same and counts |
-| S5 | every step | Every event names its chat; a session, a turn and an item id stay with the chat they were first seen in; every chat mark in an event's text is its own chat's, and a turn names only its own chat's prompts; a request is settled only in its own chat; an answer reaches the harness in its own chat's session, with what was chosen (allowed or not, or the option's words); a file the agent asks to send names the chat whose harness asked, and how it went reaches only that chat's harness, as it went |
+| S5 | every step | Every event names its chat; a session, a turn and an item id stay with the chat they were first seen in; every chat mark in an event's text is its own chat's, and a turn names only its own chat's prompts; a request is settled only in its own chat; an answer reaches the harness in its own chat's session, with what was chosen (allowed or not, or the option's words); a file the agent asks to send is handed over for the chat whose harness asked, every mark in its path that chat's, and how it went reaches the harness in that chat's session, as the core gave it |
 | S11 | every request, and at each checkpoint | A request returns within the suite's patience, and when it has returned the harness has it, with the driver not polled again: a prompt or an answer taken was heard, or the chat's own harness read something after it was given and then died (a death before, or of another chat's harness, shows nothing); no line the harness reads is half a message; with waits dropped at every point, nothing is lost; an answer the harness can no longer read is not taken; a request refused never reaches the harness later |
 | S12 | before each prompt, and at each checkpoint | The harness takes up a session again only when the chat's last prompt named it, or when it was the chat's current session as that prompt was made (Pi restarting a chat's Pi), not a session an earlier prompt named, nor the session the resume itself made current; a named session is taken up; a prompt naming none stays in the chat's session |
 | S13 | every step | An item id, once closed, is not used again in its chat, and an id from before a restart is not used after it (a session's own item returns with its session); an item keeps its session |
@@ -69,8 +70,8 @@ Every driver runs these, but where the table under "What was run" says otherwise
 | `restart` | A turn, a restart, a prompt naming the chat's session, a prompt naming none; then a restart in the middle of a turn |
 | `new_session` | A prompt naming the chat's session; a new session, settled by the new session; the next prompt goes to it, and not to the session named before; another chat naming the old one is refused |
 | `folder` | A chat moves the harness to another folder (D-101): a chat that chose none opens its session in the driver's own folder; a new session naming another folder is taken, settled by the new session, which opens there, and the next prompt goes to it; a chat with no session yet moves and its first session opens there; a third chat stays in the driver's folder; after a restart the moved session is taken up in its folder. Checked against the folder the fake heard (`cwd` on Codex's and ACP's session requests, the folder Pi's relay was started in), and reported as D-101 |
+| `send_file` | The agent sends a file with the driver's own tool (D-090): each request must name the chat whose harness asked, with its relative path made whole from that chat's folder (D-101), and how it went must reach that harness, and only it, as the tool's result. Two chats open sessions in the driver's folder, chat 2's last, so an agent that keeps one tool server for a folder's sessions (OpenCode) reaches the driver through chat 2's and only the call names chat 1's session; chat 1's file is sent. While it waits for the core's word, chat 1 prompts again: the prompt must return within a second, taken or refused, since the core cannot give the word until it does (S11). Then chat 2 moves to another folder, and two files are asked for at once, chat 2's there and chat 1's, both waiting, answered the other way round: chat 1's sent, chat 2's refused, and the core's words must reach chat 2's new session. Checked against what the fake heard as its tool's result, which must come without the driver being polled again. A driver that gives its harness no such tool (`Subject::sends_files`, false by default) must hand over no file; every built-in driver gives one |
 | `settings` | A setting changed, settled once |
-| `send_file` | The agent sends a file with the driver's own tool (D-090): the request names the chat whose harness asked, with the relative path made whole from that chat's folder (D-101), and what the core says reaches that harness, and only it, as the tool's result. One chat, sent; then two at once, one moved to another folder, both waiting, answered the other way round, the earlier refused with the core's words. Checked against what the fake heard as its tool's result. A driver that gives its harness no such tool (`Subject::sends_files`, false by default) passes with nothing checked: ACP for now |
 | `dies_at_every_step` | The harness dies on its n-th frame after start, in a turn that asks for approval, for every n the turn reaches: a run with nothing failing counts them first, and each run must see the harness die before what it left is checked |
 | `replay` | A recording played back through the driver, every approval allowed (the one-time choice, as recorded); every recorded message must be played, and the driver's answer to the harness's own request must be the recorded one, to the same request with the same decision, or nothing more is played. Answered the other way, a recording stops (`a_replay_stops_on_another_answer`, through `replay_refused`): the prompt must be taken and the approval asked, the answer taken and turned away by the replay, and nothing more played, so a run that failed earlier does not pass |
 
@@ -81,7 +82,7 @@ The pipe between driver and harness holds 256 bytes each way, so a dropped wait 
 | Fake | From | Shapes | What differs |
 | --- | --- | --- | --- |
 | Codex | the stand-in in `crates/marmot-agent-codex/tests/driver.rs` | threads, turns, `commandExecution`, approvals, `requestUserInput`, the driver's `send_file` dynamic tool (`item/tool/call`, only on a thread started with it), steer, interrupt, settings, resume | one process for every chat |
-| ACP | the agent in `crates/marmot-agent-acp/tests/driver.rs` | sessions, prompts, tool calls, `request_permission`, `elicitation/create`, cancel, config options | **OpenCode**: `session/resume`. **Goose**: `session/load` with a replay, sessions numbered by day, `activeRunId`, and after a crash a run of its own until cancelled. **Cursor**: `session/load`, no name, `cursor/update_todos` naming only its tool call |
+| ACP | the agent in `crates/marmot-agent-acp/tests/driver.rs` | sessions, prompts, tool calls, `request_permission`, `elicitation/create`, cancel, config options, MCP servers over HTTP (`src/fake/mcp.rs` is the client: `initialize`, `tools/list`, `tools/call`) | **OpenCode**: `session/resume`; one tool server of a name for every session in a folder, the last handed over, the calling session named in `_meta["ai.opencode/sessionID"]`. **Goose**: `session/load` with a replay, sessions numbered by day, `activeRunId`, and after a crash a run of its own until cancelled; servers kept per session, the caller named in `_meta["agent-session-id"]`. **Cursor**: `session/load`, no name, `cursor/update_todos` naming only its tool call; servers kept per session, the caller not named |
 | Pi | `crates/marmot-agent-pi/tests/fake_pi.py` | Pi's records, extension dialogs, the driver's `send_file` tool (only with the driver's extension loaded, asking in its dialog), steering, abort, a session's file written once it holds a message | one process per chat: the driver runs `src/fake/relay.py`, which connects its standard input and output to a socket the test serves, so each Pi is scripted in Rust |
 
 The faults, set as `Knobs` and changeable between steps: frames written in pieces; replies late; replies after the
@@ -92,7 +93,9 @@ pieces. A killed harness blocked writing to a driver that stopped reading is cut
 is; one that dies by its own script writes what it said first. Each line read and each death is logged with the process
 that did it, so a death is matched to the chat whose harness it was. A harness's sessions outlive its processes, so a restart can take them up. A death is counted once both ends of
 the pipe are closed, so a driver that writes after it is seen writing to a harness that has gone. What a driver leaves
-unfinished when it closes the harness's input is not a line, and is not read as one.
+unfinished when it closes the harness's input is not a line, and is not read as one. A fake can act off the pipe: the ACP
+fake calls the driver's tool over HTTP in a task of its own, and the engine hands the result back to it
+(`Protocol::waker`, `Protocol::woken`) as it would a frame.
 
 ## What was run, and found
 
@@ -103,11 +106,11 @@ nothing.
 
 | Driver | Scenarios | Recordings | Deliberate faults caught |
 | --- | --- | --- | --- |
-| Codex | all, `dies_at_every_step` (6) | `simple`, `approval_allowed`, `command` | all 19 that one harness for every chat can show |
-| ACP, OpenCode-shaped | all, `dies_at_every_step` (3) | `simple`, `approval_allowed` | `PromptTwice` |
-| ACP, Goose-shaped | `two_chats`, `answered_once`, `answer_after_death`, `dies_mid_turn`, `restart`, `new_session`, `folder`, `dies_at_every_step` (3) | `simple`, `approval_allowed` | |
-| ACP, Cursor-shaped | `two_chats`, `answered_once`, `answer_after_death`, `restart`, `dies_at_every_step` (4) | `simple`, `approval_allowed` | |
-| Pi | all, `dies_at_every_step` (6) | `gate_allowed`, `command` | 11: those that turn on a harness for each chat, `TakeUnhanded`, `SwallowPrompt` and the three for files |
+| Codex | all, `dies_at_every_step` (6) | `simple`, `approval_allowed`, `command` | all 21 that one harness for every chat can show |
+| ACP, OpenCode-shaped | all, `dies_at_every_step` (3) | `simple`, `approval_allowed` | `PromptTwice` and the five for files |
+| ACP, Goose-shaped | `two_chats`, `answered_once`, `answer_after_death`, `dies_mid_turn`, `restart`, `new_session`, `folder`, `send_file`, `dies_at_every_step` (3) | `simple`, `approval_allowed` | the five for files |
+| ACP, Cursor-shaped | `two_chats`, `answered_once`, `answer_after_death`, `restart`, `send_file`, `dies_at_every_step` (4) | `simple`, `approval_allowed` | the five for files |
+| Pi | all, `dies_at_every_step` (6) | `gate_allowed`, `command` | 13: those that turn on a harness for each chat, `TakeUnhanded`, `SwallowPrompt` and the five for files |
 
 The faults (`src/faults.rs`), each caught as the property it breaks, by the scenario named. Where more than one check
 names the property, the test also requires the words of the check meant for the fault (`Fault::detail`):
@@ -132,8 +135,14 @@ names the property, the test also requires the words of the check meant for the 
 | `SwallowPrompt`: a chat's later prompts taken and never handed over (Pi only: a later prompt follows a death only there) | S11 | `dies_mid_turn` |
 | `MadeUpStop`: an interrupt refused without reaching the harness, the turn shown stopped all the same | L2: nothing was checked | `dies_with_requests_pending` |
 | `FileWrongChat`: a file chat 2's harness asked to send handed over as chat 1's | S5 | `send_file` |
+| `FileToWrongChat`: a file chat 1's agent asks to send handed over for chat 2, as a driver that routes a call by the token of the last session in a folder would | S5 | `send_file` |
 | `FileOwnFolder`: a relative path made whole from the driver's own folder, not the chat's | D-101 | `send_file` |
 | `FileUnanswered`: how a file went never passed on to the harness that asked | D-090 | `send_file` |
+| `LoseFileResult`: a file sent is passed on, but the core's refusal of one never reaches the harness | D-090 | `send_file` |
+
+`send_file` was also shown, 2026-11-22, to catch the ACP driver put wrong by hand three ways: a call routed by its token
+alone (S5, OpenCode-shaped, where the token is the last chat's), by the session it names alone (L2, Cursor-shaped, which
+names none: the file never comes), and a relative path made whole from the driver's folder instead of the chat's (D-101).
 
 Five driver bugs were found, each fixed after its scenario failed:
 
@@ -161,8 +170,7 @@ Not covered yet, and why:
 - **Codex's greeting** (`Codex::connect`) still waits for `initialize` with no limit. It runs before the core's loop, at
   start. Not changed here.
 - **Pi's start** waits up to `STARTUP_LIMIT` (60 s, fixed), so a Pi that never answers `get_state` is not run: too slow.
-- **The harness's own actions** (compacting), **group chats** and **attachments**. Files the agent sends are covered
-  for Codex and Pi (`send_file`), not yet for ACP, whose driver gives the agent no such tool.
+- **The harness's own actions** (compacting), **group chats** and **attachments**.
 - **Goose and Cursor** run only the scenarios where they differ from OpenCode.
 
 ## Running it
