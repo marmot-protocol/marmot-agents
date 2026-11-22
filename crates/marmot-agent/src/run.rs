@@ -23,18 +23,19 @@ use crate::config::Config;
 use crate::conversation::{Act, Conversation, Saved, Sending};
 use crate::files::Folders;
 use crate::keys::GroupKey;
-use crate::marmot::{Incoming, Marmot, Message};
+use crate::marmot::{FileFailed, Incoming, Live, Marmot, Message, SendFailed, Side};
 use crate::socket::SocketDriver;
 use marmot_agent_driver::{Driver, Output, Reason, Refusal, SendFile};
-use marmot_app::{AppError, MarmotAppEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::future::Future;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::pin::pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+use std::task::Poll;
 use std::time::Duration;
-use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
@@ -52,37 +53,6 @@ const UNKNOWN_TRIES: u32 = 10;
 /// How many sends one group makes in one turn of the core's loop, so one chat's backlog, or a slow
 /// MDK, does not hold up the others.
 const DRAIN: usize = 8;
-
-/// What a failed send means.
-enum Failed {
-    /// MDK did not take it, and may later: it is tried again.
-    Busy,
-    /// MDK refused it, and will again.
-    Refused {
-        /// It was an edit of a message that is gone.
-        gone: bool,
-    },
-    /// It may have gone out: the core looks for it before it sends it again.
-    Unknown,
-}
-
-/// What MDK's error says of a send: whether MDK took it.
-fn failed(error: &AppError) -> Failed {
-    match error {
-        AppError::AccountWorkerBusy
-        | AppError::RuntimeBusy
-        | AppError::AccountSessionBusy
-        | AppError::GroupCatchingUp(_)
-        | AppError::GroupCommitPending(_) => Failed::Busy,
-        AppError::InvalidEditTarget => Failed::Refused { gone: true },
-        AppError::InvalidAppMessagePayload(_)
-        | AppError::EventTooLarge { .. }
-        | AppError::UnknownGroup(_)
-        | AppError::GroupRemoved(_)
-        | AppError::UserBlocked => Failed::Refused { gone: false },
-        _ => Failed::Unknown,
-    }
-}
 
 /// A send whose outcome is not known.
 struct Unknown {
@@ -204,9 +174,31 @@ fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
     std::fs::File::create(path)
 }
 
-/// The core: MDK, a driver, and the conversation.
-pub struct Core<D: Driver> {
-    marmot: Marmot,
+/// What woke the core's loop: one of the things it waits for. One lives at a time, briefly, so
+/// its size does not matter.
+#[allow(clippy::large_enum_variant)]
+enum Woke {
+    /// The clock's tick, for the requests that have waited too long.
+    Tick,
+    /// A group's sends may be tried again.
+    Retry,
+    /// The driver's next event, or its end.
+    Driver(Option<Output>),
+    /// A file finished uploading.
+    Uploaded(Uploaded),
+    /// A live event from the Marmot side.
+    Marmot(Live),
+    /// The core is asked to stop.
+    Stop,
+}
+
+/// How many things the core's loop waits for: the variants of [`Woke`].
+const WAITS: usize = 6;
+
+/// The core: MDK, a driver, and the conversation. It reaches MDK through [`Side`], which
+/// [`Marmot`] is, so a simulator can stand in for MDK.
+pub struct Core<D: Driver, M: Side = Marmot> {
+    marmot: M,
     driver: D,
     conversation: Conversation,
     read: BTreeMap<GroupKey, i64>,
@@ -214,8 +206,9 @@ pub struct Core<D: Driver> {
     config: Config,
     /// The folders the agent may send files from (D-090).
     folders: Folders,
-    /// The core's clock, which never jumps, for how long a control has waited (D-087).
-    started: std::time::Instant,
+    /// The core's clock, which never jumps, for how long a control has waited (D-087). Tokio's,
+    /// which is the system's except in a simulation, whose clock is virtual.
+    started: Instant,
     /// For each group whose last send failed: when to try again, and how long it waited last.
     retry: HashMap<GroupKey, (Instant, Duration)>,
     /// Sends, by token, whose outcome is not known: they may have gone out.
@@ -228,12 +221,33 @@ pub struct Core<D: Driver> {
     drained: HashMap<GroupKey, usize>,
     /// Whether [`DRAIN`] holds: not when the core stops, which sends all it can.
     bounded: bool,
+    /// Which of the things the loop waits for is looked at first in its next turn: each in its
+    /// turn, so when several are ready at once none waits behind the others for long, and the
+    /// same inputs always give the same order, which a simulation replays.
+    first: usize,
+    /// Faults put back for the simulator, to show its checks find them: none in use.
+    #[cfg(feature = "sim-bugs")]
+    bugs: Bugs,
 }
 
-impl<D: Driver> Core<D> {
+/// Bugs fixed before, put back on purpose so the simulator can show it finds each
+/// (`docs/design/verification.md`, "A check must be shown to catch its bug"). Only in a build
+/// with the `sim-bugs` feature, which no release has.
+#[cfg(feature = "sim-bugs")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Bugs {
+    /// A send is saved only after it went, not before: a crash in between forgets it (S2, S3).
+    pub save_after_send: bool,
+    /// A send whose outcome is not known is sent again at once, without looking for it (S1, S3).
+    pub retry_ambiguous_blindly: bool,
+    /// What the agent's words settle is ignored: settles are read only from items (S1).
+    pub settles_only_from_items: bool,
+}
+
+impl<D: Driver, M: Side> Core<D, M> {
     /// A core for the agent on `marmot`, driving `driver`, with the settings in `config`, keeping
     /// its state in `store`.
-    pub fn new(marmot: Marmot, driver: D, config: &Config, store: Store) -> Result<Self, String> {
+    pub fn new(marmot: M, driver: D, config: &Config, store: Store) -> Result<Self, String> {
         // The working folder, the default, is the person's to choose; a listed folder is
         // checked, since an import or a hand may have put one in the wrong place.
         if let Some(listed) = &config.files_from {
@@ -241,7 +255,7 @@ impl<D: Driver> Core<D> {
         }
         let kept = store.load()?;
         let conversation = Conversation::new(
-            marmot.agent.clone(),
+            marmot.agent().clone(),
             driver.harness().name,
             config.rights(),
             driver.capabilities(),
@@ -256,7 +270,7 @@ impl<D: Driver> Core<D> {
             store,
             folders: Folders::new(&config.file_folders()),
             config: config.clone(),
-            started: std::time::Instant::now(),
+            started: Instant::now(),
             retry: HashMap::new(),
             // A send left queued that was handed to MDK may have gone out just before the core
             // stopped.
@@ -270,7 +284,19 @@ impl<D: Driver> Core<D> {
             unknown_tries: UNKNOWN_TRIES,
             drained: HashMap::new(),
             bounded: true,
+            first: 0,
+            #[cfg(feature = "sim-bugs")]
+            bugs: Bugs::default(),
         })
+    }
+
+    /// Puts back the bugs in `bugs`, for the simulator.
+    #[cfg(feature = "sim-bugs")]
+    pub fn with_bugs(mut self, bugs: Bugs) -> Self {
+        self.bugs = bugs;
+        self.conversation
+            .settles_only_from_items(bugs.settles_only_from_items);
+        self
     }
 
     /// Sends whose outcome is not known are looked for after `settle`, and tried `tries` times:
@@ -286,8 +312,8 @@ impl<D: Driver> Core<D> {
     /// An error when the state file could not be written: the core stopped where it was.
     pub async fn run(
         mut self,
-        events: tokio::sync::broadcast::Receiver<MarmotAppEvent>,
-        stop: impl std::future::Future<Output = ()>,
+        events: M::Events,
+        stop: impl Future<Output = ()>,
     ) -> Result<(), String> {
         self.run_until(events, stop).await.map_err(|Unsaved| {
             eprintln!("marmot-agent: {UNSAVED}");
@@ -297,8 +323,8 @@ impl<D: Driver> Core<D> {
 
     async fn run_until(
         &mut self,
-        mut events: tokio::sync::broadcast::Receiver<MarmotAppEvent>,
-        stop: impl std::future::Future<Output = ()>,
+        mut events: M::Events,
+        stop: impl Future<Output = ()>,
     ) -> Result<(), Unsaved> {
         self.publish_name().await;
         // What a stopped core left queued goes first, then what it left open is closed.
@@ -322,30 +348,62 @@ impl<D: Driver> Core<D> {
                     None => std::future::pending().await,
                 }
             };
-            tokio::select! {
-                _ = clock.tick() => loop {
+            // Whichever comes first. The waits not taken are dropped, which each allows: the
+            // driver's by its trait (D-058), the others lose nothing.
+            let first = self.first;
+            self.first = (first + 1) % WAITS;
+            let woke = {
+                let mut tick = pin!(clock.tick());
+                let mut retry = pin!(retry);
+                let mut driver = pin!(self.driver.next_event());
+                let mut upload = pin!(uploads.recv());
+                let mut live = pin!(self.marmot.next(&mut events));
+                let mut stop = stop.as_mut();
+                std::future::poll_fn(|cx| {
+                    for wait in (0..WAITS).map(|i| (first + i) % WAITS) {
+                        let woke = match wait {
+                            0 => tick.as_mut().poll(cx).map(|_| Woke::Tick),
+                            1 => retry.as_mut().poll(cx).map(|()| Woke::Retry),
+                            2 => driver.as_mut().poll(cx).map(Woke::Driver),
+                            // The core holds a sender, so this never ends.
+                            3 => match upload.as_mut().poll(cx) {
+                                Poll::Ready(Some(done)) => Poll::Ready(Woke::Uploaded(done)),
+                                _ => Poll::Pending,
+                            },
+                            4 => live.as_mut().poll(cx).map(Woke::Marmot),
+                            _ => stop.as_mut().poll(cx).map(|()| Woke::Stop),
+                        };
+                        if woke.is_ready() {
+                            return woke;
+                        }
+                    }
+                    Poll::Pending
+                })
+                .await
+            };
+            match woke {
+                Woke::Tick => loop {
                     let acts = self.conversation.overdue(self.clock());
                     if acts.is_empty() {
                         break;
                     }
                     self.carry_out(acts).await?;
                 },
-                () = retry => self.flush_all().await?,
-                event = self.driver.next_event() => match event {
-                    Some(Output::Event(emitted)) => {
-                        let acts = self.conversation.emitted(emitted);
-                        self.carry_out(acts).await?;
-                    }
-                    Some(Output::SendFile(file)) => self.send_file(file, &uploaded).await?,
-                    None => break,
-                },
-                Some(done) = uploads.recv() => self.file_done(done).await?,
-                event = events.recv() => match event {
-                    Ok(event) => self.on_marmot(event).await?,
-                    Err(RecvError::Lagged(_)) => self.catch_up().await?,
-                    Err(RecvError::Closed) => break,
-                },
-                () = &mut stop => break,
+                Woke::Retry => self.flush_all().await?,
+                Woke::Driver(Some(Output::Event(emitted))) => {
+                    let acts = self.conversation.emitted(emitted);
+                    self.carry_out(acts).await?;
+                }
+                Woke::Driver(Some(Output::SendFile(file))) => {
+                    self.send_file(file, &uploaded).await?
+                }
+                Woke::Driver(None) => break,
+                Woke::Uploaded(done) => self.file_done(done).await?,
+                Woke::Marmot(Live::Message(message)) => self.handle(message).await?,
+                Woke::Marmot(Live::Groups) => self.consider_invitations().await?,
+                Woke::Marmot(Live::Other) => {}
+                Woke::Marmot(Live::Lagged) => self.catch_up().await?,
+                Woke::Marmot(Live::Closed) | Woke::Stop => break,
             }
         }
         // Everything the stop closes is queued and saved at once, before any of it is sent: a
@@ -405,52 +463,7 @@ impl<D: Driver> Core<D> {
         let Some(name) = self.config.name.clone() else {
             return;
         };
-        let relays = self
-            .config
-            .relays
-            .iter()
-            .map(|r| cgka_traits::TransportEndpoint(r.clone()))
-            .collect();
-        let current = self
-            .marmot
-            .runtime
-            .fetch_current_user_profile_for_account_id(self.marmot.agent.as_str(), relays)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        if current.name.as_deref() == Some(&name) && current.display_name.as_deref() == Some(&name)
-        {
-            return;
-        }
-        let profile = marmot_app::UserProfileMetadata {
-            name: Some(name.clone()),
-            display_name: Some(name),
-            ..current
-        };
-        let published = self
-            .marmot
-            .runtime
-            .publish_user_profile_using_account_relays(&self.marmot.label, profile)
-            .await;
-        if published.is_err() {
-            eprintln!("marmot-agent: the agent's name could not be published");
-        }
-    }
-
-    async fn on_marmot(&mut self, event: MarmotAppEvent) -> Result<(), Unsaved> {
-        match event {
-            MarmotAppEvent::MessageReceived(received)
-                if received.account_id_hex == self.marmot.agent.as_str() =>
-            {
-                self.handle(Message::from(received.message)).await
-            }
-            MarmotAppEvent::GroupJoined { account_id_hex, .. }
-            | MarmotAppEvent::GroupEvent(marmot_app::RuntimeGroupEvent {
-                account_id_hex, ..
-            }) if account_id_hex == self.marmot.agent.as_str() => self.consider_invitations().await,
-            _ => Ok(()),
-        }
+        self.marmot.publish_name(&name, &self.config.relays).await;
     }
 
     /// Accepts an invitation from someone who may add the agent, and declines the rest. A group
@@ -478,7 +491,7 @@ impl<D: Driver> Core<D> {
         let mut joined = false;
         for (group, allowed) in invitations {
             // A mark left for an invitation not accepted is never read: only accepted groups are.
-            joined |= self.marmot.decide(&group, allowed).await.is_ok() && allowed;
+            joined |= self.marmot.decide(&group, allowed).await && allowed;
         }
         if joined {
             self.catch_up().await?;
@@ -536,7 +549,9 @@ impl<D: Driver> Core<D> {
     async fn carry_out(&mut self, acts: Vec<Act>) -> Result<(), Unsaved> {
         let mut queue: VecDeque<Act> = acts.into();
         while let Some(act) = queue.pop_front() {
-            self.save()?;
+            if !(matches!(act, Act::Send { .. }) && self.bug_save_after_send()) {
+                self.save()?;
+            }
             let next = self.carry_out_one(act).await?;
             queue.extend(next);
         }
@@ -606,7 +621,7 @@ impl<D: Driver> Core<D> {
             };
             if let Some(&Unknown { settled, tries }) = self.unknown.get(&token) {
                 let taken = |event: &crate::keys::EventKey| self.conversation.is_first(event);
-                match self.marmot.find_sent(group, &what, taken) {
+                match self.marmot.find_sent(group, &what, &taken) {
                     Ok(Some(event)) => {
                         self.unknown.remove(&token);
                         self.conversation.sent(&key, event);
@@ -633,7 +648,7 @@ impl<D: Driver> Core<D> {
                 }
             }
             // Saved as tried before MDK has it, so a crash after leaves it to be looked for.
-            if self.conversation.attempting(&token) {
+            if self.conversation.attempting(&token) && !self.bug_save_after_send() {
                 self.save()?;
             }
             match self.marmot.send(group, &what, &token).await {
@@ -643,9 +658,9 @@ impl<D: Driver> Core<D> {
                     self.conversation.sent(&key, event);
                     self.save()?;
                 }
-                Err(error) => {
-                    let failed = failed(&error);
-                    if let Failed::Unknown = failed {
+                Err(failed) => {
+                    let failed = self.bug_blind_retry(failed);
+                    if let SendFailed::Unknown = failed {
                         // Looked for once MDK has settled it, and given up only after that.
                         let tries = self.unknown.get(&token).map_or(0, |u| u.tries) + 1;
                         let settled = Instant::now() + self.settle;
@@ -653,9 +668,9 @@ impl<D: Driver> Core<D> {
                             .insert(token.clone(), Unknown { settled, tries });
                     }
                     match failed {
-                        Failed::Refused { gone } => self.give_up(&token, gone)?,
-                        Failed::Busy | Failed::Unknown => {
-                            if matches!(failed, Failed::Unknown) {
+                        SendFailed::Refused { gone } => self.give_up(&token, gone)?,
+                        SendFailed::Busy | SendFailed::Unknown => {
+                            if matches!(failed, SendFailed::Unknown) {
                                 eprintln!("marmot-agent: a send failed; it will be tried again");
                             }
                             self.wait_longer(group);
@@ -687,6 +702,27 @@ impl<D: Driver> Core<D> {
         (self.retry).insert(group.clone(), (Instant::now() + wait, wait));
     }
 
+    /// Whether the bug "a send is saved only after it went" is put back.
+    #[cfg(feature = "sim-bugs")]
+    fn bug_save_after_send(&self) -> bool {
+        self.bugs.save_after_send
+    }
+
+    #[cfg(not(feature = "sim-bugs"))]
+    fn bug_save_after_send(&self) -> bool {
+        false
+    }
+
+    /// What a failed send is taken as: as it is, or, with the bug "a send whose outcome is not
+    /// known is sent again at once" put back, as busy.
+    fn bug_blind_retry(&self, failed: SendFailed) -> SendFailed {
+        #[cfg(feature = "sim-bugs")]
+        if self.bugs.retry_ambiguous_blindly && failed == SendFailed::Unknown {
+            return SendFailed::Busy;
+        }
+        failed
+    }
+
     fn save(&self) -> Result<(), Unsaved> {
         let kept = Kept {
             conversation: self.conversation.saved().clone(),
@@ -701,7 +737,7 @@ impl<D: Driver> Core<D> {
 /// may have come after MDK took it, such as a wait for MDK that ran out while the send went on, so
 /// it is not tried again: that could post the file twice, and a post cannot be taken back.
 async fn upload(
-    marmot: &Marmot,
+    marmot: &impl Side,
     folders: Folders,
     path: PathBuf,
     group: &GroupKey,
@@ -713,8 +749,8 @@ async fn upload(
     for _ in 0..FILE_BUSY_TRIES {
         match marmot.send_file(group, &outgoing, turn.as_ref()).await {
             Ok(_) => return Ok(()),
-            Err(AppError::AccountWorkerBusy) => {}
-            Err(_) => {
+            Err(FileFailed::Busy) => {}
+            Err(FileFailed::Failed) => {
                 // MDK's own words can name a group, so they are not printed (D-071).
                 eprintln!("marmot-agent: a file's send failed");
                 return Err(Refusal {

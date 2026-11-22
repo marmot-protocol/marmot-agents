@@ -275,6 +275,15 @@ async fn a_slow_upload_holds_up_nothing_else() {
 
     let path = work.path().join("notes.txt").display().to_string();
     chat.say(&path).await;
+    // The interrupt names the chat's running turn, so wait until the person sees it running: sent
+    // before the core has the turn, it is refused as having nothing to stop.
+    eventually(|| {
+        chat.latest().into_iter().find(|(_, read)| {
+            matches!(read.item.event.body(), Body::Turn(_))
+                && read.item.event.header().state == State::Running
+        })
+    })
+    .await;
     chat.ask(None, &Asked::Interrupt, "Stop").await;
     eventually(|| (*controls.lock().unwrap() == 1).then_some(())).await;
     assert!(

@@ -119,7 +119,7 @@ plugin; the rest of the table is the planned shape, so that the code lands in th
 
 | Path | Holds |
 | --- | --- |
-| `crates/` | The Rust core, the driver trait, and the Rust drivers (Codex, Pi, ACP) |
+| `crates/` | The Rust core, the driver trait, the Rust drivers (Codex, Pi, ACP), and the core's simulator |
 | `packages/` | TypeScript: the Claude Code driver, the OpenClaw plugin, a socket client |
 | `python/` | The Hermes plugin |
 | `docs/` | Design, decisions and reference |

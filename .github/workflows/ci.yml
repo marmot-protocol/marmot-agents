@@ -55,7 +55,62 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: Tests
-        run: cargo test --locked --workspace --all-features
+        # The simulator's tests run in the Simulator job, in release, so they are not run twice.
+        run: cargo test --locked --workspace --all-features --exclude marmot-agent-sim
+
+  simulator:
+    name: Simulator
+    runs-on: ubuntu-24.04
+    # Within the pull-request budget (D-094). Beside the Rust job, in release, with the build
+    # cached. Measured with 4 jobs on 2026-11-22: with the dependencies cached, building the
+    # workspace's crates and running every test took 35 s (the runs about 10 s), so the job should
+    # take about 5 minutes with its setup; with no cache (after Cargo.lock or the compiler
+    # changes) the build alone took 6 min 44 s, so expect 10 to 14 on a runner. More seeds are for
+    # a nightly run.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Odin
+        run: |
+          bash tools/odin/install.sh "${RUNNER_TEMP}/odin"
+          echo "ODIN=${RUNNER_TEMP}/odin/odin" >> "${GITHUB_ENV}"
+
+      - name: Install the pinned toolchain
+        run: |
+          rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Cache the build
+        # Keyed by Cargo.lock, the toolchain and this job; a pull request reads master's cache.
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Build the simulator's tests
+        run: cargo test --locked --release -p marmot-agent-sim --all-features --no-run
+
+      - name: The simulator's tests, with the seeds
+        # Each family of the gate runs this many schedules from seed 0; the bug switches and the
+        # faults made by hand are each found, and a capsule replays exactly. They take about 10 s
+        # once built, so a run that hangs is killed after 4 minutes, as an ordinary failure, and
+        # the step below still keeps what it left; the job's own limit would cancel the job
+        # instead.
+        env:
+          MARMOT_AGENT_SIM_RUNS: "200"
+        run: timeout --kill-after=30s 4m cargo test --locked --release -p marmot-agent-sim --all-features
+
+      - name: Keep the schedules and capsules of a failed run
+        # Each failure leaves a capsule that replays it (crates/marmot-agent-sim/README.md); a run
+        # that hung or panicked leaves its schedule.
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: simulator-capsules
+          path: target/tmp/marmot-agent-sim/
+          if-no-files-found: ignore
+          retention-days: 14
 
   recordings:
     name: Recordings

@@ -8,11 +8,13 @@ duplicate it here.
 Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) into Marmot group chats.
 
 **Status: every harness is driven; building towards the swap (M4).** The Rust workspace under `crates/` has
-seven crates, and CI checks them: `marmot-agent-events`, the agent event and its eleven item types;
+eight crates, and CI checks them: `marmot-agent-events`, the agent event and its eleven item types;
 `marmot-agent-driver`, the trait a driver implements; the built-in drivers `marmot-agent-codex` (Codex, with
 subagents switched off for now), `marmot-agent-acp` (OpenCode, Goose and Cursor over ACP) and `marmot-agent-pi`
 (Pi, in a container from `tools/pi`); `marmot-agent`, the core, which runs one agent's account through MDK and
-drives a built-in driver or serves a local socket; and `marmot-agent-chat`, a terminal client for trying it.
+drives a built-in driver or serves a local socket; `marmot-agent-chat`, a terminal client for trying it; and
+`marmot-agent-sim`, a deterministic simulator that runs the real core against a simulated MDK and a scripted
+driver, with faults, from a seed.
 Over the socket connect `packages/claude-code`, the Claude Code driver, `packages/openclaw`, the OpenClaw plugin,
 and `python/marmot_hermes`, the Hermes plugin; the plugins run inside their gateways, in containers. Each driver
 has a scenario that runs it end to end against the real harness on MDK's test relay. What is built next, and in what order, is in
@@ -67,6 +69,7 @@ being replaced by what is designed here, not extended.
 | Work on moving an install over | `crates/marmot-agent/src/import`, after `docs/move.md` and `docs/reference/current-connectors.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Plan or add tests, models or proofs | `docs/design/verification.md` |
+| Work on the simulator, or replay one of its failure capsules | `crates/marmot-agent-sim/README.md`, after `docs/design/verification.md` |
 | Change the link check | `lychee.toml` |
 
 ## The shape, in brief
@@ -224,6 +227,17 @@ cargo test --locked --workspace --all-features
 
 `rustup` installs the pinned compiler the first time. `--locked` fails when `Cargo.lock` is out of date: update
 it on purpose, with `cargo update` or by building once without the flag, and commit it.
+
+The workspace's tests include the simulator's at a small count of runs. CI's Rust job leaves them out
+(`--exclude marmot-agent-sim`) and runs them in a job of its own, in release with more runs
+(`MARMOT_AGENT_SIM_RUNS`); for a change to the core's run loop, conversation or Marmot side, run that too:
+
+```sh
+MARMOT_AGENT_SIM_RUNS=200 cargo test --locked --release -p marmot-agent-sim --all-features
+```
+
+A failure prints the path of a capsule, and CI keeps the capsules as the run's `simulator-capsules` artifact;
+`crates/marmot-agent-sim/README.md` says how to replay one.
 
 The core links MDK, whose markdown parser is written in Odin and needs one exact Odin release to build. Install
 it once with `bash tools/odin/install.sh <absolute folder>`, which checks its checksum, and set `ODIN` to the

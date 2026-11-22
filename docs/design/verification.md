@@ -166,6 +166,20 @@ clock, from a seed. It owns S1 to S4, S10, L1 to L3 for the core.
   is internal. A second lane runs the same scenarios on MDK's real test relay, with crashes, for what a fake
   cannot show.
 
+**Built** (2026-11-22): [`crates/marmot-agent-sim`](../../crates/marmot-agent-sim/README.md). The seam is
+`marmot::Side`, which the real `Marmot` implements; the clock is tokio's, paused in a run; the run loop looks at
+what it waits for in turn rather than at random, so a schedule replays exactly. It checks S1, S3, S4, S5, S10 and
+S12 after every step, and L1, L2, L3 and S2 at the end within 900 s of virtual time, from what the simulated MDK
+stored and what the harness saw. Runs are named `family/vVERSION/SEED/INDEX`; a failure leaves a capsule that
+replays exactly, shrunk greedily. Six families form the gate and run on every pull request. Two more show what
+lies beyond an assumption: `disorder` (a message heard before MDK stores it, or out of order, which MDK does not
+do) loses messages, and `late` (a send that lands after the core looked for it) finds the accepted duplicate.
+Three bugs fixed before are put back behind a test-only feature, and each is found. Bounded result, 2026-11-22:
+36,000 runs of the gate (6 families, 1,000 runs each, seeds 0 to 5), one or two chats, up to about 120 steps
+each, all passing. Not yet: the connector that
+drops mid-request and the one that reconnects (left to the conformance suite, which owns the socket), files, and
+the second lane on MDK's real relay.
+
 ### 4. Formal models
 
 **TLA+**, checked with TLC, as MDK does, so both projects use one tool and one way of working. Each model has a
@@ -234,7 +248,7 @@ takes about 8 to 10.
 
 | When | What |
 | --- | --- |
-| Every pull request | Everything that runs today, the conformance suite, property tests at normal counts, the simulator on a fixed set of seeds, TLC on small bounds, Kani on the small proofs, the privacy scan, each in its own job |
+| Every pull request | Everything that runs today, the conformance suite, property tests at normal counts, the simulator on a fixed set of seeds (built: 200 runs of each gate family from seed 0, in release, in its own job), TLC on small bounds, Kani on the small proofs, the privacy scan, each in its own job |
 | Nightly | Property tests at high counts, the simulator on many new seeds, TLC on larger bounds, fuzzing, mutation testing, and the real-harness scenarios on numes.ai's free models, in a workflow that pull requests cannot reach |
 | Weekly | Long simulator campaigns |
 
