@@ -577,7 +577,21 @@ pub async fn dies_at_every_step<S: Subject>(subject: impl Fn() -> S) -> Result<(
 /// Replays a recording through the driver: one prompt, every approval allowed, until its turn
 /// ends. The subject's fake is a [`Replay`](crate::fake::Replay).
 pub async fn replay<S: Subject>(subject: S, words: &str) -> Result<(), Violation> {
+    replay_answering(subject, words, true).await
+}
+
+/// Replays a recording, answering every approval as `allow` says. A recording that allowed one
+/// is not played on when the driver refuses it instead: that the turn never ends shows the replay
+/// checks what the driver answers.
+pub async fn replay_answering<S: Subject>(
+    subject: S,
+    words: &str,
+    allow: bool,
+) -> Result<(), Violation> {
     let mut run = Run::start(subject).await;
+    if !allow {
+        run.patience = Duration::from_secs(2);
+    }
     let m = taken(run.prompt("c-1", words).await?, "the prompt")?;
     loop {
         let e = run
@@ -588,7 +602,7 @@ pub async fn replay<S: Subject>(subject: S, words: &str) -> Result<(), Violation
         if !waiting(&e) {
             break;
         }
-        taken(run.answer(&e, true).await?.1, "the answer")?;
+        taken(run.answer(&e, allow).await?.1, "the answer")?;
     }
     run.drain(Duration::from_millis(100)).await;
     run.check.all_settled();

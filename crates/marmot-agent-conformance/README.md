@@ -64,7 +64,7 @@ out is reported as the liveness property it stands for (L1 a request, L2 a turn,
 | `new_session` | A new session, settled by the new session; the next prompt goes to it; another chat naming the old one is refused |
 | `settings` | A setting changed, settled once |
 | `dies_at_every_step` | The harness dies on its n-th frame after start, in a turn that asks for approval, for every n the turn reaches: a run with nothing failing counts them first, and each run must see the harness die before what it left is checked |
-| `replay` | A recording played back through the driver, every approval allowed; every recorded message must be played |
+| `replay` | A recording played back through the driver, every approval allowed (the one-time choice, as recorded); every recorded message must be played, and the driver's answer to the harness's own request must be the recorded one, to the same request with the same decision, or nothing more is played. Answered the other way, a recording stops (`a_replay_stops_on_another_answer`) |
 
 The pipe between driver and harness holds 256 bytes each way, so a dropped wait can fall in the middle of a write.
 

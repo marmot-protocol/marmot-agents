@@ -154,3 +154,15 @@ async fn every_fault_is_caught() {
         "not caught as they should be: {missed:#?}"
     );
 }
+
+// A replay plays on only when the driver answers as recorded: refused, the recording that allowed
+// stops, and the turn never ends.
+#[tokio::test]
+async fn a_replay_stops_on_another_answer() {
+    let subject = OnFake {
+        recording: Some(recording("approval_allowed.jsonl")),
+        ..OnFake::default()
+    };
+    let found = scenarios::replay_answering(subject, "as recorded", false).await;
+    assert!(found.is_err(), "a refused approval played the recording on");
+}

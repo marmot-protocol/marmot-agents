@@ -167,3 +167,25 @@ async fn replays_recordings() {
         assert_eq!(left, 0, "{name}: {left} recorded messages never played");
     }
 }
+
+// A replay plays on only when the driver answers as recorded: answered the other way, the recording
+// stops, and the turn never ends.
+#[tokio::test]
+async fn a_replay_stops_on_another_answer() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/recordings/pi/gate_allowed.jsonl");
+    let recording = std::fs::read_to_string(path).expect("the recording");
+    let fake = Fake::new();
+    let left = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+    let server = Server::replaying(&fake, &recording, left).expect("the fake listens");
+    let subject = OnFake {
+        fake,
+        server,
+        replay: true,
+    };
+    let found = scenarios::replay_answering(subject, "as recorded", false).await;
+    assert!(
+        found.is_err(),
+        "an answer the other way played the recording on"
+    );
+}

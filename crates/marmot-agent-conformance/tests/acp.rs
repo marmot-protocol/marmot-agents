@@ -185,3 +185,24 @@ async fn replays_recordings() {
         }
     }
 }
+
+// A replay plays on only when the driver answers as recorded: refused, the recording that allowed
+// stops, and the turn never ends.
+#[tokio::test]
+async fn a_replay_stops_on_another_answer() {
+    for (flavor, folder) in [
+        (Flavor::OpenCode, "opencode"),
+        (Flavor::Goose, "goose"),
+        (Flavor::Cursor, "cursor"),
+    ] {
+        let subject = OnFake {
+            recording: Some(recording(folder, "approval_allowed.jsonl")),
+            ..subject(flavor)
+        };
+        let found = scenarios::replay_answering(subject, "as recorded", false).await;
+        assert!(
+            found.is_err(),
+            "{folder}: a refused approval played the recording on"
+        );
+    }
+}

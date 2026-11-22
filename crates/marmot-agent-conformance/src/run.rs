@@ -256,7 +256,9 @@ impl<S: Subject> Run<S> {
     }
 
     /// Answers an approval or a question an event shows: allowing it, or the first option, when
-    /// `allow`; otherwise refusing it, or the second option.
+    /// `allow`; otherwise refusing it, or the second option. Of the choices that allow or refuse,
+    /// the one for this time only is taken where there is one, as a careful person would, and as
+    /// the recordings did.
     pub async fn answer(
         &mut self,
         asked: &Emitted,
@@ -265,8 +267,12 @@ impl<S: Subject> Run<S> {
         let (given, expect) = match asked.event.body() {
             Body::Approval(a) => {
                 let wanted = if allow { Effect::Allow } else { Effect::Deny };
-                let choice = (a.choices.iter())
-                    .find(|c| c.effect == wanted)
+                let once = |c: &&marmot_agent_events::body::Choice| {
+                    let words = format!("{} {}", c.id, c.label).to_lowercase();
+                    c.effect == wanted && words.contains("once")
+                };
+                let choice = (a.choices.iter().find(once))
+                    .or_else(|| a.choices.iter().find(|c| c.effect == wanted))
                     .or(a.choices.first())
                     .expect("an approval offers a choice");
                 (

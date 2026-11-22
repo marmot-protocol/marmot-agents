@@ -3,7 +3,9 @@
 //! A recording is the messages that went each way in one scripted session
 //! (`fixtures/recordings/<harness>/*.jsonl`). The replay waits for the driver to write each
 //! recorded outgoing message, matched by its kind (its method, or its Pi type, or a reply), and
-//! answers it with the recorded incoming messages that followed, up to the next outgoing one. A
+//! answers it with the recorded incoming messages that followed, up to the next outgoing one. The
+//! driver's answer to a request of the harness's own, such as an approval, must be the recorded
+//! one: to the same request, with the same decision, or nothing more is played. A
 //! recorded reply is given the id of the driver's request it answers, since the driver numbers its
 //! own requests. What the recording does not hold, such as the lists of models Codex's driver asks
 //! for on a new chat, goes to a fallback fake.
@@ -57,7 +59,10 @@ impl<P: Protocol> Replay<P> {
 impl<P: Protocol> Protocol for Replay<P> {
     fn hear(&mut self, frame: &Value, out: &mut Outbox, heard: &mut Vec<Heard>) {
         let next = (self.at..self.lines.len()).find(|&i| self.lines[i].0);
-        let matched = next.filter(|&i| key(&self.lines[i].1) == key(frame));
+        let matched = next.filter(|&i| {
+            let recorded = &self.lines[i].1;
+            key(recorded) == key(frame) && (!answers_harness(recorded) || same(recorded, frame))
+        });
         let Some(at) = matched else {
             self.fallback.hear(frame, out, heard);
             return;
@@ -89,4 +94,18 @@ impl<P: Protocol> Protocol for Replay<P> {
     fn ended(&mut self) {
         self.fallback.ended();
     }
+}
+
+/// Whether a message from the driver answers a request of the harness's own: a JSON-RPC reply, or
+/// Pi's answer to an extension's dialog.
+fn answers_harness(message: &Value) -> bool {
+    is_reply(message) || message["type"] == "extension_ui_response"
+}
+
+/// Whether the driver's answer is the recorded one: every field the recording has, the request's
+/// id and the decision among them, is the same.
+fn same(recorded: &Value, frame: &Value) -> bool {
+    recorded
+        .as_object()
+        .is_some_and(|fields| fields.iter().all(|(k, v)| frame.get(k) == Some(v)))
 }
