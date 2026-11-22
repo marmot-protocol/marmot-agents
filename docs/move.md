@@ -1,7 +1,8 @@
 # Moving an install over
 
 Status: describes `marmot-agent import` as built
-([D-089](decisions.md#d-089-an-install-moves-over-by-importing-its-account-home-in-place)). How the old
+([D-089](decisions.md#d-089-an-install-moves-over-by-importing-its-account-home-in-place)), and what
+[the tests](#how-it-is-tested) show of it. How the old
 allow-lists become the new settings, who becomes the owner unasked, `files_from` (and the core refusing to
 start when one overlaps the home), `--leave-running`, and what the import does with a home that holds several
 identities, are proposals until the project owner accepts them.
@@ -61,8 +62,12 @@ encryption state and its chats.
    ~/.marmot-agents/codex/marmot-agent.toml`. For Claude Code, start its driver too. For Hermes and OpenClaw,
    run the installer instead, with `--replace-plugin`, such as `install/hermes.sh --replace-plugin`: it uses
    the imported settings and the identity in the old home, never makes a new one, runs the core as a service,
-   and puts the new plugin in the gateway in place of the old one, pointed at that home. Then restart the
-   gateway. Without settings in the agent's folder, `--replace-plugin` stops before changing anything.
+   and puts the new plugin in the gateway in place of the old one, pointed at that home. It keeps a copy of
+   the old plugin and of the gateway's settings in the agent's folder, under `backups`, and takes the old
+   plugin's own settings out of the gateway's (for OpenClaw, its socket, account and sender policy, which
+   OpenClaw would refuse once the new plugin is in). The gateway may keep running while it does. Then
+   restart the gateway. Without settings in the agent's folder, `--replace-plugin` stops before changing
+   anything.
 
 On its first start the core reads nothing already in a chat as a prompt, so it never runs an old prompt again.
 That also means a message sent to the agent between the import and that first start is not answered: keep the
@@ -72,6 +77,11 @@ Up to MDK 0.19.0, a `wn-agent` stopped in the moment after a message reached it 
 for the core ([MDK #3602](https://github.com/marmot-protocol/mdk/issues/3602)). That is fixed in the MDK
 revision the core uses: the import tests stop `wn-agent` at once after the person's last message, and each
 passed 10 runs of 10.
+
+After the move, the gateway starts a new conversation in each chat: the new plugin names a chat by the
+core's own id for it, not by the group, so what Hermes or OpenClaw kept of a chat's conversation stays with
+the old one (seen with OpenClaw, and read in the Hermes plugin's code). The chat itself, and everything said in
+it, is where it was.
 
 ## What carries over
 
@@ -143,7 +153,19 @@ harness's program: an agent over ACP, or the Pi driver's own fake Pi. For Claude
 socket, and a stand-in for the Claude Code driver connects to it as the driver does. For Codex, the core runs
 in the test with a stand-in driver.
 
-Not proven yet: a move on a real machine, with systemd and the real harnesses, and Hermes and OpenClaw.
+A second test moves an install of each gateway plugin over: Hermes and OpenClaw
+(`crates/marmot-agent/tests/import_gateways.rs`). It needs Docker, so it runs only when asked, one scenario at a
+time (`cargo test -p marmot-agent --test import_gateways -- --ignored --test-threads=1`). The real gateway runs
+in the repository's image (`python/hermes`, `packages/openclaw/container`) with today's plugin, built from MDK's
+sources as MDK's release builds it and set up as MDK's installer sets it up, and the person has a message
+answered through it. Then the import, `install/hermes.sh` or `install/openclaw.sh` with `--replace-plugin`
+against that same gateway, the core started by the launcher the installer writes, and the gateway restarted with
+the new plugin. The person's next message is sent once and answered, and no request the gateway makes to its
+model after the move holds anything said before it. The model is a scripted one the test serves on the loopback
+address, and no systemd is touched: the import's service manager notes what it stops, and the installer runs with
+`--no-service`.
+
+Not proven yet: a move on a real machine, with systemd and the real harnesses.
 
 ## Going back
 
