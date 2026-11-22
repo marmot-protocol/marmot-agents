@@ -45,6 +45,8 @@ pub struct Knobs {
     /// The harness stops reading its input, and keeps it open, until this is cleared. The driver's
     /// writes stop once the pipe is full.
     pub deaf: bool,
+    /// When set, only the harness process started with this tag is deaf; the others read on.
+    pub deaf_only: Option<String>,
     /// A reply comes after the notifications that follow from its request, and every other reply
     /// is held back a little, so a later request's reply overtakes it.
     pub reorder: bool,
@@ -406,7 +408,7 @@ async fn engine<P: Protocol>(
             }
         }
         let read = tokio::select! {
-            read = reader.read_until(b'\n', &mut line), if !knobs.deaf => read,
+            read = reader.read_until(b'\n', &mut line), if !deaf(&knobs, tag.as_deref()) => read,
             _ = turned.changed() => continue,
             changed = kill.changed() => {
                 if changed.is_err() {
@@ -474,6 +476,11 @@ async fn engine<P: Protocol>(
         shared.log.push(Did::Died(tag.clone()));
         shared.dead.push(tag);
     }
+}
+
+/// Whether the harness process started with `tag` has stopped reading.
+fn deaf(knobs: &Knobs, tag: Option<&str>) -> bool {
+    knobs.deaf && (knobs.deaf_only.is_none() || knobs.deaf_only.as_deref() == tag)
 }
 
 /// Hands one frame to the protocol, and what it answers to the writer. True if the harness died.

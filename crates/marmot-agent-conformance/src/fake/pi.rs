@@ -401,6 +401,11 @@ impl Server {
             .map(|(chat, _)| chat.clone())
     }
 
+    /// The tag of the Pi serving `chat`, once a prompt has shown it.
+    pub fn tag_of(&self, chat: &str) -> Option<String> {
+        self.store.lock().unwrap().tags.get(chat).cloned()
+    }
+
     /// The Pi serving `chat` dies now.
     pub fn kill_chat(&self, chat: &str) {
         let tag = self.store.lock().unwrap().tags.get(chat).cloned();

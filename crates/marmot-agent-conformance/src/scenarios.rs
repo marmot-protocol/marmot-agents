@@ -357,13 +357,36 @@ fn longer_than_a_pipe(words: &str) -> String {
 /// The harness stops reading its input, keeping it open, while a prompt too long for the pipe is
 /// written: the prompt still returns, within the suite's patience (S11, D-066). Refused, it stays
 /// refused: when the harness reads again, it never reads the prompt.
+///
+/// With a harness for each chat, only the first chat's stops reading. The second chat's goes on
+/// serving it, without being started again, while the first is stuck and after; and the first
+/// chat's next prompt is taken, by a harness started again for it.
 pub async fn stops_reading<S: Subject>(subject: S) -> Result<(), Violation> {
     let mut run = Run::start(subject).await;
+    let apart = !run.subject.shared_harness();
     let first = taken(run.prompt("c-1", "hello").await?, "the first prompt")?;
     run.wait("L2", "the first turn's end", ended_turn_of(&first))
         .await?;
-    run.subject.fake().set_knobs(Knobs {
+    let mut deaf_only = None;
+    if apart {
+        let other = taken(run.prompt("c-2", "hello").await?, "chat 2's first prompt")?;
+        run.wait("L2", "chat 2's first turn's end", ended_turn_of(&other))
+            .await?;
+        deaf_only = run.subject.tag_of(&ChatId::from("c-1"));
+        if deaf_only.is_none() {
+            return Err(broke("L2", "chat 1's harness has no tag"));
+        }
+    }
+    let fake = run.subject.fake().clone();
+    let opened = |heard: &[Heard]| {
+        (heard.iter())
+            .filter(|h| matches!(h, Heard::Opened { .. }))
+            .count()
+    };
+    let opened_before = opened(&fake.heard());
+    fake.set_knobs(Knobs {
         deaf: true,
+        deaf_only,
         ..Knobs::default()
     });
     let stuck = "#stuck";
@@ -371,8 +394,19 @@ pub async fn stops_reading<S: Subject>(subject: S) -> Result<(), Violation> {
         .prompt("c-1", &longer_than_a_pipe(stuck))
         .await?
         .is_err();
+    if apart {
+        // Chat 1's harness is still deaf; chat 2's serves on.
+        let other = taken(run.prompt("c-2", "again").await?, "chat 2's next prompt")?;
+        run.wait("L2", "chat 2's next turn's end", ended_turn_of(&other))
+            .await?;
+        if opened(&fake.heard()) != opened_before {
+            return Err(broke(
+                "L2",
+                "a harness was started again for a chat whose harness kept reading",
+            ));
+        }
+    }
     // The harness reads again.
-    let fake = run.subject.fake().clone();
     fake.set_knobs(Knobs::default());
     let read = |heard: &[Heard]| {
         (heard.iter()).any(|h| matches!(h, Heard::Prompt { text, .. } if text.contains(stuck)))
@@ -382,6 +416,24 @@ pub async fn stops_reading<S: Subject>(subject: S) -> Result<(), Violation> {
             "S11",
             "a prompt the driver refused reached the harness once it read again",
         ));
+    }
+    if apart {
+        // Chat 1's next prompt takes its own session up again, in a new harness.
+        let session = (run.check.session_of(&ChatId::from("c-1")).cloned())
+            .ok_or_else(|| broke("L2", "chat 1's session was never shown"))?;
+        let before = fake.heard().len();
+        let again = taken(run.prompt("c-1", "hello").await?, "chat 1's next prompt")?;
+        run.wait("L2", "chat 1's next turn's end", ended_turn_of(&again))
+            .await?;
+        let taken_up = fake.heard()[before..]
+            .iter()
+            .any(|h| matches!(h, Heard::Opened { session: s, resumed: true } if *s == session));
+        if !taken_up {
+            return Err(broke(
+                "S12",
+                "chat 1's session was not taken up again after its harness stopped reading",
+            ));
+        }
     }
     run.end().await
 }

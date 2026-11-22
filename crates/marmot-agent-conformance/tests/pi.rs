@@ -28,9 +28,12 @@ impl Subject for OnFake {
 
     async fn start(&mut self) -> Pi {
         let (program, args, cwd) = self.server.program();
-        Pi::start(Setup { program, args, cwd })
+        let mut pi = Pi::start(Setup { program, args, cwd })
             .await
-            .expect("the relay answers --version")
+            .expect("the relay answers --version");
+        // The suite waits five seconds for a request; the driver gives up on a Pi sooner.
+        pi.set_patience(std::time::Duration::from_secs(2));
+        pi
     }
 
     fn fake(&self) -> &Fake {
@@ -64,58 +67,26 @@ impl Subject for OnFake {
     fn chat_of(&self, tag: &str) -> Option<ChatId> {
         self.server.chat_of(tag).map(ChatId)
     }
+
+    fn tag_of(&self, chat: &ChatId) -> Option<String> {
+        self.server.tag_of(&chat.0)
+    }
 }
 
-// One test for each scenario Pi runs. Those it leaves out are named, with the reason; a check that
-// the two lists name every scenario in the suite's one list, once, is made from the same names.
+// One test for each scenario, made from the suite's one list of them.
 macro_rules! conformance {
-    (run: [$($name:ident),* $(,)?]; left_out: [$($out:ident),* $(,)?]) => {
+    ($make:expr; $($name:ident),* $(,)?) => {
         $(
             #[tokio::test]
             async fn $name() {
-                let found = scenarios::$name(subject()).await;
+                let found = scenarios::$name($make).await;
                 found.unwrap_or_else(|v| panic!("{v}"));
             }
         )*
-
-        #[test]
-        fn every_scenario_is_run_or_left_out() {
-            $(let _ = scenarios::$out::<OnFake>;)*
-            let found = scenarios::covered(&[$(stringify!($name)),*], &[$(stringify!($out)),*]);
-            found.unwrap_or_else(|wrong| panic!("{wrong}"));
-        }
     };
 }
 
-conformance!(
-    run: [
-        one_turn,
-        two_chats,
-        answered_once,
-        answer_after_death,
-        dies_mid_turn,
-        dies_with_requests_pending,
-        dropped_waits,
-        slow_and_out_of_order,
-        partial_frames,
-        never_answers,
-        late_replies,
-        restart,
-        new_session,
-        settings,
-    ];
-    // Pi's driver waits for a record to be written with no limit, so a Pi that stops reading its
-    // input stalls the request, and every chat with it (found by this scenario, 2026-11-22; not yet
-    // fixed). It is run, and fails, as an ignored test below.
-    left_out: [stops_reading]
-);
-
-#[tokio::test]
-#[ignore = "Pi's driver waits for a record to be written with no limit"]
-async fn stops_reading() {
-    let found = scenarios::stops_reading(subject()).await;
-    found.unwrap_or_else(|v| panic!("{v}"));
-}
+marmot_agent_conformance::with_scenarios!(conformance!(subject()));
 
 #[tokio::test]
 async fn dies_at_every_step() {

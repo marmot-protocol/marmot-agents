@@ -366,6 +366,14 @@ args = ["<model key file>", "<Pi's state folder>"]
   and the handler may be waiting for the chat's answer to a question. Pi's response, read in turn with its
   other records, says which turn responds to the prompt: the next one (`started`), the running one (`queued`),
   or none. If Pi refuses it, the error item that makes says so.
+- **A Pi that stops reading.** A request waits at most a minute for its record to be written to the chat's Pi
+  ([D-098](../decisions.md#d-098-a-harness-that-stops-reading-ends-its-connection)). The task that writes to
+  the Pi keeps that deadline itself: a record not written in full by then never reaches Pi whole, as the task
+  lets go of Pi's input, and of whatever else waited to be written, before it says so. A Pi that has not read it
+  has stopped working ([D-066](../decisions.md#d-066-the-core-finishes-every-request-it-starts)): the driver
+  stops that Pi as it stops any (the script removes its container), so nothing queued for it reaches a later
+  Pi. The chat's open items close, as for any Pi that stops, and the request is refused as failed. Only that
+  chat's Pi stops: the others run on, and the chat's next prompt takes its session up in a new Pi.
 - **Interrupt** sends `abort`; the end of the turn settles it. **New session** sends `new_session`, and the new
   session item settles it. **`set`** changes `model` (`provider/id`) or `thinking`; the session item's edit
   settles it, made again if the setting kept its value, since Pi then says nothing. The one action,

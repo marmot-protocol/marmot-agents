@@ -230,6 +230,10 @@ impl<S: Subject> Subject for Faulty<S> {
         self.inner.chat_of(tag)
     }
 
+    fn tag_of(&self, chat: &ChatId) -> Option<String> {
+        self.inner.tag_of(chat)
+    }
+
     fn loose(&self) -> bool {
         self.inner.loose()
     }
