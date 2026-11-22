@@ -185,6 +185,13 @@ harness_connect() {
     config=$("$OPENCLAW" config file 2>/dev/null) || config=""
     [ -z "$config" ] || backup_file "$config"
     [ -z "$OLD_PLUGIN" ] || backup_file "$OLD_PLUGIN"
+    # The old plugin's channel has settings ours does not take (its socket, account and who may write).
+    # OpenClaw checks the whole of its settings against the installed plugin's schema before it changes
+    # any, so once ours is in, it would refuse to change anything: take them out first, while the old
+    # plugin still accepts what is left. The copy kept above has them.
+    if [ -n "$OLD_PLUGIN" ] && [ -n "$(oc_get channels.marmot)" ]; then
+        act "$OPENCLAW" config unset channels.marmot
+    fi
     # Installing a plugin enables it too.
     say "adding the Marmot plugin to your OpenClaw"
     act "$OPENCLAW" plugins install --force --accept-capabilities "$MA_LIB/packages/openclaw/marmot-agent-openclaw.tgz"

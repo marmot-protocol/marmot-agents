@@ -121,6 +121,17 @@ def walk(c, path, make=False):
     return c, last
 
 
+def valid():
+    """OpenClaw checks the whole of its settings before it changes one: the marmot channel against the
+    schema of the plugin installed, ours (packages/openclaw/openclaw.plugin.json) taking only these."""
+    ours = plugin / "package.json"
+    if ours.is_file() and json.loads(ours.read_text()).get("name") == "marmot-agent-openclaw":
+        extra = set(load().get("channels", {}).get("marmot", {})) - {"enabled", "home"}
+        if extra:
+            sys.exit("OpenClaw config is invalid: channels.marmot: invalid config for plugin marmot: "
+                     f"must not have additional properties: {sorted(extra)}")
+
+
 if args == ["--version"]:
     print(f"OpenClaw {os.environ.get('FAKE_OPENCLAW_VERSION', '2026.11.5')} (e13cf15)")
 elif args[:2] == ["config", "file"]:
@@ -134,12 +145,14 @@ elif args[:2] == ["config", "get"]:
     print(json.dumps(value, indent=2) if "--json" in args or not isinstance(value, str) else value)
 elif args[:2] == ["config", "set"]:
     note()
+    valid()
     c = load()
     parent, last = walk(c, args[2], make=True)
     parent[last] = json.loads(args[3]) if "--strict-json" in args else args[3]
     save(c)
 elif args[:2] == ["config", "unset"]:
     note()
+    valid()
     c = load()
     parent, last = walk(c, args[2])
     if parent is None or last not in parent:
@@ -1100,8 +1113,12 @@ class Boundaries(unittest.TestCase):
         self.refused(m, "openclaw", *m.args("openclaw", "--binary", str(m.core)), message="--replace-plugin")
         self.assertEqual(m.calls(), [])
         old_home, settings = self.imported(m, "openclaw", "OpenClaw")
-        # Today's connector points the channel at its home, which the import keeps.
-        (m.home / ".openclaw/openclaw.json").write_text(json.dumps({"channels": {"marmot": {"home": str(old_home)}}}))
+        # Today's connector points the channel at its home, which the import keeps, with its socket, its
+        # account and who may write, as its installer and the person set them.
+        old_channel = {"enabled": True, "home": str(old_home), "socketPath": f"{old_home}/dev/wn-agent.sock",
+                       "accountIdHex": "ab" * 32, "dm": {"allowFrom": [OWNER]},
+                       "senderPolicy": {"allowedUsers": [OWNER]}}
+        (m.home / ".openclaw/openclaw.json").write_text(json.dumps({"channels": {"marmot": old_channel}}))
         m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--no-service", "--replace-plugin"))
         kept = next((m.data / "agents/openclaw/backups").glob("marmot.*"))
         self.assertEqual(json.loads((kept / "package.json").read_text())["name"], "@marmot-protocol/openclaw-marmot")
