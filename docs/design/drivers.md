@@ -132,7 +132,9 @@ sequenceDiagram
   server from the Agent SDK with the same tool, which Claude Code calls `mcp__marmot__send_file`. Pi gets it
   from a small extension of the driver's own, loaded into each chat's Pi ([the Pi driver](#the-pi-driver)). An
   ACP agent (OpenCode, Goose, Cursor) gets an MCP server the ACP driver serves itself, over HTTP on the loopback
-  address, on every session it opens or takes up ([the ACP driver](#the-acp-driver)). All take one
+  address, on every session it opens or takes up, but only when its settings say `send_files = true`: it is
+  off until the owner decides [Q-31](../open-questions.md#q-31-how-does-an-acp-agent-reach-the-drivers-file-tool)
+  ([the ACP driver](#the-acp-driver)). All take one
   argument, `path`. The model is never asked to write a path into its answer, and nothing in its words is read
   as a request to send by the driver. A gateway's plugin takes the gateway's own way instead
   ([below](#a-gateways-files)).
@@ -372,6 +374,7 @@ The core is started with an `[acp]` section in place of `[codex]`:
 name = "opencode"                 # what events call the agent until it names itself; Cursor never does
 command = ["opencode", "acp"]     # or ["cursor-agent", "acp"], ["goose", "acp"], or Goose's container, below
 cwd = "/home/me/work"
+send_files = true                 # provisional, off unless set until Q-31 is decided: the send_file tool
 ```
 
 - **Goose, OpenCode and Cursor run on the host**, as the person's own programs, with their own settings and
@@ -426,19 +429,27 @@ cwd = "/home/me/work"
   else unknown is refused, so the agent never waits for ever.
 - **Sending a file** ([sending a file](#sending-a-file)). Built 2026-11-22; provisional, and its security
   points wait on the owner ([Q-31](../open-questions.md#q-31-how-does-an-acp-agent-reach-the-drivers-file-tool)).
-  An agent that takes MCP servers over HTTP (`mcpCapabilities.http`, which OpenCode, Goose and Cursor all
-  state) is given the driver's own on `session/new`, `session/load` and `session/resume`, named `marmot`, with
-  one tool, `send_file`. The driver serves it with the official MCP library (`rmcp`), on `127.0.0.1` and a
-  port the system picks, stateless, answering in plain JSON; it refuses a `Host` that is not the loopback.
-  Each chat has a token of its own, 128 random bits, which the agent sends in an `Authorization` header and
+  **Off until Q-31 is decided:** the driver listens on nothing and hands the agent no server unless the
+  `[acp]` settings say `send_files = true` (provisional too). Once switched on, an agent that takes MCP servers
+  over HTTP (`mcpCapabilities.http`, which OpenCode, Goose and Cursor all state) is given the driver's own on
+  `session/new`, `session/load` and `session/resume`, named `marmot`, with one tool, `send_file`. The driver
+  serves it with the official MCP library (`rmcp`), on `127.0.0.1` and a port the system picks, stateless,
+  answering in plain JSON; it refuses a `Host` that is not the loopback. Each chat has a token of its own for
+  each folder it opens a session in, 128 random bits, which the agent sends in an `Authorization` header and
   never in the address, since OpenCode writes the address into its log. A request without a token the driver
   gave is refused before MCP reads it. A tool call goes to the chat whose session the call names in its
-  `_meta` (OpenCode: `ai.opencode/sessionID`; Goose: `agent-session-id`), or, when it names none (Cursor), to
-  the chat whose token it carries. OpenCode keeps one server of a name for every session in a folder, the one
-  handed over last, so its calls carry whichever chat's token came last: the token alone would send one
-  chat's file to another. A call naming a session no chat has, such as one of OpenCode's subagents, is refused,
-  never guessed. A relative path is made whole from the chat's folder. An agent that takes no MCP server over
-  HTTP is given none, and has no tool. Goose in its container cannot reach the loopback address, so it has no
+  `_meta` (OpenCode: `ai.opencode/sessionID`; Goose: `agent-session-id`), and that session must be the token's
+  own chat's (Goose), or, for OpenCode, a session of a chat working in the token's folder: OpenCode keeps one
+  server of a name for every session in a folder, the one handed over last, so its calls carry whichever
+  chat's token came last there, and the token alone would send one chat's file to another. A call that names
+  no session goes to the chat whose token it carries (Cursor, which keeps a server for each session); from
+  OpenCode it is refused. A call naming a session no chat has (such as one of OpenCode's subagents), another
+  chat's session, or a session in a shape the driver cannot read, is refused, never guessed. A relative path
+  is made whole from the chat's folder, which changes only once the agent has opened a session in the new
+  one. While a file waits for the core's word, a prompt to that chat that would restart its turn is refused
+  as busy: the turn waits on the tool's result, which the core can give only once the prompt returns. When
+  the driver stops, a call in flight is answered as not sent. An agent that takes no MCP server over HTTP is
+  given none, and has no tool. Goose in its container cannot reach the loopback address, so it has no
   tool there; on the host it has. What each agent does was read in its source or seen on the wire
   ([harness interfaces](../reference/harness-interfaces.md#mcp-servers-from-the-client-over-acp)).
 

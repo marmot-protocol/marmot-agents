@@ -307,9 +307,12 @@ arrive unasked is not known.
 
 ### Q-31 How does an ACP agent reach the driver's file tool?
 
-Built 2026-11-22, provisional; the security points wait on the project owner. The ACP driver serves an MCP
-server of its own, with one tool, `send_file`, and hands it to every session it opens or takes up
-([the ACP driver](design/drivers.md#the-acp-driver)). OpenCode, Goose and Cursor all take it, and the scenario
+Built 2026-11-22, provisional; the security points wait on the project owner. The ACP driver can serve an MCP
+server of its own, with one tool, `send_file`, and hand it to every session it opens or takes up
+([the ACP driver](design/drivers.md#the-acp-driver)). **It is off until this is decided:** the driver starts
+the server only when the `[acp]` settings say `send_files = true`, a setting that is itself provisional, so
+nothing listens for anyone who has not asked. Only the tests and the scenarios against real agents switch it
+on. OpenCode, Goose and Cursor all take it, and the scenario
 against the real agents sends a file with OpenCode and Cursor
 ([what each does](reference/harness-interfaces.md#mcp-servers-from-the-client-over-acp)). To decide, each with
 the recommendation:
@@ -318,8 +321,9 @@ the recommendation:
   program on the machine, which must then show a chat's token: 128 random bits, new each time the core starts,
   sent by the agent in a header. A `Host` that is not the loopback is refused, so a web page cannot reach it
   by a name of its own. Goose keeps the header, with the session, in its store on disk. The token's power is
-  the agent's own: to send a file from the folders the settings allow, to the chat it names. Recommended:
-  accept it. ACP's HTTP servers can only be named by an address, so a Unix socket, which file permissions would
+  the agent's own: to send a file from the folders the settings allow, to its own chat, or, for OpenCode,
+  which keeps one server for every session in a folder, to a chat working in the same folder, and only for
+  the session the call names. Recommended: accept it, and switch it on by default. ACP's HTTP servers can only be named by an address, so a Unix socket, which file permissions would
   guard, cannot be used; a stdio helper the agent starts would need a program of ours beside every agent, and
   still could not reach Goose's container.
 - **The agent's own approval of the tool.** Cursor asks before it calls any MCP tool, and Goose in `approve`
@@ -336,6 +340,8 @@ the recommendation:
   tool.
 - **A call from a session no chat has**, such as one of OpenCode's subagents, is refused. Recommended: keep
   refusing until [Q-30](#q-30-how-does-a-chat-show-an-agents-subagents) is settled.
+- **The setting.** `send_files` in `[acp]`, off unless set. Recommended: once the listener is accepted, on
+  by default, the setting left to switch it off.
 
 ## The repository and the move from MDK
 
