@@ -135,9 +135,9 @@ async fn faults_are_caught() {
         Fault::ResumeUnasked,
         Fault::TakeUnhanded,
     ] {
-        match faults::caught(subject(), fault, None).await {
-            Err(v) if v.property == fault.breaks() => {}
-            other => missed.push(format!("{fault:?}: {other:?}")),
+        let found = faults::caught(subject(), fault, None).await;
+        if !fault.caught_as(&found) {
+            missed.push(format!("{fault:?}: {found:?}"));
         }
     }
     assert!(

@@ -37,7 +37,7 @@ Checked here for drivers; each id is the plan's, so a search finds the property,
 | S4 | at each checkpoint | No prompt reaches the harness twice |
 | S5 | every step | Every event names its chat; a session, a turn and an item stay with the chat they were first seen in; a chat's mark appears only in its own chat, and a turn names only its own chat's prompts; a request is settled only in its own chat; an answer reaches the harness in its own chat's session, with what was chosen |
 | S11 | every request, and at each checkpoint | A request returns within the suite's patience, and when it has returned the harness has it, with the driver not polled again: an answer taken was heard, or the harness died reading what was written after it; no line the harness reads is half a message; with waits dropped at every point, nothing is lost; an answer the harness can no longer read is not taken; a request refused never reaches the harness later |
-| S12 | at each checkpoint | The harness takes up a session again only when a prompt named it, or when it is the chat's own current session (Pi restarting a chat's Pi); a named session is taken up; a prompt naming none stays in the chat's session |
+| S12 | at each checkpoint | The harness takes up a session again only when a prompt named it, or when it was the chat's current session as its last prompt was made (Pi restarting a chat's Pi), not the session the resume itself made current; a named session is taken up; a prompt naming none stays in the chat's session |
 | S13 | every step | An item id, once closed, is not used again in its chat, and an id from before a restart is not used after it (a session's own item returns with its session); an item keeps its session |
 | SEQ | every step | `seq` rises within a session (D-059, point 4). Not in the plan's table |
 
@@ -99,7 +99,8 @@ nothing.
 | ACP, Cursor-shaped | `two_chats`, `answered_once`, `answer_after_death`, `restart`, `dies_at_every_step` (4) | `simple`, `approval_allowed` | |
 | Pi | all but `stops_reading`, which fails, `dies_at_every_step` (6) | `gate_allowed`, `command` | 7: those that turn on a harness for each chat, and `TakeUnhanded` |
 
-The faults (`src/faults.rs`), each caught as the property it breaks, by the scenario named:
+The faults (`src/faults.rs`), each caught as the property it breaks, by the scenario named. Where more than one check
+names the property, the test also requires the words of the check meant for the fault (`Fault::detail`):
 
 | Fault | Breaks | Caught by |
 | --- | --- | --- |

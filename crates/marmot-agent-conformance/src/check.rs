@@ -12,7 +12,7 @@
 //! | S4 | No prompt reaches the harness twice. |
 //! | S5 | Every event names its chat, and a session, a turn and an item stay with the chat they were first seen in. An event whose text carries a chat's mark is that chat's, as is every prompt a turn names. An answer reaches the harness in the session of its own chat, and with what was chosen. |
 //! | S11 | A request returns, and once it has returned the harness has it, with the driver not polled again. No line the harness reads is half a message. Dropping the wait for an event at any point loses nothing (the scenario that drops waits checks what arrives). |
-//! | S12 | The harness takes up a session again only when a prompt named it, or when it is the chat's own current session (a driver restarting a harness that died). Never a session no chat had. |
+//! | S12 | The harness takes up a session again only when a prompt named it, or when it was the chat's current session as the chat's last prompt was made (a driver restarting a harness that died). Not the session a resume itself just made current. Never a session no chat had. |
 //! | S13 | An item id, once closed, is never used again in its chat, and an id from before a restart is never used after it; only a session's own item returns with its session. An item keeps its session. |
 //! | SEQ | `seq` rises within a session (D-059, point 4). Not in the property table; named here so a search finds it. |
 
@@ -96,6 +96,9 @@ pub struct Checker {
     retired: HashMap<(ChatId, String), Option<String>>,
     /// Each chat's current session, in this driver's life.
     current: HashMap<ChatId, String>,
+    /// Each chat's current session as its last prompt was made: what a driver may take up again
+    /// unasked. Kept apart from `current`, which the resume's own events change.
+    resumable: HashMap<ChatId, String>,
     seq: HashMap<String, u64>,
     /// Chats whose harness has stopped; `everything` when the whole harness did.
     stopped: HashSet<ChatId>,
@@ -149,6 +152,10 @@ impl Checker {
     /// A prompt is about to be handed to the driver.
     pub fn prompting(&mut self, message: &MessageId, chat: &ChatId, session: Option<&str>) {
         self.prompts.insert(message.clone(), chat.clone());
+        match self.current.get(chat) {
+            Some(current) => self.resumable.insert(chat.clone(), current.clone()),
+            None => self.resumable.remove(chat),
+        };
         if let Some(session) = session {
             let named = self.named.entry(chat.clone()).or_default();
             named.insert(session.to_string());
@@ -220,6 +227,7 @@ impl Checker {
             request.old = true;
         }
         self.current.clear();
+        self.resumable.clear();
         self.seq.clear();
         self.named.clear();
         self.stopped.clear();
@@ -421,7 +429,7 @@ impl Checker {
                         continue;
                     };
                     let named = self.named.get(&owner).is_some_and(|n| n.contains(session));
-                    let current = self.current.get(&owner) == Some(session);
+                    let current = self.resumable.get(&owner) == Some(session);
                     if !named && !current {
                         let detail = format!("a session of {owner:?} taken up, unasked");
                         self.fail("S12", detail);

@@ -144,9 +144,9 @@ async fn every_fault_is_caught() {
     for fault in Fault::ALL {
         let subject = OnFake::default();
         let inject = injector(&subject.pending);
-        match faults::caught(subject, fault, Some(inject)).await {
-            Err(v) if v.property == fault.breaks() => {}
-            other => missed.push(format!("{fault:?}: {other:?}")),
+        let found = faults::caught(subject, fault, Some(inject)).await;
+        if !fault.caught_as(&found) {
+            missed.push(format!("{fault:?}: {found:?}"));
         }
     }
     assert!(

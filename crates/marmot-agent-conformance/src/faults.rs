@@ -64,6 +64,26 @@ impl Fault {
         }
     }
 
+    /// What the violation must say, where more than one check could name the property: so that
+    /// the check meant for it, and not another, is what catches it.
+    pub fn detail(self) -> Option<&'static str> {
+        match self {
+            Fault::ResumeUnasked => Some("taken up, unasked"),
+            _ => None,
+        }
+    }
+
+    /// Whether `found` is this fault caught as it should be: the property it breaks, by the check
+    /// meant for it.
+    pub fn caught_as(self, found: &Result<(), Violation>) -> bool {
+        match found {
+            Err(v) => {
+                v.property == self.breaks() && self.detail().is_none_or(|d| v.detail.contains(d))
+            }
+            Ok(()) => false,
+        }
+    }
+
     /// The scenario that catches it.
     pub fn caught_by(self) -> &'static str {
         match self {
