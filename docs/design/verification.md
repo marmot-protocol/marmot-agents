@@ -141,6 +141,14 @@ fixed on 2026-11-21, each with a test that failed first.
   after it; and two groups read again at the same moment were read in no fixed order, so a capsule could not
   replay. Now a failed list is tried again before any live message moves a mark, a new group starts at the first
   message heard live, and waiting groups are read again in order.
+- **A new group can start at its history** (L3). **Fixed** on 2026-11-22. The test for the new group above failed
+  now and then (about 1 run in 6): a message stored while the core was down reached the driver as a prompt. MDK
+  stores a sync's messages and announces them live only at the end of the sync, so a core that subscribes in
+  between hears, live, a message that arrived before it started, and a group with no read mark started there.
+  Now such a group starts only at a message that arrived, by MDK's own time of arrival, in a later whole second
+  than the core started; one that arrived before, or in that second, is history. The test now subscribes before
+  the message is announced, so the core hears it live every time; it failed 6 of 6 runs before the fix and passed
+  24 of 24 after. The simulator does not reach this: its groups always start from an invitation, with a mark.
 - **Settles carried by a message are dropped** (S1). **Fixed.** The core read `settles` only from items that are
   not messages. A pending answer whose approval ends without naming it stayed pending until the driver stopped.
   A driver's event could settle another chat's request.

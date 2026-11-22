@@ -241,7 +241,25 @@ impl World {
 
     /// Runs `core`, as [`World::start`] does.
     pub fn run<D: Driver + 'static>(&self, core: Core<D>) -> Running {
-        let events = self.runtime.subscribe();
+        self.run_on(core, self.runtime.subscribe())
+    }
+
+    /// As [`World::start`], on `events`: what MDK emitted since they were subscribed to reaches
+    /// the core live, as an event emitted after the core subscribed does, even for a message MDK
+    /// stored before.
+    pub fn start_on(
+        &self,
+        driver: impl Driver + 'static,
+        events: tokio::sync::broadcast::Receiver<marmot_app::MarmotAppEvent>,
+    ) -> Running {
+        self.run_on(self.core(driver, Store::new(self.state.path())), events)
+    }
+
+    fn run_on<D: Driver + 'static>(
+        &self,
+        core: Core<D>,
+        events: tokio::sync::broadcast::Receiver<marmot_app::MarmotAppEvent>,
+    ) -> Running {
         let (stop, stopped) = oneshot::channel::<()>();
         let task = tokio::spawn(async move {
             core.run(events, async {

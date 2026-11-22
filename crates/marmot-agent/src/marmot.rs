@@ -78,6 +78,9 @@ pub struct Message {
     pub tags: Vec<Vec<String>>,
     /// When the sender says it was sent, in seconds.
     pub recorded_at: u64,
+    /// When it arrived here, by this machine's clock, in whole seconds: when MDK received it from
+    /// a relay, which may be before it was stored and long before it is announced live.
+    pub received_at: u64,
     /// Its place in this machine's storage, which only grows: the order messages arrived in here,
     /// whatever their senders' clocks say. Known for a stored message; a live one is looked up.
     pub order: Option<i64>,
@@ -103,6 +106,7 @@ impl From<AppMessageRecord> for Message {
             content: record.plaintext,
             tags: record.tags,
             recorded_at: record.recorded_at,
+            received_at: record.received_at,
             order: Some(record.insert_order),
         }
     }
@@ -119,6 +123,7 @@ impl From<marmot_app::ReceivedMessage> for Message {
             content: message.plaintext,
             tags: message.tags,
             recorded_at: message.recorded_at,
+            received_at: message.received_at,
             order: None,
         }
     }
@@ -668,6 +673,9 @@ pub trait Side: Clone + Send + Sync + 'static {
     /// The latest place in storage order for a group.
     fn latest(&self, group: &GroupKey) -> Result<i64, NotNow>;
 
+    /// This machine's clock, in whole seconds since the epoch, as a message's `received_at` is.
+    fn now(&self) -> u64;
+
     /// What others sent to a group that was stored after `after`, in storage order.
     fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow>;
 
@@ -858,6 +866,10 @@ impl Side for Marmot {
 
     fn latest(&self, group: &GroupKey) -> Result<i64, NotNow> {
         Marmot::latest(self, group)
+    }
+
+    fn now(&self) -> u64 {
+        now()
     }
 
     fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow> {

@@ -235,6 +235,10 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// The core's clock, which never jumps, for how long a control has waited (D-087). Tokio's,
     /// which is the system's except in a simulation, whose clock is virtual.
     started: Instant,
+    /// When this core started, by the machine's clock, in whole seconds as MDK gives the time a
+    /// message arrived: a group the core has never seen starts at a message that arrived in a
+    /// later second, and what arrived before is its history.
+    since: u64,
     /// For each group whose last send failed: when to try again, and how long it waited last.
     retry: HashMap<GroupKey, (Instant, Duration)>,
     /// The groups whose next send MDK has queued, not yet taken into its engine.
@@ -244,8 +248,9 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// read never goes ahead of it. In order, so groups due at the same moment are read again in
     /// the same order every time.
     unread: BTreeMap<GroupKey, Again>,
-    /// For a group the core has never seen, the first message heard live whose place MDK could
-    /// not give: the group starts there, not after its latest message.
+    /// For a group the core has never seen, the first message heard live that arrived after the
+    /// core started and whose place MDK could not give: the group starts there, not after its
+    /// latest message.
     starts: BTreeMap<GroupKey, Message>,
     /// When to list the groups again, for a catch-up that MDK could not list them for. Until then
     /// no live message moves a mark, which could pass messages whose notices were lost.
@@ -312,6 +317,7 @@ impl<D: Driver, M: Side> Core<D, M> {
         } else {
             folders
         };
+        let since = marmot.now();
         Ok(Self {
             marmot,
             driver,
@@ -321,6 +327,7 @@ impl<D: Driver, M: Side> Core<D, M> {
             folders,
             config: config.clone(),
             started: Instant::now(),
+            since,
             retry: HashMap::new(),
             queued: HashSet::new(),
             unread: BTreeMap::new(),
@@ -369,6 +376,8 @@ impl<D: Driver, M: Side> Core<D, M> {
         mut events: M::Events,
         stop: impl Future<Output = ()>,
     ) -> Result<(), Unsaved> {
+        // The core starts once it has subscribed: what arrived before then is history.
+        self.since = self.marmot.now();
         self.publish_name().await;
         // What a stopped core left queued goes first, then what it left open is closed.
         self.flush_all().await?;
@@ -631,8 +640,9 @@ impl<D: Driver, M: Side> Core<D, M> {
 
     /// Reads what was stored for one group after its mark. When MDK cannot be read, or a message
     /// in it cannot, the group waits to be read again; when all of it was read, it waits no more.
-    /// A group the core has never seen starts at the first message heard live that MDK could not
-    /// place, or else after its latest message, so its history is not read as prompts (L3).
+    /// A group the core has never seen starts at the first message heard live, arrived after the
+    /// core started, that MDK could not place, or else after its latest message, so its history
+    /// is not read as prompts (L3).
     async fn catch_up_group(&mut self, group: GroupKey) -> Result<(), Unsaved> {
         let after = match self.read.get(&group) {
             Some(&after) => after,
@@ -684,11 +694,18 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// D-070). A mark that cannot be saved stops the core before the message reaches the driver.
     /// A message MDK cannot read for a moment is not marked read, and neither is anything after it
     /// in its group: the group is read again from its mark later (S10, L3). A group the core has
-    /// never seen starts at the first message heard live, even while MDK cannot say where its
-    /// history ends: what was stored before it is history.
+    /// never seen starts at the first message heard live that arrived after the core started,
+    /// even while MDK cannot say where its history ends: what was stored before it is history.
+    /// Being heard live says nothing of when a message arrived, since MDK announces what it
+    /// stored only once it has stored a whole batch, so a core that subscribed in between hears a
+    /// message that arrived before it started. MDK gives that time in whole seconds, so one that
+    /// arrived in the second the core started is taken as history too.
     async fn handle(&mut self, message: Message) -> Result<(), Unsaved> {
         let group = message.group.clone();
         let new = !self.read.contains_key(&group);
+        if new && message.received_at <= self.since {
+            return Ok(());
+        }
         if self.waits(&group) && (!new || self.starts.contains_key(&group)) {
             return Ok(());
         }

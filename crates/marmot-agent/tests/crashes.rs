@@ -6,7 +6,7 @@ mod common;
 
 use common::{Chat, World, first, within};
 use marmot_agent::carrier::Asked;
-use marmot_agent::marmot::Fault;
+use marmot_agent::marmot::{Fault, now};
 use marmot_agent::run::{Core, Kept, Store};
 use marmot_agent::{Conversation, EventKey, GroupKey, Heard, PubKey, Sending, Where};
 use marmot_agent_driver::{
@@ -462,7 +462,9 @@ async fn a_message_that_cannot_be_read_for_a_moment_is_read_after() {
 
 // A group the core has never seen, as on an imported account's first run, starts after what is
 // stored in it. When MDK cannot say where that is for a while, a message that arrives meanwhile is
-// still read, once, and what was there before is not (L3).
+// still read, once, and what was there before is not (L3), even when MDK announces a message it
+// stored before the core started only after the core subscribed: it stores a sync's messages and
+// announces them at the end of the sync, so a core that subscribes in between hears one live.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_message_that_arrives_while_a_new_group_cannot_be_read_is_read() {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
@@ -471,6 +473,8 @@ async fn a_message_that_arrives_while_a_new_group_cannot_be_read_is_read() {
     let core = world.start(driver);
     let (chat, _) = a_chat(&world, &seen).await;
     core.stop().await;
+    // Subscribed before MDK announces the message, so the core hears it live when it starts.
+    let events = world.runtime.subscribe();
     chat.say("while away").await;
     let group = GroupKey(chat.hex.clone());
     let stored = || world.marmot.stored(&group, 0).ok().filter(|m| m.len() == 2);
@@ -484,7 +488,11 @@ async fn a_message_that_arrives_while_a_new_group_cannot_be_read_is_read() {
         world.marmot.faults.push(Fault::LatestFails);
     }
     let (driver, _events, seen) = stub(false);
-    let core = world.start(driver);
+    let starting = now();
+    let core = world.start_on(driver, events);
+    // MDK gives the time a message arrived in whole seconds, so only one that arrived in a later
+    // second than the core started is known to have come after it.
+    within(5, || (now() >= starting + 2).then_some(())).await;
     chat.say("new").await;
     within(30, || seen.lock().unwrap().prompts.first().cloned()).await;
     // A message read twice, or history read as a prompt, would come by now.

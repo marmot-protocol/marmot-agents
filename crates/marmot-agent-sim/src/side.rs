@@ -59,6 +59,7 @@ impl SimSide {
                 content: r.content.clone(),
                 tags: r.tags.clone(),
                 recorded_at: r.recorded_at,
+                received_at: World::secs_at(r.ms),
                 order: Some(r.order),
             })
             .collect()
@@ -203,6 +204,10 @@ impl Side for SimSide {
             .map(|r| r.order)
             .max()
             .unwrap_or(0))
+    }
+
+    fn now(&self) -> u64 {
+        lock(&self.world).secs()
     }
 
     fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow> {
