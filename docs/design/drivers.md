@@ -11,7 +11,10 @@ Pi driver builds on ([D-086](../decisions.md#d-086-the-pi-driver-reads-pis-rpc-m
 That an agent's file goes to the chat as an attachment from an allowed folder is decided
 ([D-090](../decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)); how a
 driver asks for it, in [sending a file](#sending-a-file), is a proposal: built, and provisional until the
-owner accepts it.
+owner accepts it. That the installers run the harness the person already has, and add our plugin to their own
+Hermes and OpenClaw, is decided
+([D-102](../decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)); which of their
+gateway's settings the installers change is a proposal, provisional until the owner accepts it.
 
 ## What a driver does
 
@@ -272,11 +275,17 @@ The core is started with an `[acp]` section in place of `[codex]`:
 ```toml
 [acp]
 name = "opencode"                 # what events call the agent until it names itself; Cursor never does
-command = ["opencode", "acp"]     # or ["cursor-agent", "acp"], or Goose's container, below
+command = ["opencode", "acp"]     # or ["cursor-agent", "acp"], ["goose", "acp"], or Goose's container, below
 cwd = "/home/me/work"
 ```
 
-- **Goose runs in a throwaway container.** `tools/goose/goose-acp.sh <model-key-file> [goose-home]` builds
+- **Goose, OpenCode and Cursor run on the host**, as the person's own programs, with their own settings and
+  sign-in: the installers expect them on `PATH` and install none
+  ([D-102](../decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)). Goose runs as
+  `goose acp`, on the model its own settings name (`goose configure`), and reads `GOOSE_MODE` from its
+  environment.
+- **Goose can also run in a throwaway container**, as this project's tests and recordings run it, and as
+  `install/goose.sh --container` sets it up. `tools/goose/goose-acp.sh <model-key-file> [goose-home]` builds
   the image from [`tools/goose`](../../tools/goose/Dockerfile) (Goose pinned, with its checksum) and runs it
   with `docker run -i --rm`, speaking ACP on its standard input and output. The work folder is mounted at the
   same path, so the paths the core and Goose name agree; Goose's sessions live in `goose-home`, so they survive
@@ -288,7 +297,6 @@ cwd = "/home/me/work"
   in `MODEL_BASE_URL` and `MODEL_NAME` in its environment; neither has a default ([D-100](../decisions.md#d-100-the-installers-defaults)).
   Goose runs in its own default mode, `auto`, which asks nothing; `GOOSE_MODE=approve` makes it ask in the chat
   before every tool call.
-- **OpenCode and Cursor run on the host.** Cursor uses the machine's own sign-in.
 - **A prompt** starts the chat's session if it has none (`session/new`), or takes up the one the core names
   ([D-065](../decisions.md#d-065-a-prompt-names-a-session-only-to-resume-one)) with `session/resume` when the
   agent offers it and `session/load` otherwise; what `session/load` replays is not sent again. Goose, after taking up a
@@ -336,8 +344,8 @@ core is started with a `[pi]` section in place of `[codex]`:
 ```toml
 [pi]
 cwd = "/home/me/work"
-program = "tools/pi/pi.sh"           # or "pi", for a Pi installed on the machine
-args = ["<model key file>", "<Pi's state folder>"]
+program = "pi"                       # the default; or "tools/pi/pi.sh", to run Pi in a container
+args = []                            # for pi.sh: ["<model key file>", "<Pi's state folder>"]
 ```
 
 - **One Pi per chat.** Pi in RPC mode holds one session at a time, so each chat gets its own Pi process,
@@ -351,7 +359,12 @@ args = ["<model key file>", "<Pi's state folder>"]
   once, at start, for `pi --version`. Pi 1.6.0 reads nothing until its extensions' start-up handlers have
   finished, so a question one asks then could never be answered: the driver treats it as a failed start, as
   it does a Pi that has not answered within a minute or comes up in another session, and stops that Pi.
-- **In a container.** [`tools/pi/pi.sh`](../../tools/pi/pi.sh) runs Pi in a throwaway Docker container built
+- **As the person's own `pi`, by default.** The installer expects Pi on `PATH`, set up with a model provider,
+  and installs none ([D-102](../decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)).
+  Each chat's Pi runs as the person, in the work folder, with Pi's own settings and sessions. Pi asks nobody
+  before a tool runs, so it acts with the person's own rights, as it does when they run it themselves.
+- **Or in a container**, for a boundary, as this project's tests run it and as `install/pi.sh --container`
+  sets it up. [`tools/pi/pi.sh`](../../tools/pi/pi.sh) runs Pi in a throwaway Docker container built
   from [`tools/pi/Dockerfile`](../../tools/pi/Dockerfile), Pi pinned at 1.6.0, on standard input and output.
   The working folder is mounted at the same path, and the model key file from the first argument, read-only.
   `MODEL_BASE_URL` and `MODEL_NAME` name the endpoint and the model; neither has a default ([D-100](../decisions.md#d-100-the-installers-defaults)).
@@ -408,7 +421,21 @@ passing them on is a later step); no approval commands.
 A channel plugin named `marmot`, in TypeScript, that runs inside OpenClaw
 ([`packages/openclaw`](../../packages/openclaw)) and connects to the core over the
 [socket](socket-protocol.md#the-messages-as-built). It is built as JavaScript and installed into OpenClaw from a
-packed archive, as a release is. OpenClaw runs in a container, never on the owner's machine directly:
+packed archive, as a release is. The core is started with a `[connector]` section, as for Claude Code.
+
+**In the person's own OpenClaw.** `install/openclaw.sh` builds the plugin, packs it, and adds it to the OpenClaw
+the person already has, with OpenClaw's own commands (`openclaw plugins install`, `plugins enable`, `config
+set`) ([D-102](../decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)). It sets the
+`marmot` channel's `home` to the agent's home, where the plugin finds the core's socket and its token, and,
+when OpenClaw forwards no approvals, forwards those of a Marmot chat's sessions to their own chat
+(`approvals.exec`, mode `session`, filtered to session keys holding `:marmot:`), since an approval otherwise
+waits unseen. It changes nothing else: the person's agent, its workspace, its model and its other channels are
+theirs. It keeps a copy of OpenClaw's settings in the agent's folder first, and `--uninstall` removes the plugin
+and its channel and puts the approvals setting back. One OpenClaw serves one agent. The person's gateway loads
+the plugin when it starts; the installer says to restart it and does not restart it itself.
+
+**In a container, for this project's tests.** The scenario and the recordings run OpenClaw in a throwaway
+container:
 
 ```sh
 packages/openclaw/run.sh <agent home> <openclaw state folder> <work folder> <model-key-file> [model]
@@ -475,7 +502,21 @@ provisional, for the owner's review.
 A Hermes platform plugin in Python, [`python/marmot_hermes`](../../python/marmot_hermes), that runs inside
 Hermes and connects to the core over the [socket](socket-protocol.md#the-messages-as-built). It uses the
 standard library and what Hermes provides, nothing else. Hermes sees a chat platform called `marmot`. The core
-is started with a `[connector]` section, as for Claude Code, and Hermes runs in a container:
+is started with a `[connector]` section, as for Claude Code.
+
+**In the person's own Hermes.** `install/hermes.sh` copies the plugin into the plugins folder of the Hermes the
+person already has, enables it, and sets, with Hermes's own commands (`hermes plugins enable`, `config set`),
+the `marmot` platform's `home` to the agent's home, where the plugin finds the core's socket and its token
+(the plugin reads `MARMOT_AGENT_HOME` first, as the container sets it), and `MARMOT_ALLOW_ALL_USERS=true` in
+Hermes's `.env`, so that Hermes takes whatever the core lets through
+([D-084](../decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through),
+[D-102](../decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)). It changes
+nothing else, so Hermes's model, its approval mode and who may answer its approvals are the person's. It keeps a
+copy of `config.yaml` and `.env` in the agent's folder first, and `--uninstall` takes out the platform, the
+variable (or puts back the value it had) and the plugin. One Hermes serves one agent. The person's gateway
+loads the plugin when it starts; the installer says to restart it.
+
+**In a container, for this project's tests.** The scenario and the recordings run Hermes in a container:
 
 ```sh
 docker volume create hermes-home
@@ -488,9 +529,8 @@ rest of it, and Hermes runs as the user that owns them; the script waits for the
 work folder that holds the agent's home or the key, or lies inside the home, or holds or lies inside the folder of every agent, which the installer names in `MARMOT_AGENT_DATA`,
 links resolved. The image is built for that user and group, so its tag names them
 (`marmot-agents-hermes-<uid>-<gid>`). Hermes's own home is a Docker volume, so its sessions survive a restart;
-the installer names it, and the container, after the agent and a hash of its folder, since Docker's names are
-shared by every account on the machine. `MODEL_BASE_URL` names the endpoint and `MODEL_NAME`, or `[model]`,
-the model; neither has a default ([D-100](../decisions.md#d-100-the-installers-defaults)). The model key is mounted read-only and read at every start
+the caller names it, and the container (`HERMES_CONTAINER`). `MODEL_BASE_URL` names the endpoint and
+`MODEL_NAME`, or `[model]`, the model; neither has a default ([D-100](../decisions.md#d-100-the-installers-defaults)). The model key is mounted read-only and read at every start
 into Hermes's environment, which its configuration names (`key_env`); it is written into no file, the volume
 included, and Hermes keeps that variable from the commands it runs. Hermes's own output holds what people and the model say, so neither `run.sh` nor Docker keeps any
 of it (`--log-driver=none`). With `HERMES_LOG` the plugin appends its own log lines to that file, mounted
