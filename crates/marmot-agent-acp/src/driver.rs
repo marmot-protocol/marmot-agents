@@ -31,6 +31,9 @@ type Reader = Lines<BufReader<Box<dyn AsyncRead + Unpin + Send>>>;
 /// up by itself, before it gives up.
 const ENDING: Duration = Duration::from_secs(60);
 
+/// A message for the agent's input, and who waits to hear whether it was written.
+type Line = (String, Option<tokio::sync::oneshot::Sender<bool>>);
+
 /// What a request the driver sent is for.
 enum Purpose {
     /// Nothing follows from it but what the chat's translator reads in the reply.
@@ -64,8 +67,9 @@ struct Chat {
 pub struct Acp {
     reader: Reader,
     /// Each message for the agent goes whole to a task that writes it, so a future the core drops
-    /// never leaves half a message on the agent's input.
-    writer: tokio::sync::mpsc::UnboundedSender<String>,
+    /// never leaves half a message on the agent's input. A request's message comes with a channel
+    /// the task says on whether it was written.
+    writer: tokio::sync::mpsc::UnboundedSender<Line>,
     /// The process, when the driver started it. It is killed when the driver is dropped.
     child: Option<Child>,
     /// The driver's name for the agent, until the agent names itself.
@@ -146,16 +150,20 @@ impl Acp {
         name: &str,
     ) -> io::Result<Self> {
         let output: Box<dyn AsyncRead + Unpin + Send> = Box::new(output);
-        let (writer, mut lines) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (writer, mut lines) = tokio::sync::mpsc::unbounded_channel::<Line>();
         let mut input = input;
         tokio::spawn(async move {
-            while let Some(line) = lines.recv().await {
+            while let Some((line, done)) = lines.recv().await {
                 let written = async {
                     input.write_all(line.as_bytes()).await?;
                     input.write_all(b"\n").await?;
                     input.flush().await
                 };
-                if written.await.is_err() {
+                let ok = written.await.is_ok();
+                if let Some(done) = done {
+                    let _ = done.send(ok);
+                }
+                if !ok {
                     break; // the agent's input is closed: the driver learns it from the next send
                 }
             }
@@ -258,14 +266,31 @@ impl Acp {
         id
     }
 
+    /// Hands a message to the task that writes it, and does not wait: for what the driver writes
+    /// while it reads, in a future the core may drop.
     async fn write(&mut self, text: &str) -> io::Result<()> {
         self.writer
-            .send(text.to_string())
+            .send((text.to_string(), None))
             .map_err(|_| io::Error::other("the agent's input is closed"))
     }
 
-    /// Sends a message for a chat and feeds it to that chat's translator; the events it makes
-    /// settle `settles`. A request is kept, with what it is for, until the agent answers it.
+    /// Hands a message to the task that writes it, and waits until it is written: a request
+    /// returns once the agent has it, and an answer the agent cannot read is not shown as given.
+    async fn write_whole(&mut self, text: &str) -> io::Result<()> {
+        let (done, written) = tokio::sync::oneshot::channel();
+        let closed = || io::Error::other("the agent's input is closed");
+        self.writer
+            .send((text.to_string(), Some(done)))
+            .map_err(|_| closed())?;
+        match written.await {
+            Ok(true) => Ok(()),
+            _ => Err(closed()),
+        }
+    }
+
+    /// Sends a message for a chat once it is written, and feeds it to that chat's translator; the
+    /// events it makes settle `settles`. A request is kept, with what it is for, until the agent
+    /// answers it. Only the core's requests send this way: the wait is not safe to drop.
     async fn send(
         &mut self,
         chat: &ChatId,
@@ -276,7 +301,7 @@ impl Acp {
         if self.gone {
             return Err(Refusal::new(Reason::Failed));
         }
-        if self.write(text).await.is_err() {
+        if self.write_whole(text).await.is_err() {
             self.stopped();
             return Err(Refusal::new(Reason::Failed));
         }
@@ -426,7 +451,12 @@ impl Acp {
                         .map(Translator::cancel_replies)
                         .unwrap_or_default();
                     for reply in replies {
-                        let _ = self.send(&chat, None, &reply, Vec::new()).await;
+                        // Read in a future the core may drop: handed over, not waited for.
+                        if self.write(&reply).await.is_err() {
+                            self.stopped();
+                            break;
+                        }
+                        self.feed(&chat, Direction::Out, &reply, Vec::new());
                     }
                 }
             }

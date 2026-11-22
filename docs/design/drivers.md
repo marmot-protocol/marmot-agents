@@ -289,7 +289,9 @@ cwd = "/home/me/work"
 - **Item ids** of tools, approvals and questions name the session as well as the agent's tool-call id, which
   is the agent's own for one session; so an answer can only reach the chat whose request it names.
 - **Writing**: each message goes whole to a task that writes it, so a call the core abandons never leaves
-  half a message on the agent's input.
+  half a message on the agent's input. A request returns only once its message is written, and only then
+  is it fed to the chat's translator: an answer the agent can no longer read is refused as failed, not
+  shown as given (found by the conformance suite's `answer_after_death`, 2026-11-22).
 - **Waiting has a limit.** A session request, the end of a cancelled turn and the end of Goose's own run are
   each waited for up to a minute. A session request not answered by then ends the connection, so a late
   reply cannot install a session after the prompt failed.

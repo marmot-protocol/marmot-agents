@@ -131,9 +131,8 @@ conformance!(Cursor:
     restart,
 );
 
-// Found a bug in the driver: an answer written after the agent has gone is shown as given.
+// Found a bug in the driver: an answer written after the agent had gone was shown as given.
 #[tokio::test]
-#[ignore = "the ACP driver takes an answer the agent can no longer read; fixed next"]
 async fn answer_after_death() {
     for flavor in [Flavor::OpenCode, Flavor::Goose, Flavor::Cursor] {
         let found = scenarios::run("answer_after_death", subject(flavor)).await;
