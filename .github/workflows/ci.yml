@@ -88,12 +88,18 @@ jobs:
         # Keyed by Cargo.lock, the toolchain and this job; a pull request reads master's cache.
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
+      - name: Build the simulator's tests
+        run: cargo test --locked --release -p marmot-agent-sim --all-features --no-run
+
       - name: The simulator's tests, with the seeds
         # Each family of the gate runs this many schedules from seed 0; the bug switches and the
-        # faults made by hand are each found, and a capsule replays exactly.
+        # faults made by hand are each found, and a capsule replays exactly. They take about 10 s
+        # once built, so a run that hangs is killed after 4 minutes, as an ordinary failure, and
+        # the step below still keeps what it left; the job's own limit would cancel the job
+        # instead.
         env:
           MARMOT_AGENT_SIM_RUNS: "200"
-        run: cargo test --locked --release -p marmot-agent-sim --all-features
+        run: timeout --kill-after=30s 4m cargo test --locked --release -p marmot-agent-sim --all-features
 
       - name: Keep the schedules and capsules of a failed run
         # Each failure leaves a capsule that replays it (crates/marmot-agent-sim/README.md); a run
