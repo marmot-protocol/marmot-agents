@@ -88,6 +88,7 @@ messages="$messages|an event could not be sent $kind|connected to the core|the c
 messages="$messages|the core could not be reached|a call for no chat this plugin knows $kind"
 messages="$messages|a run went on after it was cancelled|OpenClaw did not let a message in $kind"
 messages="$messages|OpenClaw's run of a message failed|OpenClaw refused a call $kind"
+messages="$messages|a file was not sent $kind|a file was not sent: the core cannot be asked|a file not on this machine was not sent"
 plugin_line="^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+([+-][0-9:]+|Z) )?marmot-agent-openclaw: ($messages)\$"
 "${run[@]}" 2>&1 | { grep -E --line-buffered "$plugin_line" >&2 || true; }
 exit "${PIPESTATUS[0]}"

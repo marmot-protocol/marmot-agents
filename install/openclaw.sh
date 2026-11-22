@@ -27,6 +27,7 @@ OUR_APPROVALS='{"enabled":true,"mode":"session","sessionFilter":[":marmot:"]}'
 harness_check() {
     # What harness_connect reads, also when a dry run goes on without OpenClaw.
     OLD_PLUGIN="" OPENCLAW_FOUND=0
+    choose_files_from ""
     need_node
     OPENCLAW=$(program_path openclaw) || {
         OPENCLAW=openclaw
@@ -41,6 +42,7 @@ harness_check() {
         return 0
     fi
     say "found OpenClaw $version at $OPENCLAW"
+    openclaw_files_from
     # One OpenClaw serves one agent: its marmot channel names one agent's home.
     local home
     home=$(oc_get channels.marmot.home)
@@ -106,7 +108,27 @@ harness_prepare() {
         sh "$(canonical "$MA_STAGE/packages/openclaw")"
 }
 
+# The workspace of OpenClaw's agent, which it writes the files it sends in (D-090): the main agent's own,
+# or the default for every agent, or else OpenClaw's own default (docs/concepts/agent-workspace.md).
+openclaw_files_from() {
+    local workspace
+    workspace=$(oc_get agents.entries.main.workspace)
+    [ -n "$workspace" ] || workspace=$(oc_get agents.defaults.workspace)
+    if [ -z "$workspace" ]; then
+        if [ -n "${OPENCLAW_STATE_DIR:-}" ]; then
+            workspace=$OPENCLAW_STATE_DIR/workspace
+        elif [ -n "${OPENCLAW_PROFILE:-}" ] && [ "$OPENCLAW_PROFILE" != default ]; then
+            workspace=${OPENCLAW_HOME:-$HOME}/.openclaw-$OPENCLAW_PROFILE/workspace
+        else
+            workspace=${OPENCLAW_HOME:-$HOME}/.openclaw/workspace
+        fi
+    fi
+    choose_files_from "$workspace"
+}
+
 harness_settings() {
+    files_from_settings
+    say ""
     say "[connector]"
 }
 
@@ -154,6 +176,7 @@ json_field() {
 
 harness_summary() {
     say ""
+    files_from_summary
     say "Your OpenClaw loads the plugin when its gateway starts. Restart it: openclaw gateway restart"
     say "(or start it: openclaw gateway run). The plugin connects to the agent once both run."
 }

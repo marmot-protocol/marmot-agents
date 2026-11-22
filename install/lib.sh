@@ -1120,6 +1120,50 @@ check_cwd() {
     if inside "$key" "$MA_DATA"; then die "the model key file must not be inside $MA_DATA"; fi
 }
 
+# The folder a gateway's agent works in, from which the core may send the files it names (D-090), for
+# a harness whose plugin states no folder: FILES_FROM, or none and FILES_WHY saying why. Never the home
+# itself (D-099), nor a folder that holds or lies in the agents' data, which would stop the core.
+# Provisional, for the owner's review.
+choose_files_from() {
+    local folder=$1
+    FILES_FROM="" FILES_WHY=""
+    case $folder in
+        "") FILES_WHY="its work folder is not known"; return 0 ;;
+        \~ | \~/*) folder=$HOME${folder#\~} ;;
+        /*) ;;
+        *) FILES_WHY="its work folder is not a whole path"; return 0 ;;
+    esac
+    no_control "$HARNESS_TITLE's work folder" "$folder"
+    folder=$(canonical "$folder") || { FILES_WHY="its work folder names a loop of links"; return 0; }
+    if [ "$folder" = "$(canonical "$HOME")" ] || [ "$folder" = / ]; then
+        FILES_WHY="it works in your whole home folder, which holds the agent's keys and more"
+    elif inside "$folder" "$MA_DATA" || inside "$MA_DATA" "$folder"; then
+        FILES_WHY="its work folder holds or lies in $MA_DATA, which holds the agents' keys"
+    else
+        FILES_FROM=$folder
+    fi
+}
+
+# The settings' line for choose_files_from: the folder, or a comment saying how to name one.
+files_from_settings() {
+    if [ -n "$FILES_FROM" ]; then
+        say "# The folder $HARNESS_TITLE works in: the agent may send the files in it to a chat (D-090)."
+        say "files_from = [$(toml_str "$FILES_FROM")]"
+    else
+        say "# The agent sends no files until a folder is listed here (D-090): $FILES_WHY."
+        say "# files_from = [\"/the/folder/$HARNESS_TITLE/writes/its/files/in\"]"
+    fi
+}
+
+# What the summary says about the files the agent may send.
+files_from_summary() {
+    if [ -n "$FILES_FROM" ]; then
+        say "The agent may send the files in $FILES_FROM to a chat; change that with files_from in its settings."
+    else
+        say "The agent sends no files until you list a folder with files_from in its settings ($FILES_WHY)."
+    fi
+}
+
 main() {
     MA_HERE=$(cd "$(dirname "${BASH_SOURCE[1]}")" && pwd -P)
     parse_args "$@"

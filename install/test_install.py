@@ -18,6 +18,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -1121,6 +1122,57 @@ class Boundaries(unittest.TestCase):
         m.log.write_text("")
         subprocess.run([str(start)], check=True, env={"PATH": SYSTEM_PATH, "FAKE_LOG": str(m.log)})
         self.assertIn("with MODEL_BASE_URL=https://models.example/v1", m.calls())
+
+
+class FilesFrom(unittest.TestCase):
+    """A gateway's agent may send the files in the folder its gateway works in (D-090): the installer
+    reads that folder from the gateway's own settings and lists it in `files_from` (provisional). It never
+    lists the home itself (D-099), nor a folder that holds or lies in the agents' data, which would stop
+    the core; then it lists none, and says how to."""
+
+    def settings(self, m: Machine, harness: str) -> tuple:
+        out = m.run(harness, *m.args(harness, "--binary", str(m.core), "--no-service")).stdout
+        text = (m.data / f"agents/{harness}/settings.toml").read_text()
+        return tomllib.loads(text).get("files_from"), text, out
+
+    def hermes(self, m: Machine, terminal: dict) -> None:
+        (m.home / ".hermes").mkdir()
+        (m.home / ".hermes/config.yaml").write_text(json.dumps({"terminal": terminal}))
+
+    def test_hermes_lists_the_folder_its_commands_run_in(self):
+        for cwd, listed in (("/srv/projects", "/srv/projects"), ("~/projects", "projects")):
+            with self.subTest(cwd=cwd):
+                m = Machine(self)
+                self.hermes(m, {"cwd": cwd, "backend": "local"})
+                files, _, _ = self.settings(m, "hermes")
+                self.assertEqual(files, [listed if listed.startswith("/") else str(m.home / listed)])
+
+    def test_hermes_in_the_home_or_a_sandbox_lists_none(self):
+        for terminal in ({"cwd": "."}, {}, {"cwd": "~"}, {"cwd": "/srv/projects", "backend": "docker"},
+                         {"cwd": "~/.local/share"}, {"cwd": "~/.local/share/marmot-agent/agents"}):
+            with self.subTest(terminal=terminal):
+                m = Machine(self)
+                self.hermes(m, terminal)
+                files, text, out = self.settings(m, "hermes")
+                self.assertIsNone(files)
+                self.assertIn("# files_from = [", text)
+                self.assertIn("files_from", out)
+
+    @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
+    def test_openclaw_lists_its_agents_workspace(self):
+        for config, env, listed in (({"agents": {"defaults": {"workspace": "/theirs"}}}, {}, "/theirs"),
+                                    ({"agents": {"defaults": {"workspace": "/theirs"}, "entries": {"main": {
+                                        "workspace": "~/main"}}}}, {}, "main"),
+                                    ({}, {}, ".openclaw/workspace"),
+                                    ({}, {"OPENCLAW_PROFILE": "work"}, ".openclaw-work/workspace")):
+            with self.subTest(config=config, env=env):
+                m = Machine(self)
+                (m.home / ".openclaw").mkdir()
+                (m.home / ".openclaw/openclaw.json").write_text(json.dumps(config))
+                out = m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--no-service"), env=env).stdout
+                text = (m.data / "agents/openclaw/settings.toml").read_text()
+                self.assertEqual(tomllib.loads(text).get("files_from"),
+                                 [listed if listed.startswith("/") else str(m.home / listed)], out)
 
 
 class Wrappers(unittest.TestCase):
