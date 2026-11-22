@@ -142,7 +142,10 @@ sequenceDiagram
   named or linked, or one in an allowed folder that lies inside the home. So a working folder of `~` lets the
   agent send its work but not its keys. A folder in `files_from` that is, holds or lies inside the home stops
   the core from starting. The owner may allow both with one line in the settings,
-  `send_files_from_agent_home = true`.
+  `send_files_from_agent_home = true`. Whether an allowed folder lies inside the home is found from the
+  folder held open, by going up from it; when the way up cannot be followed, the folder counts as inside.
+  Known limit: a bind mount can show part of the home elsewhere, where the way up does not pass through the
+  home, so a file reached through one is not refused. Telling that would mean reading the mount table.
 - **Sending runs on the side.** Uploading can take long, so it runs as a task of its own while the chats go
   on, and the core tells the driver once it is done. The core offers the file to MDK again only while MDK says
   it is busy, which it says only before it has taken the file, for about half a minute. Any other failure is

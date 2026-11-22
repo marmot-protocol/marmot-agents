@@ -23,11 +23,12 @@ what the harness actually sends. The recordings they produced are in
 - Each scenario lets the agent run commands and edit files in the project directory you give it. Give it a
   throwaway copy of `demo/`, never a real project.
 - Raw recordings contain your paths and account details. Keep them outside the repository.
-- Goose, Pi, Hermes and OpenClaw run on a model you choose; nothing here has a default
+- OpenCode, Goose, Pi, Hermes and OpenClaw run on a model you choose; nothing here has a default
   ([D-100](../../docs/decisions.md#d-100-the-installers-defaults)). Copy
   [`tests.env.example`](../../tests.env.example) to `tests.env` at the top of the repository, which git ignores,
-  and fill in `MODEL_BASE_URL`, `MODEL_NAME` and `MODEL_KEY_FILE`, the file that holds the endpoint's key. The
-  scenarios against real harnesses read the same file. A variable set in the environment wins.
+  and fill in `MODEL_BASE_URL`, `MODEL_NAME` and `MODEL_KEY_FILE`, the file that holds the endpoint's key, and,
+  for OpenCode, `OPENCODE_MODEL`, the model as OpenCode names it. The scenarios against real harnesses read the
+  same file. A variable set in the environment wins; a name the file gives twice is an error.
 
 ## Record
 
@@ -185,7 +186,8 @@ say so there: what a harness does instead is the useful part.
 
 - The ACP recorder runs the agent with `HOME` and the XDG folders set to a throwaway folder beside the project
   (or `--home`), so it reads none of your settings, skills, plugins or sign-ins and adds nothing to your history.
-  For OpenCode that means its free models only, which is what the recordings use. `--config` passes OpenCode a
+  For OpenCode that means a model it reaches without signing in, such as one of its free ones, which the
+  recordings use; `OPENCODE_MODEL` names it, unless `--config` does. `--config` passes OpenCode a
   configuration as JSON, and `--agent` names another agent's command. The scrubber reads ACP recordings from
   `raw/acp/<agent>/`.
 - Goose runs in a container built from `tools/goose`, with the work folder mounted at the same path and its

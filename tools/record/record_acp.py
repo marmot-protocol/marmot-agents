@@ -22,7 +22,8 @@ The agent runs with HOME and the XDG folders pointed at a throwaway folder, so i
 own settings, skills, plugins or sign-ins, and its sessions stay out of your history. It gets no other
 variable of yours either, apart from PATH and the locale. Give `--home` to keep that folder between
 runs; otherwise a new one is made beside the project folder and removed. `--config` is passed to
-OpenCode as OPENCODE_CONFIG_CONTENT; the default picks a free model.
+OpenCode as OPENCODE_CONFIG_CONTENT. OpenCode's model is OPENCODE_MODEL, the model as OpenCode names
+it, from the environment or from tests.env, unless `--config` names one; there is no default (D-100).
 
 The script has no dependencies. Raw recordings contain local paths. Scrub them before sharing.
 """
@@ -45,8 +46,6 @@ import tests_env
 
 TURN_TIMEOUT = 240
 PROTOCOL_VERSION = 1
-# The cheapest OpenCode model that worked on 2026-11-21: a free one, which needs no account.
-DEFAULT_CONFIG = {"model": "opencode/deepseek-v4.1-flash-free"}
 # Approval scenarios: OpenCode asks before every shell command and every edit.
 ASK = {"permission": {"bash": "ask", "edit": "ask"}}
 # The only variables the agent gets from the recorder's own environment. Everything else it is given
@@ -449,12 +448,16 @@ def main():
     if not (args.scenario in SCENARIOS and args.project and args.output):
         sys.exit(__doc__)
     tests_env.load()
+    f = SCENARIOS[args.scenario]
+    config = {**getattr(f, "config", {}), **(json.loads(args.config) if args.config else {})}
+    command = args.agent_auto if args.agent_auto and not getattr(f, "ask", False) else args.agent
+    if Path(shlex.split(command)[0]).name == "opencode" and "model" not in config:
+        tests_env.need(tests_env.OPENCODE)
+        config["model"] = os.environ[tests_env.OPENCODE]
     cwd = str(Path(args.project).resolve())
     # Beside the project, so the scrubber's map for the work folder covers the paths the agent
     # writes into its answers, such as where it kept a command's output.
     home = Path(args.home).resolve() if args.home else Path(tempfile.mkdtemp(prefix="acp-home-", dir=Path(cwd).parent))
-    f = SCENARIOS[args.scenario]
-    config = {**DEFAULT_CONFIG, **getattr(f, "config", {}), **(json.loads(args.config) if args.config else {})}
     homes = {"HOME": os.environ.get("HOME", "")} if args.own_home else {
         "HOME": str(home),
         "XDG_CONFIG_HOME": str(home / ".config"),
@@ -470,7 +473,6 @@ def main():
         # For an agent without OpenCode's configuration: ask before every tool. Goose's wrapper reads it.
         **({"RECORD_ASK": "1"} if getattr(f, "ask", False) else {}),
     }
-    command = args.agent_auto if args.agent_auto and not getattr(f, "ask", False) else args.agent
     a = Agent(args.output, shlex.split(command), env, cwd)
     try:
         f(a, cwd)

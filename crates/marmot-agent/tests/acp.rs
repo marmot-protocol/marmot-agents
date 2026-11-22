@@ -7,7 +7,8 @@
 //! its agent, so it runs only when asked for:
 //!
 //! ```sh
-//! # OpenCode, on the host, with a throwaway home and a free model: needs `opencode`.
+//! # OpenCode, on the host, with a throwaway home: needs `opencode`, and OPENCODE_MODEL, the model as
+//! # OpenCode names it, in the environment or in tests.env (see tests.env.example).
 //! cargo test -p marmot-agent --test acp opencode -- --ignored --nocapture
 //! # Goose, in a throwaway container: needs Docker, and a model: MODEL_BASE_URL, MODEL_NAME and
 //! # MODEL_KEY_FILE, in the environment or in tests.env (see tests.env.example).
@@ -18,7 +19,7 @@
 
 mod common;
 
-use common::{Chat, TURN, TestModel, World, lines, within};
+use common::{Chat, TURN, TestModel, World, lines, tests_env, within};
 use marmot_agent::carrier::Asked;
 use marmot_agent_acp::Acp;
 use marmot_agent_events::State;
@@ -36,9 +37,12 @@ const OPENCODE: Agent = Agent {
     name: "opencode",
     command: |_work, home| {
         let home = home.display();
-        // A throwaway home: none of the machine's settings, skills or sign-ins, and a free model.
-        // OpenCode asks before every command and edit.
-        let config = r#"{"model":"opencode/deepseek-v4.1-flash-free","permission":{"bash":"ask","edit":"ask"}}"#;
+        // A throwaway home: none of the machine's settings, skills or sign-ins, and the model
+        // tests.env names (D-100). OpenCode asks before every command and edit.
+        let config = serde_json::json!({
+            "model": tests_env("OPENCODE_MODEL"),
+            "permission": {"bash": "ask", "edit": "ask"},
+        });
         vec![
             "env".into(),
             format!("HOME={home}"),
@@ -182,7 +186,7 @@ async fn scenario(agent: Agent) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "needs opencode installed"]
+#[ignore = "needs opencode installed and a model"]
 async fn opencode_end_to_end() {
     scenario(OPENCODE).await;
 }

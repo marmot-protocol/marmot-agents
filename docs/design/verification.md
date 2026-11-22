@@ -275,8 +275,8 @@ then check that no log, debug output, file or recording contains one.
 ### 10. Real harnesses
 
 The scenarios against real harnesses stay, and run nightly instead of only by hand. Most tests use recorded
-sessions instead of live models. The scenarios that need a model (Goose, Pi, OpenClaw and Hermes), and the
-recorders in `tools/record`, read it from three names, with no default anywhere in the code
+sessions instead of live models. The scenarios that need a model (OpenCode, Goose, Pi, OpenClaw and Hermes), and the
+recorders in `tools/record`, read it from these names, with no default anywhere in the code
 ([D-100](../decisions.md#d-100-the-installers-defaults)):
 
 | Name | What |
@@ -284,10 +284,12 @@ recorders in `tools/record`, read it from three names, with no default anywhere 
 | `MODEL_BASE_URL` | An OpenAI-compatible endpoint |
 | `MODEL_NAME` | The model, as the endpoint names it |
 | `MODEL_KEY_FILE` | The file that holds the endpoint's key, readable by its owner alone |
+| `OPENCODE_MODEL` | For OpenCode, which reaches models through its own providers: the model as OpenCode names it |
 
-Each comes from the environment, or else from `tests.env` at the top of the repository, which git ignores;
+Each comes from the environment, or else from `tests.env` at the top of the repository, which git ignores and
+which may give each name once;
 [`tests.env.example`](../../tests.env.example) shows it. The nightly workflow, once it lands, sets
-`MODEL_BASE_URL` and `MODEL_NAME` from CI secrets of the same names, and writes the secret `MODEL_KEY`, the key
+`MODEL_BASE_URL`, `MODEL_NAME` and `OPENCODE_MODEL` from CI secrets of the same names, and writes the secret `MODEL_KEY`, the key
 itself, to a file only the job can read, which it names in `MODEL_KEY_FILE`.
 
 ## In CI

@@ -649,26 +649,10 @@ pub struct TestModel {
 
 impl TestModel {
     pub fn read() -> Self {
-        let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests.env");
-        let text = std::fs::read_to_string(file).unwrap_or_default();
-        let value = |name: &str| {
-            let from_file = || {
-                (text.lines())
-                    .filter_map(|line| line.trim().strip_prefix(name)?.strip_prefix('='))
-                    .map(|value| value.trim().to_string())
-                    .next_back()
-            };
-            (std::env::var(name).ok().filter(|v| !v.is_empty()))
-                .or_else(from_file)
-                .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| {
-                    panic!("set {name}, in the environment or in tests.env (see tests.env.example)")
-                })
-        };
         Self {
-            url: value("MODEL_BASE_URL"),
-            name: value("MODEL_NAME"),
-            key_file: value("MODEL_KEY_FILE"),
+            url: tests_env("MODEL_BASE_URL"),
+            name: tests_env("MODEL_NAME"),
+            key_file: tests_env("MODEL_KEY_FILE"),
         }
     }
 
@@ -683,4 +667,28 @@ impl TestModel {
             .map(|(name, value)| format!("{name}={value}"))
             .collect()
     }
+}
+
+/// The setting `name` for the scenarios against real harnesses (D-100): from the environment, or
+/// else from `tests.env` at the top of the repository, one `NAME=value` per line. There is no
+/// default: an unset name stops the scenario, saying what to set, and so does a name the file gives
+/// twice, since the readers in `tools/record` would not know which to take either.
+pub fn tests_env(name: &str) -> String {
+    if let Some(value) = std::env::var(name).ok().filter(|v| !v.is_empty()) {
+        return value;
+    }
+    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests.env");
+    let text = std::fs::read_to_string(file).unwrap_or_default();
+    let mut values = (text.lines())
+        .filter_map(|line| line.trim().split_once('='))
+        .filter(|(key, _)| key.trim_end() == name)
+        .map(|(_, value)| value.trim().to_string());
+    let value = values.next();
+    assert!(
+        values.next().is_none(),
+        "tests.env sets {name} more than once; keep one"
+    );
+    value.filter(|v| !v.is_empty()).unwrap_or_else(|| {
+        panic!("set {name}, in the environment or in tests.env (see tests.env.example)")
+    })
 }

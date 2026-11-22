@@ -26,7 +26,7 @@ use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::Read;
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
@@ -39,6 +39,10 @@ pub const MAX_FILE: u64 = 64 * 1024 * 1024;
 
 /// The most links one path may pass through, as the system allows.
 const MAX_LINKS: usize = 40;
+
+/// The most folders the way up from an allowed folder to the top is walked; a deeper one counts as
+/// inside the home.
+const MAX_DEPTH: usize = 4096;
 
 /// A file read for sending.
 pub struct Outgoing {
@@ -63,7 +67,7 @@ impl std::fmt::Debug for Outgoing {
 /// may reach it by, as the settings give it and as its real path.
 struct Root {
     names: Vec<PathBuf>,
-    dir: OwnedFd,
+    dir: File,
     /// Whether the folder is the account home or lies inside it, when files from there are kept.
     in_home: bool,
 }
@@ -158,8 +162,9 @@ impl Folders {
             .filter_map(|folder| {
                 let real = std::fs::canonicalize(folder).ok()?;
                 let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
-                let dir = rustix::fs::open(&real, flags, Mode::empty()).ok()?;
-                let in_home = home.is_some() && real.ancestors().any(|a| id_of_path(a) == home);
+                let dir = File::from(rustix::fs::open(&real, flags, Mode::empty()).ok()?);
+                // Asked of the folder held open, not of its name, which may since lead elsewhere.
+                let in_home = home.is_some_and(|home| lies_in(&dir, home));
                 let mut names = vec![real];
                 if let Ok(given) = std::path::absolute(folder)
                     && !names.contains(&given)
@@ -214,7 +219,7 @@ impl Root {
     /// `home`, a file with the home on its way is refused.
     fn open(&self, rest: &Path, home: Option<Id>) -> Result<File, Refusal> {
         // The folders opened on the way, below this one; a `..` goes back to the one before.
-        let mut opened: Vec<OwnedFd> = Vec::new();
+        let mut opened: Vec<File> = Vec::new();
         let mut parts: VecDeque<OsString> = VecDeque::new();
         push_front(&mut parts, rest);
         let mut links = 0;
@@ -237,15 +242,17 @@ impl Root {
                 Ok(fd) if last => {
                     // The folders still open are the file's own, from this one down, since a
                     // `..` closes the last and a whole link starts again from this one.
-                    if home.is_some()
-                        && (self.in_home || opened.iter().any(|d| id_of(d.as_fd()) == home))
+                    // One whose identity the system does not give counts as the home.
+                    if let Some(home) = home
+                        && (self.in_home
+                            || opened.iter().any(|d| id_of(d).is_none_or(|i| i == home)))
                     {
                         return Err(in_home());
                     }
                     return Ok(File::from(fd));
                 }
                 Ok(fd) => {
-                    opened.push(fd);
+                    opened.push(File::from(fd));
                     continue;
                 }
                 Err(error) => error,
@@ -285,9 +292,45 @@ impl Root {
 }
 
 /// The device and inode of an open file, if the system says.
-fn id_of(fd: BorrowedFd<'_>) -> Option<Id> {
-    let stat = rustix::fs::fstat(fd).ok()?;
-    Some((stat.st_dev as u64, stat.st_ino as u64))
+fn id_of(file: &File) -> Option<Id> {
+    let meta = file.metadata().ok()?;
+    Some((meta.dev(), meta.ino()))
+}
+
+/// Whether the folder held open is `home` or lies inside it, found from the folder itself by going
+/// up one `..` at a time to the top, so a rename of its name or of a folder above it cannot make
+/// the answer describe another folder. When the way up cannot be followed, it counts as inside.
+fn lies_in(dir: &File, home: Id) -> bool {
+    // Only the folder's identity is needed on the way, so where the system allows, the folders
+    // above are opened without needing leave to read them.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let flags = OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    let Some(mut id) = id_of(dir) else {
+        return true;
+    };
+    let mut here: Option<File> = None;
+    for _ in 0..MAX_DEPTH {
+        if id == home {
+            return true;
+        }
+        let at = here.as_ref().unwrap_or(dir).as_fd();
+        let Ok(up) = rustix::fs::openat(at, "..", flags, Mode::empty()) else {
+            return true;
+        };
+        let up = File::from(up);
+        let Some(above) = id_of(&up) else {
+            return true;
+        };
+        if above == id {
+            // The top, which is its own `..`.
+            return false;
+        }
+        id = above;
+        here = Some(up);
+    }
+    true
 }
 
 /// The device and inode of the folder at `path`, links followed.
@@ -705,6 +748,31 @@ mod tests {
             let out = f.read(&home.join("out/report.txt"));
             assert_eq!(reason(out), Reason::NotAllowed);
         }
+    }
+
+    // Whether an allowed folder is in the home is asked of the folder held open, not of its name:
+    // moved after it was opened, the folder keeps its own answer, whatever now has its name.
+    #[test]
+    fn whether_a_folder_is_in_the_home_follows_the_folder_held_open() {
+        let (work, home) = holding_the_home();
+        let home_id = id_of_path(&home).unwrap();
+        let open = |path: &Path| File::open(path).unwrap();
+        let inside = home.join("inside");
+        let outside = work.path().join("outside");
+        std::fs::create_dir(&inside).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let (was_inside, was_outside) = (open(&inside), open(&outside));
+        assert!(lies_in(&open(&home), home_id));
+        assert!(lies_in(&was_inside, home_id));
+        assert!(!lies_in(&was_outside, home_id));
+
+        // The two swap places: each keeps the answer of where it now is.
+        let swap = work.path().join("swap");
+        std::fs::rename(&inside, &swap).unwrap();
+        std::fs::rename(&outside, &inside).unwrap();
+        std::fs::rename(&swap, &outside).unwrap();
+        assert!(!lies_in(&was_inside, home_id));
+        assert!(lies_in(&was_outside, home_id));
     }
 
     fn settings(home: &Path, lines: &str) -> Config {
