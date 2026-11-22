@@ -2016,7 +2016,8 @@ fn an_event_that_settles_very_many_spreads_them_over_versions() {
     assert!(failed_at_the_end(&mut talk).is_empty());
 }
 
-// The agent's words carry at most what one event can; the turn's next versions settle the rest.
+// The agent's words carry at most what MDK takes in a chat message, 64 tags of 16 KB in all,
+// with their turn and phase; the turn's next versions settle the rest.
 #[test]
 fn words_that_settle_very_many_leave_the_rest_to_the_turn() {
     let (mut talk, prompt) = started();
@@ -2034,14 +2035,31 @@ fn words_that_settle_very_many_leave_the_rest_to_the_turn() {
     said.settles = requests;
     let acts = talk.emitted(said);
     let mut settled = Vec::new();
+    let mut words = 0;
     for (_, what) in sends(&talk, acts) {
         let settles = match what {
-            Sending::Words { settles, .. } => settles,
+            Sending::Words {
+                settles,
+                turn,
+                remark,
+                ..
+            } => {
+                // MDK takes a chat message with at most 64 tags, of at most 16 KB in all.
+                let tags = carrier::words_tags(turn.as_ref(), remark, &settles);
+                let bytes: usize = tags.iter().flatten().map(String::len).sum();
+                assert!(
+                    tags.len() <= 64 && bytes <= 16 * 1024,
+                    "MDK takes the words"
+                );
+                words = settles.len();
+                settles
+            }
             Sending::Item { item, .. } => item.settles,
         };
         assert!(settles.len() <= carrier::SETTLES_MAX);
         settled.extend(settles);
     }
+    assert!(words > 0, "the words settle what they can");
     settled.sort();
     settled.dedup();
     assert_eq!(settled.len(), 450);

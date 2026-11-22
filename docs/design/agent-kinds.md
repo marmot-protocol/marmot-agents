@@ -70,6 +70,11 @@ Built on 2026-11-21 while fixing the known gaps of [testing and verification](ve
 - **At most 200 `settles` on one event.** An item's version, or the agent's words, that would settle more goes
   out as several versions of the same item, the same and numbered on, each settling at most 200; words leave the
   rest to their turn's next versions. So every event that settles fits in 64 KB.
+- **The agent's words settle at most what MDK takes in a chat message** (2026-11-22). MDK takes a chat message
+  with at most 64 tags, of at most 16 KB in all, and does not export those numbers; kind 1201 and its edits are
+  held only to their shape and 64 KB. So the agent's words carry as many `settles` as fit beside their `turn`
+  and `phase`: 62 with a short turn id, fewer with a long one. Their turn's next versions settle the rest, as
+  above. The core keeps MDK's two numbers itself (`carrier.rs`), and a test against MDK checks them.
 - **`no_effect`.** An answer the driver took whose item stopped waiting without naming it is settled at once by a
   `refused` notice with the reason `no_effect`, not left pending until the driver stops.
 - **`failed` for a send MDK refuses.** A send MDK will not take, and is not an edit of words that were removed, is
@@ -181,9 +186,9 @@ MDK issue 3612; none of it holds up the core.
   Done in MDK 0.19.0 (`submit_tagged_text`, `submit_tagged_edit_for_local_send`, `submit_custom_event`); a file
   sent crash-safely (`upload_media_with_client_token`) still carries no tags: that part is not done.
 - Expose items, with their latest version, to the apps.
-- Let a chat message carry up to 200 `settles` tags, as the provisional additions below send. MDK still caps a chat
-  message at 64 tags and 16 KB of them, so the agent's words that settle more than about 60 requests are refused.
-  **Not done.**
+- Let a chat message carry up to 200 `settles` tags, as an item can. MDK still caps a chat message at 64 tags and
+  16 KB of them. **Not done**, and no longer needed for the core to work: the agent's words now carry only as
+  many as fit, and their turn settles the rest (see the provisional additions above).
 
 ## Decided
 

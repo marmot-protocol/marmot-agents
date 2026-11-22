@@ -830,6 +830,33 @@ pub fn read_request(agent: &PubKey, tags: &[Vec<String>]) -> Option<(Option<Even
 /// The tags of the agent's words, a chat message (D-022): the turn they belong to, for a remark
 /// made while the agent works the phase that keeps it from alerting (D-078), and the answers and
 /// controls whose effect they show, as an item names them (D-028).
+/// The most tags MDK takes on a chat message, the agent's words: MDK's own limit, which it does
+/// not export (its `validate_message_tags`). Provisional, as MDK may change it.
+pub const WORDS_TAGS_MAX: usize = 64;
+/// The most bytes MDK takes in all of a chat message's tags, every part of every tag counted:
+/// MDK's own limit, as [`WORDS_TAGS_MAX`].
+pub const WORDS_TAG_BYTES_MAX: usize = 16 * 1024;
+
+/// How many of `settles`, from the first, the agent's words can carry with their turn and phase,
+/// as MDK takes a chat message: at most [`WORDS_TAGS_MAX`] tags of [`WORDS_TAG_BYTES_MAX`] in
+/// all, and never more than [`SETTLES_MAX`]. Their turn's next versions carry the rest. An item
+/// is not held to these: MDK checks only its shape and its 64 KB.
+pub fn words_settles_fit(turn: Option<&TurnId>, remark: bool, settles: &[EventKey]) -> usize {
+    let own = words_tags(turn, remark, &[]);
+    let mut count = own.len();
+    let mut bytes: usize = own.iter().flatten().map(String::len).sum();
+    let mut fit = 0;
+    for request in settles.iter().take(SETTLES_MAX) {
+        count += 1;
+        bytes += "settles".len() + request.as_str().len();
+        if count > WORDS_TAGS_MAX || bytes > WORDS_TAG_BYTES_MAX {
+            break;
+        }
+        fit += 1;
+    }
+    fit
+}
+
 pub fn words_tags(turn: Option<&TurnId>, remark: bool, settles: &[EventKey]) -> Vec<Vec<String>> {
     let mut tags: Vec<Vec<String>> = turn
         .map(|t| tag(["turn", t.as_str()]))

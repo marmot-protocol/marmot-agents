@@ -21,7 +21,7 @@
 //! - a chat of a coding harness has a folder, set by someone who may approve, that applies from
 //!   its next session (D-101).
 
-use crate::carrier::{Asked, Item, SETTLES_MAX};
+use crate::carrier::{self, Asked, Item, SETTLES_MAX};
 use crate::chat_folder::{FOLDER, FolderRule, LABEL};
 use crate::keys::{EventKey, GroupKey, PubKey};
 use crate::rights::{Right, Rights, needed_for};
@@ -967,8 +967,13 @@ impl Conversation {
                 let mut held = std::mem::take(&mut record.held);
                 let first_words = record.first.is_none()
                     && !(self.saved.outbox.iter()).any(|q| q.what.key() == key);
+                let remark = message.phase == Some(marmot_agent_events::body::Phase::Commentary);
                 let settles = if first_words {
-                    by_turn = held.split_off(held.len().min(SETTLES_MAX));
+                    // As many as MDK takes in a chat message; the turn carries the rest.
+                    let keys: Vec<EventKey> =
+                        held.iter().map(|r| EventKey::from(r.as_str())).collect();
+                    let fit = carrier::words_settles_fit(header.turn.as_ref(), remark, &keys);
+                    by_turn = held.split_off(fit);
                     take_pending(&mut self.saved.pending, &group, &held)
                 } else {
                     by_turn = held;
@@ -978,7 +983,7 @@ impl Conversation {
                     key: key.clone(),
                     text,
                     turn: header.turn.clone(),
-                    remark: message.phase == Some(marmot_agent_events::body::Phase::Commentary),
+                    remark,
                     edit: record.first.clone(),
                     settles,
                 });

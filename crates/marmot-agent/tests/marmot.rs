@@ -686,3 +686,49 @@ async fn an_edit_of_a_first_event_that_disappeared_is_told_apart() {
     assert_eq!(sent, Err(SendFailed::FirstGone));
     world.runtime.shutdown().await;
 }
+
+// The agent's words carry as many `settles` as MDK takes in a chat message, with their turn and
+// phase, and no more: the numbers the core keeps for MDK's limits, which MDK does not export, are
+// MDK's. A long turn leaves room for fewer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_agents_words_settle_as_many_as_mdk_takes() {
+    use marmot_agent::marmot::SendFailed;
+    use marmot_agent::{EventKey, Sending, Token, carrier};
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let group = a_quiet_chat(&world).await;
+    let requests: Vec<EventKey> = (0..300)
+        .map(|n| EventKey::from(format!("{n:064x}").as_str()))
+        .collect();
+    for (name, turn) in [("short", "t1".to_string()), ("long", "t".repeat(12 * 1024))] {
+        let turn = Some(marmot_agent_events::TurnId(turn));
+        let fit = carrier::words_settles_fit(turn.as_ref(), true, &requests);
+        assert!(fit > 0 && fit < carrier::WORDS_TAGS_MAX, "{name}: {fit}");
+        for (count, takes) in [(fit, true), (fit + 1, false)] {
+            let words = Sending::Words {
+                key: format!("{name}{count}"),
+                text: format!("words {name} {count}"),
+                turn: turn.clone(),
+                remark: true,
+                edit: None,
+                settles: requests[..count].to_vec(),
+            };
+            let token = Token {
+                send: format!("{name}{count}"),
+                mdk: format!("token {name} {count}"),
+                edits: None,
+                tried_at: None,
+            };
+            let sent = world.send(&group, &words, &token).await;
+            if takes {
+                assert!(sent.is_ok(), "{name}: {count} taken: {sent:?}");
+            } else {
+                assert_eq!(
+                    sent,
+                    Err(SendFailed::Refused { gone: false }),
+                    "{name}: {count}"
+                );
+            }
+        }
+    }
+    world.runtime.shutdown().await;
+}
