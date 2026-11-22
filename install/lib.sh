@@ -7,13 +7,18 @@
 # What it installs, for an agent called NAME (D-100):
 #
 #   ~/.local/bin/marmot-agent                          the core
-#   ~/.local/share/marmot-agent/lib/                   the connectors and container files; an install
-#                                                      replaces only the parts its harness uses
+#   ~/.local/share/marmot-agent/lib/                   the connectors, the plugins and the container
+#                                                      files; an install replaces only the parts its
+#                                                      harness uses
 #   ~/.local/share/marmot-agent/agents/NAME/           this agent: settings.toml, its account home in home/,
 #                                                      what its harness keeps, start (which runs the core
 #                                                      with service.env), and the service's files
 #   systemd: ~/.config/systemd/user/marmot-agent-NAME.service (and -connector.service, for a socket harness)
 #   launchd: ~/Library/LaunchAgents/org.marmot.marmot-agent.NAME.plist (and .connector.plist)
+#
+# It never installs a harness (D-102): each must be there already, a program on PATH or, for Hermes and
+# OpenClaw, an installation of the person's own, into which it adds our plugin. Containers are only for
+# Goose and Pi, and only when asked for with --container.
 #
 # Nothing secret is written by it: a model key is named by its path, and must be readable by its owner only.
 
@@ -27,15 +32,23 @@ wss://relay.us.whitenoise.chat"
 # What a harness script sets before calling `main`:
 #   HARNESS            its id, such as codex; the default agent name
 #   HARNESS_TITLE      how people know it, such as Codex; the default name the agent shows in chats
-#   HARNESS_KIND       builtin (the core drives it) or socket (a connector drives it over the socket)
-#   HARNESS_OPTIONS    the options of its own it takes, of: model-key model model-url permission-mode goose-mode
-#   HARNESS_SUPPORT    the folders of the support files (support_paths) it uses, such as tools/pi
+#   HARNESS_KIND       builtin (the core drives it), socket (a connector of ours drives it over the
+#                      socket, as a service beside the core's) or plugin (our plugin, inside the person's
+#                      own gateway, connects to the socket: the gateway is theirs to run, and has a
+#                      workspace of its own, so no work folder is asked for)
+#   HARNESS_OPTIONS    the options of its own it takes, of: container model-key model model-url
+#                      permission-mode goose-mode replace-plugin
+#   HARNESS_SUPPORT    the folders of the support files (support_paths) it uses, such as tools/pi;
+#                      harness_check may change it
 # and these functions:
 #   harness_check      checks what the harness needs; `need` and `missing` report
 #   harness_prepare    builds its images or installs its packages, from its support files in $MA_STAGE
 #   harness_settings   prints its section of the settings
 #   harness_connector  (socket only) prints the body of the script that starts its connector
+#   harness_connect    (plugin only) adds the plugin to the gateway, once the agent is set up
 #   harness_env        (optional) prints KEY=value lines for the service's environment
+#   harness_summary    (optional) prints what the person does next, after the summary
+#   harness_uninstall  (optional) removes what the install added outside the agent's folder
 
 # ---------------------------------------------------------------------------------------------------
 # Output
@@ -187,6 +200,21 @@ need_docker() {
     fi
 }
 
+# Node 24 or later, and npm, which come together; sets NODE.
+need_node() {
+    local major
+    NODE=$(program_path node) || NODE=""
+    if [ -z "$NODE" ]; then
+        NODE=node
+        missing "Node 24" "Install Node 24 or later (https://nodejs.org), then run this again."
+    else
+        major=$("$NODE" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
+        [ "$major" -ge 24 ] 2>/dev/null ||
+            missing "Node 24" "This machine has Node $major. Install Node 24 or later (https://nodejs.org)."
+    fi
+    program_path npm >/dev/null || missing "npm" "It comes with Node (https://nodejs.org)."
+}
+
 # A harness in a container runs on a model endpoint the person brings (D-100): its address, the model,
 # and its key. None has a default.
 need_model() {
@@ -219,7 +247,68 @@ file_mode() {
 }
 
 linux_only() {
-    [ "$OS" = Linux ] || die "$HARNESS_TITLE is installed on Linux only for now: it needs its container to reach the core's socket and this folder at the same paths."
+    [ "$OS" = Linux ] || die "$HARNESS_TITLE in a container (--container) is installed on Linux only for now: the container needs this folder at the same path. Leave out --container to run your own $HARNESS_TITLE."
+}
+
+# The options that only a harness in a container takes: its model is the container's to set up, while
+# a harness of the person's own uses its own settings.
+container_options_only() {
+    if [ -n "$MODEL_KEY" ] || [ -n "$MODEL" ] || [ -n "$MODEL_URL" ]; then
+        die "--model-key, --model and --model-url go with --container: your own $HARNESS_TITLE uses the model it is set up with"
+    fi
+}
+
+# The first version number, such as 1.6.0, in what a program prints for --version; nothing if none.
+version_of() {
+    "$@" --version 2>/dev/null | sed -n 's/[^0-9]*\([0-9][0-9]*\(\.[0-9][0-9]*\)\{1,2\}\).*/\1/p' | head -n 1
+}
+
+# Whether version $1 is lower than version $2, each numbers separated by dots.
+version_below() {
+    local a=$1 b=$2 x y
+    while [ -n "$a" ] || [ -n "$b" ]; do
+        x=${a%%.*} y=${b%%.*}
+        x=${x:-0} y=${y:-0}
+        [ "$x" -eq "$y" ] 2>/dev/null || { [ "$x" -lt "$y" ] 2>/dev/null; return; }
+        case $a in *.*) a=${a#*.} ;; *) a="" ;; esac
+        case $b in *.*) b=${b#*.} ;; *) b="" ;; esac
+    done
+    return 1
+}
+
+# Checks a harness program found on PATH: that it runs, and its version. A version older than the one
+# its driver was built and recorded against is reported, not refused: it may work.
+check_version() {
+    local program=$1 tested=$2 how=$3 version
+    version=$(version_of "$program")
+    if [ -z "$version" ]; then
+        missing "a working $HARNESS_TITLE" "$program --version failed or printed no version. $how"
+        return 0
+    fi
+    say "found $HARNESS_TITLE $version at $program"
+    if version_below "$version" "$tested"; then
+        warn "$HARNESS_TITLE $version is older than $tested, the version marmot-agent was tested with; if it misbehaves, update it. $how"
+    fi
+}
+
+# ---------------------------------------------------------------------------------------------------
+# The person's own files
+
+# Keeps a copy of a file of the person's own, such as a gateway's configuration, in the agent's folder,
+# readable by its owner only, before the install changes it.
+backup_file() {
+    local file=$1 copy
+    [ -e "$file" ] || return 0
+    copy="$MA_AGENT_DIR/backups/$(basename "$file").$(date -u +%Y%m%dT%H%M%SZ)"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        say "would keep a copy of $file in $copy"
+        return 0
+    fi
+    private_dir "$MA_AGENT_DIR/backups"
+    rm -rf "$copy"
+    (umask 077 && cp -R "$file" "$copy")
+    chmod -R go-rwx "$copy"
+    say "kept a copy of $file in $copy"
 }
 
 # ---------------------------------------------------------------------------------------------------
@@ -265,8 +354,9 @@ inside() {
 # ---------------------------------------------------------------------------------------------------
 # The core and the files beside it
 
-# The files the connectors and containers need at run time. The release archive holds these and the
-# core; package.sh reads this list.
+# The files the connectors, the plugins and the containers need: the Claude Code driver, the OpenClaw
+# plugin's source, from which it is built, the Hermes plugin, and Pi's and Goose's containers, for
+# --container. The release archive holds these and the core; package.sh reads this list.
 support_paths() {
     cat <<'EOF'
 LICENSE
@@ -280,9 +370,6 @@ packages/openclaw/tsconfig.json
 packages/openclaw/tsconfig.build.json
 packages/openclaw/openclaw.plugin.json
 packages/openclaw/src
-packages/openclaw/container
-packages/openclaw/run.sh
-python/hermes
 python/marmot_hermes
 tools/pi
 tools/goose
@@ -508,10 +595,35 @@ update_settings() {
         }' "$MA_SETTINGS" | put "$MA_SETTINGS" 600
 }
 
-# Makes the agent's identity once; its public key is kept beside the settings to show again.
+# Whether `marmot-agent import` wrote the agent's settings, from today's connector of the harness that
+# follows, such as "Hermes install,", or of any (docs/move.md): its identity came with its home.
+imported() {
+    local line
+    [ -f "$MA_SETTINGS" ] || return 1
+    line=$(head -n 1 "$MA_SETTINGS")
+    case $line in "# Imported by \`marmot-agent import\` from a ${1:-}"*) return 0 ;; esac
+    return 1
+}
+
+# The account home the agent's settings name: the one in the agent's folder, unless they were imported
+# or edited since. Only a plain path in quotes is read.
+settings_home() {
+    local value
+    value=$(awk '/^[[:space:]]*\[/ { exit } /^home[[:space:]]*=/ { sub(/^home[[:space:]]*=[[:space:]]*/, ""); print; exit }' "$MA_SETTINGS")
+    value=$(printf '%s' "$value" | sed -n -e 's/^"\([^"\\]*\)"[[:space:]]*\(#.*\)\{0,1\}$/\1/p' \
+        -e "s/^'\([^']*\)'[[:space:]]*\(#.*\)\{0,1\}\$/\1/p")
+    case $value in /*) printf '%s' "$value" ;; *) return 1 ;; esac
+}
+
+# Makes the agent's identity once; its public key is kept beside the settings to show again. An
+# imported agent has one in its home already, and is never given another.
 init_agent() {
     if [ -s "$MA_AGENT_DIR/public-key" ]; then
         say "the agent already has an identity"
+        return 0
+    fi
+    if imported; then
+        say "the agent keeps the identity it was imported with, in $MA_HOME"
         return 0
     fi
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -712,22 +824,39 @@ service and keeps the agent's settings and identity.
 Options:
   --owner KEY          your public key, in hex or as an npub: only you may prompt and approve (asked
                        when not given)
+EOF
+    [ "$HARNESS_KIND" = plugin ] || cat <<EOF
   --cwd FOLDER         the folder $HARNESS_TITLE works in (asked; default ~/marmot-agent/NAME)
+EOF
+    cat <<EOF
   --name NAME          the agent's name on this machine, for its folder and its service (default: $HARNESS)
   --display-name TEXT  the name people see in chats (default: $HARNESS_TITLE)
   --relay URL          a relay for the agent's account; may repeat (default: White Noise's relays)
   --local-relay URL    use only this relay on this machine, for a try (no White Noise relays)
 EOF
+    case " $HARNESS_OPTIONS " in *" container "*) cat <<EOF
+  --container          run $HARNESS_TITLE in a throwaway container instead of the one on your PATH
+                       (Linux only; needs Docker), on an OpenAI-compatible model endpoint
+EOF
+    esac
     case " $HARNESS_OPTIONS " in *" model-key "*) cat <<EOF
-  --model-key FILE     the model endpoint's API key, in a file only you can read (required)
+  --model-key FILE     with --container: the model endpoint's API key, in a file only you can read
+                       (required)
 EOF
     esac
     case " $HARNESS_OPTIONS " in *" model "*) cat <<EOF
-  --model NAME         the model, as the endpoint names it (required)
+  --model NAME         with --container: the model, as the endpoint names it (required)
 EOF
     esac
     case " $HARNESS_OPTIONS " in *" model-url "*) cat <<EOF
-  --model-url URL      an OpenAI-compatible endpoint, such as https://models.example/v1 (required)
+  --model-url URL      with --container: an OpenAI-compatible endpoint, such as
+                       https://models.example/v1 (required)
+EOF
+    esac
+    case " $HARNESS_OPTIONS " in *" replace-plugin "*) cat <<EOF
+  --replace-plugin     put our plugin in place of the Marmot plugin of today's connectors, if
+                       $HARNESS_TITLE has that one, for an install moved over with its settings in
+                       the agent's folder (see docs/move.md); the old one is kept in that folder
 EOF
     esac
     case " $HARNESS_OPTIONS " in *" permission-mode "*) cat <<EOF
@@ -745,7 +874,8 @@ EOF
   --binary PATH        install this marmot-agent program instead
   --no-service         set up no service
   --no-start           set up the service without starting it
-  --uninstall          stop and remove the service; keep the agent's folder and identity
+  --uninstall          stop and remove the service, and what the install added to $HARNESS_TITLE;
+                       keep the agent's folder and identity
   --dry-run            say what would be done, and show each file that would be written
   --yes                ask nothing; stop if a required value is missing
   -h, --help           show this
@@ -765,6 +895,7 @@ parse_args() {
     DRY_RUN=0 ASSUME_YES=0 NO_SERVICE=0 NO_START=0 UNINSTALL=0 FROM_SOURCE=0
     BINARY_FROM="" VERSION="" NAME=$HARNESS DISPLAY=$HARNESS_TITLE OWNER="" RELAYS="" LOCAL_RELAY="" CWD=""
     MODEL_KEY="" MODEL="" MODEL_URL="" PERMISSION_MODE="" GOOSE_MODE="" SET_CWD=0 SET_KEY=""
+    CONTAINER="" REPLACE_PLUGIN=0
     while [ $# -gt 0 ]; do
         case $1 in
             --owner | --cwd | --name | --display-name | --relay | --local-relay | --version | --binary | \
@@ -789,6 +920,8 @@ parse_args() {
                 esac
                 shift 2
                 ;;
+            --container) takes container; CONTAINER=1; shift ;;
+            --replace-plugin) takes replace-plugin; REPLACE_PLUGIN=1; shift ;;
             --from-source) FROM_SOURCE=1; shift ;;
             --no-service) NO_SERVICE=1; shift ;;
             --no-start) NO_START=1; shift ;;
@@ -816,8 +949,11 @@ parse_args() {
     [ $count -le 1 ] || die "give one of --version, --from-source and --binary"
     if [ -n "$BINARY_FROM" ]; then BINARY_FROM=$(absolute "$BINARY_FROM"); fi
     if [ -n "$MODEL_KEY" ]; then MODEL_KEY=$(absolute "$MODEL_KEY"); fi
+    if [ "$HARNESS_KIND" = plugin ] && [ -n "$CWD" ]; then
+        die "$HARNESS_TITLE works in the workspace it manages itself, so it takes no --cwd"
+    fi
     # What this run was given, before the saved choices fill in the rest.
-    CWD_GIVEN=$CWD MODEL_KEY_GIVEN=$MODEL_KEY
+    CWD_GIVEN=$CWD MODEL_KEY_GIVEN=$MODEL_KEY CONTAINER_GIVEN=$CONTAINER
 }
 
 # An absolute path, without needing the file to exist.
@@ -852,7 +988,7 @@ set_paths() {
 
 # What was chosen when the agent was installed, and is not in its settings: kept beside them, so that
 # running the script again changes only what it is given.
-CHOICES="CWD MODEL_KEY MODEL MODEL_URL PERMISSION_MODE GOOSE_MODE"
+CHOICES="CWD MODEL_KEY MODEL MODEL_URL PERMISSION_MODE GOOSE_MODE CONTAINER"
 
 load_choices() {
     [ -f "$MA_AGENT_DIR/choices" ] || return 0
@@ -886,11 +1022,20 @@ check_harness() {
     local owner=""
     if [ -f "$MA_AGENT_DIR/harness" ]; then
         owner=$(cat "$MA_AGENT_DIR/harness")
+    elif [ "$HARNESS_KIND" = plugin ] && imported "$HARNESS_TITLE install,"; then
+        # Moved over from today's connector (docs/move.md): the settings name its home and identity.
+        say "using the settings marmot-agent import wrote in $MA_SETTINGS"
     elif [ -f "$MA_SETTINGS" ]; then
         die "the agent \"$NAME\" has settings but no record of its harness in $MA_AGENT_DIR/harness: give another --name, or write the harness's name, such as $HARNESS, there"
     fi
     [ -z "$owner" ] || [ "$owner" = "$HARNESS" ] ||
         die "the agent \"$NAME\" runs $owner; use install/$owner.sh for it, or give another --name"
+    # The home is the one the settings name, which an imported agent keeps where it was.
+    if [ -f "$MA_SETTINGS" ]; then
+        MA_HOME=$(settings_home) ||
+            die "$MA_SETTINGS names no account home this script can read: write it as home = \"/its/path\""
+        no_control "the account home" "$MA_HOME"
+    fi
 }
 
 # Asks for, or checks, what a new agent needs: its owner and its work folder.
@@ -901,6 +1046,11 @@ settle_values() {
     case $MODEL_URL in "" | http://?* | https://?*) ;; *) die "--model-url must start with http:// or https://" ;; esac
     if [ -f "$MA_SETTINGS" ]; then
         [ -z "$OWNER" ] || warn "the agent already has settings; --owner is ignored (edit $MA_SETTINGS)"
+        # The settings that are kept say where the harness runs; a run again does not change that.
+        if [ -n "$CONTAINER_GIVEN" ] && [ "$(saved_choice CONTAINER)" != 1 ]; then
+            die "the agent \"$NAME\" runs the $HARNESS_TITLE on your PATH; to run it in a container, install another agent with --name, or remove $MA_AGENT_DIR to start again"
+        fi
+        [ "$HARNESS_KIND" != plugin ] || return 0
         local settings_cwd
         settings_cwd=$(sed -n 's/^cwd = "\(.*\)"$/\1/p' "$MA_SETTINGS" | head -n 1)
         # A harness the core drives works where its settings say, which may have been edited since.
@@ -921,6 +1071,7 @@ settle_values() {
     [ -n "$OWNER" ] || die "give your public key with --owner"
     owner_shape "$OWNER" || die "--owner must be a public key in hex (64 characters) or an npub"
     case $OWNER in npub1* | NPUB1*) ;; *) OWNER=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]') ;; esac
+    [ "$HARNESS_KIND" != plugin ] || return 0
     if [ -z "$CWD" ] && can_ask; then
         CWD=$(ask "The folder $HARNESS_TITLE works in" "$HOME/marmot-agent/$NAME")
     fi
@@ -982,6 +1133,11 @@ main() {
         return 0
     fi
     [ "$DRY_RUN" -eq 0 ] || say "dry run: nothing is installed, written or started"
+    # The plugin of today's connector serves an identity in its old home: an agent made here instead
+    # would be a new one, in none of its chats.
+    if [ "$REPLACE_PLUGIN" -eq 1 ] && [ ! -f "$MA_SETTINGS" ]; then
+        die "--replace-plugin is for an install moved over from today's connector: first run marmot-agent import <its home> --settings $MA_SETTINGS (docs/move.md), then this again"
+    fi
 
     settle_values
     harness_check
@@ -1005,7 +1161,9 @@ main() {
     private_dir "$MA_DATA/agents"
     private_dir "$MA_AGENT_DIR"
     printf '%s\n' "$HARNESS" | put "$MA_AGENT_DIR/harness" 600
-    if [ "$DRY_RUN" -eq 1 ]; then
+    if [ -z "$CWD" ]; then
+        :
+    elif [ "$DRY_RUN" -eq 1 ]; then
         [ -d "$CWD" ] || say "would make folder $CWD"
     else
         mkdir -p "$CWD"
@@ -1014,6 +1172,7 @@ main() {
     save_choices
     init_agent
     write_launchers
+    if [ "$HARNESS_KIND" = plugin ]; then harness_connect; fi
     if [ "$NO_SERVICE" -eq 0 ]; then
         if [ "$OS" = Linux ]; then systemd_units; else launchd_agents; fi
         start_services
@@ -1042,4 +1201,5 @@ summary() {
         say "Its logs: $MA_AGENT_DIR/logs"
     fi
     say "To remove the service (the agent's folder is kept): $MA_LIB/install/$HARNESS.sh --uninstall --name $NAME"
+    if declare -F harness_summary >/dev/null; then harness_summary; fi
 }

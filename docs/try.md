@@ -85,6 +85,23 @@ The same steps work with Claude Code in place of Codex, through the socket. It a
 
 Then invite the agent and talk to it in the client as before.
 
+## With an installed agent
+
+The scripts in `install/` set an agent up with the harness you already have
+([D-102](decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)). To try one with the
+client in place of White Noise, give it the client's relay and no service, and run its `start` script:
+
+```sh
+target/release/marmot-agent-chat /tmp/try/person --serve 7777     # as in step 2; note your key
+install/opencode.sh --owner <your key> --local-relay ws://127.0.0.1:7777 --cwd /tmp/try/work \
+    --binary target/release/marmot-agent --no-service
+~/.local/share/marmot-agent/agents/opencode/start
+```
+
+Then `:invite` the key the script printed, as in step 5. For Hermes or OpenClaw, the script adds the plugin to
+your own gateway: start or restart the gateway once the core runs. `--uninstall` takes the service, and the
+plugin, out again; the agent's folder stays until you remove it.
+
 ## Moving an existing install
 
 To move one of today's connector installs over, keeping its identity and its chats, see [`move.md`](move.md).

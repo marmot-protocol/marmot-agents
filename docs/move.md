@@ -26,6 +26,14 @@ encryption state and its chats.
    marmot-agent import ~/.marmot-agents/codex
    ```
 
+   For Hermes and OpenClaw, put the settings where the installer looks for them, in the agent's folder
+   (`hermes` here is the agent's name, the installer's `--name`, which is the harness's by default):
+
+   ```sh
+   mkdir -p ~/.local/share/marmot-agent/agents/hermes
+   marmot-agent import ~/.marmot-agents/hermes --settings ~/.local/share/marmot-agent/agents/hermes/settings.toml
+   ```
+
    In this order, it:
 
    - stops and disables the old services (`wn-agent-codex.service` and `wn-codex.service`, or the
@@ -50,8 +58,11 @@ encryption state and its chats.
    the old allow-lists changed as the services stopped, it stops there and says how to start them again.
 
 3. Start the core with those settings, as the import tells you: `marmot-agent run
-   ~/.marmot-agents/codex/marmot-agent.toml`. For Claude Code, start its driver too; for Hermes and OpenClaw,
-   put the new plugin in the gateway in place of the old one and restart the gateway.
+   ~/.marmot-agents/codex/marmot-agent.toml`. For Claude Code, start its driver too. For Hermes and OpenClaw,
+   run the installer instead, with `--replace-plugin`, such as `install/hermes.sh --replace-plugin`: it uses
+   the imported settings and the identity in the old home, never makes a new one, runs the core as a service,
+   and puts the new plugin in the gateway in place of the old one, pointed at that home. Then restart the
+   gateway. Without settings in the agent's folder, `--replace-plugin` stops before changing anything.
 
 On its first start the core reads nothing already in a chat as a prompt, so it never runs an old prompt again.
 That also means a message sent to the agent between the import and that first start is not answered: keep the

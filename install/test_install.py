@@ -4,11 +4,15 @@
 
 Each script runs against a throwaway HOME, with stand-ins for the programs it calls (the harnesses,
 systemctl, launchctl, docker, npm and node) on PATH, so nothing on the machine running the tests is
-installed, started or changed. A stand-in marmot-agent plays the core; the download test serves a
-release from a folder, packaged by tools/release/package.sh.
+installed, started or changed. The stand-ins for OpenClaw and Hermes keep their settings in files in
+that HOME, as the real ones do, and do what the installers ask of them: add a plugin, set and unset a
+setting. A stand-in marmot-agent plays the core; the download test serves a release from a folder,
+packaged by tools/release/package.sh. The OpenClaw installer reads JSON with node, so its tests use
+the node on the PATH the tests run with, and are skipped without one.
 """
 
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -20,8 +24,15 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 HARNESSES = ["codex", "claude-code", "opencode", "goose", "cursor", "pi", "openclaw", "hermes"]
-SOCKET = {"claude-code", "openclaw", "hermes"}
-CONTAINER = {"goose", "pi", "openclaw", "hermes"}
+# A connector of ours, as a service beside the core's.
+SOCKET = {"claude-code"}
+# Our plugin, in the person's own gateway.
+PLUGIN = {"openclaw", "hermes"}
+# What may run in a container instead, with --container.
+CONTAINER = {"goose", "pi"}
+# Each harness's program, as the stand-ins on PATH provide it.
+PROGRAMS = ("codex", "opencode", "cursor-agent", "goose", "pi", "openclaw", "hermes")
+REAL_NODE = shutil.which("node")
 OWNER = "ab" * 32
 AGENT_KEY = "cd" * 32
 # NIP-19's own example.
@@ -50,16 +61,215 @@ esac
 FAKE_LOGGER = """#!/bin/sh
 echo "$(basename "$0") $*" >> "$FAKE_LOG"
 """
-# npm ci makes the packages it installs, as the real one does.
+# npm ci makes the packages it installs, and npm pack the archive, as the real one does.
 FAKE_NPM = """#!/bin/sh
 echo "npm $*" >> "$FAKE_LOG"
-for last in "$@"; do :; done
-mkdir -p "$last/node_modules/a-package"
+command=$1 prefix=.
+while [ $# -gt 0 ]; do [ "$1" = --prefix ] && prefix=$2; shift; done
+case $command in
+    ci) mkdir -p "$prefix/node_modules/a-package" ;;
+    pack) echo "a packed plugin" > marmot-agent-openclaw-0.0.0.tgz ;;
+esac
 """
-FAKE_NODE = """#!/bin/sh
-[ "$1" = -p ] && { echo "${FAKE_NODE_MAJOR:-24}"; exit 0; }
+# A script node runs is run by the real one, where there is one.
+FAKE_NODE = f"""#!/bin/sh
+[ "$1" = -p ] && {{ echo "${{FAKE_NODE_MAJOR:-24}}"; exit 0; }}
+[ "$1" = -e ] && exec "{REAL_NODE or 'false'}" "$@"
 echo "node $*" >> "$FAKE_LOG"
 """
+# Pi and Goose say their version, as Pi 1.6.0 and Goose 1.59.2 print it, and are not run otherwise.
+FAKE_VERSIONED = """#!/bin/sh
+[ "$1" = --version ] && {{ echo "${{FAKE_VERSION:-{version}}}"; exit 0; }}
+echo "$(basename "$0") $*" >> "$FAKE_LOG"
+"""
+FAKE_OPENCLAW = r'''#!/usr/bin/env python3
+"""A stand-in for `openclaw`: the commands the installer runs, on a JSON file as OpenClaw keeps it."""
+import json, os, shutil, sys
+from pathlib import Path
+
+args = sys.argv[1:]
+state = Path(os.environ.get("OPENCLAW_HOME") or os.environ["HOME"]) / ".openclaw"
+config = state / "openclaw.json"
+plugin = state / "extensions" / "marmot"
+
+
+def load():
+    return json.loads(config.read_text()) if config.exists() else {}
+
+
+def save(c):
+    state.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps(c, indent=2) + "\n")
+
+
+def note():
+    with open(os.environ["FAKE_LOG"], "a") as log:
+        log.write("openclaw " + " ".join(args) + "\n")
+
+
+def walk(c, path, make=False):
+    *parents, last = path.split(".")
+    for p in parents:
+        if p not in c:
+            if not make:
+                return None, last
+            c[p] = {}
+        c = c[p]
+    return c, last
+
+
+if args == ["--version"]:
+    print(f"OpenClaw {os.environ.get('FAKE_OPENCLAW_VERSION', '2026.11.5')} (e13cf15)")
+elif args[:2] == ["config", "file"]:
+    print(config)
+elif args[:2] == ["config", "get"]:
+    c, last = walk(load(), args[2])
+    if c is None or last not in c:
+        print(json.dumps({"ok": False, "error": {"message": f"Config path is valid but unset: {args[2]}"}}, indent=2))
+        sys.exit(1)
+    value = c[last]
+    print(json.dumps(value, indent=2) if "--json" in args or not isinstance(value, str) else value)
+elif args[:2] == ["config", "set"]:
+    note()
+    c = load()
+    parent, last = walk(c, args[2], make=True)
+    parent[last] = json.loads(args[3]) if "--strict-json" in args else args[3]
+    save(c)
+elif args[:2] == ["config", "unset"]:
+    note()
+    c = load()
+    parent, last = walk(c, args[2])
+    if parent is None or last not in parent:
+        sys.exit(1)
+    del parent[last]
+    save(c)
+elif args[:2] == ["plugins", "install"]:
+    # Installing enables the plugin, unless --no-enable.
+    note()
+    shutil.rmtree(plugin, ignore_errors=True)
+    plugin.mkdir(parents=True)
+    (plugin / "package.json").write_text(json.dumps({"name": "marmot-agent-openclaw"}))
+    shutil.copy(args[-1], plugin / "packed.tgz")
+    c = load()
+    c.setdefault("plugins", {}).setdefault("entries", {})["marmot"] = {"enabled": True, "config": {}}
+    save(c)
+elif args[:2] == ["plugins", "inspect"]:
+    # One found in a folder of plugins.load.paths wins, and has no install record.
+    found = [f for f in load().get("plugins", {}).get("load", {}).get("paths", []) if Path(f, "package.json").is_file()]
+    if found:
+        print(json.dumps({"plugin": {"id": "marmot", "rootDir": found[0], "source": found[0] + "/dist/index.js"}}))
+    elif plugin.is_dir():
+        print(json.dumps({"plugin": {"id": "marmot", "rootDir": str(plugin)}, "install": {"installPath": str(plugin)}}))
+    else:
+        sys.exit(1)
+elif args[:2] == ["plugins", "uninstall"]:
+    note()
+    shutil.rmtree(plugin, ignore_errors=True)
+    c = load()
+    c.get("channels", {}).pop("marmot", None)
+    c.get("plugins", {}).get("entries", {}).pop("marmot", None)
+    save(c)
+else:
+    sys.exit(f"the openclaw stand-in does not know: {args}")
+'''
+FAKE_HERMES = r'''#!/usr/bin/env python3
+"""A stand-in for `hermes`: the commands the installer runs. Its config.yaml is JSON, which is YAML."""
+import json, os, sys
+from pathlib import Path
+
+args = sys.argv[1:]
+home = Path(os.environ.get("HERMES_HOME") or Path(os.environ["HOME"]) / ".hermes")
+config = home / "config.yaml"
+env = home / ".env"
+
+
+def load():
+    return json.loads(config.read_text()) if config.exists() else {}
+
+
+def save(c):
+    home.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps(c, indent=2) + "\n")
+
+
+def lines():
+    return env.read_text().splitlines() if env.exists() else []
+
+
+def env_key(line):
+    """The key of a .env line, which may start with export and have spaces around the =."""
+    left = line.split("=", 1)[0].strip()
+    return left[len("export "):].strip() if left.startswith("export ") else left
+
+
+def note():
+    with open(os.environ["FAKE_LOG"], "a") as log:
+        log.write("hermes " + " ".join(args) + "\n")
+
+
+def walk(c, path, make=False):
+    *parents, last = path.split(".")
+    for p in parents:
+        if p not in c:
+            if not make:
+                return None, last
+            c[p] = {}
+        c = c[p]
+    return c, last
+
+
+if args == ["--version"]:
+    print(f"Hermes Agent v{os.environ.get('FAKE_HERMES_VERSION', '0.23.2')} (2026.9.24) · stable")
+elif args[:2] == ["config", "path"]:
+    print(config)
+elif args[:2] == ["config", "env-path"]:
+    print(env)
+elif args[:2] == ["config", "get"]:
+    key = args[2]
+    if key.isupper():
+        found = [l.split("=", 1)[1].strip() for l in lines() if "=" in l and env_key(l) == key]
+        if not found and key not in os.environ:
+            sys.exit(f"Config key not set: {key}")
+        print((found or [os.environ.get(key)])[-1])
+    else:
+        c, last = walk(load(), key)
+        value = c.get(last, "") if c is not None else ""
+        print(str(value).lower() if isinstance(value, bool) else value)
+elif args[:2] == ["config", "set"]:
+    note()
+    key, value = args[2], args[3]
+    if key.isupper():
+        home.mkdir(parents=True, exist_ok=True)
+        env.write_text("".join(l + "\n" for l in lines() if env_key(l) != key) + f"{key}={value}\n")
+    else:
+        c = load()
+        parent, last = walk(c, key, make=True)
+        parent[last] = {"true": True, "false": False}.get(value, value)
+        save(c)
+elif args[:2] == ["config", "unset"]:
+    note()
+    key = args[2]
+    if key.isupper():
+        env.write_text("".join(l + "\n" for l in lines() if env_key(l) != key))
+    else:
+        c = load()
+        parent, last = walk(c, key)
+        if parent is not None:
+            parent.pop(last, None)
+        save(c)
+elif args[:2] in (["plugins", "enable"], ["plugins", "disable"]):
+    note()
+    if not (home / "plugins" / args[2] / "plugin.yaml").is_file():
+        sys.exit(f"no plugin {args[2]}")
+    c = load()
+    plugins = c.setdefault("plugins", {"enabled": [], "disabled": []})
+    on, off = ("enabled", "disabled") if args[1] == "enable" else ("disabled", "enabled")
+    plugins[off] = [p for p in plugins.get(off, []) if p != args[2]]
+    plugins[on] = sorted(set(plugins.get(on, [])) | {args[2]})
+    save(c)
+else:
+    sys.exit(f"the hermes stand-in does not know: {args}")
+'''
 
 
 def mode(path: Path) -> int:
@@ -69,7 +279,7 @@ def mode(path: Path) -> int:
 class Machine:
     """A throwaway HOME and a PATH of stand-ins."""
 
-    def __init__(self, test: unittest.TestCase, programs=("codex", "opencode", "cursor-agent")):
+    def __init__(self, test: unittest.TestCase, programs=PROGRAMS):
         self.dir = Path(tempfile.mkdtemp(prefix="marmot-install-"))
         test.addCleanup(shutil.rmtree, self.dir, True)
         self.home = self.dir / "home"
@@ -82,6 +292,11 @@ class Machine:
         self.write(self.core, FAKE_CORE)
         for name in ("systemctl", "launchctl", "docker", *programs):
             self.write(self.bin / name, FAKE_LOGGER)
+        stand_ins = {"goose": FAKE_VERSIONED.format(version=" 1.59.2"), "pi": FAKE_VERSIONED.format(version="1.6.0"),
+                     "openclaw": FAKE_OPENCLAW, "hermes": FAKE_HERMES}
+        for name in programs:
+            if name in stand_ins:
+                self.write(self.bin / name, stand_ins[name])
         self.write(self.bin / "npm", FAKE_NPM)
         self.write(self.bin / "node", FAKE_NODE)
         self.key = self.dir / "model.key"
@@ -119,10 +334,12 @@ class Machine:
             raise AssertionError(f"{harness}.sh failed ({result.returncode}):\n{result.stdout}\n{result.stderr}")
         return result
 
-    def args(self, harness: str, *more: str) -> list:
-        args = ["--yes", "--owner", OWNER, "--cwd", str(self.home / "work")]
-        if harness in CONTAINER:
-            args += ["--model-key", str(self.key), *MODEL]
+    def args(self, harness: str, *more: str, container=False) -> list:
+        args = ["--yes", "--owner", OWNER]
+        if harness not in PLUGIN:
+            args += ["--cwd", str(self.home / "work")]
+        if container:
+            args += ["--container", "--model-key", str(self.key), *MODEL]
         return args + list(more)
 
     def calls(self) -> list:
@@ -138,39 +355,58 @@ class DryRun(unittest.TestCase):
     """--dry-run writes nothing, and shows every file and command a real run would."""
 
     def test_every_harness(self):
-        for harness in HARNESSES:
-            with self.subTest(harness=harness):
-                m = Machine(self)
-                out = m.run(harness, *m.args(harness, "--binary", str(m.core), "--dry-run")).stdout
-                self.assertEqual(m.files(), [], "a dry run writes nothing")
-                self.assertEqual([c for c in m.calls() if c != "docker info"], [], "a dry run only looks")
-                agent = m.data / "agents" / harness
-                self.assertIn(f"would write {agent}/settings.toml (mode 600):", out)
-                self.assertIn(f'    | owner = "{OWNER}"', out)
-                self.assertIn(f'    | home = "{agent}/home"', out)
-                self.assertIn(f"would run: {m.home}/.local/bin/marmot-agent init {agent}/settings.toml", out)
-                unit = m.units / f"marmot-agent-{harness}.service"
-                self.assertIn(f"would write {unit} (mode 644):", out)
-                self.assertIn(f'    | ExecStart="{agent}/start"', out)
-                self.assertIn("    | Restart=always", out, "the core is started again when its harness stops")
-                self.assertIn(f"would write {agent}/start (mode 700):", out)
-                self.assertIn(f"    | exec '{m.home}/.local/bin/marmot-agent' run '{agent}/settings.toml'", out)
-                connector = m.units / f"marmot-agent-{harness}-connector.service"
-                if harness in SOCKET:
-                    self.assertIn("    | [connector]", out)
-                    self.assertIn(f"would write {agent}/connector (mode 700):", out)
-                    self.assertIn(f"would write {connector} (mode 644):", out)
-                    self.assertIn(f"    | BindsTo=marmot-agent-{harness}.service", out)
-                    self.assertIn(f"    | ExecStart=\"{agent}/connector\"", out)
-                else:
-                    self.assertNotIn(str(connector), out)
-                    self.assertNotIn("[connector]", out)
-                self.assertIn("would run: systemctl --user daemon-reload", out)
-                self.assertIn(f"would run: systemctl --user restart marmot-agent-{harness}.service", out)
-                if harness in CONTAINER:
-                    self.assertIn("would run: docker build", out)
-                    self.assertIn(str(m.key), out, "the key is named by its path")
-                self.assertNotIn("not a real key", out, "the key is never read into a file")
+        """Each harness, as the person has it, the same on Linux and on macOS (D-102)."""
+        for system in ("Linux", "Darwin"):
+            for harness in HARNESSES:
+                with self.subTest(harness=harness, system=system):
+                    self.dry_run(harness, system)
+
+    def dry_run(self, harness: str, system: str) -> None:
+        m = Machine(self)
+        out = m.run(harness, *m.args(harness, "--binary", str(m.core), "--dry-run"),
+                    env={"MARMOT_AGENT_OS": system}).stdout
+        self.assertEqual(m.files(), [], "a dry run writes nothing")
+        self.assertEqual(m.calls(), [], "a dry run only looks")
+        agent = m.data / "agents" / harness
+        self.assertIn(f"would write {agent}/settings.toml (mode 600):", out)
+        self.assertIn(f'    | owner = "{OWNER}"', out)
+        self.assertIn(f'    | home = "{agent}/home"', out)
+        self.assertIn(f"would run: {m.home}/.local/bin/marmot-agent init {agent}/settings.toml", out)
+        self.assertIn(f"would write {agent}/start (mode 700):", out)
+        self.assertIn(f"    | exec '{m.home}/.local/bin/marmot-agent' run '{agent}/settings.toml'", out)
+        self.assertNotIn("docker", out, "nothing runs in a container unless asked")
+        if harness in PLUGIN:
+            self.assertIn("    | [connector]", out)
+            self.assertNotIn("cwd = ", out, "the gateway keeps the workspace it manages itself")
+            self.assertNotIn(f"{agent}/connector", out, "the person's gateway is no service of ours")
+        elif harness in SOCKET:
+            self.assertIn("    | [connector]", out)
+            self.assertIn(f"would write {agent}/connector (mode 700):", out)
+        else:
+            self.assertNotIn("[connector]", out)
+            self.assertIn(f'    | cwd = "{m.home}/work"', out)
+        if system == "Linux":
+            unit = m.units / f"marmot-agent-{harness}.service"
+            self.assertIn(f"would write {unit} (mode 644):", out)
+            self.assertIn(f'    | ExecStart="{agent}/start"', out)
+            self.assertIn("    | Restart=always", out, "the core is started again when its harness stops")
+            connector = m.units / f"marmot-agent-{harness}-connector.service"
+            self.assertEqual(str(connector) in out, harness in SOCKET)
+            if harness in SOCKET:
+                self.assertIn(f"    | BindsTo=marmot-agent-{harness}.service", out)
+                self.assertIn(f"    | ExecStart=\"{agent}/connector\"", out)
+            self.assertIn("would run: systemctl --user daemon-reload", out)
+            self.assertIn(f"would run: systemctl --user restart marmot-agent-{harness}.service", out)
+            self.assertNotIn("launchctl", out)
+        else:
+            plist = m.home / f"Library/LaunchAgents/org.marmot.marmot-agent.{harness}.plist"
+            self.assertIn(f"would write {plist} (mode 644):", out)
+            self.assertIn(f"    |         <string>{agent}/start</string>", out)
+            self.assertIn("    |     <key>KeepAlive</key><true/>", out)
+            self.assertIn(f"would run: launchctl bootstrap gui/{os.getuid()} {plist}", out)
+            self.assertNotIn("systemctl", out)
+            connector = m.home / f"Library/LaunchAgents/org.marmot.marmot-agent.{harness}.connector.plist"
+            self.assertEqual(str(connector) in out, harness in SOCKET)
 
     def test_harness_sections(self):
         m = Machine(self)
@@ -178,15 +414,8 @@ class DryRun(unittest.TestCase):
             "codex": ["[codex]", f'program = "{m.bin}/codex"'],
             "opencode": ["[acp]", 'name = "opencode"', f'command = ["{m.bin}/opencode", "acp"]'],
             "cursor": ["[acp]", 'name = "cursor"', f'command = ["{m.bin}/cursor-agent", "acp"]'],
-            "goose": [
-                "[acp]",
-                f'command = ["{m.data}/lib/tools/goose/goose-acp.sh", "{m.key}", "{m.data}/agents/goose/goose"]',
-            ],
-            "pi": [
-                "[pi]",
-                f'program = "{m.data}/lib/tools/pi/pi.sh"',
-                f'args = ["{m.key}", "{m.data}/agents/pi/pi"]',
-            ],
+            "goose": ["[acp]", 'name = "goose"', f'command = ["{m.bin}/goose", "acp"]'],
+            "pi": ["[pi]", f'program = "{m.bin}/pi"'],
         }
         for harness, lines in expected.items():
             with self.subTest(harness=harness):
@@ -194,38 +423,73 @@ class DryRun(unittest.TestCase):
                 for line in lines:
                     self.assertIn(f"    | {line}", out)
                 self.assertIn(f'    | cwd = "{m.home}/work"', out)
+                self.assertNotIn("    | args = ", out)
+                for variable in ("MODEL_BASE_URL", "MODEL_HOST", "MODEL_NAME"):
+                    self.assertNotIn(variable, out, "the harness's own settings choose its model")
 
-    def test_goose_endpoint_and_mode(self):
+    def test_plugin_harnesses(self):
+        """What a dry run says it would do to the person's own OpenClaw and Hermes."""
         m = Machine(self)
-        out = m.run(
-            "goose",
-            *m.args("goose", "--binary", str(m.core), "--dry-run", "--model-url", "https://models.example/v1/"),
-        ).stdout
+        agent = m.data / "agents/openclaw"
+        out = m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--dry-run")).stdout
+        self.assertIn("would run: sh -c cd ", out)
+        self.assertIn(f"would run: {m.bin}/openclaw plugins install --force --accept-capabilities "
+                      f"{m.data}/lib/packages/openclaw/marmot-agent-openclaw.tgz", out)
+        self.assertNotIn("plugins enable", out, "installing a plugin enables it")
+        if REAL_NODE:
+            self.assertIn(f'would run: {m.bin}/openclaw config set channels.marmot '
+                          f'{{"enabled":true,"home":"{agent}/home"}} --strict-json', out)
+            self.assertIn(f"would run: {m.bin}/openclaw config set approvals.exec "
+                          '{"enabled":true,"mode":"session","sessionFilter":[":marmot:"]} --strict-json', out)
+        self.assertIn("openclaw gateway restart", out)
+        agent = m.data / "agents/hermes"
+        out = m.run("hermes", *m.args("hermes", "--binary", str(m.core), "--dry-run")).stdout
+        self.assertIn(f"would copy {m.data}/lib/python/marmot_hermes to {m.home}/.hermes/plugins/marmot", out)
+        self.assertIn(f"would run: {m.bin}/hermes plugins enable marmot", out)
+        self.assertIn(f"would run: {m.bin}/hermes config set platforms.marmot.enabled true", out)
+        self.assertIn(f"would run: {m.bin}/hermes config set platforms.marmot.home {agent}/home", out)
+        self.assertIn(f"would run: {m.bin}/hermes config set MARMOT_ALLOW_ALL_USERS true", out)
+        self.assertIn("hermes gateway restart", out)
+
+    def test_plugin_harnesses_without_the_gateway(self):
+        """A dry run goes on without the gateway, and says how to get it."""
+        m = Machine(self, programs=())
+        for harness, title in (("openclaw", "OpenClaw"), ("hermes", "Hermes")):
+            with self.subTest(harness=harness):
+                result = m.run(harness, *m.args(harness, "--binary", str(m.core), "--dry-run"))
+                self.assertIn(f"missing: {title}", result.stderr)
+                self.assertIn(f"would add the Marmot plugin to your {title}", result.stdout)
+
+    def test_containers_on_request(self):
+        """Pi and Goose run in a container only with --container, on the model it is given."""
+        m = Machine(self)
+        out = m.run("pi", *m.args("pi", "--binary", str(m.core), "--dry-run", container=True)).stdout
+        self.assertIn("would run: docker build -q -t marmot-agents-pi", out)
+        self.assertIn(f'    | program = "{m.data}/lib/tools/pi/pi.sh"', out)
+        self.assertIn(f'    | args = ["{m.key}", "{m.data}/agents/pi/pi"]', out)
+        self.assertIn(str(m.key), out, "the key is named by its path")
+        self.assertNotIn("not a real key", out, "the key is never read into a file")
+        out = m.run("goose", *m.args("goose", "--binary", str(m.core), "--dry-run", "--model-url",
+                                     "https://models.example/v1/", container=True)).stdout
+        self.assertIn("would run: docker build -q -t marmot-agents-goose", out)
+        self.assertIn(f'    | command = ["{m.data}/lib/tools/goose/goose-acp.sh", "{m.key}", '
+                      f'"{m.data}/agents/goose/goose"]', out)
         self.assertIn("    | MODEL_BASE_URL='https://models.example/v1/'", out)
         self.assertIn("    | MODEL_NAME='some/model'", out)
         self.assertNotIn("| GOOSE_MODE='", out, "Goose runs in its own default mode, which asks nothing (D-100)")
-        out = m.run("goose", *m.args("goose", "--binary", str(m.core), "--dry-run", "--goose-mode", "approve")).stdout
+        out = m.run("goose", *m.args("goose", "--binary", str(m.core), "--dry-run", "--goose-mode", "approve",
+                                     container=True)).stdout
         self.assertIn("    | GOOSE_MODE='approve'", out)
+        self.assertEqual([c for c in m.calls() if c != "docker info"], [])
 
-    def test_macos_launch_agents(self):
-        for harness in ("codex", "claude-code"):
-            with self.subTest(harness=harness):
-                m = Machine(self)
-                out = m.run(
-                    harness, *m.args(harness, "--binary", str(m.core), "--dry-run"), env={"MARMOT_AGENT_OS": "Darwin"}
-                ).stdout
-                plist = m.home / f"Library/LaunchAgents/org.marmot.marmot-agent.{harness}.plist"
-                self.assertIn(f"would write {plist} (mode 644):", out)
-                self.assertIn(f"    |         <string>{m.data}/agents/{harness}/start</string>", out)
-                self.assertIn("    |     <key>KeepAlive</key><true/>", out)
-                self.assertIn(f"would run: launchctl bootstrap gui/{os.getuid()} {plist}", out)
-                self.assertNotIn("systemctl", out)
-                connector = m.home / f"Library/LaunchAgents/org.marmot.marmot-agent.{harness}.connector.plist"
-                self.assertEqual(str(connector) in out, harness in SOCKET)
+    def test_goose_mode_reaches_the_persons_goose(self):
+        m = Machine(self)
+        out = m.run("goose", *m.args("goose", "--binary", str(m.core), "--dry-run", "--goose-mode", "auto")).stdout
+        self.assertIn("    | GOOSE_MODE='auto'", out)
 
     def test_containers_are_linux_only(self):
         m = Machine(self)
-        result = m.run("pi", *m.args("pi", "--binary", str(m.core), "--dry-run"),
+        result = m.run("pi", *m.args("pi", "--binary", str(m.core), "--dry-run", container=True),
                        env={"MARMOT_AGENT_OS": "Darwin"}, check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Linux only", result.stderr)
@@ -324,30 +588,129 @@ class Install(unittest.TestCase):
         for unit in units:
             self.assertFalse(unit.exists())
 
-    def test_container_harness(self):
+    def test_hermes(self):
+        """Our plugin goes into the person's own Hermes, and comes out again; the rest of it is theirs."""
         m = Machine(self)
-        m.run("hermes", *m.args("hermes", "--binary", str(m.core), "--model", "some/model:free", "--no-start"))
+        hermes = m.home / ".hermes"
+        hermes.mkdir()
+        mine = {"model": {"default": "their-model"}, "platforms": {"telegram": {"enabled": True}}}
+        (hermes / "config.yaml").write_text(json.dumps(mine))
+        (hermes / ".env").write_text("THEIR_KEY=x\n")
+        out = m.run("hermes", *m.args("hermes", "--binary", str(m.core))).stdout
         agent = m.data / "agents/hermes"
-        env = (agent / "service.env").read_text()
-        self.assertIn("MODEL_NAME='some/model:free'", env)
-        # Docker's names are shared by the machine's accounts: the volume and the container are named
-        # after the agent's folder too, and the image, built for this account's user, after that user.
-        volume = "marmot-agent-hermes-hermes-" + hashlib.sha256(os.path.realpath(agent).encode()).hexdigest()[:12]
-        image = f"marmot-agents-hermes-{os.getuid()}-{os.getgid()}"
-        self.assertIn(f"HERMES_CONTAINER='{volume}'", env)
-        self.assertIn(f"HERMES_IMAGE='{image}'", env)
-        self.assertIn(f"MARMOT_AGENT_DATA='{m.data}'", env)
-        self.assertNotIn("not a real key", env)
-        text = (agent / "connector").read_text()
-        self.assertIn(f"'{m.data}/lib/python/hermes/run.sh' '{agent}/home' '{m.home}/work' "
-                      f"'{volume}' '{m.key}'", text)
-        calls = m.calls()
-        self.assertIn(f"docker volume create {volume}", calls)
-        self.assertTrue(any(c.startswith("docker build -q --build-arg UID=") and f" -t {image} " in c for c in calls))
-        self.assertNotIn("systemctl --user restart", "\n".join(calls), "--no-start starts nothing")
-        # Installed again, it keeps the same names, and so Hermes's home.
-        m.run("hermes", "--yes", "--binary", str(m.core), "--no-start")
-        self.assertIn(f"HERMES_CONTAINER='{volume}'", (agent / "service.env").read_text())
+        config = json.loads((hermes / "config.yaml").read_text())
+        self.assertEqual(config["platforms"]["marmot"], {"enabled": True, "home": f"{agent}/home"})
+        self.assertEqual(config["platforms"]["telegram"], {"enabled": True})
+        self.assertEqual(config["model"], mine["model"])
+        self.assertIn("marmot", config["plugins"]["enabled"])
+        self.assertEqual((hermes / ".env").read_text(), "THEIR_KEY=x\nMARMOT_ALLOW_ALL_USERS=true\n")
+        plugin = hermes / "plugins/marmot"
+        self.assertEqual(sorted(p.name for p in plugin.iterdir()),
+                         sorted(p.name for p in (ROOT / "python/marmot_hermes").iterdir() if p.name != "__pycache__"))
+        backups = sorted(p.name.split(".2")[0] for p in (agent / "backups").iterdir())
+        self.assertEqual(backups, [".env", "config.yaml"], "their settings are copied before they change")
+        self.assertEqual(json.loads(next((agent / "backups").glob("config.yaml.*")).read_text()), mine)
+        self.assertEqual(mode(agent / "backups"), 0o700)
+        self.assertIn("hermes gateway restart", out)
+        self.assertEqual([u.name for u in m.units.iterdir()], ["marmot-agent-hermes.service"],
+                         "the person's gateway is no service of ours")
+        self.assertFalse((agent / "connector").exists())
+        self.assertNotIn("cwd", (agent / "settings.toml").read_text())
+        # Again: nothing new is recorded, and the plugin is replaced by the one installed now.
+        (plugin / "stale.py").write_text("")
+        m.run("hermes", "--yes", "--binary", str(m.core))
+        self.assertFalse((plugin / "stale.py").exists())
+        # Uninstall: what was added goes, and what was theirs stays.
+        m.log.write_text("")
+        m.run("hermes", "--uninstall")
+        config = json.loads((hermes / "config.yaml").read_text())
+        self.assertNotIn("marmot", config["platforms"])
+        self.assertEqual(config["platforms"]["telegram"], {"enabled": True})
+        self.assertNotIn("marmot", config["plugins"]["enabled"])
+        self.assertEqual((hermes / ".env").read_text(), "THEIR_KEY=x\n")
+        self.assertFalse(plugin.exists())
+        self.assertIn("hermes config unset platforms.marmot", m.calls())
+
+    def test_hermes_keeps_an_allow_all_it_had(self):
+        # In each shape Hermes reads in its .env: put back with its value.
+        for line in ("MARMOT_ALLOW_ALL_USERS=1", "export MARMOT_ALLOW_ALL_USERS=yes", "MARMOT_ALLOW_ALL_USERS = on"):
+            with self.subTest(line=line):
+                m = Machine(self)
+                (m.home / ".hermes").mkdir()
+                (m.home / ".hermes/.env").write_text(line + "\n")
+                m.run("hermes", *m.args("hermes", "--binary", str(m.core), "--no-service"))
+                self.assertEqual((m.home / ".hermes/.env").read_text(), "MARMOT_ALLOW_ALL_USERS=true\n")
+                m.run("hermes", "--uninstall")
+                value = line.split("=", 1)[1].strip()
+                self.assertEqual((m.home / ".hermes/.env").read_text(), f"MARMOT_ALLOW_ALL_USERS={value}\n")
+
+    @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
+    def test_openclaw(self):
+        """Our plugin goes into the person's own OpenClaw, and comes out again; the rest of it is theirs."""
+        m = Machine(self)
+        state = m.home / ".openclaw"
+        state.mkdir()
+        mine = {"channels": {"telegram": {"enabled": True}}, "agents": {"defaults": {"workspace": "/theirs"}}}
+        (state / "openclaw.json").write_text(json.dumps(mine))
+        out = m.run("openclaw", *m.args("openclaw", "--binary", str(m.core))).stdout
+        agent = m.data / "agents/openclaw"
+        config = json.loads((state / "openclaw.json").read_text())
+        self.assertEqual(config["channels"]["marmot"], {"enabled": True, "home": f"{agent}/home"})
+        self.assertEqual(config["channels"]["telegram"], {"enabled": True})
+        self.assertEqual(config["agents"], mine["agents"], "their agent's settings are theirs")
+        self.assertEqual(config["approvals"]["exec"],
+                         {"enabled": True, "mode": "session", "sessionFilter": [":marmot:"]})
+        self.assertEqual((state / "extensions/marmot/packed.tgz").read_text(), "a packed plugin\n")
+        self.assertTrue(config["plugins"]["entries"]["marmot"]["enabled"])
+        self.assertFalse([c for c in m.calls() if c.startswith("openclaw plugins enable")])
+        lib = m.data / "lib/packages/openclaw"
+        self.assertFalse((lib / "node_modules").exists(), "what only builds the plugin is removed")
+        self.assertTrue(any(c.startswith("npm ci") for c in m.calls()))
+        self.assertIn("npm pack --silent", m.calls())
+        self.assertEqual(json.loads(next((agent / "backups").glob("openclaw.json.*")).read_text()), mine)
+        self.assertIn("openclaw gateway restart", out)
+        self.assertEqual([u.name for u in m.units.iterdir()], ["marmot-agent-openclaw.service"])
+        # Uninstall: the plugin, its channel and the approvals the install switched on go.
+        m.run("openclaw", "--uninstall")
+        config = json.loads((state / "openclaw.json").read_text())
+        self.assertEqual(config["channels"], mine["channels"])
+        self.assertNotIn("exec", config.get("approvals", {}))
+        self.assertFalse((state / "extensions/marmot").exists())
+
+    @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
+    def test_openclaw_keeps_the_approvals_it_was_given(self):
+        m = Machine(self)
+        state = m.home / ".openclaw"
+        state.mkdir()
+        # Forwarding that is on is the person's: kept, and kept again by the uninstall.
+        on = {"enabled": True, "mode": "targets", "targets": [{"channel": "telegram", "to": "1"}]}
+        (state / "openclaw.json").write_text(json.dumps({"approvals": {"exec": on}}))
+        out = m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--no-service")).stdout
+        self.assertIn("forwards approvals already", out)
+        self.assertEqual(json.loads((state / "openclaw.json").read_text())["approvals"]["exec"], on)
+        m.run("openclaw", "--uninstall")
+        self.assertEqual(json.loads((state / "openclaw.json").read_text())["approvals"]["exec"], on)
+        # Forwarding that is off is switched on, and put back as it was.
+        m = Machine(self)
+        state = m.home / ".openclaw"
+        state.mkdir()
+        off = {"enabled": False, "mode": "targets"}
+        (state / "openclaw.json").write_text(json.dumps({"approvals": {"exec": off}}))
+        m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--no-service"))
+        self.assertTrue(json.loads((state / "openclaw.json").read_text())["approvals"]["exec"]["enabled"])
+        m.run("openclaw", "--uninstall")
+        self.assertEqual(json.loads((state / "openclaw.json").read_text())["approvals"]["exec"], off)
+
+    @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
+    def test_openclaw_keeps_approvals_forwarded_automatically(self):
+        m = Machine(self)
+        state = m.home / ".openclaw"
+        state.mkdir()
+        auto = {"enabled": "auto", "mode": "targets"}
+        (state / "openclaw.json").write_text(json.dumps({"approvals": {"exec": auto}}))
+        out = m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--no-service")).stdout
+        self.assertIn("forwards approvals already", out)
+        self.assertEqual(json.loads((state / "openclaw.json").read_text())["approvals"]["exec"], auto)
 
     def test_npub_owner(self):
         m = Machine(self)
@@ -382,6 +745,63 @@ class Install(unittest.TestCase):
         self.assertIn("codex login", result.stderr)
         self.assertEqual(m.files(), [])
 
+    def test_each_missing_harness_says_how_to_get_it(self):
+        hints = {"goose": ("missing: Goose", "goose configure"),
+                 "pi": ("missing: Pi", "npm install -g @earendil-works/pi-coding-agent"),
+                 "openclaw": ("missing: OpenClaw", "openclaw onboard"),
+                 "hermes": ("missing: Hermes", "hermes setup")}
+        for harness, (missing, how) in hints.items():
+            with self.subTest(harness=harness):
+                m = Machine(self, programs=())
+                if shutil.which(harness, path=SYSTEM_PATH):
+                    self.skipTest(f"this machine has {harness} in /usr/bin")
+                result = m.run(harness, *m.args(harness, "--binary", str(m.core)), check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(missing, result.stderr)
+                self.assertIn(how, result.stderr)
+                self.assertEqual(m.files(), [])
+                self.assertEqual(m.calls(), [])
+
+    def test_an_older_harness_is_named(self):
+        m = Machine(self)
+        result = m.run("pi", *m.args("pi", "--binary", str(m.core), "--dry-run"), env={"FAKE_VERSION": "1.5.9"})
+        self.assertIn("Pi 1.5.9 is older than 1.6.0", result.stderr)
+        result = m.run("goose", *m.args("goose", "--binary", str(m.core), "--dry-run"), env={"FAKE_VERSION": "1.60.0"})
+        self.assertNotIn("older", result.stderr)
+        # OpenClaw refuses a plugin for a newer release than itself, so an older one is missing.
+        result = m.run("openclaw", *m.args("openclaw", "--binary", str(m.core)),
+                       env={"FAKE_OPENCLAW_VERSION": "2026.10.10"}, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing: OpenClaw 2026.11.5 or later", result.stderr)
+
+    def test_model_options_go_with_a_container(self):
+        m = Machine(self)
+        for harness in CONTAINER:
+            with self.subTest(harness=harness):
+                result = m.run(harness, *m.args(harness, "--binary", str(m.core), "--model", "x"), check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("go with --container", result.stderr)
+        for harness in PLUGIN:
+            with self.subTest(harness=harness):
+                result = m.run(harness, *m.args(harness, "--binary", str(m.core), "--container"), check=False)
+                self.assertIn(f"takes no --container", result.stderr)
+                result = m.run(harness, *m.args(harness, "--binary", str(m.core), "--cwd", "/x"), check=False)
+                self.assertIn("takes no --cwd", result.stderr)
+        self.assertEqual(m.files(), [])
+
+    def test_a_native_agent_stays_native(self):
+        m = Machine(self)
+        m.run("pi", *m.args("pi", "--binary", str(m.core), "--no-service"))
+        result = m.run("pi", "--yes", "--binary", str(m.core), "--no-service", "--container", "--model-key",
+                       str(m.key), check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("runs the Pi on your PATH", result.stderr)
+        # And one in a container stays there, run again without --container.
+        m.run("goose", *m.args("goose", "--binary", str(m.core), "--no-service", container=True))
+        m.run("goose", "--yes", "--binary", str(m.core), "--no-service")
+        self.assertIn("goose-acp.sh", (m.data / "agents/goose/settings.toml").read_text())
+        self.assertIn("MODEL_BASE_URL=", (m.data / "agents/goose/service.env").read_text())
+
     def test_claude_code_needs_a_stored_sign_in(self):
         m = Machine(self)
         shutil.rmtree(m.claude)
@@ -412,7 +832,7 @@ class Install(unittest.TestCase):
             for left_out, message in (("--model-url", "missing: a model endpoint"), ("--model", "missing: a model\n")):
                 with self.subTest(harness=harness, left_out=left_out):
                     m = Machine(self)
-                    args = m.args(harness, "--binary", str(m.core))
+                    args = m.args(harness, "--binary", str(m.core), container=True)
                     at = args.index(left_out)
                     del args[at:at + 2]
                     result = m.run(harness, *args, check=False)
@@ -425,7 +845,7 @@ class Install(unittest.TestCase):
     def test_model_key_must_be_private(self):
         m = Machine(self)
         m.key.chmod(0o644)
-        result = m.run("pi", *m.args("pi", "--binary", str(m.core)), check=False)
+        result = m.run("pi", *m.args("pi", "--binary", str(m.core), container=True), check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("chmod 600", result.stderr)
         self.assertEqual(m.files(), [])
@@ -436,8 +856,8 @@ class Install(unittest.TestCase):
         key = m.home / "work/key"
         key.write_text("x")
         key.chmod(0o600)
-        result = m.run("pi", "--yes", "--owner", OWNER, "--cwd", str(m.home / "work"), "--model-key", str(key),
-                       "--binary", str(m.core), check=False)
+        result = m.run("pi", "--yes", "--owner", OWNER, "--cwd", str(m.home / "work"), "--container",
+                       "--model-key", str(key), "--binary", str(m.core), check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("must not be inside the work folder", result.stderr)
 
@@ -451,10 +871,11 @@ class Install(unittest.TestCase):
 class Boundaries(unittest.TestCase):
     """What keeps an install from handing a harness the keys, or another agent's service."""
 
-    def refused(self, m: Machine, harness: str, *args: str, message: str) -> None:
+    def refused(self, m: Machine, harness: str, *args: str, message: str) -> subprocess.CompletedProcess:
         result = m.run(harness, *args, check=False)
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(message, result.stderr)
+        return result
 
     def test_work_folder_is_compared_with_links_and_dots_resolved(self):
         m = Machine(self)
@@ -464,7 +885,7 @@ class Boundaries(unittest.TestCase):
         key.write_text("x")
         key.chmod(0o600)
         (m.dir / "link").symlink_to(project)
-        common = ["--yes", "--owner", OWNER, "--binary", str(m.core), "--model-key", str(key), *MODEL]
+        common = ["--yes", "--owner", OWNER, "--binary", str(m.core), "--container", "--model-key", str(key), *MODEL]
         inside = "must not be inside the work folder"
         # The key's folder, named through `..`, through a link, and through a link to a folder below it.
         self.refused(m, "goose", *common, "--cwd", f"{project}/sub/..", message=inside)
@@ -473,8 +894,8 @@ class Boundaries(unittest.TestCase):
         # The key named through a link from outside the work folder.
         outside = m.dir / "outside.key"
         outside.symlink_to(key)
-        self.refused(m, "pi", "--yes", "--owner", OWNER, "--binary", str(m.core), "--model-key", str(outside),
-                     "--cwd", str(project), message=inside)
+        self.refused(m, "pi", "--yes", "--owner", OWNER, "--binary", str(m.core), "--container", "--model-key",
+                     str(outside), "--cwd", str(project), message=inside)
         # The folder that holds the agents, named through a link, and a work folder inside it.
         (m.dir / "home-link").symlink_to(m.home)
         self.refused(m, "codex", "--yes", "--owner", OWNER, "--binary", str(m.core),
@@ -500,7 +921,7 @@ class Boundaries(unittest.TestCase):
         m.run("claude-code", *m.args("claude-code", "--binary", str(m.core)))
         packages = m.data / "lib/packages/claude-code/node_modules/a-package"
         self.assertTrue(packages.is_dir())
-        m.run("pi", *m.args("pi", "--binary", str(m.core)))
+        m.run("pi", *m.args("pi", "--binary", str(m.core), container=True))
         self.assertTrue(packages.is_dir(), "installing Pi leaves the Claude Code driver's packages")
         self.assertTrue((m.data / "lib/packages/claude-code/src/main.ts").is_file())
         self.assertTrue((m.data / "lib/tools/pi/pi.sh").is_file())
@@ -527,8 +948,8 @@ class Boundaries(unittest.TestCase):
 
     def test_a_bad_model_url_stops_before_anything(self):
         m = Machine(self)
-        result = m.run("goose", *m.args("goose", "--binary", str(m.core), "--model-url", "ftp://models.example"),
-                       check=False)
+        result = m.run("goose", *m.args("goose", "--binary", str(m.core), "--model-url", "ftp://models.example",
+                                        container=True), check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--model-url must start with http:// or https://", result.stderr)
         self.assertEqual(m.files(), [])
@@ -545,7 +966,7 @@ class Boundaries(unittest.TestCase):
 
     def test_a_work_folder_or_key_given_again_is_written_into_the_kept_settings(self):
         m = Machine(self)
-        m.run("pi", *m.args("pi", "--binary", str(m.core), "--no-service"))
+        m.run("pi", *m.args("pi", "--binary", str(m.core), "--no-service", container=True))
         settings = m.data / "agents/pi/settings.toml"
         edited = settings.read_text() + "# edited\n"
         settings.write_text(edited)
@@ -570,7 +991,7 @@ class Boundaries(unittest.TestCase):
 
     def test_a_key_the_settings_no_longer_name_is_refused(self):
         m = Machine(self)
-        m.run("goose", *m.args("goose", "--binary", str(m.core), "--no-service"))
+        m.run("goose", *m.args("goose", "--binary", str(m.core), "--no-service", container=True))
         agent = m.data / "agents/goose"
         settings = agent / "settings.toml"
         settings.write_text(settings.read_text().replace(f'"{m.key}"', '"/somewhere/else.key"'))
@@ -584,10 +1005,109 @@ class Boundaries(unittest.TestCase):
         self.assertIn("does not name the model key file the agent was installed with", result.stderr)
         self.assertEqual((settings.read_text(), (agent / "choices").read_text()), before)
 
+    @staticmethod
+    def imported(m: Machine, harness: str, title: str) -> tuple:
+        """An install of today's connector moved over as docs/move.md says: its home where it was, and
+        the settings `marmot-agent import --settings` wrote in the agent's folder."""
+        old_home = m.home / f".marmot-agents/{harness}"
+        (old_home / "accounts").mkdir(parents=True)
+        settings = m.data / f"agents/{harness}/settings.toml"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(f"# Imported by `marmot-agent import` from a {title} install, at 20261122T000000Z.\n"
+                            f"# The home before the import is backed up in {old_home}.backup-20261122T000000Z.\n"
+                            f'home = "{old_home}"\nrelays = ["wss://relay.example"]\nowner = "{OWNER}"\n'
+                            '\n[connector]\n')
+        return old_home, settings
+
+    def test_another_plugin_called_marmot_is_not_replaced_unasked(self):
+        """Today's connectors put a plugin called marmot into Hermes and OpenClaw (docs/move.md)."""
+        m = Machine(self)
+        old = m.home / ".hermes/plugins/marmot"
+        old.mkdir(parents=True)
+        (old / "plugin.yaml").write_text("name: marmot\ndescription: the old connector's\n")
+        self.refused(m, "hermes", *m.args("hermes", "--binary", str(m.core)), message="--replace-plugin")
+        self.assertEqual(m.calls(), [])
+        self.assertFalse(m.data.exists())
+        # Replacing it without moving the install over would make a new identity, in none of its chats.
+        self.refused(m, "hermes", *m.args("hermes", "--binary", str(m.core), "--replace-plugin"),
+                     message="marmot-agent import")
+        self.assertEqual(m.calls(), [])
+        self.assertFalse(m.data.exists())
+        old_home, settings = self.imported(m, "hermes", "Hermes")
+        before = settings.read_text()
+        m.run("hermes", *m.args("hermes", "--binary", str(m.core), "--no-service", "--replace-plugin"))
+        kept = next((m.data / "agents/hermes/backups").glob("marmot.*"))
+        self.assertEqual((kept / "plugin.yaml").read_text(), "name: marmot\ndescription: the old connector's\n")
+        self.assertIn("marmot-agent's local socket", (old / "plugin.yaml").read_text())
+        # The imported identity and home are kept, and the gateway points at that home.
+        config = m.home / ".hermes/config.yaml"
+        self.assertEqual(json.loads(config.read_text())["platforms"]["marmot"]["home"], str(old_home))
+        self.assertEqual(settings.read_text(), before)
+        self.assertFalse([c for c in m.calls() if c.startswith("marmot-agent init")])
+        self.assertFalse((m.data / "agents/hermes/home").exists())
+        self.assertEqual((m.data / "agents/hermes/harness").read_text(), "hermes\n")
+        # Again, and then uninstalled: the same home, and no identity made.
+        m.run("hermes", "--yes", "--binary", str(m.core), "--no-service")
+        self.assertEqual(json.loads(config.read_text())["platforms"]["marmot"]["home"], str(old_home))
+        self.assertFalse([c for c in m.calls() if c.startswith("marmot-agent init")])
+        m.run("hermes", "--uninstall")
+        self.assertNotIn("marmot", json.loads(config.read_text())["platforms"])
+
+    def test_settings_imported_for_another_harness_are_refused(self):
+        m = Machine(self)
+        self.imported(m, "hermes", "OpenClaw")
+        self.refused(m, "hermes", *m.args("hermes", "--binary", str(m.core)), message="no record of its harness")
+
+    @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
+    def test_another_openclaw_plugin_called_marmot_is_not_replaced_unasked(self):
+        m = Machine(self)
+        old = m.home / ".openclaw/extensions/marmot"
+        old.mkdir(parents=True)
+        (old / "package.json").write_text(json.dumps({"name": "@marmot-protocol/openclaw-marmot"}))
+        self.refused(m, "openclaw", *m.args("openclaw", "--binary", str(m.core)), message="--replace-plugin")
+        self.assertEqual(m.calls(), [])
+        old_home, settings = self.imported(m, "openclaw", "OpenClaw")
+        # Today's connector points the channel at its home, which the import keeps.
+        (m.home / ".openclaw/openclaw.json").write_text(json.dumps({"channels": {"marmot": {"home": str(old_home)}}}))
+        m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--no-service", "--replace-plugin"))
+        kept = next((m.data / "agents/openclaw/backups").glob("marmot.*"))
+        self.assertEqual(json.loads((kept / "package.json").read_text())["name"], "@marmot-protocol/openclaw-marmot")
+        config = json.loads((m.home / ".openclaw/openclaw.json").read_text())
+        self.assertEqual(config["channels"]["marmot"], {"enabled": True, "home": str(old_home)})
+        self.assertFalse([c for c in m.calls() if c.startswith("marmot-agent init")])
+        m.run("openclaw", "--uninstall")
+        self.assertNotIn("marmot", json.loads((m.home / ".openclaw/openclaw.json").read_text())["channels"])
+
+    @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
+    def test_an_openclaw_plugin_found_in_a_load_path_counts(self):
+        """OpenClaw loads a plugin from plugins.load.paths with no install record, in place of one it installed."""
+        m = Machine(self)
+        found = m.home / "plugins/marmot"
+        found.mkdir(parents=True)
+        (found / "package.json").write_text(json.dumps({"name": "@marmot-protocol/openclaw-marmot"}))
+        (m.home / ".openclaw").mkdir()
+        (m.home / ".openclaw/openclaw.json").write_text(json.dumps({"plugins": {"load": {"paths": [str(found)]}}}))
+        self.imported(m, "openclaw", "OpenClaw")
+        result = self.refused(m, "openclaw", *m.args("openclaw", "--binary", str(m.core), "--replace-plugin"),
+                              message="plugins.load.paths")
+        self.assertIn(str(found), result.stderr)
+        self.assertEqual(m.calls(), [])
+
+    def test_one_gateway_serves_one_agent(self):
+        m = Machine(self)
+        m.run("hermes", *m.args("hermes", "--binary", str(m.core), "--no-service"))
+        before = (m.home / ".hermes/config.yaml").read_text()
+        self.refused(m, "hermes", *m.args("hermes", "--binary", str(m.core), "--name", "second"),
+                     message="already connects to the agent whose home is")
+        self.assertEqual((m.home / ".hermes/config.yaml").read_text(), before)
+        # Uninstalling the second leaves the first in place.
+        m.run("hermes", "--uninstall", "--name", "second")
+        self.assertEqual((m.home / ".hermes/config.yaml").read_text(), before)
+
     def test_goose_needs_x86_64(self):
         m = Machine(self)
-        result = m.run("goose", *m.args("goose", "--binary", str(m.core)), env={"MARMOT_AGENT_MACHINE": "aarch64"},
-                       check=False)
+        result = m.run("goose", *m.args("goose", "--binary", str(m.core), container=True),
+                       env={"MARMOT_AGENT_MACHINE": "aarch64"}, check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("x86_64 only", result.stderr)
         self.assertEqual(m.files(), [])
@@ -595,7 +1115,7 @@ class Boundaries(unittest.TestCase):
     def test_without_a_service_the_launcher_has_the_environment(self):
         m = Machine(self)
         out = m.run("goose", *m.args("goose", "--binary", str(m.core), "--no-service",
-                                     "--model-url", "https://models.example/v1")).stdout
+                                     "--model-url", "https://models.example/v1", container=True)).stdout
         start = m.data / "agents/goose/start"
         self.assertIn(f"Run it with: {start}", out)
         m.log.write_text("")

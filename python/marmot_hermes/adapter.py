@@ -11,7 +11,9 @@ allowed, and anyone in a chat may answer its approvals (provisional, Q-22).
 
 Environment:
     MARMOT_AGENT_HOME   where the core's socket and the plugin's token are: `socket/marmot-agent.sock`
-                        and `connector.token` (the agent's home, or a folder holding just those two)
+                        and `connector.token` (the agent's home, or a folder holding just those two).
+                        Without it, the platform's `home` setting says, `platforms.marmot.home` in
+                        Hermes's `config.yaml`, as `install/hermes.sh` writes it
     HERMES_VERSION      Hermes's release, which Hermes does not report to a plugin (D-044)
     MARMOT_LOG          optional; a file the plugin appends its own log lines to, and nothing else does
 
@@ -171,7 +173,9 @@ def recorded(name, base_fn):
 class MarmotAdapter(BasePlatformAdapter):
     def __init__(self, config):
         super().__init__(config, Platform(PLATFORM))
-        self.home = Path(os.environ.get("MARMOT_AGENT_HOME", ""))
+        extra = getattr(config, "extra", None)
+        setting = extra.get("home") if isinstance(extra, dict) else None
+        self.home = Path(os.environ.get("MARMOT_AGENT_HOME") or (setting if isinstance(setting, str) else ""))
         hermes_home = Path(os.environ.get("HERMES_HOME") or Path.home() / ".hermes")
         self.connector = Connector(self, self.send_to_core, os.environ.get("HERMES_VERSION") or VERSION,
                                    generations=hermes_home / "marmot" / "sessions.json", warn=self.warn)
