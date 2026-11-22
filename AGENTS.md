@@ -228,14 +228,16 @@ cargo test --locked --workspace --all-features
 `rustup` installs the pinned compiler the first time. `--locked` fails when `Cargo.lock` is out of date: update
 it on purpose, with `cargo update` or by building once without the flag, and commit it.
 
-The workspace's tests include the simulator's at a small count of runs. CI also runs it in a job of its own with
-more (`MARMOT_AGENT_SIM_RUNS`); for a change to the core's run loop, conversation or Marmot side, run that too:
+The workspace's tests include the simulator's at a small count of runs. CI's Rust job leaves them out
+(`--exclude marmot-agent-sim`) and runs them in a job of its own, in release with more runs
+(`MARMOT_AGENT_SIM_RUNS`); for a change to the core's run loop, conversation or Marmot side, run that too:
 
 ```sh
-MARMOT_AGENT_SIM_RUNS=100 cargo test --locked -p marmot-agent-sim --all-features
+MARMOT_AGENT_SIM_RUNS=200 cargo test --locked --release -p marmot-agent-sim --all-features
 ```
 
-A failure prints the path of a capsule; `crates/marmot-agent-sim/README.md` says how to replay it.
+A failure prints the path of a capsule, and CI keeps the capsules as the run's `simulator-capsules` artifact;
+`crates/marmot-agent-sim/README.md` says how to replay one.
 
 The core links MDK, whose markdown parser is written in Odin and needs one exact Odin release to build. Install
 it once with `bash tools/odin/install.sh <absolute folder>`, which checks its checksum, and set `ODIN` to the

@@ -248,7 +248,7 @@ takes about 8 to 10.
 
 | When | What |
 | --- | --- |
-| Every pull request | Everything that runs today, the conformance suite, property tests at normal counts, the simulator on a fixed set of seeds (built: 200 runs of each gate family from seed 0, in its own job), TLC on small bounds, Kani on the small proofs, the privacy scan, each in its own job |
+| Every pull request | Everything that runs today, the conformance suite, property tests at normal counts, the simulator on a fixed set of seeds (built: 200 runs of each gate family from seed 0, in release, in its own job), TLC on small bounds, Kani on the small proofs, the privacy scan, each in its own job |
 | Nightly | Property tests at high counts, the simulator on many new seeds, TLC on larger bounds, fuzzing, mutation testing, and the real-harness scenarios on numes.ai's free models, in a workflow that pull requests cannot reach |
 | Weekly | Long simulator campaigns |
 
