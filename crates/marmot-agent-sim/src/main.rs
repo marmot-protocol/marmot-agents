@@ -15,7 +15,7 @@ usage:
   marmot-agent-sim show FAMILY SEED INDEX
 
 families: calm crash sends live driver mixed (the gate), disorder late
-bugs (with the `bugs` feature): save_after_send retry_ambiguous_blindly settles_only_from_items";
+bugs (with the `bugs` feature): save_after_send retry_ambiguous_with_new_token settles_only_from_items";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -66,7 +66,9 @@ fn run_campaigns(args: &[String]) -> Result<bool, String> {
             "--out" => out = Some(PathBuf::from(value.ok_or(USAGE)?)),
             "--bug" => match value.map(String::as_str) {
                 Some("save_after_send") => bugs.save_after_send = true,
-                Some("retry_ambiguous_blindly") => bugs.retry_ambiguous_blindly = true,
+                Some("retry_ambiguous_with_new_token") => {
+                    bugs.retry_ambiguous_with_new_token = true
+                }
                 Some("settles_only_from_items") => bugs.settles_only_from_items = true,
                 _ => return Err(format!("no such bug\n{USAGE}")),
             },

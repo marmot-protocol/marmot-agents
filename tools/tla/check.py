@@ -93,15 +93,14 @@ CASES = [
     Case("fair", FAIR, PASS),
     Case("unfair", "CoreLifecycle.unfair.cfg", TEMPORAL,
          counterexample="unfair-mdk-never-answers",
-         what="Without FairMdk, MDK never takes a step again once the core waits on a lookup: "
-              "the notice that settles r1 is never posted (L1). The lookup stays enabled; it is "
-              "never taken, so the trace ends in a stutter."),
-    Case("no-crash-safe-sends", "CoreLifecycle.duplicate.cfg", invariant("S3"),
+         what="Without FairMdk, MDK never takes a step again once a send is queued: the notice "
+              "that settles r1 is never posted (L1). The send stays enabled; it is never taken, "
+              "so the trace ends in a stutter."),
+    Case("no-token-dedupe", "CoreLifecycle.duplicate.cfg", invariant("S3"),
          counterexample="duplicate-first-event",
-         what="The known limit until MDK has crash-safe tagged sends: a send MDK posted, a "
-              "failed save, a restart, and a lookup that misses it; the send goes again and the "
-              "chat has two first events for one item (S3)."),
-    Case("token-dedupe", "CoreLifecycle.dedupe.cfg", PASS),
+         what="Without TokenDedupe, as before MDK 0.19.0's token-based sends: a send MDK posted, "
+              "a failed save, a restart, and the send tried again, which MDK does not know for "
+              "the one it posted; the chat has two first events for one item (S3)."),
     Case("live-out-of-order", "CoreLifecycle.liveorder.cfg", invariant("S10"),
          counterexample="live-out-of-order",
          what="Without LiveInOrder: MDK hands a later message over first; the read mark passes "
@@ -128,19 +127,19 @@ CASES = [
               "anything. Nothing stands in for a last resort, so nothing loops, and the item "
               "stays open in the chat (S2; L2 too)."),
     Case("last-resort-given-up", REFUSE, invariant("S2"),
-         {"MaxAmbiguous": "1", "UnknownTries": "1", **SAFETY, **NO_PROMPT},
+         {"MaxRejected": "1", "RejectedTries": "1", **SAFETY, **NO_PROMPT},
          counterexample="last-resort-given-up",
          what="The same limit, reached by a give-up: MDK refuses an item's closing version in a "
-              "live group, and the core's close that stands in for it meets an unknown outcome "
-              "and is given up after its tries (one here; the code: ten). LastResortTaken speaks "
-              "only of refusals. Nothing stands in for a last resort, so the item stays open in "
-              "the chat (S2)."),
+              "live group, and MDK takes the core's close that stands in for it and drops it "
+              "before it goes out, which gives it up after its tries (one here; the code: ten). "
+              "LastResortTaken speaks only of refusals. Nothing stands in for a last resort, so "
+              "the item stays open in the chat (S2)."),
     Case("gone-group", "CoreLifecycle.gone.cfg", PASS),
     mutant("SaveAfterSend", "S1"),
     mutant("SettleUnpending", "S1"),
     mutant("RecoverKeepsOpen", "S2"),
-    mutant("NoAttemptedFlag", "S3"),
-    mutant("BlindResend", "S3"),
+    mutant("FreshTokenOnRestart", "S3"),
+    mutant("NewTokenResend", "S3"),
     temporal_mutant("NoFailedNotice", "S3Told", REFUSE, **NO_PROMPT),
     temporal_mutant("NoRetell", "S3Told", REFUSE, **TWICE),
     mutant("NoReplacement", "S2", GIVEUP),
@@ -157,7 +156,8 @@ CASES = [
     probe("NeverSettledByEvent"),
     probe("NeverResumed"),
     probe("NeverClosedByCore"),
-    probe("NeverLookedUpAfterCrash"),
+    probe("NeverDedupedAfterCrash"),
+    probe("NeverSentAfterDrop"),
     probe("NeverDeliveredInCatchUp"),
     probe("NeverPromptAfterNewSession"),
     # Nothing is refused or given up in the fair configuration; MDK refuses every send here.

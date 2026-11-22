@@ -1784,3 +1784,32 @@ The swap waits for it.
 already send media, and the new system must not do less than they do on any harness that can.
 
 Decided 2026-11-22. The project owner decided.
+
+## D-109 How the core's sends survive a crash, as built
+
+**Decision.** On MDK 0.19.0 the core hands every send in its outbox to MDK under a token saved with it (MDK's
+token-based local sends):
+
+- **Retries.** A send whose outcome is not known is tried again under the same token, with no limit, since that
+  cannot send it twice. A try MDK took and then dropped gets a new token, and the send is given up after ten such
+  drops, with what stands in for it
+  ([D-097](#d-097-what-stands-in-for-a-send-that-is-dropped)).
+- **The state file** keeps, besides what it kept before: a random salt the tokens are made from, how many tries of
+  each send MDK dropped, the token of each first message, and when each send was first tried under its token.
+  None of these identifies anyone.
+- **A send MDK may have forgotten.** Once a group's disappearing-messages period has passed since a send's first
+  try, and MDK no longer knows its token, the send is not tried again. It is given up with a `failed` notice saying
+  "Something the agent sent may not have been delivered to the chat."
+- **An accepted limit,** as in [D-096](#d-096-four-limits-of-the-core-that-the-simulator-and-the-model-accept): the
+  core reads the group's period as it is now, so a period made longer after a send went out, while its outcome was
+  not known, can let that send go out twice.
+- **Timings.** On a stop, the core waits up to 60 seconds in all for sends MDK still holds. It asks again after a
+  held send at most every 500 ms.
+- **A state file from before tokens,** whose outbox holds sends already tried, stops the core at start.
+- **Files** keep no token until MDK's token form for an upload carries a message's tags, which the project asks MDK
+  for.
+
+**Why.** The project owner accepted the recommendations. A token makes trying again safe, so the duplicate first
+event that D-096 used to accept no longer happens. The notice for a forgotten send says what is known, not more.
+
+Decided 2026-11-22. The project owner decided.

@@ -1,7 +1,7 @@
 """Turns a TLC error trace of the CoreLifecycle model into a schedule in the shared action names.
 
 TLC v1.7.4 prints each state of a trace in full, headed by the name of the action that led to it,
-without the action's arguments. The arguments, and the outcome of each send and lookup, are read
+without the action's arguments. The arguments, and the outcome of each send, are read
 here from what changed between one state and the next, so a schedule is made from the trace by a
 program and never by hand. The schedule is plain JSON: the messages people post, the steps, and how
 the trace ends (an invariant broken at its last step, a stutter for ever, or a loop back to a step).
@@ -15,10 +15,10 @@ docs/design/verification.md names the actions. A step names what the model's act
   before it is stored is dropped), CatchUp(chat, msg), CatchUpDone;
 - Deliver(msg, kind, session), Take(msg), Refuse(msg), Emit(item, settles, fin), Tick(req);
 - Send(chat, send, outcome), where `send` names the item and version, or the notice and what it
-  is about, and `last_resort` when it stands in for a dropped send; and the
-  outcome is sent, busy, ambiguous (it did not go out), ambiguous_landed (it went out) or refused;
-- Lookup(chat, send, result): found, or absent; an absent one either gives the send up
-  (`gives_up`) or is followed by the Send that tries it again;
+  is about, `last_resort` when it stands in for a dropped send, and `try` the number of its tries
+  MDK dropped before (each such try is under a new token); and the outcome is sent, busy,
+  ambiguous (it did not go out), ambiguous_landed (it went out), refused, or rejected (MDK took it
+  and dropped it before it went out; `gives_up` when the core gives it up then);
 - Save, SaveFails, Crash, Restart, DriverStops, Stop.
 """
 
@@ -206,13 +206,16 @@ def about_of(tok):
 
 
 def send_of(entry):
-    """The send an outbox entry is, marked when it stands in for a dropped send (a last resort)."""
+    """The send an outbox entry is, marked when it stands in for a dropped send (a last resort),
+    and with the number of its tries MDK dropped, when there were any."""
     if entry["i"] != "notice":
         out = {"item": entry["i"], "version": entry["v"]}
     else:
         out = about_of(entry["tok"])
     if entry.get("lr"):
         out["last_resort"] = True
+    if entry.get("rej"):
+        out["try"] = entry["rej"]
     return out
 
 
@@ -227,23 +230,35 @@ def toks(cv):
     return {entry["tok"] for entry in cv["outbox"]}
 
 
+def mdk_token(entry):
+    return (entry["tok"], entry["rej"])
+
+
 def posted(s, t):
     return s["iposts"] != t["iposts"] or s["shown"] != t["shown"] or s["mdkTok"] != t["mdkTok"]
 
 
 def send_outcome(s, t, entry):
+    """What MDK answered, and, for a try it dropped, whether the core gave the send up."""
     tok = entry["tok"]
     if t["ambig"] > s["ambig"]:
-        landed = (tok in t["mdkTok"] and tok not in s["mdkTok"]) or posted(s, t)
-        return "ambiguous_landed" if landed else "ambiguous"
+        landed = (mdk_token(entry) in t["mdkTok"] and mdk_token(entry) not in s["mdkTok"]) \
+            or posted(s, t)
+        return "ambiguous_landed" if landed else "ambiguous", False
+    after = [e for e in t["cv"]["outbox"] if e["tok"] == tok]
+    if after and after[0]["rej"] > entry["rej"]:
+        return "rejected", False
     if tok in toks(t["cv"]):
-        return "busy"
+        return "busy", False
+    if t["rejects"] > s["rejects"] or (t["mdkDropped"] == s["mdkDropped"]
+                                       and mdk_token(entry) in s["mdkDropped"]):
+        return "rejected", True
     # Gone from the outbox: refused (MDK took note of it, or the version was dropped, or nothing
     # was posted for it), or else sent (posted now, or, with TokenDedupe, posted before).
     if t["mdkRefused"] != s["mdkRefused"] or t["dropped"] != s["dropped"] \
-            or tok not in t["mdkTok"]:
-        return "refused"
-    return "sent"
+            or mdk_token(entry) not in t["mdkTok"]:
+        return "refused", False
+    return "sent", False
 
 
 def chats_with(cv):
@@ -254,18 +269,19 @@ def chats_with(cv):
     return seen
 
 
-def changed_head(s, t, need_unknown):
+def changed_head(s, t):
     """The chat whose oldest send the step acted on."""
-    unk = as_map(s["unk"])
     picks = []
     for chat in chats_with(s["cv"]):
         entry = head_for(s["cv"], chat)
-        if (entry["tok"] in unk) != need_unknown:
-            continue
         after = [e for e in t["cv"]["outbox"] if e["tok"] == entry["tok"]]
-        if after != [entry] or as_map(t["unk"]).get(entry["tok"]) != unk.get(entry["tok"]) \
-                or t["mdkTok"] != s["mdkTok"] or t["sv"] != s["sv"]:
+        if after != [entry] or t["mdkTok"] != s["mdkTok"] or t["ambig"] != s["ambig"] \
+                or t["mdkDropped"] != s["mdkDropped"]:
             picks.append((chat, entry))
+    heads = [(chat, head_for(s["cv"], chat)) for chat in chats_with(s["cv"])]
+    if not picks and len(heads) == 1:
+        # Busy changes nothing: the one send there is was the one tried.
+        return heads[0]
     if len(picks) != 1:
         raise ValueError(f"cannot tell which send the step acted on: {picks}")
     return picks[0]
@@ -306,24 +322,12 @@ def step(action, s, t, constants):
         (req,) = s["deadline"] - t["deadline"]
         return [{"action": "Tick", "req": req}]
     if action == "Send":
-        chat, entry = changed_head(s, t, need_unknown=False)
-        return [{"action": "Send", "chat": chat, "send": send_of(entry),
-                 "outcome": send_outcome(s, t, entry)}]
-    if action == "Lookup":
-        chat, entry = changed_head(s, t, need_unknown=True)
-        tok, what = entry["tok"], send_of(entry)
-        tries = as_map(s["unk"])[tok]
-        still = tok in toks(t["cv"])
-        if not still and tok in s["mdkTok"] and not posted(s, t) and t["dropped"] == s["dropped"] \
-                and t["sv"] == s["sv"]:
-            return [{"action": "Lookup", "chat": chat, "send": what, "result": "found"}]
-        if not still and tries >= constants["UnknownTries"] and t["sv"] == s["sv"] \
-                and t["mdkRefused"] == s["mdkRefused"]:
-            return [{"action": "Lookup", "chat": chat, "send": what, "result": "absent",
-                     "gives_up": True}]
-        return [{"action": "Lookup", "chat": chat, "send": what, "result": "absent"},
-                {"action": "Send", "chat": chat, "send": what,
-                 "outcome": send_outcome(s, t, entry)}]
+        chat, entry = changed_head(s, t)
+        outcome, gives_up = send_outcome(s, t, entry)
+        made = {"action": "Send", "chat": chat, "send": send_of(entry), "outcome": outcome}
+        if gives_up:
+            made["gives_up"] = True
+        return [made]
     raise ValueError(f"no rule for the action {action}")
 
 

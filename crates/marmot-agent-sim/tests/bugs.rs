@@ -36,9 +36,9 @@ fn save_after_send_is_found() {
 }
 
 #[test]
-fn retry_ambiguous_blindly_is_found() {
+fn retry_ambiguous_with_new_token_is_found() {
     let bugs = BugSet {
-        retry_ambiguous_blindly: true,
+        retry_ambiguous_with_new_token: true,
         ..BugSet::default()
     };
     let (property, index) = found(Family::Sends, bugs, 40);

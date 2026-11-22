@@ -74,7 +74,7 @@ fn crash() {
             "crash before a delivery",
             "crash just after a send went",
             "save fails",
-            "lookup found",
+            "send again, same event",
             "live event lost while down",
             "catch-up that reads something",
         ],
@@ -90,9 +90,8 @@ fn sends() {
             "send refused",
             "send ambiguous, not gone",
             "send ambiguous, gone",
-            "lookup found",
-            "lookup absent",
-            "lookup error",
+            "send dropped",
+            "send again, same event",
         ],
     );
 }
@@ -135,5 +134,13 @@ fn mixed() {
             "lag",
             "driver stops",
         ],
+    );
+}
+
+#[test]
+fn late() {
+    gate(
+        Family::Late,
+        &["send again, still to land", "send again, same event"],
     );
 }

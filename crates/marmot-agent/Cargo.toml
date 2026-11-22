@@ -21,28 +21,29 @@ hex = "0.4"
 # An owner's npub, in the settings (NIP-19) and for `marmot-agent key`.
 bech32 = "0.12"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-# The connector's token.
+# The connector's token, and the salt of the tokens sends are handed to MDK under.
 getrandom = "0.3"
+# Those tokens are digests, as MDK takes at most 128 bytes; the stand-in Blossom server in the
+# file test names each blob by its hash.
+sha2 = "0.10"
 # Opening a file the agent sends one part of its path at a time, from a folder held open, so no
 # link leads out of it (D-090).
 rustix = { version = "1", features = ["fs"] }
 # MDK, as a library (D-002). The revision moves together with the [patch] entries in the workspace
 # Cargo.toml and tools/odin/install.sh.
-marmot-app = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220" }
-marmot-account = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220" }
-cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220" }
+marmot-app = { git = "https://github.com/marmot-protocol/mdk.git", rev = "3fce95465cdea1edc8456dbd1c6691d1c8dc1f2e" }
+marmot-account = { git = "https://github.com/marmot-protocol/mdk.git", rev = "3fce95465cdea1edc8456dbd1c6691d1c8dc1f2e" }
+cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "3fce95465cdea1edc8456dbd1c6691d1c8dc1f2e" }
 
 [dev-dependencies]
 # MDK's test relay, and its storage settings for tests.
 nostr-relay-builder = "0.44"
-storage-sqlite = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220", features = ["test-support"] }
+storage-sqlite = { git = "https://github.com/marmot-protocol/mdk.git", rev = "3fce95465cdea1edc8456dbd1c6691d1c8dc1f2e", features = ["test-support"] }
 tempfile = "3"
-# The stand-in Blossom server in the file test names each blob by its hash.
-sha2 = "0.10"
 # The import test runs today's connector, wn-agent, from MDK at the same revision, and speaks to
 # its socket.
-agent-connector = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220" }
-agent-control = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220" }
+agent-connector = { git = "https://github.com/marmot-protocol/mdk.git", rev = "3fce95465cdea1edc8456dbd1c6691d1c8dc1f2e" }
+agent-control = { git = "https://github.com/marmot-protocol/mdk.git", rev = "3fce95465cdea1edc8456dbd1c6691d1c8dc1f2e" }
 # The Claude Code scenario runs the driver as a program.
 tokio = { version = "1", features = ["process"] }
 

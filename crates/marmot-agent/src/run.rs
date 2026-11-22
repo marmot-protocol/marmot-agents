@@ -13,8 +13,9 @@
 //! It is written before anything leaves the core: a message is marked read before it reaches the
 //! driver, so a crash never hands the driver the same prompt twice (D-037); a request is pending
 //! on disk before the driver gets it, so a crash leaves it to be settled (D-070); and a version
-//! of an item is queued on disk, with what it settles, before it is sent, so a crash leaves it to
-//! be sent again as it was (S1, S3). When the file cannot be written the core stops where it is,
+//! of an item is queued on disk, with what it settles and the token MDK keeps it under, before it
+//! is sent, so a crash leaves it to be sent again as it was, and MDK, which knows the token,
+//! sends nothing twice (S1, S3). When the file cannot be written the core stops where it is,
 //! as a crash would, and the next start takes up what is on disk. MDK does not replay what
 //! arrived while a program was down, so on start, and whenever it falls behind, the core reads
 //! what was stored after the read mark. A message MDK cannot read for a moment is not taken as
@@ -30,7 +31,7 @@ use crate::marmot::{FileFailed, Incoming, Live, Marmot, Message, NotNow, SendFai
 use crate::socket::SocketDriver;
 use marmot_agent_driver::{Driver, Output, Reason, Refusal, SendFile};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -45,25 +46,25 @@ use tokio::time::Instant;
 /// The longest a group's sends wait before the next try, after failing again and again.
 const SEND_WAIT_MAX: Duration = Duration::from_secs(10);
 
-/// How long MDK is given to finish a send whose outcome is not known, before the core looks for
-/// it in what MDK stored and, not finding it, sends it again.
-const SETTLE: Duration = Duration::from_secs(15);
+/// The longest a group waits before it asks again after a send MDK has queued.
+const QUEUED_WAIT_MAX: Duration = Duration::from_millis(500);
 
-/// How many times a send whose outcome is never known is tried. After the last try it is looked
-/// for once more, when MDK has settled it, and only if it is not there is it given up as refused.
-const UNKNOWN_TRIES: u32 = 10;
+/// How long a stop waits, in all, for MDK to take into its engine the sends it has queued.
+const STOP_WAIT: Duration = Duration::from_secs(60);
+
+/// How many tries of one send MDK may take and drop before it went out, before the core gives
+/// it up as refused. Each such try sent nothing, so the next is made under a new token.
+pub const REJECTED_TRIES: u32 = 10;
+
+/// Why the core does not start on a state file an older core left with sends it handed to MDK
+/// before MDK kept tokens: sent again under a token, any of them could go out twice. No such core
+/// was released.
+const TRIED_WITHOUT_TOKENS: &str = "the state file was left by an older marmot-agent with sends \
+    that may have gone out; move it away to start afresh";
 
 /// How many sends one group makes in one turn of the core's loop, so one chat's backlog, or a slow
 /// MDK, does not hold up the others.
 const DRAIN: usize = 8;
-
-/// A send whose outcome is not known.
-struct Unknown {
-    /// When MDK will have settled it, so the core can tell from what it stored.
-    settled: Instant,
-    /// How many times it was tried without knowing.
-    tries: u32,
-}
 
 /// When to read again what MDK could not read for a moment, and how long that waited.
 struct Again {
@@ -236,8 +237,8 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     started: Instant,
     /// For each group whose last send failed: when to try again, and how long it waited last.
     retry: HashMap<GroupKey, (Instant, Duration)>,
-    /// Sends, by token, whose outcome is not known: they may have gone out.
-    unknown: HashMap<String, Unknown>,
+    /// The groups whose next send MDK has queued, not yet taken into its engine.
+    queued: HashSet<GroupKey>,
     /// For each group MDK could not read for a moment: when to read it again from its mark.
     /// Nothing more of it is read until then, so what comes after the message that could not be
     /// read never goes ahead of it. In order, so groups due at the same moment are read again in
@@ -249,10 +250,8 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// When to list the groups again, for a catch-up that MDK could not list them for. Until then
     /// no live message moves a mark, which could pass messages whose notices were lost.
     listing: Option<Again>,
-    /// How long MDK is given to settle a send whose outcome is not known: [`SETTLE`].
-    settle: Duration,
-    /// How many times such a send is tried: [`UNKNOWN_TRIES`].
-    unknown_tries: u32,
+    /// How many tries of a send MDK may drop before it is given up: [`REJECTED_TRIES`].
+    rejected_tries: u32,
     /// How many sends each group made in this turn of the loop, at most [`DRAIN`].
     drained: HashMap<GroupKey, usize>,
     /// Whether [`DRAIN`] holds: not when the core stops, which sends all it can.
@@ -274,8 +273,9 @@ pub struct Core<D: Driver, M: Side = Marmot> {
 pub struct Bugs {
     /// A send is saved only after it went, not before: a crash in between forgets it (S2, S3).
     pub save_after_send: bool,
-    /// A send whose outcome is not known is sent again at once, without looking for it (S1, S3).
-    pub retry_ambiguous_blindly: bool,
+    /// A send whose outcome is not known is tried again under a new token, as if MDK had dropped
+    /// it: MDK cannot tell it is the send it already has (S1, S3).
+    pub retry_ambiguous_with_new_token: bool,
     /// What the agent's words settle is ignored: settles are read only from items (S1).
     pub settles_only_from_items: bool,
 }
@@ -289,6 +289,9 @@ impl<D: Driver, M: Side> Core<D, M> {
         // the owner allows it (D-099).
         let folders = Folders::from_config(config)?;
         let kept = store.load()?;
+        if kept.conversation.tried_without_tokens() {
+            return Err(TRIED_WITHOUT_TOKENS.into());
+        }
         let mut conversation = Conversation::new(
             marmot.agent().clone(),
             driver.harness().name,
@@ -309,7 +312,6 @@ impl<D: Driver, M: Side> Core<D, M> {
         } else {
             folders
         };
-        let attempted = conversation.attempted_tokens();
         Ok(Self {
             marmot,
             driver,
@@ -320,19 +322,11 @@ impl<D: Driver, M: Side> Core<D, M> {
             config: config.clone(),
             started: Instant::now(),
             retry: HashMap::new(),
-            // A send left queued that was handed to MDK may have gone out just before the core
-            // stopped.
-            unknown: (attempted.into_iter())
-                .map(|token| {
-                    let settled = Instant::now();
-                    (token, Unknown { settled, tries: 0 })
-                })
-                .collect(),
+            queued: HashSet::new(),
             unread: BTreeMap::new(),
             starts: BTreeMap::new(),
             listing: None,
-            settle: SETTLE,
-            unknown_tries: UNKNOWN_TRIES,
+            rejected_tries: REJECTED_TRIES,
             drained: HashMap::new(),
             bounded: true,
             first: 0,
@@ -350,11 +344,9 @@ impl<D: Driver, M: Side> Core<D, M> {
         self
     }
 
-    /// Sends whose outcome is not known are looked for after `settle`, and tried `tries` times:
-    /// for the tests, as the simulator will set them (`docs/design/verification.md`).
-    pub fn unknown_sends(mut self, tries: u32, settle: Duration) -> Self {
-        self.unknown_tries = tries;
-        self.settle = settle;
+    /// A send is given up after MDK dropped `tries` of its tries: for the tests.
+    pub fn rejected_sends(mut self, tries: u32) -> Self {
+        self.rejected_tries = tries;
         self
     }
 
@@ -472,7 +464,20 @@ impl<D: Driver, M: Side> Core<D, M> {
         self.retry.clear();
         self.bounded = false;
         self.carry_out(ended).await?;
-        self.flush_all().await
+        self.flush_all().await?;
+        // What MDK has queued is asked after until its engine takes it, for a while, and what
+        // comes after it is sent then. What MDK is busy for waits for the next start.
+        let stopped = Instant::now();
+        while !self.queued.is_empty() && stopped.elapsed() < STOP_WAIT {
+            let next = (self.queued.iter())
+                .filter_map(|g| self.retry.get(g).map(|(at, _)| *at))
+                .min();
+            tokio::time::sleep_until(next.unwrap_or_else(Instant::now)).await;
+            for group in self.queued.clone() {
+                self.flush(&group).await?;
+            }
+        }
+        Ok(())
     }
 
     /// Starts sending a file the agent asked to send, as a task of its own so the chats go on
@@ -782,16 +787,18 @@ impl<D: Driver, M: Side> Core<D, M> {
     }
 
     /// Sends what is queued for a group, oldest first, each marked sent and saved once it has
-    /// gone, a few in each turn of the loop so other work and other groups go on between. A send MDK is busy for stays queued,
-    /// and the group waits, longer each time, before it is tried again; the other groups go on
-    /// meanwhile. A send whose outcome is not known may have gone out, so it is not sent again
-    /// blindly: once MDK has had time to settle it, the core looks for it in what MDK stored, and
-    /// sends it again only if it is not there (S3). A send MDK refuses, or one given up after its
-    /// tries, is handed to the conversation, which drops it with a notice, closing an item whose
-    /// closing version it was and settling in its place what a notice settled, or sends an edit
-    /// whose message is gone as a new message. A send is otherwise never given up while the core runs, so a later version never
-    /// goes out as if it were new, and one still queued when the core stops goes out when it
-    /// starts again (S1, S3).
+    /// gone, a few in each turn of the loop so other work and other groups go on between. Each
+    /// send is handed to MDK under its token, which MDK keeps: a send tried again under it, after
+    /// an answer that was lost or a restart, gives back the event it made, so nothing goes out
+    /// twice (S3). A send MDK is busy for, or whose outcome is not known, stays queued, and the
+    /// group waits, longer each time, before it is tried again under the same token; the other
+    /// groups go on meanwhile. A send MDK took and dropped before it went out sent nothing, and
+    /// is tried again under a new token, up to [`REJECTED_TRIES`] times. A send MDK refuses, or
+    /// one given up after those tries, is handed to the conversation, which drops it with a
+    /// notice, closing an item whose closing version it was and settling in its place what a
+    /// notice settled, or sends an edit whose message is gone as a new message. A send is
+    /// otherwise never given up while the core runs, so a later version never goes out as if it
+    /// were new, and one still queued when the core stops goes out when it starts again (S1, S3).
     async fn flush(&mut self, group: &GroupKey) -> Result<(), Unsaved> {
         if self
             .retry
@@ -812,68 +819,61 @@ impl<D: Driver, M: Side> Core<D, M> {
             let key = match &what {
                 Sending::Item { key, .. } | Sending::Words { key, .. } => key.clone(),
             };
-            if let Some(&Unknown { settled, tries }) = self.unknown.get(&token) {
-                let taken = |event: &crate::keys::EventKey| self.conversation.is_first(event);
-                match self.marmot.find_sent(group, &what, &taken) {
-                    Ok(Some(event)) => {
-                        self.unknown.remove(&token);
-                        self.conversation.sent(&key, event);
-                        self.save()?;
-                        continue;
-                    }
-                    Ok(None) => {}
-                    // Not knowing is not "not there": ask again later, never send blindly.
-                    Err(_) => {
-                        self.wait_longer(group);
-                        return Ok(());
-                    }
-                }
-                if settled > Instant::now() {
-                    let wait = self.retry.get(group).map_or(Duration::ZERO, |(_, w)| *w);
-                    self.retry.insert(group.clone(), (settled, wait));
-                    return Ok(());
-                }
-                if tries >= self.unknown_tries {
-                    // Tried as often as it is tried, and its last try is not in what MDK
-                    // stored: given up, as MDK refused it.
-                    self.give_up(&token, false)?;
-                    continue;
-                }
-            }
-            // Saved as tried before MDK has it, so a crash after leaves it to be looked for.
-            if self.conversation.attempting(&token) && !self.bug_save_after_send() {
+            // Saved before MDK has it, so the token MDK keeps it under is on disk first.
+            if self.conversation.attempting(&token.send, unix_now()) && !self.bug_save_after_send()
+            {
                 self.save()?;
             }
             match self.marmot.send(group, &what, &token).await {
                 Ok(event) => {
                     self.retry.remove(group);
-                    self.unknown.remove(&token);
+                    self.queued.remove(group);
                     self.conversation.sent(&key, event);
                     self.save()?;
                 }
-                Err(failed) => {
-                    let failed = self.bug_blind_retry(failed);
-                    if let SendFailed::Unknown = failed {
-                        // Looked for once MDK has settled it, and given up only after that.
-                        let tries = self.unknown.get(&token).map_or(0, |u| u.tries) + 1;
-                        let settled = Instant::now() + self.settle;
-                        self.unknown
-                            .insert(token.clone(), Unknown { settled, tries });
+                Err(failed) => match self.bug_new_token(&token.send, failed) {
+                    SendFailed::Refused { gone } => self.give_up(&token.send, gone)?,
+                    SendFailed::Forgotten => {
+                        // MDK's own words can name a group, so they are not printed (D-071).
+                        eprintln!(
+                            "marmot-agent: a send's outcome can no longer be known; the chat is told"
+                        );
+                        self.conversation.lost(&token.send);
+                        self.save()?;
                     }
-                    match failed {
-                        SendFailed::Refused { gone } => self.give_up(&token, gone)?,
-                        SendFailed::Busy | SendFailed::Unknown => {
-                            if matches!(failed, SendFailed::Unknown) {
-                                eprintln!("marmot-agent: a send failed; it will be tried again");
-                            }
-                            self.wait_longer(group);
-                            return Ok(());
+                    SendFailed::Rejected => {
+                        // Nothing went: the next try is under a new token, saved first. The last
+                        // try is saved with the give-up and what stands in for it, in one write.
+                        let tries = self.conversation.rejected(&token.send);
+                        if tries >= self.rejected_tries {
+                            self.give_up(&token.send, false)?;
+                            continue;
                         }
+                        self.save()?;
+                        eprintln!(
+                            "marmot-agent: a send was dropped by MDK; it will be tried again"
+                        );
+                        self.wait_longer(group);
+                        return Ok(());
                     }
-                }
+                    // MDK has it queued: asked after again soon, under the same token, and the
+                    // core goes on meanwhile.
+                    SendFailed::Pending => {
+                        self.wait_queued(group);
+                        return Ok(());
+                    }
+                    failed @ (SendFailed::Busy | SendFailed::Unknown) => {
+                        if failed == SendFailed::Unknown {
+                            eprintln!("marmot-agent: a send failed; it will be tried again");
+                        }
+                        self.wait_longer(group);
+                        return Ok(());
+                    }
+                },
             }
         }
         self.retry.remove(group);
+        self.queued.remove(group);
         Ok(())
     }
 
@@ -883,15 +883,25 @@ impl<D: Driver, M: Side> Core<D, M> {
     fn give_up(&mut self, token: &str, gone: bool) -> Result<(), Unsaved> {
         // MDK's own words can name a group, so they are not printed (D-071).
         eprintln!("marmot-agent: a send was refused; the chat is told");
-        self.unknown.remove(token);
         self.conversation.refused(token, gone);
         self.save()
     }
 
     /// The group's sends wait before they are tried again, longer each time.
     fn wait_longer(&mut self, group: &GroupKey) {
+        self.queued.remove(group);
         let wait = (self.retry.get(group)).map_or(Duration::from_millis(100), |(_, w)| {
             (*w * 2).clamp(Duration::from_millis(100), SEND_WAIT_MAX)
+        });
+        (self.retry).insert(group.clone(), (Instant::now() + wait, wait));
+    }
+
+    /// MDK has the group's next send queued: it is asked after again soon, a little later each
+    /// time, up to [`QUEUED_WAIT_MAX`], and the group's sends after it wait for it.
+    fn wait_queued(&mut self, group: &GroupKey) {
+        self.queued.insert(group.clone());
+        let wait = (self.retry.get(group)).map_or(Duration::from_millis(10), |(_, w)| {
+            (*w * 2).clamp(Duration::from_millis(10), QUEUED_WAIT_MAX)
         });
         (self.retry).insert(group.clone(), (Instant::now() + wait, wait));
     }
@@ -907,13 +917,14 @@ impl<D: Driver, M: Side> Core<D, M> {
         false
     }
 
-    /// What a failed send is taken as: as it is, or, with the bug "a send whose outcome is not
-    /// known is sent again at once" put back, as busy.
-    fn bug_blind_retry(&self, failed: SendFailed) -> SendFailed {
+    /// With the bug "a send whose outcome is not known is tried again under a new token" put
+    /// back: such a send's next try is made under a new token, as if MDK had dropped this one.
+    fn bug_new_token(&mut self, token: &str, failed: SendFailed) -> SendFailed {
         #[cfg(feature = "sim-bugs")]
-        if self.bugs.retry_ambiguous_blindly && failed == SendFailed::Unknown {
-            return SendFailed::Busy;
+        if self.bugs.retry_ambiguous_with_new_token && failed == SendFailed::Unknown {
+            self.conversation.rejected(token);
         }
+        let _ = token;
         failed
     }
 
@@ -924,6 +935,13 @@ impl<D: Driver, M: Side> Core<D, M> {
         };
         self.store.save(&kept).map_err(|_| Unsaved)
     }
+}
+
+/// Seconds since 1970, as a state file keeps when a send was first tried: unlike the core's clock,
+/// the same across restarts.
+fn unix_now() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    now.map_or(0, |d| d.as_secs())
 }
 
 /// Reads a file from the allowed folders and sends it to `group`. It is offered to MDK again only

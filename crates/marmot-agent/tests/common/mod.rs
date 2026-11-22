@@ -252,6 +252,25 @@ impl World {
         Running { stop, task }
     }
 
+    /// Sends something to a group under `token` as the core does, asking MDK again while it has
+    /// the send queued, as the core does through its retries, for up to 30 seconds.
+    pub async fn send(
+        &self,
+        group: &marmot_agent::GroupKey,
+        what: &marmot_agent::Sending,
+        token: &marmot_agent::Token,
+    ) -> Result<EventKey, marmot_agent::marmot::SendFailed> {
+        for _ in 0..3000 {
+            match self.marmot.send(group, what, token).await {
+                Err(marmot_agent::marmot::SendFailed::Pending) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await
+                }
+                done => return done,
+            }
+        }
+        panic!("MDK kept the send queued for 30 seconds");
+    }
+
     /// Waits until the agent has accepted the group, and gives its id as text.
     pub async fn joined(&self, group: &GroupId) -> String {
         let group_hex = hex::encode(group.as_slice());

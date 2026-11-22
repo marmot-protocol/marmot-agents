@@ -20,9 +20,10 @@ below. What it taught:
 - **Settling by a tag works.** Each answer and control was settled by the item version that named it, or by a
   notice saying why it had none. The notice needed a kind of its own, `refused`, which the event model lacked.
 - **The 64 KB limit has to cover diffs, not only output.** Codex puts a file edit's whole diff in the item.
-- **The agent's words as chat messages work,** but MDK's crash-safe way to send a chat message takes no tags, so
+- **The agent's words as chat messages work,** but MDK's crash-safe way to send a chat message took no tags, so
   the turn tag ([D-022](../decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)) and crash-safe
-  sending cannot both be had today.
+  sending could not both be had. MDK 0.19.0 added tagged crash-safe sends, and the core has used them since
+  2026-11-22.
 - **A remark during a turn arrives as a chat message,** and alerted like the final answer. It no longer does
   ([D-078](../decisions.md#d-078-the-agents-remarks-during-a-turn-do-not-alert)).
 
@@ -69,7 +70,9 @@ Built on 2026-11-21 while fixing the known gaps of [testing and verification](ve
   `refused` notice with the reason `no_effect`, not left pending until the driver stops.
 - **`failed` for a send MDK refuses.** A send MDK will not take, and is not an edit of words that were removed, is
   dropped. A `refused` notice with the reason `failed` tells the chat, and settles what the send settled. An
-  edit of words whose message is gone goes out as a new message.
+  edit of words whose message is gone goes out as a new message. A send given up without knowing whether it
+  went out, because MDK no longer knows its token once the group's messages have disappeared, is dropped the
+  same way, and its notice's text says it may not have been delivered.
 - **The `cut` tag.** One tag for each kind of field cut, with the full length of all that was cut of that kind:
   `text`, `title`, `command`, `error`, `input`, `plan`, `steps`, `choices`, `questions`, `description`. `output`
   keeps its full length and `diffs` its count, as before. A list thinned in its middle: `entries` or `changes`,
@@ -141,6 +144,8 @@ were sent, they are edited like any chat message.
   of kind 1201 or 1202 ([D-024](../decisions.md#d-024-who-an-agent-event-alerts)). Do not alert for a chat
   message with `["phase", "commentary"]` (D-078).
 - Let a chat message sent crash-safely carry tags, so the agent's words keep their turn and are never sent twice.
+  Done in MDK 0.19.0 (`submit_tagged_text`, `submit_tagged_edit_for_local_send`, `submit_custom_event`); a file
+  sent crash-safely (`upload_media_with_client_token`) still carries no tags.
 - Expose items, with their latest version, to the apps.
 
 ## Decided

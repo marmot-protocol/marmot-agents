@@ -7,19 +7,19 @@
 
 use crate::carrier::{self, REQUEST_KIND};
 use crate::config::Config;
-use crate::conversation::{Heard, HeardQuote, HeardRequest, Sending, Where};
+use crate::conversation::{Heard, HeardQuote, HeardRequest, Sending, Token, Where};
 use crate::files::Outgoing;
 use crate::keys::{EventKey, GroupKey, PubKey};
 use cgka_traits::GroupId;
 use marmot_account::{AccountHome, AccountSummary};
 use marmot_agent_events::TurnId;
 use marmot_app::{
-    AppError, AppMessageQuery, AppMessageRecord, MarmotApp, MarmotAppConfig, MarmotAppEvent,
-    MarmotAppRuntime, MediaUploadAttachmentRequest, MediaUploadRequest,
+    AppError, AppMessageQuery, AppMessageRecord, LocalSendStatus, MarmotApp, MarmotAppConfig,
+    MarmotAppEvent, MarmotAppRuntime, MediaUploadAttachmentRequest, MediaUploadRequest,
 };
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The kind of a chat message.
 const CHAT: u64 = 9;
@@ -153,10 +153,14 @@ pub struct Marmot {
     pub faults: Faults,
 }
 
-/// Faults the next sends, the next lookups of a send, and the next readings of where a group is,
-/// or of where its messages end, meet, one each, oldest first.
+/// Faults the next sends, and the next readings of where a group is, or of where its messages end,
+/// meet, one each, oldest first.
 #[derive(Clone, Default)]
-pub struct Faults(Arc<Mutex<VecDeque<Fault>>>);
+pub struct Faults {
+    next: Arc<Mutex<VecDeque<Fault>>>,
+    /// The tokens of sends MDK keeps queued ([`Fault::Held`]), and until when.
+    held: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+}
 
 /// What a send meets.
 pub enum Fault {
@@ -164,34 +168,47 @@ pub enum Fault {
     LoseReply,
     /// MDK refuses the send with this error, before it takes it.
     Refuse(AppError),
-    /// MDK cannot be asked what it stored, the next time the core looks for a send.
-    LookupFails,
+    /// The send meets what MDK says of a try it took and dropped before it went out, as when its
+    /// engine fails it. Nothing is handed to MDK; the core tries again under a new token.
+    Reject,
     /// MDK cannot say where a group is, the next time a message is read: a passing failure, as
     /// when the group's state cannot be read for a moment.
     PlaceFails,
     /// MDK cannot say where a group's messages end, the next time the core asks.
     LatestFails,
+    /// MDK takes the send and keeps it queued this long before its engine takes it, as when the
+    /// engine is held up: until then MDK says it is queued.
+    Held(Duration),
 }
 
 impl Faults {
     /// The next send meets `fault`.
     pub fn push(&self, fault: Fault) {
-        self.0.lock().expect("never poisoned").push_back(fault);
+        self.next.lock().expect("never poisoned").push_back(fault);
     }
 
     /// The oldest fault for a send, one that is neither of the others.
     fn next_send(&self) -> Option<Fault> {
-        self.next(|f| {
-            !matches!(
-                f,
-                Fault::LookupFails | Fault::PlaceFails | Fault::LatestFails
-            )
-        })
+        self.next(|f| !matches!(f, Fault::PlaceFails | Fault::LatestFails))
+    }
+
+    /// Keeps the send under `token` queued for `long`, from its first try.
+    fn hold(&self, token: &str, long: Duration) {
+        let mut held = self.held.lock().expect("never poisoned");
+        let until = std::time::Instant::now() + long;
+        held.entry(token.to_string()).or_insert(until);
+    }
+
+    /// Whether the send under `token` is kept queued now.
+    fn held(&self, token: &str) -> bool {
+        let held = self.held.lock().expect("never poisoned");
+        held.get(token)
+            .is_some_and(|until| *until > std::time::Instant::now())
     }
 
     /// The oldest fault `which` picks.
     fn next(&self, which: impl Fn(&Fault) -> bool) -> Option<Fault> {
-        let mut faults = self.0.lock().expect("never poisoned");
+        let mut faults = self.next.lock().expect("never poisoned");
         let at = faults.iter().position(which)?;
         faults.remove(at)
     }
@@ -316,28 +333,77 @@ impl Marmot {
         }))
     }
 
-    /// Sends something to a group, and gives back the id of the event it became. `token` is the
-    /// same each time this send is tried, across restarts. MDK takes no such token yet, so a send
-    /// that went out just before a crash goes out again after it, and an item's first version
-    /// then makes two rows. When MDK gives sends that are safe across a crash, the token is what
-    /// is handed to it here, and nothing else changes.
+    /// Sends something to a group under `token`, and gives back the id of the event it became.
+    /// MDK keeps the send under [`Token::mdk`] before it answers (its `submit_*` calls), and a
+    /// send tried again under the same token, after an answer that was lost or a restart, gives
+    /// back the same event and sends nothing: what went out goes out once. The event comes back
+    /// once MDK has taken the send into its engine, which delivers it from there. MDK is asked
+    /// once: while it still has the send queued the answer is [`SendFailed::Pending`], and the
+    /// core asks again later by trying it again under the same token, with nothing held up
+    /// meanwhile. MDK may drop it before its engine takes it ([`SendFailed::Rejected`]), and then
+    /// nothing of it went out.
     pub async fn send(
         &self,
         group: &GroupKey,
         what: &Sending,
-        token: &str,
-    ) -> Result<EventKey, AppError> {
-        let _ = token;
-        let id = group_id(group).ok_or_else(|| AppError::UnknownGroup(String::new()))?;
+        token: &Token,
+    ) -> Result<EventKey, SendFailed> {
+        let id = group_id(group).ok_or(SendFailed::Refused { gone: false })?;
         let fault = self.faults.next_send();
-        if let Some(Fault::Refuse(error)) = fault {
-            return Err(error);
+        match fault {
+            Some(Fault::Refuse(error)) => return Err(send_failed(&error)),
+            Some(Fault::Reject) => return Err(SendFailed::Rejected),
+            Some(Fault::Held(long)) => self.faults.hold(&token.mdk, long),
+            _ => {}
         }
-        let summary = match what {
+        if let Some(tried) = token.tried_at
+            && self.may_have_let_go(group, tried)?
+        {
+            match self.status(&id, &token.mdk) {
+                // MDK still keeps it: tried again, it is answered from what MDK keeps.
+                Ok(Some(_)) => {}
+                Ok(None) => return Err(SendFailed::Forgotten),
+                Err(_) => return Err(SendFailed::Unknown),
+            }
+        }
+        let taken = match self.submit(&id, what, token).await {
+            Ok(Taken::Kept(event)) => event,
+            // Words an older core sent, without a token: their edit goes as it went then. Sent
+            // again, it shows the same text, and adds nothing anyone sees.
+            Ok(Taken::Sent(event)) => return Ok(event),
+            Err(error) => {
+                return Err(match self.status(&id, &token.mdk) {
+                    // A try MDK dropped is refused if tried again; that is the drop, not a
+                    // refusal.
+                    Ok(Some(LocalSendStatus::Rejected)) => SendFailed::Rejected,
+                    // MDK answers a token it took with what it made of it, before it looks at
+                    // the group: so it never took this one, and the group is going or gone.
+                    Ok(None) if group_ended(&error) => SendFailed::Refused { gone: false },
+                    _ => send_failed(&error),
+                });
+            }
+        };
+        match self.status(&id, &token.mdk) {
+            Ok(Some(LocalSendStatus::EngineOwned | LocalSendStatus::Completed(_))) => {}
+            Ok(Some(LocalSendStatus::Rejected)) => return Err(SendFailed::Rejected),
+            // Queued, or not to be read for a moment: MDK has it, and goes on with it.
+            Ok(Some(LocalSendStatus::Queued) | None) | Err(_) => return Err(SendFailed::Pending),
+        }
+        if let Some(Fault::LoseReply) = fault {
+            return Err(SendFailed::Unknown);
+        }
+        Ok(taken)
+    }
+
+    /// Hands a send to MDK, which keeps it under `token` and gives back the event it will be.
+    async fn submit(&self, id: &GroupId, what: &Sending, token: &Token) -> Result<Taken, AppError> {
+        let label = &self.label;
+        let mdk = token.mdk.clone();
+        let accepted = match what {
             Sending::Item { item, .. } => {
                 let out = carrier::item(item).map_err(|_| too_large())?;
-                self.runtime
-                    .send_custom_event(&self.label, &id, out.kind, out.tags, out.content)
+                (self.runtime)
+                    .submit_custom_event(label, id, out.kind, out.tags, out.content, mdk)
                     .await?
             }
             Sending::Words {
@@ -346,8 +412,17 @@ impl Marmot {
                 ..
             } => {
                 let text = carrier::fit_words(text, &[]).map_err(|_| too_large())?;
-                self.runtime
-                    .edit_message(&self.label, &id, target.as_str(), &text)
+                let Some(original) = token.edits.clone() else {
+                    let summary = (self.runtime)
+                        .edit_message(label, id, target.as_str(), &text)
+                        .await?;
+                    let event = summary.message_ids.into_iter().next();
+                    return event
+                        .map(|e| Taken::Sent(EventKey(e)))
+                        .ok_or(AppError::UnknownGroup(String::new()));
+                };
+                (self.runtime)
+                    .submit_tagged_edit_for_local_send(label, id, original, text, Vec::new(), mdk)
                     .await?
             }
             Sending::Words {
@@ -359,53 +434,34 @@ impl Marmot {
             } => {
                 let tags = carrier::words_tags(turn.as_ref(), *remark, settles);
                 let text = carrier::fit_words(text, &tags).map_err(|_| too_large())?;
-                self.runtime
-                    .send_tagged_text(&self.label, &id, text, tags)
+                (self.runtime)
+                    .submit_tagged_text(label, id, text, tags, mdk)
                     .await?
             }
         };
-        if let Some(Fault::LoseReply) = fault {
-            return Err(AppError::AccountWorkerResponseTimedOut);
-        }
-        summary
-            .message_ids
-            .into_iter()
-            .next()
-            .map(EventKey)
-            .ok_or(AppError::UnknownGroup(String::new()))
+        Ok(Taken::Kept(EventKey(accepted.message_id_hex)))
     }
 
-    /// The event a send became, when MDK stored it as sent by the agent: for a send whose
-    /// outcome is not known, which may have gone out. An item is matched by its id, its version
-    /// and the first event it names; the agent's words by their text and every tag the core
-    /// gives them (the turn, the phase, what they settle), among those not already known as the
-    /// first of something (`taken`). An edit is never found: sent again, it shows the same text,
-    /// and adds nothing anyone sees. An error when MDK could not be asked: that says nothing of
-    /// whether it went out.
-    pub fn find_sent(
-        &self,
-        group: &GroupKey,
-        what: &Sending,
-        taken: impl Fn(&EventKey) -> bool,
-    ) -> Result<Option<EventKey>, AppError> {
-        // An edit, or words that cannot fit and so were never sent, is not looked for.
-        let Some(wanted) = SentMatch::new(what) else {
-            return Ok(None);
-        };
-        let query = AppMessageQuery {
-            group_id_hex: Some(group.as_str().to_string()),
-            kinds: Some(vec![wanted.kind()]),
-            limit: None,
-        };
-        let rows = match self.faults.next(|f| matches!(f, Fault::LookupFails)) {
-            Some(_) => Err(AppError::RuntimeBusy),
-            None => self.runtime.messages_with_query(&self.label, query),
-        };
-        Ok((rows?.into_iter())
-            .filter(|row| row.direction == "sent" && row.sender == self.agent.as_str())
-            .filter(|row| wanted.matches(&row.plaintext, &row.tags))
-            .map(|row| EventKey(row.message_id_hex))
-            .find(|event| !taken(event)))
+    /// Whether MDK may have let go of a token first tried at `tried` (seconds since 1970). MDK
+    /// forgets a token with the message it made, and a group's messages disappear once they are
+    /// as old as the group says; a message is never older than its first try. An error when MDK
+    /// cannot say for a moment.
+    fn may_have_let_go(&self, group: &GroupKey, tried: u64) -> Result<bool, SendFailed> {
+        let record = (self.app)
+            .group(&self.label, group.as_str())
+            .map_err(|_| SendFailed::Unknown)?;
+        let keep = record.map_or(0, |r| r.message_retention.disappearing_message_secs);
+        let now = SystemTime::now().duration_since(UNIX_EPOCH);
+        let now = now.map_or(0, |d| d.as_secs());
+        Ok(keep > 0 && now.saturating_sub(tried) >= keep)
+    }
+
+    /// What MDK says became of the send it keeps under `token`.
+    fn status(&self, id: &GroupId, token: &str) -> Result<Option<LocalSendStatus>, AppError> {
+        if self.faults.held(token) {
+            return Ok(Some(LocalSendStatus::Queued));
+        }
+        (self.runtime).local_send_status(&self.label, id, token)
     }
 
     /// Sends a file to a group as an encrypted attachment, tagged with its turn like the agent's
@@ -537,102 +593,12 @@ impl Marmot {
     }
 }
 
-/// How a send whose outcome is not known is told apart among the events MDK stored as sent by
-/// the agent, from a stored event's kind, content and tags: an item by its id, its version and
-/// the first event it names; the agent's words by their text and every tag the core gives them
-/// (the turn, the phase, what they settle). Each side that stores events keeps its own query and
-/// uses this to match: [`Marmot::find_sent`], and the simulator's MDK.
-#[derive(Clone, Debug)]
-pub struct SentMatch {
-    kind: u64,
-    wanted: Wanted,
-}
-
-#[derive(Clone, Debug)]
-enum Wanted {
-    Item {
-        id: String,
-        version: String,
-        first: Option<String>,
-    },
-    Words {
-        text: String,
-        tags: [Vec<Vec<String>>; 3],
-    },
-}
-
-/// The tags of the agent's words that tell two sends apart.
-const WORDS_TAGS: [&str; 3] = ["turn", "phase", "settles"];
-
-fn words_tags_named(tags: &[Vec<String>]) -> [Vec<Vec<String>>; 3] {
-    WORDS_TAGS.map(|name| {
-        (tags.iter())
-            .filter(|t| t.first().map(String::as_str) == Some(name))
-            .cloned()
-            .collect()
-    })
-}
-
-impl SentMatch {
-    /// What `what` became once stored, or `None` when it is never looked for: an edit, which sent
-    /// again shows the same text and adds nothing anyone sees, or words that cannot fit and so
-    /// were never sent.
-    pub fn new(what: &Sending) -> Option<Self> {
-        match what {
-            Sending::Item { item, .. } => Some(Self {
-                kind: carrier::ITEM_KIND,
-                wanted: Wanted::Item {
-                    id: item.event.header().item.as_str().to_string(),
-                    version: item.version.to_string(),
-                    first: item.first.as_ref().map(|f| f.as_str().to_string()),
-                },
-            }),
-            Sending::Words { edit: Some(_), .. } => None,
-            Sending::Words {
-                text,
-                turn,
-                remark,
-                settles,
-                ..
-            } => {
-                let tags = carrier::words_tags(turn.as_ref(), *remark, settles);
-                let text = carrier::fit_words(text, &tags).ok()?;
-                Some(Self {
-                    kind: CHAT,
-                    wanted: Wanted::Words {
-                        text,
-                        tags: words_tags_named(&tags),
-                    },
-                })
-            }
-        }
-    }
-
-    /// The kind of event to look among.
-    pub fn kind(&self) -> u64 {
-        self.kind
-    }
-
-    /// Whether a stored event of [`Self::kind`], with this content and these tags, is the send.
-    pub fn matches(&self, content: &str, tags: &[Vec<String>]) -> bool {
-        match &self.wanted {
-            Wanted::Item { id, version, first } => {
-                tag(tags, "item_id") == Some(id.as_str())
-                    && tag(tags, "v") == Some(version.as_str())
-                    && tag(tags, "item") == first.as_deref()
-            }
-            Wanted::Words { text, tags: wanted } => {
-                content == text && words_tags_named(tags) == *wanted
-            }
-        }
-    }
-}
-
-/// The first value of the tag named `name`.
-fn tag<'a>(tags: &'a [Vec<String>], name: &str) -> Option<&'a str> {
-    (tags.iter())
-        .find(|t| t.len() >= 2 && t[0] == name)
-        .map(|t| t[1].as_str())
+/// What MDK gave back for a send.
+enum Taken {
+    /// MDK keeps it under its token, as this event.
+    Kept(EventKey),
+    /// It went out without a token, as this event.
+    Sent(EventKey),
 }
 
 /// What a send that cannot fit in 64 KB fails with, before it reaches MDK: a refusal, which drops
@@ -705,21 +671,14 @@ pub trait Side: Clone + Send + Sync + 'static {
     /// What others sent to a group that was stored after `after`, in storage order.
     fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow>;
 
-    /// Sends something to a group, and gives back the id of the event it became.
+    /// Sends something to a group under `token`, and gives back the id of the event it became.
+    /// A send tried again under the same token gives back the same event and sends nothing.
     fn send(
         &self,
         group: &GroupKey,
         what: &Sending,
-        token: &str,
+        token: &Token,
     ) -> impl Future<Output = Result<EventKey, SendFailed>> + Send;
-
-    /// The event a send whose outcome is not known became, when it is stored as the agent's.
-    fn find_sent(
-        &self,
-        group: &GroupKey,
-        what: &Sending,
-        taken: &dyn Fn(&EventKey) -> bool,
-    ) -> Result<Option<EventKey>, LookupFailed>;
 
     /// Sends a file to a group, tagged with its turn.
     fn send_file(
@@ -754,13 +713,20 @@ pub enum SendFailed {
         /// It was an edit of a message that is gone.
         gone: bool,
     },
-    /// It may have gone out: the core looks for it before it sends it again.
+    /// MDK may have taken it, and the answer was lost or is not known yet: it is tried again
+    /// under the same token, which MDK answers with the same event, sending nothing twice.
     Unknown,
+    /// MDK took it, and dropped it before it went out: nothing of it went. MDK refuses its token
+    /// from now on, so it is tried again under a new one.
+    Rejected,
+    /// MDK keeps it under its token, queued, and its engine has not taken it yet: it is tried
+    /// again soon under the same token, which MDK answers from what it keeps.
+    Pending,
+    /// It was first tried so long ago that its group's messages have disappeared since, and
+    /// MDK no longer knows its token: it may have gone out, and tried again it could go out
+    /// twice. It is given up, and the chat told it may not have been delivered.
+    Forgotten,
 }
-
-/// MDK could not be asked what it stored. That says nothing of whether a send went out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct LookupFailed;
 
 /// What a failed file send means.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -769,6 +735,16 @@ pub enum FileFailed {
     Busy,
     /// Anything else, which may have come after MDK took it.
     Failed,
+}
+
+/// Whether MDK refused a send because its group is being disbanded, or because MDK has no such
+/// group: for good, unlike other failures to read its storage, which pass.
+fn group_ended(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::GroupDisbanding(_)
+            | AppError::Storage(cgka_traits::storage::StorageError::NotFound)
+    )
 }
 
 /// What MDK's error says of a send: whether MDK took it.
@@ -780,6 +756,19 @@ fn send_failed(error: &AppError) -> SendFailed {
         | AppError::GroupCatchingUp(_)
         | AppError::GroupCommitPending(_) => SendFailed::Busy,
         AppError::InvalidEditTarget => SendFailed::Refused { gone: true },
+        // MDK spaces out the edits of one message a second apart, at most half a minute ahead:
+        // the edit is taken once the ones before it have gone.
+        AppError::InvalidAppMessagePayload(why) if why.starts_with("pending edit rate limit") => {
+            SendFailed::Busy
+        }
+        // MDK makes an event's id from its kind, tags, content and second, and keeps the id of
+        // every send it took, even one it dropped: the same bytes under another token in that
+        // second are the same event. MDK took nothing, and in the next second they are another.
+        AppError::InvalidAppMessagePayload(why)
+            if why.starts_with("message identity collision") =>
+        {
+            SendFailed::Busy
+        }
         AppError::InvalidAppMessagePayload(_)
         | AppError::EventTooLarge { .. }
         | AppError::UnknownGroup(_)
@@ -879,20 +868,9 @@ impl Side for Marmot {
         &self,
         group: &GroupKey,
         what: &Sending,
-        token: &str,
+        token: &Token,
     ) -> Result<EventKey, SendFailed> {
-        Marmot::send(self, group, what, token)
-            .await
-            .map_err(|error| send_failed(&error))
-    }
-
-    fn find_sent(
-        &self,
-        group: &GroupKey,
-        what: &Sending,
-        taken: &dyn Fn(&EventKey) -> bool,
-    ) -> Result<Option<EventKey>, LookupFailed> {
-        Marmot::find_sent(self, group, what, taken).map_err(|_| LookupFailed)
+        Marmot::send(self, group, what, token).await
     }
 
     async fn send_file(

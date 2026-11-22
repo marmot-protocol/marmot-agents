@@ -112,6 +112,11 @@ Built so far, provisional until the owner accepts what others can see:
   gateway's work folder in `files_from`. The ACP agents do not offer it yet; every harness that allows it must
   before the swap
   ([D-107](decisions.md#d-107-every-harness-that-lets-an-agent-send-a-file-gets-file-sending-before-the-swap)).
+- **Sends that survive a crash.** On MDK 0.19.0, every send in the core's outbox (the agent's words and their
+  edits, items and their later versions, notices, and what stands in for a dropped send) is handed to MDK under
+  a token saved with it, and a send tried again under it, after a lost answer or a restart, gives back the same
+  event and sends nothing. A file the agent sends keeps no token: MDK's token form for files carries no tags. See
+  [sends that give up](design/verification.md#first-fix-what-is-known).
 
 ### Verification, alongside M4
 

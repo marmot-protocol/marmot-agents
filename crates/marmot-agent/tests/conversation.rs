@@ -1982,6 +1982,57 @@ fn final_words_that_do_not_change_still_settle_what_they_name() {
     assert!(failed_at_the_end(&mut talk).is_empty());
 }
 
+// A send keeps the token MDK knows it by: the same each time it is tried, across a restart, a new
+// one only once MDK dropped a try of it, and another for each send and each state file. An edit of
+// the agent's words names the token their first message went under (S3).
+#[test]
+fn a_send_keeps_its_token_until_mdk_drops_a_try() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let group = direct().group;
+    talk.emitted(emitted(&chat, words(State::Done)));
+    let (first, _) = talk.next_send(&group).unwrap();
+    assert!(first.mdk.len() <= 128, "MDK takes at most 128 bytes");
+    let again = conversation(talk.saved().clone());
+    assert_eq!(
+        again.next_send(&group).unwrap().0,
+        first,
+        "the same after a restart"
+    );
+    // A core whose state file was lost names its sends the same again, under other tokens.
+    let (mut lost, _) = started();
+    lost.emitted(emitted(&chat, words(State::Done)));
+    let (anew, _) = lost.next_send(&group).unwrap();
+    assert_eq!(anew.send, first.send);
+    assert_ne!(anew.mdk, first.mdk, "another state file, other tokens");
+
+    assert_eq!(talk.rejected(&first.send), 1);
+    let (retry, _) = talk.next_send(&group).unwrap();
+    assert_eq!(retry.send, first.send, "the same send");
+    assert_ne!(retry.mdk, first.mdk, "under a new token");
+    talk.sent(&format!("{chat}/w1"), EventKey::from("e-w1"));
+
+    let mut changed = emitted(&chat, words(State::Done));
+    changed.event = AgentEvent::new(
+        Header {
+            text: "other words".into(),
+            ..changed.event.header().clone()
+        },
+        changed.event.body().clone(),
+        None,
+    )
+    .unwrap();
+    talk.emitted(changed);
+    let (edit, what) = talk.next_send(&group).unwrap();
+    assert!(matches!(what, Sending::Words { edit: Some(_), .. }));
+    assert_eq!(
+        edit.edits.as_ref(),
+        Some(&retry.mdk),
+        "the edit names the first message"
+    );
+    assert_ne!(edit.mdk, retry.mdk, "and is a send of its own");
+}
+
 // When MDK refuses an edit of the agent's words, the turn's version queued to settle what the
 // edit showed settles nothing: those requests are settled as failed, as the edit failed (S1).
 #[test]
@@ -2014,7 +2065,7 @@ fn a_refused_edit_leaves_its_turn_version_settling_nothing() {
         .find(|(_, what)| matches!(what, Sending::Words { edit: Some(_), .. }))
         .map(|(token, _)| token.clone())
         .expect("the edit is queued");
-    talk.refused(&edit, false);
+    talk.refused(&edit.send, false);
     let mut failed = Vec::new();
     for (_, what) in talk.queued(&direct().group) {
         let Sending::Item { item, .. } = what else {
@@ -2066,7 +2117,7 @@ fn what_stands_in_for_a_dropped_send_is_the_last() {
             reason,
             item.settles.clone(),
         ));
-        talk.refused(&token, false);
+        talk.refused(&token.send, false);
     }
     let r1 = vec![EventKey::from("r1")];
     let failed = Some("failed".to_string());
@@ -2106,7 +2157,7 @@ fn deliver_all(talk: &mut Conversation) -> Vec<Item> {
             talk.sent(&key, EventKey::from(format!("e-sent-{tries}").as_str()));
             out.push(*item);
         } else {
-            talk.refused(&token, false);
+            talk.refused(&token.send, false);
         }
     }
     out
@@ -2151,7 +2202,7 @@ fn a_final_version_dropped_after_a_delivered_close_leaves_the_close() {
             talk.sent(&key, EventKey::from(format!("e-v{n}").as_str()));
         } else {
             carried = item.settles.clone();
-            talk.refused(&token, false);
+            talk.refused(&token.send, false);
         }
     }
     assert_eq!(carried.len(), 50);
@@ -2198,7 +2249,7 @@ fn a_dropped_notice_that_tells_of_a_gap_is_replaced_once() {
         if reason(&item).as_deref() == Some("not_delivered") {
             talk.sent(&key, EventKey::from("e-close"));
         } else {
-            talk.refused(&token, false);
+            talk.refused(&token.send, false);
         }
     }
     let failed = Some("failed".to_string());
@@ -2640,5 +2691,39 @@ fn a_harness_with_its_own_workspace_gets_no_folder_setting() {
     let acts = talk.asked(set_folder("r1", FRIEND, Some("es"), "/anywhere"));
     assert!(
         matches!(acts.as_slice(), [Act::Control(c)] if matches!(&c.action, Action::Set { setting, .. } if setting == "folder"))
+    );
+}
+
+// A send is first tried at a time kept with it, for as long as its token stands: a try MDK
+// dropped makes a new token, tried afresh. One given up without knowing whether it went out is
+// dropped like a refused one, with what stands in for it, and the chat's notice says it may not
+// have been delivered, not that it was not (S1, S3).
+#[test]
+fn a_send_given_up_unknown_says_it_may_not_have_gone() {
+    let (mut talk, _) = started();
+    let asked = request(direct(), "r1", OWNER, Some("e-not-yet"), Asked::Interrupt);
+    the_item(&mut talk, |t| t.asked(asked));
+    let (token, _) = talk.next_send(&direct().group).unwrap();
+    assert_eq!(token.tried_at, None);
+    assert!(talk.attempting(&token.send, 100), "the first try is saved");
+    assert!(!talk.attempting(&token.send, 200), "a later one is not");
+    let (tried, _) = talk.next_send(&direct().group).unwrap();
+    assert_eq!((tried.tried_at, &tried.mdk), (Some(100), &token.mdk));
+    talk.rejected(&token.send);
+    let (again, _) = talk.next_send(&direct().group).unwrap();
+    assert_eq!(again.tried_at, None, "a new token is tried afresh");
+    assert_ne!(again.mdk, token.mdk);
+
+    talk.lost(&token.send);
+    let Some((_, Sending::Item { item, .. })) = talk.next_send(&direct().group) else {
+        panic!("a notice stands in");
+    };
+    assert_eq!(item.settles, vec![EventKey::from("r1")]);
+    assert!(is_refused(&item, "failed"));
+    assert!(
+        item.event
+            .header()
+            .text
+            .contains("may not have been delivered")
     );
 }

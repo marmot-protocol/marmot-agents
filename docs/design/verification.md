@@ -9,7 +9,9 @@ tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules)
 [first, fix what is known](#first-fix-what-is-known), the behaviour the fixes made visible is provisional: built,
 and waiting for the owner. Of the models, `CoreLifecycle` is built (2026-11-22); the others are planned. The
 conformance suite's first phase, for the built-in drivers, is built (2026-11-22); its second, for the socket
-connectors, is designed.
+connectors, is designed. The core's sends went over to MDK 0.19.0's token-based sends on 2026-11-22, which ends
+the duplicate a restart could make; how often a send is tried is decided
+([D-109](../decisions.md#d-109-how-the-cores-sends-survive-a-crash-as-built)).
 
 ## Why
 
@@ -79,20 +81,53 @@ fixed on 2026-11-21, each with a test that failed first.
   request was. A failed save of the read mark was ignored, so a crash could run a prompt twice (S4). Closing
   everything on a stop and then crashing sent the closes again. A group accepted just before a failed save
   started, after the restart, at its latest message, skipping what had arrived.
-- **Sends that give up** (S1, S3). **Fixed, as far as the core can.** The core stopped trying a send after five
-  failures, which lost settles and started a new row for the next version. A send whose outcome was not known,
-  as when the wait for MDK ran out, may have gone out, and was sent again blindly. Now a send is kept until it
-  goes. One the core handed to MDK, and whose outcome is not known, is looked for in what MDK stored before it is
-  sent again: at once after a restart, and after 15 seconds while running; when MDK cannot be asked, the core
-  asks again later. After its tenth try it is looked for once more, and only then given up. One MDK refuses is
-  dropped with a notice.
+- **Sends that give up** (S1, S3). **Fixed.** The core stopped trying a send after five failures, which lost
+  settles and started a new row for the next version. A send whose outcome was not known, as when the wait for
+  MDK ran out, may have gone out, and was sent again blindly. Now a send is kept until it goes, and is handed to
+  MDK under a token saved with it before MDK has it (MDK 0.19.0's `submit_tagged_text`,
+  `submit_tagged_edit_for_local_send` and `submit_custom_event`). MDK keeps the send under that token before it
+  answers: tried again under it, after an answer that was lost or a restart, the send gives back the event MDK
+  made of it and sends nothing. So a send whose outcome is not known is simply tried again, under the same token,
+  a little later each time, with no limit. A try MDK took and dropped before it went out (its status
+  `Rejected`) sent nothing; MDK refuses its token from then on, so the next try is under a new one, and after
+  ten such tries the send is given up. One MDK refuses is dropped with a notice. Review of the move found four
+  more cases, each fixed with a test that failed first, against MDK itself where it is MDK's behaviour. MDK makes
+  an event's id from its kind, tags, content and second, and keeps the id of every send it took, even one it
+  dropped: a dropped send tried again in the same second under its new token, or a second send of the same
+  words in one second, met that id and was given up as refused; now that is MDK busy for the second, and the
+  send goes in the next (the tests make MDK drop sends for real, while the agent's own disband of a group is
+  under way). A send to a group being disbanded, or one MDK does not have, was tried for ever, and nothing
+  after it in the chat went; now, when MDK holds nothing under the token, it is refused for good. The core
+  waited in its one loop, up to a minute, for MDK to take each send into its engine, so a send MDK kept queued
+  held up every chat and a stop; now MDK is asked once per try, and a group whose send MDK has queued asks again
+  through its retry timer while the rest goes on. And the tenth drop of a send was saved before its give-up, in
+  a second write; now the two are saved together. A state file that has sends handed to MDK and no salt, which
+  only an unreleased core from before tokens could write, stops the core at start rather than risk sending one
+  twice.
 
-  **What a restart still cannot recover.** A crash between MDK storing a send and the core saving that it went
-  leaves the core to find it by looking. An item's version is found by its id, its version and its first
-  event. The agent's words are found by their text and tags; when an earlier message of the agent's is the same
-  in both, the core cannot tell the two apart. When the lookup cannot identify the earlier send, the send goes
-  out again, and the chat shows a duplicate first event. That ends when MDK's crash-safe sends take tagged
-  events, and the token each send keeps is handed to MDK.
+  **The limit MDK's message retention sets.** MDK forgets a token with the message it made: when a group's
+  messages disappear (a period any admin of the group may set, with no lower bound), the token goes with them,
+  and a send tried again under it after that would be a new one. So the core keeps, with each send, when it was
+  first tried under its token, and once the group's period has passed since then it asks MDK whether it still
+  knows the token before it tries again. If MDK does not, the send may have gone out: it is not tried again, and
+  is given up as not known, with a `failed` notice that says it may not have been delivered. The period read is
+  the group's now; a period made longer after a send went out, while its outcome was not known, is not seen,
+  and such a send could go out twice. That needs a lost answer or a crash, a restart later than the old period,
+  and the period changed in between; it is accepted as a limit
+  ([D-109](../decisions.md#d-109-how-the-cores-sends-survive-a-crash-as-built)).
+
+  **What a restart could not recover, until MDK 0.19.0.** Before, the core looked a send whose outcome was not
+  known for in what MDK stored, by its id, version and first event for an item, and by its text and tags for the
+  agent's words. A crash between MDK storing a send and the core saving that it went, with a lookup that could
+  not tell the send from an earlier one, or that came before MDK had stored it, sent it again, and the chat
+  showed a duplicate first event. The token ends that: nothing is looked for any more. The model now assumes
+  what MDK's tokens give (`TokenDedupe`) and shows the duplicate without it
+  ([`duplicate-first-event`](../../formal/tla/counterexamples/duplicate-first-event.json)); the simulator's
+  `late` family, a send that lands long after it was handed over, found the duplicate before and finds none now,
+  and is part of the gate. Two things keep no token: an edit of words an older core sent without one, which goes
+  as before and, sent again, shows the same text; and a file the agent sends (D-090), whose token form in MDK
+  carries no tags, so the file would lose its turn. A file is not tried again after a failure that may have come
+  after MDK took it, as before.
 - **A message MDK cannot read for a moment is skipped for good** (S10, L3). **Fixed** on 2026-11-22
   ([#83](https://github.com/marmot-protocol/marmot-agents/issues/83)). The core took a message it could not place,
   as when its group's state could not be read for a moment, for one not meant for the agent, and moved its read
@@ -157,13 +192,24 @@ dropped. Besides those:
 - **The settings refuse a key they cannot read.** `owner`, `invite`, and the people in `prompt` and `approve` are
   read as hex in either case or as an npub; anything else stops the core at start, naming the setting.
 - **A failed save stops the core**, as a crash would, and the next start takes up what is on disk.
-- **The state file** (`marmot-agent-state.json` in the home) keeps, besides what it kept before: the sends not
-  yet made, oldest first, each with a token that stays the same across tries, whether it was handed to MDK,
+- **The state file** (`marmot-agent-state.json` in the home) keeps, besides what it kept before: a random salt,
+  made once, that is part of every token handed to MDK, so a core whose state file was lost never reuses a token
+  MDK holds; the sends not yet made, oldest first, each with a name that stays the same across tries, how many
+  of its tries MDK dropped (the token MDK keeps it under is a digest of the salt, the name and that count),
+  whether it was handed to MDK, when it was first handed to MDK under its token now,
   whether it stands in for a dropped send (and so is the last), whether it is a `failed` notice that tells of
   a dropped send, for each item whether the latest version of it that went out closed it, and,
   for a turn's version that settles what the agent's words showed, the send of those words; where recently
   forgotten items stood; for a turn, the message that started it; and for the agent's words, the requests they
-  settle, held until a message carries them.
+  settle, held until a message carries them, and the token their first message went under, which an edit names.
+- **How often a send is tried.** One whose outcome is not known is tried again under the same token with no
+  limit, a little later each time up to ten seconds; one MDK took and dropped is tried again under a new token,
+  and given up, with a `failed` notice, after ten such tries. MDK is asked once per try whether its engine has
+  taken a send; while MDK has it queued the group asks again a little later each time, up to half a second, and
+  a stop waits up to a minute in all for what MDK has queued. A send MDK no longer knows the token of, once the
+  group's messages have disappeared since its first try, is given up with a `failed` notice that says
+  "Something the agent sent may not have been delivered to the chat."
+- **A state file with sends handed to MDK and no salt stops the core at start**, saying to move it away.
 - **A group's read mark is saved before the agent accepts the group.**
 - **One chat sends at most eight events in each turn of the core's loop**, then the others go; a stop sends all
   it can.
@@ -222,14 +268,16 @@ clock, from a seed. It owns S1 to S4, S10, L1 to L3 for the core.
 what it waits for in turn rather than at random, so a schedule replays exactly. It checks S1, S3, S4, S5, S10 and
 S12 after every step, and L1, L2, L3 and S2 at the end within 900 s of virtual time, from what the simulated MDK
 stored and what the harness saw. Runs are named `family/vVERSION/SEED/INDEX`; a failure leaves a capsule that
-replays exactly, shrunk greedily. Six families form the gate and run on every pull request. Two more show what
-lies beyond an assumption: `disorder` (a message heard before MDK stores it, or out of order, which MDK does not
-do) loses messages, and `late` (a send that lands after the core looked for it) finds the accepted duplicate.
+replays exactly, shrunk greedily. Seven families form the gate and run on every pull request. One more shows
+what lies beyond an assumption: `disorder` (a message heard before MDK stores it, or out of order, which MDK does
+not do) loses messages. `late` (a send that lands long after it was handed over) found the accepted duplicate
+until the sends took MDK's tokens, and joined the gate then.
 Three bugs fixed before are put back behind a test-only feature, and each is found. Bounded result, 2026-11-22:
 36,000 runs of the gate (6 families, 1,000 runs each, seeds 0 to 5), one or two chats, up to about 120 steps
 each, all passing. After `ReadFails` joined `live` and `mixed` (version 3 of each), the same day: 18,000 runs
 (seeds 1 to 3), all passing; after it gained a failed list of groups, 6,000 runs of `live` and `mixed` (seeds 1 to
-3), all passing. Not yet: the connector that
+3), all passing. After the sends took MDK's tokens (version 2 of `sends`, 4 of `mixed`, and `late` in the
+gate): 21,000 runs (7 families, 1,000 runs each, seeds 0 to 2), all passing. Not yet: the connector that
 drops mid-request and the one that reconnects (left to the conformance suite, which owns the socket), files, and
 the second lane on MDK's real relay.
 

@@ -24,6 +24,8 @@ pub mod rights;
 pub mod run;
 pub mod socket;
 
-pub use conversation::{Act, Conversation, Heard, HeardQuote, HeardRequest, Saved, Sending, Where};
+pub use conversation::{
+    Act, Conversation, Heard, HeardQuote, HeardRequest, Saved, Sending, Token, Where,
+};
 pub use keys::{EventKey, GroupKey, PubKey};
 pub use rights::{Right, Rights, Who};

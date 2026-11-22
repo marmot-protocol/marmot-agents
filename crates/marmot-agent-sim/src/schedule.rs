@@ -16,7 +16,8 @@ pub enum Family {
     Calm,
     /// Crashes between any two effects, failed saves, clean stops.
     Crash,
-    /// Sends MDK is busy for, whose outcome is not known, or that it refuses; lookups that fail.
+    /// Sends MDK is busy for, whose outcome is not known, that it refuses, or that it takes and
+    /// drops before they go out.
     Sends,
     /// A live stream that lags, live messages that come late, and reads of what arrived that fail
     /// for a moment.
@@ -29,9 +30,10 @@ pub enum Family {
     /// MDK emits a message only after storing it, in order (inferred from its account worker),
     /// so this family is not part of the gate: it shows what the core would do.
     Disorder,
-    /// Beyond the core's stated assumption: a send whose outcome is not known lands after the
-    /// core has looked for it. This is the accepted limit (`verification.md`, "What a restart
-    /// still cannot recover"): the family is expected to find a duplicate.
+    /// A send whose outcome is not known goes out long after, while the core tries it again.
+    /// Beyond what the core once assumed, when it looked for such a send in what MDK stored and
+    /// found a duplicate here; now that MDK keeps each send's token, it finds none, and the
+    /// family is part of the gate.
     Late,
 }
 
@@ -49,13 +51,14 @@ impl Family {
     ];
 
     /// The families every pull request runs, which must pass.
-    pub const GATE: [Family; 6] = [
+    pub const GATE: [Family; 7] = [
         Family::Calm,
         Family::Crash,
         Family::Sends,
         Family::Live,
         Family::Driver,
         Family::Mixed,
+        Family::Late,
     ];
 
     /// The family's name, as a run's name gives it.
@@ -81,11 +84,13 @@ impl Family {
     /// an old name never stands for a new schedule. Version 2 of `live`, `driver` and `mixed`:
     /// a message heard live takes the ones stored before it off the list still to be heard, and
     /// a `Hang` goes ahead of the moves still queued. Version 3 of `live` and `mixed`: reads that
-    /// fail for a moment (`ReadFails`).
+    /// fail for a moment (`ReadFails`). Version 2 of `sends` and 4 of `mixed`: sends MDK drops
+    /// (`Rejected`) in place of lookups that fail, which the core no longer makes.
     pub fn version(self) -> u32 {
         match self {
-            Family::Live | Family::Mixed => 3,
-            Family::Driver => 2,
+            Family::Mixed => 4,
+            Family::Live => 3,
+            Family::Driver | Family::Sends => 2,
             _ => 1,
         }
     }
@@ -112,7 +117,7 @@ impl Family {
                 busy: 5,
                 ambiguous: 6,
                 refused: 1,
-                lookup: 3,
+                rejected: 3,
                 crash: 2,
                 crash_after_send: 2,
                 ..none
@@ -140,7 +145,7 @@ impl Family {
                 busy: 2,
                 ambiguous: 2,
                 refused: 1,
-                lookup: 1,
+                rejected: 1,
                 lag: 1,
                 late_hear: 2,
                 read: 1,
@@ -277,8 +282,11 @@ pub enum Outcome {
     Refused,
     /// It goes out, and the core crashes before it learns so.
     CrashAfter,
-    /// The outcome is not known, and it goes out `ms` later: beyond the core's assumption that
-    /// a send settles within its wait ([`Family::Late`]).
+    /// MDK takes it and drops it before it goes out: nothing of it went, and MDK refuses its
+    /// token from then on.
+    Rejected,
+    /// The outcome is not known, and it goes out `ms` later, while the core tries it again
+    /// ([`Family::Late`]).
     Late {
         /// How much later.
         ms: u64,
@@ -350,8 +358,6 @@ pub enum Action {
         /// What it meets.
         outcome: Outcome,
     },
-    /// The next lookup of a send fails (`Lookup(send)`: `Error`).
-    Lookup,
     /// The next read of this kind fails, for a moment (`ReadFails`).
     ReadFails {
         /// Which read.
@@ -382,9 +388,9 @@ pub struct BugSet {
     /// A send is saved only after it went.
     #[serde(default)]
     pub save_after_send: bool,
-    /// A send whose outcome is not known is sent again blindly.
+    /// A send whose outcome is not known is tried again under a new token.
     #[serde(default)]
-    pub retry_ambiguous_blindly: bool,
+    pub retry_ambiguous_with_new_token: bool,
     /// What the agent's words settle is ignored.
     #[serde(default)]
     pub settles_only_from_items: bool,
@@ -393,7 +399,7 @@ pub struct BugSet {
 impl BugSet {
     /// Whether any is put back.
     pub fn any(&self) -> bool {
-        self.save_after_send || self.retry_ambiguous_blindly || self.settles_only_from_items
+        self.save_after_send || self.retry_ambiguous_with_new_token || self.settles_only_from_items
     }
 }
 
@@ -445,7 +451,7 @@ struct Mix {
     busy: u32,
     ambiguous: u32,
     refused: u32,
-    lookup: u32,
+    rejected: u32,
     read: u32,
     lag: u32,
     late_hear: u32,
@@ -510,7 +516,7 @@ pub fn generate(name: &RunName) -> Schedule {
             mix.busy,
             mix.ambiguous,
             mix.refused,
-            mix.lookup,
+            mix.rejected,
             mix.lag,
             mix.refuse,
             mix.slow,
@@ -607,7 +613,9 @@ pub fn generate(name: &RunName) -> Schedule {
             10 => steps.push(Action::Send {
                 outcome: Outcome::Refused,
             }),
-            11 => steps.push(Action::Lookup),
+            11 => steps.push(Action::Send {
+                outcome: Outcome::Rejected,
+            }),
             12 => steps.push(Action::Lag),
             13 => steps.push(Action::Refuse),
             14 => steps.push(Action::Slow {

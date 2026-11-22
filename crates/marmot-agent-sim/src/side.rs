@@ -4,13 +4,12 @@
 //! [`Marmot`]: marmot_agent::marmot::Marmot
 
 use crate::schedule::{Outcome, ReadStep};
-use crate::world::{CHAT, EDIT, Landing, RefusedSend, World, describe};
+use crate::world::{CHAT, EDIT, Kept, Landing, RefusedSend, World, describe};
 use marmot_agent::carrier::{self, REQUEST_KIND};
 use marmot_agent::files::Outgoing;
-use marmot_agent::marmot::{
-    FileFailed, Incoming, Live, LookupFailed, Message, NotNow, SendFailed, SentMatch, Side,
-};
-use marmot_agent::{EventKey, GroupKey, Heard, HeardRequest, PubKey, Sending, Where};
+use marmot_agent::marmot::{FileFailed, Incoming, Live, Message, NotNow, SendFailed, Side};
+use marmot_agent::run::REJECTED_TRIES;
+use marmot_agent::{EventKey, GroupKey, Heard, HeardRequest, PubKey, Sending, Token, Where};
 use marmot_agent_events::TurnId;
 use marmot_agent_events::body::{Body, NoticeKind};
 use std::sync::{Arc, Mutex};
@@ -230,7 +229,7 @@ impl Side for SimSide {
         &self,
         group: &GroupKey,
         what: &Sending,
-        token: &str,
+        token: &Token,
     ) -> Result<EventKey, SendFailed> {
         let (result, crash) = {
             let mut world = lock(&self.world);
@@ -247,30 +246,6 @@ impl Side for SimSide {
         result
     }
 
-    fn find_sent(
-        &self,
-        group: &GroupKey,
-        what: &Sending,
-        taken: &dyn Fn(&EventKey) -> bool,
-    ) -> Result<Option<EventKey>, LookupFailed> {
-        let mut world = lock(&self.world);
-        world.land();
-        if world.lookup_errors > 0 {
-            world.lookup_errors -= 1;
-            world.note("Lookup: Error");
-            return Err(LookupFailed);
-        }
-        let Some(chat) = world.chat_of(group) else {
-            return Ok(None);
-        };
-        let found = find(&world, chat, what, taken);
-        world.note(match found {
-            Some(_) => "Lookup: Found",
-            None => "Lookup: Absent",
-        });
-        Ok(found)
-    }
-
     async fn send_file(
         &self,
         _group: &GroupKey,
@@ -283,17 +258,20 @@ impl Side for SimSide {
 }
 
 /// What the simulated MDK does with a send: what it stores, and what it answers, with the
-/// outcome the schedule armed for it. The second value says the core crashes now.
+/// outcome the schedule armed for it. The second value says the core crashes now. MDK keeps each
+/// send it took under its token ([`Token::mdk`]), as its `submit_*` calls do: a send tried again
+/// under a token it keeps meets no armed outcome, and is answered from what became of the first:
+/// the same event once it went out, an unknown outcome while it is still to land, and its drop
+/// when MDK dropped it. A token it keeps for other bytes is refused.
 fn send(
     world: &mut World,
     group: &GroupKey,
     what: &Sending,
-    token: &str,
+    token: &Token,
 ) -> (Result<EventKey, SendFailed>, bool) {
     let Some(chat) = world.chat_of(group) else {
         return (Err(SendFailed::Refused { gone: false }), false);
     };
-    world.trying(chat, token);
     // What MDK would store, as the real Marmot side builds it.
     let built = match what {
         Sending::Item { item, .. } => {
@@ -358,17 +336,29 @@ fn send(
     };
     let Ok((kind, content, tags, edits)) = built else {
         world.refused.push(dropped);
-        world.unknown.remove(&chat);
         world.note(format!("Send(c{chat}): Refused, too large"));
         return (Err(SendFailed::Refused { gone: false }), false);
     };
+    let request = (kind, content.clone(), tags.clone(), edits.clone());
+    if let Some(kept) = world.tokens.get(&(chat, token.mdk.clone())).cloned() {
+        return (answer_again(world, chat, &kept, &request, dropped), false);
+    }
     let row = world.store_sent(chat, kind, content, tags, edits);
     let described = describe(&row);
+    let event = row.event.clone();
     let outcome = world.outcomes.pop_front();
-    // Busy leaves the send as the core last knew it; any other outcome but an unknown one that
-    // stored nothing settles what became of it.
-    if !matches!(outcome, Some(Outcome::Busy | Outcome::Ambiguous)) {
-        world.unknown.remove(&chat);
+    // What MDK keeps under the token: every outcome but those where it never had the send.
+    if !matches!(
+        outcome,
+        Some(Outcome::Busy | Outcome::Ambiguous | Outcome::Refused)
+    ) {
+        let rejected = outcome == Some(Outcome::Rejected);
+        let kept = Kept {
+            request,
+            event,
+            rejected,
+        };
+        world.tokens.insert((chat, token.mdk.clone()), kept);
     }
     match outcome {
         None => {
@@ -385,8 +375,11 @@ fn send(
             world.note(format!("Send({described}): Refused"));
             (Err(SendFailed::Refused { gone: false }), false)
         }
+        Some(Outcome::Rejected) => {
+            world.note(format!("Send({described}): Rejected"));
+            (Err(dropped_try(world, &token.send, dropped)), false)
+        }
         Some(Outcome::Ambiguous) => {
-            world.unknown.insert(chat, (token.to_string(), dropped));
             world.note(format!("Send({described}): Ambiguous, not sent"));
             (Err(SendFailed::Unknown), false)
         }
@@ -410,20 +403,42 @@ fn send(
     }
 }
 
-/// The event a send became, looked for as the real Marmot side looks: its own query over this
-/// storage (the agent's events in the chat), matched by the core's own [`SentMatch`], among those
-/// not already known as the first of something. Whether the core then sends nothing twice is the
-/// oracles' to check, from what was stored.
-fn find(
-    world: &World,
+/// MDK's answer to a send tried again under a token it keeps: `request` is what it carries now.
+fn answer_again(
+    world: &mut World,
     chat: usize,
-    what: &Sending,
-    taken: &dyn Fn(&EventKey) -> bool,
-) -> Option<EventKey> {
-    let wanted = SentMatch::new(what)?;
-    (world.rows.iter())
-        .filter(|r| r.chat == chat && r.from_agent && r.kind == wanted.kind())
-        .filter(|r| wanted.matches(&r.content, &r.tags))
-        .map(|r| r.event.clone())
-        .find(|e| !taken(e))
+    kept: &Kept,
+    request: &crate::world::Request,
+    dropped: RefusedSend,
+) -> Result<EventKey, SendFailed> {
+    if kept.request != *request {
+        // Never made by the core: a token names one send. The core drops it as refused.
+        world.refused.push(dropped);
+        world.note(format!("Send(c{chat}): Refused, token taken"));
+        return Err(SendFailed::Refused { gone: false });
+    }
+    if kept.rejected {
+        world.note(format!("Send(c{chat}): Rejected again"));
+        return Err(SendFailed::Rejected);
+    }
+    if (world.rows.iter()).any(|r| r.event == kept.event) {
+        world.note(format!("Send(c{chat}): Sent before, same token"));
+        return Ok(kept.event.clone());
+    }
+    world.note(format!("Send(c{chat}): still to land, same token"));
+    Err(SendFailed::Unknown)
+}
+
+/// MDK dropped a try of the send named `send`: the core tries it again under a new token, until
+/// it has dropped [`REJECTED_TRIES`] of them, when the core gives it up as refused, and it is
+/// recorded among the sends dropped.
+fn dropped_try(world: &mut World, send: &str, dropped: RefusedSend) -> SendFailed {
+    let chat = dropped.chat;
+    let tries = world.drops.entry((chat, send.to_string())).or_default();
+    *tries += 1;
+    if *tries >= REJECTED_TRIES {
+        world.note(format!("Send(c{chat}): given up"));
+        world.refused.push(dropped);
+    }
+    SendFailed::Rejected
 }
