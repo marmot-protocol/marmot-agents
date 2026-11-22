@@ -1785,6 +1785,36 @@ already send media, and the new system must not do less than they do on any harn
 
 Decided 2026-11-22. The project owner decided.
 
+## D-108 How an agent's file reaches the core, as built
+
+**Decision.** For [D-090](#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder) and
+[D-107](#d-107-every-harness-that-lets-an-agent-send-a-file-gets-file-sending-before-the-swap):
+
+- **The tool.** Every harness the core gives a tool to gets the same one: `send_file`, taking one argument, `path`,
+  and answering "Sent." or "Not sent: …". Codex gets it as a dynamic tool and Claude Code from an in-process MCP
+  server. Pi gets it from a small extension the driver ships and loads with `--extension`, since Pi's RPC mode
+  has no way for a client to add a tool.
+- **A gateway's own way.** The Hermes and OpenClaw plugins turn the files their gateway hands the platform into
+  the core's `send_file`, one request for each file. A caption goes as the agent's words, before the files.
+- **OpenClaw's original path.** OpenClaw copies a reply's file into its own outbound media store and hands the
+  channel only the copy. The plugin sends the path the agent named, which OpenClaw keeps in a record its plugin
+  SDK does not export. This is a stretch of [D-006](#d-006-prefer-official-interfaces-and-libraries), accepted
+  until OpenClaw exposes that path, which the project asks it to do.
+- **A gateway's folder.** The installer lists the gateway's work folder in `files_from`: Hermes's `terminal.cwd`,
+  or the workspace of the OpenClaw agent that takes the Marmot chats. It lists none when that folder is the
+  whole home, holds or lies in the agents' data, or holds or lies in a gateway's home or media cache, or when
+  Hermes runs its commands in a sandbox, or OpenClaw's Marmot chats may go to more than one agent. A folder that
+  lies inside OpenClaw's state folder, as its default workspace does, is allowed. A `files_from` already in the
+  settings is never changed by a re-run.
+- **Media caches stay out.** Hermes's and OpenClaw's media caches are never allowed, since they also hold files
+  people sent the gateway in any of its chats, on any platform.
+
+**Why.** The project owner accepted the recommendations. One tool with one wording reads the same on every
+harness. Each way is the harness's own, or the only one it offers. Leaving the caches out keeps a file sent in
+one chat or platform from being posted into another.
+
+Decided 2026-11-22. The project owner decided.
+
 ## D-109 How the core's sends survive a crash, as built
 
 **Decision.** On MDK 0.19.0 the core hands every send in its outbox to MDK under a token saved with it (MDK's

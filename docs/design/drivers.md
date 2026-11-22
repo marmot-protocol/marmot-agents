@@ -10,8 +10,8 @@ So is how drivers are tested
 Pi driver builds on ([D-086](../decisions.md#d-086-the-pi-driver-reads-pis-rpc-messages-with-types-of-its-own)).
 That an agent's file goes to the chat as an attachment from an allowed folder is decided
 ([D-090](../decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)); how a
-driver asks for it, in [sending a file](#sending-a-file), is a proposal: built, and provisional until the
-owner accepts it. That the installers run the harness the person already has, and add our plugin to their own
+driver asks for it, in [sending a file](#sending-a-file), is decided too
+([D-108](../decisions.md#d-108-how-an-agents-file-reaches-the-core-as-built)). That the installers run the harness the person already has, and add our plugin to their own
 Hermes and OpenClaw, is decided
 ([D-102](../decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)); which of their
 gateway's settings the installers change is decided too
@@ -107,7 +107,8 @@ every request to return
 
 ## Sending a file
 
-A proposal, built and provisional. What is decided is the outcome
+Decided ([D-108](../decisions.md#d-108-how-an-agents-file-reaches-the-core-as-built)). What it builds on is the
+outcome
 ([D-090](../decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)): the
 file goes to the chat as an ordinary encrypted attachment, tagged with its turn, and only from folders the
 settings allow.
@@ -180,7 +181,7 @@ The ACP driver does not offer the tool yet.
 
 ### A gateway's files
 
-Built 2026-11-22; provisional until the owner accepts it. Hermes and OpenClaw already let their agent send a
+Decided ([D-108](../decisions.md#d-108-how-an-agents-file-reaches-the-core-as-built)). Hermes and OpenClaw already let their agent send a
 file to any chat platform: the agent writes a `MEDIA:<path>` line in its answer, or a tool attaches a file, and
 the gateway hands the platform the file. Each plugin turns that into the core's `send_file`, one request for
 each file, as today's connectors turn it into `send_media`.
