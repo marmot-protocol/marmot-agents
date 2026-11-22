@@ -22,6 +22,8 @@ HERMES_HOW="Install or update it (https://github.com/NousResearch/hermes-agent),
 OUR_PLUGIN="marmot-agent's local socket"
 
 harness_check() {
+    # What harness_connect reads, also when a dry run goes on without a Hermes to add the plugin to.
+    HERMES_CONFIG="" HERMES_ENV="" PLUGIN="" OLD_PLUGIN=0
     HERMES=$(program_path hermes) || {
         HERMES=hermes
         missing "Hermes" "$HERMES_HOW"
@@ -52,7 +54,6 @@ harness_check() {
     if [ -n "$home" ] && [ "$home" != "$MA_HOME" ]; then
         die "your Hermes already connects to the agent whose home is $home. One Hermes serves one agent: uninstall that one first (install/hermes.sh --uninstall --name <its name>), or install into another Hermes (HERMES_HOME)"
     fi
-    OLD_PLUGIN=0
     if [ -e "$PLUGIN" ] && ! ours "$PLUGIN"; then
         if [ "$REPLACE_PLUGIN" -eq 1 ]; then
             OLD_PLUGIN=1
@@ -76,6 +77,10 @@ harness_settings() {
 
 # Adds the plugin to the person's Hermes and points its platform at this agent's home.
 harness_connect() {
+    if [ -z "$PLUGIN" ]; then
+        say "would add the Marmot plugin to your Hermes, once it is installed and set up"
+        return 0
+    fi
     backup_file "$HERMES_CONFIG"
     [ -z "$HERMES_ENV" ] || backup_file "$HERMES_ENV"
     [ "$OLD_PLUGIN" -eq 0 ] || backup_file "$PLUGIN"
@@ -91,11 +96,10 @@ harness_connect() {
     act "$HERMES" plugins enable marmot </dev/null
     act "$HERMES" config set platforms.marmot.enabled true
     act "$HERMES" config set platforms.marmot.home "$MA_HOME"
-    # What was there before, to put back on --uninstall: the line's value, or nothing.
-    local before=""
-    if [ -n "$HERMES_ENV" ] && [ -f "$HERMES_ENV" ]; then
-        before=$(sed -n 's/^MARMOT_ALLOW_ALL_USERS=//p' "$HERMES_ENV" | tail -n 1)
-    fi
+    # What was there before, to put back on --uninstall: the value, as Hermes reads it in any of the
+    # shapes its .env takes, or nothing.
+    local before
+    before=$("$HERMES" config get MARMOT_ALLOW_ALL_USERS 2>/dev/null) || before=""
     [ "$before" != true ] || return 0
     if [ "$DRY_RUN" -eq 1 ]; then
         say "would record MARMOT_ALLOW_ALL_USERS as it is in $MA_AGENT_DIR/hermes-allow-all"

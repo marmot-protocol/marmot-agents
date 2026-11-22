@@ -25,12 +25,15 @@ OUR_PACKAGE=marmot-agent-openclaw
 OUR_APPROVALS='{"enabled":true,"mode":"session","sessionFilter":[":marmot:"]}'
 
 harness_check() {
+    # What harness_connect reads, also when a dry run goes on without OpenClaw.
+    OLD_PLUGIN="" OPENCLAW_FOUND=0
     need_node
     OPENCLAW=$(program_path openclaw) || {
         OPENCLAW=openclaw
         missing "OpenClaw" "$OPENCLAW_HOW"
         return 0
     }
+    OPENCLAW_FOUND=1
     local version
     version=$(version_of "$OPENCLAW")
     if [ -z "$version" ] || version_below "$version" "$OPENCLAW_LEAST"; then
@@ -44,12 +47,20 @@ harness_check() {
     if [ -n "$home" ] && [ "$home" != "$MA_HOME" ]; then
         die "your OpenClaw already connects to the agent whose home is $home. One OpenClaw serves one agent: uninstall that one first (install/openclaw.sh --uninstall --name <its name>), or install into another OpenClaw (OPENCLAW_HOME)"
     fi
-    OLD_PLUGIN=""
-    local package
-    package=$(plugin_package)
-    if [ -n "$package" ] && [ "$package" != "$OUR_PACKAGE" ]; then
+    local found package
+    found=$(plugin_found)
+    package=$(plugin_package "${found#* }")
+    if [ -z "$found" ] || [ "$package" = "$OUR_PACKAGE" ]; then
+        :
+    elif [ "${found%% *}" = found ]; then
+        # A plugin OpenClaw loads from a folder it is pointed at wins over one it installed.
+        missing "room for our Marmot plugin" "Your OpenClaw loads another plugin called marmot ($package) from" \
+            "${found#* }, a folder its settings point it at (plugins.load.paths), and it would load that" \
+            "one in place of ours. Take that folder out of plugins.load.paths (moving the install over" \
+            "first if it is today's connector, docs/move.md), then run this again."
+    else
         if [ "$REPLACE_PLUGIN" -eq 1 ]; then
-            OLD_PLUGIN=$(plugin_path)
+            OLD_PLUGIN=${found#* }
         else
             missing "room for our Marmot plugin" "Your OpenClaw has another plugin called marmot ($package), such as the one of" \
                 "today's connector. Move that install over first (docs/move.md), then run this again with" \
@@ -64,16 +75,21 @@ oc_get() {
     if out=$("$OPENCLAW" config get "$@" 2>/dev/null); then printf '%s' "$out"; fi
 }
 
-# The folder and the package name of the plugin called marmot that OpenClaw has, if any.
-plugin_path() {
+# The plugin called marmot that OpenClaw has, if any, as "installed FOLDER" for one an install of its
+# own put there, or "found FOLDER" for one it finds in a folder it is pointed at, with no install record.
+plugin_found() {
     "$OPENCLAW" plugins inspect marmot --json 2>/dev/null | "$NODE" -e '
         let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
-          try { const p = JSON.parse(s).install?.installPath; if (p) process.stdout.write(p); } catch {}
+          try {
+            const j = JSON.parse(s), p = j.plugin || {}, installed = j.install?.installPath;
+            const folder = installed || p.rootDir || (p.source ? require("path").dirname(p.source) : "");
+            if (folder) process.stdout.write((installed ? "installed " : "found ") + folder);
+          } catch {}
         });' || true
 }
+# The package name of the plugin in a folder; nothing for no folder.
 plugin_package() {
-    local folder
-    folder=$(plugin_path)
+    local folder=$1
     [ -n "$folder" ] || return 0
     [ -f "$folder/package.json" ] || { printf 'unknown'; return 0; }
     "$NODE" -e 'try { process.stdout.write(require(process.argv[1]).name || "unknown"); } catch { process.stdout.write("unknown"); }' \
@@ -96,17 +112,23 @@ harness_settings() {
 
 # Adds the plugin to the person's OpenClaw and points its channel at this agent's home.
 harness_connect() {
-    local config channel approvals
+    local config channel approvals enabled
+    if [ "$OPENCLAW_FOUND" -eq 0 ]; then
+        say "would add the Marmot plugin to your OpenClaw, once it is installed"
+        return 0
+    fi
     config=$("$OPENCLAW" config file 2>/dev/null) || config=""
     [ -z "$config" ] || backup_file "$config"
     [ -z "$OLD_PLUGIN" ] || backup_file "$OLD_PLUGIN"
+    # Installing a plugin enables it too.
     say "adding the Marmot plugin to your OpenClaw"
     act "$OPENCLAW" plugins install --force --accept-capabilities "$MA_LIB/packages/openclaw/marmot-agent-openclaw.tgz"
-    act "$OPENCLAW" plugins enable marmot
     channel=$("$NODE" -e 'process.stdout.write(JSON.stringify({ enabled: true, home: process.argv[1] }))' "$MA_HOME")
     act "$OPENCLAW" config set channels.marmot "$channel" --strict-json
     approvals=$(oc_get approvals.exec --json)
-    if [ "$(printf '%s' "$approvals" | json_field enabled)" = true ]; then
+    # On is true or "auto"; only one that is off or not set is switched on.
+    enabled=$(printf '%s' "$approvals" | json_field enabled)
+    if [ -n "$enabled" ] && [ "$enabled" != false ]; then
         if [ ! -f "$MA_AGENT_DIR/openclaw-approvals" ]; then
             say "your OpenClaw forwards approvals already (approvals.exec): it must forward those of a Marmot chat's"
             say "sessions to their own chat, or an approval waits unseen"

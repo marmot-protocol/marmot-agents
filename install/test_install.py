@@ -144,20 +144,24 @@ elif args[:2] == ["config", "unset"]:
     del parent[last]
     save(c)
 elif args[:2] == ["plugins", "install"]:
+    # Installing enables the plugin, unless --no-enable.
     note()
     shutil.rmtree(plugin, ignore_errors=True)
     plugin.mkdir(parents=True)
     (plugin / "package.json").write_text(json.dumps({"name": "marmot-agent-openclaw"}))
     shutil.copy(args[-1], plugin / "packed.tgz")
-elif args[:2] == ["plugins", "enable"]:
-    note()
     c = load()
-    c.setdefault("plugins", {}).setdefault("entries", {})[args[2]] = {"enabled": True}
+    c.setdefault("plugins", {}).setdefault("entries", {})["marmot"] = {"enabled": True, "config": {}}
     save(c)
 elif args[:2] == ["plugins", "inspect"]:
-    if not plugin.is_dir():
+    # One found in a folder of plugins.load.paths wins, and has no install record.
+    found = [f for f in load().get("plugins", {}).get("load", {}).get("paths", []) if Path(f, "package.json").is_file()]
+    if found:
+        print(json.dumps({"plugin": {"id": "marmot", "rootDir": found[0], "source": found[0] + "/dist/index.js"}}))
+    elif plugin.is_dir():
+        print(json.dumps({"plugin": {"id": "marmot", "rootDir": str(plugin)}, "install": {"installPath": str(plugin)}}))
+    else:
         sys.exit(1)
-    print(json.dumps({"plugin": {"id": "marmot"}, "install": {"installPath": str(plugin)}}))
 elif args[:2] == ["plugins", "uninstall"]:
     note()
     shutil.rmtree(plugin, ignore_errors=True)
@@ -192,6 +196,12 @@ def lines():
     return env.read_text().splitlines() if env.exists() else []
 
 
+def env_key(line):
+    """The key of a .env line, which may start with export and have spaces around the =."""
+    left = line.split("=", 1)[0].strip()
+    return left[len("export "):].strip() if left.startswith("export ") else left
+
+
 def note():
     with open(os.environ["FAKE_LOG"], "a") as log:
         log.write("hermes " + " ".join(args) + "\n")
@@ -217,8 +227,10 @@ elif args[:2] == ["config", "env-path"]:
 elif args[:2] == ["config", "get"]:
     key = args[2]
     if key.isupper():
-        found = [l.split("=", 1)[1] for l in lines() if l.startswith(key + "=")] or [os.environ.get(key, "")]
-        print(found[-1])
+        found = [l.split("=", 1)[1].strip() for l in lines() if "=" in l and env_key(l) == key]
+        if not found and key not in os.environ:
+            sys.exit(f"Config key not set: {key}")
+        print((found or [os.environ.get(key)])[-1])
     else:
         c, last = walk(load(), key)
         value = c.get(last, "") if c is not None else ""
@@ -228,7 +240,7 @@ elif args[:2] == ["config", "set"]:
     key, value = args[2], args[3]
     if key.isupper():
         home.mkdir(parents=True, exist_ok=True)
-        env.write_text("".join(l + "\n" for l in lines() if not l.startswith(key + "=")) + f"{key}={value}\n")
+        env.write_text("".join(l + "\n" for l in lines() if env_key(l) != key) + f"{key}={value}\n")
     else:
         c = load()
         parent, last = walk(c, key, make=True)
@@ -238,7 +250,7 @@ elif args[:2] == ["config", "unset"]:
     note()
     key = args[2]
     if key.isupper():
-        env.write_text("".join(l + "\n" for l in lines() if not l.startswith(key + "=")))
+        env.write_text("".join(l + "\n" for l in lines() if env_key(l) != key))
     else:
         c = load()
         parent, last = walk(c, key)
@@ -423,7 +435,7 @@ class DryRun(unittest.TestCase):
         self.assertIn("would run: sh -c cd ", out)
         self.assertIn(f"would run: {m.bin}/openclaw plugins install --force --accept-capabilities "
                       f"{m.data}/lib/packages/openclaw/marmot-agent-openclaw.tgz", out)
-        self.assertIn(f"would run: {m.bin}/openclaw plugins enable marmot", out)
+        self.assertNotIn("plugins enable", out, "installing a plugin enables it")
         if REAL_NODE:
             self.assertIn(f'would run: {m.bin}/openclaw config set channels.marmot '
                           f'{{"enabled":true,"home":"{agent}/home"}} --strict-json', out)
@@ -438,6 +450,15 @@ class DryRun(unittest.TestCase):
         self.assertIn(f"would run: {m.bin}/hermes config set platforms.marmot.home {agent}/home", out)
         self.assertIn(f"would run: {m.bin}/hermes config set MARMOT_ALLOW_ALL_USERS true", out)
         self.assertIn("hermes gateway restart", out)
+
+    def test_plugin_harnesses_without_the_gateway(self):
+        """A dry run goes on without the gateway, and says how to get it."""
+        m = Machine(self, programs=())
+        for harness, title in (("openclaw", "OpenClaw"), ("hermes", "Hermes")):
+            with self.subTest(harness=harness):
+                result = m.run(harness, *m.args(harness, "--binary", str(m.core), "--dry-run"))
+                self.assertIn(f"missing: {title}", result.stderr)
+                self.assertIn(f"would add the Marmot plugin to your {title}", result.stdout)
 
     def test_containers_on_request(self):
         """Pi and Goose run in a container only with --container, on the model it is given."""
@@ -611,12 +632,17 @@ class Install(unittest.TestCase):
         self.assertIn("hermes config unset platforms.marmot", m.calls())
 
     def test_hermes_keeps_an_allow_all_it_had(self):
-        m = Machine(self)
-        (m.home / ".hermes").mkdir()
-        (m.home / ".hermes/.env").write_text("MARMOT_ALLOW_ALL_USERS=1\n")
-        m.run("hermes", *m.args("hermes", "--binary", str(m.core), "--no-service"))
-        m.run("hermes", "--uninstall")
-        self.assertEqual((m.home / ".hermes/.env").read_text(), "MARMOT_ALLOW_ALL_USERS=1\n")
+        # In each shape Hermes reads in its .env: put back with its value.
+        for line in ("MARMOT_ALLOW_ALL_USERS=1", "export MARMOT_ALLOW_ALL_USERS=yes", "MARMOT_ALLOW_ALL_USERS = on"):
+            with self.subTest(line=line):
+                m = Machine(self)
+                (m.home / ".hermes").mkdir()
+                (m.home / ".hermes/.env").write_text(line + "\n")
+                m.run("hermes", *m.args("hermes", "--binary", str(m.core), "--no-service"))
+                self.assertEqual((m.home / ".hermes/.env").read_text(), "MARMOT_ALLOW_ALL_USERS=true\n")
+                m.run("hermes", "--uninstall")
+                value = line.split("=", 1)[1].strip()
+                self.assertEqual((m.home / ".hermes/.env").read_text(), f"MARMOT_ALLOW_ALL_USERS={value}\n")
 
     @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
     def test_openclaw(self):
@@ -635,6 +661,8 @@ class Install(unittest.TestCase):
         self.assertEqual(config["approvals"]["exec"],
                          {"enabled": True, "mode": "session", "sessionFilter": [":marmot:"]})
         self.assertEqual((state / "extensions/marmot/packed.tgz").read_text(), "a packed plugin\n")
+        self.assertTrue(config["plugins"]["entries"]["marmot"]["enabled"])
+        self.assertFalse([c for c in m.calls() if c.startswith("openclaw plugins enable")])
         lib = m.data / "lib/packages/openclaw"
         self.assertFalse((lib / "node_modules").exists(), "what only builds the plugin is removed")
         self.assertTrue(any(c.startswith("npm ci") for c in m.calls()))
@@ -672,6 +700,17 @@ class Install(unittest.TestCase):
         self.assertTrue(json.loads((state / "openclaw.json").read_text())["approvals"]["exec"]["enabled"])
         m.run("openclaw", "--uninstall")
         self.assertEqual(json.loads((state / "openclaw.json").read_text())["approvals"]["exec"], off)
+
+    @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
+    def test_openclaw_keeps_approvals_forwarded_automatically(self):
+        m = Machine(self)
+        state = m.home / ".openclaw"
+        state.mkdir()
+        auto = {"enabled": "auto", "mode": "targets"}
+        (state / "openclaw.json").write_text(json.dumps({"approvals": {"exec": auto}}))
+        out = m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--no-service")).stdout
+        self.assertIn("forwards approvals already", out)
+        self.assertEqual(json.loads((state / "openclaw.json").read_text())["approvals"]["exec"], auto)
 
     def test_npub_owner(self):
         m = Machine(self)
@@ -832,10 +871,11 @@ class Install(unittest.TestCase):
 class Boundaries(unittest.TestCase):
     """What keeps an install from handing a harness the keys, or another agent's service."""
 
-    def refused(self, m: Machine, harness: str, *args: str, message: str) -> None:
+    def refused(self, m: Machine, harness: str, *args: str, message: str) -> subprocess.CompletedProcess:
         result = m.run(harness, *args, check=False)
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(message, result.stderr)
+        return result
 
     def test_work_folder_is_compared_with_links_and_dots_resolved(self):
         m = Machine(self)
@@ -965,6 +1005,20 @@ class Boundaries(unittest.TestCase):
         self.assertIn("does not name the model key file the agent was installed with", result.stderr)
         self.assertEqual((settings.read_text(), (agent / "choices").read_text()), before)
 
+    @staticmethod
+    def imported(m: Machine, harness: str, title: str) -> tuple:
+        """An install of today's connector moved over as docs/move.md says: its home where it was, and
+        the settings `marmot-agent import --settings` wrote in the agent's folder."""
+        old_home = m.home / f".marmot-agents/{harness}"
+        (old_home / "accounts").mkdir(parents=True)
+        settings = m.data / f"agents/{harness}/settings.toml"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(f"# Imported by `marmot-agent import` from a {title} install, at 20261122T000000Z.\n"
+                            f"# The home before the import is backed up in {old_home}.backup-20261122T000000Z.\n"
+                            f'home = "{old_home}"\nrelays = ["wss://relay.example"]\nowner = "{OWNER}"\n'
+                            '\n[connector]\n')
+        return old_home, settings
+
     def test_another_plugin_called_marmot_is_not_replaced_unasked(self):
         """Today's connectors put a plugin called marmot into Hermes and OpenClaw (docs/move.md)."""
         m = Machine(self)
@@ -974,10 +1028,35 @@ class Boundaries(unittest.TestCase):
         self.refused(m, "hermes", *m.args("hermes", "--binary", str(m.core)), message="--replace-plugin")
         self.assertEqual(m.calls(), [])
         self.assertFalse(m.data.exists())
+        # Replacing it without moving the install over would make a new identity, in none of its chats.
+        self.refused(m, "hermes", *m.args("hermes", "--binary", str(m.core), "--replace-plugin"),
+                     message="marmot-agent import")
+        self.assertEqual(m.calls(), [])
+        self.assertFalse(m.data.exists())
+        old_home, settings = self.imported(m, "hermes", "Hermes")
+        before = settings.read_text()
         m.run("hermes", *m.args("hermes", "--binary", str(m.core), "--no-service", "--replace-plugin"))
         kept = next((m.data / "agents/hermes/backups").glob("marmot.*"))
         self.assertEqual((kept / "plugin.yaml").read_text(), "name: marmot\ndescription: the old connector's\n")
         self.assertIn("marmot-agent's local socket", (old / "plugin.yaml").read_text())
+        # The imported identity and home are kept, and the gateway points at that home.
+        config = m.home / ".hermes/config.yaml"
+        self.assertEqual(json.loads(config.read_text())["platforms"]["marmot"]["home"], str(old_home))
+        self.assertEqual(settings.read_text(), before)
+        self.assertFalse([c for c in m.calls() if c.startswith("marmot-agent init")])
+        self.assertFalse((m.data / "agents/hermes/home").exists())
+        self.assertEqual((m.data / "agents/hermes/harness").read_text(), "hermes\n")
+        # Again, and then uninstalled: the same home, and no identity made.
+        m.run("hermes", "--yes", "--binary", str(m.core), "--no-service")
+        self.assertEqual(json.loads(config.read_text())["platforms"]["marmot"]["home"], str(old_home))
+        self.assertFalse([c for c in m.calls() if c.startswith("marmot-agent init")])
+        m.run("hermes", "--uninstall")
+        self.assertNotIn("marmot", json.loads(config.read_text())["platforms"])
+
+    def test_settings_imported_for_another_harness_are_refused(self):
+        m = Machine(self)
+        self.imported(m, "hermes", "OpenClaw")
+        self.refused(m, "hermes", *m.args("hermes", "--binary", str(m.core)), message="no record of its harness")
 
     @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
     def test_another_openclaw_plugin_called_marmot_is_not_replaced_unasked(self):
@@ -987,9 +1066,32 @@ class Boundaries(unittest.TestCase):
         (old / "package.json").write_text(json.dumps({"name": "@marmot-protocol/openclaw-marmot"}))
         self.refused(m, "openclaw", *m.args("openclaw", "--binary", str(m.core)), message="--replace-plugin")
         self.assertEqual(m.calls(), [])
+        old_home, settings = self.imported(m, "openclaw", "OpenClaw")
+        # Today's connector points the channel at its home, which the import keeps.
+        (m.home / ".openclaw/openclaw.json").write_text(json.dumps({"channels": {"marmot": {"home": str(old_home)}}}))
         m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--no-service", "--replace-plugin"))
         kept = next((m.data / "agents/openclaw/backups").glob("marmot.*"))
         self.assertEqual(json.loads((kept / "package.json").read_text())["name"], "@marmot-protocol/openclaw-marmot")
+        config = json.loads((m.home / ".openclaw/openclaw.json").read_text())
+        self.assertEqual(config["channels"]["marmot"], {"enabled": True, "home": str(old_home)})
+        self.assertFalse([c for c in m.calls() if c.startswith("marmot-agent init")])
+        m.run("openclaw", "--uninstall")
+        self.assertNotIn("marmot", json.loads((m.home / ".openclaw/openclaw.json").read_text())["channels"])
+
+    @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
+    def test_an_openclaw_plugin_found_in_a_load_path_counts(self):
+        """OpenClaw loads a plugin from plugins.load.paths with no install record, in place of one it installed."""
+        m = Machine(self)
+        found = m.home / "plugins/marmot"
+        found.mkdir(parents=True)
+        (found / "package.json").write_text(json.dumps({"name": "@marmot-protocol/openclaw-marmot"}))
+        (m.home / ".openclaw").mkdir()
+        (m.home / ".openclaw/openclaw.json").write_text(json.dumps({"plugins": {"load": {"paths": [str(found)]}}}))
+        self.imported(m, "openclaw", "OpenClaw")
+        result = self.refused(m, "openclaw", *m.args("openclaw", "--binary", str(m.core), "--replace-plugin"),
+                              message="plugins.load.paths")
+        self.assertIn(str(found), result.stderr)
+        self.assertEqual(m.calls(), [])
 
     def test_one_gateway_serves_one_agent(self):
         m = Machine(self)

@@ -253,8 +253,9 @@ linux_only() {
 # The options that only a harness in a container takes: its model is the container's to set up, while
 # a harness of the person's own uses its own settings.
 container_options_only() {
-    [ -z "$MODEL_KEY" ] && [ -z "$MODEL" ] && [ -z "$MODEL_URL" ] ||
+    if [ -n "$MODEL_KEY" ] || [ -n "$MODEL" ] || [ -n "$MODEL_URL" ]; then
         die "--model-key, --model and --model-url go with --container: your own $HARNESS_TITLE uses the model it is set up with"
+    fi
 }
 
 # The first version number, such as 1.6.0, in what a program prints for --version; nothing if none.
@@ -594,10 +595,35 @@ update_settings() {
         }' "$MA_SETTINGS" | put "$MA_SETTINGS" 600
 }
 
-# Makes the agent's identity once; its public key is kept beside the settings to show again.
+# Whether `marmot-agent import` wrote the agent's settings, from today's connector of the harness that
+# follows, such as "Hermes install,", or of any (docs/move.md): its identity came with its home.
+imported() {
+    local line
+    [ -f "$MA_SETTINGS" ] || return 1
+    line=$(head -n 1 "$MA_SETTINGS")
+    case $line in "# Imported by \`marmot-agent import\` from a ${1:-}"*) return 0 ;; esac
+    return 1
+}
+
+# The account home the agent's settings name: the one in the agent's folder, unless they were imported
+# or edited since. Only a plain path in quotes is read.
+settings_home() {
+    local value
+    value=$(awk '/^[[:space:]]*\[/ { exit } /^home[[:space:]]*=/ { sub(/^home[[:space:]]*=[[:space:]]*/, ""); print; exit }' "$MA_SETTINGS")
+    value=$(printf '%s' "$value" | sed -n -e 's/^"\([^"\\]*\)"[[:space:]]*\(#.*\)\{0,1\}$/\1/p' \
+        -e "s/^'\([^']*\)'[[:space:]]*\(#.*\)\{0,1\}\$/\1/p")
+    case $value in /*) printf '%s' "$value" ;; *) return 1 ;; esac
+}
+
+# Makes the agent's identity once; its public key is kept beside the settings to show again. An
+# imported agent has one in its home already, and is never given another.
 init_agent() {
     if [ -s "$MA_AGENT_DIR/public-key" ]; then
         say "the agent already has an identity"
+        return 0
+    fi
+    if imported; then
+        say "the agent keeps the identity it was imported with, in $MA_HOME"
         return 0
     fi
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -829,8 +855,8 @@ EOF
     esac
     case " $HARNESS_OPTIONS " in *" replace-plugin "*) cat <<EOF
   --replace-plugin     put our plugin in place of the Marmot plugin of today's connectors, if
-                       $HARNESS_TITLE has that one (see docs/move.md); the old one is kept in the
-                       agent's folder
+                       $HARNESS_TITLE has that one, for an install moved over with its settings in
+                       the agent's folder (see docs/move.md); the old one is kept in that folder
 EOF
     esac
     case " $HARNESS_OPTIONS " in *" permission-mode "*) cat <<EOF
@@ -996,11 +1022,20 @@ check_harness() {
     local owner=""
     if [ -f "$MA_AGENT_DIR/harness" ]; then
         owner=$(cat "$MA_AGENT_DIR/harness")
+    elif [ "$HARNESS_KIND" = plugin ] && imported "$HARNESS_TITLE install,"; then
+        # Moved over from today's connector (docs/move.md): the settings name its home and identity.
+        say "using the settings marmot-agent import wrote in $MA_SETTINGS"
     elif [ -f "$MA_SETTINGS" ]; then
         die "the agent \"$NAME\" has settings but no record of its harness in $MA_AGENT_DIR/harness: give another --name, or write the harness's name, such as $HARNESS, there"
     fi
     [ -z "$owner" ] || [ "$owner" = "$HARNESS" ] ||
         die "the agent \"$NAME\" runs $owner; use install/$owner.sh for it, or give another --name"
+    # The home is the one the settings name, which an imported agent keeps where it was.
+    if [ -f "$MA_SETTINGS" ]; then
+        MA_HOME=$(settings_home) ||
+            die "$MA_SETTINGS names no account home this script can read: write it as home = \"/its/path\""
+        no_control "the account home" "$MA_HOME"
+    fi
 }
 
 # Asks for, or checks, what a new agent needs: its owner and its work folder.
@@ -1098,6 +1133,11 @@ main() {
         return 0
     fi
     [ "$DRY_RUN" -eq 0 ] || say "dry run: nothing is installed, written or started"
+    # The plugin of today's connector serves an identity in its old home: an agent made here instead
+    # would be a new one, in none of its chats.
+    if [ "$REPLACE_PLUGIN" -eq 1 ] && [ ! -f "$MA_SETTINGS" ]; then
+        die "--replace-plugin is for an install moved over from today's connector: first run marmot-agent import <its home> --settings $MA_SETTINGS (docs/move.md), then this again"
+    fi
 
     settle_values
     harness_check

@@ -424,8 +424,8 @@ A channel plugin named `marmot`, in TypeScript, that runs inside OpenClaw
 packed archive, as a release is. The core is started with a `[connector]` section, as for Claude Code.
 
 **In the person's own OpenClaw.** `install/openclaw.sh` builds the plugin, packs it, and adds it to the OpenClaw
-the person already has, with OpenClaw's own commands (`openclaw plugins install`, `plugins enable`, `config
-set`) ([D-102](../decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)). It sets the
+the person already has, with OpenClaw's own commands (`openclaw plugins install`, which enables it, and
+`config set`) ([D-102](../decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)). It sets the
 `marmot` channel's `home` to the agent's home, where the plugin finds the core's socket and its token, and,
 when OpenClaw forwards no approvals, forwards those of a Marmot chat's sessions to their own chat
 (`approvals.exec`, mode `session`, filtered to session keys holding `:marmot:`), since an approval otherwise

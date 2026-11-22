@@ -64,8 +64,9 @@ to load the plugin. It changes only what the plugin needs (the `marmot` platform
 `MARMOT_ALLOW_ALL_USERS`, so that Hermes takes whatever the agent lets through; for OpenClaw, if it forwards no
 approvals, those of Marmot chats), keeps a copy of your settings in the agent's folder first, and takes out
 what it added on `--uninstall`. One Hermes or OpenClaw serves one agent. If it has the Marmot plugin of today's
-connectors, the script stops: move that install over first ([`docs/move.md`](docs/move.md)), then run it with
-`--replace-plugin`.
+connectors, the script stops: move that install over first, with its settings in the agent's folder
+([`docs/move.md`](docs/move.md)), then run it with `--replace-plugin`. It then uses those settings and the
+identity in the old home, and makes no new one.
 
 - `--dry-run` shows every file and command the script would write and run, and does nothing.
 - Running the script again updates `marmot-agent` and the service, and keeps the agent's settings and
