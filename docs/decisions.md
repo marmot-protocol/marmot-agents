@@ -1655,3 +1655,59 @@ that keeps its input open but stops reading would otherwise stall every chat. Th
 
 Decided 2026-11-22. The project owner accepted the recommendations.
 
+## D-099 Files from the agent's own home are refused by default, and the owner may allow them
+
+**Decision.** By default the core refuses to send any file inside the agent's account home, which holds its keys
+and encryption state, wherever the allowed folders are ([D-090](#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)).
+The owner may turn this off with one explicit line in the agent's settings. The installers never choose `~` itself
+as the work folder.
+
+**Why.** Safe defaults, and the owner keeps control of how their agent is set up. A work folder of `~` would
+otherwise let the agent send its own keys.
+
+Decided 2026-11-22. The project owner decided.
+
+## D-100 The installers' defaults
+
+**Decision.** The installers (D-091) put the program in `~/.local/bin/marmot-agent` and each agent in
+`~/.local/share/marmot-agent/agents/<name>/`; name services `marmot-agent-<name>` (and `-connector` for a socket
+harness), or `org.marmot.marmot-agent.<name>` on macOS; ask only the owner's key and the work folder; use White
+Noise's relays for the agent's own account (inside a group, the group's relays apply); print the
+`loginctl enable-linger` command rather than run it; and are published as one archive per platform from a version
+tag. Goose runs in its own default mode, which asks nothing. There is no default model endpoint: a person brings
+their own endpoint and key. Tests read the models they use from a local configuration file, and in CI from secrets,
+and most tests use recorded sessions rather than live models.
+
+**Why.** The project owner chose these from the proposed set. A default endpoint would send people's work to a
+service they did not choose.
+
+Decided 2026-11-22. The project owner decided; this replaces the installers' provisional defaults.
+
+## D-101 A chat can move a coding harness to another folder
+
+**Decision.** For the coding harnesses (Codex, Claude Code, OpenCode, Goose, Cursor and Pi), each chat has a folder
+setting. A chat that has chosen none uses the agent's install folder. Someone with the right to approve sets it from
+the chat, by path; it applies from the chat's next session, so setting it also starts one. The owner lists in the
+settings the top-level folders agents may work in (by default the install folder), and a chat may pick any folder
+inside them; listing `~` lifts the limit. Hermes and OpenClaw keep the workspace they manage themselves.
+
+**Why.** Working in a different folder or project is a baseline need for a coding agent. The harness picks its folder
+when a session starts. The owner's list keeps a chat member from pointing the agent anywhere on the machine, and the
+right to approve matches what a folder changes: what the agent can touch.
+
+Decided 2026-11-22. The project owner decided.
+
+## D-102 The installers connect to the harness the person already has
+
+**Decision.** The installers never install a harness. They assume it is already there: Codex, Pi, Goose, OpenCode and
+Cursor on the person's `PATH`, and Hermes and OpenClaw already installed, into which the installer adds our plugin.
+They work the same on Linux and macOS. Containers are used only by this project's own tests and CI. Pi runs as the
+person's own `pi` by default, with the container kept as an option; this replaces what
+[D-092](#d-092-the-choices-made-while-building-m3-are-accepted) says about Pi running in a container by default.
+
+**Why.** People install and update their harness themselves, as with today's connectors. Running it directly removes
+Docker as a requirement and the macOS limit. Pi asks nobody before a tool runs, so natively it acts with the person's
+own rights, as it does when they run it themselves; the container stays for those who want a boundary.
+
+Decided 2026-11-22. The project owner decided.
+

@@ -94,6 +94,10 @@ Everything on the list above that M1 to M3 did not already do: moving installs o
 built: [how](move.md)), installers and releases,
 an agent sending a file ([D-090](decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)), sends that
 survive a crash, catching up after being offline, and the switch to MDK's 1201 and 1202 once MDK has them.
+Also before the swap: a chat can move a coding harness to another folder
+([D-101](decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder)), and the installers connect to the
+harness the person already has, on Linux and macOS
+([D-102](decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)).
 **Done when** an install of each of today's connectors has moved over, on a test machine, without being
 invited again.
 
