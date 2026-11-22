@@ -111,3 +111,23 @@ fn the_folders_a_chat_may_use_are_whole_paths() {
         Some(Vec::new())
     );
 }
+
+// An ACP agent is given the driver's file tool, which listens on the loopback address, only when
+// its settings ask for it: off until the owner settles Q-31 (provisional).
+#[test]
+fn an_acp_agent_sends_files_only_when_its_settings_say_so() {
+    let text = |extra: &str| {
+        format!(
+            "home = \"/unused\"\nrelays = []\nowner = \"{HEX}\"\n\
+             [acp]\nname = \"opencode\"\ncommand = [\"opencode\", \"acp\"]\ncwd = \"/w\"\n{extra}"
+        )
+    };
+    let acp = |extra: &str| Config::parse(&text(extra)).unwrap().acp.unwrap();
+    assert!(!acp("").send_files, "off by default");
+    assert!(acp("send_files = true\n").send_files);
+    assert!(!acp("send_files = false\n").send_files);
+    assert!(matches!(
+        Config::parse(&text("send_files = \"yes\"\n")),
+        Err(ConfigError::Invalid)
+    ));
+}
