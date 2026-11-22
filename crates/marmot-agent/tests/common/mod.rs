@@ -592,7 +592,9 @@ impl Chat<'_> {
         self.allow_once(&target, &read).await
     }
 
-    /// An approval waiting now, in `turn`, whose title passes `asks_for`.
+    /// An approval waiting now, in `turn`, whose text passes `asks_for`: the text, not the title,
+    /// since the ACP driver titles every approval "Allow this …?" and puts what the agent asked
+    /// to do, such as its tool's title, in the text.
     #[allow(dead_code)] // Only the ACP scenario has a tool approved.
     pub fn approval_waiting(
         &self,
@@ -604,7 +606,7 @@ impl Chat<'_> {
             matches!(r.item.event.body(), Body::Approval(_))
                 && header.state == State::Waiting
                 && header.turn.as_ref() == Some(turn)
-                && asks_for(&header.title)
+                && asks_for(&header.text)
         })
     }
 

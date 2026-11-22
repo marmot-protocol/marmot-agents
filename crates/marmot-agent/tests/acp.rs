@@ -218,7 +218,7 @@ async fn scenario(agent: Agent) {
             break;
         }
         let turn = chat.turns_for(&asked).into_iter().next();
-        let waiting = turn.and_then(|t| chat.approval_waiting(&t, |title| title.starts_with(tool)));
+        let waiting = turn.and_then(|t| chat.approval_waiting(&t, |text| text.starts_with(tool)));
         if !allowed && let Some((target, read)) = waiting {
             chat.allow_once(&target, &read).await;
             allowed = true;
