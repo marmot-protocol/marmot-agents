@@ -5,7 +5,7 @@
 use crate::check::{Violation, broke};
 use crate::fake::{Heard, Knobs, Progress};
 use crate::run::{Run, Subject, turn_ended, waiting};
-use marmot_agent_driver::{ChatId, Emitted, MessageId, Output};
+use marmot_agent_driver::{ChatId, Driver, Emitted, MessageId, Output};
 use marmot_agent_events::{Body, State};
 use std::time::Duration;
 
@@ -39,6 +39,7 @@ macro_rules! with_scenarios {
             late_replies,
             restart,
             new_session,
+            folder,
             settings
         );
     };
@@ -427,7 +428,7 @@ pub async fn stops_reading<S: Subject>(subject: S) -> Result<(), Violation> {
             .await?;
         let taken_up = fake.heard()[before..]
             .iter()
-            .any(|h| matches!(h, Heard::Opened { session: s, resumed: true } if *s == session));
+            .any(|h| matches!(h, Heard::Opened { session: s, resumed: true, .. } if *s == session));
         if !taken_up {
             return Err(broke(
                 "S12",
@@ -516,7 +517,7 @@ async fn resumes<S: Subject>(run: &mut Run<S>, session: &str) -> Result<(), Viol
     let heard = run.subject.fake().heard();
     let taken_up = heard[before..]
         .iter()
-        .any(|h| matches!(h, Heard::Opened { session: s, resumed: true } if s == session));
+        .any(|h| matches!(h, Heard::Opened { session: s, resumed: true, .. } if s == session));
     if !taken_up {
         return Err(broke("S12", "the session a prompt named was not taken up"));
     }
@@ -582,6 +583,132 @@ pub async fn new_session<S: Subject>(subject: S) -> Result<(), Violation> {
     }
     if run.prompt_in("c-2", "let me in", Some(&old)).await?.is_ok() {
         return Err(broke("S5", "a chat took up another chat's session"));
+    }
+    run.end().await
+}
+
+/// The folder the last session `session` opened in, as the harness heard it.
+fn opened_in(heard: &[Heard], session: &str) -> Option<String> {
+    heard.iter().rev().find_map(|h| match h {
+        Heard::Opened {
+            session: s, folder, ..
+        } if s == session => folder.clone(),
+        _ => None,
+    })
+}
+
+/// The session a prompt went to, by its message id.
+fn prompted_in(heard: &[Heard], message: &MessageId) -> Option<String> {
+    heard.iter().rev().find_map(|h| match h {
+        Heard::Prompt {
+            session,
+            text,
+            refused: false,
+        } if text.contains(&format!(" {} ", message.0)) => Some(session.clone()),
+        _ => None,
+    })
+}
+
+/// A chat moves the harness to another folder (D-101). A chat that chose none works in the
+/// driver's own folder; a new session in another folder, settled by the new session, opens there,
+/// and the chat's next prompt goes to it; a chat with no session yet may move too; another chat
+/// stays where it was; and after a restart the moved chat's session is taken up in its folder. A
+/// driver may refuse none of it.
+pub async fn folder<S: Subject>(subject: S) -> Result<(), Violation> {
+    let mut run = Run::start(subject).await;
+    let own = run
+        .driver
+        .folder()
+        .ok_or_else(|| broke("D-101", "a coding driver states no folder of its own"))?;
+    let own = own.to_string_lossy().into_owned();
+    let other = run.subject.other_folder();
+    let first = taken(run.prompt("c-1", "hello").await?, "the first prompt")?;
+    run.wait("L2", "the first turn's end", ended_turn_of(&first))
+        .await?;
+    let chat = ChatId::from("c-1");
+    let old = (run.check.session_of(&chat).cloned())
+        .ok_or_else(|| broke("L2", "the chat's session was never shown"))?;
+    let heard = run.subject.fake().heard();
+    if opened_in(&heard, &old).as_deref() != Some(own.as_str()) {
+        return Err(broke("D-101", "a chat that chose none worked elsewhere"));
+    }
+
+    let (request, result) = run.new_session_in("c-1", Some(&old), &other).await?;
+    taken(result, "a new session in another folder")?;
+    let fresh = run
+        .wait("L1", "the new session", |e| {
+            matches!(e.event.body(), Body::Session(_))
+                && e.event.header().state == State::Running
+                && (e.event.header().session.as_ref()).is_some_and(|s| s.as_str() != old)
+        })
+        .await?;
+    let new = fresh.event.header().session.clone().expect("a session");
+    run.checkpoint().await?;
+    if !run.seen.iter().any(|e| e.settles.contains(&request)) {
+        return Err(broke("S1", "the new session was never settled"));
+    }
+    let next = taken(run.prompt("c-1", "where now").await?, "the next prompt")?;
+    run.wait("L2", "the next turn's end", ended_turn_of(&next))
+        .await?;
+    run.checkpoint().await?;
+    let heard = run.subject.fake().heard();
+    let other_text = other.to_string_lossy().into_owned();
+    if prompted_in(&heard, &next).as_deref() != Some(new.as_str()) {
+        return Err(broke(
+            "S12",
+            "the prompt after the move went to another session",
+        ));
+    }
+    if opened_in(&heard, new.as_str()).as_deref() != Some(other_text.as_str()) {
+        return Err(broke(
+            "D-101",
+            "the new session did not open in the chat's folder",
+        ));
+    }
+
+    // A chat with no session yet moves, and its first session opens there.
+    let (_, result) = run.new_session_in("c-2", None, &other).await?;
+    taken(
+        result,
+        "a new session in another folder, for a chat with none",
+    )?;
+    let second = taken(run.prompt("c-2", "hello").await?, "chat 2's prompt")?;
+    run.wait("L2", "chat 2's turn's end", ended_turn_of(&second))
+        .await?;
+    // A third chat stays in the driver's own folder.
+    let third = taken(run.prompt("c-3", "hello").await?, "chat 3's prompt")?;
+    run.wait("L2", "chat 3's turn's end", ended_turn_of(&third))
+        .await?;
+    run.checkpoint().await?;
+    let heard = run.subject.fake().heard();
+    for (message, want, what) in [
+        (
+            &second,
+            &other_text,
+            "chat 2's session did not open in its folder",
+        ),
+        (&third, &own, "a chat that did not move worked elsewhere"),
+    ] {
+        let session = prompted_in(&heard, message);
+        let folder = session.and_then(|s| opened_in(&heard, &s));
+        if folder.as_ref() != Some(want) {
+            return Err(broke("D-101", what));
+        }
+    }
+
+    // After a restart the moved chat's session is taken up, in its folder.
+    run.restart().await?;
+    let again = taken(
+        run.prompt_in("c-1", "still there", Some(new.as_str()))
+            .await?,
+        "a prompt naming the moved session",
+    )?;
+    run.wait("L2", "the resumed turn's end", ended_turn_of(&again))
+        .await?;
+    run.checkpoint().await?;
+    let heard = run.subject.fake().heard();
+    if opened_in(&heard, new.as_str()).as_deref() != Some(other_text.as_str()) {
+        return Err(broke("D-101", "the moved session was taken up elsewhere"));
     }
     run.end().await
 }

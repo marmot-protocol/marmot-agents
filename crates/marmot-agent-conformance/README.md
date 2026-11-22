@@ -66,6 +66,7 @@ Every driver runs these, but where the table under "What was run" says otherwise
 | `late_replies` | Every reply comes half a second late (for Pi, everything slow): a prompt in a new chat, which waits more than once, is still taken |
 | `restart` | A turn, a restart, a prompt naming the chat's session, a prompt naming none; then a restart in the middle of a turn |
 | `new_session` | A prompt naming the chat's session; a new session, settled by the new session; the next prompt goes to it, and not to the session named before; another chat naming the old one is refused |
+| `folder` | A chat moves the harness to another folder (D-101): a chat that chose none opens its session in the driver's own folder; a new session naming another folder is taken, settled by the new session, which opens there, and the next prompt goes to it; a chat with no session yet moves and its first session opens there; a third chat stays in the driver's folder; after a restart the moved session is taken up in its folder. Checked against the folder the fake heard (`cwd` on Codex's and ACP's session requests, the folder Pi's relay was started in), and reported as D-101 |
 | `settings` | A setting changed, settled once |
 | `dies_at_every_step` | The harness dies on its n-th frame after start, in a turn that asks for approval, for every n the turn reaches: a run with nothing failing counts them first, and each run must see the harness die before what it left is checked |
 | `replay` | A recording played back through the driver, every approval allowed (the one-time choice, as recorded); every recorded message must be played, and the driver's answer to the harness's own request must be the recorded one, to the same request with the same decision, or nothing more is played. Answered the other way, a recording stops (`a_replay_stops_on_another_answer`, through `replay_refused`): the prompt must be taken and the approval asked, the answer taken and turned away by the replay, and nothing more played, so a run that failed earlier does not pass |
@@ -101,7 +102,7 @@ nothing.
 | --- | --- | --- | --- |
 | Codex | all, `dies_at_every_step` (6) | `simple`, `approval_allowed`, `command` | all 16 that one harness for every chat can show |
 | ACP, OpenCode-shaped | all, `dies_at_every_step` (3) | `simple`, `approval_allowed` | `PromptTwice` |
-| ACP, Goose-shaped | `two_chats`, `answered_once`, `answer_after_death`, `dies_mid_turn`, `restart`, `new_session`, `dies_at_every_step` (3) | `simple`, `approval_allowed` | |
+| ACP, Goose-shaped | `two_chats`, `answered_once`, `answer_after_death`, `dies_mid_turn`, `restart`, `new_session`, `folder`, `dies_at_every_step` (3) | `simple`, `approval_allowed` | |
 | ACP, Cursor-shaped | `two_chats`, `answered_once`, `answer_after_death`, `restart`, `dies_at_every_step` (4) | `simple`, `approval_allowed` | |
 | Pi | all, `dies_at_every_step` (6) | `gate_allowed`, `command` | 8: those that turn on a harness for each chat, `TakeUnhanded` and `SwallowPrompt` |
 

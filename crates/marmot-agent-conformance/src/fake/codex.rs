@@ -223,6 +223,7 @@ impl Protocol for Codex {
                 heard.push(Heard::Opened {
                     session: thread,
                     resumed: false,
+                    folder: params["cwd"].as_str().map(String::from),
                 });
             }
             "thread/resume" => {
@@ -234,6 +235,7 @@ impl Protocol for Codex {
                 heard.push(Heard::Opened {
                     session: thread,
                     resumed: true,
+                    folder: params["cwd"].as_str().map(String::from),
                 });
             }
             "turn/start" => {
