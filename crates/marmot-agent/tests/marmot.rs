@@ -600,3 +600,89 @@ async fn a_send_older_than_its_groups_messages_is_not_sent_again() {
     assert!(!texts.contains(&"words forgotten".to_string()));
     world.runtime.shutdown().await;
 }
+
+// In a chat whose messages disappear, an item's first event can be gone while the item goes on.
+// MDK then refuses an edit of it, as it no longer has the event nor the token it went under, and
+// says so: the core is told the first event is gone, apart from any other refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_edit_of_a_first_event_that_disappeared_is_told_apart() {
+    use marmot_agent::carrier::Item;
+    use marmot_agent::marmot::SendFailed;
+    use marmot_agent::{Sending, Token};
+    use marmot_agent_events::body::{StartedBy, Turn};
+    use marmot_agent_events::{AgentEvent, Header};
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let group = a_quiet_chat(&world).await;
+    (world.runtime)
+        .update_message_retention(&world.person, &group_id(&group), 60)
+        .await
+        .unwrap();
+    let keep = || {
+        let record = world.marmot.app.group(&world.marmot.label, group.as_str());
+        record
+            .ok()
+            .flatten()
+            .map(|r| r.message_retention.disappearing_message_secs)
+    };
+    eventually(|| (keep() == Some(60)).then_some(())).await;
+    let session = |version: u64, first: Option<marmot_agent::EventKey>| {
+        let header = Header {
+            harness: "codex".into(),
+            session: Some("s1".into()),
+            turn: Some("t1".into()),
+            item: "t1".into(),
+            seq: version,
+            state: State::Running,
+            title: "Turn".into(),
+            text: format!("version {version}"),
+        };
+        let body = Body::Turn(Turn {
+            started_by: StartedBy::User,
+            duration_ms: None,
+            usage: None,
+        });
+        Sending::Item {
+            key: "t1".into(),
+            item: Box::new(Item {
+                event: AgentEvent::new(header, body, None).unwrap(),
+                version,
+                first,
+                started_by: None,
+                settles: Vec::new(),
+            }),
+        }
+    };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    let now = now.unwrap().as_secs();
+    let token = |mdk: &str, edits: Option<&str>| Token {
+        send: mdk.into(),
+        mdk: mdk.into(),
+        edits: edits.map(Into::into),
+        tried_at: Some(now),
+    };
+    let first = (world.send(&group, &session(1, None), &token("v1", None)))
+        .await
+        .unwrap();
+    // The first event's time comes: MDK's sweep takes the clock it is given.
+    let later = (now + 3600) * 1000;
+    let mut gone = false;
+    for _ in 0..100 {
+        (world.marmot.runtime)
+            .sweep_expired_retention(&world.marmot.label, later)
+            .await
+            .unwrap();
+        gone = (world.marmot.runtime)
+            .timeline_message(&world.marmot.label, group.as_str(), first.as_str())
+            .unwrap()
+            .is_none();
+        if gone {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    assert!(gone, "the first event disappeared");
+    let edit = session(2, Some(first.clone()));
+    let sent = world.send(&group, &edit, &token("v2", Some("v1"))).await;
+    assert_eq!(sent, Err(SendFailed::FirstGone));
+    world.runtime.shutdown().await;
+}

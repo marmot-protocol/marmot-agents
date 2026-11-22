@@ -385,6 +385,10 @@ impl Marmot {
                     // MDK answers a token it took with what it made of it, before it looks at
                     // the group: so it never took this one, and the group is going or gone.
                     Ok(None) if group_ended(&error) => SendFailed::Refused { gone: false },
+                    // Nor this edit: it checks the token before the first event the edit names.
+                    Ok(None) if token.edits.is_some() && first_gone(&error) => {
+                        SendFailed::FirstGone
+                    }
                     _ => send_failed(&error),
                 });
             }
@@ -761,6 +765,11 @@ pub enum SendFailed {
     /// MDK keeps it under its token, queued, and its engine has not taken it yet: it is tried
     /// again soon under the same token, which MDK answers from what it keeps.
     Pending,
+    /// It was an edit, and MDK no longer has the event it edits, nor the token that event went
+    /// under: the group's messages disappeared since it went. MDK did not take this edit. A
+    /// later version of an item then goes out as a new first event, and the agent's words as a
+    /// new message.
+    FirstGone,
     /// It was first tried so long ago that its group's messages have disappeared since, and
     /// MDK no longer knows its token: it may have gone out, and tried again it could go out
     /// twice. It is given up, and the chat told it may not have been delivered.
@@ -783,6 +792,19 @@ fn group_ended(error: &AppError) -> bool {
         error,
         AppError::GroupDisbanding(_)
             | AppError::Storage(cgka_traits::storage::StorageError::NotFound)
+    )
+}
+
+/// Whether MDK refused an edit because it no longer has the first event it names, nor the token
+/// that event went under: MDK forgets a token with its event once the group's messages disappear.
+/// Not an event someone deleted, or one that never reached the group, which MDK refuses as an
+/// edit target ([`AppError::InvalidEditTarget`]).
+fn first_gone(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::InvalidAppMessagePayload(why)
+            if why == "original local send was not found"
+                || why == "original local message is unavailable"
     )
 }
 

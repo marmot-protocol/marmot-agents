@@ -2152,6 +2152,80 @@ fn a_later_version_names_the_token_its_first_event_went_under() {
     assert_ne!(later.mdk, first.mdk, "and is a send of its own");
 }
 
+// In a chat whose messages disappear, an item's first event can be gone while the item goes on,
+// and MDK refuses an edit of it. The version goes out as a new first event, under the same name,
+// and the versions after it edit that one; the item's version goes on rising. Kept across a
+// restart, so it is saved before it is sent. The agent's words whose message is gone go out as
+// a new message.
+#[test]
+fn a_version_whose_first_event_is_gone_goes_out_as_a_new_first_event() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let group = direct().group;
+    talk.emitted(emitted(&chat, event("cmd", State::Running, turn())));
+    let _ = talk.next_send(&group).unwrap();
+    talk.sent(&format!("{chat}/cmd"), hex_id(1));
+    let mut running = event("cmd", State::Running, turn());
+    running = AgentEvent::new(
+        Header {
+            text: "still running".into(),
+            ..running.header().clone()
+        },
+        turn(),
+        None,
+    )
+    .unwrap();
+    talk.emitted(emitted(&chat, running));
+    let (edit, what) = talk.next_send(&group).unwrap();
+    assert!(matches!(&what, Sending::Item { item, .. } if item.first == Some(hex_id(1))));
+
+    talk.first_gone(&edit.send);
+    let mut talk = conversation(talk.saved().clone());
+    let (anew, what) = talk.next_send(&group).unwrap();
+    let Sending::Item { item, .. } = what else {
+        panic!("not an item")
+    };
+    assert_eq!((item.version, &item.first, &anew.edits), (2, &None, &None));
+    assert_eq!(carrier::item(&item).unwrap().kind, carrier::ITEM_KIND);
+    assert_eq!(anew.send, edit.send, "the same send");
+    talk.sent(&format!("{chat}/cmd"), hex_id(2));
+
+    talk.emitted(emitted(&chat, event("cmd", State::Done, turn())));
+    let (last, what) = talk.next_send(&group).unwrap();
+    let Sending::Item { item, .. } = what else {
+        panic!("not an item")
+    };
+    assert_eq!((item.version, item.first), (3, Some(hex_id(2))));
+    assert_eq!(
+        last.edits.as_ref(),
+        Some(&anew.mdk),
+        "names the new first event"
+    );
+
+    talk.sent(&format!("{chat}/cmd"), hex_id(3));
+    talk.emitted(emitted(&chat, words(State::Running)));
+    talk.sent(&format!("{chat}/w1"), hex_id(4));
+    let mut changed = emitted(&chat, words(State::Done));
+    changed.event = AgentEvent::new(
+        Header {
+            text: "other words".into(),
+            ..changed.event.header().clone()
+        },
+        changed.event.body().clone(),
+        None,
+    )
+    .unwrap();
+    talk.emitted(changed);
+    let (edit, what) = talk.next_send(&group).unwrap();
+    assert!(matches!(what, Sending::Words { edit: Some(_), .. }));
+    talk.first_gone(&edit.send);
+    let (_, what) = talk.next_send(&group).unwrap();
+    assert!(
+        matches!(what, Sending::Words { edit: None, .. }),
+        "a new message"
+    );
+}
+
 // A state file from before kind 1201, whose items' first events went out under a temporary kind
 // no edit applies to (D-069): an item's next version goes out as a new first event, of kind 1201,
 // and its version goes on rising. The agent's words were chat messages then too, and are still

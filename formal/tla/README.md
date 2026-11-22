@@ -55,7 +55,9 @@ tries a send again is not modelled: a send may be tried again at once.
   out (`closed_in_chat`). The model does not reach that case: a driver's item ends with the driver, and the
   versions that spread settles are not modelled (inferred from the model; the simulator reaches it, and its
   oracle allows it).
-- **Time.** No clock: `Tick` may fire for any taken control, and a send may be tried again at once.
+- **Time.** No clock: `Tick` may fire for any taken control, and a send may be tried again at once. So
+  disappearing messages are not modelled either: a send MDK has forgotten the token of (`lost`), and an edit
+  whose first event has disappeared, which goes out as a new first event (`first_gone`).
 - **Files the agent sends** (D-090).
 
 ## Trusted assumptions

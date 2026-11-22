@@ -939,6 +939,11 @@ impl<D: Driver, M: Side> Core<D, M> {
                 }
                 Err(failed) => match self.bug_new_token(&token.send, failed) {
                     SendFailed::Refused { gone } => self.give_up(&token.send, gone)?,
+                    SendFailed::FirstGone => {
+                        // Saved before the send is tried again, as a new first event or message.
+                        self.conversation.first_gone(&token.send);
+                        self.save()?;
+                    }
                     SendFailed::Forgotten => {
                         // MDK's own words can name a group, so they are not printed (D-071).
                         eprintln!(

@@ -1147,6 +1147,33 @@ impl Conversation {
         self.dropped(token, gone, NOT_DELIVERED);
     }
 
+    /// MDK refused the send named `token`, an edit, because the first event it names is gone:
+    /// the group's messages disappeared since it went, and MDK did not take this edit. The
+    /// agent's words go out as a new message, as when their message was removed
+    /// ([`Conversation::refused`]). An item's version goes out as a new first event, under the
+    /// same name, and every version after it edits that one: the item has no first event in the
+    /// chat until it goes. Its version goes on rising. The caller saves this before the send is
+    /// tried again.
+    pub fn first_gone(&mut self, token: &str) {
+        let Some(queued) = self.saved.outbox.iter().find(|q| q.token == token) else {
+            return;
+        };
+        if matches!(queued.what, Sending::Words { .. }) {
+            self.dropped(token, true, NOT_DELIVERED);
+            return;
+        }
+        let key = queued.what.key().to_string();
+        if let Some(record) = self.saved.items.get_mut(&key) {
+            record.first = None;
+            record.first_token = None;
+        }
+        for queued in (self.saved.outbox.iter_mut()).filter(|q| q.what.key() == key) {
+            if let Sending::Item { item, .. } = &mut queued.what {
+                item.first = None;
+            }
+        }
+    }
+
     /// The send named `token` is given up without knowing whether it went out: MDK no longer
     /// knows its token, and trying it again could send it twice. It is dropped as a refused one
     /// is ([`Conversation::refused`]), and the chat's notice says it may not have been delivered.

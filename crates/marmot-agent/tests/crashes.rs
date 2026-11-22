@@ -1182,6 +1182,79 @@ async fn a_state_with_an_item_tried_before_kind_1201_is_refused() {
     world.runtime.shutdown().await;
 }
 
+// In a chat whose messages disappear, an item's first event can be gone while the item goes on:
+// its next version goes out as a new first event, of kind 1201, and the chat is not told of a
+// failure, as nothing failed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_item_whose_first_event_disappeared_goes_on_as_a_new_one() {
+    use marmot_agent::carrier::{ITEM_KIND, read_item};
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, id) = a_chat(&world, &seen).await;
+    (world.runtime)
+        .update_message_retention(&world.person, &chat.group, 60)
+        .await
+        .unwrap();
+    let marmot = &world.marmot;
+    within(30, || {
+        let record = marmot.app.group(&marmot.label, &chat.hex).ok().flatten()?;
+        (record.message_retention.disappearing_message_secs == 60).then_some(())
+    })
+    .await;
+    let emit = |state: State| Emitted {
+        event: event("t", state, turn()),
+        chat: Some(id.clone()),
+        prompts: Vec::new(),
+        settles: Vec::new(),
+    };
+    let firsts = || -> Vec<(String, u64)> {
+        (sent_by_core(&chat, ITEM_KIND).into_iter())
+            .filter(|m| m.kind == ITEM_KIND)
+            .filter_map(|m| {
+                let read = read_item(m.kind, &m.plaintext, &m.tags)?;
+                let header = read.item.event.header();
+                (header.item.as_str() == "t").then_some((m.message_id_hex, read.item.version))
+            })
+            .collect()
+    };
+    events.send(emit(State::Running)).unwrap();
+    let first = within(20, || firsts().into_iter().next()).await;
+    // The first event's time comes: MDK's sweep takes the clock it is given.
+    let later = (unix_now() + 3600) * 1000;
+    let mut gone = false;
+    for _ in 0..100 {
+        (marmot.runtime)
+            .sweep_expired_retention(&marmot.label, later)
+            .await
+            .unwrap();
+        gone = (marmot.runtime)
+            .timeline_message(&marmot.label, &chat.hex, &first.0)
+            .unwrap()
+            .is_none();
+        if gone {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(gone, "the first event disappeared");
+
+    events.send(emit(State::Done)).unwrap();
+    let anew = within(20, || {
+        (firsts().into_iter()).find(|(_, version)| *version == 2)
+    })
+    .await;
+    assert_ne!(anew.0, first.0, "a new first event");
+    let failed = (sent_by_core(&chat, ITEM_KIND).into_iter())
+        .filter_map(|m| read_item(m.kind, &m.plaintext, &m.tags))
+        .filter(|r| refused(&r.item.event).is_some())
+        .count();
+    assert_eq!(failed, 0, "nothing failed");
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
 // A send MDK keeps queued, and has not yet taken into its engine, does not hold up the core: the
 // core asks after it again later, and meanwhile reads what the chat says and hands it on. Once
 // MDK takes the send, it goes out once.

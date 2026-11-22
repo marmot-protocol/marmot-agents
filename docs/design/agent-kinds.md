@@ -106,6 +106,13 @@ Built on 2026-11-21 while fixing the known gaps of [testing and verification](ve
 - **A notice about a message names it with `started_by`** (2026-11-22). The core's `refused` notice about a chat
   message it did not act on, a prompt from someone without the right or one the driver refused, names that
   message with the tag a turn names its message with, now `started_by`.
+- **An item whose first event has disappeared** (2026-11-22). In a chat whose messages disappear, an item's
+  first event can go while the item goes on, as a session's does. MDK then refuses an edit of it, as it no
+  longer has the event nor the token it went under. The core sends that version as a new kind 1201 event
+  instead, the item's first from then on, with its version going on rising; the chat is told of no failure. The
+  agent's words whose message has disappeared go out as a new message, as when their message was removed. An
+  item's first event that someone deleted, or that never reached the group, is not sent again: that version is
+  dropped with a `failed` notice, as before.
 - **An item begun under the temporary kind** (2026-11-22). A state file from a core that sent items under the
   temporary kind of D-069 is taken up once: MDK applies no edit to such an event, so each of its items' next
   version goes out as a new kind 1201 event, the item's first from then on, with its version going on rising. What
