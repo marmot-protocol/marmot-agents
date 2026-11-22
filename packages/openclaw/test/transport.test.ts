@@ -765,6 +765,30 @@ test("a path in a reply is made whole from the agent's workspace or the home, an
   assert.deepEqual(warned.filter((w) => w.includes("file")), ["a file not on this machine was not sent", "a file not on this machine was not sent"]);
 });
 
+test("a file OpenClaw copied into its media store to send goes as the path the agent named", async () => {
+  // OpenClaw copies each local file of a reply into its outbound media store and names the copy in the
+  // payload; it keeps the path the agent named in its own record of the payload, as 2026.11.5 does.
+  const key = Symbol.for("openclaw.replyPayloadMetadata");
+  const global = globalThis as unknown as Record<symbol, unknown>;
+  const had = Object.hasOwn(global, key);
+  if (!had) global[key] = new WeakMap();
+  try {
+    const { openclaw, connector, asked } = withFiles();
+    await connector.serve("prompt", prompt("m-1", "files"));
+    const run = openclaw.last();
+    run.start("r-1");
+    const copy = "/state/.openclaw/media/outbound/report---0a1b2c3d-0000-4000-8000-000000000000.txt";
+    const unknown = "/state/.openclaw/media/outbound/other---0a1b2c3d-0000-4000-8000-000000000001.txt";
+    const payload = { text: "", mediaUrl: copy, mediaUrls: [copy, unknown], attachments: [{ name: "report.txt", mimeType: "text/plain" }] };
+    (global[key] as WeakMap<object, unknown>).set(payload, { replyMediaSourceUrls: new Map([[copy, ["/work/report.txt"]]]) });
+    await run.deliver(payload, { kind: "block", assistantMessageIndex: 0 });
+    // A copy OpenClaw kept no source for goes as it is named, and the core decides on it.
+    assert.deepEqual(asked, [["c-1", "/work/report.txt"], ["c-1", unknown]]);
+  } finally {
+    if (!had) delete global[key];
+  }
+});
+
 test("a file the core refuses leaves the delivery done and the rest of the batch going", async () => {
   const { openclaw, connector, asked, warned } = withFiles();
   await connector.serve("prompt", prompt("m-1", "files"));

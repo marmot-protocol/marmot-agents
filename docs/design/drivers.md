@@ -194,7 +194,10 @@ each file, as today's connectors turn it into `send_media`.
   asks the core for each local one once the reply's text is on its way, and does the same for media OpenClaw
   sends to a chat through the channel's outbound adapter, whose caption goes first as the agent's words. That
   send fails when the core refuses the file or cannot be asked, and has a receipt only once the core sent
-  it. The channel now says it takes media. A relative path
+  it. The channel now says it takes media. OpenClaw hands a reply's file over as a copy in its outbound media
+  store, which the core never allows; the plugin sends the path the agent named, which OpenClaw keeps beside
+  the payload in a record its plugin SDK does not export, and a copy with no path recorded goes as it is
+  named, so the core refuses it. A relative path
   is taken from the agent's workspace, as OpenClaw takes it; an address on the web, or a stored inbound
   attachment, is not sent.
 - **A caption goes as the agent's words**, before the files, since `send_file` carries none. A batch keeps one

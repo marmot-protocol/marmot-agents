@@ -22,7 +22,7 @@
  */
 
 import { homedir } from "node:os";
-import { isAbsolute, sep } from "node:path";
+import { isAbsolute, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { AgentEvent, Line } from "./translate.ts";
@@ -202,6 +202,28 @@ function mediaOf(payload: unknown): string[] {
   const p = object(payload);
   const all = [p["mediaUrl"], ...(Array.isArray(p["mediaUrls"]) ? p["mediaUrls"] : [])];
   return [...new Set(all.filter((u): u is string => typeof u === "string" && u.trim() !== ""))];
+}
+
+/**
+ * The media of a reply as the agent named it. Before it hands a reply to the channel, OpenClaw copies each
+ * local file into its outbound media store and names the copy, `<state>/media/outbound/<name>---<id>`, in
+ * the payload; the core sends only from the folders it allows, which never hold that store. OpenClaw keeps
+ * the path the agent named in its record of the payload (`replyMediaSourceUrls`, keyed by the copy), which
+ * the plugin SDK does not export: read on 2026-11-22 in release 2026.11.5's bundled code
+ * (`src/auto-reply/reply/reply-media-paths.ts`). A copy with no source recorded goes as it is named, and the
+ * core refuses it unless its folder is allowed.
+ */
+function sourcesOf(payload: unknown, media: string[]): string[] {
+  const record = (globalThis as Record<symbol, unknown>)[Symbol.for("openclaw.replyPayloadMetadata")];
+  if (!(record instanceof WeakMap) || typeof payload !== "object" || payload === null) return media;
+  const sources = object(record.get(payload))["replyMediaSourceUrls"];
+  if (!(sources instanceof Map)) return media;
+  const named = media.map((url) => {
+    const from: unknown = sources.get(url) ?? (isAbsolute(url) ? sources.get(normalize(url)) : undefined);
+    const first = Array.isArray(from) ? from.find((u): u is string => typeof u === "string" && u.trim() !== "") : undefined;
+    return first ?? url;
+  });
+  return [...new Set(named)];
 }
 
 function push(map: Map<string, string[]>, key: string, value: string): void {
@@ -509,7 +531,7 @@ export class Connector {
       // Nothing is posted here: what OpenClaw delivers reaches the chat as the events it becomes.
       // The files a reply carries go to the core once its text is on its way (D-090).
       deliver: tap("deliver", async (payload: unknown, info: unknown) => {
-        if (text(object(info)["kind"]) !== "tool") await this.sendFiles(chat.id, chat.route, mediaOf(payload));
+        if (text(object(info)["kind"]) !== "tool") await this.sendFiles(chat.id, chat.route, sourcesOf(payload, mediaOf(payload)));
         return { messageId: this.receipt() };
       }),
       onError: tap("dispatcher.onError"),

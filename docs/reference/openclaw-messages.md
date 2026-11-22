@@ -361,8 +361,10 @@ without it counts as the reply is inferred from these two runs.
 
 Read on 2026-11-22 in the documentation shipped with release 2026.11.5 (`docs/reference/rich-output-protocol.md`,
 `docs/tools/index.md`, `docs/concepts/agent-workspace.md`, `docs/plugins/sdk-channel-plugins.md`) and its type
-declarations, and the workspace call tried in that release. Not recorded: no session sent a file. What the
-plugin does with it is in [a gateway's files](../design/drivers.md#a-gateways-files).
+declarations, and the workspace call tried in that release; how a reply's file reaches the channel was read in
+its bundled code and seen in the end-to-end scenario's run on the same day, with a debug line that was not
+kept. Not recorded: no session in `fixtures/` sent a file. What the plugin does with it is in
+[a gateway's files](../design/drivers.md#a-gateways-files).
 
 - **How the agent asks.** A standalone `MEDIA:<path>` line in a final reply, or a tool's structured
   attachment. A reply payload carries them as `mediaUrl` and `mediaUrls`, beside its `text`. A local path may
@@ -372,6 +374,19 @@ plugin does with it is in [a gateway's files](../design/drivers.md#a-gateways-fi
   included (inferred: the recorder's channel said it takes no media, and no recording holds media). Sends
   outside a run go to the message adapter's `send.media` with `to`, `text` (the caption), `mediaUrl`, and the
   folders and reader OpenClaw allows (`mediaLocalRoots`, `mediaReadFile`).
+- **A reply's file is a copy.** Before it hands a reply to the channel, OpenClaw copies each local file the
+  agent named into its outbound media store and names the copy in the payload:
+  `<state folder>/media/outbound/<name>---<uuid>.<ext>` (`saveMediaBuffer(…, "outbound", …)`, in
+  `src/auto-reply/reply/reply-media-paths.ts`). Seen in the scenario: a `MEDIA:` line naming `<work>/report.txt`
+  reached `deliver` (`info.kind` `block`) with `mediaUrl` and `mediaUrls` naming the copy, `attachments`
+  `[{name: "report.txt", mimeType: "text/plain", trustedLocalMedia: true}]` and `trustedLocalMedia: true`, and
+  nothing in the payload naming the original. The original is kept only in OpenClaw's own record of the payload:
+  a `WeakMap` at `globalThis[Symbol.for("openclaw.replyPayloadMetadata")]`, whose entry for the payload has
+  `replyMediaSourceUrls`, a `Map` from the copy (normalized as `path.normalize`) to the paths the agent named.
+  Neither the plugin SDK's exports nor any type declaration names it. Only the internal web chat
+  (`mediaNormalizationOwner: "gateway"`) skips the copy. A durable send also copies queued media into
+  `<state folder>/delivery-queue-media` for a replay after a restart (read in `src/infra/outbound/deliver.ts`,
+  not seen).
 - **Where its files are.** The workspace is `agents.entries.<id>.workspace`, then `agents.defaults.workspace`,
   then `~/.openclaw/workspace` (`~/.openclaw-<profile>/workspace` with `OPENCLAW_PROFILE`).
   `resolveAgentWorkspaceDir(cfg, agentId)` from `openclaw/plugin-sdk/agent-runtime` gives it. Generated media
