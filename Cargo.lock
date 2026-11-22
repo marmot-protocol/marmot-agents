@@ -3136,6 +3136,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "marmot-agent-conformance"
+version = "0.1.0"
+dependencies = [
+ "marmot-agent-acp",
+ "marmot-agent-codex",
+ "marmot-agent-driver",
+ "marmot-agent-events",
+ "marmot-agent-pi",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "marmot-agent-driver"
 version = "0.1.0"
 dependencies = [

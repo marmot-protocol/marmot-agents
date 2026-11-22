@@ -55,7 +55,9 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
       - name: Tests
-        # The simulator's tests run in the Simulator job, in release, so they are not run twice.
+        # The simulator's tests run in the Simulator job, in release, so they are not run twice. The
+        # driver conformance suite (crates/marmot-agent-conformance) runs here, in about 30 s; its Pi
+        # tests need the runner's python3.
         run: cargo test --locked --workspace --all-features --exclude marmot-agent-sim
 
   simulator:

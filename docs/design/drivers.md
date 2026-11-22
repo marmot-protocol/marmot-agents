@@ -173,7 +173,9 @@ Hand-written test messages are a guess about what the harness sends. Recordings 
 The Codex driver is tested this way: each of its recordings must give the events the prototype gives
 ([`crates/marmot-agent-codex/tests/replay.rs`](../../crates/marmot-agent-codex/tests/replay.rs)). Every driver
 is tested so, and by one end-to-end scenario
-([D-074](../decisions.md#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)).
+([D-074](../decisions.md#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)). Every
+driver also passes the [conformance suite](../../crates/marmot-agent-conformance/README.md), on a fake harness
+that can fail in each way review found drivers mishandle.
 
 ## The Codex driver
 
@@ -189,7 +191,12 @@ server is declined for now ([D-064](../decisions.md#d-064-the-codex-driver-decli
 ([`crates/marmot-agent-codex`](../../crates/marmot-agent-codex)). The transport runs one Codex for every chat of an
 agent, and starts it with subagents switched off until how a chat shows them is decided
 ([subagents as threads](subagents.md)). Every session it starts gets the driver's `send_file` tool
-([sending a file](#sending-a-file)); a call becomes a `tool` item, of kind `other`, like any tool.
+([sending a file](#sending-a-file)); a call becomes a `tool` item, of kind `other`, like any tool. A
+request waits for Codex at most a minute in all, to read what the driver writes, to pick a session, or for a
+request before it; a Codex that has not read or answered by then has stopped working, and the connection ends,
+so nothing it says later is read and a message cut short is never finished
+([D-066](../decisions.md#d-066-the-core-finishes-every-request-it-starts); found by the conformance suite's
+`never_answers` and `stops_reading`, 2026-11-22).
 
 ## The Claude Code driver
 
@@ -289,10 +296,15 @@ cwd = "/home/me/work"
 - **Item ids** of tools, approvals and questions name the session as well as the agent's tool-call id, which
   is the agent's own for one session; so an answer can only reach the chat whose request it names.
 - **Writing**: each message goes whole to a task that writes it, so a call the core abandons never leaves
-  half a message on the agent's input.
+  half a message on the agent's input. A request returns only once its message is written, and only then
+  is it fed to the chat's translator: an answer the agent can no longer read is refused as failed, not
+  shown as given (found by the conformance suite's `answer_after_death`, 2026-11-22).
 - **Waiting has a limit.** A session request, the end of a cancelled turn and the end of Goose's own run are
-  each waited for up to a minute. A session request not answered by then ends the connection, so a late
-  reply cannot install a session after the prompt failed.
+  each waited for up to a minute, and so is the writing of a request's message. A session request not
+  answered, or a message not written, by then ends the connection: the task that writes ends with it, and
+  nothing the agent says later is read, so a late reply cannot install a session after the prompt failed and
+  a message cut short never reaches the agent (found by the conformance suite's `stops_reading`,
+  2026-11-22).
 - **Cursor's `cursor/update_todos`** names its tool call and no session; it goes to the chat whose session
   has that tool call.
 - **Requests nobody is asked about** are answered at once: Cursor's `cursor/update_todos` is taken, anything

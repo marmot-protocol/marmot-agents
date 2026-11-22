@@ -7,7 +7,9 @@ on 2026-11-21. The property list, the models and the layers below are the plan; 
 change as the work goes. It comes from reading all the code after M3 and the M4 work in progress, and from how MDK
 tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules). Under
 [first, fix what is known](#first-fix-what-is-known), the behaviour the fixes made visible is provisional: built,
-and waiting for the owner. Of the models, `CoreLifecycle` is built (2026-11-22); the others are planned.
+and waiting for the owner. Of the models, `CoreLifecycle` is built (2026-11-22); the others are planned. The
+conformance suite's first phase, for the built-in drivers, is built (2026-11-22); its second, for the socket
+connectors, is designed.
 
 ## Why
 
@@ -173,6 +175,18 @@ Each driver gets a scriptable fake harness, grown from the stand-ins that exist 
 agent, Codex's fake), that can: write a reply short, answer late or never, answer out of order, die at any step,
 serve two chats at once, and replay a recording.
 
+**Built**, phase one (2026-11-22): [`crates/marmot-agent-conformance`](../../crates/marmot-agent-conformance/README.md).
+Codex, ACP (OpenCode-, Goose- and Cursor-shaped) and Pi run 15 scenarios on fakes of their harnesses (Goose and
+Cursor the ones where they differ), a death at each frame an approval's turn writes, and seven recordings replayed
+through the transport, which play on only after the recorded answer. The checker names each failure by its
+property: S1, S2, S5, S11, S12, S13, and S4 and `seq` for drivers besides. Seventeen deliberate faults, put in by a
+wrapper driver, are each caught as the property they break, by the check meant for them. It found four driver
+bugs, each fixed after its scenario failed: the ACP driver took, and showed as given, an answer the agent could no
+longer read; the Codex driver waited for ever on a Codex that never answered; and both waited for ever on a harness
+that stopped reading its input. Each of the last three held up every chat. Pi's driver has the last bug too, not
+yet fixed. Bounded result: one or two chats, up to two sessions each, one restart. Phase two, the socket connectors over the real socket with a fake harness
+inside each, is designed in the suite's README.
+
 ### 3. A deterministic simulator
 
 A new crate, `marmot-agent-sim`, that runs the real core with a fake Marmot side and scripted drivers, on a virtual
@@ -270,7 +284,7 @@ takes about 8 to 10.
 
 | When | What |
 | --- | --- |
-| Every pull request | Everything that runs today, the conformance suite, property tests at normal counts, the simulator on a fixed set of seeds (built: 200 runs of each gate family from seed 0, in release, in its own job), TLC on small bounds, Kani on the small proofs, the privacy scan, each in its own job |
+| Every pull request | Everything that runs today, the conformance suite (built: in the Rust job, about 30 s), property tests at normal counts, the simulator on a fixed set of seeds (built: 200 runs of each gate family from seed 0, in release, in its own job), TLC on small bounds, Kani on the small proofs, the privacy scan, each in its own job |
 | Nightly | Property tests at high counts, the simulator on many new seeds, TLC on larger bounds, fuzzing, mutation testing, and the real-harness scenarios on numes.ai's free models, in a workflow that pull requests cannot reach |
 | Weekly | Long simulator campaigns |
 
