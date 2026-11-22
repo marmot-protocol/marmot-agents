@@ -418,9 +418,22 @@ pub async fn stops_reading<S: Subject>(subject: S) -> Result<(), Violation> {
         ));
     }
     if apart {
+        // Chat 1's next prompt takes its own session up again, in a new harness.
+        let session = (run.check.session_of(&ChatId::from("c-1")).cloned())
+            .ok_or_else(|| broke("L2", "chat 1's session was never shown"))?;
+        let before = fake.heard().len();
         let again = taken(run.prompt("c-1", "hello").await?, "chat 1's next prompt")?;
         run.wait("L2", "chat 1's next turn's end", ended_turn_of(&again))
             .await?;
+        let taken_up = fake.heard()[before..]
+            .iter()
+            .any(|h| matches!(h, Heard::Opened { session: s, resumed: true } if *s == session));
+        if !taken_up {
+            return Err(broke(
+                "S12",
+                "chat 1's session was not taken up again after its harness stopped reading",
+            ));
+        }
     }
     run.end().await
 }
