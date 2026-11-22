@@ -1180,6 +1180,43 @@ async fn an_item_whose_closing_version_is_given_up_is_closed_after_all() {
     closing_version_dropped(true).await;
 }
 
+// The last try MDK may drop is saved with what it leads to, in one write: the send given up and
+// what stands in for it (D-097). A state that counts the last drop while the send is still queued
+// is never written, so a crash cannot leave the send to be tried once more than its tries.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_last_dropped_try_is_saved_with_its_give_up() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, events, seen) = stub(false);
+    let (store, failed) = Store::failing_when(world.state.path(), |kept| {
+        let kept = json(kept);
+        let outbox = kept["conversation"]["outbox"].as_array().cloned();
+        (outbox.unwrap_or_default().iter()).any(|q| q["rejected"].as_u64() >= Some(1))
+    });
+    let core = world.run(world.core(driver, store).rejected_sends(1));
+    let (chat, id) = a_chat(&world, &seen).await;
+    world.marmot.faults.push(Fault::Reject);
+    let emit = Emitted {
+        event: event("t", State::Done, turn()),
+        chat: Some(id.clone()),
+        prompts: Vec::new(),
+        settles: Vec::new(),
+    };
+    events.send(emit).unwrap();
+    within(20, || {
+        (chat.items().into_iter())
+            .any(|(_, r)| refused(&r.item.event).as_deref() == Some("failed"))
+            .then_some(())
+    })
+    .await;
+    assert!(
+        !failed.load(SeqCst),
+        "no state counts the last drop of a queued send"
+    );
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
 /// A notice that settles a request, which MDK refuses or the core gives up, is followed by a
 /// `failed` notice that settles the request in its place (L1). Found by the TLA+ model, whose
 /// cases `give-up-settles` and `refuse-settles` now check the fix.

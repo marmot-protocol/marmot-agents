@@ -801,13 +801,14 @@ impl<D: Driver, M: Side> Core<D, M> {
                 Err(failed) => match self.bug_new_token(&token.send, failed) {
                     SendFailed::Refused { gone } => self.give_up(&token.send, gone)?,
                     SendFailed::Rejected => {
-                        // Nothing went: the next try is under a new token, saved first.
+                        // Nothing went: the next try is under a new token, saved first. The last
+                        // try is saved with the give-up and what stands in for it, in one write.
                         let tries = self.conversation.rejected(&token.send);
-                        self.save()?;
                         if tries >= self.rejected_tries {
                             self.give_up(&token.send, false)?;
                             continue;
                         }
+                        self.save()?;
                         eprintln!(
                             "marmot-agent: a send was dropped by MDK; it will be tried again"
                         );
