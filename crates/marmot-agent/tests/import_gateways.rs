@@ -6,13 +6,15 @@
 //! installer does. A person invites the agent and has a message answered. Then the move, as
 //! `docs/move.md` says: `wn-agent` stopped as systemd stops it, the import, our installer with
 //! `--replace-plugin` against the same gateway, the core started with the launcher the installer
-//! wrote, and the gateway restarted. The person's next message is answered in the same chat, by
-//! the same agent key, and nothing from before the move is read as a prompt.
+//! wrote, and the gateway restarted. The person's next message, sent once, is answered in the
+//! same chat, by the same agent key, in the turn that message started, and no request the gateway
+//! makes to its model after the move holds anything said before it.
 //!
 //! What stands in: the gateway's model is a scripted one this test serves on the loopback address,
 //! which answers each request by what the person's words in it say, so no model key is needed and
-//! nothing leaves the machine; the service manager is the one `tests/import.rs` uses, which notes
-//! what the import stops (no systemd is touched), and the core runs without a service
+//! nothing leaves the machine; the service manager is the one the other import tests use
+//! (`old_connector::Noted`), which notes what the import stops (no systemd is touched), and the
+//! core runs without a service
 //! (`--no-service`), started with the launcher the installer writes. The gateway runs in its
 //! container with the test's folder mounted at its own path, so the installer, on this machine,
 //! runs the gateway's own commands (`hermes`, `openclaw`) in that container, on the same files.
@@ -20,24 +22,26 @@
 //! It needs Docker, and the network to build the images and the old plugin's packages the first
 //! time. A gateway's home with its runtime takes some hundreds of megabytes in the temporary
 //! folder: set `TMPDIR` to another one where that is small, with a short path, since the agent's
-//! sockets are in it. It runs only when asked for:
+//! sockets are in it. The gateways run on this machine's network, and OpenClaw's on a port the test
+//! finds free and then lets go of, so run one scenario at a time. They run only when asked for:
 //!
 //! ```sh
-//! cargo test -p marmot-agent --test import_gateways -- --ignored --nocapture
+//! cargo test -p marmot-agent --test import_gateways -- --ignored --nocapture --test-threads=1
 //! ```
 
 mod common;
+mod old_connector;
 
-use agent_control::{AgentControlEnvelope, AgentControlRequest, AgentControlResponse};
+use agent_control::{AgentControlRequest, AgentControlResponse};
 use common::within;
 use marmot_account::AccountHome;
-use marmot_agent::import::services::{Loaded, Service, Services};
-use marmot_agent::import::{self, Connector, Options, Places};
+use marmot_agent::EventKey;
+use marmot_agent::carrier::{self, ITEM_KIND};
+use marmot_agent::import::{self, Connector, Options};
 use marmot_agent::rights::Who;
-use marmot_app::{
-    AccountSetupRequest, AppMessageQuery, AppMessageRecord, MarmotApp, MarmotAppConfig,
-    MarmotAppRuntime,
-};
+use marmot_agent_events::body::Body;
+use marmot_app::{AppMessageQuery, MarmotAppRuntime};
+use old_connector::{BEFORE, Noted, Unanswered, ask, chat_messages, local_app, places, setup};
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -47,8 +51,7 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 
-/// What the person writes before the move, and after it.
-const BEFORE: &str = "before the move";
+/// What the person writes after the move; before it, they write `old_connector::BEFORE`.
 const AFTER: &str = "after the move";
 /// What the scripted model answers to each.
 const BEFORE_ANSWER: &str = "first answer";
@@ -58,124 +61,16 @@ const OTHER_ANSWER: &str = "some other answer";
 /// How long a gateway may take to answer, from its start: it loads its plugins and runtime first.
 const ANSWER: u64 = 300;
 
-/// The service managers, as the tests see them: each service stopped and disabled is noted.
-/// There is no systemd to ask, so the units' files are read.
-#[derive(Default)]
-struct Noted(Vec<String>);
-
-impl Services for Noted {
-    fn stop_and_disable(&mut self, service: &Service) -> Result<(), String> {
-        self.0.push(service.name.clone());
-        Ok(())
-    }
-
-    fn systemd_unit(&mut self, _: &str) -> Option<Result<Loaded, String>> {
-        None
-    }
-}
-
-fn places(root: &Path) -> Places {
-    Places {
-        user_home: root.to_path_buf(),
-        systemd_units: root.join(".config/systemd/user"),
-        launch_agents: root.join("Library/LaunchAgents"),
-        hermes_home: root.join(".hermes"),
-        openclaw_config: root.join(".openclaw/openclaw.json"),
-    }
-}
-
-/// Today's connector, `wn-agent`, as its own program: MDK's `agent-connector` at the revision
-/// the core uses, serving its socket on the home as the installed service does. The test runs
-/// itself again with this test alone and the home and relay in its environment, and stops it as
-/// systemd stops a service. It does nothing when run on its own.
+/// Today's connector, as its own program: run by `Install::new`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "run by the gateway import tests, as the old connector"]
 async fn old_connector() {
-    let (Some(home), Some(relay)) = (
-        std::env::var_os("OLD_CONNECTOR_HOME"),
-        std::env::var("OLD_CONNECTOR_RELAY").ok(),
-    ) else {
-        return;
-    };
-    storage_sqlite::relax_storage_for_test_process();
-    let mut config = agent_connector::AgentConnectorConfig::new(&home);
-    config.relays = vec![relay];
-    config.allow_loopback_relays = true;
-    agent_connector::serve_socket(config).await.unwrap();
-}
-
-/// One request to the old connector's socket, as its clients make them, and its answer, waited
-/// for up to 30 seconds. `None` when nothing listens yet or no answer came.
-async fn ask(socket: &Path, request: AgentControlRequest) -> Option<AgentControlResponse> {
-    let stream = tokio::net::UnixStream::connect(socket).await.ok()?;
-    let (read, mut write) = stream.into_split();
-    let envelope = AgentControlEnvelope::request(Some("1".into()), request);
-    let exchange = async {
-        agent_control::write_frame(&mut write, &envelope)
-            .await
-            .ok()?;
-        let mut read = tokio::io::BufReader::new(read);
-        let answer: AgentControlEnvelope<AgentControlResponse> =
-            agent_control::read_envelope(&mut read).await.ok()??;
-        Some(answer.payload)
-    };
-    tokio::time::timeout(Duration::from_secs(30), exchange)
-        .await
-        .ok()
-        .flatten()
-}
-
-/// Whether the old connector is in the chat yet.
-async fn joined(socket: &Path, agent: &str, group: &str) -> bool {
-    let request = AgentControlRequest::TimelineList {
-        account_id_hex: agent.to_string(),
-        group_id_hex: group.to_string(),
-        before: None,
-        after: None,
-        before_inclusive: false,
-        limit: Some(1),
-    };
-    matches!(
-        ask(socket, request).await,
-        Some(AgentControlResponse::TimelinePage { .. })
-    )
-}
-
-/// An app on a home, as the test client opens one, with only the test relay.
-fn local_app(home: &Path, relay: &str) -> MarmotApp {
-    MarmotApp::try_with_relays_and_account_home_and_config(
-        home,
-        vec![relay.to_string()],
-        AccountHome::open(home),
-        MarmotAppConfig::default().with_allow_loopback_relay_endpoints(true),
-    )
-    .unwrap()
-}
-
-fn setup(relay: &str) -> AccountSetupRequest {
-    let endpoint = cgka_traits::TransportEndpoint(relay.to_string());
-    AccountSetupRequest {
-        default_relays: vec![endpoint.clone()],
-        bootstrap_relays: vec![endpoint],
-        publish_initial_key_package: true,
-        ..AccountSetupRequest::default()
-    }
-}
-
-fn chat_messages(runtime: &MarmotAppRuntime, account: &str, group: &str) -> Vec<AppMessageRecord> {
-    let query = AppMessageQuery {
-        group_id_hex: Some(group.to_string()),
-        kinds: Some(vec![9]),
-        limit: None,
-    };
-    runtime
-        .messages_with_query(account, query)
-        .unwrap_or_default()
+    old_connector::serve().await;
 }
 
 /// The scripted model: an OpenAI-compatible endpoint on the loopback address that answers every
-/// chat completion by what the turn's user messages say, streamed or not, and keeps them for each
-/// request it was sent.
+/// chat completion by what the turn's user messages say, streamed or not, and keeps the whole body
+/// of each request it was sent, oldest first.
 struct Model {
     url: String,
     heard: Arc<Mutex<Vec<String>>>,
@@ -195,14 +90,13 @@ impl Model {
         Self { url, heard }
     }
 
-    /// How many requests the model was sent whose turn says `text`.
-    fn asked(&self, text: &str) -> usize {
-        let heard = self.heard.lock().unwrap();
-        heard.iter().filter(|h| h.contains(text)).count()
-    }
-
     fn requests(&self) -> usize {
         self.heard.lock().unwrap().len()
+    }
+
+    /// The bodies of the requests the model was sent after the first `from`.
+    fn since(&self, from: usize) -> Vec<String> {
+        self.heard.lock().unwrap()[from..].to_vec()
     }
 }
 
@@ -275,7 +169,8 @@ async fn answer(mut stream: tokio::net::TcpStream, heard: Arc<Mutex<Vec<String>>
             .collect::<Vec<_>>()
             .join("\n");
         let text = scripted_answer(&said);
-        heard.lock().unwrap().push(said);
+        let whole = String::from_utf8_lossy(&buf[head..head + length]).into_owned();
+        heard.lock().unwrap().push(whole);
         let usage = json!({"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12});
         if request["stream"] == true {
             let chunk = |delta: Value, finish: Value| {
@@ -412,20 +307,20 @@ impl Install {
             .spawn()
             .unwrap();
         let socket = home.join("dev/wn-agent.sock");
+        let create = || AgentControlRequest::AccountCreate {
+            label: Some(label.into()),
+            publish_key_package: true,
+        };
         let mut agent = None;
         for _ in 0..600 {
-            if tokio::net::UnixStream::connect(&socket).await.is_ok() {
-                let create = AgentControlRequest::AccountCreate {
-                    label: Some(label.into()),
-                    publish_key_package: true,
-                };
-                match ask(&socket, create).await {
-                    Some(AgentControlResponse::AccountCreated { account }) => {
-                        agent = Some(account.account_id_hex);
-                    }
-                    other => panic!("the old connector did not make the identity: {other:?}"),
+            match ask(&socket, create()).await {
+                Ok(AgentControlResponse::AccountCreated { account }) => {
+                    agent = Some(account.account_id_hex);
+                    break;
                 }
-                break;
+                Err(Unanswered::NotListening) => {}
+                // Asked again, a second identity could be made, which the core refuses.
+                other => panic!("the old connector did not make the identity: {other:?}"),
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
@@ -436,7 +331,7 @@ impl Install {
         };
         assert!(matches!(
             ask(&socket, allow).await,
-            Some(AgentControlResponse::Allowlist { .. })
+            Ok(AgentControlResponse::Allowlist { .. })
         ));
         Self {
             root,
@@ -492,7 +387,10 @@ impl Install {
         let socket = self.home.join("dev/wn-agent.sock");
         let mut ok = false;
         for _ in 0..120 {
-            if joined(&socket, &self.agent, &group_hex).await {
+            if old_connector::timeline(&socket, &self.agent, &group_hex)
+                .await
+                .is_some()
+            {
                 ok = true;
                 break;
             }
@@ -510,11 +408,11 @@ impl Install {
             .count()
     }
 
-    /// The person writes `text`, again every 30 seconds while no answer came, until the agent
-    /// answers with `answer`, from its own key. The old connector can miss a message sent as it
-    /// settles a new chat, and OpenClaw's old plugin first asks whether to publish a name for the
-    /// agent, and takes the next message as that name.
-    async fn exchange(
+    /// Through the old plugin: the person writes `text`, again every 30 seconds while no answer
+    /// came, until the agent answers with `answer`, from its own key. The old connector can miss a
+    /// message sent as it settles a new chat, and OpenClaw's old plugin first asks whether to
+    /// publish a name for the agent, and takes the next message as that name.
+    async fn exchange_before(
         &self,
         group: &cgka_traits::GroupId,
         group_hex: &str,
@@ -537,11 +435,70 @@ impl Install {
         panic!("the agent did not answer {text:?}");
     }
 
-    /// Stops the old connector as systemd stops it. A `wn-agent` stopped in the moment after a
-    /// message arrives can leave the home deaf to that chat for the next program (see
-    /// `tests/import.rs`), so it is stopped five seconds after the last one.
+    /// Through our plugin: the person writes `text` once, and the agent answers it with `answer`,
+    /// from its own key, in the turn that message started. Gives the turn.
+    async fn exchange_after(
+        &self,
+        group: &cgka_traits::GroupId,
+        group_hex: &str,
+        text: &str,
+        answer: &str,
+    ) -> String {
+        let sent = self
+            .person_runtime
+            .send_message(&self.person, group, text.as_bytes().to_vec())
+            .await
+            .unwrap();
+        let prompt = EventKey(sent.message_ids[0].clone());
+        for _ in 0..ANSWER * 2 {
+            if let Some(turn) = self.answered_in(group_hex, &prompt, answer) {
+                return turn;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        self.show_log();
+        panic!("the agent did not answer {text:?}, sent once");
+    }
+
+    /// The turn that `prompt` started in which the agent said `answer`, if there is one yet: a
+    /// turn item names the message that started it, and the agent's words name their turn.
+    fn answered_in(&self, group_hex: &str, prompt: &EventKey, answer: &str) -> Option<String> {
+        let sent = |kind: u64| {
+            let query = AppMessageQuery {
+                group_id_hex: Some(group_hex.to_string()),
+                kinds: Some(vec![kind]),
+                limit: None,
+            };
+            (self.person_runtime.messages_with_query(&self.person, query))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| m.sender == self.agent)
+        };
+        let turns: Vec<String> = sent(ITEM_KIND)
+            .filter_map(|m| carrier::read_item(&m.plaintext, &m.tags))
+            .filter(|r| matches!(r.item.event.body(), Body::Turn(_)))
+            .filter(|r| r.item.started_by.as_ref() == Some(prompt))
+            .filter_map(|r| {
+                r.item
+                    .event
+                    .header()
+                    .turn
+                    .as_ref()
+                    .map(|t| t.as_str().to_string())
+            })
+            .collect();
+        sent(9)
+            .filter(|m| m.plaintext.contains(answer))
+            .find_map(|m| {
+                let turn = m.tags.iter().find(|t| t.len() >= 2 && t[0] == "turn")?;
+                turns.contains(&turn[1]).then(|| turn[1].clone())
+            })
+    }
+
+    /// Stops the old connector as systemd stops it, at once: with MDK at the revision the core
+    /// uses, a `wn-agent` stopped in the moment after a message reached it no longer leaves the
+    /// home deaf to that chat (MDK #3602).
     async fn stop_connector(&mut self) {
-        tokio::time::sleep(Duration::from_secs(5)).await;
         let pid = self.connector.id().unwrap().to_string();
         let killed = Std::new("kill").args(["-TERM", &pid]).status().unwrap();
         assert!(killed.success());
@@ -704,6 +661,25 @@ impl Install {
         }
         self.show_log();
         panic!("the core did not mark where the chat stands");
+    }
+
+    /// Checks that the gateway asked its model about the message after the move, and that none of
+    /// the requests it made to its model since `moved` holds what was said before the move: the
+    /// person's words or the agent's answer.
+    fn nothing_from_before(&self, model: &Model, moved: usize) {
+        let after = model.since(moved);
+        assert!(
+            after.iter().any(|b| b.contains(AFTER)),
+            "the gateway asked its model about the message after the move"
+        );
+        for (i, body) in after.iter().enumerate() {
+            for old in [BEFORE, BEFORE_ANSWER] {
+                assert!(
+                    !body.contains(old),
+                    "request {i} after the move holds {old:?}: something from before reached the model"
+                );
+            }
+        }
     }
 
     /// Prints the plugin's own log lines, which name what happened by kind only (D-071), when a
@@ -959,7 +935,7 @@ async fn a_hermes_install_moves_over() {
     let old_gateway = gateway.start(&["hermes", "gateway", "run"], &root.join("plugin.log"));
     let (group, group_hex) = install.chat().await;
     install
-        .exchange(&group, &group_hex, BEFORE, BEFORE_ANSWER)
+        .exchange_before(&group, &group_hex, BEFORE, BEFORE_ANSWER)
         .await;
     let answered_before = install.answers(&group_hex, BEFORE_ANSWER);
     println!(
@@ -1002,18 +978,14 @@ async fn a_hermes_install_moves_over() {
     let mut core = install.start_core("hermes", &settings).await;
     // The person's gateway is restarted, as the installer says, and loads our plugin.
     old_gateway.stop().await;
+    let moved = model.requests();
     let _new_gateway = gateway.start(&["hermes", "gateway", "run"], &root.join("plugin.log"));
     install.marked(&group_hex).await;
 
-    let before_requests = model.asked(BEFORE);
     install
-        .exchange(&group, &group_hex, AFTER, AFTER_ANSWER)
+        .exchange_after(&group, &group_hex, AFTER, AFTER_ANSWER)
         .await;
-    assert_eq!(
-        model.asked(BEFORE),
-        before_requests,
-        "nothing from before the move was read as a prompt"
-    );
+    install.nothing_from_before(&model, moved);
     assert_eq!(install.answers(&group_hex, BEFORE_ANSWER), answered_before);
 
     let _ = core.kill().await;
@@ -1104,13 +1076,20 @@ fn edit_json(file: &Path, change: impl FnOnce(&mut Value)) {
     std::fs::write(file, serde_json::to_string_pretty(&value).unwrap() + "\n").unwrap();
 }
 
-/// A port on the loopback address nothing listens on now, for the gateway's own.
+/// A port on the loopback address nothing listens on now, for the gateway's own. It is let go of
+/// before the gateway takes it, so it is one the system does not hand out by itself, below its
+/// range of ports for the other end of a connection (`ip_local_port_range`): only a program that
+/// asks for it by number can take it meanwhile, as a second scenario run beside this one could.
 fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+    let lowest = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        .ok()
+        .and_then(|r| r.split_whitespace().next()?.parse::<u16>().ok())
+        .unwrap_or(32768);
+    let start = 20000 + (std::process::id() % 5000) as u16;
+    (start..lowest)
+        .chain(20000..start)
+        .find(|port| std::net::TcpListener::bind(("127.0.0.1", *port)).is_ok())
+        .expect("a free port below the system's own range")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1226,7 +1205,7 @@ async fn an_openclaw_install_moves_over() {
     let old_gateway = gateway.start(&["openclaw", "gateway", "run"], &root.join("plugin.log"));
     let (group, group_hex) = install.chat().await;
     install
-        .exchange(&group, &group_hex, BEFORE, BEFORE_ANSWER)
+        .exchange_before(&group, &group_hex, BEFORE, BEFORE_ANSWER)
         .await;
     let answered_before = install.answers(&group_hex, BEFORE_ANSWER);
     println!(
@@ -1267,18 +1246,14 @@ async fn an_openclaw_install_moves_over() {
     let mut core = install.start_core("openclaw", &settings).await;
     // The person's gateway is restarted, as the installer says, and loads our plugin.
     old_gateway.stop().await;
+    let moved = model.requests();
     let _new_gateway = gateway.start(&["openclaw", "gateway", "run"], &root.join("plugin.log"));
     install.marked(&group_hex).await;
 
-    let before_requests = model.asked(BEFORE);
     install
-        .exchange(&group, &group_hex, AFTER, AFTER_ANSWER)
+        .exchange_after(&group, &group_hex, AFTER, AFTER_ANSWER)
         .await;
-    assert_eq!(
-        model.asked(BEFORE),
-        before_requests,
-        "nothing from before the move was read as a prompt"
-    );
+    install.nothing_from_before(&model, moved);
     assert_eq!(install.answers(&group_hex, BEFORE_ANSWER), answered_before);
 
     let _ = core.kill().await;
