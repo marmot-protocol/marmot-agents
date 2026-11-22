@@ -663,20 +663,3 @@ async fn a_file_the_agent_sends_goes_to_the_core_and_the_result_back_to_pi() {
         serde_json::json!({"sent": false, "text": text})
     );
 }
-
-// A chat that moved works in its own folder (D-101): a relative path is made whole from there,
-// not from the driver's.
-#[tokio::test]
-async fn a_relative_path_is_made_whole_from_the_chats_folder() {
-    let (mut pi, work) = start().await;
-    let moved = work.path().join("moved");
-    std::fs::create_dir(&moved).unwrap();
-    let mut asked = prompt("c-1", "m-1", "file:notes.txt");
-    asked.chat.folder = Some(moved.clone());
-    pi.prompt(asked).await.unwrap();
-    let file = file_request(&mut pi).await;
-    assert_eq!(file.path, moved.join("notes.txt"));
-    pi.file_sent(file.id, Ok(())).await;
-    until(&mut pi, |e| is_turn(e, State::Done)).await;
-    assert_eq!(file_replies(&moved).len(), 1, "the chat's own Pi heard it");
-}

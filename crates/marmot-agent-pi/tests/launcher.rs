@@ -172,6 +172,25 @@ fn the_drivers_extension_is_mounted_read_only_and_never_from_the_state() {
         log(&docker)
     );
 
+    // Named through a link, as when the temporary folder is one: the file is mounted at the name
+    // given, so the `--extension` argument the driver passed finds it in the container too.
+    let link = outside.path().join("link");
+    std::os::unix::fs::symlink(extension.parent().unwrap(), &link).unwrap();
+    let through = link.join("send-file.ts");
+    let linked = outside.path().join("docker-link");
+    let output = with_fake_docker(work.path(), &linked, &key, &state)
+        .args(["--version"])
+        .env("MARMOT_AGENT_PI_EXTENSION", &through)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let wanted = format!("mount {}:{}:ro", extension.display(), through.display());
+    assert!(
+        log(&linked).lines().any(|l| l == wanted),
+        "{}",
+        log(&linked)
+    );
+
     std::fs::create_dir_all(&state).unwrap();
     let inside = state.join("send-file.ts");
     std::fs::write(&inside, "export default function () {}").unwrap();

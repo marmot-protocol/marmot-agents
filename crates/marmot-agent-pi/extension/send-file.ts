@@ -25,7 +25,7 @@ export default function (pi: ExtensionAPI) {
       additionalProperties: false,
     },
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const path = String(params.path).replace(/^@/, "");
+      const path = String(params.path);
       const reply = await ctx.ui.input(REQUEST, JSON.stringify({ path }), { signal });
       let answer: { sent?: unknown; text?: unknown } = {};
       try {

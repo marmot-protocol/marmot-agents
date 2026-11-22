@@ -16,7 +16,7 @@
 #   mounted, so one chat's Pi cannot read another chat's sessions. When the last argument is
 #   `--version`, as when the driver asks Pi its version, an empty folder is mounted in its place.
 # - MARMOT_AGENT_PI_EXTENSION, when set (the driver sets it), names one file, the driver's own Pi
-#   extension, which is mounted read-only at the same path, so that `--extension <it>` loads it. It
+#   extension, which is mounted read-only at the name given, so that `--extension <it>` loads it. It
 #   must be an ordinary file outside the state folder.
 # - The model key is mounted read-only. It is never built into the image, never put in an
 #   environment variable, and never written anywhere.
@@ -49,8 +49,12 @@ if [ -n "${MARMOT_AGENT_DATA:-}" ]; then
     fi
 fi
 # The driver's extension, one file, read-only: never the state folder or anything in it.
+# It is mounted at the name the driver gave, which `--extension` names, even when that name passes
+# through a link, as a temporary folder can.
 extension=""
+extension_at=""
 if [ -n "${MARMOT_AGENT_PI_EXTENSION:-}" ]; then
+    extension_at=$(realpath -s "$MARMOT_AGENT_PI_EXTENSION")
     extension=$(realpath "$MARMOT_AGENT_PI_EXTENSION")
     [ -f "$extension" ] || { echo "error: MARMOT_AGENT_PI_EXTENSION must name a file" >&2; exit 2; }
     if inside "$extension" "$state"; then
@@ -114,7 +118,7 @@ docker run --rm -i --name "$name" --label "marmot-agents.pi.run=$run" --cidfile 
     -v "$key:/run/secrets/model_key:ro" \
     -v "$state:/state" \
     -v "$work:$work" -w "$work" \
-    ${extension:+-v "$extension:$extension:ro"} \
+    ${extension:+-v "$extension:$extension_at:ro"} \
     -e MODEL_BASE_URL="$MODEL_BASE_URL" \
     -e MODEL_NAME="$MODEL_NAME" \
     -e THINKING="${THINKING:-low}" \
