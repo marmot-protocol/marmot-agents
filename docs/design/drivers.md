@@ -136,6 +136,16 @@ sequenceDiagram
   and a `..` never climbs above the folder. A folder on the way swapped for a link meanwhile cannot lead out
   either. It also refuses a file with a second name (a hard link, which could be outside), anything but an
   ordinary file, an empty file, and one over 64 MiB, well under the 512 MiB MDK uploads in one piece.
+- **Never the agent's own home.** Whatever the folders, the core refuses a file inside the account home, which
+  holds the agent's keys ([D-099](../decisions.md#d-099-files-from-the-agents-own-home-are-refused-by-default-and-the-owner-may-allow-them)):
+  one whose way from the allowed folder passes through the home, known by its device and inode however it is
+  named or linked, or one in an allowed folder that lies inside the home. So a working folder of `~` lets the
+  agent send its work but not its keys. A folder in `files_from` that is, holds or lies inside the home stops
+  the core from starting. The owner may allow both with one line in the settings,
+  `send_files_from_agent_home = true`. Whether an allowed folder lies inside the home is found from the
+  folder held open, by going up from it; when the way up cannot be followed, the folder counts as inside.
+  Known limit: a bind mount can show part of the home elsewhere, where the way up does not pass through the
+  home, so a file reached through one is not refused. Telling that would mean reading the mount table.
 - **Sending runs on the side.** Uploading can take long, so it runs as a task of its own while the chats go
   on, and the core tells the driver once it is done. The core offers the file to MDK again only while MDK says
   it is busy, which it says only before it has taken the file, for about half a minute. Any other failure is
@@ -274,8 +284,10 @@ cwd = "/home/me/work"
   that holds `goose-home` or the key, or lies inside `goose-home`, or holds or lies inside the folder of every agent, which the installer names in `MARMOT_AGENT_DATA`,
   links resolved, and Docker keeps no log of
   the container, since what Goose writes holds the conversation. So the command is
-  `["<repo>/tools/goose/goose-acp.sh", "<model-key-file>", "<goose-home>"]`, and `GOOSE_MODE=approve` in its
-  environment makes Goose ask before every tool call.
+  `["<repo>/tools/goose/goose-acp.sh", "<model-key-file>", "<goose-home>"]`, with the endpoint and the model
+  in `MODEL_BASE_URL` and `MODEL_NAME` in its environment; neither has a default ([D-100](../decisions.md#d-100-the-installers-defaults)).
+  Goose runs in its own default mode, `auto`, which asks nothing; `GOOSE_MODE=approve` makes it ask in the chat
+  before every tool call.
 - **OpenCode and Cursor run on the host.** Cursor uses the machine's own sign-in.
 - **A prompt** starts the chat's session if it has none (`session/new`), or takes up the one the core names
   ([D-065](../decisions.md#d-065-a-prompt-names-a-session-only-to-resume-one)) with `session/resume` when the
@@ -342,6 +354,7 @@ args = ["<model key file>", "<Pi's state folder>"]
 - **In a container.** [`tools/pi/pi.sh`](../../tools/pi/pi.sh) runs Pi in a throwaway Docker container built
   from [`tools/pi/Dockerfile`](../../tools/pi/Dockerfile), Pi pinned at 1.6.0, on standard input and output.
   The working folder is mounted at the same path, and the model key file from the first argument, read-only.
+  `MODEL_BASE_URL` and `MODEL_NAME` name the endpoint and the model; neither has a default ([D-100](../decisions.md#d-100-the-installers-defaults)).
   Pi reads the key from that file when it calls the model, so it is in no image, environment variable or file
   Pi writes. Of Pi's state folder, the second argument, each chat's Pi gets only the chat's own folder, so it
   cannot read another chat's sessions: the driver names the chat in `MARMOT_AGENT_CHAT`, as a hash of its id.
@@ -410,8 +423,8 @@ inside the folder of every agent, which the installer names in `MARMOT_AGENT_DAT
 plugin's own fixed messages, which name what happened by kind, reach the script's standard error
 ([D-071](../decisions.md#d-071-what-may-be-logged)). The container is named after the state folder, so Docker runs one at a time on it, and the
 entrypoint may then recover the lock that a killed gateway leaves on OpenClaw's state, which OpenClaw cannot do
-by itself across containers. The model is a free one by default, with a second free model as OpenClaw's
-fallback (`MODEL_FALLBACKS`). The core is started with a `[connector]` section, as for Claude Code. The key stays out of the
+by itself across containers. `MODEL_BASE_URL` names the endpoint and `MODEL_NAME`, or `[model]`, the model;
+neither has a default ([D-100](../decisions.md#d-100-the-installers-defaults)). `MODEL_FALLBACKS` may name models OpenClaw tries when the first fails. The core is started with a `[connector]` section, as for Claude Code. The key stays out of the
 image and out of the configuration file, and the plugin replaces its whole value with a marker in anything it
 sends. The masked form `/model status` shows is let through
 ([D-088](../decisions.md#d-088-openclaws-model-status-may-show-the-masked-model-key)).
@@ -476,7 +489,8 @@ work folder that holds the agent's home or the key, or lies inside the home, or 
 links resolved. The image is built for that user and group, so its tag names them
 (`marmot-agents-hermes-<uid>-<gid>`). Hermes's own home is a Docker volume, so its sessions survive a restart;
 the installer names it, and the container, after the agent and a hash of its folder, since Docker's names are
-shared by every account on the machine. The model key is mounted read-only and read at every start
+shared by every account on the machine. `MODEL_BASE_URL` names the endpoint and `MODEL_NAME`, or `[model]`,
+the model; neither has a default ([D-100](../decisions.md#d-100-the-installers-defaults)). The model key is mounted read-only and read at every start
 into Hermes's environment, which its configuration names (`key_env`); it is written into no file, the volume
 included, and Hermes keeps that variable from the commands it runs. Hermes's own output holds what people and the model say, so neither `run.sh` nor Docker keeps any
 of it (`--log-driver=none`). With `HERMES_LOG` the plugin appends its own log lines to that file, mounted

@@ -1,16 +1,26 @@
 #!/bin/sh
 # Record one Hermes scenario in a throwaway container.
 #
-#   tools/record/hermes/record.sh <scenario.json> <output.jsonl> <model-key-file> [model-name]
+#   tools/record/hermes/record.sh <scenario.json> <output.jsonl> [model-key-file] [model-name]
+#
+# The model is MODEL_BASE_URL, MODEL_NAME (or [model-name]) and MODEL_KEY_FILE (or [model-key-file]),
+# from the environment or from tests.env at the top of the repository (tests.env.example says how);
+# there is no default.
 #
 # The container gets a fresh, anonymous data volume and is removed afterwards, so every
 # recording starts from zero. The model key is mounted read-only and is not kept anywhere.
 # Set RECORD_LOG to a file to keep the gateway's own log, for finding out why a run failed.
 set -eu
-[ $# -ge 3 ] || { sed -n '2,9p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,12p' "$0"; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
-scenario=$(realpath "$1"); out=$(realpath -m "$2"); key=$(realpath "$3")
-model=${4:-${MODEL_NAME:-z-ai/glm-5.3}}
+TESTS_ENV="$here/../../../tests.env"
+# shellcheck source=../tests-env.sh
+. "$here/../tests-env.sh"
+scenario=$(realpath "$1"); out=$(realpath -m "$2")
+key=${3:-$(tests_env MODEL_KEY_FILE)}
+key=$(realpath "$key")
+model=${4:-$(tests_env MODEL_NAME)}
+url=$(tests_env MODEL_BASE_URL)
 image=${RECORD_IMAGE:-marmot-agents-record-hermes}
 outdir=$(mktemp -d)
 chmod 0777 "$outdir"
@@ -27,7 +37,7 @@ docker run --rm \
     -v "$scenario:/scenario.json:ro" \
     -v "$key:/run/secrets/model_key:ro" \
     -v "$outdir:/out" \
-    -e MODEL_BASE_URL="${MODEL_BASE_URL:-https://api.numes.ai/api/v1}" \
+    -e MODEL_BASE_URL="$url" \
     -e MODEL_NAME="$model" \
     -e REASONING_EFFORT="${REASONING_EFFORT:-high}" \
     -e RECORDER_TURN_TIMEOUT="${RECORDER_TURN_TIMEOUT:-900}" \

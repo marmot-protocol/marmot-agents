@@ -5,19 +5,20 @@
 //! run twice (`docs/plan.md`, D-074).
 //!
 //! Each command it asks for is harmless and runs in a throwaway folder mounted into the container.
-//! It needs Docker, and a model key for the OpenAI-compatible endpoint in `MODEL_BASE_URL` (numes.ai
-//! by default), given as the path of a file that holds it. It runs only when asked for:
+//! It needs Docker, and a model: `MODEL_BASE_URL`, `MODEL_NAME` and `MODEL_KEY_FILE`, the file
+//! that holds the endpoint's key, in the environment or in `tests.env` (`tests.env.example` says
+//! how; there is no default). It runs only when asked for:
 //!
 //! ```sh
-//! MARMOT_HERMES_MODEL_KEY=<file> cargo test -p marmot-agent --test hermes -- --ignored --nocapture
+//! cargo test -p marmot-agent --test hermes -- --ignored --nocapture
 //! ```
 //!
-//! `MARMOT_HERMES_MODEL` picks the model (a free one by default), and `HERMES_LOG` names a file
-//! that keeps the plugin's own log lines, which name what went wrong by kind only (D-071).
+//! `HERMES_LOG` names a file that keeps the plugin's own log lines, which name what went wrong by
+//! kind only (D-071).
 
 mod common;
 
-use common::{Chat, World, lines, within};
+use common::{Chat, TestModel, World, lines, within};
 use marmot_agent::carrier::{self, Asked};
 use marmot_agent::run::serve;
 use marmot_agent::socket::Endpoint;
@@ -39,12 +40,12 @@ struct Hermes {
     volume: String,
     home: PathBuf,
     work: PathBuf,
-    key: PathBuf,
+    model: TestModel,
     child: Option<Child>,
 }
 
 impl Hermes {
-    fn new(home: &Path, work: &Path, key: PathBuf) -> Self {
+    fn new(home: &Path, work: &Path, model: TestModel) -> Self {
         let id = std::process::id();
         let volume = format!("marmot-hermes-test-{id}");
         let made = Std::new("docker")
@@ -57,7 +58,7 @@ impl Hermes {
             volume,
             home: home.to_path_buf(),
             work: work.to_path_buf(),
-            key,
+            model,
             child: None,
         }
     }
@@ -70,12 +71,10 @@ impl Hermes {
             .arg(&self.home)
             .arg(&self.work)
             .arg(&self.volume)
-            .arg(&self.key)
+            .arg(&self.model.key_file)
+            .envs(self.model.env())
             .env("HERMES_CONTAINER", &self.name)
             .kill_on_drop(true);
-        if let Ok(model) = std::env::var("MARMOT_HERMES_MODEL") {
-            command.arg(model);
-        }
         self.child = Some(command.spawn().expect("the Hermes container starts"));
     }
 
@@ -171,12 +170,9 @@ impl Drop for Hermes {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "needs Docker and a model key"]
+#[ignore = "needs Docker and a model"]
 async fn hermes_end_to_end() {
-    let key = PathBuf::from(
-        std::env::var("MARMOT_HERMES_MODEL_KEY")
-            .expect("MARMOT_HERMES_MODEL_KEY names the file that holds the model key"),
-    );
+    let model = TestModel::read();
     let started = Instant::now();
     let work = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
@@ -193,7 +189,7 @@ async fn hermes_end_to_end() {
         serve(marmot, &config, &store, listener, token, stop).await
     });
     let lap = |what: &str| println!("{what} after {}s", started.elapsed().as_secs());
-    let mut hermes = Hermes::new(home.path(), work.path(), key);
+    let mut hermes = Hermes::new(home.path(), work.path(), model);
     hermes.start();
 
     let group = world

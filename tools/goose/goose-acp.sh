@@ -12,13 +12,13 @@
 # the conversation.
 #
 # Settings, from the environment:
-#   MODEL_HOST       default https://api.numes.ai
-#   MODEL_BASE_PATH  default api/v1/chat/completions
-#   MODEL_NAME       default z-ai/glm-5.3-flash:free
-#   GOOSE_MODE       auto (default) or approve; RECORD_ASK=1 means approve
+#   MODEL_BASE_URL   an OpenAI-compatible endpoint, such as https://models.example/v1 (required)
+#   MODEL_NAME       the model, as the endpoint names it (required)
+#   GOOSE_MODE       auto or approve; unset, Goose's own default, auto, which asks nothing.
+#                    RECORD_ASK=1 means approve
 #   GOOSE_IMAGE      default marmot-agents-goose, built from this folder when missing
 set -eu
-[ $# -ge 1 ] || { sed -n '2,19p' "$0"; exit 2; }
+[ $# -ge 1 ] || { sed -n '2,20p' "$0"; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
 key=$(realpath "$1")
 home=$(realpath -m "${2:-$HOME/.goose-acp}")
@@ -38,9 +38,18 @@ if [ -n "${MARMOT_AGENT_DATA:-}" ]; then
         echo "error: the work folder and the agents' folder must not hold one another" >&2; exit 2
     fi
 fi
+# There is no default model endpoint or model (D-100): the installer, a test or a person names both.
+[ -n "${MODEL_BASE_URL:-}" ] || { echo "error: set MODEL_BASE_URL to an OpenAI-compatible model endpoint; there is no default" >&2; exit 2; }
+[ -n "${MODEL_NAME:-}" ] || { echo "error: set MODEL_NAME to the model to use; there is no default" >&2; exit 2; }
+# Goose takes the endpoint as its scheme and host, and the path of its chat completions.
+host=$(printf '%s' "$MODEL_BASE_URL" | sed -E 's#^(https?://[^/]+).*#\1#')
+path=${MODEL_BASE_URL#"$host"}
+path=${path#/}
+path=${path%/}
 image=${GOOSE_IMAGE:-marmot-agents-goose}
-mode=${GOOSE_MODE:-auto}
+mode=${GOOSE_MODE:-}
 [ "${RECORD_ASK:-}" = 1 ] && mode=approve
+case $mode in "" | auto | approve) ;; *) echo "error: GOOSE_MODE takes auto or approve" >&2; exit 2 ;; esac
 
 mkdir -p "$home"
 docker image inspect "$image" >/dev/null 2>&1 || docker build -q -t "$image" "$here" >&2
@@ -53,8 +62,8 @@ exec docker run -i --rm --name "$name" --log-driver=none \
     -v "$work:$work" -w "$work" \
     -v "$home:/goose-home" -e HOME=/goose-home \
     -v "$key:/run/secrets/model_key:ro" \
-    -e MODEL_HOST="${MODEL_HOST:-https://api.numes.ai}" \
-    -e MODEL_BASE_PATH="${MODEL_BASE_PATH:-api/v1/chat/completions}" \
-    -e MODEL_NAME="${MODEL_NAME:-z-ai/glm-5.3-flash:free}" \
-    -e GOOSE_MODE="$mode" \
+    -e MODEL_HOST="$host" \
+    -e MODEL_BASE_PATH="${path:+$path/}chat/completions" \
+    -e MODEL_NAME="$MODEL_NAME" \
+    ${mode:+-e GOOSE_MODE=$mode} \
     "$image"

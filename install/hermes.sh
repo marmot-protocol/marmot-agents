@@ -22,7 +22,7 @@ image() { printf 'marmot-agents-hermes-%s-%s' "$(id -u)" "$(id -g)"; }
 harness_check() {
     linux_only
     need_docker
-    need_model_key
+    need_model
 }
 
 harness_prepare() {
@@ -37,8 +37,8 @@ harness_settings() {
 }
 
 harness_env() {
-    say "MODEL_BASE_URL=${MODEL_URL:-$MA_DEFAULT_MODEL_URL}"
-    [ -z "$MODEL" ] || say "MODEL_NAME=$MODEL"
+    say "MODEL_BASE_URL=$MODEL_URL"
+    say "MODEL_NAME=$MODEL"
     say "HERMES_CONTAINER=$(volume)"
     say "HERMES_IMAGE=$(image)"
 }

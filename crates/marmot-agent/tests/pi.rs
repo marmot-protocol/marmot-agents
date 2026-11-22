@@ -8,16 +8,17 @@
 //! command: that question comes to the chat, and the person's answer goes back to Pi.
 //!
 //! Pi runs through `tools/pi/pi.sh`, in a throwaway container, in a throwaway folder. It needs
-//! Docker, and a file holding a key for the model endpoint the script uses, named by
-//! `PI_MODEL_KEY_FILE`. So it runs only when asked for:
+//! Docker, and a model: `MODEL_BASE_URL`, `MODEL_NAME` and `MODEL_KEY_FILE`, the file that holds
+//! the endpoint's key, in the environment or in `tests.env` (`tests.env.example` says how; there
+//! is no default). So it runs only when asked for:
 //!
 //! ```sh
-//! PI_MODEL_KEY_FILE=<key file> cargo test -p marmot-agent --test pi -- --ignored --nocapture
+//! cargo test -p marmot-agent --test pi -- --ignored --nocapture
 //! ```
 
 mod common;
 
-use common::{Chat, TURN, World, lines, within};
+use common::{Chat, TURN, TestModel, World, lines, within};
 use marmot_agent::EventKey;
 use marmot_agent::carrier::{Asked, AskedReply, Read};
 use marmot_agent_events::State;
@@ -76,18 +77,25 @@ async fn allow(chat: &Chat<'_>, command: &str) -> EventKey {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "needs Docker and a model key"]
+#[ignore = "needs Docker and a model"]
 async fn pi_end_to_end() {
     let began = Instant::now();
-    let key = std::env::var("PI_MODEL_KEY_FILE").expect("PI_MODEL_KEY_FILE names the model key");
+    let model = TestModel::read();
     let work = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/pi/pi.sh");
+    // The script is started through `env`, which hands it the endpoint and the model.
+    let mut args = model.env_args();
+    args.extend([
+        script.display().to_string(),
+        model.key_file.clone(),
+        state.path().display().to_string(),
+        "--extension".into(),
+        GATE.into(),
+    ]);
     let settings = format!(
-        "name = \"Pi\"\n[pi]\ncwd = \"{}\"\nprogram = \"{}\"\nargs = [\"{key}\", \"{}\", \"--extension\", \"{GATE}\"]\n",
-        work.path().display(),
-        script.display(),
-        state.path().display(),
+        "name = \"Pi\"\n[pi]\ncwd = {:?}\nprogram = \"env\"\nargs = {args:?}\n",
+        work.path().display().to_string(),
     );
     let world = World::new(&settings).await;
     world.runtime.start().await.unwrap();

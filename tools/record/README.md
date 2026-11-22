@@ -23,6 +23,12 @@ what the harness actually sends. The recordings they produced are in
 - Each scenario lets the agent run commands and edit files in the project directory you give it. Give it a
   throwaway copy of `demo/`, never a real project.
 - Raw recordings contain your paths and account details. Keep them outside the repository.
+- OpenCode, Goose, Pi, Hermes and OpenClaw run on a model you choose; nothing here has a default
+  ([D-100](../../docs/decisions.md#d-100-the-installers-defaults)). Copy
+  [`tests.env.example`](../../tests.env.example) to `tests.env` at the top of the repository, which git ignores,
+  and fill in `MODEL_BASE_URL`, `MODEL_NAME` and `MODEL_KEY_FILE`, the file that holds the endpoint's key, and,
+  for OpenCode, `OPENCODE_MODEL`, the model as OpenCode names it. The scenarios against real harnesses read the
+  same file. A variable set in the environment wins; a name the file gives twice is an error.
 
 ## Record
 
@@ -80,11 +86,11 @@ python3 tools/record/inventory.py fixtures/recordings/claude          # with eve
 Hermes is recorded in a container, with a plugin that plays the chat.
 
 ```sh
-tools/record/hermes/record.sh tools/record/hermes/scenarios/simple.json out/simple.jsonl <model-key-file> [model]
+tools/record/hermes/record.sh tools/record/hermes/scenarios/simple.json out/simple.jsonl [model-key-file] [model]
 ```
 
-- **What it needs.** Docker, and a file holding an API key for an OpenAI-compatible model endpoint. Set
-  `MODEL_BASE_URL` for the endpoint and pass the model name as the last argument.
+- **What it needs.** Docker, and a model: `MODEL_BASE_URL`, `MODEL_NAME` and `MODEL_KEY_FILE`, as
+  [above](#before-you-start). A key file or a model name given as an argument wins.
 - **Every run starts from zero.** The container gets a fresh data volume and is removed afterwards. To reuse a
   configured Hermes across runs, run the image yourself with a named volume on `/data`.
 - **The key is mounted read-only when the container starts.** It is never built into the image or written to
@@ -111,11 +117,11 @@ Scrub the output like any other recording, with the files in a folder named `her
 OpenClaw is recorded the same way as Hermes: in a container, with a plugin that plays the chat.
 
 ```sh
-tools/record/openclaw/record.sh tools/record/openclaw/scenarios/simple.json out/simple.jsonl <model-key-file> [model]
+tools/record/openclaw/record.sh tools/record/openclaw/scenarios/simple.json out/simple.jsonl [model-key-file] [model]
 ```
 
-- **What it needs.** Docker, and a file holding an API key for an OpenAI-compatible model endpoint. Set
-  `MODEL_BASE_URL` for the endpoint and pass the model name as the last argument.
+- **What it needs.** Docker, and a model: `MODEL_BASE_URL`, `MODEL_NAME` and `MODEL_KEY_FILE`, as
+  [above](#before-you-start). A key file or a model name given as an argument wins.
 - **Every run starts from zero.** The container gets a fresh data volume and is removed afterwards.
 - **The key is mounted read-only when the container starts.** It is never built into the image, and OpenClaw's
   configuration file only names the variable that holds it. The plugin also replaces the key with a marker if
@@ -152,12 +158,11 @@ Pi is recorded through its RPC mode, with Pi in a throwaway container built from
 
 ```sh
 python3 tools/record/record_pi.py --list
-python3 tools/record/record_pi.py command "$work/demo" "$work/raw/pi/command.jsonl" <model-key-file>
+python3 tools/record/record_pi.py command "$work/demo" "$work/raw/pi/command.jsonl" [model-key-file]
 ```
 
-- **What it needs.** Docker, and a file holding an API key for an OpenAI-compatible model endpoint.
-  `MODEL_BASE_URL` sets the endpoint and `MODEL_NAME` the model; the defaults are in
-  [`tools/pi/pi.sh`](../pi/pi.sh).
+- **What it needs.** Docker, and a model: `MODEL_BASE_URL`, `MODEL_NAME` and `MODEL_KEY_FILE`, as
+  [above](#before-you-start). A key file given as an argument wins.
 - **The key is mounted read-only when the container starts.** Pi reads it from that file whenever it calls the
   model; it is never built into the image, put in an environment variable or written anywhere.
 - **Every recording starts from zero.** Pi's state, its settings and its sessions, is a fresh temporary folder
@@ -181,13 +186,15 @@ say so there: what a harness does instead is the useful part.
 
 - The ACP recorder runs the agent with `HOME` and the XDG folders set to a throwaway folder beside the project
   (or `--home`), so it reads none of your settings, skills, plugins or sign-ins and adds nothing to your history.
-  For OpenCode that means its free models only, which is what the recordings use. `--config` passes OpenCode a
+  For OpenCode that means a model it reaches without signing in, such as one of its free ones, which the
+  recordings use; `OPENCODE_MODEL` names it, unless `--config` does. `--config` passes OpenCode a
   configuration as JSON, and `--agent` names another agent's command. The scrubber reads ACP recordings from
   `raw/acp/<agent>/`.
 - Goose runs in a container built from `tools/goose`, with the work folder mounted at the same path and its
   home in the recorder's throwaway folder, so a session survives the restart in `resume` and `load`. The key
-  file is mounted read-only; the model is `z-ai/glm-5.3-flash:free` on numes.ai unless `MODEL_NAME` says
-  otherwise. Approval scenarios run Goose in its `approve` mode.
+  file is mounted read-only; `MODEL_BASE_URL` and `MODEL_NAME` come from the environment or `tests.env`, as
+  [above](#before-you-start). Approval scenarios run Goose in its `approve` mode; the others in Goose's own
+  default, `auto`.
 - Cursor runs on the machine's own sign-in (`--own-home`; no credential is copied), so its sessions go into
   your Cursor history. It asks before every command unless started with `--force`, so scenarios that need no
   approval use `--agent-auto "cursor-agent --force acp"`. Its command list names your own skills and entries

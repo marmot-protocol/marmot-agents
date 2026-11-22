@@ -11,16 +11,22 @@
 //! refused. Only an ordinary file is read, never a folder, a device or a pipe, and only up to
 //! [`MAX_FILE`].
 //!
+//! No file inside the account home, which holds the agent's keys, is sent, whichever allowed folder
+//! leads to it, unless the owner allows it in the settings (D-099). A file is inside the home when
+//! the home is one of the folders on its way, known by its device and inode, or when the allowed
+//! folder itself lies inside the home.
+//!
 //! Nothing here prints a path, a name or a file's contents (D-071). A refusal says why in words
 //! the chat can read, and names no path.
 
+use crate::config::Config;
 use marmot_agent_driver::{Reason, Refusal};
 use rustix::fs::{Mode, OFlags};
 use std::collections::VecDeque;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::Read;
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd};
 use std::os::unix::ffi::OsStringExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
@@ -33,6 +39,10 @@ pub const MAX_FILE: u64 = 64 * 1024 * 1024;
 
 /// The most links one path may pass through, as the system allows.
 const MAX_LINKS: usize = 40;
+
+/// The most folders the way up from an allowed folder to the top is walked; a deeper one counts as
+/// inside the home.
+const MAX_DEPTH: usize = 4096;
 
 /// A file read for sending.
 pub struct Outgoing {
@@ -57,13 +67,18 @@ impl std::fmt::Debug for Outgoing {
 /// may reach it by, as the settings give it and as its real path.
 struct Root {
     names: Vec<PathBuf>,
-    dir: OwnedFd,
+    dir: File,
 }
+
+/// A folder as the system knows it, whatever its name: its device and inode.
+type Id = (u64, u64);
 
 /// The folders the agent may send files from.
 #[derive(Clone, Default)]
 pub struct Folders {
     allowed: Arc<Vec<Root>>,
+    /// The account home, when no file inside it may be sent.
+    home: Option<Id>,
 }
 
 /// Shows how many folders there are, and no path (D-071).
@@ -89,6 +104,13 @@ fn outside() -> Refusal {
     )
 }
 
+fn in_home() -> Refusal {
+    refused(
+        Reason::NotAllowed,
+        "The file is in the agent's own home, which holds its keys.",
+    )
+}
+
 fn unreadable() -> Refusal {
     refused(Reason::Failed, "The file could not be read.")
 }
@@ -96,7 +118,8 @@ fn unreadable() -> Refusal {
 /// Checks the folders the settings list for sending files against the account home, which holds
 /// the agent's keys: none may be the home, hold it or lie inside it. Each is compared by its real
 /// path, links followed, as [`Folders::new`] opens it; one that is not there allows nothing
-/// anyway. The refusal names no path (D-071).
+/// anyway. The refusal names no path (D-071). Not checked when the owner allows files from the
+/// home (D-099).
 pub fn apart_from_home(folders: &[PathBuf], home: &Path) -> Result<(), String> {
     let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
     for folder in folders {
@@ -106,7 +129,8 @@ pub fn apart_from_home(folders: &[PathBuf], home: &Path) -> Result<(), String> {
         if real.starts_with(&home) || home.starts_with(&real) {
             return Err(
                 "a folder in `files_from` is the account home, holds it or lies inside it, and \
-                 the home holds the agent's keys; take that folder out of the settings"
+                 the home holds the agent's keys; take that folder out of the settings, or, to \
+                 let the agent send files from its home, add `send_files_from_agent_home = true`"
                     .into(),
             );
         }
@@ -115,15 +139,28 @@ pub fn apart_from_home(folders: &[PathBuf], home: &Path) -> Result<(), String> {
 }
 
 impl Folders {
+    /// The folders the settings allow, kept apart from the account home unless the owner allows
+    /// files from it (D-099). A folder listed in `files_from` that is, holds or lies inside the
+    /// home is refused, as [`apart_from_home`] says.
+    pub fn from_config(config: &Config) -> Result<Self, String> {
+        let home = (!config.send_files_from_agent_home).then_some(config.home.as_path());
+        if let (Some(home), Some(listed)) = (home, &config.files_from) {
+            apart_from_home(listed, home)?;
+        }
+        Ok(Self::new(&config.file_folders(), home))
+    }
+
     /// The folders, each opened now. One that does not exist, or cannot be opened, allows
-    /// nothing.
-    pub fn new(folders: &[PathBuf]) -> Self {
+    /// nothing. With `home`, no file inside it is sent, whichever folder leads to it.
+    pub fn new(folders: &[PathBuf], home: Option<&Path>) -> Self {
+        // A home that is not there holds nothing.
+        let home = home.and_then(id_of_path);
         let allowed = folders
             .iter()
             .filter_map(|folder| {
                 let real = std::fs::canonicalize(folder).ok()?;
                 let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
-                let dir = rustix::fs::open(&real, flags, Mode::empty()).ok()?;
+                let dir = File::from(rustix::fs::open(&real, flags, Mode::empty()).ok()?);
                 let mut names = vec![real];
                 if let Ok(given) = std::path::absolute(folder)
                     && !names.contains(&given)
@@ -135,6 +172,7 @@ impl Folders {
             .collect();
         Self {
             allowed: Arc::new(allowed),
+            home,
         }
     }
 
@@ -157,7 +195,7 @@ impl Folders {
             let Some(rest) = root.names.iter().find_map(|n| path.strip_prefix(n).ok()) else {
                 continue;
             };
-            match root.open(rest) {
+            match root.open(rest, self.home) {
                 Ok(file) => return finish(file, path),
                 Err(refusal) => {
                     first.get_or_insert(refusal);
@@ -169,10 +207,11 @@ impl Folders {
 }
 
 impl Root {
-    /// Opens `rest`, a path inside this folder, one part at a time from the folder held open.
-    fn open(&self, rest: &Path) -> Result<File, Refusal> {
+    /// Opens `rest`, a path inside this folder, one part at a time from the folder held open. With
+    /// `home`, a file with the home on its way is refused.
+    fn open(&self, rest: &Path, home: Option<Id>) -> Result<File, Refusal> {
         // The folders opened on the way, below this one; a `..` goes back to the one before.
-        let mut opened: Vec<OwnedFd> = Vec::new();
+        let mut opened: Vec<File> = Vec::new();
         let mut parts: VecDeque<OsString> = VecDeque::new();
         push_front(&mut parts, rest);
         let mut links = 0;
@@ -192,9 +231,22 @@ impl Root {
                 OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
             };
             let error = match rustix::fs::openat(at, part.as_os_str(), flags, Mode::empty()) {
-                Ok(fd) if last => return Ok(File::from(fd)),
+                Ok(fd) if last => {
+                    // The folders still open are the file's own, from this one down, since a
+                    // `..` closes the last and a whole link starts again from this one.
+                    // One whose identity the system does not give counts as the home. Whether the
+                    // allowed folder itself lies in the home is asked again now, of the folder held
+                    // open, since it may have been moved there after the start.
+                    if let Some(home) = home
+                        && (opened.iter().any(|d| id_of(d).is_none_or(|i| i == home))
+                            || lies_in(&self.dir, home))
+                    {
+                        return Err(in_home());
+                    }
+                    return Ok(File::from(fd));
+                }
                 Ok(fd) => {
-                    opened.push(fd);
+                    opened.push(File::from(fd));
                     continue;
                 }
                 Err(error) => error,
@@ -231,6 +283,54 @@ impl Root {
             "Only an ordinary file can be sent.",
         ))
     }
+}
+
+/// The device and inode of an open file, if the system says.
+fn id_of(file: &File) -> Option<Id> {
+    let meta = file.metadata().ok()?;
+    Some((meta.dev(), meta.ino()))
+}
+
+/// Whether the folder held open is `home` or lies inside it, found from the folder itself by going
+/// up one `..` at a time to the top, so a rename of its name or of a folder above it cannot make
+/// the answer describe another folder. When the way up cannot be followed, it counts as inside.
+fn lies_in(dir: &File, home: Id) -> bool {
+    // Only the folder's identity is needed on the way, so where the system allows, the folders
+    // above are opened without needing leave to read them.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let flags = OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
+    let Some(mut id) = id_of(dir) else {
+        return true;
+    };
+    let mut here: Option<File> = None;
+    for _ in 0..MAX_DEPTH {
+        if id == home {
+            return true;
+        }
+        let at = here.as_ref().unwrap_or(dir).as_fd();
+        let Ok(up) = rustix::fs::openat(at, "..", flags, Mode::empty()) else {
+            return true;
+        };
+        let up = File::from(up);
+        let Some(above) = id_of(&up) else {
+            return true;
+        };
+        if above == id {
+            // The top, which is its own `..`.
+            return false;
+        }
+        id = above;
+        here = Some(up);
+    }
+    true
+}
+
+/// The device and inode of the folder at `path`, links followed.
+fn id_of_path(path: &Path) -> Option<Id> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.dev(), meta.ino()))
 }
 
 /// Puts the parts of `path` in front of those still to follow.
@@ -336,7 +436,7 @@ mod tests {
     use super::*;
 
     fn folders(dir: &Path) -> Folders {
-        Folders::new(&[dir.to_path_buf()])
+        Folders::new(&[dir.to_path_buf()], None)
     }
 
     fn reason(result: Result<Outgoing, Refusal>) -> Reason {
@@ -586,11 +686,137 @@ mod tests {
         apart_from_home(&[out, root.path().join("missing")], &home).unwrap();
     }
 
+    /// A working folder that holds the account home, as `~` holds an installed agent's: the home
+    /// with its keys, and a file of the agent's work beside it.
+    fn holding_the_home() -> (tempfile::TempDir, PathBuf) {
+        let work = tempfile::tempdir().unwrap();
+        let home = work.path().join("agent");
+        std::fs::create_dir(&home).unwrap();
+        std::fs::write(home.join("keys.json"), "keys").unwrap();
+        std::fs::write(work.path().join("notes.txt"), "work").unwrap();
+        (work, home)
+    }
+
+    // The home holds the agent's keys: no file inside it is sent, wherever the allowed folder
+    // is, and by whatever path or link the agent names it (D-099). The rest of the folder is.
+    #[test]
+    fn no_file_inside_the_account_home_is_sent_from_a_folder_that_holds_it() {
+        let (work, home) = holding_the_home();
+        let w = work.path();
+        std::os::unix::fs::symlink(home.join("keys.json"), w.join("whole.json")).unwrap();
+        std::os::unix::fs::symlink("agent/keys.json", w.join("relative.json")).unwrap();
+        std::os::unix::fs::symlink(&home, w.join("home-link")).unwrap();
+        std::fs::create_dir(w.join("out")).unwrap();
+        std::os::unix::fs::symlink("../agent", w.join("out/up")).unwrap();
+        let f = Folders::new(&[w.to_path_buf()], Some(&home));
+        for path in [
+            home.join("keys.json"),
+            w.join("whole.json"),
+            w.join("relative.json"),
+            w.join("home-link/keys.json"),
+            w.join("out/up/keys.json"),
+            w.join("out/../agent/./keys.json"),
+        ] {
+            let refusal = f.read(&path).unwrap_err();
+            assert_eq!(refusal.reason, Reason::NotAllowed, "{}", path.display());
+            let detail = refusal.detail.unwrap();
+            assert!(
+                !detail.contains('/') && !detail.contains("agent/"),
+                "{detail}"
+            );
+        }
+        assert_eq!(f.read(&w.join("notes.txt")).unwrap().bytes, b"work");
+        // A path that passes through the home and leaves it ends outside it.
+        let back = f.read(&home.join("../notes.txt")).unwrap();
+        assert_eq!(back.bytes, b"work");
+    }
+
+    // An allowed folder inside the home sends nothing from it, nor does the home itself.
+    #[test]
+    fn a_folder_inside_the_account_home_sends_nothing() {
+        let (_work, home) = holding_the_home();
+        std::fs::create_dir(home.join("out")).unwrap();
+        std::fs::write(home.join("out/report.txt"), "report").unwrap();
+        for folder in [home.clone(), home.join("out")] {
+            let f = Folders::new(&[folder], Some(&home));
+            let out = f.read(&home.join("out/report.txt"));
+            assert_eq!(reason(out), Reason::NotAllowed);
+        }
+    }
+
+    // An allowed folder moved into the home after the start sends nothing more, even by the name
+    // it was allowed under, since the question is asked again of the folder held open each time.
+    #[test]
+    fn a_folder_moved_into_the_account_home_sends_nothing_more() {
+        let (work, home) = holding_the_home();
+        let out = work.path().join("out");
+        std::fs::create_dir(&out).unwrap();
+        std::fs::write(out.join("report.txt"), "report").unwrap();
+        let f = Folders::new(std::slice::from_ref(&out), Some(&home));
+        assert_eq!(f.read(&out.join("report.txt")).unwrap().bytes, b"report");
+        std::fs::rename(&out, home.join("out")).unwrap();
+        assert_eq!(reason(f.read(&out.join("report.txt"))), Reason::NotAllowed);
+    }
+
+    // Whether an allowed folder is in the home is asked of the folder held open, not of its name:
+    // moved after it was opened, the folder keeps its own answer, whatever now has its name.
+    #[test]
+    fn whether_a_folder_is_in_the_home_follows_the_folder_held_open() {
+        let (work, home) = holding_the_home();
+        let home_id = id_of_path(&home).unwrap();
+        let open = |path: &Path| File::open(path).unwrap();
+        let inside = home.join("inside");
+        let outside = work.path().join("outside");
+        std::fs::create_dir(&inside).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let (was_inside, was_outside) = (open(&inside), open(&outside));
+        assert!(lies_in(&open(&home), home_id));
+        assert!(lies_in(&was_inside, home_id));
+        assert!(!lies_in(&was_outside, home_id));
+
+        // The two swap places: each keeps the answer of where it now is.
+        let swap = work.path().join("swap");
+        std::fs::rename(&inside, &swap).unwrap();
+        std::fs::rename(&outside, &inside).unwrap();
+        std::fs::rename(&swap, &outside).unwrap();
+        assert!(!lies_in(&was_inside, home_id));
+        assert!(lies_in(&was_outside, home_id));
+    }
+
+    fn settings(home: &Path, lines: &str) -> Config {
+        let owner = "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e";
+        Config::parse(&format!(
+            "home = {home:?}\nrelays = []\nowner = \"{owner}\"\n{lines}"
+        ))
+        .unwrap()
+    }
+
+    // The settings decide: by default the home is kept apart, from the harness's working folder
+    // and from a listed folder alike, and one explicit line lets the owner allow it (D-099).
+    #[test]
+    fn the_owner_may_allow_files_from_the_account_home_with_one_line() {
+        let (work, home) = holding_the_home();
+        let keys = home.join("keys.json");
+        let pi = format!("[pi]\ncwd = {:?}\n", work.path());
+        let listed = format!("files_from = [{home:?}]\n[pi]\ncwd = \"/unused\"\n");
+        let allow = "send_files_from_agent_home = true\n";
+
+        let by_default = Folders::from_config(&settings(&home, &pi)).unwrap();
+        assert_eq!(reason(by_default.read(&keys)), Reason::NotAllowed);
+        assert!(by_default.read(&work.path().join("notes.txt")).is_ok());
+        assert!(Folders::from_config(&settings(&home, &listed)).is_err());
+
+        for lines in [format!("{allow}{pi}"), format!("{allow}{listed}")] {
+            let allowed = Folders::from_config(&settings(&home, &lines)).unwrap();
+            assert_eq!(allowed.read(&keys).unwrap().bytes, b"keys", "{lines}");
+        }
+    }
+
     #[test]
     fn with_no_folder_nothing_is_sent() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("notes.txt"), "hello").unwrap();
-        let none = Folders::new(&[dir.path().join("missing")]);
+        let none = Folders::new(&[dir.path().join("missing")], None);
         let out = none.read(&dir.path().join("notes.txt"));
         assert_eq!(reason(out), Reason::NotSupported);
     }

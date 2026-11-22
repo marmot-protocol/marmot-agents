@@ -12,6 +12,7 @@
 //! allow_loopback_relays = false        # true: relays on this machine may be used
 //! files_from = ["/home/me/work/out"]   # where the agent may send files from; by default the
 //!                                      # harness's working folder, and none for a connector
+//! send_files_from_agent_home = false   # true: files inside the account home may be sent too
 //!
 //! [codex]                              # Codex, built in; or, for a connector on the socket,
 //! cwd = "/home/me/work"                # an empty [connector] section in its place
@@ -76,9 +77,14 @@ pub struct Config {
     /// The folders the agent may send files from (D-090). By default the working folder of a
     /// harness the core runs, and none for a connector on the socket, whose folder the core does
     /// not know. A folder listed here may not be the account home, hold it or lie inside it: the
-    /// core refuses to start on one.
+    /// core refuses to start on one, unless `send_files_from_agent_home` is set.
     #[serde(default)]
     pub files_from: Option<Vec<PathBuf>>,
+    /// Whether the agent may send files inside the account home, which holds its keys, when an
+    /// allowed folder holds it (D-099). Off by default: the core refuses every file whose real
+    /// place is inside the home, wherever the allowed folders are.
+    #[serde(default)]
+    pub send_files_from_agent_home: bool,
     /// Codex, when the agent is Codex, built in.
     #[serde(default)]
     pub codex: Option<CodexConfig>,

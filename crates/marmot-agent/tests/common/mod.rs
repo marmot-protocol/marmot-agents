@@ -633,3 +633,62 @@ impl Chat<'_> {
             .collect()
     }
 }
+
+/// The model a scenario against a real harness runs on: an OpenAI-compatible endpoint, the model,
+/// and the file that holds the endpoint's key (D-100). Each is read from the environment, or else
+/// from `tests.env` at the top of the repository, which git ignores (`tests.env.example` shows it).
+/// There is no default; CI's nightly workflow sets the same names from its secrets.
+pub struct TestModel {
+    /// `MODEL_BASE_URL`.
+    pub url: String,
+    /// `MODEL_NAME`.
+    pub name: String,
+    /// `MODEL_KEY_FILE`.
+    pub key_file: String,
+}
+
+impl TestModel {
+    pub fn read() -> Self {
+        Self {
+            url: tests_env("MODEL_BASE_URL"),
+            name: tests_env("MODEL_NAME"),
+            key_file: tests_env("MODEL_KEY_FILE"),
+        }
+    }
+
+    /// The endpoint and the model as the container scripts take them, from their environment.
+    pub fn env(&self) -> [(&'static str, &str); 2] {
+        [("MODEL_BASE_URL", &self.url), ("MODEL_NAME", &self.name)]
+    }
+
+    /// The same, as arguments for `env`, for a program the core starts.
+    pub fn env_args(&self) -> Vec<String> {
+        (self.env().iter())
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect()
+    }
+}
+
+/// The setting `name` for the scenarios against real harnesses (D-100): from the environment, or
+/// else from `tests.env` at the top of the repository, one `NAME=value` per line. There is no
+/// default: an unset name stops the scenario, saying what to set, and so does a name the file gives
+/// twice, since the readers in `tools/record` would not know which to take either.
+pub fn tests_env(name: &str) -> String {
+    if let Some(value) = std::env::var(name).ok().filter(|v| !v.is_empty()) {
+        return value;
+    }
+    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests.env");
+    let text = std::fs::read_to_string(file).unwrap_or_default();
+    let mut values = (text.lines())
+        .filter_map(|line| line.trim().split_once('='))
+        .filter(|(key, _)| key.trim_end() == name)
+        .map(|(_, value)| value.trim().to_string());
+    let value = values.next();
+    assert!(
+        values.next().is_none(),
+        "tests.env sets {name} more than once; keep one"
+    );
+    value.filter(|v| !v.is_empty()).unwrap_or_else(|| {
+        panic!("set {name}, in the environment or in tests.env (see tests.env.example)")
+    })
+}

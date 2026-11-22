@@ -1548,7 +1548,8 @@ Decided 2026-11-21. The project owner accepted the recommendation.
   its own named from a hash of the chat id (`MARMOT_AGENT_CHAT`). After a restart a session that never held a
   message, and one whose file was deleted, are both made again empty (issue #63). A question asked while Pi
   starts fails the start. A second Compact while one runs is refused as busy. The default model is
-  `deepseek/deepseek-v4.1-flash:free`.
+  `deepseek/deepseek-v4.1-flash:free`. (Replaced by
+  [D-100](#d-100-the-installers-defaults): there is no default model.)
 - **ACP.** A streamed message's native message is the list of its chunks. An ACP agent reads a chat message as
   Codex does ([D-062](#d-062-what-codex-reads-for-a-chat-message)). A message during a turn cancels it and
   prompts (`restart`). A setting in ACP's `mode` category needs the right to approve. OpenCode's question tool

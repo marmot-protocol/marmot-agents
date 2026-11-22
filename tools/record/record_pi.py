@@ -2,7 +2,7 @@
 """Record `pi --mode rpc` sessions: every JSON record in both directions.
 
 Usage:
-    record_pi.py <scenario> <project-dir> <output.jsonl> <model-key-file>
+    record_pi.py <scenario> <project-dir> <output.jsonl> [model-key-file]
     record_pi.py --list
 
 Each output line is {"t": <ms since start>, "dir": "out"|"in", "msg": <the JSON record>}.
@@ -10,7 +10,9 @@ Each output line is {"t": <ms since start>, "dir": "out"|"in", "msg": <the JSON 
 {"_recorder": ...} is a note the recorder wrote, such as that it started Pi again.
 
 Pi runs in a throwaway container, through `tools/pi/pi.sh`, with the model key mounted
-read-only. Its state (settings and sessions) is a fresh temporary folder for each recording.
+read-only. The model is MODEL_BASE_URL, MODEL_NAME and MODEL_KEY_FILE (or [model-key-file]), from the
+environment or from tests.env at the top of the repository (tests.env.example says how); there is no
+default. Its state (settings and sessions) is a fresh temporary folder for each recording.
 The script has no dependencies besides Docker. Raw recordings contain local paths. Scrub them
 before sharing.
 
@@ -21,12 +23,15 @@ levels and the commands before the first prompt, and again after a new session.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
+
+import tests_env
 
 TURN_TIMEOUT = 300
 PI = Path(__file__).resolve().parent.parent / "pi" / "pi.sh"
@@ -357,9 +362,14 @@ def main():
         for name, f in SCENARIOS.items():
             print(f"{name:18} {f.__doc__.splitlines()[0]}")
         return
-    if len(sys.argv) != 5 or sys.argv[1] not in SCENARIOS:
+    if len(sys.argv) not in (4, 5) or sys.argv[1] not in SCENARIOS:
         sys.exit(__doc__)
-    name, project, out, key = sys.argv[1:]
+    tests_env.load()
+    if len(sys.argv) == 5:
+        os.environ["MODEL_KEY_FILE"] = sys.argv[4]
+    tests_env.need(*tests_env.NAMES)
+    name, project, out = sys.argv[1:4]
+    key = os.environ["MODEL_KEY_FILE"]
     with tempfile.TemporaryDirectory(prefix="pi-state-") as state:
         pi = Pi(Path(out), str(Path(project).resolve()), str(Path(key).resolve()), state, EXTRA.get(name))
         try:

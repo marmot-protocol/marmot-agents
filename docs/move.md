@@ -95,7 +95,8 @@ The rule is that nobody may do more afterwards than the old install let them:
 - `files_from` lists only the old media folders, each found as `wn-agent` found it (`..` taken away before
   links are followed), and never one that is, holds or lies inside the home or its backup. The working folder
   is never allowed by default. The core checks `files_from` against the home again each time it starts, and
-  refuses to start if a folder has come to overlap it.
+  refuses to start if a folder has come to overlap it, unless the owner has allowed files from the home
+  ([D-099](decisions.md#d-099-files-from-the-agents-own-home-are-refused-by-default-and-the-owner-may-allow-them)).
 
 Who may approve is the owner alone, the default
 ([D-010](decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)). The harness works in one

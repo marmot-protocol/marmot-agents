@@ -275,7 +275,23 @@ then check that no log, debug output, file or recording contains one.
 
 ### 10. Real harnesses
 
-The scenarios against real harnesses stay, and run nightly instead of only by hand.
+The scenarios against real harnesses stay, and run nightly instead of only by hand. Most tests use recorded
+sessions instead of live models. The scenarios that need a model (OpenCode, Goose, Pi, OpenClaw and Hermes), and the
+recorders in `tools/record`, read it from these names, with no default anywhere in the code
+([D-100](../decisions.md#d-100-the-installers-defaults)):
+
+| Name | What |
+| --- | --- |
+| `MODEL_BASE_URL` | An OpenAI-compatible endpoint |
+| `MODEL_NAME` | The model, as the endpoint names it |
+| `MODEL_KEY_FILE` | The file that holds the endpoint's key, readable by its owner alone |
+| `OPENCODE_MODEL` | For OpenCode, which reaches models through its own providers: the model as OpenCode names it |
+
+Each comes from the environment, or else from `tests.env` at the top of the repository, which git ignores and
+which may give each name once;
+[`tests.env.example`](../../tests.env.example) shows it. The nightly workflow, once it lands, sets
+`MODEL_BASE_URL`, `MODEL_NAME` and `OPENCODE_MODEL` from CI secrets of the same names, and writes the secret `MODEL_KEY`, the key
+itself, to a file only the job can read, which it names in `MODEL_KEY_FILE`.
 
 ## In CI
 
@@ -286,7 +302,7 @@ takes about 8 to 10.
 | When | What |
 | --- | --- |
 | Every pull request | Everything that runs today, the conformance suite (built: in the Rust job, about 30 s), property tests at normal counts, the simulator on a fixed set of seeds (built: 200 runs of each gate family from seed 0, in release, in its own job), TLC on small bounds, Kani on the small proofs, the privacy scan, each in its own job |
-| Nightly | Property tests at high counts, the simulator on many new seeds, TLC on larger bounds, fuzzing, mutation testing, and the real-harness scenarios on numes.ai's free models, in a workflow that pull requests cannot reach |
+| Nightly | Property tests at high counts, the simulator on many new seeds, TLC on larger bounds, fuzzing, mutation testing, and the real-harness scenarios on numes.ai's free models, named by CI secrets ([real harnesses](#10-real-harnesses)), in a workflow that pull requests cannot reach |
 | Weekly | Long simulator campaigns |
 
 ## In what order

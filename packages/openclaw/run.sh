@@ -12,8 +12,9 @@
 # every agent, which the installer sets): the script refuses to start if it does, links resolved. The
 # model key is mounted read-only and is not kept anywhere. The container is removed when it stops. It is
 # named after the state folder, so no two run on one state folder at once, and one that was killed leaves
-# nothing in the way of the next. Set MODEL_BASE_URL for another endpoint, and MODEL_FALLBACKS for the
-# models OpenClaw tries when the first fails (comma-separated; empty for none).
+# nothing in the way of the next. MODEL_BASE_URL names the endpoint and MODEL_NAME, or [model], the model;
+# both are required. MODEL_FALLBACKS names the models OpenClaw tries when the first fails (comma-separated;
+# none by default).
 # Nothing the chat says is written to disk or to a log (D-071): Docker keeps no log of the container, and
 # of the gateway's output only the plugin's own lines reach this script's standard error: one of its fixed
 # messages after "marmot-agent-openclaw: " (packages/openclaw/src), each naming what happened by kind,
@@ -25,7 +26,7 @@ if [ "${1:-}" = "--name" ] && [ $# -eq 2 ]; then name_of "$2"; echo; exit 0; fi
 [ $# -ge 4 ] || { sed -n '2,21p' "$0"; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
 home=$(realpath "$1"); state=$(realpath "$2"); work=$(realpath "$3"); key=$(realpath "$4")
-model=${5:-${MODEL_NAME:-z-ai/glm-5.3-flash:free}}
+model=${5:-${MODEL_NAME:-}}
 image=${OPENCLAW_IMAGE:-marmot-agent-openclaw}
 name=$(name_of "$state")
 inside() { case "$1/" in "${2%/}"/*) return 0 ;; esac; return 1; }
@@ -45,6 +46,9 @@ if [ -n "${MARMOT_AGENT_DATA:-}" ]; then
         echo "error: the work folder and the agents' folder must not hold one another" >&2; exit 2
     fi
 fi
+# There is no default model endpoint or model (D-100): the installer, a test or a person names both.
+[ -n "${MODEL_BASE_URL:-}" ] || { echo "error: set MODEL_BASE_URL to an OpenAI-compatible model endpoint; there is no default" >&2; exit 2; }
+[ -n "$model" ] || { echo "error: set MODEL_NAME, or give the model's name, to choose the model; there is no default" >&2; exit 2; }
 # A connector started with the core waits for it. The socket and the token are mounted with --mount,
 # which fails on a missing source where -v would make an empty folder in its place.
 case $home in *,*) echo "error: the agent's home must not have a comma in its path" >&2; exit 2 ;; esac
@@ -69,10 +73,10 @@ run=(docker run --rm -i --log-driver=none \
     -v "$state:/state" \
     -v "$work:/work" \
     -v "$key:/run/secrets/model_key:ro" \
-    -e MODEL_BASE_URL="${MODEL_BASE_URL:-https://api.numes.ai/api/v1}" \
+    -e MODEL_BASE_URL="$MODEL_BASE_URL" \
     -e MODEL_NAME="$model" \
     -e MARMOT_STATE_EXCLUSIVE=1 \
-    -e MODEL_FALLBACKS="${MODEL_FALLBACKS-deepseek/deepseek-v4.1-flash:free}" \
+    -e MODEL_FALLBACKS="${MODEL_FALLBACKS:-}" \
     ${EXEC_MODE:+-e EXEC_MODE="$EXEC_MODE"} \
     "$image")
 # The plugin's messages (`say` in src/index.ts, `warn` in src/connector.ts), each fixed but for a kind
