@@ -6,7 +6,7 @@
 
 use marmot_agent_driver::{
     Action, Answer, Chat, ChatId, Control, Driver, Emitted, FilesIn, Given, MidTurn, Output,
-    Person, Prompt, Reason, Reply, Sessions,
+    Person, Prompt, Reason, Refusal, Reply, SendFile, Sessions,
 };
 use marmot_agent_events::body::{Body, StartedBy};
 use marmot_agent_events::{SessionId, State, TurnId};
@@ -599,4 +599,84 @@ async fn a_setting_pi_stops_before_acting_on_has_failed_and_stays_failed() {
             break;
         }
     }
+}
+
+/// Events until the driver asks to send a file, which it gives back. None of them may show the
+/// tool's dialog as a question: it is the driver's own request, not the chat's to answer.
+async fn file_request(pi: &mut Pi) -> SendFile {
+    loop {
+        let output = tokio::time::timeout(Duration::from_secs(10), pi.next_event())
+            .await
+            .expect("an output in time")
+            .expect("the driver goes on");
+        match output {
+            Output::SendFile(file) => return file,
+            Output::Event(e) => assert!(
+                !matches!(e.event.body(), Body::Question(_)),
+                "the tool's dialog was shown as a question"
+            ),
+        }
+    }
+}
+
+/// The answers the fake's `send_file` tool got, in order.
+fn file_replies(work: &Path) -> Vec<serde_json::Value> {
+    let text = std::fs::read_to_string(work.join(".fake-file-replies")).unwrap_or_default();
+    (text.lines().map(|l| serde_json::from_str(l).unwrap())).collect()
+}
+
+// Pi gets the driver's `send_file` tool from its extension (D-090). The call reaches the core as a
+// request for the chat that made it, with a relative path made whole from the folder Pi works in,
+// and what the core says goes back to Pi as the tool's result.
+#[tokio::test]
+async fn a_file_the_agent_sends_goes_to_the_core_and_the_result_back_to_pi() {
+    let (mut pi, work) = start().await;
+    pi.prompt(prompt("c-1", "m-1", "file:out/notes.txt"))
+        .await
+        .unwrap();
+    let file = file_request(&mut pi).await;
+    assert_eq!(file.chat, ChatId::from("c-1"));
+    assert_eq!(file.path, work.path().join("out/notes.txt"));
+    pi.file_sent(file.id, Ok(())).await;
+    until(&mut pi, |e| is_turn(e, State::Done)).await;
+    assert_eq!(
+        file_replies(work.path()),
+        vec![serde_json::json!({"sent": true, "text": "Sent."})]
+    );
+
+    // A refusal goes back with the core's words, which name no path; an absolute path stays as
+    // the agent gave it.
+    pi.prompt(prompt("c-1", "m-2", "file:/elsewhere/notes.txt"))
+        .await
+        .unwrap();
+    let file = file_request(&mut pi).await;
+    assert_eq!(file.path, Path::new("/elsewhere/notes.txt"));
+    let refused = Refusal {
+        reason: Reason::NotAllowed,
+        detail: Some("the file is not in a folder the settings allow.".into()),
+    };
+    pi.file_sent(file.id, Err(refused)).await;
+    until(&mut pi, |e| is_turn(e, State::Done)).await;
+    let text = "Not sent: the file is not in a folder the settings allow.";
+    assert_eq!(
+        file_replies(work.path())[1],
+        serde_json::json!({"sent": false, "text": text})
+    );
+}
+
+// A chat that moved works in its own folder (D-101): a relative path is made whole from there,
+// not from the driver's.
+#[tokio::test]
+async fn a_relative_path_is_made_whole_from_the_chats_folder() {
+    let (mut pi, work) = start().await;
+    let moved = work.path().join("moved");
+    std::fs::create_dir(&moved).unwrap();
+    let mut asked = prompt("c-1", "m-1", "file:notes.txt");
+    asked.chat.folder = Some(moved.clone());
+    pi.prompt(asked).await.unwrap();
+    let file = file_request(&mut pi).await;
+    assert_eq!(file.path, moved.join("notes.txt"));
+    pi.file_sent(file.id, Ok(())).await;
+    until(&mut pi, |e| is_turn(e, State::Done)).await;
+    assert_eq!(file_replies(&moved).len(), 1, "the chat's own Pi heard it");
 }

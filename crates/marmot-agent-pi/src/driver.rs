@@ -22,12 +22,19 @@
 //! and of everything queued behind the record. A Pi that has not read it by then has stopped
 //! working (D-066, D-098): that chat's Pi is stopped, and the request is refused as failed. The
 //! chat's next prompt starts a new Pi; other chats' Pis run on.
+//!
+//! Every Pi the driver starts loads the driver's own extension, which gives Pi a tool, `send_file`
+//! (D-090). Pi's RPC mode lets a client add no tool, so the tool asks the driver through Pi's
+//! extension UI, in an `input` dialog titled [`SEND_FILE_REQUEST`]. The driver takes that dialog
+//! as the request: it never reaches the translator, and so never shows as a question. It hands the
+//! core a [`SendFile`], and answers the dialog with how the send went, which the tool gives the
+//! model as its result. The tool call itself shows as a `tool` item, from Pi's own records.
 
 use crate::translate::DIALOGS;
 use crate::{Direction, Translator};
 use marmot_agent_driver::{
     Action, Answer, Capabilities, ChatId, Control, Driver, Emitted, FilesIn, Harness, MessageId,
-    MidTurn, Output, Prompt, Reason, Refusal, RequestId, Sessions,
+    MidTurn, Output, Prompt, Reason, Refusal, RequestId, SendFile, Sessions,
 };
 use marmot_agent_events::{AgentEvent, Body, State};
 use serde_json::{Value, json};
@@ -48,6 +55,18 @@ use tokio::time::Instant;
 /// lowercase hex. A script that runs Pi elsewhere, such as `tools/pi/pi.sh`, keeps each chat's
 /// sessions apart by it.
 pub const CHAT_VARIABLE: &str = "MARMOT_AGENT_CHAT";
+
+/// The environment variable that names the driver's extension file, which each Pi is started with
+/// (`--extension <it>`). A script that runs Pi elsewhere makes that file readable there:
+/// `tools/pi/pi.sh` mounts it read-only at the same path.
+pub const EXTENSION_VARIABLE: &str = "MARMOT_AGENT_PI_EXTENSION";
+
+/// The driver's extension, which gives Pi the `send_file` tool. It is built into the driver and
+/// written out when the driver starts.
+const EXTENSION: &str = include_str!("../extension/send-file.ts");
+
+/// The title of the dialog the extension's `send_file` tool asks the driver in.
+pub const SEND_FILE_REQUEST: &str = "marmot-agent send_file";
 
 /// How long a Pi that was asked to stop has before it is killed.
 const STOP_GRACE: Duration = Duration::from_secs(10);
@@ -82,13 +101,15 @@ impl fmt::Debug for Setup {
 }
 
 impl Setup {
-    /// The command that runs a chat's Pi in `folder`, the chat's, or else the setup's own (D-101).
-    fn command(&self, chat: &ChatId, folder: Option<&Path>) -> Command {
+    /// The command that runs a chat's Pi in `folder`, the chat's, or else the setup's own (D-101),
+    /// with the driver's `extension`.
+    fn command(&self, chat: &ChatId, folder: Option<&Path>, extension: &Path) -> Command {
         let mut command = Command::new(&self.program);
         command
             .args(&self.args)
             .current_dir(folder.unwrap_or(&self.cwd))
             .env(CHAT_VARIABLE, chat_key(chat))
+            .env(EXTENSION_VARIABLE, extension)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // Pi writes diagnostics there, which can hold paths and words from the chat (D-071).
@@ -255,6 +276,15 @@ struct Chat {
     folder: Option<PathBuf>,
 }
 
+/// A file the agent asked to send, waiting for the core to say how it went.
+struct FileCall {
+    chat: ChatId,
+    /// The Pi that asked: an answer goes only to it.
+    generation: u64,
+    /// The id of the extension's dialog, which the answer names.
+    dialog: String,
+}
+
 impl Chat {
     /// Takes a control off the list of those waiting for their effect; false if it was not there.
     fn unsettled(&mut self, request: &RequestId) -> bool {
@@ -275,8 +305,12 @@ pub struct Pi {
     held: HashSet<String>,
     lines: mpsc::UnboundedReceiver<Line>,
     sender: mpsc::UnboundedSender<Line>,
-    /// Events read and not yet handed to the core.
-    ready: VecDeque<Emitted>,
+    /// Events, and files to send, read and not yet handed to the core.
+    ready: VecDeque<Output>,
+    /// Files the agent asked to send that the core has not answered for, by the driver's id.
+    files: HashMap<String, FileCall>,
+    /// The folder that holds the driver's extension, removed with the driver.
+    extension: tempfile::TempDir,
     next_id: u64,
     /// How long a request waits for its record to be written.
     patience: Duration,
@@ -298,6 +332,11 @@ impl Pi {
             return Err(io::Error::other("pi --version failed"));
         }
         let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        // A folder of the driver's own, which only its user can open, holds the extension.
+        let extension = tempfile::Builder::new()
+            .prefix("marmot-agent-pi-")
+            .tempdir()?;
+        std::fs::write(extension.path().join("send-file.ts"), EXTENSION)?;
         let (sender, lines) = mpsc::unbounded_channel();
         Ok(Self {
             setup,
@@ -308,6 +347,8 @@ impl Pi {
             lines,
             sender,
             ready: VecDeque::new(),
+            files: HashMap::new(),
+            extension,
             next_id: 1,
             patience: PATIENCE,
         })
@@ -335,8 +376,12 @@ impl Pi {
         resume: Resume,
         folder: Option<&Path>,
     ) -> Result<(), Unstarted> {
-        let mut command = self.setup.command(chat, folder);
-        command.args(["--mode", "rpc"]);
+        let extension = self.extension.path().join("send-file.ts");
+        let mut command = self.setup.command(chat, folder, &extension);
+        command
+            .args(["--mode", "rpc"])
+            .arg("--extension")
+            .arg(&extension);
         if let Some(session) = session {
             let flag = match resume {
                 Resume::Open => "--session",
@@ -561,6 +606,14 @@ impl Pi {
             return;
         };
         let record: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        if record["type"] == "extension_ui_request"
+            && record["method"] == "input"
+            && record["title"] == SEND_FILE_REQUEST
+        {
+            let generation = c.generation;
+            self.file_call(&chat, generation, &record);
+            return;
+        }
         if c.opening
             && record["type"] == "extension_ui_request"
             && DIALOGS.iter().any(|d| record["method"] == *d)
@@ -694,12 +747,46 @@ impl Pi {
             }
             _ => Vec::new(),
         };
-        self.ready.push_back(Emitted {
+        self.ready.push_back(Output::Event(Emitted {
             event,
             chat: Some(chat.clone()),
             prompts,
             settles,
-        });
+        }));
+    }
+
+    /// The extension's `send_file` tool asks to send a file: the request goes to the core, or, if
+    /// it names no path, is answered at once, since the tool waits for the answer. A path the agent
+    /// gives relative to the folder Pi works in is made whole here: the core takes only an absolute
+    /// one. An absolute path stays as it is, and any `..` is left for the core to follow.
+    fn file_call(&mut self, chat: &ChatId, generation: u64, record: &Value) {
+        let dialog = record["id"].as_str().unwrap_or_default().to_string();
+        let asked: Value = (record["placeholder"].as_str())
+            .and_then(|p| serde_json::from_str(p).ok())
+            .unwrap_or(Value::Null);
+        let Some(path) = asked["path"].as_str().filter(|p| !p.is_empty()) else {
+            let refused = Err(Refusal {
+                reason: Reason::Invalid,
+                detail: Some("it was not given a path.".into()),
+            });
+            let reply = file_reply(&dialog, &refused);
+            let _ = self.send(chat, None, &reply); // a Pi that has gone needs no answer
+            return;
+        };
+        let c = self.chats.get(chat).expect("a chat that was read");
+        let folder = c.folder.clone().unwrap_or_else(|| self.setup.cwd.clone());
+        let id = format!("file-{}", self.id());
+        let call = FileCall {
+            chat: chat.clone(),
+            generation,
+            dialog,
+        };
+        self.files.insert(id.clone(), call);
+        self.ready.push_back(Output::SendFile(SendFile {
+            id,
+            chat: chat.clone(),
+            path: folder.join(path),
+        }));
     }
 
     /// A chat's Pi has gone, or is let go: its translator closes what it can. Nothing Pi sends can
@@ -713,6 +800,9 @@ impl Pi {
         if c.process.take().is_none() {
             return;
         }
+        // The tool that asked has gone with its Pi: nothing waits for how its file went.
+        self.files.retain(|_, call| call.chat != *chat);
+        let c = self.chats.get_mut(chat).expect("a chat");
         let untaken =
             !c.pending.is_empty() || (c.waiting.values()).any(|w| matches!(w, Waiting::Prompt(_)));
         c.waiting.clear();
@@ -830,6 +920,20 @@ async fn write_records<W: AsyncWrite + Unpin>(
         }
         let _ = write.written.send(written);
     }
+}
+
+/// The driver's answer to the `send_file` tool's dialog: whether the file was sent, and if not, why,
+/// in words the model reads, as the tool gives them.
+fn file_reply(dialog: &str, result: &Result<(), Refusal>) -> String {
+    let (sent, text) = match result {
+        Ok(()) => (true, "Sent.".to_string()),
+        Err(refusal) => match &refusal.detail {
+            Some(detail) => (false, format!("Not sent: {detail}")),
+            None => (false, "Not sent.".to_string()),
+        },
+    };
+    let value = json!({"sent": sent, "text": text}).to_string();
+    json!({"type": "extension_ui_response", "id": dialog, "value": value}).to_string()
 }
 
 /// Whether an event is the end of a compaction that was asked for, as `compaction_end` says.
@@ -1026,11 +1130,26 @@ impl Driver for Pi {
 
     async fn next_event(&mut self) -> Option<Output> {
         loop {
-            if let Some(event) = self.ready.pop_front() {
-                return Some(event.into());
+            if let Some(output) = self.ready.pop_front() {
+                return Some(output);
             }
             self.read().await;
         }
+    }
+
+    /// The core says how a file the agent asked to send went: the tool's dialog is answered, in
+    /// the Pi that asked, if it is still running. A Pi that has stopped reading is stopped, as for
+    /// any record (D-098).
+    async fn file_sent(&mut self, id: String, result: Result<(), Refusal>) {
+        let Some(call) = self.files.remove(&id) else {
+            return;
+        };
+        let current = self.chats.get(&call.chat).map(|c| c.generation);
+        if current != Some(call.generation) {
+            return;
+        }
+        let reply = file_reply(&call.dialog, &result);
+        let _ = self.write(&call.chat, None, &reply).await;
     }
 }
 

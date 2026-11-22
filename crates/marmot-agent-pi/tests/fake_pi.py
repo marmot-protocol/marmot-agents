@@ -15,6 +15,9 @@ What a prompt does depends on its words:
 - "/veto": an extension command, after which an extension cancels any new session;
 - "auto": Pi compacts the conversation of its own accord before it replies;
 - any other prompt that starts with "/": an extension command, handled with no run;
+- "file:<path>": calls the driver's `send_file` tool with <path>, as Pi does once it has loaded the
+  driver's extension (`--extension <file>`, which must be the driver's own); the reply is "sent:"
+  and the tool's result, and each answer the tool gets is added to `.fake-file-replies`;
 - anything else: one text reply, "ok: <the prompt>".
 
 Setting the thinking level to "crash" makes the process exit before it responds. As Pi does, a
@@ -94,6 +97,40 @@ def compact(cmd):
     respond(cmd, data={"summary": "s"})
 
 
+def send_file(text):
+    """The driver's own tool, as its extension runs it: an input dialog with the request's title.
+    Without the extension, Pi has no such tool."""
+    path = text.split("file:", 1)[1].split()[0]
+    if not extension_loaded():
+        return "no send_file tool"
+    call = f"call-{uuid.uuid4()}"
+    assistant([{"type": "toolCall", "id": call, "name": "send_file", "arguments": {"path": path}}], "toolUse")
+    send({"type": "tool_execution_start", "toolCallId": call, "toolName": "send_file", "args": {"path": path}})
+    send({"type": "extension_ui_request", "id": str(uuid.uuid4()), "method": "input",
+          "title": "marmot-agent send_file", "placeholder": json.dumps({"path": path})})
+    wait_until(lambda: state["answer"] is not None, 30)
+    answer = json.loads(state["answer"] or "{}")
+    with open(".fake-file-replies", "a") as f:
+        f.write(json.dumps(answer) + "\n")
+    result = {"content": [{"type": "text", "text": answer.get("text", "Not sent.")}]}
+    send({"type": "tool_execution_end", "toolCallId": call, "toolName": "send_file", "result": result,
+          "isError": answer.get("sent") is not True})
+    return f"sent: {answer.get('text')}"
+
+
+def extension_loaded():
+    """Whether Pi was started with the driver's extension: a file that registers the tool."""
+    args = sys.argv[1:]
+    if "--extension" not in args:
+        return False
+    try:
+        with open(args[args.index("--extension") + 1]) as f:
+            source = f.read()
+    except OSError:
+        return False
+    return 'name: "send_file"' in source and "marmot-agent send_file" in source
+
+
 def run(text):
     keep_session()
     send({"type": "agent_start"})
@@ -101,6 +138,8 @@ def run(text):
     send({"type": "message_start", "message": user})
     send({"type": "message_end", "message": user})
     reply = f"ok: {text}"
+    if "file:" in text:
+        reply = send_file(text)
     if "auto" in text:
         send({"type": "compaction_start", "reason": "threshold"})
         send({"type": "compaction_end", "reason": "threshold", "result": {"summary": "s"},
