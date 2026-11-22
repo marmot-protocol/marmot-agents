@@ -104,10 +104,10 @@ invited again, and every harness that allows it can send a file.
 Built so far, provisional until the owner accepts what others can see:
 
 - **An agent sending a file.** A driver asks the core to send a file, and the core sends it from an allowed
-  folder as an encrypted attachment tagged with its turn. Codex and Claude Code each get a `send_file` tool;
-  connectors on the socket send a `send_file` request. See
+  folder as an encrypted attachment tagged with its turn. Codex, Claude Code and Pi each get a `send_file`
+  tool (Pi's from an extension the driver ships); connectors on the socket send a `send_file` request. See
   [sending a file](design/drivers.md#sending-a-file) and
-  [the socket's `send_file`](design/socket-protocol.md#the-messages-as-built). Pi and the ACP agents, and the
+  [the socket's `send_file`](design/socket-protocol.md#the-messages-as-built). The ACP agents, and the
   Hermes and OpenClaw plugins, do not offer it yet; every harness that allows it must before the swap
   ([D-107](decisions.md#d-107-every-harness-that-lets-an-agent-send-a-file-gets-file-sending-before-the-swap)).
 

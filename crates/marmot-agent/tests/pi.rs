@@ -1,7 +1,9 @@
 //! M3's scenario for Pi, with a real Pi in a container: through MDK's test relay, a person invites
 //! the agent, allows a command an extension asks about, interrupts a turn, starts a new session,
 //! and has the core crash in the middle of a turn and carries on, with nothing run twice
-//! (`docs/plan.md`, D-074). The crash takes Pi's container with it.
+//! (`docs/plan.md`, D-074). The crash takes Pi's container with it. Then the agent sends a file
+//! from its working folder with the driver's `send_file` tool, which the person downloads and
+//! reads (D-090).
 //!
 //! Pi asks nobody before it acts, so it has no approvals. It runs here with the permission gate
 //! Pi ships as an example extension, which asks through Pi's extension UI before a dangerous
@@ -18,7 +20,7 @@
 
 mod common;
 
-use common::{Chat, TURN, TestModel, World, lines, within};
+use common::{Chat, TURN, TestModel, World, files_sent, lines, within};
 use marmot_agent::EventKey;
 use marmot_agent::carrier::{Asked, AskedReply, Read};
 use marmot_agent_events::State;
@@ -183,6 +185,31 @@ async fn pi_end_to_end() {
         "the prompt started one turn"
     );
     lap("carried on after the crash");
+
+    // 5. A file from the working folder, sent with the driver's own tool, arrives as an
+    //    attachment the person can read, tagged with the turn that sent it.
+    let asked = chat
+        .say("Send the file runs.txt to the chat with your send_file tool, then reply with the word done.")
+        .await;
+    let sent = chat.turn_for(&asked).await;
+    chat.turn_at(&sent, State::Done).await;
+    let mut files = Vec::new();
+    for _ in 0..TURN {
+        files = files_sent(&world, &chat.group).await;
+        if !files.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    assert_eq!(files.len(), 1, "one file sent");
+    assert_eq!(files[0].0, "runs.txt");
+    assert_eq!(files[0].1, b"ran\n");
+    assert_eq!(
+        files[0].2.as_deref(),
+        Some(sent.as_str()),
+        "tagged with its turn"
+    );
+    lap("sent a file");
 
     core.stop().await;
     world.runtime.shutdown().await;
