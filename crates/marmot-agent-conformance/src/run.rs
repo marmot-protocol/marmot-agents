@@ -51,6 +51,13 @@ pub trait Subject: Send {
         None
     }
 
+    /// The tag of the harness process that serves `chat`, once a prompt has shown it. Only a
+    /// driver with a harness for each chat tags them.
+    fn tag_of(&self, chat: &ChatId) -> Option<String> {
+        let _ = chat;
+        None
+    }
+
     /// The prompt is checked as handed when the harness has read anything more, rather than by its
     /// text: a replay does not read its prompts.
     fn loose(&self) -> bool {
