@@ -1601,3 +1601,57 @@ of anything a pull request can trigger keeps it from code nobody reviewed.
 
 Decided 2026-11-21. The project owner accepted the recommendation, with the 15-minute ceiling.
 
+## D-095 The import prints the paths it needs to undo a move
+
+**Decision.** `marmot-agent import` prints to the terminal the paths of the old service files it stopped, the backup
+it made and the settings it wrote. Logs still follow [D-071](#d-071-what-may-be-logged).
+
+**Why.** The person running the import needs them to go back. The terminal is theirs; a log is not.
+
+Decided 2026-11-22. The project owner accepted the recommendation.
+
+## D-096 Four limits of the core that the simulator and the model accept
+
+**Decision.** These are accepted as limits, not bugs, and the simulator and the `CoreLifecycle` model check around
+them:
+
+- A request with no target, read in time but undone by a crash and read again more than five minutes later, is
+  dropped with no notice ([D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)).
+- If a crash loses the driver's "session ended" event before it is saved, the next prompt after the restart takes up
+  that session again. Nothing can replay the event.
+- When a version of an item is refused or given up, its versions have a gap; that is allowed once the chat has been
+  told with a `failed` notice.
+- When MDK also refuses the one replacement for a dropped send (D-097), what it would have closed or settled stays as
+  it is. In practice that means the group is gone.
+
+**Why.** Each needs MDK to refuse or lose things it rarely does, or would need state no program can recover.
+
+Decided 2026-11-22. The project owner accepted the recommendations.
+
+## D-097 What stands in for a send that is dropped
+
+**Decision.** When MDK refuses a send for good, or the core gives one up after its tries:
+
+- a closing version the chat never got is replaced by the core's own close: the item's next version, in its final
+  state, with a `warning` notice body of reason `not_delivered` ("Not delivered"), and no native message;
+- a `failed` notice that settled requests, or told the chat of a dropped version, is replaced by a fresh `failed`
+  notice doing the same;
+- each is replaced once, whatever MDK's reason; a replacement that is itself dropped is not replaced.
+
+**Why.** Without it an item stayed open, or requests stayed pending, for good (found by the model). One small
+replacement fits and cannot loop.
+
+Decided 2026-11-22. The project owner accepted the recommendations.
+
+## D-098 A harness that stops reading ends its connection
+
+**Decision.** A driver that cannot hand a request to its harness within its patience (one minute) gives up on that
+harness: it stops it, closes its open items and refuses the request, and later requests, as failed. An answer the
+harness can no longer read is refused as failed, never shown as given. This applies to every built-in driver
+(Codex, ACP and Pi).
+
+**Why.** The core waits for each request ([D-066](#d-066-the-core-finishes-every-request-it-starts)), so a harness
+that keeps its input open but stops reading would otherwise stall every chat. The conformance suite found it.
+
+Decided 2026-11-22. The project owner accepted the recommendations.
+
