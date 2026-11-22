@@ -4,7 +4,7 @@
 # launchd agent), with the bash that macOS ships (3.2), so: no associative arrays, no `mapfile`, and no
 # expansion of an empty array under `set -u`.
 #
-# What it installs, for an agent called NAME (provisional: the paths and names are the owner's to settle):
+# What it installs, for an agent called NAME (D-100):
 #
 #   ~/.local/bin/marmot-agent                          the core
 #   ~/.local/share/marmot-agent/lib/                   the connectors and container files; an install
@@ -22,7 +22,7 @@ MA_RELEASES=${MARMOT_AGENT_RELEASES:-https://github.com/$MA_REPO/releases}
 # White Noise's own relays, as MDK names them, and as today's installers use.
 MA_DEFAULT_RELAYS="wss://relay.eu.whitenoise.chat
 wss://relay.us.whitenoise.chat"
-MA_DEFAULT_MODEL_URL=https://api.numes.ai/api/v1
+# There is no default model endpoint or model (D-100): a person brings their own.
 
 # What a harness script sets before calling `main`:
 #   HARNESS            its id, such as codex; the default agent name
@@ -187,7 +187,17 @@ need_docker() {
     fi
 }
 
-need_model_key() {
+# A harness in a container runs on a model endpoint the person brings (D-100): its address, the model,
+# and its key. None has a default.
+need_model() {
+    if [ -z "$MODEL_URL" ]; then
+        missing "a model endpoint" "$HARNESS_TITLE needs an OpenAI-compatible model endpoint of your choosing; there is" \
+            "no default. Give its address with --model-url URL, such as https://models.example/v1."
+    fi
+    if [ -z "$MODEL" ]; then
+        missing "a model" "$HARNESS_TITLE needs the name of the model to use, as the endpoint names it. Give it with" \
+            "--model NAME."
+    fi
     if [ -z "$MODEL_KEY" ]; then
         missing "a model key" "$HARNESS_TITLE needs the API key of an OpenAI-compatible model endpoint, in a file" \
             "only you can read (chmod 600). Give its path with --model-key FILE. It is mounted read-only" \
@@ -713,11 +723,11 @@ EOF
 EOF
     esac
     case " $HARNESS_OPTIONS " in *" model "*) cat <<EOF
-  --model NAME         the model (default: the container script's own)
+  --model NAME         the model, as the endpoint names it (required)
 EOF
     esac
     case " $HARNESS_OPTIONS " in *" model-url "*) cat <<EOF
-  --model-url URL      an OpenAI-compatible endpoint (default: $MA_DEFAULT_MODEL_URL)
+  --model-url URL      an OpenAI-compatible endpoint, such as https://models.example/v1 (required)
 EOF
     esac
     case " $HARNESS_OPTIONS " in *" permission-mode "*) cat <<EOF
@@ -725,7 +735,8 @@ EOF
 EOF
     esac
     case " $HARNESS_OPTIONS " in *" goose-mode "*) cat <<EOF
-  --goose-mode MODE    approve (default: ask in the chat before each tool) or auto
+  --goose-mode MODE    auto or approve (ask in the chat before each tool); by default Goose's own mode,
+                       auto, which asks nothing
 EOF
     esac
     cat <<EOF
@@ -886,8 +897,7 @@ check_harness() {
 settle_values() {
     load_choices
     [ -n "$PERMISSION_MODE" ] || PERMISSION_MODE=default
-    [ -n "$GOOSE_MODE" ] || GOOSE_MODE=approve
-    case $GOOSE_MODE in approve | auto) ;; *) die "--goose-mode takes approve or auto" ;; esac
+    case $GOOSE_MODE in "" | approve | auto) ;; *) die "--goose-mode takes approve or auto" ;; esac
     case $MODEL_URL in "" | http://?* | https://?*) ;; *) die "--model-url must start with http:// or https://" ;; esac
     if [ -f "$MA_SETTINGS" ]; then
         [ -z "$OWNER" ] || warn "the agent already has settings; --owner is ignored (edit $MA_SETTINGS)"

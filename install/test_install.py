@@ -28,6 +28,8 @@ AGENT_KEY = "cd" * 32
 NPUB = "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
 NPUB_HEX = "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e"
 SYSTEM_PATH = "/usr/bin:/bin"
+# A model endpoint and a model, which a harness in a container needs and has no default for (D-100).
+MODEL = ["--model-url", "https://models.example/v1", "--model", "some/model"]
 
 FAKE_CORE = f"""#!/bin/sh
 case $1 in
@@ -42,7 +44,7 @@ esac
 echo "marmot-agent $*" >> "$FAKE_LOG"
 case $1 in
     init) home=$(sed -n 's/^home = "\\(.*\\)"$/\\1/p' "$2"); mkdir -p "$home"; echo {AGENT_KEY} ;;
-    run) echo "with MODEL_HOST=${{MODEL_HOST:-}}" >> "$FAKE_LOG" ;;
+    run) echo "with MODEL_BASE_URL=${{MODEL_BASE_URL:-}}" >> "$FAKE_LOG" ;;
 esac
 """
 FAKE_LOGGER = """#!/bin/sh
@@ -118,10 +120,10 @@ class Machine:
         return result
 
     def args(self, harness: str, *more: str) -> list:
-        args = ["--yes", "--owner", OWNER, "--cwd", str(self.home / "work"), *more]
+        args = ["--yes", "--owner", OWNER, "--cwd", str(self.home / "work")]
         if harness in CONTAINER:
-            args += ["--model-key", str(self.key)]
-        return args
+            args += ["--model-key", str(self.key), *MODEL]
+        return args + list(more)
 
     def calls(self) -> list:
         return self.log.read_text().splitlines()
@@ -199,9 +201,11 @@ class DryRun(unittest.TestCase):
             "goose",
             *m.args("goose", "--binary", str(m.core), "--dry-run", "--model-url", "https://models.example/v1/"),
         ).stdout
-        self.assertIn("    | MODEL_HOST='https://models.example'", out)
-        self.assertIn("    | MODEL_BASE_PATH='v1/chat/completions'", out)
-        self.assertIn("    | GOOSE_MODE='approve'", out, "Goose asks before each tool unless told otherwise")
+        self.assertIn("    | MODEL_BASE_URL='https://models.example/v1/'", out)
+        self.assertIn("    | MODEL_NAME='some/model'", out)
+        self.assertNotIn("| GOOSE_MODE='", out, "Goose runs in its own default mode, which asks nothing (D-100)")
+        out = m.run("goose", *m.args("goose", "--binary", str(m.core), "--dry-run", "--goose-mode", "approve")).stdout
+        self.assertIn("    | GOOSE_MODE='approve'", out)
 
     def test_macos_launch_agents(self):
         for harness in ("codex", "claude-code"):
@@ -401,6 +405,23 @@ class Install(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing: Node 24", result.stderr)
 
+    def test_a_container_harness_needs_an_endpoint_and_a_model(self):
+        # There is no default endpoint or model: one would send people's work to a service they did
+        # not choose (D-100). Each is asked for by name, and nothing is installed without them.
+        for harness in sorted(CONTAINER):
+            for left_out, message in (("--model-url", "missing: a model endpoint"), ("--model", "missing: a model\n")):
+                with self.subTest(harness=harness, left_out=left_out):
+                    m = Machine(self)
+                    args = m.args(harness, "--binary", str(m.core))
+                    at = args.index(left_out)
+                    del args[at:at + 2]
+                    result = m.run(harness, *args, check=False)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(message, result.stderr)
+                    self.assertIn(left_out, result.stderr, "says which option gives it")
+                    self.assertEqual(m.files(), [])
+                    self.assertNotIn("numes", result.stdout + result.stderr)
+
     def test_model_key_must_be_private(self):
         m = Machine(self)
         m.key.chmod(0o644)
@@ -443,7 +464,7 @@ class Boundaries(unittest.TestCase):
         key.write_text("x")
         key.chmod(0o600)
         (m.dir / "link").symlink_to(project)
-        common = ["--yes", "--owner", OWNER, "--binary", str(m.core), "--model-key", str(key)]
+        common = ["--yes", "--owner", OWNER, "--binary", str(m.core), "--model-key", str(key), *MODEL]
         inside = "must not be inside the work folder"
         # The key's folder, named through `..`, through a link, and through a link to a folder below it.
         self.refused(m, "goose", *common, "--cwd", f"{project}/sub/..", message=inside)
@@ -579,7 +600,7 @@ class Boundaries(unittest.TestCase):
         self.assertIn(f"Run it with: {start}", out)
         m.log.write_text("")
         subprocess.run([str(start)], check=True, env={"PATH": SYSTEM_PATH, "FAKE_LOG": str(m.log)})
-        self.assertIn("with MODEL_HOST=https://models.example", m.calls())
+        self.assertIn("with MODEL_BASE_URL=https://models.example/v1", m.calls())
 
 
 class Wrappers(unittest.TestCase):
@@ -594,8 +615,11 @@ class Wrappers(unittest.TestCase):
         self.work.mkdir()
 
     def run_script(self, script: str, *args: str, timeout=30, cwd=None, env=None) -> subprocess.CompletedProcess:
-        environment = {"PATH": f"{self.m.bin}:{SYSTEM_PATH}", "FAKE_LOG": str(self.m.log), "HOME": str(self.m.home)}
+        environment = {"PATH": f"{self.m.bin}:{SYSTEM_PATH}", "FAKE_LOG": str(self.m.log), "HOME": str(self.m.home),
+                       "MODEL_BASE_URL": "https://models.example/v1", "MODEL_NAME": "some/model"}
         environment.update(env or {})
+        for name in [k for k, v in environment.items() if v is None]:
+            del environment[name]
         return subprocess.run([str(ROOT / script), *args], env=environment, cwd=cwd or self.work,
                               stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout)
 
@@ -646,6 +670,26 @@ class Wrappers(unittest.TestCase):
                 result = self.run_script(script, *args, cwd=cwd, env=env)
                 self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(len([c for c in self.m.calls() if c.startswith("docker run")]), 4)
+
+    def test_no_container_script_has_a_default_endpoint_or_model(self):
+        # Each needs both from its environment, as the installer writes them (D-100).
+        self.serve_core().join()
+        for name in ("MODEL_BASE_URL", "MODEL_NAME"):
+            for script, args, cwd in self.wrappers(self.work):
+                with self.subTest(script=script, without=name):
+                    result = self.run_script(script, *args, cwd=cwd, env={name: None})
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn(f"set {name}", result.stderr)
+        self.assertEqual([c for c in self.m.calls() if c.startswith("docker run")], [])
+        # Goose takes the endpoint as one address, as the others do, and Goose's own mode unless told.
+        result = self.run_script("tools/goose/goose-acp.sh", str(self.m.key), str(self.agent / "goose"),
+                                 env={"MODEL_BASE_URL": "https://models.example/api/v1/"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        run = [c for c in self.m.calls() if c.startswith("docker run")][-1]
+        self.assertIn("-e MODEL_HOST=https://models.example ", run)
+        self.assertIn("-e MODEL_BASE_PATH=api/v1/chat/completions ", run)
+        self.assertIn("-e MODEL_NAME=some/model ", run)
+        self.assertNotIn("GOOSE_MODE", run)
 
     def test_openclaw_passes_on_the_plugins_lines_only(self):
         import re

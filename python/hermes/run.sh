@@ -19,7 +19,7 @@ set -euo pipefail
 [ $# -ge 4 ] || { sed -n '2,17p' "$0"; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
 home=$(realpath "$1"); work=$(realpath "$2"); volume=$3; key=$(realpath "$4")
-model=${5:-${MODEL_NAME:-z-ai/glm-5.3-flash:free}}
+model=${5:-${MODEL_NAME:-}}
 # The image is built for the calling user and group, so it is named after them: another account's
 # build of it would hand Hermes a user that cannot open this one's socket.
 image=${HERMES_IMAGE:-marmot-agents-hermes-$(id -u)-$(id -g)}
@@ -36,6 +36,9 @@ if [ -n "${MARMOT_AGENT_DATA:-}" ]; then
         echo "error: the work folder and the agents' folder must not hold one another" >&2; exit 2
     fi
 fi
+# There is no default model endpoint or model (D-100): the installer, a test or a person names both.
+[ -n "${MODEL_BASE_URL:-}" ] || { echo "error: set MODEL_BASE_URL to an OpenAI-compatible model endpoint; there is no default" >&2; exit 2; }
+[ -n "$model" ] || { echo "error: set MODEL_NAME, or give the model's name, to choose the model; there is no default" >&2; exit 2; }
 # The socket and the token are mounted with --mount, which fails on a missing source where -v would
 # make an empty folder in its place; a connector started with the core waits for it.
 case $home in *,*) echo "error: the agent's home must not have a comma in its path" >&2; exit 2 ;; esac
@@ -60,7 +63,7 @@ run=(docker run --rm --log-driver=none --name "$name"
     -v "$here/../marmot_hermes:/opt/marmot-plugin:ro"
     -v "$volume:/data"
     -v "$key:/run/secrets/model_key:ro"
-    -e MODEL_BASE_URL="${MODEL_BASE_URL:-https://api.numes.ai/api/v1}"
+    -e MODEL_BASE_URL="$MODEL_BASE_URL"
     -e MODEL_NAME="$model"
     -e REASONING_EFFORT="${REASONING_EFFORT:-high}")
 [ -z "${HERMES_CONFIG_PATCH:-}" ] || run+=(-e HERMES_CONFIG_PATCH="$HERMES_CONFIG_PATCH")

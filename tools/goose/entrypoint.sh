@@ -3,12 +3,12 @@
 #
 # Needs:
 #   /run/secrets/model_key   the model provider's API key (a mounted file, never an image layer)
-#   MODEL_HOST               the endpoint's scheme and host, for example https://api.numes.ai
-#   MODEL_BASE_PATH          the path of its chat completions, for example api/v1/chat/completions
+#   MODEL_HOST               the endpoint's scheme and host, for example https://models.example
+#   MODEL_BASE_PATH          the path of its chat completions, for example v1/chat/completions
 #   MODEL_NAME               the model to use
 #   HOME                     a folder Goose may keep its configuration and sessions in
 # Optional:
-#   GOOSE_MODE               auto (the default here): run tools without asking; approve: ask before each
+#   GOOSE_MODE               auto (Goose's own default): run tools without asking; approve: ask before each
 set -eu
 
 : "${MODEL_HOST:?set MODEL_HOST}"

@@ -81,6 +81,8 @@ fn with_fake_docker(work: &Path, docker: &Path, key: &Path, state: &Path) -> Com
         .current_dir(work)
         .env("PATH", path)
         .env("FAKE_DOCKER", docker)
+        .env("MODEL_BASE_URL", "https://models.example/v1")
+        .env("MODEL_NAME", "some/model")
         .env_remove("MARMOT_AGENT_CHAT");
     command
 }

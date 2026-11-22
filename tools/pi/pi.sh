@@ -23,7 +23,7 @@
 #   container is named after its state folder, and one left running by a script that was killed
 #   outright is removed when that chat's Pi next starts.
 #
-# MODEL_BASE_URL and MODEL_NAME choose the endpoint and the model; PI_IMAGE the image.
+# MODEL_BASE_URL and MODEL_NAME, both required, name the endpoint and the model; PI_IMAGE the image.
 set -eu
 [ $# -ge 2 ] || { sed -n '2,26p' "$0"; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
@@ -45,6 +45,9 @@ if [ -n "${MARMOT_AGENT_DATA:-}" ]; then
         echo "error: the work folder and the agents' folder must not hold one another" >&2; exit 2
     fi
 fi
+# There is no default model endpoint or model (D-100): the installer, a test or a person names both.
+[ -n "${MODEL_BASE_URL:-}" ] || { echo "error: set MODEL_BASE_URL to an OpenAI-compatible model endpoint; there is no default" >&2; exit 2; }
+[ -n "${MODEL_NAME:-}" ] || { echo "error: set MODEL_NAME to the model to use; there is no default" >&2; exit 2; }
 run="$$-$(date +%s%N)"
 name="pi-$run"
 if [ -n "${MARMOT_AGENT_CHAT:-}" ]; then
@@ -99,8 +102,8 @@ docker run --rm -i --name "$name" --label "marmot-agents.pi.run=$run" --cidfile 
     -v "$key:/run/secrets/model_key:ro" \
     -v "$state:/state" \
     -v "$work:$work" -w "$work" \
-    -e MODEL_BASE_URL="${MODEL_BASE_URL:-https://api.numes.ai/api/v1}" \
-    -e MODEL_NAME="${MODEL_NAME:-deepseek/deepseek-v4.1-flash:free}" \
+    -e MODEL_BASE_URL="$MODEL_BASE_URL" \
+    -e MODEL_NAME="$MODEL_NAME" \
     -e THINKING="${THINKING:-low}" \
     "$image" pi "$@" <&3 3<&- &
 pid=$!

@@ -20,7 +20,7 @@ harness_check() {
         *) die "Goose is installed on x86_64 only for now: its container image is built for it" ;;
     esac
     need_docker
-    need_model_key
+    need_model
 }
 
 harness_prepare() {
@@ -35,18 +35,11 @@ harness_settings() {
     say "cwd = $(toml_str "$CWD")"
 }
 
-# goose-acp.sh takes the endpoint as its host and the path of its chat completions. settle_values has
-# checked the URL.
+# Goose runs in its own default mode, which asks nothing, unless --goose-mode chose one (D-100).
 harness_env() {
-    local url=${MODEL_URL:-$MA_DEFAULT_MODEL_URL} host path
-    host=$(printf '%s' "$url" | sed -E 's#^(https?://[^/]+).*#\1#')
-    path=${url#"$host"}
-    path=${path#/}
-    path=${path%/}
-    say "MODEL_HOST=$host"
-    say "MODEL_BASE_PATH=${path:+$path/}chat/completions"
-    [ -z "$MODEL" ] || say "MODEL_NAME=$MODEL"
-    say "GOOSE_MODE=$GOOSE_MODE"
+    say "MODEL_BASE_URL=$MODEL_URL"
+    say "MODEL_NAME=$MODEL"
+    [ -z "$GOOSE_MODE" ] || say "GOOSE_MODE=$GOOSE_MODE"
 }
 
 main "$@"
