@@ -1655,3 +1655,31 @@ that keeps its input open but stops reading would otherwise stall every chat. Th
 
 Decided 2026-11-22. The project owner accepted the recommendations.
 
+## D-099 Files from the agent's own home are refused by default, and the owner may allow them
+
+**Decision.** By default the core refuses to send any file inside the agent's account home, which holds its keys
+and encryption state, wherever the allowed folders are ([D-090](#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)).
+The owner may turn this off with one explicit line in the agent's settings. The installers never choose `~` itself
+as the work folder.
+
+**Why.** Safe defaults, and the owner keeps control of how their agent is set up. A work folder of `~` would
+otherwise let the agent send its own keys.
+
+Decided 2026-11-22. The project owner decided.
+
+## D-100 The installers' defaults
+
+**Decision.** The installers (D-091) put the program in `~/.local/bin/marmot-agent` and each agent in
+`~/.local/share/marmot-agent/agents/<name>/`; name services `marmot-agent-<name>` (and `-connector` for a socket
+harness), or `org.marmot.marmot-agent.<name>` on macOS; ask only the owner's key and the work folder; use White
+Noise's relays for the agent's own account (inside a group, the group's relays apply); print the
+`loginctl enable-linger` command rather than run it; and are published as one archive per platform from a version
+tag. Goose runs in its own default mode, which asks nothing. There is no default model endpoint: a person brings
+their own endpoint and key. Tests read the models they use from a local configuration file, and in CI from secrets,
+and most tests use recorded sessions rather than live models.
+
+**Why.** The project owner chose these from the proposed set. A default endpoint would send people's work to a
+service they did not choose.
+
+Decided 2026-11-22. The project owner decided; this replaces the installers' provisional defaults.
+
