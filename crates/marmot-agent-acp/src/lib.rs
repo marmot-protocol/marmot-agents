@@ -11,6 +11,7 @@
 //! transport: it runs the agent, gives each chat a translator, and implements the driver trait.
 
 mod driver;
+mod mcp;
 mod translate;
 
 pub use driver::Acp;

@@ -10,11 +10,17 @@
 //!
 //! The agent can be any command: `opencode acp`, `cursor-agent acp`, or Goose through
 //! `tools/goose/goose-acp.sh`, which runs it in a throwaway container.
+//!
+//! An agent that takes MCP servers over HTTP is given the driver's own on every session it opens,
+//! with one tool, `send_file` (D-090, [`crate::mcp`]). A call goes to the chat whose session the
+//! call names, or, when it names none, to the chat whose token it carries, and becomes a request
+//! for the core to send the file.
 
+use crate::mcp::{self, Call, Server, Tokens};
 use crate::{Direction, Translator};
 use marmot_agent_driver::{
     Action, Answer, Capabilities, ChatId, Control, Driver, Emitted, FilesIn, Harness, MessageId,
-    MidTurn, Output, Prompt, Reason, Refusal, RequestId, Sessions,
+    MidTurn, Output, Prompt, Reason, Refusal, RequestId, SendFile, Sessions,
 };
 use marmot_agent_events::{AgentEvent, Body, State};
 use serde_json::{Value, json};
@@ -56,12 +62,21 @@ enum Effect {
     NewSession(Option<String>),
 }
 
-/// One chat: its translator, the controls waiting for their effect, and the request picking its
-/// session, while one is waiting.
+/// One chat: its translator, the controls waiting for their effect, the request picking its
+/// session, while one is waiting, the folder its session works in, and its token for the driver's
+/// MCP server.
 struct Chat {
     translator: Translator,
     effects: Vec<(RequestId, Effect)>,
     picking: Option<String>,
+    cwd: Option<String>,
+    token: String,
+}
+
+/// What the driver read next: a line from the agent, or a call of its tool.
+enum Read {
+    Line(io::Result<Option<String>>),
+    Call(Call),
 }
 
 /// The ACP driver: one agent process, serving every chat of one agent.
@@ -100,8 +115,8 @@ pub struct Acp {
     prompts: HashMap<(ChatId, String), Vec<MessageId>>,
     /// Messages naming a session no chat has yet, kept while a session is being picked.
     early: Vec<String>,
-    /// Events read and not yet handed to the core.
-    ready: VecDeque<Emitted>,
+    /// Events read, and files asked to be sent, not yet handed to the core.
+    ready: VecDeque<Output>,
     /// The agent has gone.
     gone: bool,
     /// Messages for no chat.
@@ -118,6 +133,12 @@ pub struct Acp {
     /// How long the driver waits for the agent to answer a session request, end a cancelled turn,
     /// or end a run of its own.
     patience: Duration,
+    /// The driver's MCP server, when the agent takes one over HTTP, and each chat's token for it.
+    mcp: Option<Server>,
+    tokens: Tokens,
+    /// The tool calls handed to the core, by the driver's id for each, until the core answers.
+    files: HashMap<String, tokio::sync::oneshot::Sender<Result<(), Refusal>>>,
+    next_file: u64,
 }
 
 impl Acp {
@@ -203,6 +224,10 @@ impl Acp {
             busy: HashSet::new(),
             calls: HashMap::new(),
             patience: ENDING,
+            mcp: None,
+            tokens: Tokens::default(),
+            files: HashMap::new(),
+            next_file: 0,
         };
         let id = acp.id();
         let hello = json!({
@@ -251,6 +276,11 @@ impl Acp {
         acp.version = result["agentInfo"]["version"].as_str().map(String::from);
         acp.load = result["agentCapabilities"]["loadSession"].as_bool() == Some(true);
         acp.resume = result["agentCapabilities"]["sessionCapabilities"]["resume"].is_object();
+        // OpenCode, Goose and Cursor take MCP servers over HTTP; an agent that does not is given
+        // none, and has no tool to send a file.
+        if result["agentCapabilities"]["mcpCapabilities"]["http"] == true {
+            acp.mcp = Some(Server::start(acp.tokens.clone()).await?);
+        }
         acp.greeting = vec![(Direction::Out, hello), (Direction::In, line)];
         Ok(acp)
     }
@@ -348,20 +378,74 @@ impl Acp {
         Ok(id)
     }
 
-    /// Reads one message from the agent and handles it. False once the agent has gone.
+    /// Reads one message from the agent, or one call of its tool, and handles it. False once the
+    /// agent has gone. Both waits are safe to drop: nothing of a line, nor a call, is lost.
     async fn read(&mut self) -> bool {
         if self.gone {
             return false;
         }
-        match self.reader.next_line().await {
-            Ok(Some(line)) => {
+        let read = match self.mcp.as_mut() {
+            Some(server) => tokio::select! {
+                line = self.reader.next_line() => Read::Line(line),
+                Some(call) = server.calls.recv() => Read::Call(call),
+            },
+            None => Read::Line(self.reader.next_line().await),
+        };
+        match read {
+            Read::Call(call) => {
+                self.tool_call(call);
+                true
+            }
+            Read::Line(Ok(Some(line))) => {
                 self.route(&line).await;
                 true
             }
-            Ok(None) | Err(_) => {
+            Read::Line(Ok(None) | Err(_)) => {
                 self.stopped();
                 false
             }
+        }
+    }
+
+    /// The agent calls the driver's tool. The call goes to the chat whose session it names, or,
+    /// when it names none (Cursor), to the chat whose token it carries: OpenCode keeps one server
+    /// for every session in a folder, so its calls carry whichever chat's token came last. A call
+    /// naming a session no chat has is refused, never guessed. A relative path is made whole from
+    /// the chat's folder; the core takes only an absolute one, and follows any `..` itself.
+    fn tool_call(&mut self, call: Call) {
+        let refuse = |call: Call, detail: &str| {
+            let refused = Refusal {
+                reason: Reason::Invalid,
+                detail: Some(detail.into()),
+            };
+            let _ = call.reply.send(Err(refused));
+        };
+        let chat = match &call.session {
+            Some(session) => self.owners.get(session).cloned(),
+            None => Some(call.chat.clone()),
+        };
+        let Some(chat) = chat.filter(|c| self.chats.contains_key(c)) else {
+            return refuse(call, "the driver cannot tell which chat asked.");
+        };
+        let Some(path) = call.path.clone().filter(|p| !p.is_empty()) else {
+            return refuse(call, "the tool was not given a path.");
+        };
+        let cwd =
+            (self.chats.get(&chat).and_then(|c| c.cwd.clone())).unwrap_or_else(|| self.cwd.clone());
+        let path = PathBuf::from(cwd).join(path);
+        self.next_file += 1;
+        let id = format!("file-{}", self.next_file);
+        self.files.insert(id.clone(), call.reply);
+        self.ready
+            .push_back(Output::SendFile(SendFile { id, chat, path }));
+    }
+
+    /// The MCP servers a chat's session is given: the driver's, with the chat's token, when the
+    /// agent takes one.
+    fn servers(&self, chat: &ChatId) -> Value {
+        match (&self.mcp, self.chats.get(chat)) {
+            (Some(server), Some(c)) => server.for_session(&c.token),
+            _ => json!([]),
         }
     }
 
@@ -618,12 +702,12 @@ impl Acp {
             }
             _ => Vec::new(),
         };
-        self.ready.push_back(Emitted {
+        self.ready.push_back(Output::Event(Emitted {
             event,
             chat: Some(chat.clone()),
             prompts,
             settles,
-        });
+        }));
     }
 
     /// The agent has gone: each translator closes what it can, and nothing more will come.
@@ -697,12 +781,26 @@ impl Acp {
         for (direction, text) in &self.greeting {
             let _ = translator.feed(*direction, text);
         }
+        // A token is made only for a chat the driver serves; one that cannot be made leaves the
+        // chat without the tool, and a call with an empty token is never accepted.
+        let token = if self.mcp.is_some() {
+            mcp::token().unwrap_or_default()
+        } else {
+            String::new()
+        };
+        if !token.is_empty()
+            && let Ok(mut tokens) = self.tokens.lock()
+        {
+            tokens.insert(token.clone(), chat.clone());
+        }
         self.chats.insert(
             chat.clone(),
             Chat {
                 translator,
                 effects: Vec::new(),
                 picking: None,
+                cwd: None,
+                token,
             },
         );
     }
@@ -750,8 +848,9 @@ impl Acp {
         folder: Option<&Path>,
     ) -> Result<(), Refusal> {
         let cwd = self.cwd_for(folder);
+        let servers = self.servers(chat);
         let params = |id: Option<&str>| {
-            let mut p = json!({"cwd": cwd, "mcpServers": []});
+            let mut p = json!({"cwd": cwd, "mcpServers": servers});
             if let Some(id) = id {
                 p["sessionId"] = id.into();
             }
@@ -770,6 +869,9 @@ impl Acp {
             self.sessions.insert(s.to_string(), chat.clone());
         }
         let p = params(session);
+        if let Some(c) = self.chats.get_mut(chat) {
+            c.cwd = Some(cwd.clone());
+        }
         self.request(chat, method, p, Purpose::Plain).await?;
         self.picked(chat).await?;
         let now = self
@@ -970,7 +1072,10 @@ impl Driver for Acp {
                     c.effects.push((request.clone(), Effect::NewSession(old)));
                 }
                 let cwd = self.cwd_for(chat_folder.as_deref());
-                let params = json!({"cwd": cwd, "mcpServers": []});
+                let params = json!({"cwd": cwd, "mcpServers": self.servers(&chat)});
+                if let Some(c) = self.chats.get_mut(&chat) {
+                    c.cwd = Some(cwd);
+                }
                 self.request(&chat, "session/new", params, Purpose::Control(request))
                     .await?;
                 Ok(())
@@ -1000,12 +1105,19 @@ impl Driver for Acp {
 
     async fn next_event(&mut self) -> Option<Output> {
         loop {
-            if let Some(event) = self.ready.pop_front() {
-                return Some(event.into());
+            if let Some(output) = self.ready.pop_front() {
+                return Some(output);
             }
             if !self.read().await {
-                return self.ready.pop_front().map(Output::from);
+                return self.ready.pop_front();
             }
+        }
+    }
+
+    async fn file_sent(&mut self, id: String, result: Result<(), Refusal>) {
+        // The agent hears it as the tool's result. One that has gone hears nothing.
+        if let Some(reply) = self.files.remove(&id) {
+            let _ = reply.send(result);
         }
     }
 }
