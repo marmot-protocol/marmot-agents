@@ -10,7 +10,7 @@ use crate::check::{Checker, Violation, broke, mark};
 use crate::fake::{Fake, Heard};
 use marmot_agent_driver::{
     Action, Answer, Chat, ChatId, Control, Driver, Emitted, Given, MessageId, Output, Person,
-    Prompt, Refusal, Reply, RequestId,
+    Prompt, Refusal, Reply, RequestId, SendFile,
 };
 use marmot_agent_events::body::Effect;
 use marmot_agent_events::{Body, SessionId, TurnId};
@@ -68,6 +68,13 @@ pub trait Subject: Send {
     /// folder on disk for a driver that starts a program there.
     fn other_folder(&self) -> std::path::PathBuf {
         "/work/elsewhere".into()
+    }
+
+    /// Whether the driver gives the harness a tool to send a file to the chat (D-090), which the
+    /// fake calls for [`Script::File`](crate::fake::Script::File). A driver that gives none passes
+    /// the `send_file` scenario with nothing to check.
+    fn sends_files(&self) -> bool {
+        false
     }
 
     /// Whether the harness may send a reply after what follows from it, or answer a later request
@@ -545,6 +552,44 @@ impl<S: Subject> Run<S> {
         let v = broke(why, detail);
         self.check.record(v.clone());
         v
+    }
+
+    /// Outputs until the driver asks to send a file, which is given back. If none comes within the
+    /// patience, or the driver ends first, that breaks `why`.
+    pub async fn file(&mut self, why: &'static str, what: &str) -> Result<SendFile, Violation> {
+        let deadline = tokio::time::Instant::now() + self.patience;
+        loop {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let next = tokio::time::timeout(left, self.next()).await;
+            self.ok()?;
+            match next {
+                Ok(Some(Output::SendFile(file))) => return Ok(file),
+                Ok(Some(Output::Event(_))) => {}
+                Ok(None) => return Err(self.lost(why, format!("the driver ended before {what}"))),
+                Err(_) => return Err(self.lost(why, format!("{what} never came"))),
+            }
+        }
+    }
+
+    /// Tells the driver how a file it asked to send went, as the core does once the send is done
+    /// (D-090), and waits for it to return (S11). The chat's harness should then hear it.
+    pub async fn file_sent(
+        &mut self,
+        file: &SendFile,
+        result: Result<(), Refusal>,
+    ) -> Result<(), Violation> {
+        self.check.expect_file(&file.chat, result.is_ok());
+        let told = self.driver.file_sent(file.id.clone(), result);
+        if tokio::time::timeout(self.patience, told).await.is_err() {
+            let patience = self.patience;
+            let v = broke(
+                "S11",
+                format!("file_sent did not return within {patience:?}"),
+            );
+            self.check.record(v.clone());
+            return Err(v);
+        }
+        Ok(())
     }
 
     /// Takes what the driver hands over until it has nothing for `quiet`, or ends. Returns

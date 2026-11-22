@@ -60,6 +60,12 @@ pub enum Fault {
     /// L2 (the scenario checks nothing): an interrupt is refused without reaching the harness,
     /// and the turn is shown stopped all the same, with an event the driver makes up.
     MadeUpStop,
+    /// S5: a file chat 2's harness asked to send is handed over as chat 1's.
+    FileWrongChat,
+    /// D-101: a relative path is made whole from the driver's own folder, not the chat's.
+    FileOwnFolder,
+    /// D-090: how a file went is never passed on to the harness that asked.
+    FileUnanswered,
 }
 
 impl Fault {
@@ -69,7 +75,13 @@ impl Fault {
             Fault::DropSettle | Fault::SettleTwice | Fault::SettleOnStop => "S1",
             Fault::LeaveOpen => "S2",
             Fault::PromptTwice => "S4",
-            Fault::WrongChat | Fault::MixWords | Fault::ShareItem | Fault::SwapChoice => "S5",
+            Fault::WrongChat
+            | Fault::MixWords
+            | Fault::ShareItem
+            | Fault::SwapChoice
+            | Fault::FileWrongChat => "S5",
+            Fault::FileOwnFolder => "D-101",
+            Fault::FileUnanswered => "D-090",
             Fault::ResumeUnasked => "S12",
             Fault::ReuseItem => "S13",
             Fault::SeqBack => "SEQ",
@@ -91,6 +103,9 @@ impl Fault {
             Fault::SwapChoice => Some("not as given"),
             Fault::SwallowPrompt => Some("a prompt returned before the harness had it"),
             Fault::MadeUpStop => Some("did not die on the interrupt"),
+            Fault::FileWrongChat => Some("a file asked for in"),
+            Fault::FileOwnFolder => Some("relative path"),
+            Fault::FileUnanswered => Some("never heard how a file"),
             _ => None,
         }
     }
@@ -122,11 +137,12 @@ impl Fault {
             Fault::SeqBack => "one_turn",
             Fault::HalfFrame | Fault::LoseOnDrop => "dropped_waits",
             Fault::TakeUnhanded => "answer_after_death",
+            Fault::FileWrongChat | Fault::FileOwnFolder | Fault::FileUnanswered => "send_file",
         }
     }
 
     /// Every fault.
-    pub const ALL: [Fault; 17] = [
+    pub const ALL: [Fault; 20] = [
         Fault::DropSettle,
         Fault::SettleTwice,
         Fault::SettleOnStop,
@@ -144,6 +160,9 @@ impl Fault {
         Fault::TakeUnhanded,
         Fault::SwallowPrompt,
         Fault::MadeUpStop,
+        Fault::FileWrongChat,
+        Fault::FileOwnFolder,
+        Fault::FileUnanswered,
     ];
 
     /// Whether only a driver with a harness for each chat can show the fault.
@@ -203,6 +222,7 @@ impl<S: Subject> Subject for Faulty<S> {
             seqs: HashMap::new(),
             queued: VecDeque::new(),
             prompted: HashSet::new(),
+            folders: HashMap::new(),
         }
     }
 
@@ -241,6 +261,14 @@ impl<S: Subject> Subject for Faulty<S> {
     fn reorders(&self) -> bool {
         self.inner.reorders()
     }
+
+    fn sends_files(&self) -> bool {
+        self.inner.sends_files()
+    }
+
+    fn other_folder(&self) -> std::path::PathBuf {
+        self.inner.other_folder()
+    }
 }
 
 /// A driver with a fault.
@@ -267,6 +295,8 @@ pub struct FaultyDriver<D> {
     queued: VecDeque<Output>,
     /// Chats that have prompted.
     prompted: HashSet<ChatId>,
+    /// The folder each chat works in, as its last prompt or new session named it.
+    folders: HashMap<ChatId, Option<std::path::PathBuf>>,
 }
 
 /// Fires the injector if dropped before it is disarmed.
@@ -299,8 +329,21 @@ fn rebuilt(
 impl<D: Driver> FaultyDriver<D> {
     /// What the fault does to an output; `None` drops it.
     fn alter(&mut self, output: Output) -> Option<Output> {
-        let Output::Event(mut e) = output else {
-            return Some(output);
+        let mut e = match output {
+            Output::Event(e) => e,
+            Output::SendFile(mut file) => {
+                if self.fault == Fault::FileWrongChat && file.chat.0 == "c-2" {
+                    file.chat = "c-1".into();
+                }
+                let chosen = self.folders.get(&file.chat).cloned().flatten();
+                if let (Fault::FileOwnFolder, Some(chosen), Some(own)) =
+                    (self.fault, chosen, self.inner.folder())
+                    && let Ok(rest) = file.path.strip_prefix(&chosen)
+                {
+                    file.path = own.join(rest);
+                }
+                return Some(Output::SendFile(file));
+            }
         };
         self.count += 1;
         let header = e.event.header().clone();
@@ -421,6 +464,7 @@ impl<D: Driver> Driver for FaultyDriver<D> {
 
     async fn prompt(&mut self, prompt: Prompt) -> Result<(), Refusal> {
         let mut prompt = prompt;
+        (self.folders).insert(prompt.chat.id.clone(), prompt.chat.folder.clone());
         let again = !self.prompted.insert(prompt.chat.id.clone());
         if self.fault == Fault::SwallowPrompt && again {
             return Ok(());
@@ -474,6 +518,9 @@ impl<D: Driver> Driver for FaultyDriver<D> {
             }
             return Err(Refusal::new(Reason::Failed));
         }
+        if let Action::NewSession { chat, .. } = &control.action {
+            self.folders.insert(chat.id.clone(), chat.folder.clone());
+        }
         let interrupt = matches!(control.action, Action::Interrupt { .. });
         let request = control.request.clone();
         let result = self.inner.control(control).await;
@@ -506,7 +553,14 @@ impl<D: Driver> Driver for FaultyDriver<D> {
         }
     }
 
+    fn folder(&self) -> Option<std::path::PathBuf> {
+        self.inner.folder()
+    }
+
     async fn file_sent(&mut self, id: String, result: Result<(), Refusal>) {
+        if self.fault == Fault::FileUnanswered {
+            return;
+        }
         self.inner.file_sent(id, result).await;
     }
 }

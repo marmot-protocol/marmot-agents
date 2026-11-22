@@ -60,6 +60,10 @@ impl Subject for OnFake {
         false
     }
 
+    fn sends_files(&self) -> bool {
+        true
+    }
+
     fn loose(&self) -> bool {
         self.replay
     }
@@ -103,7 +107,7 @@ async fn dies_at_every_step() {
 }
 
 // The faults that touch what differs with a harness for each chat: settling when one chat's Pi
-// stops, closing what it left, and keeping chats apart.
+// stops, closing what it left, and keeping chats apart, files included.
 #[tokio::test]
 async fn faults_are_caught() {
     use marmot_agent_conformance::faults::{self, Fault};
@@ -117,6 +121,9 @@ async fn faults_are_caught() {
         Fault::ResumeUnasked,
         Fault::TakeUnhanded,
         Fault::SwallowPrompt,
+        Fault::FileWrongChat,
+        Fault::FileOwnFolder,
+        Fault::FileUnanswered,
     ] {
         let found = faults::caught(subject(), fault, None).await;
         if !fault.caught_as(&found) {
