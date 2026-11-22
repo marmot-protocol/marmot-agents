@@ -313,6 +313,9 @@ pub struct Conversation {
     messages: HashMap<String, EventKey>,
     seen: HashSet<EventKey>,
     seen_order: VecDeque<EventKey>,
+    /// A bug put back for the simulator: what the agent's words settle is ignored.
+    #[cfg(feature = "sim-bugs")]
+    bug_settles_only_from_items: bool,
 }
 
 impl Conversation {
@@ -335,7 +338,16 @@ impl Conversation {
             messages: HashMap::new(),
             seen: HashSet::new(),
             seen_order: VecDeque::new(),
+            #[cfg(feature = "sim-bugs")]
+            bug_settles_only_from_items: false,
         }
+    }
+
+    /// Puts back, for the simulator, the bug that read settles only from items, never from the
+    /// agent's words (`docs/design/verification.md`).
+    #[cfg(feature = "sim-bugs")]
+    pub fn settles_only_from_items(&mut self, on: bool) {
+        self.bug_settles_only_from_items = on;
     }
 
     /// What to keep across a restart.
@@ -716,8 +728,14 @@ impl Conversation {
         // event carries.
         let mut by_turn = Vec::new();
         let mut words = None;
+        #[allow(unused_mut)]
+        let mut named = emitted.settles.as_slice();
+        #[cfg(feature = "sim-bugs")]
+        if self.bug_settles_only_from_items {
+            named = &[];
+        }
         if let Body::Message(message) = emitted.event.body() {
-            for request in &emitted.settles {
+            for request in named {
                 let ours = (self.saved.pending.get(&request.0)).is_some_and(|p| p.group == group);
                 if ours && !record.held.contains(&request.0) {
                     record.held.push(request.0.clone());
