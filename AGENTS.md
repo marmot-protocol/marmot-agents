@@ -8,13 +8,14 @@ duplicate it here.
 Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) into Marmot group chats.
 
 **Status: every harness is driven; building towards the swap (M4).** The Rust workspace under `crates/` has
-eight crates, and CI checks them: `marmot-agent-events`, the agent event and its eleven item types;
+nine crates, and CI checks them: `marmot-agent-events`, the agent event and its eleven item types;
 `marmot-agent-driver`, the trait a driver implements; the built-in drivers `marmot-agent-codex` (Codex, with
 subagents switched off for now), `marmot-agent-acp` (OpenCode, Goose and Cursor over ACP) and `marmot-agent-pi`
 (Pi, in a container from `tools/pi`); `marmot-agent`, the core, which runs one agent's account through MDK and
-drives a built-in driver or serves a local socket; `marmot-agent-chat`, a terminal client for trying it; and
+drives a built-in driver or serves a local socket; `marmot-agent-chat`, a terminal client for trying it;
 `marmot-agent-sim`, a deterministic simulator that runs the real core against a simulated MDK and a scripted
-driver, with faults, from a seed.
+driver, with faults, from a seed; and `marmot-agent-conformance`, the suite every driver must pass, on scriptable
+fakes of the harnesses.
 Over the socket connect `packages/claude-code`, the Claude Code driver, `packages/openclaw`, the OpenClaw plugin,
 and `python/marmot_hermes`, the Hermes plugin; the plugins run inside their gateways, in containers. Each driver
 has a scenario that runs it end to end against the real harness on MDK's test relay. What is built next, and in what order, is in
@@ -70,6 +71,7 @@ being replaced by what is designed here, not extended.
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Plan or add tests, models or proofs | `docs/design/verification.md` |
 | Work on the simulator, or replay one of its failure capsules | `crates/marmot-agent-sim/README.md`, after `docs/design/verification.md` |
+| Work on the driver conformance suite or its fake harnesses, or add a driver to it | `crates/marmot-agent-conformance/README.md`, after `docs/design/verification.md` |
 | Change the link check | `lychee.toml` |
 
 ## The shape, in brief
@@ -227,6 +229,10 @@ cargo test --locked --workspace --all-features
 
 `rustup` installs the pinned compiler the first time. `--locked` fails when `Cargo.lock` is out of date: update
 it on purpose, with `cargo update` or by building once without the flag, and commit it.
+
+The workspace's tests include the driver conformance suite (`crates/marmot-agent-conformance`), which runs every
+built-in driver on fakes of its harness in about 30 seconds; its Pi tests need `python3`, as Pi's own do. For a
+change to a driver, run it alone with `cargo test -p marmot-agent-conformance`.
 
 The workspace's tests include the simulator's at a small count of runs. CI's Rust job leaves them out
 (`--exclude marmot-agent-sim`) and runs them in a job of its own, in release with more runs
