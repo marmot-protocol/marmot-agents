@@ -69,7 +69,7 @@ That also means a message sent to the agent between the import and that first st
 gap short, or ask again afterwards.
 
 Known problem, in MDK at the revision the core uses: when `wn-agent` is stopped in the moment after a message
-reaches it, the core afterwards does not hear that chat. The import test stops `wn-agent` five seconds after
+reaches it, the core afterwards does not hear that chat. The import tests stop `wn-agent` five seconds after
 the last message for that reason. Do not import while people are writing to the agent.
 
 ## What carries over
@@ -83,6 +83,7 @@ the last message for that reason. Do not import while people are writing to the 
 | Who may write to the agent: a terminal harness's `WN_*_ALLOWED_SENDERS_HEX`, Hermes's `MARMOT_ALLOWED_USERS` or OpenClaw's `senderPolicy` | `prompt` |
 | The folders `wn-agent` could send files from (`--media-allowed-root`) | `files_from`; none when it had none |
 | The harness | `[codex]`, `[pi]`, `[acp]` for OpenCode and Goose, or `[connector]` |
+| The harness's program, `WN_<HARNESS>_BIN`, as the installer found it | `program` in `[codex]` and `[pi]`, the first word of `command` in `[acp]`; not for Claude Code, whose driver runs the Claude Code that comes with it |
 
 The rule is that nobody may do more afterwards than the old install let them:
 
@@ -118,6 +119,30 @@ that refused everyone leaves only the owner. The import lists each of these as i
 
 A home with more than one identity is refused, since the core runs every identity in its home and each
 identity is its own program ([D-072](decisions.md#d-072-one-agent-identity-per-core-process-until-the-swap)).
+
+## What is proven
+
+A test moves an install of each coding connector over: Codex, Claude Code, OpenCode, Pi and Goose
+(`crates/marmot-agent/tests/import.rs` and `import_coding.rs`). For each, it:
+
+- runs today's `wn-agent`, MDK's `agent-connector` at the revision the core uses, on a home laid out as MDK's
+  `install-terminal-harness-marmot.sh` lays it out: the harness's env file in the home, and the two systemd
+  units with their settings;
+- has the old connector make its identity, a person invite it into a chat of two, and the person write to it,
+  which it stores;
+- stops it as systemd does, makes the plan and checks it: the connector, the owner, who may prompt and
+  approve, the relays, and that what does not map is said; then carries it out, and checks the backup and the
+  settings written for that harness;
+- starts the core on those settings, and checks that the person's next message reaches the harness and is
+  answered in the same chat, from the same key, and that nothing written before the move reached the harness.
+
+Each harness is a stand-in that needs no model or account. For OpenCode, Goose and Pi the core is
+`marmot-agent run` on the imported settings, with its own driver, on a stand-in where the installer found the
+harness's program: an agent over ACP, or the Pi driver's own fake Pi. For Claude Code, the core serves its
+socket, and a stand-in for the Claude Code driver connects to it as the driver does. For Codex, the core runs
+in the test with a stand-in driver.
+
+Not proven yet: a move on a real machine, with systemd and the real harnesses, and Hermes and OpenClaw.
 
 ## Going back
 
