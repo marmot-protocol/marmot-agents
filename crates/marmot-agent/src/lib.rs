@@ -9,9 +9,11 @@
 //! - [`socket`]: a driver that is a separate program, on the local socket.
 //! - [`config`]: the standing settings (D-073).
 //! - [`files`]: which files the agent may send, and reading them (D-090).
+//! - [`chat_folder`]: which folder a chat may move its harness to (D-101).
 //! - [`import`]: taking over one of today's connector installs (D-089).
 
 pub mod carrier;
+pub mod chat_folder;
 pub mod config;
 pub mod conversation;
 pub mod files;

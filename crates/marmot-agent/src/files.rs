@@ -154,7 +154,16 @@ impl Folders {
     /// nothing. With `home`, no file inside it is sent, whichever folder leads to it.
     pub fn new(folders: &[PathBuf], home: Option<&Path>) -> Self {
         // A home that is not there holds nothing.
-        let home = home.and_then(id_of_path);
+        Self::open(folders, home.and_then(id_of_path))
+    }
+
+    /// Other folders, each opened now, under the same rule for the account home as these: a
+    /// chat's own folder (D-101) keeps files inside the home out as the settings' folders do.
+    pub fn others(&self, folders: &[PathBuf]) -> Self {
+        Self::open(folders, self.home)
+    }
+
+    fn open(folders: &[PathBuf], home: Option<Id>) -> Self {
         let allowed = folders
             .iter()
             .filter_map(|folder| {
@@ -729,6 +738,25 @@ mod tests {
         // A path that passes through the home and leaves it ends outside it.
         let back = f.read(&home.join("../notes.txt")).unwrap();
         assert_eq!(back.bytes, b"work");
+    }
+
+    // A chat's own folder (D-101) keeps the home's files out as the settings' folders do, and
+    // lets them through only when the owner allows it (D-099).
+    #[test]
+    fn a_chats_folder_that_holds_the_home_keeps_its_files_out() {
+        let (work, home) = holding_the_home();
+        let w = work.path().to_path_buf();
+        let kept = Folders::new(&[], Some(&home)).others(std::slice::from_ref(&w));
+        assert_eq!(
+            reason(kept.read(&home.join("keys.json"))),
+            Reason::NotAllowed
+        );
+        assert_eq!(kept.read(&w.join("notes.txt")).unwrap().bytes, b"work");
+        let allowed = Folders::new(&[], None).others(std::slice::from_ref(&w));
+        assert_eq!(
+            allowed.read(&home.join("keys.json")).unwrap().bytes,
+            b"keys"
+        );
     }
 
     // An allowed folder inside the home sends nothing from it, nor does the home itself.

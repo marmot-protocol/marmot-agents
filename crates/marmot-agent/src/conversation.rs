@@ -17,19 +17,23 @@
 //! - each answer or control is settled once: by the event that shows its effect, or by a notice
 //!   that says why it had none (D-028);
 //! - a stopped driver, or a core that stopped, leaves no item open and no request unsettled
-//!   (D-058, D-070).
+//!   (D-058, D-070);
+//! - a chat of a coding harness has a folder, set by someone who may approve, that applies from
+//!   its next session (D-101).
 
 use crate::carrier::{Asked, Item, SETTLES_MAX};
+use crate::chat_folder::{FOLDER, FolderRule, LABEL};
 use crate::keys::{EventKey, GroupKey, PubKey};
 use crate::rights::{Right, Rights, needed_for};
 use marmot_agent_driver::{
     Action, Answer, Attachment, Capabilities, Chat, ChatId, Control, Emitted, Given, MessageId,
     Person, PersonId, Prompt, Quoted, Reason, Refusal, Reply, RequestId,
 };
-use marmot_agent_events::body::{Body, Notice, NoticeKind};
+use marmot_agent_events::body::{Body, Notice, NoticeKind, Setting};
 use marmot_agent_events::{AgentEvent, Header, ItemId, SessionId, State, TurnId};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
 
 /// A request older than this that points at nothing, such as "new session", is dropped (D-028).
 pub const LATE_SECS: u64 = 5 * 60;
@@ -183,6 +187,10 @@ pub struct Saved {
     people: BTreeMap<PubKey, String>,
     /// Each chat's session, by the core's chat id (D-065).
     sessions: BTreeMap<String, SessionId>,
+    /// The folder each chat chose for its sessions, resolved, by the core's chat id (D-101). A
+    /// chat that chose none works in the driver's own folder.
+    #[serde(default)]
+    folders: BTreeMap<String, PathBuf>,
     /// Every item sent and not yet forgotten, by the core's name for it.
     items: BTreeMap<String, Record>,
     /// The order finished items were finished in, oldest first, so the oldest are forgotten.
@@ -295,6 +303,10 @@ struct Pending {
     chat: String,
     /// For a new session: the driver took it, so the chat's saved session is not named again.
     new_session: bool,
+    /// For a new session that moves the chat to a folder: the folder, the chat's once the driver
+    /// has taken it (D-101).
+    #[serde(default)]
+    folder: Option<PathBuf>,
     /// For an answer: the item it answers, so a second answer to it is refused.
     #[serde(default)]
     answers: Option<String>,
@@ -325,6 +337,8 @@ pub struct Conversation {
     harness: String,
     rights: Rights,
     capabilities: Capabilities,
+    /// The rule for a chat's folder, when the driver works in one a chat may move (D-101).
+    folders: Option<FolderRule>,
     saved: Saved,
     /// Chats the driver has taken a prompt or a new session for since it started (D-065).
     taken: HashSet<String>,
@@ -352,6 +366,7 @@ impl Conversation {
             harness: harness.into(),
             rights,
             capabilities,
+            folders: None,
             saved,
             taken: HashSet::new(),
             messages: HashMap::new(),
@@ -360,6 +375,29 @@ impl Conversation {
             #[cfg(feature = "sim-bugs")]
             bug_settles_only_from_items: false,
         }
+    }
+
+    /// Offers each chat a folder setting, by `rule`: for a driver that works in a folder of its own,
+    /// which a chat may move (D-101).
+    pub fn with_folders(mut self, rule: FolderRule) -> Self {
+        self.folders = Some(rule);
+        self
+    }
+
+    /// The folder a chat's sessions work in: the one it chose, or else the driver's own. `None`
+    /// when the driver states no folder.
+    pub fn chat_folder(&self, chat: &ChatId) -> Option<PathBuf> {
+        let rule = self.folders.as_ref()?;
+        Some(
+            (self.saved.folders.get(&chat.0).cloned())
+                .unwrap_or_else(|| rule.default_folder().to_path_buf()),
+        )
+    }
+
+    /// The folder a chat chose for its sessions, if it chose one (D-101).
+    pub fn chosen_folder(&self, chat: &ChatId) -> Option<PathBuf> {
+        self.folders.as_ref()?;
+        self.saved.folders.get(&chat.0).cloned()
     }
 
     /// Puts back, for the simulator, the bug that read settles only from items, never from the
@@ -479,6 +517,8 @@ impl Conversation {
         // the request names, whether it exists, waits or was answered (S6).
         let right = match &heard.asked {
             Asked::Choice { .. } => Right::Approve,
+            // A folder changes what the agent can touch (D-101).
+            Asked::Set { setting, .. } if self.moves_folder(setting) => Right::Approve,
             Asked::Set { setting, .. } => self.right_to_set(&chat.id.0, setting),
             _ => Right::Prompt,
         };
@@ -526,7 +566,16 @@ impl Conversation {
             Ok(act) => act,
             Err(refusal) => return self.refuse_now(&heard, &chat, refusal),
         };
-        let new_session = matches!(heard.asked, Asked::NewSession);
+        let moving =
+            matches!(&heard.asked, Asked::Set { setting, .. } if self.moves_folder(setting));
+        let new_session = matches!(heard.asked, Asked::NewSession) || moving;
+        let folder = match &act {
+            Act::Control(Control {
+                action: Action::NewSession { chat, .. },
+                ..
+            }) if moving => chat.folder.clone(),
+            _ => None,
+        };
         self.saved.pending.insert(
             request.0.clone(),
             Pending {
@@ -534,6 +583,7 @@ impl Conversation {
                 group: heard.chat.group,
                 chat: chat.id.0,
                 new_session,
+                folder,
                 answers,
                 deadline: None,
             },
@@ -620,6 +670,21 @@ impl Conversation {
                 let chat = chat.clone();
                 control(Action::NewSession { chat, session })
             }
+            Asked::Set { setting, value } if self.moves_folder(setting) => {
+                // It applies from the chat's next session, so it starts one there (D-101).
+                let rule = self.folders.as_ref().expect("a driver with a folder");
+                let current = self.chat_folder(&chat.id).expect("a driver with a folder");
+                let folder = rule.check(value, &current)?;
+                let session = match target {
+                    Some(t) => t.header().session.clone(),
+                    None => self.saved.sessions.get(&chat.id.0).cloned(),
+                };
+                let chat = Chat {
+                    folder: Some(folder),
+                    ..chat.clone()
+                };
+                control(Action::NewSession { chat, session })
+            }
             Asked::Set { setting, value } => {
                 let session = session_of(target)?;
                 control(Action::Set {
@@ -657,6 +722,9 @@ impl Conversation {
                     if pending.new_session {
                         self.taken.insert(pending.chat.clone());
                     }
+                    if let Some(folder) = pending.folder.take() {
+                        self.saved.folders.insert(pending.chat.clone(), folder);
+                    }
                 }
                 Vec::new()
             }
@@ -692,6 +760,7 @@ impl Conversation {
         let Some(chat) = chat else {
             return Vec::new();
         };
+        let emitted = self.show_folder(&chat, emitted);
         let Some(group) = self.group_of(&chat) else {
             return Vec::new();
         };
@@ -849,6 +918,7 @@ impl Conversation {
             id: chat.clone(),
             group: true,
             name: None,
+            folder: None,
         };
         let notice = self.notice(&group, &chat, reason_word(refusal.reason), text);
         vec![self.send_notice(&group, notice, None, Vec::new())]
@@ -996,6 +1066,7 @@ impl Conversation {
             id: ChatId(chat),
             group: true,
             name: None,
+            folder: None,
         };
         let mut chunks: Vec<Vec<EventKey>> =
             settles.chunks(SETTLES_MAX).map(<[_]>::to_vec).collect();
@@ -1238,7 +1309,13 @@ impl Conversation {
                 id
             }
         };
+        let folder = self
+            .saved
+            .folders
+            .get(&id)
+            .filter(|_| self.folders.is_some());
         Chat {
+            folder: folder.cloned(),
             id: ChatId(id),
             group: !chat.direct,
             name: chat.name.clone(),
@@ -1301,6 +1378,50 @@ impl Conversation {
             .filter(|r| r.chat == chat && r.open() && matches!(r.last.body(), Body::Turn(_)))
             .max_by_key(|r| r.last.header().seq)
             .and_then(|r| r.last.header().turn.clone())
+    }
+
+    /// Whether a `set` of `setting` moves the chat's folder: the core's own setting, for a driver
+    /// that works in a folder a chat may move (D-101).
+    fn moves_folder(&self, setting: &str) -> bool {
+        setting == FOLDER && self.folders.is_some()
+    }
+
+    /// A session item, with the chat's folder among its settings, marked as needing the right to
+    /// approve (D-101). A session keeps the folder it started in: once an item has shown it, its
+    /// later versions show the same, even after the chat has moved.
+    fn show_folder(&self, chat: &str, emitted: Emitted) -> Emitted {
+        let Body::Session(session) = emitted.event.body() else {
+            return emitted;
+        };
+        let Some(now) = self.chat_folder(&ChatId(chat.to_string())) else {
+            return emitted;
+        };
+        let header = emitted.event.header();
+        let key = format!("{chat}/{}", header.item.as_str());
+        let kept = (self.saved.items.get(&key))
+            .filter(|r| r.last.header().session == header.session)
+            .and_then(|r| match r.last.body() {
+                Body::Session(s) => (s.settings.iter())
+                    .find(|x| x.id == FOLDER)
+                    .and_then(|x| x.value.clone()),
+                _ => None,
+            });
+        let mut session = session.clone();
+        session.settings.retain(|s| s.id != FOLDER);
+        session.settings.push(Setting {
+            id: FOLDER.into(),
+            label: LABEL.into(),
+            value: Some(kept.unwrap_or_else(|| now.display().to_string())),
+            options: None,
+            approve: true,
+        });
+        let event = AgentEvent::new(
+            header.clone(),
+            Body::Session(session),
+            emitted.event.native().cloned(),
+        )
+        .expect("a session item repeats no secret");
+        Emitted { event, ..emitted }
     }
 
     /// The right a setting needs, from the chat's session item (D-043).
@@ -1412,6 +1533,7 @@ impl Conversation {
             id: ChatId(pending.chat),
             group: true,
             name: None,
+            folder: None,
         };
         let notice = self.notice(&pending.group, &chat, reason, text);
         vec![self.send_notice(&pending.group, notice, None, vec![pending.event])]

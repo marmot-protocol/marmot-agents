@@ -52,6 +52,7 @@ fn prompt(text: &str, group: bool) -> Prompt {
             id: "c-1".into(),
             group,
             name: None,
+            folder: None,
         },
         sender: alice(),
         reply_to: None,
@@ -771,6 +772,7 @@ fn a_new_session_asked_for_an_old_one_is_out_of_date() {
             id: "c-1".into(),
             group: false,
             name: None,
+            folder: None,
         },
         session: session.map(Into::into),
     };

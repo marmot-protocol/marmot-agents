@@ -64,6 +64,12 @@ pub trait Subject: Send {
         false
     }
 
+    /// A folder a chat may move the harness to, other than the driver's own (D-101). It must be a
+    /// folder on disk for a driver that starts a program there.
+    fn other_folder(&self) -> std::path::PathBuf {
+        "/work/elsewhere".into()
+    }
+
     /// Whether the harness may send a reply after what follows from it, or answer a later request
     /// first. Codex and ACP agents may; Pi answers a prompt before its run reports anything, so
     /// its fake is made slow instead.
@@ -88,6 +94,9 @@ pub struct Run<S: Subject> {
     pub loose: bool,
     /// Every event the driver handed over, in order.
     pub seen: Vec<Emitted>,
+    /// The folder each chat moved to, once the driver took the new session that moved it, as the
+    /// core keeps it (D-101).
+    pub folders: std::collections::HashMap<String, std::path::PathBuf>,
     next_message: u64,
     next_request: u64,
 }
@@ -99,11 +108,12 @@ fn person() -> Person {
     }
 }
 
-fn chat(id: &str) -> Chat {
+fn chat(id: &str, folder: Option<&std::path::PathBuf>) -> Chat {
     Chat {
         id: id.into(),
         group: false,
         name: None,
+        folder: folder.cloned(),
     }
 }
 
@@ -130,6 +140,7 @@ impl<S: Subject> Run<S> {
             patience: Duration::from_secs(5),
             loose: false,
             seen: Vec::new(),
+            folders: Default::default(),
             next_message: 0,
             next_request: 0,
         }
@@ -251,7 +262,7 @@ impl<S: Subject> Run<S> {
         let prompt = Prompt {
             message: message.clone(),
             text,
-            chat: chat(chat_id),
+            chat: chat(chat_id, self.folders.get(chat_id)),
             sender: person(),
             reply_to: None,
             attachments: Vec::new(),
@@ -423,10 +434,30 @@ impl<S: Subject> Run<S> {
         session: Option<&str>,
     ) -> Result<(RequestId, Result<(), Refusal>), Violation> {
         let action = Action::NewSession {
-            chat: chat(chat_id),
+            chat: chat(chat_id, self.folders.get(chat_id)),
             session: session.map(SessionId::from),
         };
         self.control(chat_id, action).await
+    }
+
+    /// A new session in `folder`, as the core asks for one when a chat moves (D-101): once the
+    /// driver has taken it, the chat's prompts name the folder.
+    pub async fn new_session_in(
+        &mut self,
+        chat_id: &str,
+        session: Option<&str>,
+        folder: &std::path::Path,
+    ) -> Result<(RequestId, Result<(), Refusal>), Violation> {
+        let action = Action::NewSession {
+            chat: chat(chat_id, Some(&folder.to_path_buf())),
+            session: session.map(SessionId::from),
+        };
+        let (request, result) = self.control(chat_id, action).await?;
+        if result.is_ok() {
+            self.folders
+                .insert(chat_id.to_string(), folder.to_path_buf());
+        }
+        Ok((request, result))
     }
 
     /// Changes the harness's setting in `session`.

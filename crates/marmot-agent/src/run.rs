@@ -21,6 +21,7 @@
 //! read: its group waits, and is read again from its mark, a little later each time, while the
 //! other groups go on (S10, L3).
 
+use crate::chat_folder::FolderRule;
 use crate::config::Config;
 use crate::conversation::{Act, Conversation, Saved, Sending};
 use crate::files::Folders;
@@ -288,13 +289,26 @@ impl<D: Driver, M: Side> Core<D, M> {
         // the owner allows it (D-099).
         let folders = Folders::from_config(config)?;
         let kept = store.load()?;
-        let conversation = Conversation::new(
+        let mut conversation = Conversation::new(
             marmot.agent().clone(),
             driver.harness().name,
             config.rights(),
             driver.capabilities(),
             kept.conversation,
         );
+        // A driver that works in a folder of its own lets each chat move it (D-101).
+        let folder = driver.folder();
+        if let Some(folder) = &folder {
+            let rule = FolderRule::new(folder, config.folders.as_deref(), &config.home);
+            conversation = conversation.with_folders(rule);
+        }
+        // Files come from the folders listed, or else the harness's working folder, which a
+        // connector states in its hello (D-090).
+        let folders = if config.files_from.is_none() && config.file_folders().is_empty() {
+            folders.others(folder.as_slice())
+        } else {
+            folders
+        };
         let attempted = conversation.attempted_tokens();
         Ok(Self {
             marmot,
@@ -476,13 +490,26 @@ impl<D: Driver, M: Side> Core<D, M> {
             });
             return self.file_done(Uploaded { id, chat, result }).await;
         };
-        let (marmot, folders, uploaded) =
-            (self.marmot.clone(), self.folders.clone(), uploaded.clone());
+        let folders = self.folders_for(&chat);
+        let (marmot, uploaded) = (self.marmot.clone(), uploaded.clone());
         tokio::spawn(async move {
             let result = upload(&marmot, folders, path, &group, turn).await;
             let _ = uploaded.send(Uploaded { id, chat, result });
         });
         Ok(())
+    }
+
+    /// The folders a file from `chat` may come from (D-090): those the settings list, or else the
+    /// chat's folder, the one it chose or the harness's own (D-101). A file inside the account
+    /// home is refused from a chat's folder as from any other, unless the owner allows it (D-099).
+    fn folders_for(&self, chat: &marmot_agent_driver::ChatId) -> Folders {
+        if self.config.files_from.is_some() {
+            return self.folders.clone();
+        }
+        match self.conversation.chosen_folder(chat) {
+            Some(chosen) => self.folders.others(std::slice::from_ref(&chosen)),
+            None => self.folders.clone(),
+        }
     }
 
     /// Tells the driver how a file went. A refusal is shown in the chat, naming no path (D-090).

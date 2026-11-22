@@ -57,7 +57,8 @@ core_id!(
     RequestId
 );
 
-/// A chat, as a driver sees it.
+/// A chat, as a driver sees it. Printed for debugging, it shows the chat's id and whether it is a
+/// group, and neither its name nor its folder (D-071).
 #[derive(Clone, PartialEq, Eq)]
 pub struct Chat {
     /// The core's id for the chat.
@@ -66,6 +67,12 @@ pub struct Chat {
     pub group: bool,
     /// The chat's name, when it has one.
     pub name: Option<String>,
+    /// The folder the chat chose for its sessions, as a whole path with every link followed
+    /// (D-101). A driver starts the chat's next session there, and never moves a running one:
+    /// the folder applies from the next session. `None` when the chat chose none, and the driver
+    /// uses its own folder ([`Driver::folder`](crate::Driver::folder)). Only a driver that states
+    /// a folder of its own is handed one.
+    pub folder: Option<PathBuf>,
 }
 
 /// A person, as a driver sees them. The name is passed as it is, because the model needs it.
