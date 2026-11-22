@@ -1,7 +1,9 @@
 //! M3's scenario for the ACP driver, with real agents: through MDK's test relay, a person invites
 //! the agent, has a command approved and run, interrupts a turn, starts a new session, and has the
 //! core crash in the middle of a turn and carries on, with nothing run twice (`docs/plan.md`,
-//! D-074). It is the Codex scenario, run against OpenCode, Goose and Cursor.
+//! D-074). Then the agent sends a file from its working folder with the driver's `send_file` tool,
+//! which the person downloads and reads (D-090). It is the Codex scenario, run against OpenCode,
+//! Goose and Cursor.
 //!
 //! It approves only the exact command each step asks for, once, in a throwaway folder. Each needs
 //! its agent, so it runs only when asked for:
@@ -19,7 +21,7 @@
 
 mod common;
 
-use common::{Chat, TURN, TestModel, World, lines, tests_env, within};
+use common::{Chat, TURN, TestModel, World, files_sent, lines, tests_env, within};
 use marmot_agent::carrier::Asked;
 use marmot_agent_acp::Acp;
 use marmot_agent_events::State;
@@ -31,6 +33,9 @@ use std::path::Path;
 struct Agent {
     name: &'static str,
     command: fn(&Path, &Path) -> Vec<String>,
+    /// Whether the agent can reach the driver's tool server, on the loopback address, to send a
+    /// file (D-090).
+    files: bool,
 }
 
 const OPENCODE: Agent = Agent {
@@ -56,6 +61,7 @@ const OPENCODE: Agent = Agent {
             "acp".into(),
         ]
     },
+    files: true,
 };
 
 const GOOSE: Agent = Agent {
@@ -74,12 +80,16 @@ const GOOSE: Agent = Agent {
         ]);
         command
     },
+    // Goose takes the server, but its container has a network of its own: the host's loopback
+    // address, where the driver serves it, is not reachable from inside.
+    files: false,
 };
 
 const CURSOR: Agent = Agent {
     name: "cursor",
     // The host's own sign-in. Cursor asks before every command that is not on its allow-list.
     command: |_work, _home| vec!["cursor-agent".into(), "acp".into()],
+    files: true,
 };
 
 async fn start(agent: &Agent, work: &Path, home: &Path) -> Acp {
@@ -180,6 +190,44 @@ async fn scenario(agent: Agent) {
         "the prompt started one turn"
     );
     println!("carried on after the crash");
+
+    if !agent.files {
+        core.stop().await;
+        world.runtime.shutdown().await;
+        return;
+    }
+
+    // 5. A file from the working folder, sent with the driver's own tool, arrives as an
+    //    attachment the person can read. Cursor asks before it calls any MCP tool, and Goose in
+    //    approve mode before every tool: that approval is allowed, once.
+    let asked = chat
+        .say("Send the file runs.txt to the chat with your send_file tool, then reply with the word done.")
+        .await;
+    let mut allowed = false;
+    let mut files = Vec::new();
+    for _ in 0..TURN {
+        files = files_sent(&world, &chat.group).await;
+        if !files.is_empty() {
+            break;
+        }
+        let tool = |words: &str| words.contains("send_file") || words.contains("send file");
+        if !allowed && let Some((target, read)) = chat.approval_waiting(tool) {
+            chat.allow_once(&target, &read).await;
+            allowed = true;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    assert_eq!(files.len(), 1, "one file sent");
+    assert_eq!(files[0].0, "runs.txt");
+    assert_eq!(files[0].1, b"ran\n");
+    let sent = chat.turn_for(&asked).await;
+    assert_eq!(
+        files[0].2.as_deref(),
+        Some(sent.as_str()),
+        "tagged with its turn"
+    );
+    chat.turn_at(&sent, State::Done).await;
+    println!("sent a file");
 
     core.stop().await;
     world.runtime.shutdown().await;

@@ -589,11 +589,29 @@ impl Chat<'_> {
             })
         })
         .await;
+        self.allow_once(&target, &read).await
+    }
+
+    /// An approval waiting now whose words pass `asks_for`: its title and text, or the command it
+    /// names.
+    pub fn approval_waiting(&self, asks_for: impl Fn(&str) -> bool) -> Option<(EventKey, Read)> {
+        self.latest().into_iter().find(|(_, r)| {
+            let Body::Approval(approval) = r.item.event.body() else {
+                return false;
+            };
+            let header = r.item.event.header();
+            let command = (approval.subject.as_ref()).and_then(|s| self.command_of(s.as_str()));
+            header.state == State::Waiting && (asks_for(&header.title) || asks_for(&header.text))
+                || command.is_some_and(|c| asks_for(&c))
+        })
+    }
+
+    /// Allows a waiting approval once: with the choice that says so, or else the first that allows,
+    /// as Codex and Claude Code put "Allow once" first. Goose puts its standing choice first.
+    pub async fn allow_once(&self, target: &EventKey, read: &Read) -> EventKey {
         let Body::Approval(approval) = read.item.event.body() else {
-            unreachable!()
+            panic!("not an approval")
         };
-        // The choice that allows once: the one that says so, or else the first that allows, as
-        // Codex and Claude Code put "Allow once" first. Goose puts its standing choice first.
         let allows = || {
             approval
                 .choices
@@ -607,7 +625,7 @@ impl Chat<'_> {
         let asked = Asked::Choice {
             choice: once.id.clone(),
         };
-        self.ask(Some(&target), &asked, &once.label).await
+        self.ask(Some(target), &asked, &once.label).await
     }
 
     /// Waits for a request to be settled by its effect, never by a notice saying why it had none
