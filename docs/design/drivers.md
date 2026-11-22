@@ -15,6 +15,9 @@ owner accepts it. That the installers run the harness the person already has, an
 Hermes and OpenClaw, is decided
 ([D-102](../decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)); which of their
 gateway's settings the installers change is a proposal, provisional until the owner accepts it.
+That a chat can move a coding harness to another folder is decided
+([D-101](../decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder)); how, in
+[a chat's folder](#a-chats-folder), is built and provisional until the owner accepts it.
 
 ## What a driver does
 
@@ -126,14 +129,17 @@ sequenceDiagram
   argument, `path`. The model is never asked to write a path into its answer, and nothing in its words is read
   as a request to send.
 - **The driver hands the core a request.** `next_event` gives either an event or `SendFile`: the driver's own
-  id for the request, the chat, and the path. The driver makes a relative path whole by putting its working
-  folder in front, leaving any `..` for the core to follow; the core takes only an absolute one. The core answers through `file_sent`, with the result and, for a
+  id for the request, the chat, and the path. The driver makes a relative path whole by putting the chat's
+  session folder in front, leaving any `..` for the core to follow; the core takes only an absolute one. The core answers through `file_sent`, with the result and, for a
   refusal, a reason and a sentence that names no path. The driver passes that back to the harness as the
   tool's result. On the socket this is the `send_file` request
   ([the messages, as built](socket-protocol.md#the-messages-as-built)).
-- **The core decides.** It reads only from the folders `files_from` lists. By default that is the working
-  folder of a harness the core runs (Codex, Pi, an ACP agent); a connector on the socket has none until the
-  settings list one, since the core does not know its folder. The core opens each folder when it starts and
+- **The core decides.** It reads only from the folders `files_from` lists. By default that is the chat's
+  folder ([a chat's folder](#a-chats-folder)): the one the chat chose, or else the harness's working folder,
+  which a harness the core runs (Codex, Pi, an ACP agent) has in the settings and a connector on the socket
+  states in its hello. A connector that states none has no folder until the settings list one. A folder a chat
+  chose that holds the account home, as `~` does, is used for files like any other, under the rule below that
+  keeps the home's files out. The core opens each folder when it starts, or when the file is sent for a chat's own, and
   follows a path from that open folder one part at a time, never letting the system follow a link: a link on
   the way is read and followed by its words by the same rule, so it may lead elsewhere inside but never out,
   and a `..` never climbs above the folder. A folder on the way swapped for a link meanwhile cannot lead out
@@ -165,6 +171,41 @@ sequenceDiagram
 
 Pi, the ACP driver, and the Hermes and OpenClaw plugins do not offer the tool yet. A plugin would send the
 same `send_file` request from its gateway's own message tool.
+
+## A chat's folder
+
+Each chat of a coding harness (Codex, Claude Code, OpenCode, Goose, Cursor and Pi) works in a folder of its
+own choosing ([D-101](../decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder)). Hermes and
+OpenClaw keep the workspace they manage. Built 2026-11-22; what other programs and people see is provisional.
+
+- **The core owns the rule.** A driver states its own folder, the install folder, through `Driver::folder`
+  (a connector, as `folder` in its hello). Only then does the core offer the setting. It keeps each chat's
+  folder in its state file, so it survives a restart.
+- **The chat sees it as a setting.** The core adds a setting `folder` ("Folder") to every session item of such
+  a harness, after the harness's own: its value is the folder the session started in, its accepted values are
+  not listed, and it is marked as needing the right to approve
+  ([D-043](../decisions.md#d-043-a-setting-says-which-right-it-needs)). A session keeps the folder it started
+  in.
+- **Someone who may approve sets it**, with a `set` control naming `folder` and a path. A path may start with
+  `~`, the home; a relative one is taken from the chat's current folder. The core resolves it, links followed
+  and `..` taken away, and takes it only if it is a folder inside one of those the settings list in `folders`
+  (by default the install folder; listing `~` allows any folder in the home). The agent's account home, and
+  any folder inside it, is never allowed (provisional). A path outside is refused, before anything on disk is
+  read, with the core's refused notice, reason `not_allowed`; one inside that is not there, or is not a
+  folder, with `invalid`. Neither names the path, and nothing about it is logged
+  ([D-071](../decisions.md#d-071-what-may-be-logged)).
+- **It applies from the next session, so setting it starts one.** The core hands the driver a new session for
+  the chat, with the new folder on the chat (`Chat::folder`). The folder is the chat's once the driver has
+  taken that request; a refused one moves nothing. The new session's item settles the `set`. Every prompt
+  after names the folder, and the driver starts the chat's next session there, or takes up its session there
+  after a restart. A chat that chose none is named no folder, and works in the driver's own.
+- **Each driver:** Codex gives the folder as `cwd` on `thread/start` and `thread/resume`; an ACP agent as
+  `cwd` on `session/new`, `session/load` and `session/resume`; Claude Code as the query's `cwd`. Pi works where
+  it was started, so its driver starts each chat's Pi in the chat's folder, and a new session in another folder
+  stops the chat's Pi and starts a new one there. `tools/pi/pi.sh` mounts the folder it is started in, and
+  refuses one that holds the agent's state or key. Goose's test container (`tools/goose/goose-acp.sh`) mounts
+  only its own work folder, so a chat that moves elsewhere fails there; a natively installed Goose
+  ([D-102](../decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)) does not.
 
 ## Capabilities
 
@@ -252,8 +293,11 @@ session per chat:
   large, with its longest texts cut in the middle until it fits. Its `prompts` and `settles` are kept.
 - Every query gets the connector's `send_file` tool (`src/files.ts`), an in-process MCP server, which
   `canUseTool` allows without asking the chat. A call sends the core a `send_file` request and tells Claude Code what the core answered
-  ([sending a file](#sending-a-file)). The core needs `files_from` in its settings for a connector, normally
-  the folder given as `--cwd`.
+  ([sending a file](#sending-a-file)). The connector states the folder given as `--cwd` in its hello, so the
+  core sends files from the chat's folder without `files_from` ([a chat's folder](#a-chats-folder)).
+- A query starts in the chat's folder when the prompt names one, and in `--cwd` otherwise; a running query
+  stays where it is. A new session ends the query, and the next prompt, which names the folder, starts the new
+  one there. Claude Code keeps a session with its folder, so a resumed session is taken up in the same folder.
 
 Its capabilities: it can interrupt; a message sent during a turn ends the turn and starts another (`restart`,
 [D-040](../decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness)); the core names the
@@ -349,7 +393,8 @@ args = []                            # for pi.sh: ["<model key file>", "<Pi's st
 ```
 
 - **One Pi per chat.** Pi in RPC mode holds one session at a time, so each chat gets its own Pi process,
-  started as `program args… --mode rpc` in `cwd` when the chat first needs it. A session is resumed by
+  started as `program args… --mode rpc` in the chat's folder, or `cwd` when it chose none
+  ([a chat's folder](#a-chats-folder)), when the chat first needs it. A session is resumed by
   starting Pi with `--session <id>`: when the core names one ([D-065](../decisions.md#d-065-a-prompt-names-a-session-only-to-resume-one)),
   and when the chat's Pi has stopped. Pi writes a session's file only once it holds a message, so a session
   that never did, such as a new one the core was restarted after, has none: then the driver starts Pi with

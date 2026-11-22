@@ -1,7 +1,8 @@
 //! M1's scenario, with a real Codex: through MDK's test relay, a person invites the agent, has a
 //! command approved and run, interrupts a turn, starts a new session, and has the core crash in
 //! the middle of a turn and carries on, with nothing run twice (`docs/plan.md`, D-074). Then the
-//! agent sends a file from its working folder, which the person downloads and reads (D-090).
+//! agent sends a file from its working folder, which the person downloads and reads (D-090), and
+//! the chat moves the agent to a folder inside it, where its next session works (D-101).
 //!
 //! It approves only the exact command each step asks for, once, in a throwaway folder. It needs
 //! `codex` installed and signed in, so it runs only when asked for:
@@ -134,6 +135,27 @@ async fn codex_end_to_end() {
     assert_eq!(files[0].0, "runs.txt");
     assert_eq!(files[0].1, b"ran\n");
     println!("sent a file");
+
+    // 6. The chat moves the agent to a folder inside its own: a new session starts there, and a
+    //    command runs there.
+    std::fs::create_dir(work.path().join("sub")).unwrap();
+    let sub = std::fs::canonicalize(work.path().join("sub")).unwrap();
+    let folder = Asked::Set {
+        setting: "folder".into(),
+        value: "sub".into(),
+    };
+    let moved = chat.ask(None, &folder, "Move to sub").await;
+    let started = chat.effect_of(&moved).await;
+    assert!(matches!(started.item.event.body(), Body::Session(_)));
+    let session = started.item.event.header().session.clone().unwrap();
+    assert_eq!(chat.folder_of(&session), Some(sub.display().to_string()));
+    let asked = chat.say(&format!("{only} `touch moved.txt`")).await;
+    chat.approve("touch moved.txt").await;
+    within(TURN, || sub.join("moved.txt").exists().then_some(())).await;
+    let turn = chat.turn_for(&asked).await;
+    let done = chat.turn_at(&turn, State::Done).await;
+    assert_eq!(done.item.event.header().session.as_ref(), Some(&session));
+    println!("moved to another folder");
 
     core.stop().await;
     world.runtime.shutdown().await;

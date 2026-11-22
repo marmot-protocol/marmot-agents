@@ -211,6 +211,7 @@ and there is no third right ([D-032](../decisions.md#d-032-every-action-needs-on
 | Change a setting other than the permission mode, or use a harness's own action | Prompt | |
 | Answer an approval | Approve | |
 | Change the permission mode | Approve | It decides what the agent may do without asking, so it is a standing approval |
+| Change a coding harness's folder | Approve | It changes what the agent can touch ([D-101](../decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder)) |
 
 D-010 first put "use controls" with the right to approve. [D-039](../decisions.md#d-039-controls-need-the-right-to-prompt) moved
 them to the right to prompt. The reason: a harness's slash commands are messages, and they include commands
@@ -218,6 +219,10 @@ that stop a turn, start a session and switch the model. Someone who may prompt c
 for the button than for the typed command would protect nothing.
 
 Someone without the right gets the "not allowed" notice, which is the refusal D-010 asks for.
+
+The folder is the one setting the core holds itself rather than the harness. For a coding harness the core adds
+`folder` to each session item, marked as needing the right to approve, and a `set` of it starts the chat's next
+session in the new folder; how, in [the drivers page](drivers.md#a-chats-folder) (built, provisional).
 
 ### 10. Late and repeated events
 
@@ -453,3 +458,4 @@ In the core:
 | A listed command says where in a message it counts | [D-047](../decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts) |
 | A request to confirm a command is a question | [D-048](../decisions.md#d-048-a-request-to-confirm-a-command-is-a-question) |
 | A standing approval is an ordinary approval answer | [D-049](../decisions.md#d-049-a-standing-approval-is-an-ordinary-approval-answer) |
+| A chat can move a coding harness to another folder, by someone who may approve, from its next session | [D-101](../decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder) |
