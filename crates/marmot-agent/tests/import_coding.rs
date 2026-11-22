@@ -15,8 +15,8 @@
 //! - Pi: the Pi driver, on its own tests' `fake_pi.py`, which answers the same way;
 //! - Claude Code: the core serves its socket, and a stand-in for the Claude Code driver
 //!   (`packages/claude-code`) connects to it as that driver does, with its hello, and answers
-//!   the same way. The real driver needs Node, its packages and a signed-in Claude Code, and
-//!   runs in `claude.rs`.
+//!   "echo: " and the prompt, as the socket tests' scripted connector does. The real driver
+//!   needs Node, its packages and a signed-in Claude Code, and runs in `claude.rs`.
 //!
 //! Each stand-in sits where the installer found the harness's program, which is what the
 //! import carries over.
@@ -24,6 +24,7 @@
 mod common;
 mod old_connector;
 
+use common::connector::{self, Heard, Script};
 use common::within;
 use marmot_account::AccountHome;
 use marmot_agent::config::Config;
@@ -34,12 +35,10 @@ use old_connector::{
     BEFORE, CLAUDE, GOOSE, Invited, Noted, OPENCODE, PI, Terminal, chat_messages, installed,
     invited, places,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 /// Today's connector, as its own program: run by `old_connector::invited`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -114,78 +113,30 @@ fn heard(work: &Path, connector: Connector) -> Vec<String> {
 
 /// A stand-in for the Claude Code driver: it finds the core's socket and token in the agent's
 /// home, as `node src/main.ts --home <home> --cwd <work>` does, gives the hello that driver gives,
-/// and answers each prompt "ok: " and its text, in one turn. It takes every other request and
-/// does nothing with it. Each prompt's text is added to `heard`.
-async fn claude_code_stand_in(home: PathBuf, work: PathBuf, heard: Arc<Mutex<Vec<String>>>) {
+/// and is then the socket tests' scripted connector, which answers each prompt "echo: " and its
+/// text, in one turn, and adds the text to `heard`.
+async fn claude_code_stand_in(home: PathBuf, work: PathBuf, heard: Heard) {
     let socket = home.join("socket/marmot-agent.sock");
     let token = within(60, || {
         let token = std::fs::read_to_string(home.join("connector.token")).ok()?;
         socket.exists().then_some(token)
     })
     .await;
-    let stream = tokio::net::UnixStream::connect(&socket).await.unwrap();
-    let (read, mut write) = stream.into_split();
-    let mut lines = BufReader::new(read).lines();
-    async fn send(write: &mut tokio::net::unix::OwnedWriteHalf, message: Value) {
-        let line = format!("{message}\n");
-        write.write_all(line.as_bytes()).await.unwrap();
-    }
-    send(
-        &mut write,
-        json!({"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {
-            "protocol": PROTOCOL,
-            "connector": {"name": "marmot-agent-claude-code", "version": "0.0.0-stand-in"},
-            "harness": {"name": "claude-code"},
-            "token": token.trim(),
-            // The Claude Code driver's own (`CAPABILITIES` in `src/connector.ts`).
-            "capabilities": {
-                "interrupt": true, "mid_turn": "restart", "sessions": "core", "resume": true,
-                "approvals": true, "files_in": "none", "approval_commands": [],
-            },
-            "folder": work,
-        }}),
-    )
-    .await;
-    let welcome: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    let hello = json!({"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {
+        "protocol": PROTOCOL,
+        "connector": {"name": "marmot-agent-claude-code", "version": "0.0.0-stand-in"},
+        "harness": {"name": "claude-code"},
+        "token": token.trim(),
+        // The Claude Code driver's own (`CAPABILITIES` in `src/connector.ts`).
+        "capabilities": {
+            "interrupt": true, "mid_turn": "restart", "sessions": "core", "resume": true,
+            "approvals": true, "files_in": "none", "approval_commands": [],
+        },
+        "folder": work,
+    }});
+    let (welcome, stream) = connector::connect(&socket, hello).await;
     assert!(welcome.get("error").is_none(), "the core took the hello");
-    let mut turns = 0;
-    while let Ok(Some(line)) = lines.next_line().await {
-        let request: Value = serde_json::from_str(&line).unwrap();
-        if request.get("id").is_some() {
-            send(
-                &mut write,
-                json!({"jsonrpc": "2.0", "id": request["id"], "result": {}}),
-            )
-            .await;
-        }
-        if request["method"] != "prompt" {
-            continue;
-        }
-        turns += 1;
-        let params = &request["params"];
-        let text = params["text"].as_str().unwrap_or_default().to_string();
-        heard.lock().unwrap().push(text.clone());
-        let event = |item: String, kind: &str, state: &str, text: String, body: Value| {
-            json!({"jsonrpc": "2.0", "method": "event", "params": {
-                "item": item, "type": kind, "state": state, "title": kind, "text": text,
-                "body": body, "session": "s1", "turn": format!("t{turns}"),
-                "chat": params["chat"]["id"], "prompts": [params["message"]],
-            }})
-        };
-        let turn = json!({"started_by": "user"});
-        let (id, words) = (format!("turn{turns}"), format!("ok: {text}"));
-        let running = event(
-            id.clone(),
-            "turn",
-            "running",
-            "Working".into(),
-            turn.clone(),
-        );
-        send(&mut write, running).await;
-        let said = event(format!("msg{turns}"), "message", "done", words, json!({}));
-        send(&mut write, said).await;
-        send(&mut write, event(id, "turn", "done", "Done".into(), turn)).await;
-    }
+    connector::run(stream, Script::Echo, "claude", heard).await;
 }
 
 /// Moves an install of `terminal` over, and checks the agent answers in its chat afterwards.
@@ -330,7 +281,7 @@ async fn moved(terminal: Terminal, connector: Connector) {
         .kill_on_drop(true)
         .spawn()
         .unwrap();
-    let claude_heard = Arc::new(Mutex::new(Vec::new()));
+    let claude_heard = Heard::default();
     let driver = (connector == Connector::Claude).then(|| {
         tokio::spawn(claude_code_stand_in(
             home.clone(),
@@ -359,7 +310,11 @@ async fn moved(terminal: Terminal, connector: Connector) {
         .send_message(&person, &group, AFTER.as_bytes().to_vec())
         .await
         .unwrap();
-    let answer = format!("ok: {AFTER}");
+    // The stand-ins for the harnesses answer "ok: ", the scripted connector "echo: ".
+    let answer = match connector {
+        Connector::Claude => format!("echo: {AFTER}"),
+        _ => format!("ok: {AFTER}"),
+    };
     // MDK can take some seconds to settle a chat after a program first opens it.
     let mut answered = false;
     for _ in 0..900 {
