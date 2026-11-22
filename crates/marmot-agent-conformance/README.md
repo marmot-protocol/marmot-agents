@@ -36,7 +36,7 @@ Checked here for drivers; each id is the plan's, so a search finds the property,
 | S2 | after a stop | Every item of the chats whose harness stopped is closed, but the session's own item: a session outlives its harness (Pi's driver takes it up in a new Pi), and when a driver ends the core closes what is left (D-034) |
 | S4 | at each checkpoint | No prompt reaches the harness twice |
 | S5 | every step | Every event names its chat; a session, a turn and an item stay with the chat they were first seen in; a chat's mark appears only in its own chat, and a turn names only its own chat's prompts; a request is settled only in its own chat; an answer reaches the harness in its own chat's session, with what was chosen |
-| S11 | every request, and at each checkpoint | A request returns within the suite's patience, and when it has returned the harness has it, with the driver not polled again; no line the harness reads is half a message; with waits dropped at every point, nothing is lost; an answer the harness can no longer read is not taken |
+| S11 | every request, and at each checkpoint | A request returns within the suite's patience, and when it has returned the harness has it, with the driver not polled again: an answer taken was heard, or the harness died reading what was written after it; no line the harness reads is half a message; with waits dropped at every point, nothing is lost; an answer the harness can no longer read is not taken; a request refused never reaches the harness later |
 | S12 | at each checkpoint | The harness takes up a session again only when a prompt named it, or when it is the chat's own current session (Pi restarting a chat's Pi); a named session is taken up; a prompt naming none stays in the chat's session |
 | S13 | every step | An item id, once closed, is not used again in its chat, and an id from before a restart is not used after it (a session's own item returns with its session); an item keeps its session |
 | SEQ | every step | `seq` rises within a session (D-059, point 4). Not in the plan's table |
@@ -51,7 +51,7 @@ out is reported as the liveness property it stands for (L1 a request, L2 a turn,
 | `one_turn` | A prompt answered in words |
 | `two_chats` | Chat 1 runs until interrupted while chat 2's harness asks for approval, which is given; then chat 1 is interrupted |
 | `answered_once` | Two chats, one approval allowed and one question answered the other way, then the same item answered again, which must be refused |
-| `answer_after_death` | The harness dies while its approval waits; the driver, not yet told, is given the answer |
+| `answer_after_death` | The harness dies while its approval waits; the driver, not yet told, is given the answer, and must refuse it; the approval must close unanswered |
 | `dies_mid_turn` | The harness dies in the middle of a command; Pi's driver must start a new Pi for the next prompt |
 | `dies_with_requests_pending` | The harness dies as it reads an interrupt, before acting on it, after another chat's answer was settled |
 | `dropped_waits` | `two_chats` with every wait for an event dropped at the first point it would wait, and the harness writing in pieces |
@@ -91,11 +91,11 @@ to 12 frames after start, seven recordings.
 
 | Driver | Scenarios | Recordings | Deliberate faults caught |
 | --- | --- | --- | --- |
-| Codex | all 13, `dies_at_step` 1 to 12 | `simple`, `approval_allowed`, `command` | all 11 |
+| Codex | all 13, `dies_at_step` 1 to 12 | `simple`, `approval_allowed`, `command` | all 12 |
 | ACP, OpenCode-shaped | all 13, `dies_at_step` 1 to 10 | `simple`, `approval_allowed` | |
 | ACP, Goose-shaped | `two_chats`, `answered_once`, `answer_after_death`, `dies_mid_turn`, `restart`, `new_session`, `dies_at_step` | `simple`, `approval_allowed` | |
 | ACP, Cursor-shaped | `two_chats`, `answered_once`, `answer_after_death`, `restart`, `dies_at_step` | `simple`, `approval_allowed` | |
-| Pi | all 13, `dies_at_step` 1 to 10 | `gate_allowed`, `command` | 6: those that turn on a harness for each chat |
+| Pi | all 13, `dies_at_step` 1 to 10 | `gate_allowed`, `command` | 7: those that turn on a harness for each chat, and `TakeUnhanded` |
 
 The faults (`src/faults.rs`), each caught as the property it breaks, by the scenario named:
 
@@ -112,6 +112,7 @@ The faults (`src/faults.rs`), each caught as the property it breaks, by the scen
 | `SeqBack`: every third `seq` back to 1 | SEQ | `one_turn` |
 | `HalfFrame`: a dropped wait leaves half a message on the harness's input | S11 | `dropped_waits` |
 | `LoseOnDrop`: a dropped wait loses the event in hand | S11 | `dropped_waits` |
+| `TakeUnhanded`: an answer the driver could not hand over is taken anyway, and never settled | S11 | `answer_after_death` |
 
 Two driver bugs were found, each fixed after its scenario failed:
 

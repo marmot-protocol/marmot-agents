@@ -293,6 +293,7 @@ impl<S: Subject> Run<S> {
         };
         let before = self.answers_heard();
         let frames = self.fake().frames();
+        let deaths = self.fake().deaths();
         let returned = tokio::time::timeout(self.patience, self.driver.answer(answer)).await;
         let result = self.returned("an answer", returned)?;
         self.check.requested(&request, &result);
@@ -304,10 +305,12 @@ impl<S: Subject> Run<S> {
             if let Some(chat) = &chat {
                 self.check.expect_answer(chat, expect);
             }
-            // A harness that died reading it cannot say what it heard.
+            // The harness heard it, or died on reading what the driver wrote after it was given,
+            // and cannot say what it heard. A harness that had died before cannot have read it.
             let fake = self.fake().clone();
             self.handed("an answer", move |heard| {
-                count_answers(heard) > before || fake.deaths() > 0
+                let died_reading = fake.frames() > frames && fake.deaths() > deaths;
+                count_answers(heard) > before || died_reading
             })
             .await?;
         }

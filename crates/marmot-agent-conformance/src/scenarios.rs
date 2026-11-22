@@ -129,8 +129,8 @@ pub async fn answered_once<S: Subject>(subject: S) -> Result<(), Violation> {
 }
 
 /// The harness dies while its approval waits, and the driver, not yet told, is given the answer:
-/// it cannot hand the answer over, so it must not take it, nor show it as given (S11, S1). The
-/// approval is closed unanswered instead, and the core settles the answer as failed.
+/// it cannot hand the answer over, so it must refuse it (S11), and the approval is closed
+/// unanswered (S2). The core settles the answer as failed.
 pub async fn answer_after_death<S: Subject>(subject: S) -> Result<(), Violation> {
     let mut run = Run::start(subject).await;
     taken(run.prompt("c-1", "#ask").await?, "the prompt")?;
@@ -144,18 +144,34 @@ pub async fn answer_after_death<S: Subject>(subject: S) -> Result<(), Violation>
     }
     // A harness run as a program goes a moment after its output closes.
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let (request, result) = run.answer(&asked, true).await?;
-    run.drain(Duration::from_millis(200)).await;
-    let settled = run.seen.iter().any(|e| e.settles.contains(&request));
-    if result.is_ok() && settled {
+    let (_, result) = run.answer(&asked, true).await?;
+    if result.is_ok() {
         return Err(broke(
             "S11",
-            "an answer the harness could not have read was taken and shown as given",
+            "an answer to a harness that had died was taken",
         ));
     }
+    run.drain(Duration::from_millis(200)).await;
     run.checkpoint().await?;
     run.check.closed_after_stop();
-    run.ok()
+    run.ok()?;
+    // Closed, and with no answer shown: nobody's answer reached the harness.
+    let item = asked.event.header().item.clone();
+    let last = (run.seen.iter().rev())
+        .find(|e| e.event.header().item == item)
+        .expect("the approval was seen");
+    let answered = match last.event.body() {
+        Body::Approval(a) => a.answer.is_some(),
+        Body::Question(q) => q.answer().is_some(),
+        _ => false,
+    };
+    if waiting(last) || answered {
+        return Err(broke(
+            "S2",
+            "the approval was not closed unanswered after the harness died",
+        ));
+    }
+    Ok(())
 }
 
 /// The harness dies in the middle of a turn: every item closes (S2), and nothing the driver

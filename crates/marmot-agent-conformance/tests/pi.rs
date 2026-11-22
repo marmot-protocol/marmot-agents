@@ -135,6 +135,7 @@ async fn faults_are_caught() {
         Fault::WrongChat,
         Fault::ReuseItem,
         Fault::ResumeUnasked,
+        Fault::TakeUnhanded,
     ] {
         match faults::caught(subject(), fault, None).await {
             Err(v) if v.property == fault.breaks() => {}

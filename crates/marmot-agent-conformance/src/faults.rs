@@ -45,6 +45,8 @@ pub enum Fault {
     HalfFrame,
     /// S11: a wait for an event that is dropped loses the event it had in hand.
     LoseOnDrop,
+    /// S11: an answer the driver could not hand over is taken anyway, and nothing settles it.
+    TakeUnhanded,
 }
 
 impl Fault {
@@ -58,7 +60,7 @@ impl Fault {
             Fault::ResumeUnasked => "S12",
             Fault::ReuseItem => "S13",
             Fault::SeqBack => "SEQ",
-            Fault::HalfFrame | Fault::LoseOnDrop => "S11",
+            Fault::HalfFrame | Fault::LoseOnDrop | Fault::TakeUnhanded => "S11",
         }
     }
 
@@ -74,11 +76,12 @@ impl Fault {
             Fault::ReuseItem => "new_session",
             Fault::SeqBack => "one_turn",
             Fault::HalfFrame | Fault::LoseOnDrop => "dropped_waits",
+            Fault::TakeUnhanded => "answer_after_death",
         }
     }
 
     /// Every fault.
-    pub const ALL: [Fault; 11] = [
+    pub const ALL: [Fault; 12] = [
         Fault::DropSettle,
         Fault::SettleTwice,
         Fault::SettleOnStop,
@@ -90,6 +93,7 @@ impl Fault {
         Fault::SeqBack,
         Fault::HalfFrame,
         Fault::LoseOnDrop,
+        Fault::TakeUnhanded,
     ];
 }
 
@@ -308,7 +312,11 @@ impl<D: Driver> Driver for FaultyDriver<D> {
     }
 
     async fn answer(&mut self, answer: Answer) -> Result<(), Refusal> {
-        self.inner.answer(answer).await
+        let taken = self.inner.answer(answer).await;
+        if self.fault == Fault::TakeUnhanded {
+            return Ok(());
+        }
+        taken
     }
 
     async fn control(&mut self, control: Control) -> Result<(), Refusal> {
