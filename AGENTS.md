@@ -265,17 +265,26 @@ python3 -m unittest discover -s tests   # replays every Hermes recording against
                                         # runs the transport against a fake core and a fake Hermes
 ```
 
-For any change under `install/` or `tools/release/`, with [ShellCheck](https://github.com/koalaman/shellcheck)
-at the release CI names (it is a tool, like lychee):
+For any change under `install/` or `tools/release/`, or to `tools/tla/run.sh`, with
+[ShellCheck](https://github.com/koalaman/shellcheck) at the release CI names (it is a tool, like lychee):
 
 ```sh
-shellcheck -x install/*.sh tools/release/package.sh
+shellcheck -x install/*.sh tools/release/package.sh tools/tla/run.sh
 python3 -m unittest discover -s install -p 'test_*.py'   # runs each install script against a throwaway
                                                          # home, with stand-ins for what it calls
 ```
 
 `.github/workflows/release.yml` runs only on a version tag, so a change to it is checked by reading it, and by
 [actionlint](https://github.com/rhysd/actionlint) if you have it.
+
+For any change under `formal/` or `tools/tla/`, or to the core code a model follows (`formal/tla/README.md` says
+which), with Java 21, or Docker when there is no Java (the script then runs TLC in a pinned Java image):
+
+```sh
+python3 tools/tla/check.py   # the fair model passes; every counterexample, deliberate defect and
+                             # reachability probe fails as stated. TLC is downloaded once, pinned by
+                             # version and checksum, by tools/tla/run.sh
+```
 
 For a change to a diagram, which CI does not check:
 
