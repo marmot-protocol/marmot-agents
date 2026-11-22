@@ -52,8 +52,10 @@ which is mounted into the container, read when the harness starts, and never cop
 hold it. The script stops without them, and refuses them without `--container`: your own Pi or Goose uses the
 model it is set up with. Goose runs in its own default mode, which asks nothing; `--goose-mode approve` makes it
 ask in the chat before each tool. Containers need Linux and Docker; this project's own tests run every harness
-that way. Whatever the work folder, the agent never sends a file from its own account home, which holds its
-keys, unless you allow it in its settings
+that way. Hermes and OpenClaw keep the folder they work in; their installers let the agent send the files in
+it (`files_from` in its settings), unless it is your whole home, and then say how to name one. Whatever the
+work folder, the agent never sends a file from its own account home, which holds its keys, unless you allow
+it in its settings
 ([D-099](docs/decisions.md#d-099-files-from-the-agents-own-home-are-refused-by-default-and-the-owner-may-allow-them)). Claude
 Code must be signed in on your account (run `claude`, then `/login`): an `ANTHROPIC_API_KEY` in your shell
 does not reach the service, and the script refuses to rely on one.
