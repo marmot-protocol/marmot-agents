@@ -1690,7 +1690,8 @@ Decided 2026-11-22. The project owner decided; this replaces the installers' pro
 setting. A chat that has chosen none uses the agent's install folder. Someone with the right to approve sets it from
 the chat, by path; it applies from the chat's next session, so setting it also starts one. The owner lists in the
 settings the top-level folders agents may work in (by default the install folder), and a chat may pick any folder
-inside them; listing `~` lifts the limit. Hermes and OpenClaw keep the workspace they manage themselves.
+inside them; listing `~` lifts the limit ([replaced by D-104](#d-104-how-a-chats-folder-works-as-built):
+`~` allows the home's folders, and `/` lifts the limit). Hermes and OpenClaw keep the workspace they manage themselves.
 
 **Why.** Working in a different folder or project is a baseline need for a coding agent. The harness picks its folder
 when a session starts. The owner's list keeps a chat member from pointing the agent anywhere on the machine, and the
@@ -1712,3 +1713,61 @@ own rights, as it does when they run it themselves; the container stays for thos
 
 Decided 2026-11-22. The project owner decided.
 
+
+## D-103 A bind mount into the agent's home is an accepted limit of D-099
+
+**Decision.** The core finds the agent's home by walking up `..` from the folders it holds open
+([D-099](#d-099-files-from-the-agents-own-home-are-refused-by-default-and-the-owner-may-allow-them)). A bind mount can show a folder or file of
+the home somewhere outside it, and that walk does not see the home, so a file reached that way is not refused. This
+is accepted as a known limit; the core does not read the mount table.
+
+**Why.** Only someone allowed to create bind mounts can set one up, which the agent cannot do. Reading the mount
+table adds code that differs between systems for a case the person creates on purpose.
+
+Decided 2026-11-22. The project owner decided.
+
+## D-104 How a chat's folder works, as built
+
+**Decision.** For [D-101](#d-101-a-chat-can-move-a-coding-harness-to-another-folder):
+
+- The owner's `folders` setting lists the folders a chat may work in, by default the harness's install folder.
+  Listing `~` allows any folder inside the home of the account the agent runs as. Listing `/` lifts the limit. This
+  replaces D-101's "listing `~` lifts the limit".
+- The agent's own account home, and any folder inside it, is never a chat's folder, whatever is listed.
+- Setting the folder always starts a new session, even when it names the folder the chat already has.
+- For Pi, which keeps one process per chat, a move stops that chat's Pi and starts a new one in the new folder.
+
+**Why.** The owner accepted these from the built proposal. Keeping `~` to mean the home's folders, not the whole
+machine, makes the setting say what it reads as. The agent's home holds its keys
+([D-099](#d-099-files-from-the-agents-own-home-are-refused-by-default-and-the-owner-may-allow-them)).
+
+Decided 2026-11-22. The project owner decided.
+
+## D-105 Which gateway settings the installers change
+
+**Decision.** When the installers add our plugin to a person's own OpenClaw or Hermes
+([D-102](#d-102-the-installers-connect-to-the-harness-the-person-already-has)):
+
+- If OpenClaw forwards no approvals (`approvals.exec.enabled` is missing or `false`), the installer turns forwarding
+  on for Marmot chats only. When it is already `true` or `"auto"`, it is left alone. `--uninstall` puts back what was
+  there.
+- The installers change no other gateway setting: not OpenClaw's verbosity, reasoning, streaming or exec mode, and
+  not Hermes's approval mode or who may answer approvals.
+- The installers print the command that restarts the gateway rather than restart it.
+
+**Why.** Without forwarding, an approval in a Marmot chat waits unseen. The other settings apply to the person's
+whole agent, so changing them would change their other channels, and a restart would interrupt those channels.
+MDK's installers print the restart too.
+
+Decided 2026-11-22. The project owner decided.
+
+## D-106 The core keeps reading again a group MDK cannot read for a moment
+
+**Decision.** When MDK fails for a moment to say a message's group, its place in storage, what a catch-up reads, or
+which groups there are, the core does not move its read mark. It holds that group and reads it again from its mark,
+after 100 ms and then doubling up to 10 s, with no limit on how often. Other groups carry on.
+
+**Why.** A message is never skipped. A group that stays unreadable costs one read every 10 s, and the log line it
+writes names no group ([D-071](#d-071-what-may-be-logged)).
+
+Decided 2026-11-22. The project owner decided.
