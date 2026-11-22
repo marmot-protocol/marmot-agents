@@ -825,6 +825,16 @@ class Install(unittest.TestCase):
         self.assertIn("goose-acp.sh", (m.data / "agents/goose/settings.toml").read_text())
         self.assertIn("MODEL_BASE_URL=", (m.data / "agents/goose/service.env").read_text())
 
+    def test_goose_in_a_container_is_given_no_file_tool_it_cannot_reach(self):
+        # Goose in its container cannot reach the loopback address the ACP driver's file tool
+        # listens on, so the installer switches the tool off there; on the host it stays on (D-110).
+        m = Machine(self)
+        m.run("goose", *m.args("goose", "--binary", str(m.core), "--no-service", container=True))
+        settings = (m.data / "agents/goose/settings.toml").read_text()
+        self.assertIn("send_files = false", settings)
+        m.run("opencode", *m.args("opencode", "--binary", str(m.core), "--no-service"))
+        self.assertNotIn("send_files", (m.data / "agents/opencode/settings.toml").read_text())
+
     def test_claude_code_needs_a_stored_sign_in(self):
         m = Machine(self)
         shutil.rmtree(m.claude)

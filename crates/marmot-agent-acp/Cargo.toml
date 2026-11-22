@@ -18,8 +18,22 @@ serde = { version = "1", features = ["derive"] }
 # `raw_value` keeps the agent's own message as the exact text it arrived as.
 serde_json = { version = "1", features = ["raw_value"] }
 # Runs the agent and reads it without blocking the core.
-tokio = { version = "1", features = ["io-util", "process", "rt", "sync", "time"] }
+tokio = { version = "1", features = ["io-util", "net", "process", "rt", "sync", "time"] }
+# The driver's own MCP server, which gives the agent its `send_file` tool (D-090), with the official
+# MCP library (D-006), served over HTTP on the loopback address by hyper.
+rmcp = { version = "3.11.0", default-features = false, features = ["server", "transport-streamable-http-server"] }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http = "1"
+http-body-util = "0.1"
+bytes = "1"
+tower-service = "0.3"
+tokio-util = "0.7"
+# Each chat's token for that server.
+getrandom = "0.3"
 
 [dev-dependencies]
+# Its MCP client calls the driver's tool in the tests, as it does in the suite.
+marmot-agent-conformance = { path = "../marmot-agent-conformance" }
 # The transport is tested against a stand-in agent over an in-memory pipe.
 tokio = { version = "1", features = ["io-util", "macros", "rt", "sync", "time"] }

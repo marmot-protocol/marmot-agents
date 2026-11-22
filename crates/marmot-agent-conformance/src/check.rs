@@ -10,7 +10,7 @@
 //! | S1 | Each answer and control is settled at most once: by a refusal, or by the `settles` of one event that is not a message, of its own chat. An event the driver made up, with no native message (D-059, point 3), such as an item it closes when the harness stops, shows no effect and settles nothing, unless it is an error that settles it as failed. At the end, each request the driver took is settled, unless the driver ended, when the core settles it. A request from before a restart is never settled after it. |
 //! | S2 | After the harness stops, every item of the chats it served is closed, but for the session's own item: a session outlives its harness (Pi's driver takes it up again in a new Pi), and when the driver ends the core closes what is left (D-034). |
 //! | S4 | No prompt reaches the harness twice; a copy the harness refused counts, since it reached it. |
-//! | S5 | Every event names its chat, and a session, a turn and an item id stay with the chat they were first seen in. Every chat mark an event's text carries is its own chat's, as is every prompt a turn names. An answer reaches the harness in the session of its own chat, and with what was chosen: allowed or not, or the option's words. |
+//! | S5 | Every event names its chat, and a session, a turn and an item id stay with the chat they were first seen in. Every chat mark an event's text carries is its own chat's, as is every prompt a turn names. An answer reaches the harness in the session of its own chat, and with what was chosen: allowed or not, or the option's words. A file the agent asks to send is handed over for the chat whose session asked: every chat mark its path carries is that chat's. Its result reaches the harness in that chat's session, as the core gave it. |
 //! | S11 | A request returns, and once it has returned the harness has it, with the driver not polled again. No line the harness reads is half a message. Dropping the wait for an event at any point loses nothing (the scenario that drops waits checks what arrives). |
 //! | S12 | The harness takes up a session again only when the chat's last prompt named it, or when it was the chat's current session as that prompt was made (a driver restarting a harness that died). Not a session an earlier prompt named, nor the session a resume itself just made current. Never a session no chat had. What the harness heard is checked before each prompt, against what the prompts before it allowed. |
 //! | S13 | An item id, once closed, is never used again in its chat, and an id from before a restart is never used after it; only a session's own item returns with its session. An item keeps its session. |
@@ -109,6 +109,9 @@ struct Item {
 #[derive(Default)]
 pub struct Checker {
     requests: HashMap<RequestId, Request>,
+    /// The results of the driver's file tool the harness should hear: in which chat's session, and
+    /// whether the file was sent.
+    files: Vec<(ChatId, bool)>,
     prompts: HashMap<MessageId, ChatId>,
     /// The session the chat's last prompt named, if it named one: only that prompt may take it
     /// up.
@@ -132,9 +135,6 @@ pub struct Checker {
     ended: bool,
     /// What answers the harness should hear.
     expected: Vec<Expected>,
-    /// How each file the driver asked to send went, as the core told it, for the chat that asked:
-    /// what the harness should hear as its tool's result.
-    files: Vec<(ChatId, bool)>,
     /// How much of what the harness heard has been checked.
     heard_at: usize,
     prompts_heard: HashSet<String>,
@@ -226,6 +226,17 @@ impl Checker {
         });
     }
 
+    /// The core told the driver how a file `chat` asked to send went (D-090): the harness should
+    /// hear it as its tool's result, in that chat's session.
+    pub fn expect_file(&mut self, chat: &ChatId, sent: bool) {
+        self.files.push((chat.clone(), sent));
+    }
+
+    /// The results of the file tool the harness was to hear and has not.
+    pub fn files_unheard(&self) -> usize {
+        self.files.len()
+    }
+
     /// The driver answered an answer or a control.
     pub fn requested(&mut self, request: &RequestId, result: &Result<(), Refusal>) {
         let Some(r) = self.requests.get_mut(request) else {
@@ -287,8 +298,20 @@ impl Checker {
     pub fn output(&mut self, output: Option<&Output>) {
         match output {
             None => self.ended = true,
-            Some(Output::SendFile(_)) => {}
+            Some(Output::SendFile(file)) => self.file(file),
             Some(Output::Event(emitted)) => self.event(emitted),
+        }
+    }
+
+    /// S5: a file goes to the chat whose session asked for it, which the marks in its path name.
+    fn file(&mut self, file: &SendFile) {
+        let path = file.path.to_string_lossy();
+        if let Some(other) = marked_chats(&path).into_iter().find(|c| *c != file.chat.0) {
+            let detail = format!(
+                "a file chat {other} asked for was handed over for {:?}",
+                file.chat
+            );
+            self.fail("S5", detail);
         }
     }
 
@@ -593,12 +616,6 @@ impl Checker {
             );
             self.fail("D-090", detail);
         }
-    }
-
-    /// The core told the driver how a file `chat` asked to send went (D-090): the harness of that
-    /// chat should hear it as its tool's result.
-    pub fn expect_file(&mut self, chat: &ChatId, sent: bool) {
-        self.files.push((chat.clone(), sent));
     }
 
     /// A file the driver asked to send names the chat whose harness asked, as far as the scenario

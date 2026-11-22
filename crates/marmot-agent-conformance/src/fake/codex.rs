@@ -1,7 +1,7 @@
 //! A fake `codex app-server`, grown from the stand-in in the Codex driver's tests: JSON-RPC over
 //! lines, in the shapes `fixtures/recordings/codex` holds. One process serves every thread.
 
-use super::{FILE, Heard, Outbox, Protocol, Script, fresh};
+use super::{Heard, Outbox, Protocol, Script, file_for, fresh};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -152,7 +152,7 @@ impl Codex {
             }
             Script::File => {
                 let params = json!({"threadId": thread, "turnId": turn, "callId": fresh("call"),
-                    "namespace": null, "tool": "send_file", "arguments": {"path": FILE}});
+                    "namespace": null, "tool": "send_file", "arguments": {"path": file_for(text)}});
                 let asked = Asked::Tool {
                     thread: thread.to_string(),
                 };

@@ -15,6 +15,7 @@
 
 pub mod acp;
 pub mod codex;
+pub mod mcp;
 pub mod pi;
 mod replay;
 
@@ -143,14 +144,10 @@ pub enum Script {
     Sleep,
     /// Starts a command, then dies, as a crash would.
     Die,
-    /// Calls the driver's own tool to send a file, [`FILE`], to the chat (D-090), and goes on
-    /// once the driver says how it went. A harness that has no such tool from its driver answers
-    /// in words instead.
+    /// Calls the driver's `send_file` tool with [`file_for`] the prompt, and goes on once it has
+    /// the result. A harness the driver gives no such tool answers in words.
     File,
 }
-
-/// The file a fake asks to send, relative to the folder it works in.
-pub const FILE: &str = "out/report.txt";
 
 impl Script {
     /// The words, as a prompt carries them.
@@ -168,6 +165,15 @@ impl Script {
             .find(|(word, _)| text.contains(word))
             .map_or(Script::Reply, |(_, script)| *script)
     }
+}
+
+/// The relative path a fake asks the driver to send for a prompt: it carries the prompt's chat mark
+/// and message id, its first two words, so a file handed to the wrong chat shows it.
+pub fn file_for(prompt: &str) -> String {
+    let mut words = prompt.split_whitespace();
+    let mark = words.next().unwrap_or_default();
+    let message = words.next().unwrap_or_default();
+    format!("out/{mark} {message}.txt")
 }
 
 static NEXT: AtomicU64 = AtomicU64::new(1);
@@ -190,6 +196,18 @@ pub trait Protocol: Send + 'static {
 
     /// The harness has ended, by dying or because its input closed: what was running is cut off.
     fn ended(&mut self) {}
+
+    /// What the engine waits on, besides the driver's frames, for something the harness does off
+    /// the pipe: an ACP agent's call of an MCP tool over HTTP. When it is notified, the engine
+    /// calls [`Protocol::woken`].
+    fn waker(&self) -> Option<Arc<tokio::sync::Notify>> {
+        None
+    }
+
+    /// Something the harness did off the pipe has come back: it answers as it would to a frame.
+    fn woken(&mut self, out: &mut Outbox, heard: &mut Vec<Heard>) {
+        let _ = (out, heard);
+    }
 }
 
 impl Protocol for Box<dyn Protocol> {
@@ -203,6 +221,14 @@ impl Protocol for Box<dyn Protocol> {
 
     fn ended(&mut self) {
         (**self).ended();
+    }
+
+    fn waker(&self) -> Option<Arc<tokio::sync::Notify>> {
+        (**self).waker()
+    }
+
+    fn woken(&mut self, out: &mut Outbox, heard: &mut Vec<Heard>) {
+        (**self).woken(out, heard);
     }
 }
 
@@ -414,6 +440,7 @@ async fn engine<P: Protocol>(
     // Frames held by `Knobs::never`, to be heard once taken off it.
     let mut held: Vec<Value> = Vec::new();
     let mut killed = false;
+    let waker = protocol.waker();
     'process: while !dead {
         turned.borrow_and_update();
         let knobs = fake.knobs();
@@ -427,9 +454,23 @@ async fn engine<P: Protocol>(
                 break 'process;
             }
         }
+        let woken = async {
+            match &waker {
+                Some(waker) => waker.notified().await,
+                None => std::future::pending().await,
+            }
+        };
         let read = tokio::select! {
             read = reader.read_until(b'\n', &mut line), if !deaf(&knobs, tag.as_deref()) => read,
             _ = turned.changed() => continue,
+            () = woken => {
+                let mut out = Outbox::default();
+                let mut heard = Vec::new();
+                protocol.woken(&mut out, &mut heard);
+                fake.shared().heard.extend(heard);
+                dead = dispatch(out, &knobs, &tx, &mut replies);
+                continue;
+            }
             changed = kill.changed() => {
                 if changed.is_err() {
                     continue;

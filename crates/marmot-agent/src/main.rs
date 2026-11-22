@@ -146,7 +146,14 @@ async fn run(config: &Config) -> Result<(), String> {
             }
         }
         (None, Some(acp), _) => {
-            let starting = Acp::start(&acp.command, &acp.cwd, &acp.name);
+            let starting = async {
+                let mut driver = Acp::start(&acp.command, &acp.cwd, &acp.name).await?;
+                // Unless the settings switch it off: the server listens on the loopback address (D-110).
+                if acp.send_files {
+                    driver.serve_files().await?;
+                }
+                Ok::<_, std::io::Error>(driver)
+            };
             match unless_stopped(&mut stop, starting).await {
                 Some(driver) => {
                     let driver = driver.map_err(|_| "the ACP agent could not be started")?;

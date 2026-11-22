@@ -589,11 +589,33 @@ impl Chat<'_> {
             })
         })
         .await;
+        self.allow_once(&target, &read).await
+    }
+
+    /// An approval waiting now, in `turn`, whose text passes `asks_for`: the text, not the title,
+    /// since the ACP driver titles every approval "Allow this …?" and puts what the agent asked
+    /// to do, such as its tool's title, in the text.
+    #[allow(dead_code)] // Only the ACP scenario has a tool approved.
+    pub fn approval_waiting(
+        &self,
+        turn: &TurnId,
+        asks_for: impl Fn(&str) -> bool,
+    ) -> Option<(EventKey, Read)> {
+        self.latest().into_iter().find(|(_, r)| {
+            let header = r.item.event.header();
+            matches!(r.item.event.body(), Body::Approval(_))
+                && header.state == State::Waiting
+                && header.turn.as_ref() == Some(turn)
+                && asks_for(&header.text)
+        })
+    }
+
+    /// Allows a waiting approval once: with the choice that says so, or else the first that allows,
+    /// as Codex and Claude Code put "Allow once" first. Goose puts its standing choice first.
+    pub async fn allow_once(&self, target: &EventKey, read: &Read) -> EventKey {
         let Body::Approval(approval) = read.item.event.body() else {
-            unreachable!()
+            panic!("not an approval")
         };
-        // The choice that allows once: the one that says so, or else the first that allows, as
-        // Codex and Claude Code put "Allow once" first. Goose puts its standing choice first.
         let allows = || {
             approval
                 .choices
@@ -607,7 +629,7 @@ impl Chat<'_> {
         let asked = Asked::Choice {
             choice: once.id.clone(),
         };
-        self.ask(Some(&target), &asked, &once.label).await
+        self.ask(Some(target), &asked, &once.label).await
     }
 
     /// Waits for a request to be settled by its effect, never by a notice saying why it had none
