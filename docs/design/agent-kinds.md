@@ -109,7 +109,9 @@ Built on 2026-11-21 while fixing the known gaps of [testing and verification](ve
 - **An item begun under the temporary kind** (2026-11-22). A state file from a core that sent items under the
   temporary kind of D-069 is taken up once: MDK applies no edit to such an event, so each of its items' next
   version goes out as a new kind 1201 event, the item's first from then on, with its version going on rising. What
-  the state file kept of forgotten items is dropped.
+  the state file kept of forgotten items is dropped. A state file that holds an item already handed to MDK in the
+  old shape is refused, and the core does not start: MDK keeps that try's token bound to the old event and would
+  refuse it in the new shape, though it may have gone out. No core that sent the temporary kind was released.
 
 ## Updating an item
 

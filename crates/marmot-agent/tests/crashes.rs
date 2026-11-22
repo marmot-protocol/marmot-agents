@@ -1123,6 +1123,65 @@ async fn a_state_with_sends_tried_before_tokens_is_refused() {
     world.runtime.shutdown().await;
 }
 
+// A state file from before kind 1201 with an item handed to MDK: MDK keeps its token bound to the
+// old event, so tried again in the new shape it is refused, and the chat would be told of a
+// failure that may not have been one. No such core was released, so the core refuses to start,
+// and says why. An item queued and never handed to MDK is taken up (D-112).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_state_with_an_item_tried_before_kind_1201_is_refused() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, _events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, id) = a_chat(&world, &seen).await;
+    core.stop().await;
+    let group = GroupKey(chat.hex.clone());
+    let path = world.state.path().join("marmot-agent-state.json");
+    let before_1201 = |attempted: bool| {
+        let (store, kept, mut talk) = taken_up(&world);
+        talk.emitted(Emitted {
+            event: event("t", State::Done, turn()),
+            chat: Some(id.clone()),
+            prompts: Vec::new(),
+            settles: Vec::new(),
+        });
+        let (token, _) = talk.next_send(&group).unwrap();
+        if attempted {
+            talk.attempting(&token.send, unix_now());
+        }
+        let read = kept.read;
+        let conversation = talk.saved().clone();
+        store
+            .save(&Kept {
+                conversation,
+                read,
+                ..Kept::default()
+            })
+            .unwrap();
+        let mut file = json(&store.load().unwrap());
+        file["conversation"]
+            .as_object_mut()
+            .unwrap()
+            .remove("kind_1201");
+        std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+        store
+    };
+
+    let store = before_1201(false);
+    let (driver, _events, _) = stub(false);
+    let started = Core::new(world.marmot.clone(), driver, &world.config, store);
+    assert!(started.is_ok(), "an item never tried is taken up");
+
+    let store = before_1201(true);
+    let (driver, _events, _) = stub(false);
+    let started = Core::new(world.marmot.clone(), driver, &world.config, store);
+    let Err(why) = started else {
+        panic!("the core starts on an item tried before kind 1201");
+    };
+    assert!(why.contains("kind 1201"), "says why: {why}");
+    world.runtime.shutdown().await;
+}
+
 // A send MDK keeps queued, and has not yet taken into its engine, does not hold up the core: the
 // core asks after it again later, and meanwhile reads what the chat says and hands it on. Once
 // MDK takes the send, it goes out once.

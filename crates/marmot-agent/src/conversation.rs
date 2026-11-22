@@ -282,6 +282,15 @@ impl Saved {
         self.kind_1201 = true;
     }
 
+    /// Whether a core from before kind 1201 wrote this with an item, or a notice, it handed to
+    /// MDK: MDK keeps that try's token bound to the event in the old shape, so tried again in the
+    /// new one it is refused, though it may have gone out. Items queued and never handed to MDK
+    /// are taken up ([`Saved::move_to_kind_1201`]).
+    pub fn tried_before_kind_1201(&self) -> bool {
+        !self.kind_1201
+            && (self.outbox.iter()).any(|q| q.attempted && matches!(q.what, Sending::Item { .. }))
+    }
+
     /// Whether a core from before MDK kept tokens wrote this: it has sends it handed to MDK,
     /// without a token, and no salt. Under a token now, any of them could go out a second time.
     pub fn tried_without_tokens(&self) -> bool {
