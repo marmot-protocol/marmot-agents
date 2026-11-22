@@ -185,8 +185,12 @@ impl Side for Mdk {
     }
 }
 
-/// A harness that takes every prompt, notes its text, and emits nothing.
-struct Taker(Arc<Mutex<Vec<String>>>);
+/// A harness that takes every prompt, after `slow` if it is slow, notes its text, and emits
+/// nothing.
+struct Taker {
+    prompts: Arc<Mutex<Vec<String>>>,
+    slow: Option<Duration>,
+}
 
 impl Driver for Taker {
     fn harness(&self) -> Harness {
@@ -209,7 +213,10 @@ impl Driver for Taker {
     }
 
     async fn prompt(&mut self, prompt: Prompt) -> Result<(), Refusal> {
-        self.0.lock().unwrap().push(prompt.text);
+        if let Some(slow) = self.slow {
+            tokio::time::sleep(slow).await;
+        }
+        self.prompts.lock().unwrap().push(prompt.text);
         Ok(())
     }
 
@@ -238,18 +245,22 @@ struct Running {
 impl Running {
     /// Starts the core on `mdk`, subscribed in second [`SINCE`], with no state.
     fn start(mdk: Mdk) -> Self {
-        Self::start_in(mdk, tempfile::tempdir().unwrap(), SINCE)
+        Self::start_in(mdk, tempfile::tempdir().unwrap(), SINCE, None)
     }
 
-    /// Starts the core on `mdk` with the state in `state`, subscribed in second `since`.
-    fn start_in(mdk: Mdk, state: tempfile::TempDir, since: u64) -> Self {
+    /// Starts the core on `mdk` with the state in `state`, subscribed in second `since`, with a
+    /// harness that takes `slow` to take each prompt.
+    fn start_in(mdk: Mdk, state: tempfile::TempDir, since: u64, slow: Option<Duration>) -> Self {
         let settings = format!(
             "home = \"/unused\"\nrelays = [\"wss://relay.invalid\"]\nowner = \"{}\"\n[connector]\n",
             owner().as_str()
         );
         let config = Config::parse(&settings).unwrap();
         let prompts = Arc::default();
-        let driver = Taker(Arc::clone(&prompts));
+        let driver = Taker {
+            prompts: Arc::clone(&prompts),
+            slow,
+        };
         let core = Core::new(mdk.clone(), driver, &config, Store::new(state.path())).unwrap();
         let (announce, events) = mpsc::unbounded_channel();
         let (stop, stopped) = oneshot::channel::<()>();
@@ -281,9 +292,16 @@ impl Running {
         kept.read.get(&group()).copied()
     }
 
-    /// Gives the core time to read, try again and deliver: far more than it needs.
+    /// Gives the core time to read, try again and deliver: far more than it needs, and two of
+    /// its 10 s ticks, which come at whole tens of seconds after it started.
     async fn settle(&self) {
-        tokio::time::sleep(Duration::from_secs(30)).await;
+        tokio::time::sleep(Duration::from_secs(25)).await;
+    }
+
+    /// Gives the core a second to read what a notice woke it for, with no tick: called after
+    /// the test's first [`Running::settle`], 25 s in, when the next tick is 5 s away.
+    async fn briefly(&self) {
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
     /// Stops the core, and gives back its state.
@@ -408,9 +426,42 @@ async fn history_is_history_after_a_restart() {
     assert_eq!(core.mark(), Some(0), "the group starts before the prompt");
     assert!(core.prompts().is_empty());
     let state = core.stop().await;
-    let core = Running::start_in(mdk, state, SINCE + 60);
+    let core = Running::start_in(mdk, state, SINCE + 60, None);
     core.settle().await;
     assert_eq!(core.prompts(), ["new"]);
     assert_eq!(core.mark(), Some(2), "the history is marked read");
+    core.stop().await;
+}
+
+// A long catch-up for a harness slow to take prompts does not hold up the core: a stop asked for
+// in the middle of it is heard within a few prompts, and what was not read yet is read after the
+// next start, from the mark, once.
+#[tokio::test(start_paused = true)]
+async fn a_long_catch_up_lets_a_stop_through() {
+    let mdk = Mdk::new();
+    let slow = Some(Duration::from_secs(1));
+    let core = Running::start_in(mdk.clone(), tempfile::tempdir().unwrap(), SINCE, slow);
+    core.settle().await;
+    let mut last = None;
+    for n in 0..60 {
+        last = Some(mdk.store(&n.to_string(), SINCE + 2));
+    }
+    core.announce(last.unwrap());
+    core.briefly().await;
+    let first_run = Arc::clone(&core.prompts);
+    let asked = tokio::time::Instant::now();
+    let state = core.stop().await;
+    let waited = asked.elapsed();
+    assert!(
+        waited < Duration::from_secs(20),
+        "the stop waited {waited:?}"
+    );
+    let core = Running::start_in(mdk, state, SINCE + 60, None);
+    core.settle().await;
+    let mut prompts = first_run.lock().unwrap().clone();
+    assert!(prompts.len() < 60, "the first run stopped part of the way");
+    prompts.extend(core.prompts());
+    let expected: Vec<String> = (0..60).map(|n| n.to_string()).collect();
+    assert_eq!(prompts, expected);
     core.stop().await;
 }

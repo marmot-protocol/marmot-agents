@@ -174,7 +174,9 @@ fixed on 2026-11-21, each with a test that failed first.
   announced before one stored earlier passed it, and the earlier one was never read. A catch-up read all of a chat
   each time. Now a notice only wakes the chat's reader, which reads from the mark, a page of 100 at a time, handling
   each message once and moving the mark past it and past the agent's own messages; a notice of a message already
-  read reads nothing. The core's 10 s tick reads every chat from its mark too, for a message stored with no notice.
+  read reads nothing. A chat hands on at most 8 messages in each turn of the core's loop and is read on from its
+  mark in the next, so a long catch-up for a harness slow to take prompts holds up no stop, no driver output and no
+  other chat (`a_long_catch_up_lets_a_stop_through`, which failed first: the stop waited 59 s). The core's 10 s tick reads every chat from its mark too, for a message stored with no notice.
   The simulator's MDK now keeps only that contract: a message heard live brings no earlier one with it, those still
   to be heard come in any order, and `Reannounce` announces a stored one again (version 4 of `live`, 5 of `mixed`).
   On the core before the fix, 163 of 200 `live` runs and 122 of 200 `mixed` runs (seed 0) failed L1 or L3; after,

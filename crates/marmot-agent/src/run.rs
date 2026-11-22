@@ -17,8 +17,8 @@
 //! is sent, so a crash leaves it to be sent again as it was, and MDK, which knows the token,
 //! sends nothing twice (S1, S3). When the file cannot be written the core stops where it is,
 //! as a crash would, and the next start takes up what is on disk. A group is only ever read from
-//! its mark, page by page, in the order MDK stored its messages, and its mark moves as each is
-//! handled. MDK's live notice of a message only wakes its group's reader: MDK may announce a
+//! its mark, page by page, in the order MDK stored its messages, a few in each turn of the loop,
+//! and its mark moves as each is handled. MDK's live notice of a message only wakes its group's reader: MDK may announce a
 //! message again, or one before another stored earlier, or store one without a notice, so a
 //! notice never moves a mark (MDK #3603). MDK does not replay what arrived while a program was
 //! down, so on start, whenever the core falls behind, and on the core's tick, every group is read
@@ -37,7 +37,7 @@ use crate::marmot::{
 use crate::socket::SocketDriver;
 use marmot_agent_driver::{Driver, Output, Reason, Refusal, SendFile};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -70,6 +70,10 @@ const TRIED_WITHOUT_TOKENS: &str = "the state file was left by an older marmot-a
 
 /// How many stored rows the core reads from MDK at a time.
 const PAGE: usize = 100;
+
+/// How many stored messages one group hands on in one turn of the core's loop, so a long
+/// catch-up, or a harness slow to take prompts, does not hold up a stop or the other chats.
+const READS: usize = 8;
 
 /// How many sends one group makes in one turn of the core's loop, so one chat's backlog, or a slow
 /// MDK, does not hold up the others.
@@ -257,6 +261,9 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// then: what arrived in it by that second is its history, marked read and never handed on,
     /// in this run and every one after (L3, D-111). Kept with the marks.
     history: BTreeMap<GroupKey, u64>,
+    /// The groups with more stored after their marks than one turn of the core's loop reads:
+    /// each is read on from its mark in the next turn, so a long catch-up holds up nothing else.
+    behind: BTreeSet<GroupKey>,
     /// For each group whose last send failed: when to try again, and how long it waited last.
     retry: HashMap<GroupKey, (Instant, Duration)>,
     /// The groups whose next send MDK has queued, not yet taken into its engine.
@@ -344,6 +351,7 @@ impl<D: Driver, M: Side> Core<D, M> {
             config: config.clone(),
             started: Instant::now(),
             since: 0,
+            behind: BTreeSet::new(),
             retry: HashMap::new(),
             queued: HashSet::new(),
             unread: BTreeMap::new(),
@@ -411,7 +419,9 @@ impl<D: Driver, M: Side> Core<D, M> {
             self.drained.clear();
             let sends = self.retry.values().map(|(at, _)| *at);
             let reads = (self.unread.values().chain(&self.listing)).filter_map(|a| a.at);
-            let retry = sends.chain(reads).min();
+            // A group with more to read is read on in this turn, after other work.
+            let behind = (!self.behind.is_empty()).then(Instant::now);
+            let retry = sends.chain(reads).chain(behind).min();
             let retry = async move {
                 match retry {
                     Some(at) => tokio::time::sleep_until(at).await,
@@ -638,8 +648,8 @@ impl<D: Driver, M: Side> Core<D, M> {
         self.unread.get(group).is_some_and(|a| a.at.is_some())
     }
 
-    /// Reads again what is due: the catch-up MDK could not list the groups for, then each group,
-    /// from its mark, in order.
+    /// Reads again what is due: the catch-up MDK could not list the groups for, each group with
+    /// more to read, then each group MDK could not read, from its mark, in order.
     async fn read_again(&mut self) -> Result<(), Unsaved> {
         let now = Instant::now();
         let due = |again: &Again| again.at.is_some_and(|at| at <= now);
@@ -651,6 +661,12 @@ impl<D: Driver, M: Side> Core<D, M> {
             .filter(|(_, again)| due(again))
             .map(|(group, _)| group.clone())
             .collect();
+        // A group that waits is read at its time, as one of `groups` if that is now.
+        for group in std::mem::take(&mut self.behind) {
+            if !self.waits(&group) {
+                self.catch_up_group(group).await?;
+            }
+        }
         for group in groups {
             if let Some(again) = self.unread.get_mut(&group) {
                 again.at = None;
@@ -660,40 +676,50 @@ impl<D: Driver, M: Side> Core<D, M> {
         Ok(())
     }
 
-    /// Reads what was stored for one group after its mark, page by page in storage order, until
-    /// there is no more, handling each message once and moving the mark past it, and past what
-    /// the core does not read, such as the agent's own messages. When MDK cannot be read, or a
-    /// message in it cannot, the group waits to be read again from its mark; when all of it was
-    /// read, it waits no more. A group with no mark starts where [`Core::start_of`] says.
+    /// Reads on in one group from its mark, in storage order: one page of what was stored after
+    /// it, of which at most [`READS`] messages are handed on, each once, the mark moving past
+    /// each, and past what the core does not read, such as the agent's own messages. When more
+    /// is left, the group is read on from its mark in the next turn of the core's loop
+    /// ([`Core::behind`]). When MDK cannot be read, or a message in it cannot, the group waits to
+    /// be read again from its mark; when it was read, it waits no more. A group with no mark
+    /// starts where [`Core::start_of`] says.
     async fn catch_up_group(&mut self, group: GroupKey) -> Result<(), Unsaved> {
-        let mut mark = match self.read.get(&group) {
+        self.behind.remove(&group);
+        let mark = match self.read.get(&group) {
             Some(&mark) => mark,
             None => match self.start_of(&group)? {
                 Some(start) => start,
                 None => return Ok(()),
             },
         };
-        loop {
-            let Ok(page) = self.marmot.stored(&group, mark, PAGE) else {
-                self.read_later(&group);
+        let Ok(page) = self.marmot.stored(&group, mark, PAGE) else {
+            self.read_later(&group);
+            return Ok(());
+        };
+        let Some(last) = page.last else {
+            self.read_through(&group);
+            return Ok(());
+        };
+        for (handed, message) in page.messages.into_iter().enumerate() {
+            if handed == READS {
+                // The rest of the page is read again from the mark next turn.
+                self.read_through(&group);
+                self.behind.insert(group);
                 return Ok(());
-            };
-            let Some(last) = page.last else { break };
-            for message in page.messages {
-                self.handle(message).await?;
-                if self.waits(&group) {
-                    return Ok(());
-                }
             }
-            // Past the rows the core does not read too, so the next page starts after them. Not
-            // saved now: read again after a crash, they are passed again.
-            mark = last.max(self.read.get(&group).copied().unwrap_or(last));
-            self.read.insert(group.clone(), mark);
-            if !page.more {
-                break;
+            self.handle(message).await?;
+            if self.waits(&group) {
+                return Ok(());
             }
         }
+        // Past the rows the core does not read too, so the next page starts after them. Not
+        // saved now: read again after a crash, they are passed again.
+        let mark = last.max(self.read.get(&group).copied().unwrap_or(last));
+        self.read.insert(group.clone(), mark);
         self.read_through(&group);
+        if page.more {
+            self.behind.insert(group);
+        }
         Ok(())
     }
 
