@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Package a built marmot-agent with the files its connectors and containers need, as a release asset.
+# Package a built marmot-agent with the files its connectors, plugins and containers need, as a release
+# asset.
 #
 #   tools/release/package.sh <marmot-agent program> <target> <out folder>
 #

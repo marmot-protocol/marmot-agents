@@ -14,17 +14,7 @@ HARNESS_OPTIONS="permission-mode"
 HARNESS_SUPPORT="packages/claude-code"
 
 harness_check() {
-    local major
-    NODE=$(program_path node) || NODE=""
-    if [ -z "$NODE" ]; then
-        NODE=node
-        missing "Node 24" "Install Node 24 or later (https://nodejs.org), then run this again."
-    else
-        major=$("$NODE" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
-        [ "$major" -ge 24 ] 2>/dev/null ||
-            missing "Node 24" "This machine has Node $major. Install Node 24 or later (https://nodejs.org)."
-    fi
-    program_path npm >/dev/null || missing "npm" "It comes with Node (https://nodejs.org)."
+    need_node
     claude_signed_in
 }
 

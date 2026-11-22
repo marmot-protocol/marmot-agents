@@ -1,57 +1,150 @@
 #!/usr/bin/env bash
-# Install marmot-agent with Hermes. The core serves its socket; Hermes runs with the Marmot plugin in a
-# container, built here from python/hermes, on an OpenAI-compatible model endpoint, and connects to it.
-# Hermes's own home is a Docker volume. Linux only, for now. Run with --help for the options. The shared
-# part is in lib.sh.
+# Install marmot-agent with Hermes. Hermes must already be installed, as `hermes` on your PATH, and set up
+# with its model (D-102). The core runs as a service and serves its socket; the Marmot platform plugin
+# (python/marmot_hermes) is put into your Hermes's plugins folder, enabled with Hermes's own commands, and
+# connects to that socket from inside your Hermes gateway. Of your Hermes's settings it changes only the
+# marmot platform and MARMOT_ALLOW_ALL_USERS, which lets Hermes take whatever the core lets through
+# (D-084); a copy of config.yaml and .env is kept first, and --uninstall takes out what it added. Run with
+# --help for the options. The shared part is in lib.sh.
 set -euo pipefail
 # shellcheck source=lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 HARNESS=hermes
 HARNESS_TITLE=Hermes
-HARNESS_KIND=socket
-HARNESS_OPTIONS="model-key model model-url"
-HARNESS_SUPPORT="python/hermes python/marmot_hermes"
-
-# Docker's names are shared by every account on the machine, so the volume and the container are named
-# after this agent's folder too, which stays the same when the agent is installed again. The image is
-# built for this account's user and group, so it is named after them.
-volume() { printf 'marmot-agent-hermes-%s-%s' "$NAME" "$(printf '%s' "$MA_AGENT_DIR" | sha256sum | cut -c1-12)"; }
-image() { printf 'marmot-agents-hermes-%s-%s' "$(id -u)" "$(id -g)"; }
+HARNESS_KIND=plugin
+HARNESS_OPTIONS="replace-plugin"
+HARNESS_SUPPORT="python/marmot_hermes"
+# The release the plugin was built and recorded against (python/hermes/Dockerfile).
+HERMES_TESTED=0.23.2
+HERMES_HOW="Install or update it (https://github.com/NousResearch/hermes-agent), set up its model with: hermes setup, then run this again."
+# What our plugin's plugin.yaml says, and the old connector's does not.
+OUR_PLUGIN="marmot-agent's local socket"
 
 harness_check() {
-    linux_only
-    need_docker
-    need_model
+    HERMES=$(program_path hermes) || {
+        HERMES=hermes
+        missing "Hermes" "$HERMES_HOW"
+        return 0
+    }
+    local version
+    # Hermes prints its release after a v, and a date beside it; a checkout without tags says vunknown.
+    version=$("$HERMES" --version 2>/dev/null | sed -n 's/.*[[:space:]]v\([0-9][0-9.]*[0-9]\).*/\1/p' | head -n 1)
+    if ! "$HERMES" --version >/dev/null 2>&1; then
+        missing "a working Hermes" "hermes --version failed. $HERMES_HOW"
+        return 0
+    fi
+    say "found Hermes ${version:-of an unknown release} at $HERMES"
+    if [ -n "$version" ] && version_below "$version" "$HERMES_TESTED"; then
+        warn "Hermes $version is older than $HERMES_TESTED, the release marmot-agent was tested with; if it misbehaves, update it. $HERMES_HOW"
+    fi
+    HERMES_CONFIG=$("$HERMES" config path 2>/dev/null) || HERMES_CONFIG=""
+    HERMES_ENV=$("$HERMES" config env-path 2>/dev/null) || HERMES_ENV=""
+    case $HERMES_CONFIG in
+        /*/config.yaml) ;;
+        *) missing "Hermes's configuration" "hermes config path named no config.yaml. $HERMES_HOW"; return 0 ;;
+    esac
+    PLUGIN=$(dirname "$HERMES_CONFIG")/plugins/marmot
+    no_control "Hermes's plugins folder" "$PLUGIN"
+    # One Hermes serves one agent: its marmot platform names one agent's home.
+    local home
+    home=$("$HERMES" config get platforms.marmot.home 2>/dev/null) || home=""
+    if [ -n "$home" ] && [ "$home" != "$MA_HOME" ]; then
+        die "your Hermes already connects to the agent whose home is $home. One Hermes serves one agent: uninstall that one first (install/hermes.sh --uninstall --name <its name>), or install into another Hermes (HERMES_HOME)"
+    fi
+    OLD_PLUGIN=0
+    if [ -e "$PLUGIN" ] && ! ours "$PLUGIN"; then
+        if [ "$REPLACE_PLUGIN" -eq 1 ]; then
+            OLD_PLUGIN=1
+        else
+            missing "room for our Marmot plugin" "Your Hermes has another plugin in $PLUGIN, such as the one of today's" \
+                "connector. Move that install over first (docs/move.md), then run this again with" \
+                "--replace-plugin to put ours in its place; a copy of the old one is kept in the agent's folder."
+        fi
+    fi
 }
 
-harness_prepare() {
-    say "building Hermes's container image"
-    act docker build -q --build-arg UID="$(id -u)" --build-arg GID="$(id -g)" \
-        -f "$MA_STAGE/python/hermes/Dockerfile" -t "$(image)" "$MA_STAGE/python"
-    act docker volume create "$(volume)"
+ours() {
+    [ -f "$1/plugin.yaml" ] && grep -qF "$OUR_PLUGIN" "$1/plugin.yaml"
 }
+
+harness_prepare() { :; }
 
 harness_settings() {
     say "[connector]"
 }
 
-harness_env() {
-    say "MODEL_BASE_URL=$MODEL_URL"
-    say "MODEL_NAME=$MODEL"
-    say "HERMES_CONTAINER=$(volume)"
-    say "HERMES_IMAGE=$(image)"
+# Adds the plugin to the person's Hermes and points its platform at this agent's home.
+harness_connect() {
+    backup_file "$HERMES_CONFIG"
+    [ -z "$HERMES_ENV" ] || backup_file "$HERMES_ENV"
+    [ "$OLD_PLUGIN" -eq 0 ] || backup_file "$PLUGIN"
+    say "adding the Marmot plugin to your Hermes"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        say "would copy $MA_LIB/python/marmot_hermes to $PLUGIN"
+    else
+        mkdir -p "$(dirname "$PLUGIN")"
+        rm -rf "$PLUGIN"
+        cp -R "$MA_LIB/python/marmot_hermes" "$PLUGIN"
+    fi
+    # Enabling it the first time makes Hermes install what it needs, which takes a while.
+    act "$HERMES" plugins enable marmot </dev/null
+    act "$HERMES" config set platforms.marmot.enabled true
+    act "$HERMES" config set platforms.marmot.home "$MA_HOME"
+    # What was there before, to put back on --uninstall: the line's value, or nothing.
+    local before=""
+    if [ -n "$HERMES_ENV" ] && [ -f "$HERMES_ENV" ]; then
+        before=$(sed -n 's/^MARMOT_ALLOW_ALL_USERS=//p' "$HERMES_ENV" | tail -n 1)
+    fi
+    [ "$before" != true ] || return 0
+    if [ "$DRY_RUN" -eq 1 ]; then
+        say "would record MARMOT_ALLOW_ALL_USERS as it is in $MA_AGENT_DIR/hermes-allow-all"
+    elif [ ! -f "$MA_AGENT_DIR/hermes-allow-all" ]; then
+        printf '%s\n' "$before" | put "$MA_AGENT_DIR/hermes-allow-all" 600
+    fi
+    act "$HERMES" config set MARMOT_ALLOW_ALL_USERS true
 }
 
-# A container left by a connector that was killed outright still holds the name; this service owns it.
-harness_connector() {
-    say "docker rm -f \"\$HERMES_CONTAINER\" >/dev/null 2>&1 || true"
-    say "exec $(sh_quote "$MA_LIB/python/hermes/run.sh") $(sh_quote "$MA_HOME") $(sh_quote "$CWD") $(sh_quote "$(volume)") $(sh_quote "$MODEL_KEY")"
+harness_summary() {
+    say ""
+    say "Your Hermes loads the plugin when its gateway starts. Restart it: hermes gateway restart"
+    say "(or start it: hermes gateway run). The plugin connects to the agent once both run."
 }
 
+# Takes out of the person's Hermes what the install added: the plugin, its platform, and the
+# MARMOT_ALLOW_ALL_USERS it set. Only if the platform names this agent.
 harness_uninstall() {
-    if program_path docker >/dev/null; then act docker rm -f "$(volume)" >/dev/null 2>&1 || true; fi
-    say "kept Hermes's home, the Docker volume $(volume)"
+    HERMES=$(program_path hermes) || {
+        warn "hermes is not on PATH: remove the marmot plugin and platform from your Hermes yourself"
+        return 0
+    }
+    local home config
+    home=$("$HERMES" config get platforms.marmot.home 2>/dev/null) || home=""
+    if [ "$home" != "$MA_HOME" ]; then
+        say "your Hermes does not connect to this agent; it is left as it is"
+        return 0
+    fi
+    say "removing the Marmot plugin and its platform from your Hermes"
+    act "$HERMES" config unset platforms.marmot
+    if [ -f "$MA_AGENT_DIR/hermes-allow-all" ]; then
+        local before
+        before=$(cat "$MA_AGENT_DIR/hermes-allow-all")
+        if [ -n "$before" ]; then
+            act "$HERMES" config set MARMOT_ALLOW_ALL_USERS "$before"
+        else
+            act "$HERMES" config unset MARMOT_ALLOW_ALL_USERS
+        fi
+        act rm -f "$MA_AGENT_DIR/hermes-allow-all"
+    fi
+    act "$HERMES" plugins disable marmot
+    config=$("$HERMES" config path 2>/dev/null) || config=""
+    case $config in
+        /*/config.yaml)
+            PLUGIN=$(dirname "$config")/plugins/marmot
+            if ours "$PLUGIN"; then act rm -rf "$PLUGIN"; fi
+            ;;
+    esac
+    say "Restart your Hermes gateway for it to drop the plugin: hermes gateway restart"
 }
 
 main "$@"
