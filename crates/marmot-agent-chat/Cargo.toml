@@ -15,6 +15,6 @@ tokio = { version = "1", features = ["io-std", "io-util", "macros", "rt-multi-th
 # A relay on this machine, so a try needs nothing else running.
 nostr-relay-builder = "0.44"
 # MDK, at the core's revision.
-marmot-app = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220" }
-marmot-account = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220" }
-cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bf4778a3388be58006a498ba84bf5df541630220" }
+marmot-app = { git = "https://github.com/marmot-protocol/mdk.git", rev = "3fce95465cdea1edc8456dbd1c6691d1c8dc1f2e" }
+marmot-account = { git = "https://github.com/marmot-protocol/mdk.git", rev = "3fce95465cdea1edc8456dbd1c6691d1c8dc1f2e" }
+cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "3fce95465cdea1edc8456dbd1c6691d1c8dc1f2e" }

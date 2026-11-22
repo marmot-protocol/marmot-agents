@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copied from MDK (scripts/install-odin.sh at bf4778a33), whose markdown parser the core links
+# Copied from MDK (scripts/install-odin.sh at 3fce95465), whose markdown parser the core links
 # and which needs this exact Odin to build. Keep it in step with MDK when the MDK revision moves.
 # Upstream dev-2026-10 resolves to 84bc3fc2100b0f7880a3af37f71bccdcda41c6f9:
 # https://api.github.com/repos/odin-lang/Odin/git/ref/tags/dev-2026-10
