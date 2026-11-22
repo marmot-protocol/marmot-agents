@@ -176,13 +176,15 @@ agent, Codex's fake), that can: write a reply short, answer late or never, answe
 serve two chats at once, and replay a recording.
 
 **Built**, phase one (2026-11-22): [`crates/marmot-agent-conformance`](../../crates/marmot-agent-conformance/README.md).
-Codex, ACP (OpenCode-, Goose- and Cursor-shaped) and Pi run 13 scenarios on fakes of their harnesses, a death at each
-of the first 10 to 12 frames, and seven recordings replayed through the transport. The checker names each failure
-by its property: S1, S2, S5, S11, S12, S13, and S4 and `seq` for drivers besides. Eleven deliberate faults, put in
-by a wrapper driver, are each caught as the property they break. It found two driver bugs, each fixed after its
-scenario failed: the ACP driver took, and showed as given, an answer the agent could no longer read; the Codex
-driver waited for ever on a Codex that never answered, which held up every chat. Bounded result: one or two chats,
-up to two sessions each, one restart. Phase two, the socket connectors over the real socket with a fake harness
+Codex, ACP (OpenCode-, Goose- and Cursor-shaped) and Pi run 15 scenarios on fakes of their harnesses (Goose and
+Cursor the ones where they differ), a death at each frame an approval's turn writes, and seven recordings replayed
+through the transport, which play on only after the recorded answer. The checker names each failure by its
+property: S1, S2, S5, S11, S12, S13, and S4 and `seq` for drivers besides. Twelve deliberate faults, put in by a
+wrapper driver, are each caught as the property they break, by the check meant for them. It found four driver
+bugs, each fixed after its scenario failed: the ACP driver took, and showed as given, an answer the agent could no
+longer read; the Codex driver waited for ever on a Codex that never answered; and both waited for ever on a harness
+that stopped reading its input. Each of the last three held up every chat. Pi's driver has the last bug too, not
+yet fixed. Bounded result: one or two chats, up to two sessions each, one restart. Phase two, the socket connectors over the real socket with a fake harness
 inside each, is designed in the suite's README.
 
 ### 3. A deterministic simulator

@@ -5,8 +5,8 @@ One set of scenarios, written once against the `Driver` trait, that every driver
 of its harness. A checker looks at every step and names the property a failure breaks, by the ids the plan gives.
 
 Status: phase one is built (2026-11-22): the suite, fakes for Codex, ACP and Pi, the three built-in drivers run against
-it, and deliberate faults that show each check catches its bug. Phase two, the socket connectors, is a design, below.
-Everything here is internal: it ships in no program.
+it, and deliberate faults that show each check catches its bug. A first review's findings are fixed (2026-11-22).
+Phase two, the socket connectors, is a design, below. Everything here is internal: it ships in no program.
 
 ## How it fits
 
@@ -119,7 +119,7 @@ names the property, the test also requires the words of the check meant for the 
 | `LoseOnDrop`: a dropped wait loses the event in hand | S11 | `dropped_waits` |
 | `TakeUnhanded`: an answer the driver could not hand over is taken anyway, and never settled | S11 | `answer_after_death` |
 
-Two driver bugs were found, each fixed after its scenario failed:
+Four driver bugs were found, each fixed after its scenario failed:
 
 - **The ACP driver took an answer the agent could no longer read** (`answer_after_death`). A request's message went to
   the writer task's queue and the request returned at once, then fed the translator, so an answer to an agent that had
