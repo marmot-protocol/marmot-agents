@@ -5,8 +5,8 @@
 #
 # <agent-home> holds the core's socket folder and the plugin's token (`socket/`, `connector.token`).
 # Only those two are mounted, never the rest of the agent's home; the script waits, for two minutes at
-# most, until the core serves the socket. <work-folder> is Hermes's working folder, mounted read-write,
-# so it must not hold the agent's home or the key file, nor be inside the home: the script refuses to
+# most, until the core serves the socket. <work-folder> is Hermes's working folder, mounted read-write at
+# its own path, where Hermes's commands run, so it must not hold the agent's home or the key file, nor be inside the home: the script refuses to
 # start if it does, links resolved, and likewise if it holds or is inside MARMOT_AGENT_DATA, when that
 # is set. The plugin is mounted from this checkout, so a change to it needs no new image.
 # <hermes-volume> is a Docker volume for Hermes's own home, so that its sessions survive a restart;
@@ -42,6 +42,9 @@ fi
 # The socket and the token are mounted with --mount, which fails on a missing source where -v would
 # make an empty folder in its place; a connector started with the core waits for it.
 case $home in *,*) echo "error: the agent's home must not have a comma in its path" >&2; exit 2 ;; esac
+# The work folder is mounted at its own path, so a file the agent names there is the one the core sends
+# (D-090), and with --mount too.
+case $work in *,*) echo "error: the work folder must not have a comma in its path" >&2; exit 2 ;; esac
 tries=0
 until [ -S "$home/socket/marmot-agent.sock" ] && [ -s "$home/connector.token" ]; do
     [ $tries -lt 240 ] || { echo "error: no core socket in $home/socket" >&2; exit 2; }
@@ -59,7 +62,9 @@ docker image inspect "$image" >/dev/null 2>&1 \
 run=(docker run --rm --log-driver=none --name "$name"
     --mount "type=bind,source=$home/socket,target=/run/marmot-agent/socket"
     --mount "type=bind,source=$home/connector.token,target=/run/marmot-agent/connector.token,readonly"
-    -v "$work:/work"
+    --mount "type=bind,source=$work,target=$work"
+    -w "$work"
+    -e MARMOT_WORK="$work"
     -v "$here/../marmot_hermes:/opt/marmot-plugin:ro"
     -v "$volume:/data"
     -v "$key:/run/secrets/model_key:ro"

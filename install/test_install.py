@@ -1402,6 +1402,27 @@ class Wrappers(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr.splitlines(), plugin)
 
+    def test_a_gateway_sees_its_work_folder_where_the_core_does(self):
+        """A gateway's plugin hands the core the path its agent names (D-090): the container mounts the work
+        folder at the same path, and its gateway works there."""
+        self.serve_core().join()
+        for script, args, _ in self.wrappers(self.work)[2:]:
+            with self.subTest(script=script):
+                result = self.run_script(script, *args)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                run = [c for c in self.m.calls() if c.startswith("docker run")][-1]
+                self.assertIn(f" --mount type=bind,source={self.work},target={self.work} ", run)
+                self.assertIn(f" -w {self.work} ", run)
+                self.assertIn(f" -e MARMOT_WORK={self.work} ", run)
+                self.assertNotIn(":/work", run)
+        comma = self.m.dir / "a,b"
+        comma.mkdir()
+        for script, args, _ in self.wrappers(comma)[2:]:
+            with self.subTest(script=script, work="a,b"):
+                result = self.run_script(script, *args)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn("must not have a comma", result.stderr)
+
     def test_a_work_folder_holding_the_state_is_refused(self):
         home, state = self.agent / "home", self.agent / "state"
         cases = [

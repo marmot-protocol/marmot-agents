@@ -210,6 +210,8 @@ each file, as today's connectors turn it into `send_media`.
   one agent; the settings and the summary then say how to name one. The media caches are never listed: they
   also hold the files people sent the gateway in any of its chats, on any platform. Settings kept from an
   earlier install that list no folder get the one found now; a `files_from` already there is left as it is.
+  The containers this project runs Hermes and OpenClaw in mount the work folder at its own path, so a path
+  the agent names is the same for the core.
 
 ## A chat's folder
 
