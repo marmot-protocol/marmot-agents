@@ -1145,8 +1145,15 @@ fn section(
             .filter(|p| !p.is_empty() && *p != connector.program())
             .map(String::from)
     });
-    if program.is_some() {
-        mapped.push("the harness's program".into());
+    match (&program, connector) {
+        (None, _) => {}
+        // The Claude Code driver takes no program: it runs the Claude Code its SDK brings.
+        (Some(_), Connector::Claude) => not_mapped.push(
+            "the harness's program, `WN_CLAUDE_BIN`: the Claude Code driver runs the Claude Code \
+             that comes with it"
+                .into(),
+        ),
+        (Some(_), _) => mapped.push("the harness's program".into()),
     }
     let program = program.unwrap_or_else(|| connector.program().to_string());
     if let Some(profile) =
@@ -2009,6 +2016,36 @@ mod tests {
         let mut unknown = options(root.path(), &home);
         unknown.owner = goose.owner.clone();
         assert!(plan_err(&unknown).contains("--harness"));
+    }
+
+    /// The settings name the harness's program only where its section has one: the Claude Code
+    /// driver runs the Claude Code its SDK brings, so the old program is said not to carry over.
+    /// Once, the plan said it had carried over for Claude Code too.
+    #[test]
+    fn the_harness_program_carries_over_only_where_the_section_has_one() {
+        let root = tempfile::tempdir().unwrap();
+        let owner = people(root.path(), 1).remove(0);
+        for (harness, carried) in [("claude", false), ("pi", true), ("opencode", true)] {
+            let (home, ids) = home_with(root.path(), harness, &["x"]);
+            welcomers(&home, &ids[0], "allowlist", std::slice::from_ref(&owner));
+            let prefix = format!("WN_{}", harness.to_ascii_uppercase());
+            std::fs::create_dir_all(home.join("dev")).unwrap();
+            std::fs::write(
+                home.join(format!("dev/wn-{harness}.env")),
+                format!(
+                    "{prefix}_ALLOWED_SENDERS_HEX={owner}\n{prefix}_BIN=/opt/{harness}/bin/{harness}\n"
+                ),
+            )
+            .unwrap();
+            let plan = plan(&options(root.path(), &home)).unwrap();
+            let named = plan.settings_text.contains("/opt/");
+            let mapped = plan.mapped.iter().any(|m| m == "the harness's program");
+            let said = plan.not_mapped.iter().any(|m| m.contains("program"));
+            assert_eq!(named, carried, "{harness}: {}", plan.settings_text);
+            assert_eq!(mapped, carried, "{harness}: {:?}", plan.mapped);
+            assert_eq!(said, !carried, "{harness}: {:?}", plan.not_mapped);
+            std::fs::remove_dir_all(&home).unwrap();
+        }
     }
 
     /// The services the tests stop: none really, each noted. There is no systemd to ask.
