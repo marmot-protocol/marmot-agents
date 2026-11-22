@@ -6,6 +6,7 @@ use crate::schedule::What;
 use crate::world::{CHAT, EDIT, Row, World};
 use marmot_agent::EventKey;
 use marmot_agent::carrier::{self, ITEM_KIND};
+use marmot_agent::conversation::EFFECT_LIMIT_SECS;
 use marmot_agent_events::State;
 use marmot_agent_events::body::Body;
 use serde::{Deserialize, Serialize};
@@ -102,6 +103,12 @@ pub fn safety(world: &World) -> Option<Failure> {
         .or_else(|| s12(world))
 }
 
+/// The earliest the core's `no_effect` net may settle a request after the harness took it, in
+/// milliseconds: the core waits [`EFFECT_LIMIT_SECS`] on a clock of whole seconds, so it may fire
+/// up to a second early, and later by up to its 10-second tick. An effect shown before this was
+/// shown in time.
+pub const NET_EARLIEST_MS: u64 = (EFFECT_LIMIT_SECS - 1) * 1000;
+
 /// S1: every answer and control is settled at most once, in its own chat (S5), and not by the
 /// core's `no_effect` net when the harness showed its effect in time.
 fn s1(world: &World) -> Option<Failure> {
@@ -134,7 +141,7 @@ fn s1(world: &World) -> Option<Failure> {
             }
         }
     }
-    // Settled by the net although the harness named it, soon after taking it.
+    // Settled by the net although the harness named it before the net could fire.
     let net: BTreeSet<EventKey> = (versions(world).into_iter())
         .filter(|v| v.notice.as_deref() == Some("no_effect"))
         .flat_map(|v| {
@@ -145,8 +152,8 @@ fn s1(world: &World) -> Option<Failure> {
         .collect();
     let h = &world.harness;
     for (request, (msg, taken)) in &h.requests {
-        let named =
-            (h.emissions.iter()).any(|e| e.settles.contains(request) && e.ms <= taken + 30_000);
+        let named = (h.emissions.iter())
+            .any(|e| e.settles.contains(request) && e.ms < taken + NET_EARLIEST_MS);
         let event = world.msgs[*msg].as_ref().map(|m| m.event.clone());
         if named && event.is_some_and(|e| net.contains(&e)) {
             return Some(fail(
@@ -272,7 +279,8 @@ fn chat_ids(world: &World) -> Result<BTreeMap<String, usize>, Failure> {
     Ok(ids)
 }
 
-/// S5: a request and an item reach only their own chat.
+/// S5: a request, an item and the agent's words reach only their own chat, and an edit of the
+/// agent's words edits their own message there.
 fn s5(world: &World) -> Option<Failure> {
     let ids = match chat_ids(world) {
         Ok(ids) => ids,
@@ -292,6 +300,43 @@ fn s5(world: &World) -> Option<Failure> {
                 "S5",
                 format!("{} of c{chat} was sent to c{}", v.id, v.row.chat),
             ));
+        }
+    }
+    // Each text of the agent's words comes from one emission, of one item, in one chat.
+    let mut said: BTreeMap<&str, (usize, &str)> = BTreeMap::new();
+    for e in &world.harness.emissions {
+        if let (Some(text), Some(&chat)) = (&e.words, ids.get(&e.chat)) {
+            said.insert(text.as_str(), (chat, e.item.as_str()));
+        }
+    }
+    let words = (world.rows.iter()).filter(|r| r.from_agent && (r.kind == CHAT || r.kind == EDIT));
+    for row in words {
+        let Some(&(chat, item)) = said.get(row.content.as_str()) else {
+            continue;
+        };
+        if row.chat != chat {
+            return Some(fail(
+                "S5",
+                format!("the words of {item} of c{chat} were sent to c{}", row.chat),
+            ));
+        }
+        if row.kind == EDIT {
+            let target =
+                (row.edits.as_ref()).and_then(|t| world.rows.iter().find(|r| r.event == *t));
+            let own = target.is_some_and(|t| {
+                t.from_agent
+                    && t.kind == CHAT
+                    && t.chat == chat
+                    && said
+                        .get(t.content.as_str())
+                        .is_some_and(|(_, i)| *i == item)
+            });
+            if !own {
+                return Some(fail(
+                    "S5",
+                    format!("an edit of the words of {item} in c{chat} edits another message"),
+                ));
+            }
         }
     }
     None
@@ -367,16 +412,32 @@ pub fn liveness(world: &World) -> Vec<Failure> {
     }
     // A send MDK refuses for good is answered by a `failed` notice that settles what it
     // settled; a notice it refuses is dropped, so nothing loops, and what that notice settled
-    // stays unsettled, by design (`Conversation::refused`).
-    let refused: BTreeSet<&EventKey> = world.refused.iter().flat_map(|r| &r.settles).collect();
+    // stays unsettled, by design (`Conversation::refused`). Only that: a request whose other send
+    // was refused must still be settled, by the notice.
+    let refused: BTreeSet<&EventKey> = (world.refused.iter())
+        .filter(|r| r.notice)
+        .flat_map(|r| &r.settles)
+        .collect();
     let versions = versions(world);
     let about: BTreeSet<&EventKey> = versions
         .iter()
         .filter_map(|v| v.started_by.as_ref())
         .collect();
+    // The fair part invites the agent to every chat and stores everything posted: a chat never
+    // joined leaves its messages waiting for good.
+    for (chat, c) in world.chats.iter().enumerate() {
+        if !c.accepted {
+            failures.push(fail("L3", format!("c{chat} is never joined")));
+        }
+    }
     for (msg, m) in world.msgs.iter().enumerate() {
         let Some(m) = m else { continue };
         if m.stored.is_none() {
+            let property = if m.posted.is_request() { "L1" } else { "L3" };
+            failures.push(fail(
+                property,
+                format!("m{msg} is never stored: c{} is not joined", m.posted.chat),
+            ));
             continue;
         }
         if m.posted.is_request() {
@@ -423,9 +484,10 @@ pub fn liveness(world: &World) -> Vec<Failure> {
         }
     }
     // Everything the running driver emitted reaches the chat in the state it last gave (L2): a
-    // turn ends where people see it, and nothing waits in the outbox for good.
-    let refused: BTreeSet<&str> = (world.refused.iter())
-        .filter_map(|r| r.item.as_ref().map(|(id, _)| id.as_str()))
+    // turn ends where people see it, and nothing waits in the outbox for good; unless MDK refused
+    // the very version that showed that state.
+    let refused: Vec<(&str, State)> = (world.refused.iter())
+        .filter_map(|r| Some((r.item.as_ref()?.0.as_str(), r.state?)))
         .collect();
     if world.harness.out.is_some() {
         let mut emitted: BTreeMap<&str, &crate::world::Emission> = BTreeMap::new();
@@ -433,7 +495,7 @@ pub fn liveness(world: &World) -> Vec<Failure> {
             emitted.insert(e.item.as_str(), e);
         }
         for (item, e) in emitted {
-            if refused.contains(item) {
+            if refused.contains(&(item, e.state)) {
                 continue;
             }
             let reached = match &e.words {
@@ -476,14 +538,16 @@ pub fn liveness(world: &World) -> Vec<Failure> {
     failures
 }
 
-/// The last version of each item, leaving out an item MDK refused a version of: the core gives
-/// up on that version with a notice, by design, and sends nothing after it, so the chat may show
-/// the item as it was (S2 and L2 assume MDK takes what it does not refuse for good).
+/// The last version of each item, leaving out an item whose closing version MDK refused: the
+/// core gives up on that version with a notice, by design, and has nothing left to send, so the
+/// chat may show the item open (S2 and L2 assume MDK takes what it does not refuse for good). An
+/// item MDK refused an open version of is still to be closed.
 fn last_versions<'a>(
     world: &World,
     versions: &'a [Version<'a>],
 ) -> BTreeMap<(usize, String), &'a Version<'a>> {
     let refused: BTreeSet<(usize, &str)> = (world.refused.iter())
+        .filter(|r| r.state.is_some_and(final_state))
         .filter_map(|r| r.item.as_ref().map(|(id, _)| (r.chat, id.as_str())))
         .collect();
     let mut last = BTreeMap::new();

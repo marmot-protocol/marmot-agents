@@ -12,6 +12,7 @@ use marmot_agent::marmot::{
 };
 use marmot_agent::{EventKey, GroupKey, Heard, HeardRequest, PubKey, Sending, Where};
 use marmot_agent_events::TurnId;
+use marmot_agent_events::body::{Body, NoticeKind};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -309,12 +310,21 @@ fn send(
         Sending::Item { item, .. } => item.settles.clone(),
         Sending::Words { settles, .. } => settles.clone(),
     };
+    let (state, notice) = match what {
+        Sending::Item { item, .. } => (
+            Some(item.event.header().state),
+            matches!(item.event.body(), Body::Notice(n) if n.kind == NoticeKind::Refused),
+        ),
+        Sending::Words { .. } => (None, false),
+    };
     let Ok((kind, content, tags, edits)) = built else {
         world.refused.push(RefusedSend {
             chat,
             item,
             settles,
             words,
+            state,
+            notice,
         });
         world.note(format!("Send(c{chat}): Refused, too large"));
         return (Err(SendFailed::Refused { gone: false }), false);
@@ -338,6 +348,8 @@ fn send(
                 item,
                 settles,
                 words,
+                state,
+                notice,
             });
             world.note(format!("Send({described}): Refused"));
             (Err(SendFailed::Refused { gone: false }), false)

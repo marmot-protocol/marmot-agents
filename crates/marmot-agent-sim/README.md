@@ -23,13 +23,13 @@ emitted (`src/oracle.rs`).
 
 | Id | Checked | How |
 | --- | --- | --- |
-| S1 | every step | Each request is settled at most once, only in its own chat, and never by the `no_effect` net when the harness showed its effect within 30 s of taking it |
+| S1 | every step | Each request is settled at most once, only in its own chat, and never by the `no_effect` net when the harness showed its effect before the net could first fire: 119 s after it took the request, since the core waits `EFFECT_LIMIT_SECS` (120 s) on a clock of whole seconds and looks on a 10 s tick |
 | S3 | every step | Each item's stored versions rise by one, skipping only versions MDK refused; every later version names the first; the agent's words go out as a new message once |
 | S4 | every step | No prompt reaches the harness twice, across every crash |
-| S5 | every step | A chat id stands for one chat; an item and a settle reach only their own chat |
+| S5 | every step | A chat id stands for one chat; an item, the agent's words and a settle reach only their own chat, and an edit of the agent's words edits their own message there |
 | S10 | every step | What reaches the harness from a chat comes in storage order |
 | S12 | every step | A prompt names a session only on a driver's first prompt for the chat, only one the chat had, never one that ended |
-| L1, L2, L3 | at the end | Every request settled once; every turn ended, and everything the running driver emitted seen by the chat in its last state (nothing waits in the outbox for good); every prompt handled; within 900 s of virtual time |
+| L1, L2, L3 | at the end | Every chat joined and everything posted stored; every request settled once; every turn ended, everything the running driver emitted seen by the chat in its last state (nothing waits in the outbox for good), and no harness work left; every prompt handled; within 900 s of virtual time |
 | S2 | at the end | Before the last stop, nothing an earlier driver left is open; after it, nothing at all |
 
 The end is fair: faults stop, everything posted is stored and heard, a harness that hangs is restarted once, the
@@ -39,8 +39,12 @@ harness finishes its turns, and the clock runs. By design, and so not counted as
 - A request with no target read more than five minutes late is dropped (D-028), also when it was read in time and a
   crash undid that before it was saved.
 - A request settled only by a core notice that MDK refused for good stays unsettled: the core drops a refused notice so
-  nothing loops.
-- An item MDK refused a version of may stay as the chat last saw it.
+  nothing loops. A request whose other send MDK refused is not let off: the core's `failed` notice must settle it.
+- An item whose closing version MDK refused may stay open as the chat last saw it. One MDK refused an open version of
+  must still be closed.
+
+A run also fails, with its schedule and trace, when the core's task panics, ends when no stop, driver end or failed
+save explains it, or does not end cleanly after the last stop.
 
 ## Families
 

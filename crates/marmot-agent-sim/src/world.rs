@@ -108,6 +108,11 @@ pub struct RefusedSend {
     pub settles: Vec<EventKey>,
     /// For the agent's words: their text.
     pub words: Option<String>,
+    /// For an item: the state the refused version had.
+    pub state: Option<State>,
+    /// Whether it was a notice of the core's own, such as the `failed` notice that answers a
+    /// refused send: the core drops a refused notice, so nothing loops.
+    pub notice: bool,
 }
 
 /// A send that goes out later than the core looked for it.
