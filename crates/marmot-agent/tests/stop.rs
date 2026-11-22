@@ -10,15 +10,15 @@ use marmot_account::AccountHome;
 use marmot_agent::PubKey;
 use marmot_agent::config::Config;
 use marmot_agent::marmot::{self, Marmot};
-use marmot_agent::run::{Core, Store};
-use marmot_agent_driver::{
-    Answer, Capabilities, Control, Driver, FilesIn, Harness, MidTurn, Output, Prompt, Refusal,
-    Sessions,
-};
+use marmot_agent::socket::{Endpoint, PROTOCOL};
 use marmot_app::{AccountSetupRequest, MarmotApp, MarmotAppConfig, MarmotAppRuntime};
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use serde_json::{Value, json};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::UnixStream;
+use tokio::task::JoinHandle;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stop_during_start_up_ends_the_core() {
@@ -96,94 +96,12 @@ async fn a_stop_during_start_up_ends_the_core() {
     assert!(status.success(), "the core stops cleanly: {status}");
 }
 
-/// A harness that writes each prompt's text to a file, one a line, and emits nothing.
-struct Noting(PathBuf);
-
-impl Driver for Noting {
-    fn harness(&self) -> Harness {
-        Harness {
-            name: "noting".into(),
-            version: None,
-        }
-    }
-
-    fn capabilities(&self) -> Capabilities {
-        Capabilities {
-            interrupt: false,
-            mid_turn: MidTurn::Queue,
-            sessions: Sessions::Core,
-            resume: false,
-            approvals: false,
-            files_in: FilesIn::None,
-            approval_commands: Vec::new(),
-        }
-    }
-
-    async fn prompt(&mut self, prompt: Prompt) -> Result<(), Refusal> {
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.0)
-            .unwrap();
-        writeln!(file, "{}", prompt.text).unwrap();
-        Ok(())
-    }
-
-    async fn answer(&mut self, _answer: Answer) -> Result<(), Refusal> {
-        Ok(())
-    }
-
-    async fn control(&mut self, _control: Control) -> Result<(), Refusal> {
-        Ok(())
-    }
-
-    async fn next_event(&mut self) -> Option<Output> {
-        std::future::pending().await
-    }
-}
-
-/// The core as its own program, as `marmot-agent run` runs it, with [`Noting`] for its harness:
-/// on its home, until SIGTERM, then MDK shut down. It notes in `started` that MDK has started.
-/// The restart test runs this test binary again with this test alone and the settings in its
-/// environment. It does nothing when run on its own.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "run by the restart test, as the core's program"]
-async fn core_program() {
-    let Some(settings) = std::env::var_os("CORE_PROGRAM_SETTINGS") else {
-        return;
-    };
-    let dir = Path::new(&settings).parent().unwrap().to_path_buf();
-    let mut term =
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
-    let config = Config::read(Path::new(&settings)).unwrap();
-    let (home, app, runtime) = marmot::open(&config).unwrap();
-    let account = marmot::identity(&home).unwrap();
-    let events = runtime.subscribe();
-    runtime.start().await.unwrap();
-    std::fs::write(dir.join("started"), "").unwrap();
-    let marmot = Marmot {
-        runtime: runtime.clone(),
-        app,
-        label: account.label,
-        agent: PubKey(account.account_id_hex),
-        faults: Default::default(),
-    };
-    let driver = Noting(dir.join("prompts"));
-    let core = Core::new(marmot, driver, &config, Store::new(&config.home)).unwrap();
-    core.run(events, async move {
-        term.recv().await;
-    })
-    .await
-    .unwrap();
-    runtime.shutdown().await;
-}
-
-/// The core's program on the settings in `dir`, started once `started` is gone.
+/// The core's program, `marmot-agent run`, on the settings in `dir`, driving a connector on its
+/// socket.
 fn start_core(dir: &Path) -> tokio::process::Child {
-    let _ = std::fs::remove_file(dir.join("started"));
-    tokio::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "core_program", "--ignored", "--nocapture"])
-        .env("CORE_PROGRAM_SETTINGS", dir.join("settings.toml"))
+    tokio::process::Command::new(env!("CARGO_BIN_EXE_marmot-agent"))
+        .arg("run")
+        .arg(dir.join("settings.toml"))
         .kill_on_drop(true)
         .spawn()
         .unwrap()
@@ -204,9 +122,58 @@ async fn stop_core(mut core: tokio::process::Child) {
     assert!(status.success(), "the core stops cleanly: {status}");
 }
 
-fn prompts(dir: &Path) -> Vec<String> {
-    let text = std::fs::read_to_string(dir.join("prompts")).unwrap_or_default();
-    text.lines().map(str::to_string).collect()
+/// The prompts a connector was given, in order.
+type Prompts = Arc<Mutex<Vec<String>>>;
+
+/// A scripted connector on the socket of the core whose home is `home`, once the core listens
+/// there, which it does once MDK has started. It answers every request and notes each prompt's
+/// text, and emits nothing; it ends when the core closes the connection.
+async fn connect(home: &Path, prompts: Prompts) -> JoinHandle<()> {
+    let endpoint = Endpoint::in_home(home);
+    let stream = within(60, || {
+        std::os::unix::net::UnixStream::connect(&endpoint.socket).ok()
+    })
+    .await;
+    stream.set_nonblocking(true).unwrap();
+    let token = std::fs::read_to_string(&endpoint.token_file).unwrap();
+    let hello = json!({"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {
+        "protocol": PROTOCOL,
+        "connector": {"name": "script", "version": "0.0.1"},
+        "harness": {"name": "script", "version": "1"},
+        "token": token.trim(),
+        "capabilities": {
+            "interrupt": false, "mid_turn": "queue", "sessions": "core", "resume": false,
+            "approvals": false, "files_in": "none", "approval_commands": [],
+        },
+    }});
+    let (read, mut write) = UnixStream::from_std(stream).unwrap().into_split();
+    write
+        .write_all(format!("{hello}\n").as_bytes())
+        .await
+        .unwrap();
+    let mut lines = BufReader::new(read).lines();
+    let welcome: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert!(
+        welcome.get("result").is_some(),
+        "the core takes the connector"
+    );
+    tokio::spawn(async move {
+        while let Ok(Some(line)) = lines.next_line().await {
+            let request: Value = serde_json::from_str(&line).unwrap();
+            let answer = json!({"jsonrpc": "2.0", "id": request["id"], "result": {}});
+            if write
+                .write_all(format!("{answer}\n").as_bytes())
+                .await
+                .is_err()
+            {
+                return;
+            }
+            if request["method"] == "prompt" {
+                let text = request["params"]["text"].as_str().unwrap_or_default();
+                prompts.lock().unwrap().push(text.to_string());
+            }
+        }
+    })
 }
 
 /// A person writes in a chat with the agent; the core's program is stopped `pause` after its
@@ -243,17 +210,15 @@ async fn restarted_after(pause: Duration) {
         .account_id_hex;
     person_runtime.start().await.unwrap();
 
-    // The agent, made as `marmot-agent init` makes it, on a home of its own.
+    // The agent, made as `marmot-agent init` makes it, on a home of its own, for a connector on
+    // its socket.
     let home = dir.join("agent");
-    let work = dir.join("work");
-    std::fs::create_dir_all(&work).unwrap();
     std::fs::write(
         dir.join("settings.toml"),
         format!(
             "home = {home:?}\nrelays = [{url:?}]\nowner = \"{person}\"\nwhite_noise = false\n\
-             allow_loopback_relays = true\n\n[codex]\ncwd = {work:?}\n",
+             allow_loopback_relays = true\n\n[connector]\n",
             home = home.display().to_string(),
-            work = work.display().to_string(),
         ),
     )
     .unwrap();
@@ -267,8 +232,9 @@ async fn restarted_after(pause: Duration) {
 
     // The core runs; the person starts a chat with the agent, and it joins and marks where the
     // chat stands.
+    let prompts = Prompts::default();
     let core = start_core(dir);
-    within(60, || dir.join("started").exists().then_some(())).await;
+    let connector = connect(&home, prompts.clone()).await;
     let group = person_runtime
         .start_direct_conversation(&person, &agent)
         .await
@@ -286,35 +252,41 @@ async fn restarted_after(pause: Duration) {
         .send_message(&person, &group, b"first".to_vec())
         .await
         .unwrap();
-    within(60, || (prompts(dir) == ["first"]).then_some(())).await;
+    within(60, || (*prompts.lock().unwrap() == ["first"]).then_some(())).await;
     tokio::time::sleep(pause).await;
     stop_core(core).await;
+    connector.await.unwrap();
 
     // Started again on the same home, it hears the person's next message.
     let core = start_core(dir);
-    within(60, || dir.join("started").exists().then_some(())).await;
+    let connector = connect(&home, prompts.clone()).await;
     person_runtime
         .send_message(&person, &group, b"second".to_vec())
         .await
         .unwrap();
-    let mut heard = None;
+    let second = |p: &[String]| p.iter().any(|p| p == "second");
+    let mut heard = false;
     for _ in 0..600 {
-        let seen = prompts(dir);
-        if seen.iter().any(|p| p == "second") {
-            heard = Some(seen);
+        heard = second(&prompts.lock().unwrap());
+        if heard {
             break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     stop_core(core).await;
+    connector.await.unwrap();
     person_runtime.shutdown().await;
-    let Some(heard) = heard else {
-        panic!(
-            "the harness never had \"second\" within 60 seconds; the agent's home stored {:?}",
-            stored(dir, &group_hex)
-        );
-    };
-    assert_eq!(heard, ["first", "second"], "each message once");
+    assert!(
+        heard,
+        "the harness never had \"second\" within 60 seconds; the agent's home stored {:?}",
+        stored(dir, &group_hex)
+    );
+    // Anything handed over twice would have come by the time the core stopped.
+    assert_eq!(
+        *prompts.lock().unwrap(),
+        ["first", "second"],
+        "each message once"
+    );
 }
 
 /// The texts of the messages the agent's home stored in a group, opened once the core is stopped,
@@ -338,17 +310,18 @@ fn stored(dir: &Path, group_hex: &str) -> Vec<String> {
 
 // MDK's #3602: a home stopped just after a message arrives was deaf to that chat for the next
 // program that opened it, as seen with `wn-agent`. The core, stopped by SIGTERM the moment its
-// harness has a message, must hear the next one after it starts again. It does not, in about
-// half the runs (6 of 10, then 2 of 4, with MDK at the revision the core uses): the restarted
-// home never stores the person's next message, so it never reaches the core.
+// harness has a message, must hear the next one after it starts again. It does not, in a third
+// to a half of the runs (2 of 7 through `marmot-agent run`; 8 of 14 earlier through the core run
+// in a test program; MDK at the revision the core uses): the restarted home never stores the
+// person's next message, so it never reaches the core.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "MDK #3602: a home stopped just after a message is deaf to that chat after a restart, in about half the runs"]
+#[ignore = "MDK #3602: a home stopped just after a message is deaf to that chat after a restart, in some runs"]
 async fn a_core_stopped_just_after_a_message_hears_the_next() {
     restarted_after(Duration::ZERO).await;
 }
 
 // As above, stopped five seconds after the message, which `wn-agent` survived, and the core does
-// too (10 runs of 10).
+// too (7 runs of 7 through `marmot-agent run`; 11 of 11 earlier).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_core_stopped_a_while_after_a_message_hears_the_next() {
     restarted_after(Duration::from_secs(5)).await;
