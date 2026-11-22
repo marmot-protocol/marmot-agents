@@ -8,11 +8,11 @@ from a seed, and checks the properties after every step.
 
 | Real | Simulated |
 | --- | --- |
-| The run loop, the conversation, the outbox, the save points, the state file on disk (in `/dev/shm` when there is one), the carrier that writes and reads items | MDK, behind the core's `marmot::Side` trait: storage with insert order, live events, invitations, sends and their outcomes, lookups of a send, reads of what arrived |
-| The `no_effect` net, retries, the wait before looking for a send: production values, on a virtual clock | The harness, behind a `Driver`: sessions, turns, approvals, words, the effects of controls |
+| The run loop, the conversation, the outbox, the save points, the state file on disk (in `/dev/shm` when there is one), the carrier that writes and reads items | MDK, behind the core's `marmot::Side` trait: storage with insert order, live events, invitations, sends and their outcomes, the token MDK keeps each send under (a send tried again under it gets the same event, or the same drop, and posts nothing), reads of what arrived |
+| The `no_effect` net, retries, how many dropped tries give a send up: production values, on a virtual clock | The harness, behind a `Driver`: sessions, turns, approvals, words, the effects of controls |
 
-Not simulated: MDK's own failures beyond what the core can tell apart (busy, outcome unknown, refused, lookup failed,
-a read that fails for a moment),
+Not simulated: MDK's own failures beyond what the core can tell apart (busy, outcome unknown, refused, dropped
+before it went out, a read that fails for a moment),
 files the agent sends, a person without rights, group chats with mentions, and the socket connector. A connector that
 drops mid-request needs real Unix sockets, whose readiness tokio's paused clock does not order, so it belongs to the
 conformance suite (layer 2), which owns the socket.
@@ -64,17 +64,18 @@ makes raises the family's version.
 | --- | --- | --- |
 | `calm` | none | yes |
 | `crash` | `Crash` before any effect (a save, a send, a request to the driver, an accept), `SaveFails`, `Stop`, a send that goes out just before a crash | yes |
-| `sends` | `Send` outcomes `Busy`, `Ambiguous` (gone out or not), `Refused`, `Lookup` errors, crashes | yes |
+| `sends` | `Send` outcomes `Busy`, `Ambiguous` (gone out or not), `Refused`, `Rejected` (taken and dropped before it went out), crashes | yes |
 | `live` | `Lag`, live messages that come late, `ReadFails`: a read of what arrived that fails for a moment (where a message's group is, a live message's place in storage, the groups a catch-up lists, what it reads) | yes |
 | `driver` | `Refuse`, `Slow` (taken, and acted on, only after its time), `Hang` (the very next request, then a crash), `Ignore` (taken, never shown), `DriverStops` | yes |
 | `mixed` | all of the above | yes |
 | `disorder` | beyond MDK's contract: a message heard before it is stored, or out of order | no: shows what the core does |
-| `late` | beyond the core's assumption: a send of unknown outcome lands after the core looked for it | no: must find the accepted duplicate |
+| `late` | a send of unknown outcome that lands 20 to 90 s later, while the core tries it again under its token; it found the accepted duplicate while the core looked sends up instead | yes |
 
-The steps are named as the shared vocabulary names them (`Hear`, `Store`, `Ask`, `Emit`, `Send`, `Lookup`,
-`ReadFails`, `SaveFails`, `Crash`, `Restart`, `DriverStops`, `Stop`, `Tick`), and so is the trace, which adds what the
-core did: `CatchUp`, `Deliver` with `Take` or `Refuse`, `Save`, the outcome of each `Send` and `Lookup`, and each read
-that failed (`Place`, `Order`, `Groups` or `Stored`: `Error`).
+The steps are named as the shared vocabulary names them (`Hear`, `Store`, `Ask`, `Emit`, `Send`, `ReadFails`,
+`SaveFails`, `Crash`, `Restart`, `DriverStops`, `Stop`, `Tick`), and so is the trace, which adds what the core did:
+`CatchUp`, `Deliver` with `Take` or `Refuse`, `Save`, the outcome of each `Send` (and, for a send tried again under a
+token MDK keeps, `Sent before, same token`, `still to land, same token` or `Rejected again`), and each read that failed
+(`Place`, `Order`, `Groups` or `Stored`: `Error`).
 
 ## Running it
 
@@ -108,7 +109,8 @@ prints the trace. A capsule that puts a bug back needs `--features bugs`.
 ## Bug switches
 
 With the `bugs` feature (which turns on `marmot-agent`'s `sim-bugs`), a schedule's `bugs` puts back a bug fixed before:
-`save_after_send`, `retry_ambiguous_blindly`, `settles_only_from_items`. `tests/bugs.rs` shows the simulator finds
+`save_after_send`, `retry_ambiguous_with_new_token` (a send whose outcome is not known is tried again under a new
+token, which MDK cannot know for the send it has), `settles_only_from_items`. `tests/bugs.rs` shows the simulator finds
 each. No release has the feature: the release builds `-p marmot-agent` alone, and nothing outside this crate calls
 `Core::with_bugs`.
 

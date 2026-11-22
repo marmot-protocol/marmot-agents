@@ -312,8 +312,8 @@ fn stored(dir: &Path, group_hex: &str) -> Vec<String> {
 // program that opened it, as seen with `wn-agent`. The core, stopped by SIGTERM the moment its
 // harness has a message, must hear the next one after it starts again. It does not, in a third
 // to a half of the runs (2 of 7 through `marmot-agent run`; 8 of 14 earlier through the core run
-// in a test program; MDK at the revision the core uses): the restarted home never stores the
-// person's next message, so it never reaches the core.
+// in a test program; MDK at the revision the core uses; 5 of 12 on MDK 0.19.0, on 2026-11-22):
+// the restarted home never stores the person's next message, so it never reaches the core.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "MDK #3602: a home stopped just after a message is deaf to that chat after a restart, in some runs"]
 async fn a_core_stopped_just_after_a_message_hears_the_next() {
