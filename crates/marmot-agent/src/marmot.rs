@@ -339,51 +339,13 @@ impl Marmot {
         what: &Sending,
         taken: impl Fn(&EventKey) -> bool,
     ) -> Result<Option<EventKey>, AppError> {
-        let (kind, wanted): (u64, Box<Matches>) = match what {
-            Sending::Item { item, .. } => {
-                let id = item.event.header().item.as_str().to_string();
-                let version = item.version.to_string();
-                let first = item.first.as_ref().map(|f| f.as_str().to_string());
-                let matches = move |row: &AppMessageRecord| {
-                    tag(&row.tags, "item_id") == Some(id.as_str())
-                        && tag(&row.tags, "v") == Some(version.as_str())
-                        && tag(&row.tags, "item") == first.as_deref()
-                };
-                (carrier::ITEM_KIND, Box::new(matches))
-            }
-            Sending::Words { edit: Some(_), .. } => return Ok(None),
-            Sending::Words {
-                text,
-                turn,
-                remark,
-                settles,
-                ..
-            } => {
-                let tags = carrier::words_tags(turn.as_ref(), *remark, settles);
-                // One that cannot fit was never sent.
-                let Ok(text) = carrier::fit_words(text, &tags) else {
-                    return Ok(None);
-                };
-                let ours = |name: &str| -> Vec<Vec<String>> {
-                    (tags.iter()).filter(|t| t[0] == name).cloned().collect()
-                };
-                let wanted = [ours("turn"), ours("phase"), ours("settles")];
-                let matches = move |row: &AppMessageRecord| {
-                    let theirs = |name: &str| -> Vec<Vec<String>> {
-                        (row.tags.iter())
-                            .filter(|t| t.first().map(String::as_str) == Some(name))
-                            .cloned()
-                            .collect()
-                    };
-                    row.plaintext == text
-                        && [theirs("turn"), theirs("phase"), theirs("settles")] == wanted
-                };
-                (CHAT, Box::new(matches))
-            }
+        // An edit, or words that cannot fit and so were never sent, is not looked for.
+        let Some(wanted) = SentMatch::new(what) else {
+            return Ok(None);
         };
         let query = AppMessageQuery {
             group_id_hex: Some(group.as_str().to_string()),
-            kinds: Some(vec![kind]),
+            kinds: Some(vec![wanted.kind()]),
             limit: None,
         };
         let rows = match self.faults.next(true) {
@@ -392,7 +354,7 @@ impl Marmot {
         };
         Ok((rows?.into_iter())
             .filter(|row| row.direction == "sent" && row.sender == self.agent.as_str())
-            .filter(|row| wanted(row))
+            .filter(|row| wanted.matches(&row.plaintext, &row.tags))
             .map(|row| EventKey(row.message_id_hex))
             .find(|event| !taken(event)))
     }
@@ -526,8 +488,96 @@ impl Marmot {
     }
 }
 
-/// Whether a stored message is the one looked for.
-type Matches = dyn Fn(&AppMessageRecord) -> bool;
+/// How a send whose outcome is not known is told apart among the events MDK stored as sent by
+/// the agent, from a stored event's kind, content and tags: an item by its id, its version and
+/// the first event it names; the agent's words by their text and every tag the core gives them
+/// (the turn, the phase, what they settle). Each side that stores events keeps its own query and
+/// uses this to match: [`Marmot::find_sent`], and the simulator's MDK.
+#[derive(Clone, Debug)]
+pub struct SentMatch {
+    kind: u64,
+    wanted: Wanted,
+}
+
+#[derive(Clone, Debug)]
+enum Wanted {
+    Item {
+        id: String,
+        version: String,
+        first: Option<String>,
+    },
+    Words {
+        text: String,
+        tags: [Vec<Vec<String>>; 3],
+    },
+}
+
+/// The tags of the agent's words that tell two sends apart.
+const WORDS_TAGS: [&str; 3] = ["turn", "phase", "settles"];
+
+fn words_tags_named(tags: &[Vec<String>]) -> [Vec<Vec<String>>; 3] {
+    WORDS_TAGS.map(|name| {
+        (tags.iter())
+            .filter(|t| t.first().map(String::as_str) == Some(name))
+            .cloned()
+            .collect()
+    })
+}
+
+impl SentMatch {
+    /// What `what` became once stored, or `None` when it is never looked for: an edit, which sent
+    /// again shows the same text and adds nothing anyone sees, or words that cannot fit and so
+    /// were never sent.
+    pub fn new(what: &Sending) -> Option<Self> {
+        match what {
+            Sending::Item { item, .. } => Some(Self {
+                kind: carrier::ITEM_KIND,
+                wanted: Wanted::Item {
+                    id: item.event.header().item.as_str().to_string(),
+                    version: item.version.to_string(),
+                    first: item.first.as_ref().map(|f| f.as_str().to_string()),
+                },
+            }),
+            Sending::Words { edit: Some(_), .. } => None,
+            Sending::Words {
+                text,
+                turn,
+                remark,
+                settles,
+                ..
+            } => {
+                let tags = carrier::words_tags(turn.as_ref(), *remark, settles);
+                let text = carrier::fit_words(text, &tags).ok()?;
+                Some(Self {
+                    kind: CHAT,
+                    wanted: Wanted::Words {
+                        text,
+                        tags: words_tags_named(&tags),
+                    },
+                })
+            }
+        }
+    }
+
+    /// The kind of event to look among.
+    pub fn kind(&self) -> u64 {
+        self.kind
+    }
+
+    /// Whether a stored event of [`Self::kind`], with this content and these tags, is the send.
+    pub fn matches(&self, content: &str, tags: &[Vec<String>]) -> bool {
+        match &self.wanted {
+            Wanted::Item { id, version, first } => {
+                tag(tags, "item_id") == Some(id.as_str())
+                    && tag(tags, "v") == Some(version.as_str())
+                    && tag(tags, "item") == first.as_deref()
+            }
+            Wanted::Words { text, tags: wanted } => {
+                content == text && words_tags_named(tags) == *wanted
+            }
+        }
+    }
+}
 
 /// The first value of the tag named `name`.
 fn tag<'a>(tags: &'a [Vec<String>], name: &str) -> Option<&'a str> {

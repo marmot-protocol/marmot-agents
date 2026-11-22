@@ -5,9 +5,11 @@
 
 use crate::schedule::Outcome;
 use crate::world::{CHAT, EDIT, Landing, RefusedSend, World, describe};
-use marmot_agent::carrier::{self, ITEM_KIND, REQUEST_KIND};
+use marmot_agent::carrier::{self, REQUEST_KIND};
 use marmot_agent::files::Outgoing;
-use marmot_agent::marmot::{FileFailed, Incoming, Live, LookupFailed, Message, SendFailed, Side};
+use marmot_agent::marmot::{
+    FileFailed, Incoming, Live, LookupFailed, Message, SendFailed, SentMatch, Side,
+};
 use marmot_agent::{EventKey, GroupKey, Heard, HeardRequest, PubKey, Sending, Where};
 use marmot_agent_events::TurnId;
 use std::sync::{Arc, Mutex};
@@ -364,66 +366,20 @@ fn send(
     }
 }
 
-/// The event a send became, as the real Marmot side looks for it: an item by its id, its
-/// version and its first event; the agent's words by their text and their tags, among those not
-/// already known as the first of something; an edit never.
+/// The event a send became, looked for as the real Marmot side looks: its own query over this
+/// storage (the agent's events in the chat), matched by the core's own [`SentMatch`], among those
+/// not already known as the first of something. Whether the core then sends nothing twice is the
+/// oracles' to check, from what was stored.
 fn find(
     world: &World,
     chat: usize,
     what: &Sending,
     taken: &dyn Fn(&EventKey) -> bool,
 ) -> Option<EventKey> {
-    let tag = |tags: &[Vec<String>], name: &str| -> Option<String> {
-        (tags.iter())
-            .find(|t| t.len() >= 2 && t[0] == name)
-            .map(|t| t[1].clone())
-    };
-    let ours = (world.rows.iter()).filter(|r| r.chat == chat && r.from_agent);
-    match what {
-        Sending::Item { item, .. } => {
-            let id = item.event.header().item.as_str().to_string();
-            let version = item.version.to_string();
-            let first = item.first.as_ref().map(|f| f.as_str().to_string());
-            ours.filter(|r| r.kind == ITEM_KIND)
-                .filter(|r| {
-                    tag(&r.tags, "item_id").as_deref() == Some(id.as_str())
-                        && tag(&r.tags, "v").as_deref() == Some(version.as_str())
-                        && tag(&r.tags, "item") == first
-                })
-                .map(|r| r.event.clone())
-                .find(|e| !taken(e))
-        }
-        Sending::Words { edit: Some(_), .. } => None,
-        Sending::Words {
-            text,
-            turn,
-            remark,
-            settles,
-            ..
-        } => {
-            let tags = carrier::words_tags(turn.as_ref(), *remark, settles);
-            let text = carrier::fit_words(text, &tags).ok()?;
-            let named = |tags: &[Vec<String>], name: &str| -> Vec<Vec<String>> {
-                (tags.iter())
-                    .filter(|t| t.first().map(String::as_str) == Some(name))
-                    .cloned()
-                    .collect()
-            };
-            let wanted = [
-                named(&tags, "turn"),
-                named(&tags, "phase"),
-                named(&tags, "settles"),
-            ];
-            ours.filter(|r| r.kind == CHAT && r.content == text)
-                .filter(|r| {
-                    [
-                        named(&r.tags, "turn"),
-                        named(&r.tags, "phase"),
-                        named(&r.tags, "settles"),
-                    ] == wanted
-                })
-                .map(|r| r.event.clone())
-                .find(|e| !taken(e))
-        }
-    }
+    let wanted = SentMatch::new(what)?;
+    (world.rows.iter())
+        .filter(|r| r.chat == chat && r.from_agent && r.kind == wanted.kind())
+        .filter(|r| wanted.matches(&r.content, &r.tags))
+        .map(|r| r.event.clone())
+        .find(|e| !taken(e))
 }
