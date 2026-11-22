@@ -295,6 +295,8 @@ pub enum ReadStep {
     Order,
     /// What was stored after the read mark, in a catch-up.
     Stored,
+    /// Which groups the agent is in, as a catch-up begins.
+    Groups,
 }
 
 /// One step of a run. The names are the shared vocabulary's.
@@ -644,10 +646,11 @@ pub fn generate(name: &RunName) -> Schedule {
                 },
             }),
             19 => steps.push(Action::ReadFails {
-                at: match rng.weighted(&[2, 1, 1]) {
+                at: match rng.weighted(&[2, 1, 1, 1]) {
                     0 => ReadStep::Place,
                     1 => ReadStep::Order,
-                    _ => ReadStep::Stored,
+                    2 => ReadStep::Stored,
+                    _ => ReadStep::Groups,
                 },
             }),
             _ => steps.push(Action::Restart),

@@ -182,12 +182,15 @@ impl Side for SimSide {
         true
     }
 
-    fn groups(&self) -> Vec<GroupKey> {
-        let world = lock(&self.world);
-        (world.chats.iter())
+    fn groups(&self) -> Result<Vec<GroupKey>, NotNow> {
+        let mut world = lock(&self.world);
+        if world.read_fails(ReadStep::Groups) {
+            return Err(NotNow);
+        }
+        Ok((world.chats.iter())
             .filter(|c| c.accepted)
             .map(|c| c.group.clone())
-            .collect()
+            .collect())
     }
 
     fn latest(&self, group: &GroupKey) -> Result<i64, NotNow> {

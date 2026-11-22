@@ -100,6 +100,12 @@ fixed on 2026-11-21, each with a test that failed first.
   once the next message came. Now such a failure leaves the mark where it is; the group waits, and is read again
   from its mark, a little later each time up to ten seconds, while other groups go on. Found while looking into a
   flaky test, not by reading; the simulator's `ReadFails` fault failed 114 of 200 `live` runs before the fix.
+  Review found three more ways in, each fixed with a test that failed first: a catch-up whose list of groups
+  failed read nothing and was not tried again (7 of 200 `live` runs failed); a group the core had never seen, as
+  on an imported account, ignored what arrived while MDK could not say where its history ends, then started
+  after it; and two groups read again at the same moment were read in no fixed order, so a capsule could not
+  replay. Now a failed list is tried again before any live message moves a mark, a new group starts at the first
+  message heard live, and waiting groups are read again in order.
 - **Settles carried by a message are dropped** (S1). **Fixed.** The core read `settles` only from items that are
   not messages. A pending answer whose approval ends without naming it stayed pending until the driver stopped.
   A driver's event could settle another chat's request.
@@ -222,7 +228,8 @@ do) loses messages, and `late` (a send that lands after the core looked for it) 
 Three bugs fixed before are put back behind a test-only feature, and each is found. Bounded result, 2026-11-22:
 36,000 runs of the gate (6 families, 1,000 runs each, seeds 0 to 5), one or two chats, up to about 120 steps
 each, all passing. After `ReadFails` joined `live` and `mixed` (version 3 of each), the same day: 18,000 runs
-(seeds 1 to 3), all passing. Not yet: the connector that
+(seeds 1 to 3), all passing; after it gained a failed list of groups, 6,000 runs of `live` and `mixed` (seeds 1 to
+3), all passing. Not yet: the connector that
 drops mid-request and the one that reconnects (left to the conformance suite, which owns the socket), files, and
 the second lane on MDK's real relay.
 

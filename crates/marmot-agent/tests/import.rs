@@ -390,7 +390,11 @@ async fn an_imported_codex_install_keeps_its_identity_and_its_chat() {
         faults: Default::default(),
     };
     assert!(
-        marmot.groups().iter().any(|g| g.as_str() == group_hex),
+        marmot
+            .groups()
+            .unwrap()
+            .iter()
+            .any(|g| g.as_str() == group_hex),
         "still in the chat"
     );
     let prompts = Arc::new(AtomicUsize::new(0));

@@ -107,6 +107,7 @@ fn live() {
             "place error",
             "order error",
             "stored error",
+            "groups error",
         ],
     );
 }

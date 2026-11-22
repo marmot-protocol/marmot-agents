@@ -153,8 +153,8 @@ pub struct Marmot {
     pub faults: Faults,
 }
 
-/// Faults the next sends, the next lookups of a send, and the next readings of where a group is
-/// meet, one each, oldest first.
+/// Faults the next sends, the next lookups of a send, and the next readings of where a group is,
+/// or of where its messages end, meet, one each, oldest first.
 #[derive(Clone, Default)]
 pub struct Faults(Arc<Mutex<VecDeque<Fault>>>);
 
@@ -169,6 +169,8 @@ pub enum Fault {
     /// MDK cannot say where a group is, the next time a message is read: a passing failure, as
     /// when the group's state cannot be read for a moment.
     PlaceFails,
+    /// MDK cannot say where a group's messages end, the next time the core asks.
+    LatestFails,
 }
 
 impl Faults {
@@ -179,7 +181,12 @@ impl Faults {
 
     /// The oldest fault for a send, one that is neither of the others.
     fn next_send(&self) -> Option<Fault> {
-        self.next(|f| !matches!(f, Fault::LookupFails | Fault::PlaceFails))
+        self.next(|f| {
+            !matches!(
+                f,
+                Fault::LookupFails | Fault::PlaceFails | Fault::LatestFails
+            )
+        })
     }
 
     /// The oldest fault `which` picks.
@@ -470,15 +477,14 @@ impl Marmot {
         Err(AppError::AccountWorkerBusy)
     }
 
-    /// The groups the agent has accepted.
-    pub fn groups(&self) -> Vec<GroupKey> {
-        self.app
-            .groups(&self.label)
-            .unwrap_or_default()
-            .into_iter()
+    /// The groups the agent has accepted; [`NotNow`] when MDK could not list them, which is not
+    /// an account with none.
+    pub fn groups(&self) -> Result<Vec<GroupKey>, NotNow> {
+        let groups = self.app.groups(&self.label).map_err(|_| NotNow)?;
+        Ok((groups.into_iter())
             .filter(|g| !g.pending_confirmation && !g.archived)
             .map(|g| GroupKey(g.group_id_hex))
-            .collect()
+            .collect())
     }
 
     /// The chat messages, answers and controls others sent to a group that arrived here after
@@ -494,6 +500,12 @@ impl Marmot {
     /// The latest place in storage order for a group: where a group the core has never seen
     /// starts, so its history is not read as prompts.
     pub fn latest(&self, group: &GroupKey) -> Result<i64, NotNow> {
+        if (self.faults)
+            .next(|f| matches!(f, Fault::LatestFails))
+            .is_some()
+        {
+            return Err(NotNow);
+        }
         let rows = self.stored_all(group)?;
         Ok(rows.iter().map(|r| r.insert_order).max().unwrap_or(0))
     }
@@ -684,8 +696,8 @@ pub trait Side: Clone + Send + Sync + 'static {
     /// Accepts or declines an invitation; whether that was done.
     fn decide(&self, group: &GroupKey, accept: bool) -> impl Future<Output = bool> + Send;
 
-    /// The groups the agent has accepted.
-    fn groups(&self) -> Vec<GroupKey>;
+    /// The groups the agent has accepted; [`NotNow`] when they could not be listed.
+    fn groups(&self) -> Result<Vec<GroupKey>, NotNow>;
 
     /// The latest place in storage order for a group.
     fn latest(&self, group: &GroupKey) -> Result<i64, NotNow>;
@@ -851,7 +863,7 @@ impl Side for Marmot {
         Marmot::decide(self, group, accept).await.is_ok()
     }
 
-    fn groups(&self) -> Vec<GroupKey> {
+    fn groups(&self) -> Result<Vec<GroupKey>, NotNow> {
         Marmot::groups(self)
     }
 

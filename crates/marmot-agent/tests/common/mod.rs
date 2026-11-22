@@ -256,7 +256,7 @@ impl World {
     pub async fn joined(&self, group: &GroupId) -> String {
         let group_hex = hex::encode(group.as_slice());
         eventually(|| {
-            let groups = self.marmot.groups();
+            let groups = self.marmot.groups().unwrap_or_default();
             groups.iter().any(|g| g.as_str() == group_hex).then_some(())
         })
         .await;

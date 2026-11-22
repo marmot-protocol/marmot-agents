@@ -65,7 +65,7 @@ makes raises the family's version.
 | `calm` | none | yes |
 | `crash` | `Crash` before any effect (a save, a send, a request to the driver, an accept), `SaveFails`, `Stop`, a send that goes out just before a crash | yes |
 | `sends` | `Send` outcomes `Busy`, `Ambiguous` (gone out or not), `Refused`, `Lookup` errors, crashes | yes |
-| `live` | `Lag`, live messages that come late, `ReadFails`: a read of what arrived that fails for a moment (where a message's group is, a live message's place in storage, what a catch-up reads) | yes |
+| `live` | `Lag`, live messages that come late, `ReadFails`: a read of what arrived that fails for a moment (where a message's group is, a live message's place in storage, the groups a catch-up lists, what it reads) | yes |
 | `driver` | `Refuse`, `Slow` (taken, and acted on, only after its time), `Hang` (the very next request, then a crash), `Ignore` (taken, never shown), `DriverStops` | yes |
 | `mixed` | all of the above | yes |
 | `disorder` | beyond MDK's contract: a message heard before it is stored, or out of order | no: shows what the core does |
@@ -74,7 +74,7 @@ makes raises the family's version.
 The steps are named as the shared vocabulary names them (`Hear`, `Store`, `Ask`, `Emit`, `Send`, `Lookup`,
 `ReadFails`, `SaveFails`, `Crash`, `Restart`, `DriverStops`, `Stop`, `Tick`), and so is the trace, which adds what the
 core did: `CatchUp`, `Deliver` with `Take` or `Refuse`, `Save`, the outcome of each `Send` and `Lookup`, and each read
-that failed (`Place`, `Order` or `Stored`: `Error`).
+that failed (`Place`, `Order`, `Groups` or `Stored`: `Error`).
 
 ## Running it
 

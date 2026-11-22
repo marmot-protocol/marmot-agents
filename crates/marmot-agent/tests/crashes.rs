@@ -454,6 +454,40 @@ async fn a_message_that_cannot_be_read_for_a_moment_is_read_after() {
     world.runtime.shutdown().await;
 }
 
+// A group the core has never seen, as on an imported account's first run, starts after what is
+// stored in it. When MDK cannot say where that is for a while, a message that arrives meanwhile is
+// still read, once, and what was there before is not (L3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_that_arrives_while_a_new_group_cannot_be_read_is_read() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, _events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, _) = a_chat(&world, &seen).await;
+    core.stop().await;
+    chat.say("while away").await;
+    let group = GroupKey(chat.hex.clone());
+    let stored = || world.marmot.stored(&group, 0).ok().filter(|m| m.len() == 2);
+    within(30, || stored().map(|_| ())).await;
+    // The core has never seen the group, and MDK cannot say where it ends for about six seconds.
+    let store = Store::new(world.state.path());
+    let mut kept = store.load().unwrap();
+    kept.read.remove(&group);
+    store.save(&kept).unwrap();
+    for _ in 0..6 {
+        world.marmot.faults.push(Fault::LatestFails);
+    }
+    let (driver, _events, seen) = stub(false);
+    let core = world.start(driver);
+    chat.say("new").await;
+    within(30, || seen.lock().unwrap().prompts.first().cloned()).await;
+    // A message read twice, or history read as a prompt, would come by now.
+    tokio::time::sleep(Duration::from_secs(8)).await;
+    assert_eq!(seen.lock().unwrap().prompts, ["new"]);
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
 // A send whose reply from MDK was lost may have gone out. The core looks in what MDK stored before
 // it sends it again, and finds it: the version goes out once, and the next names it (S3).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

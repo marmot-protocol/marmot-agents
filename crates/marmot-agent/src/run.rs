@@ -64,6 +64,28 @@ struct Unknown {
     tries: u32,
 }
 
+/// When to read again what MDK could not read for a moment, and how long that waited.
+struct Again {
+    /// When it is read again; `None` while it is being read.
+    at: Option<Instant>,
+    /// How long it waited last.
+    wait: Duration,
+}
+
+impl Again {
+    /// The wait after `last`: 100 ms the first time, twice as long each time after, up to
+    /// [`SEND_WAIT_MAX`]. `None` while `last` still waits, whose time stands.
+    fn after(last: Option<&Again>) -> Option<Again> {
+        let wait = match last {
+            Some(Again { at: Some(_), .. }) => return None,
+            Some(last) => (last.wait * 2).min(SEND_WAIT_MAX),
+            None => Duration::from_millis(100),
+        };
+        let at = Some(Instant::now() + wait);
+        Some(Again { at, wait })
+    }
+}
+
 /// The state file could not be written: the core stops where it is, as a crash would.
 #[derive(Debug)]
 struct Unsaved;
@@ -217,10 +239,15 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     unknown: HashMap<String, Unknown>,
     /// For each group MDK could not read for a moment: when to read it again from its mark.
     /// Nothing more of it is read until then, so what comes after the message that could not be
-    /// read never goes ahead of it.
-    unread: HashMap<GroupKey, Instant>,
-    /// How long each group last waited to be read again, while it fails again and again.
-    unread_wait: HashMap<GroupKey, Duration>,
+    /// read never goes ahead of it. In order, so groups due at the same moment are read again in
+    /// the same order every time.
+    unread: BTreeMap<GroupKey, Again>,
+    /// For a group the core has never seen, the first message heard live whose place MDK could
+    /// not give: the group starts there, not after its latest message.
+    starts: BTreeMap<GroupKey, Message>,
+    /// When to list the groups again, for a catch-up that MDK could not list them for. Until then
+    /// no live message moves a mark, which could pass messages whose notices were lost.
+    listing: Option<Again>,
     /// How long MDK is given to settle a send whose outcome is not known: [`SETTLE`].
     settle: Duration,
     /// How many times such a send is tried: [`UNKNOWN_TRIES`].
@@ -287,8 +314,9 @@ impl<D: Driver, M: Side> Core<D, M> {
                     (token, Unknown { settled, tries: 0 })
                 })
                 .collect(),
-            unread: HashMap::new(),
-            unread_wait: HashMap::new(),
+            unread: BTreeMap::new(),
+            starts: BTreeMap::new(),
+            listing: None,
             settle: SETTLE,
             unknown_tries: UNKNOWN_TRIES,
             drained: HashMap::new(),
@@ -351,7 +379,8 @@ impl<D: Driver, M: Side> Core<D, M> {
             // Each group may send a few more events in this turn.
             self.drained.clear();
             let sends = self.retry.values().map(|(at, _)| *at);
-            let retry = sends.chain(self.unread.values().copied()).min();
+            let reads = (self.unread.values().chain(&self.listing)).filter_map(|a| a.at);
+            let retry = sends.chain(reads).min();
             let retry = async move {
                 match retry {
                     Some(at) => tokio::time::sleep_until(at).await,
@@ -412,6 +441,9 @@ impl<D: Driver, M: Side> Core<D, M> {
                 }
                 Woke::Driver(None) => break,
                 Woke::Uploaded(done) => self.file_done(done).await?,
+                // While the groups are to be listed again, the catch-up reads what came.
+                Woke::Marmot(Live::Message(message))
+                    if self.listing.is_some() && self.read.contains_key(&message.group) => {}
                 Woke::Marmot(Live::Message(message)) => self.handle(message).await?,
                 Woke::Marmot(Live::Groups) => self.consider_invitations().await?,
                 Woke::Marmot(Live::Other) => {}
@@ -514,25 +546,52 @@ impl<D: Driver, M: Side> Core<D, M> {
 
     /// Reads what was stored for each group after its mark: what arrived while the core was down,
     /// or while it fell behind. A group the core has never seen starts at its latest message. A
-    /// group waiting to be read again is left to its time.
+    /// group waiting to be read again is left to its time. When MDK cannot list the groups, the
+    /// whole catch-up is tried again later: a failed list is not an account with no groups.
     async fn catch_up(&mut self) -> Result<(), Unsaved> {
-        for group in self.marmot.groups() {
-            if !self.unread.contains_key(&group) {
+        let groups = match self.marmot.groups() {
+            Ok(groups) => groups,
+            Err(NotNow) => {
+                if self.listing.is_none() {
+                    eprintln!("marmot-agent: the groups could not be listed; they will be again");
+                }
+                if let Some(again) = Again::after(self.listing.as_ref()) {
+                    self.listing = Some(again);
+                }
+                return Ok(());
+            }
+        };
+        self.listing = None;
+        for group in groups {
+            if !self.waits(&group) {
                 self.catch_up_group(group).await?;
             }
         }
         Ok(())
     }
 
-    /// Reads again, from its mark, each group whose time to be read again has come.
+    /// Whether a group waits to be read again.
+    fn waits(&self, group: &GroupKey) -> bool {
+        self.unread.get(group).is_some_and(|a| a.at.is_some())
+    }
+
+    /// Reads again what is due: the catch-up MDK could not list the groups for, then each group,
+    /// from its mark, in order.
     async fn read_again(&mut self) -> Result<(), Unsaved> {
         let now = Instant::now();
-        let due: Vec<GroupKey> = (self.unread.iter())
-            .filter(|(_, at)| **at <= now)
+        let due = |again: &Again| again.at.is_some_and(|at| at <= now);
+        if let Some(listing) = self.listing.as_mut().filter(|a| due(a)) {
+            listing.at = None;
+            self.catch_up().await?;
+        }
+        let groups: Vec<GroupKey> = (self.unread.iter())
+            .filter(|(_, again)| due(again))
             .map(|(group, _)| group.clone())
             .collect();
-        for group in due {
-            self.unread.remove(&group);
+        for group in groups {
+            if let Some(again) = self.unread.get_mut(&group) {
+                again.at = None;
+            }
             self.catch_up_group(group).await?;
         }
         Ok(())
@@ -540,17 +599,32 @@ impl<D: Driver, M: Side> Core<D, M> {
 
     /// Reads what was stored for one group after its mark. When MDK cannot be read, or a message
     /// in it cannot, the group waits to be read again; when all of it was read, it waits no more.
+    /// A group the core has never seen starts at the first message heard live that MDK could not
+    /// place, or else after its latest message, so its history is not read as prompts (L3).
     async fn catch_up_group(&mut self, group: GroupKey) -> Result<(), Unsaved> {
         let after = match self.read.get(&group) {
             Some(&after) => after,
             None => {
-                let Ok(latest) = self.marmot.latest(&group) else {
+                let first = match self.starts.get(&group) {
+                    Some(first) => self.marmot.order_of(first).map(|o| o.map(|o| o - 1)),
+                    None => Ok(None),
+                };
+                let start = match first {
+                    Ok(Some(start)) => Ok(start),
+                    Ok(None) => self.marmot.latest(&group),
+                    Err(NotNow) => Err(NotNow),
+                };
+                let Ok(start) = start else {
                     self.read_later(&group);
                     return Ok(());
                 };
-                self.read.insert(group.clone(), latest);
-                self.unread_wait.remove(&group);
-                return self.save();
+                self.read.insert(group.clone(), start);
+                self.save()?;
+                if self.starts.remove(&group).is_none() {
+                    self.read_through(&group);
+                    return Ok(());
+                }
+                start
             }
         };
         let Ok(stored) = self.marmot.stored(&group, after) else {
@@ -560,10 +634,15 @@ impl<D: Driver, M: Side> Core<D, M> {
         for message in stored {
             self.handle(message).await?;
         }
-        if !self.unread.contains_key(&group) {
-            self.unread_wait.remove(&group);
-        }
+        self.read_through(&group);
         Ok(())
+    }
+
+    /// A group was read through: unless it waits again, it no longer waits at all.
+    fn read_through(&mut self, group: &GroupKey) {
+        if self.unread.get(group).is_some_and(|a| a.at.is_none()) {
+            self.unread.remove(group);
+        }
     }
 
     /// Hands one message to the conversation, once. What the conversation makes of it, such as a
@@ -572,20 +651,30 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// the message to be read again, and one after it leaves the request to be settled (D-037,
     /// D-070). A mark that cannot be saved stops the core before the message reaches the driver.
     /// A message MDK cannot read for a moment is not marked read, and neither is anything after it
-    /// in its group: the group is read again from its mark later (S10, L3).
+    /// in its group: the group is read again from its mark later (S10, L3). A group the core has
+    /// never seen starts at the first message heard live, even while MDK cannot say where its
+    /// history ends: what was stored before it is history.
     async fn handle(&mut self, message: Message) -> Result<(), Unsaved> {
         let group = message.group.clone();
-        if self.unread.contains_key(&group) {
+        let new = !self.read.contains_key(&group);
+        if self.waits(&group) && (!new || self.starts.contains_key(&group)) {
             return Ok(());
         }
         let order = match self.marmot.order_of(&message) {
             Ok(Some(order)) => order,
             Ok(None) => return Ok(()),
             Err(NotNow) => {
+                if new {
+                    self.starts.entry(group.clone()).or_insert(message);
+                }
                 self.read_later(&group);
                 return Ok(());
             }
         };
+        if new {
+            self.read.insert(group.clone(), order - 1);
+            self.unread.remove(&group);
+        }
         if self.read.get(&group).is_some_and(|&read| order <= read) {
             return Ok(());
         }
@@ -595,7 +684,8 @@ impl<D: Driver, M: Side> Core<D, M> {
             Ok(None) => Vec::new(),
             Err(NotNow) => {
                 self.read_later(&group);
-                return Ok(());
+                // Where a new group starts is kept, so the message is read there after a crash.
+                return if new { self.save() } else { Ok(()) };
             }
         };
         self.read.insert(group, order);
@@ -607,18 +697,14 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// after each time it fails again, up to [`SEND_WAIT_MAX`]. It is never given up, since a
     /// message is never skipped; a group MDK no longer has is not read at all.
     fn read_later(&mut self, group: &GroupKey) {
-        if self.unread.contains_key(group) {
-            return;
-        }
-        let wait = (self.unread_wait.get(group)).map_or(Duration::from_millis(100), |w| {
-            (*w * 2).clamp(Duration::from_millis(100), SEND_WAIT_MAX)
-        });
-        if !self.unread_wait.contains_key(group) {
+        let last = self.unread.get(group);
+        if last.is_none() {
             // Neither the group nor MDK's words are printed (D-071).
             eprintln!("marmot-agent: a message could not be read; it will be read again");
         }
-        self.unread_wait.insert(group.clone(), wait);
-        self.unread.insert(group.clone(), Instant::now() + wait);
+        if let Some(again) = Again::after(last) {
+            self.unread.insert(group.clone(), again);
+        }
     }
 
     /// Carries out acts one at a time, and those that follow from each. The conversation is

@@ -53,7 +53,7 @@ pub struct Campaign {
 }
 
 /// The kinds of event a campaign counts, each with what marks it in a trace entry.
-pub const MARKS: [(&str, &str); 24] = [
+pub const MARKS: [(&str, &str); 25] = [
     ("harness takes", "), Take"),
     ("crash before a save", "Crash(before Save)"),
     ("crash before a send", "Crash(before Send)"),
@@ -72,6 +72,7 @@ pub const MARKS: [(&str, &str); 24] = [
     ("place error", "Place: Error"),
     ("order error", "Order: Error"),
     ("stored error", "Stored: Error"),
+    ("groups error", "Groups: Error"),
     ("lag", "Lag("),
     ("harness refuses", "), Refuse"),
     ("harness slow", " ms"),
