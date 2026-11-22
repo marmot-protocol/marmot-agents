@@ -11,6 +11,10 @@
  * `crates/marmot-agent/src/socket.rs`). The plugin keeps how many sessions each OpenClaw session key has
  * named in `marmot-sessions.json`, in OpenClaw's state folder. It logs errors by kind only: never a
  * message, a prompt, a key or a path (D-071).
+ *
+ * A file OpenClaw delivers to a Marmot chat, with a reply or through the channel's outbound media send, is
+ * handed to the core to send (`connector.ts`, D-090). The channel says it takes media, so OpenClaw hands
+ * it over rather than leaving it out.
  */
 
 import { readFileSync, writeFileSync, renameSync } from "node:fs";
@@ -26,6 +30,7 @@ import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-run
 import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
 import { listChatCommands, resolveCommandArgChoices } from "openclaw/plugin-sdk/native-command-registry";
 import { buildModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 
 import { CAPABILITIES, Connector, type CoreEvent, type Port } from "./connector.ts";
 import { fitEvent } from "./fit.ts";
@@ -187,6 +192,14 @@ async function connectOnce(gw: Gateway, home: string, generations: [string, numb
       if (fitted === null || !core.notify("event", fitted.event)) say(`an event could not be sent (${event.type})`);
     },
     warn: say,
+    sendFile: (chat, path) => core.request("send_file", { chat, path }),
+    workspace: (agentId) => {
+      try {
+        return resolveAgentWorkspaceDir(gw.cfg, agentId ?? resolveDefaultAgentId(gw.cfg));
+      } catch {
+        return undefined;
+      }
+    },
   });
   const hello: Hello = {
     connector: { name: "marmot-agent-openclaw", version: PLUGIN_VERSION },
@@ -266,7 +279,12 @@ function buildPlugin(): unknown {
     durableFinal: { capabilities: { text: true, media: true, payload: true, replyTo: true } },
     send: {
       text: adapter("message.send.text", async () => receipt("text")),
-      media: adapter("message.send.media", async () => receipt("media")),
+      // Its file goes to the core, as a file in a reply does.
+      media: adapter("message.send.media", async (params) => {
+        const p = object(params);
+        await current?.sendMedia(String(p["to"] ?? "").replace(/^marmot:/, ""), p["mediaUrl"]);
+        return receipt("media");
+      }),
       payload: adapter("message.send.payload", async () => receipt("text")),
     },
     receive: { defaultAckPolicy: "after_agent_dispatch", supportedAckPolicies: ["after_agent_dispatch", "manual"] },
@@ -281,7 +299,7 @@ function buildPlugin(): unknown {
       blurb: "Marmot group chats, through marmot-agent.",
       markdownCapable: true,
     },
-    capabilities: { chatTypes: ["group"], reply: true, media: false, reactions: false, edit: false, unsend: false, blockStreaming: true },
+    capabilities: { chatTypes: ["group"], reply: true, media: true, reactions: false, edit: false, unsend: false, blockStreaming: true },
     config: {
       listAccountIds: () => ["default"],
       resolveAccount: (_cfg: unknown, accountId?: string) => ({

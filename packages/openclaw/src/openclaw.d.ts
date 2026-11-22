@@ -43,3 +43,8 @@ declare module "openclaw/plugin-sdk/models-provider-runtime" {
 declare module "openclaw/plugin-sdk/session-store-runtime" {
   export function getSessionEntryAsync(params: { agentId: unknown; sessionKey: unknown }): Promise<unknown>;
 }
+
+declare module "openclaw/plugin-sdk/agent-runtime" {
+  export function resolveAgentWorkspaceDir(cfg: unknown, agentId: string): string;
+  export function resolveDefaultAgentId(cfg: unknown): string;
+}

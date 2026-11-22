@@ -6,7 +6,8 @@
  *
  * The connector opens with a hello. Then the core sends `prompt`, `answer` and `control` requests, which
  * the connector answers with `{}` once it has handed them to the harness, or with a refusal; and the
- * connector sends the core `event` notifications (D-034, D-058).
+ * connector sends the core `event` notifications (D-034, D-058), and a `send_file` request when the agent
+ * sends a file to the chat (D-090).
  *
  * Nothing here writes what a message holds to a log (D-071).
  */
@@ -37,6 +38,18 @@ export type Reason =
   | "invalid"
   | "failed"
   | "not_allowed";
+
+const REASONS: ReadonlySet<string> = new Set<Reason>([
+  "not_supported",
+  "busy",
+  "unknown_item",
+  "not_waiting",
+  "already_answered",
+  "nothing_to_do",
+  "invalid",
+  "failed",
+  "not_allowed",
+]);
 
 /** A request not taken. The detail is shown in the chat, to every member. */
 export class Refusal extends Error {
@@ -99,6 +112,9 @@ export class CoreConnection {
   private queue: Promise<void> = Promise.resolve();
   /** The hello, while it waits for its answer. */
   private helloWaits: { resolve: (r: Welcome) => void; reject: (e: Error) => void } | undefined;
+  /** The connector's other requests, each while it waits for the core's answer. */
+  private readonly waits = new Map<number, { resolve: () => void; reject: (e: Refusal) => void }>();
+  private nextId = HELLO + 1;
   private readonly closedPromise: Promise<void>;
   private closed = false;
 
@@ -109,6 +125,8 @@ export class CoreConnection {
         this.closed = true;
         this.helloWaits?.reject(new HelloRefused("the connection closed"));
         this.helloWaits = undefined;
+        for (const w of this.waits.values()) w.reject(new Refusal("failed"));
+        this.waits.clear();
         resolve();
       });
     });
@@ -142,6 +160,21 @@ export class CoreConnection {
       if (!this.write({ jsonrpc: "2.0", id: HELLO, method: "hello", params: { protocol: PROTOCOL, ...hello } })) {
         this.helloWaits = undefined;
         reject(new HelloRefused("the hello could not be sent"));
+      }
+    });
+  }
+
+  /**
+   * Sends the core a request, such as `send_file`, and resolves once the core has done it, or throws the
+   * core's {@link Refusal}. One that cannot be sent, or that the connection's closing cuts off, fails.
+   */
+  request(method: string, params: unknown): Promise<void> {
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      this.waits.set(id, { resolve, reject });
+      if (!this.write({ jsonrpc: "2.0", id, method, params })) {
+        this.waits.delete(id);
+        reject(new Refusal("failed"));
       }
     });
   }
@@ -209,6 +242,15 @@ export class CoreConnection {
       const p = typeof params === "object" && params !== null && !Array.isArray(params) ? params : {};
       this.queue = this.queue.then(() => this.answer(id, method, p as Record<string, unknown>));
       return;
+    }
+    const waiting = typeof id === "number" ? this.waits.get(id) : undefined;
+    if (waiting !== undefined) {
+      this.waits.delete(id as number);
+      if ("result" in m && !("error" in m)) return waiting.resolve();
+      const data = m["error"] !== null && typeof m["error"] === "object" ? (m["error"] as Record<string, unknown>)["data"] : undefined;
+      const d = data !== null && typeof data === "object" ? (data as Record<string, unknown>) : {};
+      const reason = typeof d["reason"] === "string" && REASONS.has(d["reason"]) ? (d["reason"] as Reason) : "failed";
+      return waiting.reject(new Refusal(reason, typeof d["detail"] === "string" ? d["detail"] : undefined));
     }
     const w = this.helloWaits;
     if (id === HELLO && w !== undefined) {

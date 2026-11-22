@@ -13,8 +13,17 @@
  * vouched for: one whose answer to that approval the core sent, or whose typed `/approve` the core
  * checked against the right to approve (D-032).
  *
+ * A file OpenClaw delivers with a reply (a `MEDIA:` line in the agent's answer, or a payload's `mediaUrl`
+ * and `mediaUrls`) goes to the core as a `send_file` request, one for each local file, after the reply's
+ * text, which reaches the chat as the agent's words (D-090). The core decides whether it may be sent, from
+ * the folders its settings allow, and shows a refusal in the chat itself.
+ *
  * OpenClaw itself is reached through a {@link Port}, so tests can run the transport without it.
  */
+
+import { homedir } from "node:os";
+import { isAbsolute, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { AgentEvent, Line } from "./translate.ts";
 import { Translator } from "./translate.ts";
@@ -82,6 +91,13 @@ export interface ConnectorOptions {
   send: (event: CoreEvent) => void;
   /** Says what went wrong, by kind only (D-071). */
   warn?: (kind: string) => void;
+  /**
+   * Asks the core to send a file to a chat (D-090): resolves once it is sent, or throws the core's
+   * {@link Refusal}. Without it, no file is sent.
+   */
+  sendFile?: (chat: string, path: string) => Promise<void>;
+  /** The workspace of an OpenClaw agent, by its id, from which a relative path in a reply is taken. */
+  workspace?: (agentId: string | undefined) => string | undefined;
 }
 
 /**
@@ -179,6 +195,13 @@ function object(value: unknown): Json {
 
 function text(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+/** The media a delivery's payload carries, each once, in order: `mediaUrl`, then `mediaUrls`. */
+function mediaOf(payload: unknown): string[] {
+  const p = object(payload);
+  const all = [p["mediaUrl"], ...(Array.isArray(p["mediaUrls"]) ? p["mediaUrls"] : [])];
+  return [...new Set(all.filter((u): u is string => typeof u === "string" && u.trim() !== ""))];
 }
 
 function push(map: Map<string, string[]>, key: string, value: string): void {
@@ -484,7 +507,11 @@ export class Connector {
       this.feed(chat, { dir: "in", via: "hook", msg: { method: "onTypingController", params: { methods: Object.keys(object(typing)) } } }, from);
     const dispatcherOptions: Json = {
       // Nothing is posted here: what OpenClaw delivers reaches the chat as the events it becomes.
-      deliver: tap("deliver", async () => ({ messageId: this.receipt() })),
+      // The files a reply carries go to the core once its text is on its way (D-090).
+      deliver: tap("deliver", async (payload: unknown, info: unknown) => {
+        if (text(object(info)["kind"]) !== "tool") await this.sendFiles(chat.id, chat.route, mediaOf(payload));
+        return { messageId: this.receipt() };
+      }),
       onError: tap("dispatcher.onError"),
       onSkip: tap("dispatcher.onSkip"),
       onIdle: tap("dispatcher.onIdle"),
@@ -879,6 +906,62 @@ export class Connector {
     }
     const id = event.item.slice(event.item.indexOf(":") + 1);
     this.asking.set(event.item, { chat: chat.id, kind: event.type as "approval" | "question", id, natives });
+  }
+
+  /**
+   * Media OpenClaw sends to a chat outside a run, through the channel's outbound adapter: its file goes
+   * to the core as a file in a reply does. Its text is not sent, as a text OpenClaw sends that way is not.
+   */
+  async sendMedia(to: string, mediaUrl: unknown): Promise<void> {
+    await this.sendFiles(to, this.chats.get(to)?.route ?? null, mediaOf({ mediaUrl }));
+  }
+
+  /**
+   * Asks the core to send each file, in turn. A refusal or a failure is said by kind only: the core shows
+   * its own notice in the chat, naming no path, and the next file still goes.
+   */
+  private async sendFiles(chat: string, route: Json | null, media: string[]): Promise<void> {
+    if (media.length === 0) return;
+    const send = this.options.sendFile;
+    if (send === undefined || this.closed) return this.warn("a file was not sent: the core cannot be asked");
+    for (const url of media) {
+      const path = this.localPath(url, route);
+      if (path === null) {
+        this.warn("a file not on this machine was not sent");
+        continue;
+      }
+      try {
+        await send(chat, path);
+      } catch (e) {
+        this.warn(`a file was not sent (${e instanceof Refusal ? e.reason : "failed"})`);
+      }
+    }
+  }
+
+  /**
+   * A local file's path, whole, as the core takes it: a `file://` address, a whole path, one from the home
+   * (`~/`), or one relative to the agent's workspace, as OpenClaw reads them. A `..` is left for the core to
+   * follow. Anything else, such as an address on the web or a stored inbound attachment, is not a file here.
+   */
+  private localPath(url: string, route: Json | null): string | null {
+    let path: string;
+    if (url.startsWith("file://")) {
+      try {
+        path = fileURLToPath(url);
+      } catch {
+        return null;
+      }
+    } else if (/^[a-z][a-z0-9+.-]*:/i.test(url)) {
+      return null;
+    } else {
+      path = url;
+    }
+    if (path === "~" || path.startsWith("~/")) return homedir() + path.slice(1);
+    if (isAbsolute(path)) return path;
+    const agentId = route === null ? undefined : text(route["agentId"]) || undefined;
+    const workspace = this.options.workspace?.(agentId);
+    if (workspace === undefined || !isAbsolute(workspace)) return null;
+    return workspace.endsWith(sep) ? workspace + path : workspace + sep + path;
   }
 
   private warn(kind: string): void {
