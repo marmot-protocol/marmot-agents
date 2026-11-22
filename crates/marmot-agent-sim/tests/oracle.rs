@@ -211,53 +211,34 @@ fn words_in_the_wrong_chat_fail_s5() {
 // that answered a refused version with no `failed` notice passed.
 #[test]
 fn a_request_left_after_a_refused_version_fails_l1() {
-    // A world where MDK refused a version that settled the request, and the `failed` notice that
-    // answered it.
-    let make = || {
-        let mut w = world(1, &[set(0)]);
-        let request = event(0, &w);
-        let version = item(
-            "sess-s1",
-            2,
-            State::Running,
-            Body::Approval(no_choice()),
-            vec![request.clone()],
-        );
-        refused(&mut w, 0, &version);
-        (w, request)
-    };
-    let (w, _) = make();
+    let mut w = world(2, &[set(0)]);
+    let request = event(0, &w);
+    let version = item(
+        "sess-s1",
+        2,
+        State::Running,
+        Body::Approval(no_choice()),
+        vec![request.clone()],
+    );
+    refused(&mut w, 0, &version);
     assert_eq!(properties(oracle::liveness(&w)), vec!["L1"]);
     // Its `failed` notice refused too: the request is still to be settled, by the notice the core
     // sends in its place. It used to be let off, by design, until the TLA+ model showed it left
     // the request settled nowhere (L1).
-    let failed = |request: &EventKey| {
-        item(
-            "core-1",
-            1,
-            State::Done,
-            notice("failed"),
-            vec![request.clone()],
-        )
-    };
-    let again = |request: &EventKey| {
-        item(
-            "core-2",
-            1,
-            State::Done,
-            notice("failed"),
-            vec![request.clone()],
-        )
-    };
-    let (mut w, request) = make();
-    refused(&mut w, 0, &failed(&request));
+    let notice_settling =
+        |id: &str| item(id, 1, State::Done, notice("failed"), vec![request.clone()]);
+    let failed = notice_settling("core-1");
+    refused(&mut w, 0, &failed);
     assert_eq!(properties(oracle::liveness(&w)), vec!["L1"]);
-    sent(&mut w, 0, &again(&request));
-    assert_eq!(properties(oracle::liveness(&w)), Vec::<String>::new());
+    // The same notice refused again, as when the core tried it again after a crash before the
+    // first refusal was saved: still one notice, with nothing yet in its place. And a notice in
+    // another chat that names the request is not one of its own. Review round 1 of
+    // `dropped-sends`: the oracle counted refusals, so either let the request off.
+    refused(&mut w, 0, &failed);
+    refused(&mut w, 1, &notice_settling("core-9"));
+    assert_eq!(properties(oracle::liveness(&w)), vec!["L1"]);
     // The notice in its place refused too: the last, so let off, as in a group that is gone.
-    let (mut w, request) = make();
-    refused(&mut w, 0, &failed(&request));
-    refused(&mut w, 0, &again(&request));
+    refused(&mut w, 0, &notice_settling("core-2"));
     assert_eq!(properties(oracle::liveness(&w)), Vec::<String>::new());
 }
 
@@ -301,6 +282,12 @@ fn an_item_left_open_after_a_refused_open_version_fails_s2() {
     refused(&mut w, 0, &closing);
     refused(&mut w, 0, &close);
     assert_eq!(property(oracle::after_stop(&w)), None);
+    // Until the item opens again, newer than that close, and is left open. Review round 1 of
+    // `dropped-sends`: the refused close let the item off for good.
+    let mut again = item("turn-t1-2", 5, State::Running, turn(), Vec::new());
+    again.first = Some(first_event(&w));
+    sent(&mut w, 0, &again);
+    assert_eq!(property(oracle::after_stop(&w)), Some("S2".into()));
 }
 
 /// The first event the agent stored.
@@ -465,4 +452,58 @@ fn with_seq(item: Item, seq: u64) -> Item {
         event: AgentEvent::new(header, item.event.body().clone(), None).expect("no secret"),
         ..item
     }
+}
+
+// Review round 1 of `dropped-sends`. A closing version dropped when the chat already shows the
+// item closed (here by the core's close at a restart) is not followed by the core's own close,
+// so it does not show "not delivered" over the close the chat has; the old L2 asked for that
+// close all the same. Found by the simulator (`sends`, seed 3). One dropped while the chat shows
+// the item open still fails L2 without the core's close.
+#[test]
+fn a_closing_version_dropped_after_a_close_is_let_off_l2() {
+    let make = |closed_first: bool| {
+        let mut w = world(1, &[prompt(0)]);
+        let (_, events) = w.new_life();
+        handed(&mut w, 0, "A");
+        let mut e = emitted(&mut w, 2, "A", "sess-s1-1", None);
+        e.seq = 2;
+        *w.harness.emissions.last_mut().unwrap() = e;
+        let v1 = item(
+            "sess-s1-1",
+            1,
+            State::Running,
+            Body::Approval(no_choice()),
+            vec![],
+        );
+        sent(&mut w, 0, &v1);
+        let mut version = 2;
+        if closed_first {
+            let mut closed = item(
+                "sess-s1-1",
+                2,
+                State::Cancelled,
+                Body::Approval(no_choice()),
+                vec![],
+            );
+            closed.first = Some(first_event(&w));
+            sent(&mut w, 0, &closed);
+            version = 3;
+        }
+        let done = with_seq(
+            item(
+                "sess-s1-1",
+                version,
+                State::Done,
+                Body::Approval(no_choice()),
+                vec![],
+            ),
+            2,
+        );
+        refused(&mut w, 0, &done);
+        (w, events)
+    };
+    let (open, _events) = make(false);
+    assert_eq!(properties(oracle::liveness(&open)), vec!["L2"]);
+    let (closed, _events) = make(true);
+    assert_eq!(properties(oracle::liveness(&closed)), Vec::<String>::new());
 }
