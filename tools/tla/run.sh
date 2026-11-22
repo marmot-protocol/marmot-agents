@@ -36,6 +36,16 @@ checksum() {
     fi
 }
 
+# Fails unless the file is the pinned release.
+verify() {
+    local actual
+    actual="$(checksum "$1")"
+    if [[ "$actual" != "$TLA_SHA256" ]]; then
+        echo "error: $1 is not TLC v${TLA_VERSION}: expected $TLA_SHA256, got $actual" >&2
+        return 1
+    fi
+}
+
 if [[ -n "${TLA2TOOLS_JAR:-}" ]]; then
     jar="$TLA2TOOLS_JAR"
 else
@@ -43,21 +53,21 @@ else
     jar="$cache/tla2tools-v${TLA_VERSION}.jar"
     if [[ ! -f "$jar" ]]; then
         mkdir -p "$cache"
+        # Downloaded beside the cache's jar and checked there; only a jar that matches is moved
+        # into place, and anything else is deleted.
         tmp="$(mktemp "${jar}.tmp.XXXXXX")"
         trap 'rm -f "$tmp"' EXIT
         curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
             --connect-timeout 20 --max-time 300 --retry 5 --retry-all-errors \
             --output "$tmp" \
             "https://github.com/tlaplus/tlaplus/releases/download/v${TLA_VERSION}/tla2tools.jar"
+        verify "$tmp"
         mv "$tmp" "$jar"
         trap - EXIT
     fi
 fi
-actual="$(checksum "$jar")"
-if [[ "$actual" != "$TLA_SHA256" ]]; then
-    echo "error: $jar is not TLC v${TLA_VERSION}: expected $TLA_SHA256, got $actual" >&2
-    exit 1
-fi
+# Checked on every run, so a jar changed in the cache, or named by TLA2TOOLS_JAR, is refused.
+verify "$jar"
 
 # One worker keeps runs reproducible; the in-memory fingerprint set suits these small models.
 options=(-workers "${TLC_WORKERS:-1}" -deadlock -cleanup -metadir "states" -config "$config")
