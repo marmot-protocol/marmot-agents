@@ -160,11 +160,22 @@ impl<S: Subject> Run<S> {
         returned: Result<Result<(), Refusal>, tokio::time::error::Elapsed>,
     ) -> Result<Result<(), Refusal>, Violation> {
         let patience = self.patience;
+        if returned.is_err() {
+            self.half_lines()?;
+        }
         returned.map_err(|_| {
             let v = broke("S11", format!("{what} did not return within {patience:?}"));
             self.check.record(v.clone());
             v
         })
+    }
+
+    /// A half line on the harness's input swallows the message after it, and a wait for what
+    /// follows from that message runs out: the half line is the fault, and is reported first.
+    fn half_lines(&mut self) -> Result<(), Violation> {
+        let malformed = self.fake().malformed();
+        self.check.half_lines(&malformed);
+        self.ok()
     }
 
     /// Once a request has returned, the harness has it, with the driver not polled again (S11).
@@ -176,6 +187,7 @@ impl<S: Subject> Run<S> {
         if self.fake().wait_heard(self.patience, done).await {
             return Ok(());
         }
+        self.half_lines()?;
         let v = broke("S11", format!("{what} returned before the harness had it"));
         self.check.record(v.clone());
         Err(v)
@@ -436,8 +448,14 @@ impl<S: Subject> Run<S> {
             self.ok()?;
             let output = match next {
                 Ok(Some(output)) => output,
-                Ok(None) => return Err(self.lost(why, format!("the driver ended before {what}"))),
-                Err(_) => return Err(self.lost(why, format!("{what} never came"))),
+                Ok(None) => {
+                    self.half_lines()?;
+                    return Err(self.lost(why, format!("the driver ended before {what}")));
+                }
+                Err(_) => {
+                    self.half_lines()?;
+                    return Err(self.lost(why, format!("{what} never came")));
+                }
             };
             if let Some(e) = output.into_event()
                 && found(&e)

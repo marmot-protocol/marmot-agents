@@ -69,6 +69,7 @@ impl Fault {
     pub fn detail(self) -> Option<&'static str> {
         match self {
             Fault::ResumeUnasked => Some("taken up, unasked"),
+            Fault::HalfFrame => Some("not whole messages"),
             _ => None,
         }
     }

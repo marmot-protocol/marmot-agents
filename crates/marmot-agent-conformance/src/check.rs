@@ -109,6 +109,8 @@ pub struct Checker {
     /// How much of what the harness heard has been checked.
     heard_at: usize,
     prompts_heard: HashSet<String>,
+    /// A half line has been reported.
+    half_lines_seen: bool,
     violations: Vec<Violation>,
 }
 
@@ -393,14 +395,7 @@ impl Checker {
     /// Checks what the harness heard so far: S4, S5 for prompts and answers, S11's whole lines
     /// and S12. Call it once the driver has handed over what it had.
     pub fn heard(&mut self, heard: &[Heard], malformed: &[String]) {
-        if let Some(line) = malformed.first() {
-            let detail = format!(
-                "the harness read {} lines that are not whole messages, the first {} bytes long",
-                malformed.len(),
-                line.len()
-            );
-            self.fail("S11", detail);
-        }
+        self.half_lines(malformed);
         let fresh = heard.get(self.heard_at..).unwrap_or_default();
         self.heard_at = heard.len();
         for h in fresh {
@@ -454,6 +449,24 @@ impl Checker {
                 _ => {}
             }
         }
+    }
+
+    /// S11: no line the harness read is half a message. Checked at every checkpoint, and before
+    /// a wait that runs out is blamed, since a half line loses the message it swallowed.
+    pub fn half_lines(&mut self, malformed: &[String]) {
+        let Some(line) = malformed.first() else {
+            return;
+        };
+        if self.half_lines_seen {
+            return;
+        }
+        self.half_lines_seen = true;
+        let detail = format!(
+            "the harness read {} lines that are not whole messages, the first {} bytes long",
+            malformed.len(),
+            line.len()
+        );
+        self.fail("S11", detail);
     }
 
     // -- at the end
