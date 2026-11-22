@@ -356,6 +356,16 @@ impl Marmot {
             Some(Fault::Held(long)) => self.faults.hold(&token.mdk, long),
             _ => {}
         }
+        if let Some(tried) = token.tried_at
+            && self.may_have_let_go(group, tried)?
+        {
+            match self.status(&id, &token.mdk) {
+                // MDK still keeps it: tried again, it is answered from what MDK keeps.
+                Ok(Some(_)) => {}
+                Ok(None) => return Err(SendFailed::Forgotten),
+                Err(_) => return Err(SendFailed::Unknown),
+            }
+        }
         let taken = match self.submit(&id, what, token).await {
             Ok(Taken::Kept(event)) => event,
             // Words an older core sent, without a token: their edit goes as it went then. Sent
@@ -430,6 +440,20 @@ impl Marmot {
             }
         };
         Ok(Taken::Kept(EventKey(accepted.message_id_hex)))
+    }
+
+    /// Whether MDK may have let go of a token first tried at `tried` (seconds since 1970). MDK
+    /// forgets a token with the message it made, and a group's messages disappear once they are
+    /// as old as the group says; a message is never older than its first try. An error when MDK
+    /// cannot say for a moment.
+    fn may_have_let_go(&self, group: &GroupKey, tried: u64) -> Result<bool, SendFailed> {
+        let record = (self.app)
+            .group(&self.label, group.as_str())
+            .map_err(|_| SendFailed::Unknown)?;
+        let keep = record.map_or(0, |r| r.message_retention.disappearing_message_secs);
+        let now = SystemTime::now().duration_since(UNIX_EPOCH);
+        let now = now.map_or(0, |d| d.as_secs());
+        Ok(keep > 0 && now.saturating_sub(tried) >= keep)
     }
 
     /// What MDK says became of the send it keeps under `token`.
@@ -698,6 +722,10 @@ pub enum SendFailed {
     /// MDK keeps it under its token, queued, and its engine has not taken it yet: it is tried
     /// again soon under the same token, which MDK answers from what it keeps.
     Pending,
+    /// It was first tried so long ago that its group's messages have disappeared since, and
+    /// MDK no longer knows its token: it may have gone out, and tried again it could go out
+    /// twice. It is given up, and the chat told it may not have been delivered.
+    Forgotten,
 }
 
 /// What a failed file send means.

@@ -158,6 +158,12 @@ async fn settled_by(chat: &Chat<'_>, request: &EventKey, seconds: u64) -> AgentE
     .await
 }
 
+/// Seconds since 1970, as the core keeps when a send was first tried.
+fn unix_now() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    now.unwrap().as_secs()
+}
+
 /// The state as a save would write it, as JSON, to look into.
 fn json(kept: &Kept) -> serde_json::Value {
     serde_json::to_value(kept).unwrap()
@@ -554,7 +560,7 @@ async fn a_send_that_went_out_before_a_crash_is_not_sent_again() {
     });
     let group = GroupKey(chat.hex.clone());
     let (token, what) = talk.next_send(&group).unwrap();
-    talk.attempting(&token.send);
+    talk.attempting(&token.send, unix_now());
     let went = world.send(&group, &what, &token).await.unwrap();
     // A second send of the same event in the same second would be the same event, so a later one.
     tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -848,6 +854,7 @@ fn earlier_token() -> marmot_agent::Token {
         send: "earlier".into(),
         mdk: "earlier".into(),
         edits: None,
+        tried_at: None,
     }
 }
 
@@ -937,7 +944,7 @@ async fn a_send_tried_is_not_taken_for_an_older_one_like_it() {
     let (token, what) = talk.next_send(&group).unwrap();
     assert!(matches!(what, Sending::Words { .. }));
     // Tried just before the crash, and it did not go out.
-    talk.attempting(&token.send);
+    talk.attempting(&token.send, unix_now());
     let read = kept.read;
     let conversation = talk.saved().clone();
     store.save(&Kept { conversation, read }).unwrap();
@@ -976,7 +983,7 @@ async fn an_edit_that_went_out_before_a_crash_is_not_sent_again() {
     talk.emitted(words_done("second words", &id, Vec::new()));
     let (token, what) = talk.next_send(&group).unwrap();
     assert!(matches!(what, Sending::Words { edit: Some(_), .. }));
-    talk.attempting(&token.send);
+    talk.attempting(&token.send, unix_now());
     world.send(&group, &what, &token).await.unwrap();
     // The same edit made again in the same second would be the same event, so a later one.
     tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -1013,7 +1020,7 @@ async fn a_state_with_sends_tried_before_tokens_is_refused() {
     let (store, kept, mut talk) = taken_up(&world);
     talk.emitted(words_done("the words", &id, Vec::new()));
     let (token, _) = talk.next_send(&group).unwrap();
-    talk.attempting(&token.send);
+    talk.attempting(&token.send, unix_now());
     let read = kept.read;
     let conversation = talk.saved().clone();
     store.save(&Kept { conversation, read }).unwrap();

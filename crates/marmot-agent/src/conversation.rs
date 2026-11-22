@@ -192,6 +192,10 @@ pub struct Token {
     /// For an edit of the agent's words: the token MDK took their first message under, which
     /// the edit names. `None` when an older core sent that message, without one.
     pub edits: Option<String>,
+    /// When the send was first handed to MDK under [`Token::mdk`], in seconds since 1970: MDK
+    /// lets go of a token with the message it made, once a group's messages disappear, so a
+    /// send tried long after may no longer be known to MDK for what it was.
+    pub tried_at: Option<u64>,
 }
 
 /// Prints nothing of the tokens, which are only names (D-071).
@@ -318,6 +322,9 @@ struct Queued {
     /// good, and MDK refuses its token again, so the next try is made under a new one.
     #[serde(default)]
     rejected: u32,
+    /// When it was first handed to MDK under its token now, in seconds since 1970 ([`Token`]).
+    #[serde(default)]
+    tried_at: Option<u64>,
     /// Whether it stands in for a send that was dropped: an item's close, or a notice that
     /// settles what a dropped notice settled. Nothing stands in for it in turn, so a group MDK
     /// refuses everything for, as one that is gone, ends the chain there.
@@ -381,6 +388,9 @@ pub const EFFECT_LIMIT_SECS: u64 = 120;
 
 /// What a send MDK refused is settled with.
 const NOT_DELIVERED: &str = "Something the agent sent could not be delivered to the chat.";
+
+/// What a notice says of a send given up without knowing whether it went out.
+const NOT_KNOWN: &str = "Something the agent sent may not have been delivered to the chat.";
 
 /// The title of the core's close of an item whose closing version was not delivered.
 const CLOSED_TITLE: &str = "Not delivered";
@@ -1094,6 +1104,17 @@ impl Conversation {
     /// has no size to refuse again, and is the last: when it is dropped too, as in a group that is
     /// gone, nothing takes its place, so nothing loops. Everything is queued for the same group.
     pub fn refused(&mut self, token: &str, gone: bool) {
+        self.dropped(token, gone, NOT_DELIVERED);
+    }
+
+    /// The send named `token` is given up without knowing whether it went out: MDK no longer
+    /// knows its token, and trying it again could send it twice. It is dropped as a refused one
+    /// is ([`Conversation::refused`]), and the chat's notice says it may not have been delivered.
+    pub fn lost(&mut self, token: &str) {
+        self.dropped(token, false, NOT_KNOWN);
+    }
+
+    fn dropped(&mut self, token: &str, gone: bool, text: &str) {
         let Some(at) = self.saved.outbox.iter().position(|q| q.token == token) else {
             return;
         };
@@ -1110,13 +1131,13 @@ impl Conversation {
         }
         let queued = self.saved.outbox.remove(at).expect("found");
         if !queued.last_resort {
-            self.stand_in_for(token, queued);
+            self.stand_in_for(token, queued, text);
         }
         self.forget_old();
     }
 
     /// What goes in place of a dropped send that was not itself a last resort.
-    fn stand_in_for(&mut self, token: &str, queued: Queued) {
+    fn stand_in_for(&mut self, token: &str, queued: Queued, text: &str) {
         let key = queued.what.key().to_string();
         let notice = key.starts_with("notice/");
         let item = matches!(queued.what, Sending::Item { .. });
@@ -1157,7 +1178,7 @@ impl Conversation {
         for settles in chunks {
             // Without the chat's session, which the driver chose and which may be what made the
             // dropped send too large: nothing the notice needs.
-            let event = self.notice(&queued.group, &chat, "failed", NOT_DELIVERED.into());
+            let event = self.notice(&queued.group, &chat, "failed", text.into());
             let header = Header {
                 session: None,
                 ..event.header().clone()
@@ -1232,12 +1253,14 @@ impl Conversation {
         self.queue_as(group, what, None, true);
     }
 
-    /// The send named `token` is about to be handed to MDK. Whether that is new, and so to be
-    /// saved before it is: what MDK takes is on disk first, with the token it is taken under.
-    pub fn attempting(&mut self, token: &str) -> bool {
+    /// The send named `token` is about to be handed to MDK, `now` (seconds since 1970). Whether
+    /// that is new, the first try under its token, and so to be saved before it is: what MDK
+    /// takes is on disk first, with the token it is taken under and when it was first tried.
+    pub fn attempting(&mut self, token: &str, now: u64) -> bool {
         match self.saved.outbox.iter_mut().find(|q| q.token == token) {
-            Some(queued) if !queued.attempted => {
+            Some(queued) if queued.tried_at.is_none() => {
                 queued.attempted = true;
+                queued.tried_at = Some(now);
                 true
             }
             _ => false,
@@ -1251,6 +1274,7 @@ impl Conversation {
         match self.saved.outbox.iter_mut().find(|q| q.token == token) {
             Some(queued) => {
                 queued.rejected += 1;
+                queued.tried_at = None;
                 queued.rejected
             }
             None => 0,
@@ -1294,6 +1318,7 @@ impl Conversation {
             send: queued.token.clone(),
             mdk: self.mdk_token(queued),
             edits,
+            tried_at: queued.tried_at,
         };
         (token, what)
     }
@@ -1378,6 +1403,7 @@ impl Conversation {
             shown_by,
             attempted: false,
             rejected: 0,
+            tried_at: None,
             last_resort,
             tells: false,
         });

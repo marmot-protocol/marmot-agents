@@ -2693,3 +2693,37 @@ fn a_harness_with_its_own_workspace_gets_no_folder_setting() {
         matches!(acts.as_slice(), [Act::Control(c)] if matches!(&c.action, Action::Set { setting, .. } if setting == "folder"))
     );
 }
+
+// A send is first tried at a time kept with it, for as long as its token stands: a try MDK
+// dropped makes a new token, tried afresh. One given up without knowing whether it went out is
+// dropped like a refused one, with what stands in for it, and the chat's notice says it may not
+// have been delivered, not that it was not (S1, S3).
+#[test]
+fn a_send_given_up_unknown_says_it_may_not_have_gone() {
+    let (mut talk, _) = started();
+    let asked = request(direct(), "r1", OWNER, Some("e-not-yet"), Asked::Interrupt);
+    the_item(&mut talk, |t| t.asked(asked));
+    let (token, _) = talk.next_send(&direct().group).unwrap();
+    assert_eq!(token.tried_at, None);
+    assert!(talk.attempting(&token.send, 100), "the first try is saved");
+    assert!(!talk.attempting(&token.send, 200), "a later one is not");
+    let (tried, _) = talk.next_send(&direct().group).unwrap();
+    assert_eq!((tried.tried_at, &tried.mdk), (Some(100), &token.mdk));
+    talk.rejected(&token.send);
+    let (again, _) = talk.next_send(&direct().group).unwrap();
+    assert_eq!(again.tried_at, None, "a new token is tried afresh");
+    assert_ne!(again.mdk, token.mdk);
+
+    talk.lost(&token.send);
+    let Some((_, Sending::Item { item, .. })) = talk.next_send(&direct().group) else {
+        panic!("a notice stands in");
+    };
+    assert_eq!(item.settles, vec![EventKey::from("r1")]);
+    assert!(is_refused(&item, "failed"));
+    assert!(
+        item.event
+            .header()
+            .text
+            .contains("may not have been delivered")
+    );
+}

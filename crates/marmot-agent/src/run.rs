@@ -820,7 +820,8 @@ impl<D: Driver, M: Side> Core<D, M> {
                 Sending::Item { key, .. } | Sending::Words { key, .. } => key.clone(),
             };
             // Saved before MDK has it, so the token MDK keeps it under is on disk first.
-            if self.conversation.attempting(&token.send) && !self.bug_save_after_send() {
+            if self.conversation.attempting(&token.send, unix_now()) && !self.bug_save_after_send()
+            {
                 self.save()?;
             }
             match self.marmot.send(group, &what, &token).await {
@@ -832,6 +833,14 @@ impl<D: Driver, M: Side> Core<D, M> {
                 }
                 Err(failed) => match self.bug_new_token(&token.send, failed) {
                     SendFailed::Refused { gone } => self.give_up(&token.send, gone)?,
+                    SendFailed::Forgotten => {
+                        // MDK's own words can name a group, so they are not printed (D-071).
+                        eprintln!(
+                            "marmot-agent: a send's outcome can no longer be known; the chat is told"
+                        );
+                        self.conversation.lost(&token.send);
+                        self.save()?;
+                    }
                     SendFailed::Rejected => {
                         // Nothing went: the next try is under a new token, saved first. The last
                         // try is saved with the give-up and what stands in for it, in one write.
@@ -926,6 +935,13 @@ impl<D: Driver, M: Side> Core<D, M> {
         };
         self.store.save(&kept).map_err(|_| Unsaved)
     }
+}
+
+/// Seconds since 1970, as a state file keeps when a send was first tried: unlike the core's clock,
+/// the same across restarts.
+fn unix_now() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    now.map_or(0, |d| d.as_secs())
 }
 
 /// Reads a file from the allowed folders and sends it to `group`. It is offered to MDK again only

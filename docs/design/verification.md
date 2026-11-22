@@ -89,7 +89,31 @@ fixed on 2026-11-21, each with a test that failed first.
   made of it and sends nothing. So a send whose outcome is not known is simply tried again, under the same token,
   a little later each time, with no limit. A try MDK took and dropped before it went out (its status
   `Rejected`) sent nothing; MDK refuses its token from then on, so the next try is under a new one, and after
-  ten such tries the send is given up. One MDK refuses is dropped with a notice.
+  ten such tries the send is given up. One MDK refuses is dropped with a notice. Review of the move found four
+  more cases, each fixed with a test that failed first, against MDK itself where it is MDK's behaviour. MDK makes
+  an event's id from its kind, tags, content and second, and keeps the id of every send it took, even one it
+  dropped: a dropped send tried again in the same second under its new token, or a second send of the same
+  words in one second, met that id and was given up as refused; now that is MDK busy for the second, and the
+  send goes in the next (the tests make MDK drop sends for real, while the agent's own disband of a group is
+  under way). A send to a group being disbanded, or one MDK does not have, was tried for ever, and nothing
+  after it in the chat went; now, when MDK holds nothing under the token, it is refused for good. The core
+  waited in its one loop, up to a minute, for MDK to take each send into its engine, so a send MDK kept queued
+  held up every chat and a stop; now MDK is asked once per try, and a group whose send MDK has queued asks again
+  through its retry timer while the rest goes on. And the tenth drop of a send was saved before its give-up, in
+  a second write; now the two are saved together. A state file that has sends handed to MDK and no salt, which
+  only an unreleased core from before tokens could write, stops the core at start rather than risk sending one
+  twice.
+
+  **The limit MDK's message retention sets.** MDK forgets a token with the message it made: when a group's
+  messages disappear (a period any admin of the group may set, with no lower bound), the token goes with them,
+  and a send tried again under it after that would be a new one. So the core keeps, with each send, when it was
+  first tried under its token, and once the group's period has passed since then it asks MDK whether it still
+  knows the token before it tries again. If MDK does not, the send may have gone out: it is not tried again, and
+  is given up as not known, with a `failed` notice that says it may not have been delivered. The period read is
+  the group's now; a period made longer after a send went out, while its outcome was not known, is not seen,
+  and such a send could go out twice. That needs a lost answer or a crash, a restart later than the old period,
+  and the period changed in between; it is accepted as a limit, as a proposal for the owner, like those in
+  [D-096](../decisions.md#d-096-four-limits-of-the-core-that-the-simulator-and-the-model-accept).
 
   **What a restart could not recover, until MDK 0.19.0.** Before, the core looked a send whose outcome was not
   known for in what MDK stored, by its id, version and first event for an item, and by its text and tags for the
@@ -171,7 +195,7 @@ dropped. Besides those:
   made once, that is part of every token handed to MDK, so a core whose state file was lost never reuses a token
   MDK holds; the sends not yet made, oldest first, each with a name that stays the same across tries, how many
   of its tries MDK dropped (the token MDK keeps it under is a digest of the salt, the name and that count),
-  whether it was handed to MDK,
+  whether it was handed to MDK, when it was first handed to MDK under its token now,
   whether it stands in for a dropped send (and so is the last), whether it is a `failed` notice that tells of
   a dropped send, for each item whether the latest version of it that went out closed it, and,
   for a turn's version that settles what the agent's words showed, the send of those words; where recently
@@ -179,8 +203,12 @@ dropped. Besides those:
   settle, held until a message carries them, and the token their first message went under, which an edit names.
 - **How often a send is tried.** One whose outcome is not known is tried again under the same token with no
   limit, a little later each time up to ten seconds; one MDK took and dropped is tried again under a new token,
-  and given up, with a `failed` notice, after ten such tries. The core waits up to a minute for MDK to take a
-  send into its engine before it counts the outcome as not known.
+  and given up, with a `failed` notice, after ten such tries. MDK is asked once per try whether its engine has
+  taken a send; while MDK has it queued the group asks again a little later each time, up to half a second, and
+  a stop waits up to a minute in all for what MDK has queued. A send MDK no longer knows the token of, once the
+  group's messages have disappeared since its first try, is given up with a `failed` notice that says
+  "Something the agent sent may not have been delivered to the chat."
+- **A state file with sends handed to MDK and no salt stops the core at start**, saying to move it away.
 - **A group's read mark is saved before the agent accepts the group.**
 - **One chat sends at most eight events in each turn of the core's loop**, then the others go; a stop sends all
   it can.

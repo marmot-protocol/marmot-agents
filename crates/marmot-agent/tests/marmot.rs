@@ -240,6 +240,7 @@ async fn a_send_tried_again_under_its_token_goes_out_once() {
         send: "w@1".into(),
         mdk: "a token".into(),
         edits: None,
+        tried_at: None,
     };
     let went = world.send(&group, &words("the words"), &token).await;
     let went = went.unwrap();
@@ -324,6 +325,7 @@ fn words_named(name: &str) -> (marmot_agent::Sending, marmot_agent::Token) {
         send: name.into(),
         mdk: format!("token {name}"),
         edits: None,
+        tried_at: None,
     };
     (words, token)
 }
@@ -408,6 +410,7 @@ async fn a_send_to_a_group_disbanded_or_unknown_is_refused() {
             send: "a".into(),
             mdk: format!("token {n}"),
             edits: None,
+            tried_at: None,
         };
         let tried = world.send(&group, &words, &token).await;
         if tried == Err(SendFailed::Refused { gone: false }) {
@@ -415,5 +418,64 @@ async fn a_send_to_a_group_disbanded_or_unknown_is_refused() {
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
+    world.runtime.shutdown().await;
+}
+
+// MDK lets go of a token with the message it made, once a group's messages disappear. A send
+// first tried longer ago than they last, whose token MDK no longer knows, may have gone out: it
+// is not sent again, and is given up as not known. One whose token MDK still keeps is answered
+// from it; and in a group whose messages stay, a send goes however long ago it was first tried.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_older_than_its_groups_messages_is_not_sent_again() {
+    use marmot_agent::marmot::SendFailed;
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let group = a_quiet_chat(&world).await;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    let now = now.unwrap().as_secs();
+    let tried = |name: &str, ago: Option<u64>| {
+        let (mut words, mut token) = words_named(name);
+        if let marmot_agent::Sending::Words { text, .. } = &mut words {
+            *text = format!("words {name}");
+        }
+        token.tried_at = ago.map(|ago| now - ago);
+        (words, token)
+    };
+    let (words, token) = tried("long ago", Some(1_000_000));
+    assert!(
+        world.send(&group, &words, &token).await.is_ok(),
+        "messages stay"
+    );
+
+    let id = group_id(&group);
+    (world.runtime)
+        .update_message_retention(&world.person, &id, 60)
+        .await
+        .unwrap();
+    let keep = || {
+        let record = world.marmot.app.group(&world.marmot.label, group.as_str());
+        record
+            .ok()
+            .flatten()
+            .map(|r| r.message_retention.disappearing_message_secs)
+    };
+    eventually(|| (keep() == Some(60)).then_some(())).await;
+    let (words, token) = tried("forgotten", Some(120));
+    let sent = world.send(&group, &words, &token).await;
+    assert_eq!(sent, Err(SendFailed::Forgotten), "not sent again");
+    let (words, token) = tried("kept", None);
+    let went = world.send(&group, &words, &token).await.unwrap();
+    let token = marmot_agent::Token {
+        tried_at: Some(now - 120),
+        ..token
+    };
+    assert_eq!(
+        world.send(&group, &words, &token).await,
+        Ok(went),
+        "answered from its token"
+    );
+    let texts: Vec<_> = (sent_by_core(&world, &group, 9).into_iter())
+        .map(|m| m.plaintext)
+        .collect();
+    assert!(!texts.contains(&"words forgotten".to_string()));
     world.runtime.shutdown().await;
 }

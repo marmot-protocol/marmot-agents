@@ -70,7 +70,9 @@ Built on 2026-11-21 while fixing the known gaps of [testing and verification](ve
   `refused` notice with the reason `no_effect`, not left pending until the driver stops.
 - **`failed` for a send MDK refuses.** A send MDK will not take, and is not an edit of words that were removed, is
   dropped. A `refused` notice with the reason `failed` tells the chat, and settles what the send settled. An
-  edit of words whose message is gone goes out as a new message.
+  edit of words whose message is gone goes out as a new message. A send given up without knowing whether it
+  went out, because MDK no longer knows its token once the group's messages have disappeared, is dropped the
+  same way, and its notice's text says it may not have been delivered.
 - **The `cut` tag.** One tag for each kind of field cut, with the full length of all that was cut of that kind:
   `text`, `title`, `command`, `error`, `input`, `plan`, `steps`, `choices`, `questions`, `description`. `output`
   keeps its full length and `diffs` its count, as before. A list thinned in its middle: `entries` or `changes`,
