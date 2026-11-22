@@ -273,6 +273,126 @@ async fn a_send_tried_again_under_its_token_goes_out_once() {
     world.runtime.shutdown().await;
 }
 
+// An item's later version reaches the person as MDK's edit of its first event (D-025): MDK's row
+// for the item holds its latest version, and the version tried again under its token goes out
+// once. A waiting approval alerts the person; its closing version, and the agent's remark during
+// a turn, do not (D-024, D-078).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_items_later_version_is_mdks_edit_of_its_first_event() {
+    use marmot_agent::carrier::{self, EDIT_KIND, ITEM_KIND, Item};
+    use marmot_agent::{Sending, Token};
+    use marmot_agent_events::body::{Approval, Choice, Effect};
+    use marmot_agent_events::{AgentEvent, Header};
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let group = a_quiet_chat(&world).await;
+    (world.marmot.app)
+        .set_local_notifications_enabled(&world.person, true)
+        .unwrap();
+    let mut alerts = world.runtime.subscribe_notifications().unwrap();
+    let approval = |state: State, version: u64, first: Option<marmot_agent::EventKey>| {
+        let header = Header {
+            harness: "codex".into(),
+            session: Some("s1".into()),
+            turn: Some("t1".into()),
+            item: "call1".into(),
+            seq: 3,
+            state,
+            title: "Allow this command?".into(),
+            text: "Allow `ls`?".into(),
+        };
+        let body = Body::Approval(Approval {
+            subject: None,
+            choices: vec![Choice {
+                id: "allow".into(),
+                label: "Allow once".into(),
+                effect: Effect::Allow,
+            }],
+            answer: None,
+        });
+        Sending::Item {
+            key: "call1".into(),
+            item: Box::new(Item {
+                event: AgentEvent::new(header, body, None).unwrap(),
+                version,
+                first,
+                started_by: None,
+                settles: Vec::new(),
+            }),
+        }
+    };
+    let token = |mdk: &str, edits: Option<&str>| Token {
+        send: mdk.into(),
+        mdk: mdk.into(),
+        edits: edits.map(Into::into),
+        tried_at: None,
+    };
+    let first = (world.send(
+        &group,
+        &approval(State::Waiting, 1, None),
+        &token("v1", None),
+    ))
+    .await
+    .unwrap();
+    let alert = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            let update = alerts.recv().await.expect("notifications");
+            if update.account_id_hex == world.person {
+                return update;
+            }
+        }
+    })
+    .await
+    .expect("the waiting approval alerts the person");
+    assert_eq!(alert.message_id_hex.as_deref(), Some(first.as_str()));
+
+    let later = approval(State::Done, 2, Some(first.clone()));
+    let edit = world.send(&group, &later, &token("v2", Some("v1"))).await;
+    let edit = edit.unwrap();
+    assert_ne!(edit, first, "an event of its own");
+    let remark = Sending::Words {
+        key: "w".into(),
+        text: "Looking around".into(),
+        turn: Some("t1".into()),
+        remark: true,
+        edit: None,
+        settles: Vec::new(),
+    };
+    world
+        .send(&group, &remark, &token("w", None))
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    let again = world.send(&group, &later, &token("v2", Some("v1"))).await;
+    assert_eq!(again, Ok(edit.clone()), "the same edit");
+
+    let kinds = |kind: u64| sent_by_core(&world, &group, kind);
+    assert_eq!(kinds(ITEM_KIND).len(), 1);
+    let edits = kinds(EDIT_KIND);
+    assert_eq!(edits.len(), 1, "the later version went out once");
+    let named: Vec<_> = (edits[0].tags.iter()).filter(|t| t[0] == "e").collect();
+    assert_eq!(named, vec![&vec!["e".to_string(), first.0.clone()]]);
+    let row = eventually(|| {
+        let row = (world.runtime)
+            .timeline_message(&world.person, group.as_str(), first.as_str())
+            .unwrap()?;
+        (row.agent_item.as_ref()?.version == 2).then_some(row)
+    })
+    .await;
+    assert_eq!(row.kind, ITEM_KIND, "one row, at the first event");
+    let read = carrier::read_item(row.kind, &row.plaintext, &row.tags).unwrap();
+    assert_eq!(read.item.event.header().state, State::Done);
+    let quiet = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let update = alerts.recv().await.expect("notifications");
+            if update.account_id_hex == world.person {
+                return update;
+            }
+        }
+    });
+    assert!(quiet.await.is_err(), "nothing more alerts");
+    world.runtime.shutdown().await;
+}
+
 /// Waits until just after a whole second starts, so what follows at once falls in that second.
 async fn at_a_new_second() {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);

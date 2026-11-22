@@ -6,7 +6,7 @@
 pub mod connector;
 
 use cgka_traits::GroupId;
-use marmot_agent::carrier::{self, Asked, ITEM_KIND, Read};
+use marmot_agent::carrier::{self, Asked, EDIT_KIND, ITEM_KIND, Read};
 use marmot_agent::config::Config;
 use marmot_agent::marmot::{self, Marmot, Subscribed};
 use marmot_agent::run::{Core, Store};
@@ -297,11 +297,18 @@ impl World {
         group_hex
     }
 
-    /// What the agent sent to a group, of one kind, as the person has it, oldest first.
+    /// What the agent sent to a group, of one kind, as the person has it, oldest first. For
+    /// [`ITEM_KIND`], the items' later versions too, which are MDK's edits of their first events,
+    /// and with them any edits of the agent's words.
     pub fn sent_by_agent(&self, group_hex: &str, kind: u64) -> Vec<AppMessageRecord> {
+        let kinds = if kind == ITEM_KIND {
+            vec![ITEM_KIND, EDIT_KIND]
+        } else {
+            vec![kind]
+        };
         let query = AppMessageQuery {
             group_id_hex: Some(group_hex.to_string()),
-            kinds: Some(vec![kind]),
+            kinds: Some(kinds),
             limit: Some(500),
         };
         self.runtime
@@ -318,7 +325,7 @@ impl World {
         self.sent_by_agent(group_hex, ITEM_KIND)
             .into_iter()
             .filter_map(|m| {
-                let read = carrier::read_item(&m.plaintext, &m.tags)?;
+                let read = carrier::read_item(m.kind, &m.plaintext, &m.tags)?;
                 Some((EventKey(m.message_id_hex), read))
             })
             .collect()

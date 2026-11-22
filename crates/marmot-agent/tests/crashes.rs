@@ -341,7 +341,7 @@ async fn a_version_saved_but_not_sent_goes_out_after_a_restart() {
         settles: Vec::new(),
     };
     talk.emitted(emitted(State::Running));
-    talk.sent(&format!("{}/t", id.0), EventKey::from("e-first"));
+    let first = send_queued(&world, &mut talk, &GroupKey(chat.hex.clone())).await;
     talk.emitted(emitted(State::Done));
     store
         .save(&Kept {
@@ -357,11 +357,11 @@ async fn a_version_saved_but_not_sent_goes_out_after_a_restart() {
         let items = chat.items().into_iter().map(|(_, r)| r);
         items
             .into_iter()
-            .find(|r| r.item.event.header().item.as_str() == "t")
+            .find(|r| r.item.event.header().item.as_str() == "t" && r.item.version > 1)
     })
     .await;
     assert_eq!(read.item.version, 2);
-    assert_eq!(read.item.first, Some(EventKey::from("e-first")));
+    assert_eq!(read.item.first, first);
     assert_eq!(read.item.event.header().state, State::Done);
     core.stop().await;
     world.runtime.shutdown().await;
@@ -721,9 +721,16 @@ async fn a_group_is_read_from_its_start_after_a_failed_save() {
 /// What the agent sent to a chat, of one kind, as its own storage has it: what the core handed
 /// MDK, whether or not the person has it yet.
 fn sent_by_core(chat: &Chat<'_>, kind: u64) -> Vec<marmot_app::AppMessageRecord> {
+    use marmot_agent::carrier::{EDIT_KIND, ITEM_KIND};
+    // An item's later versions are MDK's edits of its first event.
+    let kinds = if kind == ITEM_KIND {
+        vec![ITEM_KIND, EDIT_KIND]
+    } else {
+        vec![kind]
+    };
     let query = marmot_app::AppMessageQuery {
         group_id_hex: Some(chat.hex.clone()),
-        kinds: Some(vec![kind]),
+        kinds: Some(kinds),
         limit: None,
     };
     let marmot = &chat.world.marmot;
@@ -747,7 +754,7 @@ fn words_in(chat: &Chat<'_>) -> Vec<String> {
 fn sent_item(chat: &Chat<'_>, item: &str) -> bool {
     sent_by_core(chat, marmot_agent::carrier::ITEM_KIND)
         .iter()
-        .filter_map(|m| marmot_agent::carrier::read_item(&m.plaintext, &m.tags))
+        .filter_map(|m| marmot_agent::carrier::read_item(m.kind, &m.plaintext, &m.tags))
         .any(|r| r.item.event.header().item.as_str() == item)
 }
 
@@ -1067,8 +1074,10 @@ async fn an_edit_that_went_out_before_a_crash_is_not_sent_again() {
         (sent(store.load().unwrap()) == Some(0)).then_some(())
     })
     .await;
-    let edits = sent_by_core(&chat, 1009);
-    assert_eq!(edits.len(), 1, "the edit went out once");
+    // Edits of the agent's words, not the later versions of items, which are edits too.
+    let edits = (sent_by_core(&chat, marmot_agent::carrier::EDIT_KIND).into_iter())
+        .filter(|m| marmot_agent::carrier::read_item(m.kind, &m.plaintext, &m.tags).is_none());
+    assert_eq!(edits.count(), 1, "the edit went out once");
     core.stop().await;
     world.runtime.shutdown().await;
 }
@@ -1208,20 +1217,20 @@ async fn a_chats_backlog_does_not_hold_up_another() {
         format!("{}/", id.0) < format!("{}/", team_id.0),
         "closed last"
     );
-    let mut open = |chat: &ChatId, item: &str, n: usize| {
+    let open = |talk: &mut Conversation, chat: &ChatId, item: &str| {
         talk.emitted(Emitted {
             event: event(item, State::Running, turn()),
             chat: Some(chat.clone()),
             prompts: Vec::new(),
             settles: Vec::new(),
         });
-        let first = EventKey::from(format!("{n:064x}").as_str());
-        talk.sent(&format!("{}/{item}", chat.0), first);
     };
     for n in 0..20 {
-        open(&id, &format!("a{n:02}"), n);
+        open(&mut talk, &id, &format!("a{n:02}"));
     }
-    open(&team_id, "b", 99);
+    send_queued(&world, &mut talk, &GroupKey(chat.hex.clone())).await;
+    open(&mut talk, &team_id, "b");
+    send_queued(&world, &mut talk, &GroupKey(team_hex.clone())).await;
     let read = kept.read;
     let conversation = talk.saved().clone();
     store
@@ -1243,7 +1252,7 @@ async fn a_chats_backlog_does_not_hold_up_another() {
     let closes = |chat: &Chat<'_>| -> Vec<i64> {
         (sent_by_core(chat, marmot_agent::carrier::ITEM_KIND).into_iter())
             .filter(|m| {
-                let read = marmot_agent::carrier::read_item(&m.plaintext, &m.tags);
+                let read = marmot_agent::carrier::read_item(m.kind, &m.plaintext, &m.tags);
                 read.is_some_and(|r| r.item.event.header().state == State::Cancelled)
             })
             .map(|m| m.insert_order)
@@ -1260,6 +1269,20 @@ async fn a_chats_backlog_does_not_hold_up_another() {
     );
     core.stop().await;
     world.runtime.shutdown().await;
+}
+
+/// Sends what `talk` has queued for `group` through MDK, as the core does, and notes each as sent;
+/// gives the last event. An item's later version is MDK's edit of its first event, so that event
+/// must be one MDK sent.
+async fn send_queued(world: &World, talk: &mut Conversation, group: &GroupKey) -> Option<EventKey> {
+    let mut last = None;
+    while let Some((token, what)) = talk.next_send(group) {
+        let event = world.send(group, &what, &token).await.unwrap();
+        let (Sending::Item { key, .. } | Sending::Words { key, .. }) = &what;
+        talk.sent(key, event.clone());
+        last = Some(event);
+    }
+    last
 }
 
 impl Stub {

@@ -117,7 +117,7 @@ fn watch(world: &World, hex: &str, started: Instant) -> tokio::task::JoinHandle<
         loop {
             let query = marmot_app::AppMessageQuery {
                 group_id_hex: Some(hex.clone()),
-                kinds: Some(vec![9, carrier::ITEM_KIND]),
+                kinds: Some(vec![9, carrier::ITEM_KIND, carrier::EDIT_KIND]),
                 limit: Some(1000),
             };
             for m in runtime
@@ -128,7 +128,7 @@ fn watch(world: &World, hex: &str, started: Instant) -> tokio::task::JoinHandle<
                     continue;
                 }
                 let elapsed = started.elapsed().as_secs();
-                match carrier::read_item(&m.plaintext, &m.tags) {
+                match carrier::read_item(m.kind, &m.plaintext, &m.tags) {
                     Some(read) => println!(
                         "  {elapsed:4}s {} v{} {:?}, text {} bytes",
                         kind(read.item.event.body()),

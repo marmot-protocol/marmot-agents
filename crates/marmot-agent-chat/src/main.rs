@@ -2,7 +2,8 @@
 //!
 //! It holds one person's account, talks to the agent in a Marmot group, shows each of the agent's
 //! items as it changes, and sends answers and controls. How it shows an item is a plain reference
-//! for the apps. It knows the temporary carrier of D-069. How to try the core with it is in
+//! for the apps. It reads an item's first version, kind 1201, and its later ones, MDK's edits of it,
+//! and sends answers and controls as kind 1202 (D-076). How to try the core with it is in
 //! `docs/try.md`.
 //!
 //! Typed lines are messages, sent exactly as typed, slash commands included (D-031). Lines that
@@ -23,7 +24,7 @@
 
 use cgka_traits::{GroupId, TransportEndpoint};
 use marmot_account::AccountHome;
-use marmot_agent::carrier::{self, Asked, AskedReply, ITEM_KIND, Read};
+use marmot_agent::carrier::{self, Asked, AskedReply, Read};
 use marmot_agent::{EventKey, PubKey};
 use marmot_agent_events::State;
 use marmot_agent_events::body::{Body, Choice, Effect};
@@ -307,10 +308,7 @@ impl Client {
             println!("{name}: {}", clean(&message.plaintext));
             return;
         }
-        if message.kind != ITEM_KIND {
-            return;
-        }
-        let Some(read) = carrier::read_item(&message.plaintext, &message.tags) else {
+        let Some(read) = carrier::read_item(message.kind, &message.plaintext, &message.tags) else {
             return;
         };
         let first = read
@@ -318,11 +316,10 @@ impl Client {
             .first
             .clone()
             .unwrap_or_else(|| EventKey(message.message_id_hex.clone()));
-        if self
-            .items
-            .get(&first)
-            .is_some_and(|known| known.read.item.version >= read.item.version)
-        {
+        // The highest version wins, and only the sender of an item may change it, as MDK has it.
+        if self.items.get(&first).is_some_and(|known| {
+            known.sender != message.sender || known.read.item.version >= read.item.version
+        }) {
             return;
         }
         for line in lines_for(&read) {

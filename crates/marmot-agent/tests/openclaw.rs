@@ -140,7 +140,10 @@ fn trace(world: &World, hex: &str) -> tokio::task::JoinHandle<()> {
         loop {
             let query = marmot_app::AppMessageQuery {
                 group_id_hex: Some(hex.clone()),
-                kinds: Some(vec![marmot_agent::carrier::ITEM_KIND]),
+                kinds: Some(vec![
+                    marmot_agent::carrier::ITEM_KIND,
+                    marmot_agent::carrier::EDIT_KIND,
+                ]),
                 limit: Some(500),
             };
             let messages = runtime
@@ -150,7 +153,8 @@ fn trace(world: &World, hex: &str) -> tokio::task::JoinHandle<()> {
                 if !shown.insert(m.message_id_hex.clone()) {
                     continue;
                 }
-                if let Some(read) = marmot_agent::carrier::read_item(&m.plaintext, &m.tags) {
+                if let Some(read) = marmot_agent::carrier::read_item(m.kind, &m.plaintext, &m.tags)
+                {
                     let header = read.item.event.header();
                     println!(
                         "  item {:?} {:?} {}",

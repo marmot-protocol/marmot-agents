@@ -1,9 +1,9 @@
 //! The Marmot side: what arrives in the agent's groups, turned into what the conversation takes,
 //! and what the conversation sends, handed to MDK (D-002).
 //!
-//! MDK is used as it is today, so an agent item, an answer and a control travel under the
-//! temporary kinds of [`carrier`] (D-069). The agent's words are chat messages carrying their
-//! turn (D-022).
+//! An agent item goes out as kind 1201 and its later versions as MDK's edits of it, and an answer
+//! or a control comes in as kind 1202, as [`carrier`] writes and reads them (D-076). The agent's
+//! words are chat messages carrying their turn (D-022).
 
 use crate::carrier::{self, REQUEST_KIND};
 use crate::config::Config;
@@ -408,9 +408,28 @@ impl Marmot {
         let accepted = match what {
             Sending::Item { item, .. } => {
                 let out = carrier::item(item).map_err(|_| too_large())?;
-                (self.runtime)
-                    .submit_custom_event(label, id, out.kind, out.tags, out.content, mdk)
-                    .await?
+                if out.edits().is_none() {
+                    (self.runtime)
+                        .submit_custom_event(label, id, out.kind, out.tags, out.content, mdk)
+                        .await?
+                } else {
+                    // A later version is MDK's edit of the first event, which MDK names from the
+                    // token that event went under; the core sent every first event under one.
+                    let original = token.edits.clone().ok_or_else(|| {
+                        AppError::InvalidAppMessagePayload("no token for the first event".into())
+                    })?;
+                    let tags = out.tags_but_target();
+                    (self.runtime)
+                        .submit_tagged_edit_for_local_send(
+                            label,
+                            id,
+                            original,
+                            out.content,
+                            tags,
+                            mdk,
+                        )
+                        .await?
+                }
             }
             Sending::Words {
                 edit: Some(target),

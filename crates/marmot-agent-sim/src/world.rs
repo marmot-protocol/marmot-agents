@@ -4,7 +4,7 @@
 //! and [`crate::driver::SimDriver`]; the oracles read it and nothing of the core.
 
 use crate::schedule::{Faults, Outcome, Posted, ReadStep, What};
-use marmot_agent::carrier::{self, Asked, ITEM_KIND, REQUEST_KIND};
+use marmot_agent::carrier::{self, Asked, REQUEST_KIND};
 use marmot_agent::marmot::{Live, Message};
 use marmot_agent::{EventKey, GroupKey, PubKey};
 use marmot_agent_driver::{
@@ -21,9 +21,8 @@ use tokio::time::Instant;
 
 /// The kind of a chat message.
 pub const CHAT: u64 = 9;
-/// The kind the simulated MDK gives an edit of the agent's words. Not a kind MDK uses: an edit
-/// only needs to be told apart here.
-pub const EDIT: u64 = 1_000_009;
+/// The kind of an edit, MDK's: of the agent's words, or an item's later version.
+pub const EDIT: u64 = carrier::EDIT_KIND;
 
 /// One thing that happened, at a time on the virtual clock.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -360,6 +359,10 @@ pub struct World {
     pub landings: Vec<Landing>,
     /// Sends MDK refused, and sends the core gave up after its tries.
     pub refused: Vec<RefusedSend>,
+    /// The item sends MDK could not take, as its own checks of an item would refuse them: tags it
+    /// does not read, or a later version with no token for its first event. The core never
+    /// makes one (S3).
+    pub misshapen: Vec<String>,
     /// What MDK keeps under each token, by chat and token, across the core's crashes.
     pub tokens: BTreeMap<(usize, String), Kept>,
     /// For each send, by chat and the core's name for it, how many of its tries MDK dropped.
@@ -415,6 +418,7 @@ impl World {
             crashed: false,
             landings: Vec::new(),
             refused: Vec::new(),
+            misshapen: Vec::new(),
             tokens: BTreeMap::new(),
             drops: BTreeMap::new(),
             harness: Harness::default(),
@@ -576,10 +580,7 @@ impl World {
         let mut firsts: BTreeMap<String, EventKey> = BTreeMap::new();
         let mut latest = None;
         for row in self.rows.iter().filter(|r| r.chat == chat && r.from_agent) {
-            if row.kind != ITEM_KIND {
-                continue;
-            }
-            let Some(read) = carrier::read_item(&row.content, &row.tags) else {
+            let Some(read) = carrier::read_item(row.kind, &row.content, &row.tags) else {
                 continue;
             };
             let id = read.item.event.header().item.as_str().to_string();
@@ -1394,9 +1395,7 @@ enum BodyKind {
 
 /// A short, private-free description of a stored row, for the trace.
 pub fn describe(row: &Row) -> String {
-    if row.kind == ITEM_KIND
-        && let Some(read) = carrier::read_item(&row.content, &row.tags)
-    {
+    if let Some(read) = carrier::read_item(row.kind, &row.content, &row.tags) {
         let h = read.item.event.header();
         return format!(
             "c{} {} v{} {}",

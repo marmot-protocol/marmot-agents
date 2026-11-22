@@ -244,3 +244,57 @@ fn an_answer_sees_an_approval_that_landed_while_no_core_looked() {
         assert_eq!(target, Some(landed));
     });
 }
+
+// The simulated MDK takes only an item MDK reads, as MDK checks one it is sent: a version with no
+// place in its session (`seq` 0, which the core's own notices once carried) is refused, and S3
+// fails on it, where the simulator used to store whatever the core sent.
+#[test]
+fn an_item_mdk_cannot_read_is_refused_and_fails_s3() {
+    use marmot_agent::marmot::{SendFailed, Side};
+    use marmot_agent::{Sending, Token};
+    use marmot_agent_sim::side::SimSide;
+    paused(async || {
+        let w = world(&[What::Prompt { approval: false }]);
+        let group = w.chats[0].group.clone();
+        let agent = w.agent.clone();
+        let side = SimSide {
+            world: std::sync::Arc::new(std::sync::Mutex::new(w)),
+            notify: Default::default(),
+            agent,
+        };
+        let notice = |seq| {
+            let header = Header {
+                seq,
+                ..header("core-1", State::Done)
+            };
+            let body = Body::Notice(Notice {
+                kind: NoticeKind::Refused,
+                duration_ms: None,
+                reason: Some("not_allowed".into()),
+            });
+            Sending::Item {
+                key: "notice/core-1".into(),
+                item: Box::new(Item {
+                    event: AgentEvent::new(header, body, None).expect("no secret"),
+                    version: 1,
+                    first: None,
+                    started_by: None,
+                    settles: Vec::new(),
+                }),
+            }
+        };
+        let token = |mdk: &str| Token {
+            send: mdk.into(),
+            mdk: mdk.into(),
+            edits: None,
+            tried_at: None,
+        };
+        assert!(side.send(&group, &notice(1), &token("a")).await.is_ok());
+        assert!(oracle::safety(&side.world.lock().expect("not poisoned")).is_none());
+        let refused = side.send(&group, &notice(0), &token("b")).await;
+        assert_eq!(refused, Err(SendFailed::Refused { gone: false }));
+        let world = side.world.lock().expect("not poisoned");
+        let failure = oracle::safety(&world).expect("a failure");
+        assert_eq!(failure.property, "S3");
+    });
+}

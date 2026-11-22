@@ -1,11 +1,11 @@
-//! How an agent item, an answer and a control travel in a Marmot group, for now.
+//! How an agent item, an answer and a control travel in a Marmot group (D-076).
 //!
-//! Until MDK takes the new shape of kinds 1201 and 1202, an item travels under [`ITEM_KIND`] and
-//! an answer or a control under [`REQUEST_KIND`], kinds MDK does not reserve. An item's later
-//! versions are new events that name its first event and carry a higher version, where the real
-//! carrier will use edits; a reader keeps the highest version of each item (D-069). The parts of
-//! an event follow the carrier page (`docs/design/event-carrier.md`): the plain rendering in the
-//! content, everything else in tags. The tag names are provisional.
+//! An item's first version is a kind 1201 event, [`ITEM_KIND`]; each later version is MDK's edit
+//! of it, [`EDIT_KIND`], whose one `e` tag names the first event and which carries the whole item
+//! again with a higher version (D-025). A reader keeps the highest version of each item. An answer
+//! or a control is a kind 1202 event, [`REQUEST_KIND`]. The parts of an event follow
+//! `docs/design/agent-kinds.md`: the plain rendering in the content, everything else in tags. On an
+//! item, the chat message that started its turn is a `started_by` tag, MDK's name for it (D-112).
 //!
 //! The core applies the 64 KB limit here, because only here is an item's final size known
 //! (D-057).
@@ -17,12 +17,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
 
-/// The kind an agent item travels under until MDK takes kind 1201.
-pub const ITEM_KIND: u64 = 41201;
-/// The kind an answer or a control travels under until MDK takes kind 1202.
-pub const REQUEST_KIND: u64 = 41202;
-/// The largest an agent item may be (D-026).
-pub const LIMIT: usize = 64 * 1024;
+/// The kind of an item's first version: an agent item.
+pub const ITEM_KIND: u64 = marmot_app::MARMOT_APP_EVENT_KIND_AGENT_ITEM;
+/// The kind of an item's later versions: MDK's edit, which names the item's first event.
+pub const EDIT_KIND: u64 = cgka_traits::app_event::MARMOT_APP_EVENT_KIND_EDIT;
+/// The kind of an answer or a control.
+pub const REQUEST_KIND: u64 = marmot_app::MARMOT_APP_EVENT_KIND_AGENT_REQUEST;
+/// The largest an agent item may be (D-026), as MDK has it too.
+pub const LIMIT: usize = marmot_app::AGENT_EVENT_MAX_BYTES;
 
 /// An event ready for MDK to send: its kind, content and tags.
 #[derive(Clone, PartialEq, Eq)]
@@ -36,6 +38,20 @@ pub struct Outgoing {
 }
 
 impl Outgoing {
+    /// For a later version of an item, an edit: the item's first event, which its `e` tag names.
+    /// MDK places that tag itself, from the token the first event went under.
+    pub fn edits(&self) -> Option<&str> {
+        (self.kind == EDIT_KIND).then(|| value(&self.tags, "e"))?
+    }
+
+    /// The tags without the `e` tag of an edit, as MDK takes them for an edit it places.
+    pub fn tags_but_target(&self) -> Vec<Vec<String>> {
+        (self.tags.iter())
+            .filter(|t| t.first().map(String::as_str) != Some("e"))
+            .cloned()
+            .collect()
+    }
+
     /// How large the event is: the whole event as a relay gets it, with its id, author, time and
     /// signature, and the content and tags escaped as JSON. The core cannot see the event MDK
     /// builds, so this stands in for it, rounding each part up.
@@ -601,7 +617,11 @@ struct Fields(Body);
 
 fn write_item(item: &Item, left_out: &LeftOut) -> Outgoing {
     let header = item.event.header();
-    let mut tags = vec![
+    // A later version is an edit: its one `e` tag names the first event, and counts in its size.
+    let mut tags: Vec<Vec<String>> = (item.first.iter())
+        .map(|first| tag(["e", first.as_str()]))
+        .collect();
+    tags.extend([
         tag(["v", &item.version.to_string()]),
         tag(["state", word(&header.state)]),
         tag(["title", &header.title]),
@@ -609,10 +629,7 @@ fn write_item(item: &Item, left_out: &LeftOut) -> Outgoing {
         tag(["item_id", header.item.as_str()]),
         tag(["seq", &header.seq.to_string()]),
         tag(["fields", &json(&Fields(item.event.body().clone()))]),
-    ];
-    if let Some(first) = &item.first {
-        tags.push(tag(["item", first.as_str()]));
-    }
+    ]);
     if let Some(session) = &header.session {
         tags.push(tag(["session", session.as_str()]));
     }
@@ -620,7 +637,7 @@ fn write_item(item: &Item, left_out: &LeftOut) -> Outgoing {
         tags.push(tag(["turn", turn.as_str()]));
     }
     if let Some(started_by) = &item.started_by {
-        tags.push(tag(["e", started_by.as_str()]));
+        tags.push(tag(["started_by", started_by.as_str()]));
     }
     for request in &item.settles {
         tags.push(tag(["settles", request.as_str()]));
@@ -641,15 +658,30 @@ fn write_item(item: &Item, left_out: &LeftOut) -> Outgoing {
         tags.push(tag(["cut", name, &size.to_string()]));
     }
     Outgoing {
-        kind: ITEM_KIND,
+        kind: if item.first.is_some() {
+            EDIT_KIND
+        } else {
+            ITEM_KIND
+        },
         content: header.text.clone(),
         tags,
     }
 }
 
-/// Reads an item back from an event's content and tags. `None` when it is not one.
-pub fn read_item(content: &str, tags: &[Vec<String>]) -> Option<Read> {
+/// Reads an item back from an event: its first version, of kind [`ITEM_KIND`], or a later one,
+/// an edit of kind [`EDIT_KIND`] whose one `e` tag names the first. `None` when it is neither, as
+/// an edit of the agent's words is not. Who sent an edit is the reader's to check: only the
+/// sender of the first event may edit it.
+pub fn read_item(kind: u64, content: &str, tags: &[Vec<String>]) -> Option<Read> {
     let one = |name: &str| value(tags, name);
+    let first = match kind {
+        ITEM_KIND => None,
+        EDIT_KIND => Some(one("e")?),
+        _ => return None,
+    };
+    if values(tags, "e").count() != usize::from(first.is_some()) {
+        return None;
+    }
     let Fields(body) = serde_json::from_str(one("fields")?).ok()?;
     let header = Header {
         harness: one("harness")?.to_string(),
@@ -681,8 +713,8 @@ pub fn read_item(content: &str, tags: &[Vec<String>]) -> Option<Read> {
         item: Item {
             event,
             version: one("v")?.parse().ok()?,
-            first: one("item").map(EventKey::from),
-            started_by: one("e").map(EventKey::from),
+            first: first.map(EventKey::from),
+            started_by: one("started_by").map(EventKey::from),
             settles: values(tags, "settles").map(EventKey::from).collect(),
         },
         left_out: LeftOut {

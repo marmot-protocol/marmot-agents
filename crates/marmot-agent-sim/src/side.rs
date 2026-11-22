@@ -261,9 +261,10 @@ fn send(
     };
     // What MDK would store, as the real Marmot side builds it.
     let built = match what {
-        Sending::Item { item, .. } => {
-            carrier::item(item).map(|out| (out.kind, out.content, out.tags, None))
-        }
+        Sending::Item { item, .. } => carrier::item(item).map(|out| {
+            let edits = out.edits().map(EventKey::from);
+            (out.kind, out.content, out.tags, edits)
+        }),
         Sending::Words {
             edit: Some(target),
             text,
@@ -326,6 +327,13 @@ fn send(
         world.note(format!("Send(c{chat}): Refused, too large"));
         return (Err(SendFailed::Refused { gone: false }), false);
     };
+    if let Some(why) = misshapen(what, kind, &tags, token) {
+        let why = format!("{why} in c{chat}");
+        world.note(format!("Send(c{chat}): Refused, {why}"));
+        world.misshapen.push(why);
+        world.refused.push(dropped);
+        return (Err(SendFailed::Refused { gone: false }), false);
+    }
     let request = (kind, content.clone(), tags.clone(), edits.clone());
     if let Some(kept) = world.tokens.get(&(chat, token.mdk.clone())).cloned() {
         return (answer_again(world, chat, &kept, &request, dropped), false);
@@ -428,4 +436,27 @@ fn dropped_try(world: &mut World, send: &str, dropped: RefusedSend) -> SendFaile
         world.refused.push(dropped);
     }
     SendFailed::Rejected
+}
+
+/// Why MDK would refuse an item the core sends, as its own checks do (its `submit_custom_event`
+/// for a first version, and `submit_tagged_edit_for_local_send` for a later one): tags MDK does
+/// not read as an item, or a later version with no token for its first event to name. `None`
+/// for anything else.
+fn misshapen(what: &Sending, kind: u64, tags: &[Vec<String>], token: &Token) -> Option<String> {
+    let Sending::Item { item, .. } = what else {
+        return None;
+    };
+    let name = format!("{} v{}", item.event.header().item.as_str(), item.version);
+    let own: Vec<Vec<String>> = (tags.iter())
+        .filter(|t| t.first().map(String::as_str) != Some("e"))
+        .cloned()
+        .collect();
+    if let Err(error) = cgka_traits::agent_events::validate_agent_item_tags(&own) {
+        return Some(format!("{name}: {error}"));
+    }
+    let edit = kind == EDIT;
+    if edit != item.first.is_some() || (edit && token.edits.is_none()) {
+        return Some(format!("{name}: not an edit of its first event"));
+    }
+    None
 }
