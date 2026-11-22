@@ -68,8 +68,6 @@ impl std::fmt::Debug for Outgoing {
 struct Root {
     names: Vec<PathBuf>,
     dir: File,
-    /// Whether the folder is the account home or lies inside it, when files from there are kept.
-    in_home: bool,
 }
 
 /// A folder as the system knows it, whatever its name: its device and inode.
@@ -163,19 +161,13 @@ impl Folders {
                 let real = std::fs::canonicalize(folder).ok()?;
                 let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC;
                 let dir = File::from(rustix::fs::open(&real, flags, Mode::empty()).ok()?);
-                // Asked of the folder held open, not of its name, which may since lead elsewhere.
-                let in_home = home.is_some_and(|home| lies_in(&dir, home));
                 let mut names = vec![real];
                 if let Ok(given) = std::path::absolute(folder)
                     && !names.contains(&given)
                 {
                     names.push(given);
                 }
-                Some(Root {
-                    names,
-                    dir,
-                    in_home,
-                })
+                Some(Root { names, dir })
             })
             .collect();
         Self {
@@ -242,10 +234,12 @@ impl Root {
                 Ok(fd) if last => {
                     // The folders still open are the file's own, from this one down, since a
                     // `..` closes the last and a whole link starts again from this one.
-                    // One whose identity the system does not give counts as the home.
+                    // One whose identity the system does not give counts as the home. Whether the
+                    // allowed folder itself lies in the home is asked again now, of the folder held
+                    // open, since it may have been moved there after the start.
                     if let Some(home) = home
-                        && (self.in_home
-                            || opened.iter().any(|d| id_of(d).is_none_or(|i| i == home)))
+                        && (opened.iter().any(|d| id_of(d).is_none_or(|i| i == home))
+                            || lies_in(&self.dir, home))
                     {
                         return Err(in_home());
                     }
@@ -748,6 +742,20 @@ mod tests {
             let out = f.read(&home.join("out/report.txt"));
             assert_eq!(reason(out), Reason::NotAllowed);
         }
+    }
+
+    // An allowed folder moved into the home after the start sends nothing more, even by the name
+    // it was allowed under, since the question is asked again of the folder held open each time.
+    #[test]
+    fn a_folder_moved_into_the_account_home_sends_nothing_more() {
+        let (work, home) = holding_the_home();
+        let out = work.path().join("out");
+        std::fs::create_dir(&out).unwrap();
+        std::fs::write(out.join("report.txt"), "report").unwrap();
+        let f = Folders::new(std::slice::from_ref(&out), Some(&home));
+        assert_eq!(f.read(&out.join("report.txt")).unwrap().bytes, b"report");
+        std::fs::rename(&out, home.join("out")).unwrap();
+        assert_eq!(reason(f.read(&out.join("report.txt"))), Reason::NotAllowed);
     }
 
     // Whether an allowed folder is in the home is asked of the folder held open, not of its name:
