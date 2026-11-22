@@ -69,22 +69,48 @@ fn a_name_always_makes_the_same_schedule() {
     );
 }
 
-// A failure leaves a capsule that replays it exactly and shrinks. Found with a bug put back,
-// `mark_from_live`, which loses messages MDK announces out of storage order. It was found with
-// MDK's contract switched off (the `disorder` family) until the core read every group from its
-// mark on its tick, which loses nothing there.
+// A failure shrinks and leaves a capsule that replays it exactly. The schedule is fixed, so this
+// tests the shrinker and the capsule only; that the simulator finds the bug is
+// `bugs.rs` `mark_from_live_is_found`. With the bug `mark_from_live` put back, a prompt heard
+// live moves the mark past an answer stored before it, which is never read (L1). The first
+// message, the ticks and the step after the prompt play no part.
 #[cfg(feature = "bugs")]
 #[test]
-fn a_failure_is_found_shrunk_and_replayed() {
+fn a_failure_is_shrunk_and_replayed() {
     let dir = tempfile::tempdir().unwrap();
-    let found = (0..60).find_map(|index| {
-        let mut schedule = generate(&RunName::new(Family::Live, 0, index));
-        schedule.bugs.mark_from_live = true;
-        let report = run(&schedule);
-        report.failure.is_some().then_some((schedule, report))
-    });
-    let (schedule, report) = found.expect("mark_from_live loses a message within 60 runs");
-    let property = report.failure.as_ref().unwrap().failure.property.clone();
+    let prompt = |approval| Posted {
+        chat: 0,
+        what: What::Prompt { approval },
+    };
+    let answer = Posted {
+        chat: 0,
+        what: What::Answer,
+    };
+    let schedule = Schedule {
+        name: RunName::new(Family::Live, 0, 0),
+        chats: 1,
+        bugs: BugSet {
+            mark_from_live: true,
+            ..BugSet::default()
+        },
+        faults: Faults::default(),
+        messages: vec![prompt(false), answer, prompt(true)],
+        steps: vec![
+            Action::Invite { chat: 0 },
+            Action::Tick { ms: 50 },
+            Action::Store { msg: 1 },
+            Action::Tick { ms: 50 },
+            Action::Hear { msg: 2 },
+            Action::Tick { ms: 1000 },
+        ],
+    };
+    let report = run(&schedule);
+    let property = (report.failure.as_ref())
+        .expect("mark_from_live loses the answer")
+        .failure
+        .property
+        .clone();
+    assert_eq!(property, "L1");
     let (small, small_report) = shrink(&schedule, &report, 300);
     assert!(small.steps.len() < schedule.steps.len());
     assert!(
