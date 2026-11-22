@@ -128,8 +128,9 @@ sequenceDiagram
 
 - **The harness asks with a tool the driver gives it.** Codex gets a dynamic tool, `send_file`, on every
   session the driver starts, and Codex keeps it when a session is resumed. Claude Code gets an in-process MCP
-  server from the Agent SDK with the same tool, which Claude Code calls `mcp__marmot__send_file`. Both take one
-  argument, `path`. The model is never asked to write a path into its answer, and nothing in its words is read
+  server from the Agent SDK with the same tool, which Claude Code calls `mcp__marmot__send_file`. Pi gets it
+  from a small extension of the driver's own, loaded into each chat's Pi
+  ([the Pi driver](#the-pi-driver)). All three take one argument, `path`. The model is never asked to write a path into its answer, and nothing in its words is read
   as a request to send.
 - **The driver hands the core a request.** `next_event` gives either an event or `SendFile`: the driver's own
   id for the request, the chat, and the path. The driver makes a relative path whole by putting the chat's
@@ -170,9 +171,10 @@ sequenceDiagram
   `not_allowed`, `invalid`, `not_supported`, `busy` or `failed`, and never the path
   ([D-071](../decisions.md#d-071-what-may-be-logged)).
 - **Who may.** Calling the tool needs nobody's approval in the chat: the Claude Code connector allows it in
-  its permission callback, and Codex does not ask for a dynamic tool. The folders are the limit, as the owner set them.
+  its permission callback, Codex does not ask for a dynamic tool, and Pi asks nobody before any tool. The
+  folders are the limit, as the owner set them.
 
-Pi, the ACP driver, and the Hermes and OpenClaw plugins do not offer the tool yet. A plugin would send the
+The ACP driver, and the Hermes and OpenClaw plugins, do not offer the tool yet. A plugin would send the
 same `send_file` request from its gateway's own message tool.
 
 ## A chat's folder
@@ -459,6 +461,22 @@ args = []                            # for pi.sh: ["<model key file>", "<Pi's st
   second one while it runs is refused as busy, since Pi would abort the first. Pi's refusal of any of them, or an extension cancelling a
   new session, is an error item that settles it. If Pi stops before a control has had its effect, an error
   item the driver makes settles it as failed; the items the driver closes for a stopped Pi settle nothing.
+- **Sending a file.** Pi's RPC mode lets a client add no tool of its own, and an extension is Pi's own way to
+  add one (`pi.registerTool`), so the driver ships a small one,
+  [`extension/send-file.ts`](../../crates/marmot-agent-pi/extension/send-file.ts), built into the driver. At
+  start the driver writes it into a folder of its own, which only its user can open and which goes with the
+  driver, and starts each chat's Pi with `--extension <that file>`, which Pi loads even when the person's
+  settings turn their own extensions off. A native Pi reads it where it is. In the container, `pi.sh`
+  mounts that one file read-only at the same path, which the driver names in `MARMOT_AGENT_PI_EXTENSION`,
+  and refuses one inside the state folder. Nothing is installed, and nothing of the person's Pi changes. The
+  extension's `send_file` tool asks the driver through Pi's extension UI, in an `input` dialog titled
+  `marmot-agent send_file` that carries the path. The driver takes that dialog as the request
+  ([sending a file](#sending-a-file)); it never reaches the chat as a question. It makes a relative path whole
+  from the folder the chat's Pi works in, and answers the dialog with what the core said, which the tool gives
+  the model as its result, an error if the file was not sent. The tool call shows as a `tool` item, from Pi's
+  own records. A dialog that names no path is refused at once, since the tool waits for its answer. If the
+  turn is stopped while the core sends, the tool stops waiting; the file may still arrive. Built 2026-11-22;
+  the tool's name, words and the dialog are provisional.
 - **Approvals.** Pi has none: it asks nobody before a tool runs, so `approvals` is no. An extension can ask
   through Pi's extension UI. A `select`, `confirm`, `input` or `editor` request becomes a question item,
   answered by the label chosen or the text typed; `notify` becomes a notice. With Pi's example permission

@@ -16,11 +16,12 @@ serde_json = { version = "1", features = ["raw_value"] }
 rustix = { version = "1", default-features = false, features = ["process", "std"] }
 # Names each chat's own state by a hash of its id.
 sha2 = "0.10"
+# A private folder for the driver's extension, which each Pi loads.
+tempfile = "3"
 # Runs Pi and reads it without blocking the core.
 tokio = { version = "1", features = ["io-util", "process", "rt", "sync", "time"] }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
-tempfile = "3"
 serde_json = { version = "1", features = ["raw_value"] }
 tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "rt-multi-thread", "sync", "time"] }

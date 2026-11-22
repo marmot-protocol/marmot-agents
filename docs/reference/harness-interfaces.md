@@ -120,6 +120,15 @@ documentation in its npm package and the source of `pi-codes` 1.6.0. The recordi
   more), a response to each and session events out. A prompt sent during a run must say whether it steers the
   run or follows it. Pi has no tool-approval gate of its own; an extension can ask the client through Pi's
   extension UI records. The package is `@earendil-works/pi-coding-agent`, 1.6.0, published 2026-11-20.
+- **A client's own tool.** Re-checked on 2026-11-22, in Pi 1.6.0's `docs/rpc.md`, `docs/rpc-commands.md`,
+  `docs/rpc-extension-ui.md` and `docs/extensions.md`, and by running it in the container: RPC mode has no
+  command that adds a tool. An extension adds one with `pi.registerTool`, its parameters a plain JSON Schema,
+  and is loaded with `--extension <file>` (`-e`), which loads even with `--no-extensions`; a TypeScript file
+  needs no build. A tool's `execute` gets the turn's abort signal and `ctx.ui`, whose dialogs (`select`,
+  `confirm`, `input`, `editor`) become `extension_ui_request` records that wait for the client's
+  `extension_ui_response`. Aborted, a dialog resolves to nothing and the client is not told; an answer that
+  comes later is ignored (read in its `dist/modes/rpc/rpc-mode.js`). A tool marks its result an error with
+  `isError: true`. The Pi driver's `send_file` tool is built on these.
 - **ACP.** Third party only (`pi-acp`, 0.0.35 on npm, published 2026-11-21; its issue count was not checked
   again). It supports only new, load, list and delete. Pi's own project closed its ACP pull requests.
 - **Rust.** The community crate `pi-codes` drives RPC mode, including steering. See

@@ -3,9 +3,9 @@
 //! only what it alone can tell, such as that a named session was taken up.
 
 use crate::check::{Violation, broke};
-use crate::fake::{Heard, Knobs, Progress};
+use crate::fake::{FILE, Heard, Knobs, Progress};
 use crate::run::{Run, Subject, turn_ended, waiting};
-use marmot_agent_driver::{ChatId, Driver, Emitted, MessageId, Output};
+use marmot_agent_driver::{ChatId, Driver, Emitted, MessageId, Output, Reason, Refusal};
 use marmot_agent_events::{Body, State};
 use std::time::Duration;
 
@@ -40,7 +40,8 @@ macro_rules! with_scenarios {
             restart,
             new_session,
             folder,
-            settings
+            settings,
+            send_file
         );
     };
 }
@@ -732,6 +733,108 @@ pub async fn settings<S: Subject>(subject: S) -> Result<(), Violation> {
         run.drain(Duration::from_millis(20)).await;
     }
     run.end().await
+}
+
+/// The agent sends a file with the driver's own tool (D-090). The request names the chat whose
+/// harness asked (S5), with a relative path made whole from the folder that chat works in
+/// (D-101), and what the core says of it reaches that harness, and only it, as the tool's result.
+/// First one chat, sent; then two at once, one of them moved to another folder, each waiting
+/// while the other is asked for, and answered the other way round: the later one sent, the
+/// earlier refused, with the core's words. A driver that gives its harness no such tool has
+/// nothing to show here.
+pub async fn send_file<S: Subject>(subject: S) -> Result<(), Violation> {
+    let mut run = Run::start(subject).await;
+    if !run.subject.sends_files() {
+        return run.end().await;
+    }
+    let own = run
+        .driver
+        .folder()
+        .ok_or_else(|| broke("D-101", "a coding driver states no folder of its own"))?;
+    let other = run.subject.other_folder();
+
+    let first = taken(run.prompt("c-1", "#file").await?, "the prompt")?;
+    let file = run.file("D-090", "the request to send a file").await?;
+    run.check.file_asked(&file, &ChatId::from("c-1"));
+    run.ok()?;
+    if file.path != own.join(FILE) {
+        return Err(broke(
+            "D-101",
+            "a relative path was not made whole from the chat's folder",
+        ));
+    }
+    run.file_sent(&file, Ok(())).await?;
+    told(&mut run, 1).await?;
+    run.wait("L2", "the turn's end", ended_turn_of(&first))
+        .await?;
+
+    let (_, result) = run.new_session_in("c-2", None, &other).await?;
+    taken(result, "a new session in another folder")?;
+    let two = taken(run.prompt("c-2", "#file").await?, "chat 2's prompt")?;
+    let second = run.file("D-090", "chat 2's request to send a file").await?;
+    run.check.file_asked(&second, &ChatId::from("c-2"));
+    let one = taken(run.prompt("c-1", "#file").await?, "chat 1's prompt")?;
+    let third = run.file("D-090", "chat 1's request to send a file").await?;
+    run.check.file_asked(&third, &ChatId::from("c-1"));
+    run.ok()?;
+    if second.path != other.join(FILE) || third.path != own.join(FILE) {
+        return Err(broke(
+            "D-101",
+            "a relative path was not made whole from the chat's folder",
+        ));
+    }
+    if second.id == third.id {
+        return Err(broke("D-090", "two waiting requests share an id"));
+    }
+    run.file_sent(&third, Ok(())).await?;
+    let refused = Refusal {
+        reason: Reason::NotAllowed,
+        detail: Some("the file is not in a folder the settings allow.".into()),
+    };
+    run.file_sent(&second, Err(refused)).await?;
+    told(&mut run, 3).await?;
+    for message in [&two, &one] {
+        run.wait("L2", "a turn's end", ended_turn_of(message))
+            .await?;
+    }
+    run.checkpoint().await?;
+    let heard = run.subject.fake().heard();
+    let session = prompted_in(&heard, &two);
+    let said = heard.iter().find_map(|h| match h {
+        Heard::FileResult {
+            session: s, text, ..
+        } if Some(s) == session.as_ref() => Some(text),
+        _ => None,
+    });
+    if !said.is_some_and(|t| t.contains("not in a folder the settings allow")) {
+        return Err(broke(
+            "D-090",
+            "the core's words for a refusal did not reach the agent",
+        ));
+    }
+    run.end().await
+}
+
+/// Waits until the harness has heard `count` results of its tool to send a file, taking what the
+/// driver hands over meanwhile (D-090).
+async fn told<S: Subject>(run: &mut Run<S>, count: usize) -> Result<(), Violation> {
+    let deadline = tokio::time::Instant::now() + run.patience;
+    loop {
+        let heard = run.subject.fake().heard();
+        let results = (heard.iter())
+            .filter(|h| matches!(h, Heard::FileResult { .. }))
+            .count();
+        if results >= count {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() > deadline {
+            return Err(broke(
+                "D-090",
+                "the harness never heard how a file it asked to send went",
+            ));
+        }
+        run.drain(Duration::from_millis(20)).await;
+    }
 }
 
 /// The prompt the crash sweep runs: a turn that asks for approval, which is given.

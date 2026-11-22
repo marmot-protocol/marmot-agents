@@ -61,7 +61,8 @@ the session's settings. A message that starts with a slash goes to Codex as type
 
 The relay keeps nothing when the client stops, so start again from step 2 with fresh folders.
 
-The agent can send a file from its working folder with its `send_file` tool, but never one from its own home,
+The agent can send a file from its working folder with its `send_file` tool (Codex, Claude Code and Pi), but
+never one from its own home,
 `/tmp/try/agent`, which holds its keys, even if the working folder held it, unless the settings say
 `send_files_from_agent_home = true`
 ([D-099](decisions.md#d-099-files-from-the-agents-own-home-are-refused-by-default-and-the-owner-may-allow-them)). The encrypted file goes to the

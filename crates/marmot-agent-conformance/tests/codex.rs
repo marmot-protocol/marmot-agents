@@ -68,6 +68,10 @@ impl Subject for OnFake {
     fn loose(&self) -> bool {
         self.recording.is_some()
     }
+
+    fn sends_files(&self) -> bool {
+        true
+    }
 }
 
 // One test for each scenario, made from the suite's one list of them.

@@ -133,6 +133,7 @@ conformance!(Goose:
         stops_reading,
         late_replies,
         settings,
+        send_file,
     ]
 );
 
@@ -151,6 +152,7 @@ conformance!(Cursor:
         new_session,
         folder,
         settings,
+        send_file,
     ]
 );
 

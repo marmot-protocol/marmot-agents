@@ -9,7 +9,7 @@
 //! `--session <id>` takes up a session that has one and exits otherwise, and `--session-id <id>`
 //! takes it up or starts an empty one with that id.
 
-use super::{Fake, Heard, Outbox, Protocol, Script, fresh};
+use super::{FILE, Fake, Heard, Outbox, Protocol, Script, fresh};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -53,6 +53,21 @@ struct Run {
     steered: Vec<String>,
     tool: Option<String>,
     asked: Option<String>,
+    /// The call of the driver's `send_file` tool, waiting in its dialog for the driver's answer.
+    file: Option<String>,
+}
+
+/// The title of the dialog the driver's extension asks in, as `crates/marmot-agent-pi` names it.
+const SEND_FILE_REQUEST: &str = "marmot-agent send_file";
+
+/// Whether Pi was started with the driver's extension, which gives it the `send_file` tool: a
+/// file, named after `--extension`, that registers the tool and asks in the driver's dialog.
+fn has_send_file(args: &[String]) -> bool {
+    let at = args.iter().position(|a| a == "--extension");
+    let source = at
+        .and_then(|at| args.get(at + 1))
+        .and_then(|path| std::fs::read_to_string(path).ok());
+    source.is_some_and(|s| s.contains("name: \"send_file\"") && s.contains(SEND_FILE_REQUEST))
 }
 
 /// One Pi process.
@@ -65,6 +80,8 @@ pub struct Pi {
     missing: bool,
     /// The folder the process was started in, as the relay says.
     folder: Option<String>,
+    /// It loaded the driver's extension, and so has the `send_file` tool.
+    sends_files: bool,
     thinking: String,
     run: Option<Run>,
 }
@@ -113,6 +130,7 @@ impl Pi {
             resumed,
             missing,
             folder,
+            sends_files: has_send_file(args),
             thinking: "low".into(),
             run: None,
         }
@@ -163,8 +181,27 @@ impl Pi {
             steered: Vec::new(),
             tool: None,
             asked: None,
+            file: None,
         };
         let script = Script::of(text);
+        if script == Script::File && self.sends_files {
+            // The extension's tool asks the driver, in its dialog, and waits for the answer.
+            let call = fresh("call");
+            let args = json!({"path": FILE});
+            assistant(
+                json!([{"type": "toolCall", "id": call, "name": "send_file", "arguments": args}]),
+                "toolUse",
+                out,
+            );
+            out.say(json!({"type": "tool_execution_start", "toolCallId": call, "toolName": "send_file", "args": args}));
+            let asked = fresh("ui");
+            out.say(
+                json!({"type": "extension_ui_request", "id": asked, "method": "input",
+                "title": SEND_FILE_REQUEST, "placeholder": args.to_string()}),
+            );
+            run.asked = Some(asked);
+            run.file = Some(call);
+        }
         if matches!(script, Script::Sleep | Script::Die | Script::Ask) {
             let call = fresh("call");
             let args = json!({"command": format!("echo {text}")});
@@ -190,6 +227,7 @@ impl Pi {
         self.run = Some(run);
         match script {
             Script::Reply => self.finish("ok", false, out),
+            Script::File if !self.sends_files => self.finish("no send_file tool", false, out),
             Script::Die => out.die(),
             _ => {}
         }
@@ -261,6 +299,23 @@ impl Protocol for Pi {
             "extension_ui_response" => {
                 let asked = self.run.as_ref().and_then(|r| r.asked.clone());
                 if asked.as_deref() != command["id"].as_str() {
+                    return;
+                }
+                if let Some(call) = self.run.as_mut().and_then(|r| r.file.take()) {
+                    // The driver's answer to its own tool: how the send went.
+                    let value = command["value"].as_str().unwrap_or_default();
+                    let answer: Value = serde_json::from_str(value).unwrap_or(Value::Null);
+                    let text = answer["text"].as_str().unwrap_or_default().to_string();
+                    let sent = answer["sent"] == true;
+                    heard.push(Heard::FileResult {
+                        session: self.session.clone(),
+                        sent,
+                        text: text.clone(),
+                    });
+                    let result = json!({"content": [{"type": "text", "text": text}]});
+                    out.say(json!({"type": "tool_execution_end", "toolCallId": call, "toolName": "send_file",
+                        "result": result, "isError": !sent}));
+                    self.finish("filed", false, out);
                     return;
                 }
                 let text = command["value"].as_str().map(String::from);

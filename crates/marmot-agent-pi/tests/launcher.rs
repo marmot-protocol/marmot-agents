@@ -147,3 +147,64 @@ fn a_container_still_being_created_is_removed_when_the_script_is_stopped() {
         .collect();
     assert!(left.is_empty(), "no container is left: {left:?}");
 }
+
+// The driver names its extension in MARMOT_AGENT_PI_EXTENSION: the script mounts that one file,
+// read-only, at its own path, so `--extension <it>` loads it in the container. A file in the state
+// folder is refused, since mounting it would hand one chat's Pi another chat's sessions.
+#[test]
+fn the_drivers_extension_is_mounted_read_only_and_never_from_the_state() {
+    let (work, outside, key, state) = folders();
+    let docker = outside.path().join("docker");
+    let extension = outside.path().join("ext").join("send-file.ts");
+    std::fs::create_dir_all(extension.parent().unwrap()).unwrap();
+    std::fs::write(&extension, "export default function () {}").unwrap();
+    let extension = std::fs::canonicalize(&extension).unwrap();
+    let output = with_fake_docker(work.path(), &docker, &key, &state)
+        .args(["--version"])
+        .env("MARMOT_AGENT_PI_EXTENSION", &extension)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let wanted = format!("mount {0}:{0}:ro", extension.display());
+    assert!(
+        log(&docker).lines().any(|l| l == wanted),
+        "{}",
+        log(&docker)
+    );
+
+    // Named through a link, as when the temporary folder is one: the file is mounted at the name
+    // given, so the `--extension` argument the driver passed finds it in the container too.
+    let link = outside.path().join("link");
+    std::os::unix::fs::symlink(extension.parent().unwrap(), &link).unwrap();
+    let through = link.join("send-file.ts");
+    let linked = outside.path().join("docker-link");
+    let output = with_fake_docker(work.path(), &linked, &key, &state)
+        .args(["--version"])
+        .env("MARMOT_AGENT_PI_EXTENSION", &through)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let wanted = format!("mount {}:{}:ro", extension.display(), through.display());
+    assert!(
+        log(&linked).lines().any(|l| l == wanted),
+        "{}",
+        log(&linked)
+    );
+
+    std::fs::create_dir_all(&state).unwrap();
+    let inside = state.join("send-file.ts");
+    std::fs::write(&inside, "export default function () {}").unwrap();
+    let output = with_fake_docker(work.path(), &outside.path().join("docker2"), &key, &state)
+        .args(["--version"])
+        .env("MARMOT_AGENT_PI_EXTENSION", &inside)
+        .output()
+        .unwrap();
+    refused(&output, "state folder");
+    let missing = outside.path().join("none.ts");
+    let output = with_fake_docker(work.path(), &outside.path().join("docker3"), &key, &state)
+        .args(["--version"])
+        .env("MARMOT_AGENT_PI_EXTENSION", &missing)
+        .output()
+        .unwrap();
+    refused(&output, "must name a file");
+}

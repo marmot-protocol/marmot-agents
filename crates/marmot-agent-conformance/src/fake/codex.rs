@@ -1,15 +1,17 @@
 //! A fake `codex app-server`, grown from the stand-in in the Codex driver's tests: JSON-RPC over
 //! lines, in the shapes `fixtures/recordings/codex` holds. One process serves every thread.
 
-use super::{Heard, Outbox, Protocol, Script, fresh};
+use super::{FILE, Heard, Outbox, Protocol, Script, fresh};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-/// What outlives one Codex process: the threads it can resume.
+/// What outlives one Codex process: the threads it can resume, and those started with the
+/// driver's `send_file` tool, which Codex keeps with the thread.
 #[derive(Default)]
 pub struct Store {
     threads: HashSet<String>,
+    send_file: HashSet<String>,
 }
 
 /// A shared store, for every process the fake starts.
@@ -24,8 +26,16 @@ struct Turn {
 }
 
 enum Asked {
-    Approval { thread: String },
-    Question { thread: String },
+    Approval {
+        thread: String,
+    },
+    Question {
+        thread: String,
+    },
+    /// A call of the driver's own tool, `send_file`.
+    Tool {
+        thread: String,
+    },
 }
 
 /// One Codex process.
@@ -87,7 +97,9 @@ impl Codex {
         // What the turn still asked is resolved with it.
         let ids: Vec<i64> = (self.asked.iter())
             .filter(|(_, a)| match a {
-                Asked::Approval { thread: t } | Asked::Question { thread: t } => t == thread,
+                Asked::Approval { thread: t }
+                | Asked::Question { thread: t }
+                | Asked::Tool { thread: t } => t == thread,
             })
             .map(|(id, _)| *id)
             .collect();
@@ -135,6 +147,17 @@ impl Codex {
         self.threads.insert(thread.to_string(), Some(running));
         match script {
             Script::Reply => self.finish(thread, "ok", "completed", out),
+            Script::File if !self.store.lock().unwrap().send_file.contains(thread) => {
+                self.finish(thread, "no send_file tool", "completed", out);
+            }
+            Script::File => {
+                let params = json!({"threadId": thread, "turnId": turn, "callId": fresh("call"),
+                    "namespace": null, "tool": "send_file", "arguments": {"path": FILE}});
+                let asked = Asked::Tool {
+                    thread: thread.to_string(),
+                };
+                self.ask("item/tool/call", params, asked, out);
+            }
             Script::Ask => {
                 let params = json!({"threadId": thread, "turnId": turn, "itemId": command,
                     "command": format!("echo {text}"), "cwd": "/work/demo",
@@ -199,6 +222,18 @@ impl Protocol for Codex {
                     out.say(json!({"method": "serverRequest/resolved", "params": {"threadId": thread, "requestId": id}}));
                     self.finish(&thread, "answered", "completed", out);
                 }
+                Asked::Tool { thread } => {
+                    let text = result["contentItems"][0]["text"]
+                        .as_str()
+                        .unwrap_or_default();
+                    heard.push(Heard::FileResult {
+                        session: thread.clone(),
+                        sent: result["success"] == true,
+                        text: text.to_string(),
+                    });
+                    out.say(json!({"method": "serverRequest/resolved", "params": {"threadId": thread, "requestId": id}}));
+                    self.finish(&thread, "filed", "completed", out);
+                }
             }
             return;
         };
@@ -218,7 +253,13 @@ impl Protocol for Codex {
             "thread/start" => {
                 let thread = fresh("thread");
                 self.threads.insert(thread.clone(), None);
-                self.store.lock().unwrap().threads.insert(thread.clone());
+                let mut store = self.store.lock().unwrap();
+                store.threads.insert(thread.clone());
+                let tools = params["dynamicTools"].as_array().into_iter().flatten();
+                if tools.into_iter().any(|t| t["name"] == "send_file") {
+                    store.send_file.insert(thread.clone());
+                }
+                drop(store);
                 out.reply(json!({"id": id, "result": {"thread": {"id": thread}, "model": "m1", "reasoningEffort": "low"}}));
                 heard.push(Heard::Opened {
                     session: thread,

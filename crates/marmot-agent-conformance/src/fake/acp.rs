@@ -185,7 +185,8 @@ impl Acp {
         let call = turn.call.clone();
         self.sessions.insert(session.to_string(), Some(turn));
         match script {
-            Script::Reply => self.finish(session, Some("ok"), "end_turn", out),
+            // The ACP driver gives the agent no tool to send a file yet.
+            Script::Reply | Script::File => self.finish(session, Some("ok"), "end_turn", out),
             Script::Ask => {
                 if self.flavor == Flavor::Cursor {
                     let params = json!({"toolCallId": call, "merge": false,

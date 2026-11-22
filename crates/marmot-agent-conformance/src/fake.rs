@@ -80,6 +80,13 @@ pub enum Heard {
         allow: Option<bool>,
         text: Option<String>,
     },
+    /// What the driver's own tool to send a file gave back, in the session that called it: whether
+    /// it was sent, and the words the model reads.
+    FileResult {
+        session: String,
+        sent: bool,
+        text: String,
+    },
     /// A control: `interrupt`, `new_session` or `set`.
     Control {
         session: Option<String>,
@@ -136,15 +143,23 @@ pub enum Script {
     Sleep,
     /// Starts a command, then dies, as a crash would.
     Die,
+    /// Calls the driver's own tool to send a file, [`FILE`], to the chat (D-090), and goes on
+    /// once the driver says how it went. A harness that has no such tool from its driver answers
+    /// in words instead.
+    File,
 }
+
+/// The file a fake asks to send, relative to the folder it works in.
+pub const FILE: &str = "out/report.txt";
 
 impl Script {
     /// The words, as a prompt carries them.
-    pub const WORDS: [(&str, Script); 4] = [
+    pub const WORDS: [(&str, Script); 5] = [
         ("#ask", Script::Ask),
         ("#quiz", Script::Quiz),
         ("#sleep", Script::Sleep),
         ("#die", Script::Die),
+        ("#file", Script::File),
     ];
 
     /// What a prompt's text asks for.

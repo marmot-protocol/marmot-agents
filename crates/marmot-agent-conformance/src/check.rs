@@ -17,7 +17,7 @@
 //! | SEQ | `seq` rises within a session (D-059, point 4). Not in the property table; named here so a search finds it. |
 
 use crate::fake::Heard;
-use marmot_agent_driver::{ChatId, Emitted, MessageId, Output, Refusal, RequestId};
+use marmot_agent_driver::{ChatId, Emitted, MessageId, Output, Refusal, RequestId, SendFile};
 use marmot_agent_events::{Body, State};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -132,6 +132,9 @@ pub struct Checker {
     ended: bool,
     /// What answers the harness should hear.
     expected: Vec<Expected>,
+    /// How each file the driver asked to send went, as the core told it, for the chat that asked:
+    /// what the harness should hear as its tool's result.
+    files: Vec<(ChatId, bool)>,
     /// How much of what the harness heard has been checked.
     heard_at: usize,
     prompts_heard: HashSet<String>,
@@ -483,6 +486,22 @@ impl Checker {
                         self.fail("S12", detail);
                     }
                 }
+                Heard::FileResult { session, sent, .. } => {
+                    let owner = self.owners.get(session).cloned();
+                    let at = (self.files.iter())
+                        .position(|(chat, s)| Some(chat) == owner.as_ref() && s == sent);
+                    match at {
+                        Some(at) => {
+                            self.files.remove(at);
+                        }
+                        None => {
+                            let detail = format!(
+                                "a tool's result reached a session of {owner:?} that no send in that chat gave, or not as it went"
+                            );
+                            self.fail("S5", detail);
+                        }
+                    }
+                }
                 Heard::Answer {
                     session,
                     allow,
@@ -566,6 +585,31 @@ impl Checker {
         if !self.expected.is_empty() {
             let detail = format!("{} answers never reached the harness", self.expected.len());
             self.fail("S11", detail);
+        }
+        if !self.files.is_empty() {
+            let detail = format!(
+                "the harness never heard how {} files it asked to send went",
+                self.files.len()
+            );
+            self.fail("D-090", detail);
+        }
+    }
+
+    /// The core told the driver how a file `chat` asked to send went (D-090): the harness of that
+    /// chat should hear it as its tool's result.
+    pub fn expect_file(&mut self, chat: &ChatId, sent: bool) {
+        self.files.push((chat.clone(), sent));
+    }
+
+    /// A file the driver asked to send names the chat whose harness asked, as far as the scenario
+    /// can tell it (S5).
+    pub fn file_asked(&mut self, file: &SendFile, asked_by: &ChatId) {
+        if file.chat != *asked_by {
+            let detail = format!(
+                "a file asked for in {asked_by:?} was sent to {:?}",
+                file.chat
+            );
+            self.fail("S5", detail);
         }
     }
 }

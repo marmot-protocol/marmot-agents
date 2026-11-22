@@ -15,6 +15,9 @@
 #   names a chat (the driver sets it, as lowercase hex), only that chat's own folder inside it is
 #   mounted, so one chat's Pi cannot read another chat's sessions. When the last argument is
 #   `--version`, as when the driver asks Pi its version, an empty folder is mounted in its place.
+# - MARMOT_AGENT_PI_EXTENSION, when set (the driver sets it), names one file, the driver's own Pi
+#   extension, which is mounted read-only at the name given, so that `--extension <it>` loads it. It
+#   must be an ordinary file outside the state folder.
 # - The model key is mounted read-only. It is never built into the image, never put in an
 #   environment variable, and never written anywhere.
 # - Docker keeps no log of the container: what Pi writes holds prompts, replies and tool output.
@@ -25,7 +28,7 @@
 #
 # MODEL_BASE_URL and MODEL_NAME, both required, name the endpoint and the model; PI_IMAGE the image.
 set -eu
-[ $# -ge 2 ] || { sed -n '2,26p' "$0"; exit 2; }
+[ $# -ge 2 ] || { sed -n '2,29p' "$0"; exit 2; }
 here=$(cd "$(dirname "$0")" && pwd)
 key=$(realpath "$1"); state=$(realpath -m "$2"); shift 2
 image=${PI_IMAGE:-marmot-agents-pi}
@@ -43,6 +46,19 @@ if [ -n "${MARMOT_AGENT_DATA:-}" ]; then
     data=$(realpath -m "$MARMOT_AGENT_DATA")
     if inside "$work" "$data" || inside "$data" "$work"; then
         echo "error: the work folder and the agents' folder must not hold one another" >&2; exit 2
+    fi
+fi
+# The driver's extension, one file, read-only: never the state folder or anything in it.
+# It is mounted at the name the driver gave, which `--extension` names, even when that name passes
+# through a link, as a temporary folder can.
+extension=""
+extension_at=""
+if [ -n "${MARMOT_AGENT_PI_EXTENSION:-}" ]; then
+    extension_at=$(realpath -s "$MARMOT_AGENT_PI_EXTENSION")
+    extension=$(realpath "$MARMOT_AGENT_PI_EXTENSION")
+    [ -f "$extension" ] || { echo "error: MARMOT_AGENT_PI_EXTENSION must name a file" >&2; exit 2; }
+    if inside "$extension" "$state"; then
+        echo "error: the extension must not be inside the state folder" >&2; exit 2
     fi
 fi
 # There is no default model endpoint or model (D-100): the installer, a test or a person names both.
@@ -102,6 +118,7 @@ docker run --rm -i --name "$name" --label "marmot-agents.pi.run=$run" --cidfile 
     -v "$key:/run/secrets/model_key:ro" \
     -v "$state:/state" \
     -v "$work:$work" -w "$work" \
+    ${extension:+-v "$extension:$extension_at:ro"} \
     -e MODEL_BASE_URL="$MODEL_BASE_URL" \
     -e MODEL_NAME="$MODEL_NAME" \
     -e THINKING="${THINKING:-low}" \
