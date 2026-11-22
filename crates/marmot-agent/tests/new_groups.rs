@@ -365,7 +365,9 @@ async fn a_message_announced_before_one_stored_earlier_skips_nothing() {
     let earlier = mdk.store("earlier", SINCE + 2);
     let later = mdk.store("later", SINCE + 2);
     core.announce(later.clone());
-    core.settle().await;
+    // The notice has the group read, with no tick.
+    core.briefly().await;
+    assert_eq!(core.prompts(), ["first", "earlier", "later"]);
     core.announce(earlier);
     core.announce(first);
     core.announce(later);
@@ -404,7 +406,8 @@ async fn more_than_a_page_is_read_in_order() {
         last = Some(mdk.store(&n.to_string(), SINCE + 2));
     }
     core.announce(last.unwrap());
-    core.settle().await;
+    // The notice has every page read, with no tick.
+    core.briefly().await;
     let expected: Vec<String> = (0..250).map(|n| n.to_string()).collect();
     assert_eq!(core.prompts(), expected);
     assert_eq!(core.mark(), Some(250));
