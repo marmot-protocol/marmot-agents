@@ -93,6 +93,13 @@ fixed on 2026-11-21, each with a test that failed first.
   in both, the core cannot tell the two apart. When the lookup cannot identify the earlier send, the send goes
   out again, and the chat shows a duplicate first event. That ends when MDK's crash-safe sends take tagged
   events, and the token each send keeps is handed to MDK.
+- **A message MDK cannot read for a moment is skipped for good** (S10, L3). **Fixed** on 2026-11-22
+  ([#83](https://github.com/marmot-protocol/marmot-agents/issues/83)). The core took a message it could not place,
+  as when its group's state could not be read for a moment, for one not meant for the agent, and moved its read
+  mark past it. A failed lookup of a live message's place in storage, or of what a catch-up reads, did the same
+  once the next message came. Now such a failure leaves the mark where it is; the group waits, and is read again
+  from its mark, a little later each time up to ten seconds, while other groups go on. Found while looking into a
+  flaky test, not by reading; the simulator's `ReadFails` fault failed 114 of 200 `live` runs before the fix.
 - **Settles carried by a message are dropped** (S1). **Fixed.** The core read `settles` only from items that are
   not messages. A pending answer whose approval ends without naming it stayed pending until the driver stopped.
   A driver's event could settle another chat's request.
@@ -194,8 +201,9 @@ A new crate, `marmot-agent-sim`, that runs the real core with a fake Marmot side
 clock, from a seed. It owns S1 to S4, S10, L1 to L3 for the core.
 
 - **Faults it injects:** a crash between any two effects, a failed save, a send that fails (busy, then
-  ambiguous), a live message that arrives before it is stored or out of order, a lagging event stream, a driver
-  that hangs, a socket that drops mid-request, a connector that reconnects.
+  ambiguous), a read of what arrived that fails for a moment, a live message that arrives before it is stored or
+  out of order, a lagging event stream, a driver that hangs, a socket that drops mid-request, a connector that
+  reconnects.
 - **Oracles:** the safety properties checked after every step; at the end, with faults stopped, the liveness ones.
 - **Reproducible:** a run is named by its seed. A failure writes the schedule to a file that replays it exactly,
   as MDK's failure capsules do, and the simulator shrinks it to a short schedule.
@@ -213,7 +221,8 @@ lies beyond an assumption: `disorder` (a message heard before MDK stores it, or 
 do) loses messages, and `late` (a send that lands after the core looked for it) finds the accepted duplicate.
 Three bugs fixed before are put back behind a test-only feature, and each is found. Bounded result, 2026-11-22:
 36,000 runs of the gate (6 families, 1,000 runs each, seeds 0 to 5), one or two chats, up to about 120 steps
-each, all passing. Not yet: the connector that
+each, all passing. After `ReadFails` joined `live` and `mixed` (version 3 of each), the same day: 18,000 runs
+(seeds 1 to 3), all passing. Not yet: the connector that
 drops mid-request and the one that reconnects (left to the conformance suite, which owns the socket), files, and
 the second lane on MDK's real relay.
 

@@ -17,13 +17,15 @@
 //! be sent again as it was (S1, S3). When the file cannot be written the core stops where it is,
 //! as a crash would, and the next start takes up what is on disk. MDK does not replay what
 //! arrived while a program was down, so on start, and whenever it falls behind, the core reads
-//! what was stored after the read mark.
+//! what was stored after the read mark. A message MDK cannot read for a moment is not taken as
+//! read: its group waits, and is read again from its mark, a little later each time, while the
+//! other groups go on (S10, L3).
 
 use crate::config::Config;
 use crate::conversation::{Act, Conversation, Saved, Sending};
 use crate::files::Folders;
 use crate::keys::GroupKey;
-use crate::marmot::{FileFailed, Incoming, Live, Marmot, Message, SendFailed, Side};
+use crate::marmot::{FileFailed, Incoming, Live, Marmot, Message, NotNow, SendFailed, Side};
 use crate::socket::SocketDriver;
 use marmot_agent_driver::{Driver, Output, Reason, Refusal, SendFile};
 use serde::{Deserialize, Serialize};
@@ -213,6 +215,12 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     retry: HashMap<GroupKey, (Instant, Duration)>,
     /// Sends, by token, whose outcome is not known: they may have gone out.
     unknown: HashMap<String, Unknown>,
+    /// For each group MDK could not read for a moment: when to read it again from its mark.
+    /// Nothing more of it is read until then, so what comes after the message that could not be
+    /// read never goes ahead of it.
+    unread: HashMap<GroupKey, Instant>,
+    /// How long each group last waited to be read again, while it fails again and again.
+    unread_wait: HashMap<GroupKey, Duration>,
     /// How long MDK is given to settle a send whose outcome is not known: [`SETTLE`].
     settle: Duration,
     /// How many times such a send is tried: [`UNKNOWN_TRIES`].
@@ -279,6 +287,8 @@ impl<D: Driver, M: Side> Core<D, M> {
                     (token, Unknown { settled, tries: 0 })
                 })
                 .collect(),
+            unread: HashMap::new(),
+            unread_wait: HashMap::new(),
             settle: SETTLE,
             unknown_tries: UNKNOWN_TRIES,
             drained: HashMap::new(),
@@ -340,7 +350,8 @@ impl<D: Driver, M: Side> Core<D, M> {
         loop {
             // Each group may send a few more events in this turn.
             self.drained.clear();
-            let retry = self.retry.values().map(|(at, _)| *at).min();
+            let sends = self.retry.values().map(|(at, _)| *at);
+            let retry = sends.chain(self.unread.values().copied()).min();
             let retry = async move {
                 match retry {
                     Some(at) => tokio::time::sleep_until(at).await,
@@ -388,7 +399,10 @@ impl<D: Driver, M: Side> Core<D, M> {
                     }
                     self.carry_out(acts).await?;
                 },
-                Woke::Retry => self.flush_all().await?,
+                Woke::Retry => {
+                    self.flush_all().await?;
+                    self.read_again().await?;
+                }
                 Woke::Driver(Some(Output::Event(emitted))) => {
                     let acts = self.conversation.emitted(emitted);
                     self.carry_out(acts).await?;
@@ -499,21 +513,55 @@ impl<D: Driver, M: Side> Core<D, M> {
     }
 
     /// Reads what was stored for each group after its mark: what arrived while the core was down,
-    /// or while it fell behind. A group the core has never seen starts at its latest message.
+    /// or while it fell behind. A group the core has never seen starts at its latest message. A
+    /// group waiting to be read again is left to its time.
     async fn catch_up(&mut self) -> Result<(), Unsaved> {
         for group in self.marmot.groups() {
-            let after = match self.read.get(&group) {
-                Some(&after) => after,
-                None => {
-                    let latest = self.marmot.latest(&group);
-                    self.read.insert(group, latest);
-                    self.save()?;
-                    continue;
-                }
-            };
-            for message in self.marmot.stored(&group, after) {
-                self.handle(message).await?;
+            if !self.unread.contains_key(&group) {
+                self.catch_up_group(group).await?;
             }
+        }
+        Ok(())
+    }
+
+    /// Reads again, from its mark, each group whose time to be read again has come.
+    async fn read_again(&mut self) -> Result<(), Unsaved> {
+        let now = Instant::now();
+        let due: Vec<GroupKey> = (self.unread.iter())
+            .filter(|(_, at)| **at <= now)
+            .map(|(group, _)| group.clone())
+            .collect();
+        for group in due {
+            self.unread.remove(&group);
+            self.catch_up_group(group).await?;
+        }
+        Ok(())
+    }
+
+    /// Reads what was stored for one group after its mark. When MDK cannot be read, or a message
+    /// in it cannot, the group waits to be read again; when all of it was read, it waits no more.
+    async fn catch_up_group(&mut self, group: GroupKey) -> Result<(), Unsaved> {
+        let after = match self.read.get(&group) {
+            Some(&after) => after,
+            None => {
+                let Ok(latest) = self.marmot.latest(&group) else {
+                    self.read_later(&group);
+                    return Ok(());
+                };
+                self.read.insert(group.clone(), latest);
+                self.unread_wait.remove(&group);
+                return self.save();
+            }
+        };
+        let Ok(stored) = self.marmot.stored(&group, after) else {
+            self.read_later(&group);
+            return Ok(());
+        };
+        for message in stored {
+            self.handle(message).await?;
+        }
+        if !self.unread.contains_key(&group) {
+            self.unread_wait.remove(&group);
         }
         Ok(())
     }
@@ -523,22 +571,54 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// that says it was read, before anything reaches the driver: a crash before that write leaves
     /// the message to be read again, and one after it leaves the request to be settled (D-037,
     /// D-070). A mark that cannot be saved stops the core before the message reaches the driver.
+    /// A message MDK cannot read for a moment is not marked read, and neither is anything after it
+    /// in its group: the group is read again from its mark later (S10, L3).
     async fn handle(&mut self, message: Message) -> Result<(), Unsaved> {
-        let Some(order) = self.marmot.order_of(&message) else {
-            return Ok(());
-        };
         let group = message.group.clone();
+        if self.unread.contains_key(&group) {
+            return Ok(());
+        }
+        let order = match self.marmot.order_of(&message) {
+            Ok(Some(order)) => order,
+            Ok(None) => return Ok(()),
+            Err(NotNow) => {
+                self.read_later(&group);
+                return Ok(());
+            }
+        };
         if self.read.get(&group).is_some_and(|&read| order <= read) {
             return Ok(());
         }
         let acts = match self.marmot.incoming(message).await {
-            Some(Incoming::Heard(heard)) => self.conversation.heard(heard),
-            Some(Incoming::Asked(asked)) => self.conversation.asked(asked),
-            None => Vec::new(),
+            Ok(Some(Incoming::Heard(heard))) => self.conversation.heard(heard),
+            Ok(Some(Incoming::Asked(asked))) => self.conversation.asked(asked),
+            Ok(None) => Vec::new(),
+            Err(NotNow) => {
+                self.read_later(&group);
+                return Ok(());
+            }
         };
         self.read.insert(group, order);
         // Saved before the first act, or at the end when there is none.
         self.carry_out(acts).await
+    }
+
+    /// MDK could not read the group for a moment: it is read again from its mark later, longer
+    /// after each time it fails again, up to [`SEND_WAIT_MAX`]. It is never given up, since a
+    /// message is never skipped; a group MDK no longer has is not read at all.
+    fn read_later(&mut self, group: &GroupKey) {
+        if self.unread.contains_key(group) {
+            return;
+        }
+        let wait = (self.unread_wait.get(group)).map_or(Duration::from_millis(100), |w| {
+            (*w * 2).clamp(Duration::from_millis(100), SEND_WAIT_MAX)
+        });
+        if !self.unread_wait.contains_key(group) {
+            // Neither the group nor MDK's words are printed (D-071).
+            eprintln!("marmot-agent: a message could not be read; it will be read again");
+        }
+        self.unread_wait.insert(group.clone(), wait);
+        self.unread.insert(group.clone(), Instant::now() + wait);
     }
 
     /// Carries out acts one at a time, and those that follow from each. The conversation is

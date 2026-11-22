@@ -8,7 +8,7 @@ use crate::world::{CHAT, EDIT, Landing, RefusedSend, World, describe};
 use marmot_agent::carrier::{self, REQUEST_KIND};
 use marmot_agent::files::Outgoing;
 use marmot_agent::marmot::{
-    FileFailed, Incoming, Live, LookupFailed, Message, SendFailed, SentMatch, Side,
+    FileFailed, Incoming, Live, LookupFailed, Message, NotNow, SendFailed, SentMatch, Side,
 };
 use marmot_agent::{EventKey, GroupKey, Heard, HeardRequest, PubKey, Sending, Where};
 use marmot_agent_events::TurnId;
@@ -84,17 +84,19 @@ impl Side for SimSide {
 
     async fn publish_name(&self, _name: &str, _relays: &[String]) {}
 
-    async fn incoming(&self, message: Message) -> Option<Incoming> {
+    async fn incoming(&self, message: Message) -> Result<Option<Incoming>, NotNow> {
         let mut world = lock(&self.world);
         if message.sender == world.agent {
-            return None;
+            return Ok(None);
         }
-        let chat = world.chat_of(&message.group)?;
+        let Some(chat) = world.chat_of(&message.group) else {
+            return Ok(None);
+        };
         if !world.chats[chat].accepted {
-            return None;
+            return Ok(None);
         }
         if world.read_fails(ReadStep::Place) {
-            return None;
+            return Err(NotNow);
         }
         // When the core last read it, for the oracle that knows a late request is dropped.
         let now = world.ms();
@@ -108,11 +110,13 @@ impl Side for SimSide {
             members: 2,
         };
         if message.kind == REQUEST_KIND {
-            let (target, asked) = carrier::read_request(&world.agent, &message.tags)?;
+            let Some((target, asked)) = carrier::read_request(&world.agent, &message.tags) else {
+                return Ok(None);
+            };
             // The core hands on what this request becomes before it reads another.
             world.reading = (world.msgs.iter())
                 .position(|m| m.as_ref().is_some_and(|m| m.event == message.event));
-            return Some(Incoming::Asked(HeardRequest {
+            return Ok(Some(Incoming::Asked(HeardRequest {
                 chat: place,
                 event: message.event,
                 author: message.sender,
@@ -120,12 +124,12 @@ impl Side for SimSide {
                 age_secs: world.secs().saturating_sub(message.recorded_at),
                 target,
                 asked,
-            }));
+            })));
         }
         if message.kind != CHAT {
-            return None;
+            return Ok(None);
         }
-        Some(Incoming::Heard(Heard {
+        Ok(Some(Incoming::Heard(Heard {
             chat: place,
             event: message.event,
             author: message.sender,
@@ -134,21 +138,21 @@ impl Side for SimSide {
             reply_to: None,
             mentions_agent: false,
             attachments: Vec::new(),
-        }))
+        })))
     }
 
-    fn order_of(&self, message: &Message) -> Option<i64> {
+    fn order_of(&self, message: &Message) -> Result<Option<i64>, NotNow> {
         if message.order.is_some() {
-            return message.order;
+            return Ok(message.order);
         }
         let mut world = lock(&self.world);
         world.land();
         if world.read_fails(ReadStep::Order) {
-            return None;
+            return Err(NotNow);
         }
-        (world.rows.iter())
+        Ok((world.rows.iter())
             .find(|r| r.event == message.event)
-            .map(|r| r.order)
+            .map(|r| r.order))
     }
 
     fn invitations(&self) -> Vec<(GroupKey, Option<PubKey>)> {
@@ -186,27 +190,27 @@ impl Side for SimSide {
             .collect()
     }
 
-    fn latest(&self, group: &GroupKey) -> i64 {
+    fn latest(&self, group: &GroupKey) -> Result<i64, NotNow> {
         let mut world = lock(&self.world);
         world.land();
         let Some(chat) = world.chat_of(group) else {
-            return 0;
+            return Ok(0);
         };
-        (world.rows.iter())
+        Ok((world.rows.iter())
             .filter(|r| r.chat == chat && (r.kind == CHAT || r.kind == REQUEST_KIND))
             .map(|r| r.order)
             .max()
-            .unwrap_or(0)
+            .unwrap_or(0))
     }
 
-    fn stored(&self, group: &GroupKey, after: i64) -> Vec<Message> {
+    fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow> {
         let mut world = lock(&self.world);
         world.land();
         let Some(chat) = world.chat_of(group) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         if world.read_fails(ReadStep::Stored) {
-            return Vec::new();
+            return Err(NotNow);
         }
         let messages = Self::row_messages(&world, chat, after);
         let now = world.ms();
@@ -216,7 +220,7 @@ impl Side for SimSide {
             }
         }
         world.note(format!("CatchUp(c{chat}, {} stored)", messages.len()));
-        messages
+        Ok(messages)
     }
 
     async fn send(
