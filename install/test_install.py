@@ -122,8 +122,10 @@ def walk(c, path, make=False):
 
 
 def valid():
-    """OpenClaw checks the whole of its settings before it changes one: the marmot channel against the
-    schema of the plugin installed, ours (packages/openclaw/openclaw.plugin.json) taking only these."""
+    """OpenClaw checks the whole of its settings before it reads or changes one: the marmot channel against
+    the schema of the plugin installed, ours (packages/openclaw/openclaw.plugin.json) taking only these.
+    Of the commands the installer runs, only `config file` and `agents bindings` work without (as
+    OpenClaw 2026.11.5 does)."""
     ours = plugin / "package.json"
     if ours.is_file() and json.loads(ours.read_text()).get("name") == "marmot-agent-openclaw":
         extra = set(load().get("channels", {}).get("marmot", {})) - {"enabled", "home"}
@@ -132,11 +134,18 @@ def valid():
                      f"must not have additional properties: {sorted(extra)}")
 
 
+def fail(command):
+    """A command made to fail, as FAKE_OPENCLAW_FAIL names it."""
+    if os.environ.get("FAKE_OPENCLAW_FAIL") == command:
+        sys.exit(f"the openclaw stand-in fails {command}, as asked")
+
+
 if args == ["--version"]:
     print(f"OpenClaw {os.environ.get('FAKE_OPENCLAW_VERSION', '2026.11.5')} (e13cf15)")
 elif args[:2] == ["config", "file"]:
     print(config)
 elif args[:2] == ["config", "get"]:
+    valid()
     c, last = walk(load(), args[2])
     if c is None or last not in c:
         print(json.dumps({"ok": False, "error": {"message": f"Config path is valid but unset: {args[2]}"}}, indent=2))
@@ -160,6 +169,7 @@ elif args[:2] == ["config", "unset"]:
     del parent[last]
     save(c)
 elif args[:2] == ["agents", "list"] and "--json" in args:
+    valid()
     # Each agent with its workspace, resolved as OpenClaw resolves it, and whether it takes what no
     # binding routes: the one agent, or the system agent.
     agents = load().get("agents", {})
@@ -180,9 +190,11 @@ elif args[:2] == ["agents", "list"] and "--json" in args:
 elif args[:2] == ["agents", "bindings"] and "--json" in args:
     print(json.dumps(load().get("bindings", []), indent=2))
 elif args[:2] == ["plugins", "install"]:
-    # Installing enables the plugin, unless --no-enable.
+    # Installing enables the plugin, unless --no-enable. A failed one may have taken the old one out.
     note()
+    valid()
     shutil.rmtree(plugin, ignore_errors=True)
+    fail("plugins install")
     plugin.mkdir(parents=True)
     (plugin / "package.json").write_text(json.dumps({"name": "marmot-agent-openclaw"}))
     shutil.copy(args[-1], plugin / "packed.tgz")
@@ -191,6 +203,7 @@ elif args[:2] == ["plugins", "install"]:
     save(c)
 elif args[:2] == ["plugins", "inspect"]:
     # One found in a folder of plugins.load.paths wins, and has no install record.
+    valid()
     found = [f for f in load().get("plugins", {}).get("load", {}).get("paths", []) if Path(f, "package.json").is_file()]
     if found:
         print(json.dumps({"plugin": {"id": "marmot", "rootDir": found[0], "source": found[0] + "/dist/index.js"}}))
@@ -1127,6 +1140,70 @@ class Boundaries(unittest.TestCase):
         self.assertFalse([c for c in m.calls() if c.startswith("marmot-agent init")])
         m.run("openclaw", "--uninstall")
         self.assertNotIn("marmot", json.loads((m.home / ".openclaw/openclaw.json").read_text())["channels"])
+
+    def old_openclaw(self, m: Machine):
+        """An OpenClaw with today's connector's plugin in it, its channel as that plugin's installer and the
+        person set it, and the install imported. Gives the old home, the channel and the plugin's folder."""
+        old = m.home / ".openclaw/extensions/marmot"
+        old.mkdir(parents=True)
+        (old / "package.json").write_text(json.dumps({"name": "@marmot-protocol/openclaw-marmot"}))
+        old_home, _ = self.imported(m, "openclaw", "OpenClaw")
+        old_channel = {"enabled": True, "home": str(old_home), "socketPath": f"{old_home}/dev/wn-agent.sock",
+                       "accountIdHex": "ab" * 32, "dm": {"allowFrom": [OWNER]},
+                       "senderPolicy": {"allowedUsers": [OWNER]}}
+        (m.home / ".openclaw/openclaw.json").write_text(json.dumps({"channels": {"marmot": old_channel}}))
+        return old_home, old_channel, old
+
+    @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
+    def test_a_failed_openclaw_replacement_puts_the_old_plugin_back(self):
+        """The old channel comes out before our plugin goes in; if that fails, both come back."""
+        m = Machine(self)
+        _, old_channel, old = self.old_openclaw(m)
+        result = m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--no-service", "--replace-plugin"),
+                       env={"FAKE_OPENCLAW_FAIL": "plugins install"}, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("openclaw config unset channels.marmot", m.calls())
+        config = json.loads((m.home / ".openclaw/openclaw.json").read_text())
+        self.assertEqual(config["channels"]["marmot"], old_channel)
+        self.assertEqual(json.loads((old / "package.json").read_text())["name"], "@marmot-protocol/openclaw-marmot")
+        # It says so, and where the copies are, should putting them back fail.
+        backups = m.data / "agents/openclaw/backups"
+        self.assertIn("put your OpenClaw's settings and its old plugin back", result.stderr)
+        self.assertIn(str(next(backups.glob("openclaw.json.*"))), result.stderr)
+        self.assertIn(str(next(backups.glob("marmot.*"))), result.stderr)
+        # Run again, it finishes the move.
+        m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--no-service", "--replace-plugin"))
+        config = json.loads((m.home / ".openclaw/openclaw.json").read_text())
+        self.assertEqual(set(config["channels"]["marmot"]), {"enabled", "home"})
+
+    def test_the_openclaw_channel_keys_are_our_plugins(self):
+        """What a half-done move leaves is what our plugin's channel schema does not take."""
+        schema = json.loads((ROOT / "packages/openclaw/openclaw.plugin.json").read_text())
+        keys = set(schema["channelConfigs"]["marmot"]["schema"]["properties"])
+        line = next(l for l in (ROOT / "install/openclaw.sh").read_text().splitlines() if l.startswith("OUR_CHANNEL_KEYS="))
+        self.assertEqual(set(line.split("=", 1)[1].strip('"').split()), keys)
+
+    @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
+    def test_a_half_done_openclaw_move_is_finished(self):
+        """Our plugin in, and the old plugin's settings left in its channel, which OpenClaw then refuses to
+        read or change at all: a run takes out what our plugin does not take, from the file itself."""
+        m = Machine(self)
+        old_home, old_channel, old = self.old_openclaw(m)
+        (old / "package.json").write_text(json.dumps({"name": "marmot-agent-openclaw"}))
+        config_file = m.home / ".openclaw/openclaw.json"
+        mine = {"channels": {"marmot": old_channel, "other": {"token": "theirs"}}, "gateway": {"port": 18789}}
+        config_file.write_text(json.dumps(mine))
+        out = m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--no-service", "--replace-plugin")).stdout
+        config = json.loads(config_file.read_text())
+        self.assertEqual(config["channels"]["marmot"], {"enabled": True, "home": str(old_home)})
+        self.assertEqual(config["channels"]["other"], {"token": "theirs"})
+        self.assertEqual(config["gateway"], {"port": 18789})
+        self.assertIn("accountIdHex, dm, senderPolicy, socketPath", out)
+        # The copy kept first has them.
+        kept = sorted((m.data / "agents/openclaw/backups").glob("openclaw.json.*"))
+        self.assertEqual(len(kept), 2)
+        self.assertEqual(json.loads(kept[0].read_text()), mine)
+        self.assertNotIn("openclaw config unset channels.marmot", m.calls())
 
     @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
     def test_an_openclaw_plugin_found_in_a_load_path_counts(self):

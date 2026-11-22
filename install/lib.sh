@@ -295,9 +295,11 @@ check_version() {
 # The person's own files
 
 # Keeps a copy of a file of the person's own, such as a gateway's configuration, in the agent's folder,
-# readable by its owner only, before the install changes it.
+# readable by its owner only, before the install changes it. KEPT names the copy, or is empty when none
+# was made. A copy made earlier in the same second is kept too: the new one gets a number after it.
 backup_file() {
-    local file=$1 copy
+    local file=$1 copy base n=1
+    KEPT=""
     [ -e "$file" ] || return 0
     copy="$MA_AGENT_DIR/backups/$(basename "$file").$(date -u +%Y%m%dT%H%M%SZ)"
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -305,9 +307,12 @@ backup_file() {
         return 0
     fi
     private_dir "$MA_AGENT_DIR/backups"
-    rm -rf "$copy"
+    base=$copy
+    while [ -e "$copy" ]; do n=$((n + 1)) && copy="$base.$n"; done
     (umask 077 && cp -R "$file" "$copy")
     chmod -R go-rwx "$copy"
+    # shellcheck disable=SC2034 # read by the harness's script
+    KEPT=$copy
     say "kept a copy of $file in $copy"
 }
 

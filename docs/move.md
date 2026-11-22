@@ -2,7 +2,7 @@
 
 Status: describes `marmot-agent import` as built
 ([D-089](decisions.md#d-089-an-install-moves-over-by-importing-its-account-home-in-place)), and what
-[the tests](#how-it-is-tested) show of it. How the old
+[the tests](#what-is-proven) show of it. How the old
 allow-lists become the new settings, who becomes the owner unasked, `files_from` (and the core refusing to
 start when one overlaps the home), `--leave-running`, and what the import does with a home that holds several
 identities, are proposals until the project owner accepts them.
@@ -67,7 +67,11 @@ encryption state and its chats.
    plugin's own settings out of the gateway's (for OpenClaw, its socket, account and sender policy, which
    OpenClaw would refuse once the new plugin is in). The gateway may keep running while it does. Then
    restart the gateway. Without settings in the agent's folder, `--replace-plugin` stops before changing
-   anything.
+   anything. If putting the OpenClaw plugin in fails part way, the installer puts the gateway's settings
+   and the old plugin back from those copies before it stops, and says so; run it again once what failed
+   is fixed. A run that finds the new plugin in and the old plugin's settings still in the channel, which
+   OpenClaw then refuses to read or start with, takes those settings out of OpenClaw's settings file,
+   after keeping a copy of it.
 
 On its first start the core reads nothing already in a chat as a prompt, so it never runs an old prompt again.
 That also means a message sent to the agent between the import and that first start is not answered: keep the
@@ -168,6 +172,12 @@ address, and no systemd is touched: the import's service manager notes what it s
 Not proven yet: a move on a real machine, with systemd and the real harnesses.
 
 ## Going back
+
+If the OpenClaw installer said it could not put the gateway's settings and the old plugin back, do it from
+the copies it kept in the agent's folder (`~/.local/share/marmot-agent/agents/<name>/backups`): copy
+`openclaw.json.<time>` over OpenClaw's settings file (`openclaw config file` names it) and `marmot.<time>`
+over the old plugin's folder, as it says. The Hermes installer keeps the same kind of copies there
+(`config.yaml.<time>`, `.env.<time>` and `marmot.<time>`).
 
 Before the core has run, delete the settings file and start the old services again. Once it has run, MDK has
 upgraded the store, which only goes forward: stop the core, put the backup in place of the home, and start the
