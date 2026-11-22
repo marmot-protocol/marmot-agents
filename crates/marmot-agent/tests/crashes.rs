@@ -479,7 +479,7 @@ async fn a_message_that_arrives_while_a_new_group_cannot_be_read_is_read() {
     let events = world.runtime.subscribe();
     chat.say("while away").await;
     let group = GroupKey(chat.hex.clone());
-    let stored = || world.marmot.stored(&group, 0).ok().filter(|m| m.len() == 2);
+    let stored = || (world.marmot.stored(&group, 0, 1000).ok()).filter(|p| p.messages.len() == 2);
     within(30, || stored().map(|_| ())).await;
     let live = Subscribed {
         events,
@@ -530,7 +530,7 @@ async fn a_message_that_arrives_while_the_harness_starts_is_read() {
     // the prompt comes in a later second than the core subscribed.
     within(5, || (now() >= subscribed + 2).then_some(())).await;
     chat.say("new").await;
-    let stored = || world.marmot.stored(&group, 0).ok().filter(|m| m.len() == 2);
+    let stored = || (world.marmot.stored(&group, 0, 1000).ok()).filter(|p| p.messages.len() == 2);
     within(30, || stored().map(|_| ())).await;
     within(5, || (now() >= subscribed + 4).then_some(())).await;
     let (driver, _events, seen) = stub(false);

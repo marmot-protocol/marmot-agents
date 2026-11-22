@@ -82,7 +82,8 @@ pub struct Message {
     /// a relay, which may be before it was stored and long before it is announced live.
     pub received_at: u64,
     /// Its place in this machine's storage, which only grows: the order messages arrived in here,
-    /// whatever their senders' clocks say. Known for a stored message; a live one is looked up.
+    /// whatever their senders' clocks say. Known for a stored message; a live one has none, since
+    /// it only wakes its group's reader, which reads it from storage.
     pub order: Option<i64>,
 }
 
@@ -548,47 +549,50 @@ impl Marmot {
             .collect())
     }
 
-    /// The chat messages, answers and controls others sent to a group that arrived here after
-    /// `after` in storage order, in that order, however many there are.
-    pub fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow> {
+    /// A page of what was stored for a group after `after`, in storage order: at most `limit`
+    /// rows, MDK's own paging forward in the order messages arrived here (its
+    /// `messages_after_insert_order`), so a message that arrived late with an earlier time is read
+    /// in its place. The page holds the chat messages, answers and controls others sent; its last
+    /// place counts the rows the core does not read too, such as the agent's own.
+    pub fn stored(&self, group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {
         if (self.faults)
             .next(|f| matches!(f, Fault::StoredFails))
             .is_some()
         {
             return Err(NotNow);
         }
-        let mut rows: Vec<AppMessageRecord> = (self.stored_all(group)?.into_iter())
-            .filter(|r| r.insert_order > after && r.direction == "received" && !r.invalidated)
-            .collect();
-        rows.sort_by_key(|r| r.insert_order);
-        Ok(rows.into_iter().map(Message::from).collect())
-    }
-
-    /// A message's place in storage order. `None` when it is not stored, as for one MDK removed.
-    pub fn order_of(&self, message: &Message) -> Result<Option<i64>, NotNow> {
-        if message.order.is_some() {
-            return Ok(message.order);
-        }
-        let record = self
-            .runtime
-            .message_by_id(&self.label, message.group.as_str(), message.event.as_str())
-            .map_err(|_| NotNow)?;
-        Ok(record.map(|r| r.insert_order))
-    }
-
-    /// Every chat message, answer and control stored for the group. Not only the most recent: MDK
-    /// picks those by the time their senders gave, not by when they arrived here, so a message that
-    /// arrived late with an earlier time could fall outside the window and never be read.
-    fn stored_all(&self, group: &GroupKey) -> Result<Vec<AppMessageRecord>, NotNow> {
         let query = AppMessageQuery {
             group_id_hex: Some(group.as_str().to_string()),
             kinds: Some(vec![CHAT, REQUEST_KIND]),
-            limit: None,
+            limit: Some(limit),
         };
-        (self.runtime)
-            .messages_with_query(&self.label, query)
-            .map_err(|_| NotNow)
+        let rows = (self.runtime)
+            .messages_after_insert_order(&self.label, query, after)
+            .map_err(|_| NotNow)?;
+        let last = rows.last().map(|r| r.insert_order);
+        let more = rows.len() >= limit;
+        let messages = (rows.into_iter())
+            .filter(|r| r.direction == "received" && !r.invalidated)
+            .map(Message::from)
+            .collect();
+        Ok(Page {
+            messages,
+            last,
+            more,
+        })
     }
+}
+
+/// One page of what a group stored, in storage order.
+#[derive(Debug, Default)]
+pub struct Page {
+    /// The chat messages, answers and controls others sent, in storage order.
+    pub messages: Vec<Message>,
+    /// The place of the last row of the page, whether or not it is one of `messages`: the next
+    /// page starts after it. `None` when nothing was stored after the place asked for.
+    pub last: Option<i64>,
+    /// Whether the page was full, so more may follow it.
+    pub more: bool,
 }
 
 /// What MDK gave back for a send.
@@ -651,9 +655,6 @@ pub trait Side: Clone + Send + Sync + 'static {
         message: Message,
     ) -> impl Future<Output = Result<Option<Incoming>, NotNow>> + Send;
 
-    /// A message's place in storage order, `None` when it is not stored.
-    fn order_of(&self, message: &Message) -> Result<Option<i64>, NotNow>;
-
     /// The invitations waiting for a decision, each with who sent it.
     fn invitations(&self) -> Vec<(GroupKey, Option<PubKey>)>;
 
@@ -663,8 +664,9 @@ pub trait Side: Clone + Send + Sync + 'static {
     /// The groups the agent has accepted; [`NotNow`] when they could not be listed.
     fn groups(&self) -> Result<Vec<GroupKey>, NotNow>;
 
-    /// What others sent to a group that was stored after `after`, in storage order.
-    fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow>;
+    /// A page of what was stored for a group after `after`, in storage order: at most `limit`
+    /// rows, of which the page holds what others sent.
+    fn stored(&self, group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow>;
 
     /// Sends something to a group under `token`, and gives back the id of the event it became.
     /// A send tried again under the same token gives back the same event and sends nothing.
@@ -708,7 +710,8 @@ pub fn subscribe(
 
 /// A live event, as the core takes it.
 pub enum Live {
-    /// A message arrived in one of the agent's groups.
+    /// A message arrived in one of the agent's groups: its group is read from its mark. MDK may
+    /// announce a message again, or not in the order it stored them (its `MessageReceived`).
     Message(Message),
     /// The agent joined a group, or one of its groups changed: invitations are looked at again.
     Groups,
@@ -857,10 +860,6 @@ impl Side for Marmot {
         Marmot::incoming(self, message)
     }
 
-    fn order_of(&self, message: &Message) -> Result<Option<i64>, NotNow> {
-        Marmot::order_of(self, message)
-    }
-
     fn invitations(&self) -> Vec<(GroupKey, Option<PubKey>)> {
         Marmot::invitations(self)
     }
@@ -873,8 +872,8 @@ impl Side for Marmot {
         Marmot::groups(self)
     }
 
-    fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow> {
-        Marmot::stored(self, group, after)
+    fn stored(&self, group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {
+        Marmot::stored(self, group, after, limit)
     }
 
     async fn send(

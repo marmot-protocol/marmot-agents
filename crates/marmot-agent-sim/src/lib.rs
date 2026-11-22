@@ -71,7 +71,7 @@ pub const MARKS: [(&str, &str); 26] = [
     ("send again, same event", "Sent before, same token"),
     ("send again, still to land", "still to land, same token"),
     ("place error", "Place: Error"),
-    ("order error", "Order: Error"),
+    ("live event again", "Reannounce("),
     ("stored error", "Stored: Error"),
     ("groups error", "Groups: Error"),
     ("lag", "Lag("),

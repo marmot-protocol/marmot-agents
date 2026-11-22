@@ -304,8 +304,8 @@ fn stored(dir: &Path, group_hex: &str) -> Vec<String> {
         faults: Default::default(),
     };
     let group = marmot_agent::GroupKey(group_hex.to_string());
-    let messages = marmot.stored(&group, 0).unwrap();
-    messages.into_iter().map(|m| m.content).collect()
+    let page = marmot.stored(&group, 0, 1000).unwrap();
+    page.messages.into_iter().map(|m| m.content).collect()
 }
 
 // MDK's #3602: a home stopped just after a message arrives was deaf to that chat for the next

@@ -1,13 +1,14 @@
 //! A group the core has no read mark for, as on an imported account's first run or after the state
 //! file was lost: what arrived by the time the core subscribed is its history, never a prompt, and
 //! what arrived after is read, once, in storage order (L3, S10), whatever order MDK stored and
-//! announced them in. MDK is a scripted stand-in here, so the order things are stored in, when
-//! they arrived and when they are announced are the test's to choose; the real core runs on it.
+//! announced them in. A group with a mark is read from it, whatever MDK announces. MDK is a
+//! scripted stand-in here, so the order things are stored in, when they arrived and when they are
+//! announced are the test's to choose; the real core runs on it.
 
 use marmot_agent::config::Config;
 use marmot_agent::files::Outgoing;
 use marmot_agent::marmot::{
-    FileFailed, Incoming, Live, Message, NotNow, SendFailed, Side, Subscribed,
+    FileFailed, Incoming, Live, Message, NotNow, Page, SendFailed, Side, Subscribed,
 };
 use marmot_agent::run::{Core, Store};
 use marmot_agent::{EventKey, GroupKey, Heard, PubKey, Sending, Token, Where};
@@ -124,13 +125,6 @@ impl Side for Mdk {
         })))
     }
 
-    fn order_of(&self, message: &Message) -> Result<Option<i64>, NotNow> {
-        let storage = self.storage.lock().unwrap();
-        Ok((storage.rows.iter())
-            .find(|m| m.event == message.event)
-            .and_then(|m| m.order))
-    }
-
     fn invitations(&self) -> Vec<(GroupKey, Option<PubKey>)> {
         Vec::new()
     }
@@ -143,15 +137,21 @@ impl Side for Mdk {
         Ok(vec![group()])
     }
 
-    fn stored(&self, _group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow> {
+    fn stored(&self, _group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {
         if self.read_fails() {
             return Err(NotNow);
         }
         let storage = self.storage.lock().unwrap();
-        Ok((storage.rows.iter())
+        let messages: Vec<Message> = (storage.rows.iter())
             .filter(|m| m.order.is_some_and(|o| o > after))
+            .take(limit)
             .cloned()
-            .collect())
+            .collect();
+        Ok(Page {
+            last: messages.last().and_then(|m| m.order),
+            more: messages.len() == limit,
+            messages,
+        })
     }
 
     async fn send(
@@ -319,5 +319,64 @@ async fn a_prompt_announced_after_a_read_that_found_it_is_read_once() {
     core.announce(new);
     core.settle().await;
     assert_eq!(core.prompts(), ["new"]);
+    core.stop().await;
+}
+
+// MDK may announce a message before one it stored earlier, and may announce one again, as its
+// recovery does (MDK #3606). The core reads its group from the mark, so a notice never moves the
+// mark past a message: each reaches the harness once, in storage order.
+#[tokio::test(start_paused = true)]
+async fn a_message_announced_before_one_stored_earlier_skips_nothing() {
+    let mdk = Mdk::new();
+    let core = Running::start(mdk.clone());
+    let first = mdk.store("first", SINCE + 1);
+    core.announce(first.clone());
+    core.settle().await;
+    let earlier = mdk.store("earlier", SINCE + 2);
+    let later = mdk.store("later", SINCE + 2);
+    core.announce(later.clone());
+    core.settle().await;
+    core.announce(earlier);
+    core.announce(first);
+    core.announce(later);
+    core.settle().await;
+    assert_eq!(core.prompts(), ["first", "earlier", "later"]);
+    assert_eq!(core.mark(), Some(3));
+    core.stop().await;
+}
+
+// MDK can store a message with no notice, as one it imports (MDK #3606): the core's tick reads
+// every group from its mark, so the message is read all the same.
+#[tokio::test(start_paused = true)]
+async fn a_message_stored_with_no_notice_is_read() {
+    let mdk = Mdk::new();
+    let core = Running::start(mdk.clone());
+    let first = mdk.store("first", SINCE + 1);
+    core.announce(first);
+    core.settle().await;
+    mdk.store("unannounced", SINCE + 2);
+    core.settle().await;
+    assert_eq!(core.prompts(), ["first", "unannounced"]);
+    core.stop().await;
+}
+
+// More than a page of messages is read, page by page, once each and in storage order, from one
+// notice of the last.
+#[tokio::test(start_paused = true)]
+async fn more_than_a_page_is_read_in_order() {
+    let mdk = Mdk::new();
+    let core = Running::start(mdk.clone());
+    let first = mdk.store("0", SINCE + 1);
+    core.announce(first);
+    core.settle().await;
+    let mut last = None;
+    for n in 1..250 {
+        last = Some(mdk.store(&n.to_string(), SINCE + 2));
+    }
+    core.announce(last.unwrap());
+    core.settle().await;
+    let expected: Vec<String> = (0..250).map(|n| n.to_string()).collect();
+    assert_eq!(core.prompts(), expected);
+    assert_eq!(core.mark(), Some(250));
     core.stop().await;
 }

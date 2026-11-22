@@ -7,7 +7,7 @@ use crate::schedule::{Outcome, ReadStep};
 use crate::world::{CHAT, EDIT, Kept, Landing, RefusedSend, World, describe};
 use marmot_agent::carrier::{self, REQUEST_KIND};
 use marmot_agent::files::Outgoing;
-use marmot_agent::marmot::{FileFailed, Incoming, Live, Message, NotNow, SendFailed, Side};
+use marmot_agent::marmot::{FileFailed, Incoming, Live, Message, NotNow, Page, SendFailed, Side};
 use marmot_agent::run::REJECTED_TRIES;
 use marmot_agent::{EventKey, GroupKey, Heard, HeardRequest, PubKey, Sending, Token, Where};
 use marmot_agent_events::TurnId;
@@ -42,14 +42,19 @@ pub struct SimSide {
 pub struct SimEvents;
 
 impl SimSide {
-    fn row_messages(world: &World, chat: usize, after: i64) -> Vec<Message> {
+    /// A page of what MDK stored for a chat after `after`: at most `limit` rows of its chat
+    /// messages and requests, the agent's own too, in storage order, as MDK's
+    /// `messages_after_insert_order` gives them. The page holds what others sent.
+    fn page(world: &World, chat: usize, after: i64, limit: usize) -> Page {
         let group = world.chats[chat].group.clone();
         let mut rows: Vec<&crate::world::Row> = (world.rows.iter())
-            .filter(|r| r.chat == chat && !r.from_agent && r.order > after)
+            .filter(|r| r.chat == chat && r.order > after)
             .filter(|r| r.kind == CHAT || r.kind == REQUEST_KIND)
             .collect();
         rows.sort_by_key(|r| r.order);
-        rows.into_iter()
+        rows.truncate(limit);
+        let messages = (rows.iter())
+            .filter(|r| !r.from_agent)
             .map(|r| Message {
                 group: group.clone(),
                 event: r.event.clone(),
@@ -62,7 +67,12 @@ impl SimSide {
                 received_at: World::secs_at(r.ms),
                 order: Some(r.order),
             })
-            .collect()
+            .collect();
+        Page {
+            messages,
+            last: rows.last().map(|r| r.order),
+            more: rows.len() >= limit,
+        }
     }
 }
 
@@ -141,20 +151,6 @@ impl Side for SimSide {
         })))
     }
 
-    fn order_of(&self, message: &Message) -> Result<Option<i64>, NotNow> {
-        if message.order.is_some() {
-            return Ok(message.order);
-        }
-        let mut world = lock(&self.world);
-        world.land();
-        if world.read_fails(ReadStep::Order) {
-            return Err(NotNow);
-        }
-        Ok((world.rows.iter())
-            .find(|r| r.event == message.event)
-            .map(|r| r.order))
-    }
-
     fn invitations(&self) -> Vec<(GroupKey, Option<PubKey>)> {
         let world = lock(&self.world);
         (world.chats.iter())
@@ -193,24 +189,27 @@ impl Side for SimSide {
             .collect())
     }
 
-    fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow> {
+    fn stored(&self, group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {
         let mut world = lock(&self.world);
         world.land();
         let Some(chat) = world.chat_of(group) else {
-            return Ok(Vec::new());
+            return Ok(Page::default());
         };
         if world.read_fails(ReadStep::Stored) {
             return Err(NotNow);
         }
-        let messages = Self::row_messages(&world, chat, after);
+        let page = Self::page(&world, chat, after, limit);
         let now = world.ms();
-        for message in &messages {
+        for message in &page.messages {
             if let Some(m) = (world.msgs.iter_mut().flatten()).find(|m| m.event == message.event) {
                 m.read_ms = Some(now);
             }
         }
-        world.note(format!("CatchUp(c{chat}, {} stored)", messages.len()));
-        Ok(messages)
+        // A read that finds nothing, as most of the tick's do, is not noted.
+        if !page.messages.is_empty() {
+            world.note(format!("CatchUp(c{chat}, {} stored)", page.messages.len()));
+        }
+        Ok(page)
     }
 
     async fn send(

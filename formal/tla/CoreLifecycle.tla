@@ -8,7 +8,11 @@
 (* conversation.rs `refused` as fixed on 2026-11-22: what stands in for a  *)
 (* dropped send, `last_resort` and `tells`; and with the sends MDK 0.19.0  *)
 (* keeps under a token (branch crash-safe-sends, 2026-11-22), which took   *)
-(* the place of the lookup of a send whose outcome was not known.          *)
+(* the place of the lookup of a send whose outcome was not known; and     *)
+(* with the reading by insertion order of MDK #3606 (branch                *)
+(* mdk-insertion-paging, 2026-11-22): a live message only wakes its       *)
+(* chat's reader, which reads from the mark, and the core's tick reads    *)
+(* every chat from its mark.                                               *)
 (*                                                                         *)
 (* Action names are the ones the simulator uses, so a trace from here can  *)
 (* drive it (docs/design/verification.md, step 5): Hear, Store, CatchUp,   *)
@@ -41,11 +45,11 @@ CONSTANTS
     TokenDedupe,    \* assumption: MDK keeps each send under its token (MDK 0.19.0's `submit_*`):
                     \* a send tried again under a token it posted gives back the earlier event and
                     \* posts nothing, and one under a token it dropped is dropped again
-    LiveInOrder,    \* assumption: MDK hands live messages over in storage order
     LiveAfterStore, \* assumption: MDK hands a live message over only once it has stored it
     LastResortTaken,\* assumption: MDK never refuses a last-resort send to a live group: it is as
                     \* small as the core makes anything (the accepted limit when off)
-    LagCatchUp,     \* whether the event stream may lag while the core runs, so it catches up then
+    TickCatchUp,    \* whether the core reads every chat from its mark while it runs, as on its
+                    \* tick and when the event stream lags
     FairMdk,        \* MDK eventually accepts sends and answers lookups
     FairDriver,     \* the driver eventually answers each request and closes each open item
     FairTime,       \* the clock eventually reaches every deadline
@@ -69,6 +73,8 @@ Bugs == {"none",
          "DeliverBeforeSave",  \* S4: a prompt reaches the driver before its read mark is saved
          "MarkNotLoaded",      \* S10: a restart reads every group from its start
          "CatchUpAnyOrder",    \* S10: catch-up takes any stored message after the mark
+         "MarkFromLive",       \* S10: a live message is handled itself and moves the mark to
+                               \* its place, as before MDK #3606
          "ResumeAlways",       \* S12: every prompt names the chat's saved session
          "KeepEndedSession",   \* S12: a session that ended stays the chat's
          "NewSessionUntaken",  \* S12: a new-session control the driver took leaves the chat untaken
@@ -269,7 +275,7 @@ Store(m) ==
 Handle(m) ==
     LET c == ChatOf(m) IN
     IF order[m] = 0 \/ order[m] <= cv.mark[c]
-    THEN UNCHANGED <<cv, acts>>   \* not stored (order_of is None): dropped; or already read
+    THEN UNCHANGED <<cv, acts>>   \* already read; or, with MarkFromLive, not stored: dropped
     ELSE
         /\ cv' = [cv EXCEPT !.mark[c] = order[m],
                             !.h[m] = @ + 1,
@@ -281,21 +287,32 @@ Handle(m) ==
                                     THEN NoSession ELSE cv.sess[c]]
                      ELSE [k |-> "request", x |-> m, sess |-> NoSession]>>
 
-\* Takes m off the live stream: the oldest, when MDK keeps storage order. Without
-\* LiveAfterStore, MDK may also hand m over before it stores it; the core finds no place for it
-\* (`order_of` gives nothing) and drops it, and MDK does not hand it over again once stored.
+\* The oldest of the messages stored in chat c after its mark, `after`. With CatchUpAnyOrder, any.
+Oldest(m, after) == Bug # "CatchUpAnyOrder" => \A n \in after : order[m] <= order[n]
+After(c) == {m \in Msgs : ChatOf(m) = c /\ order[m] > cv.mark[c]}
+
+\* run.rs `catch_up_group`, one message of it: the oldest stored after the chat's mark, if any.
+ReadFrom(c) ==
+    IF After(c) = {} THEN UNCHANGED <<cv, acts>>
+    ELSE \E m \in After(c) : Oldest(m, After(c)) /\ Handle(m)
+
+\* run.rs `live`: takes m off the live stream, in any order, since MDK hands messages over in
+\* any order (MDK #3606), and wakes the chat's reader, which reads from the mark: m itself, or
+\* the message stored before it there, or nothing when it was read already. Without
+\* LiveAfterStore, MDK may also hand m over before it stores it; the reader finds nothing new,
+\* and MDK does not hand m over again once stored. With MarkFromLive, the core before MDK #3606:
+\* m itself is handled, and the mark moves to its place.
 LiveTake(m) ==
     /\ phase = "run" /\ Idle
     /\ \/ \E j \in DOMAIN live :
             /\ live[j] = m
-            /\ LiveInOrder => j = 1
             /\ live' = RemoveAt(live, j)
             /\ UNCHANGED early
        \/ /\ ~LiveAfterStore
           /\ order[m] = 0 /\ m \notin early
           /\ early' = early \cup {m}
           /\ UNCHANGED live
-    /\ Handle(m)
+    /\ IF Bug = "MarkFromLive" THEN Handle(m) ELSE ReadFrom(ChatOf(m))
     /\ UNCHANGED <<order, nextOrder, mdkTok, mdkRefused, mdkDropped, phase, sv, taken, deadline,
                    inflight, drv, ghost>>
 
@@ -309,17 +326,14 @@ Ask(r) ==
     /\ r \in Requests
     /\ LiveTake(r)
 
-\* run.rs `catch_up`: what was stored after the mark, oldest first. At start, and whenever the
-\* event stream lags (RecvError::Lagged); with LagCatchUp the model lets that happen at any idle
-\* moment.
+\* run.rs `catch_up`: what was stored after the mark, oldest first. At start; with TickCatchUp
+\* also at any idle moment while the core runs, as on its tick (every 10 s) and whenever the
+\* event stream lags (RecvError::Lagged).
 CatchUp(c) ==
-    /\ phase = "start" \/ (phase = "run" /\ LagCatchUp)
+    /\ phase = "start" \/ (phase = "run" /\ TickCatchUp)
     /\ Idle
-    /\ LET after == {m \in Msgs : ChatOf(m) = c /\ order[m] > cv.mark[c]} IN
-       /\ after # {}
-       /\ \E m \in after :
-            /\ (Bug # "CatchUpAnyOrder" => \A n \in after : order[m] <= order[n])
-            /\ Handle(m)
+    /\ After(c) # {}
+    /\ \E m \in After(c) : Oldest(m, After(c)) /\ Handle(m)
     /\ UNCHANGED <<mdk, phase, sv, taken, deadline, inflight, drv, ghost>>
 
 \* Nothing is left to catch up: the loop starts.
@@ -646,7 +660,8 @@ Next ==
 (* dropped tries)                                                          *)
 (* end, since each has a bound.                                            *)
 (*   The core always: it saves, hands over, restarts, catches up at start  *)
-(*               and takes live messages.                                  *)
+(*               and, with TickCatchUp, on its tick, and takes live        *)
+(*               messages.                                                 *)
 (*   FairDriver: the driver answers each request and closes each open item.*)
 (*   FairMdk:    a send MDK keeps being offered is eventually accepted,    *)
 (*               or, for good, refused, or, under a token it dropped,      *)
@@ -659,7 +674,7 @@ Next ==
 (***************************************************************************)
 CoreSteps ==
     \/ Save \/ Deliver \/ Restart \/ CatchUpDone
-    \/ \E c \in Chats : phase = "start" /\ CatchUp(c)
+    \/ \E c \in Chats : CatchUp(c)
     \/ \E m \in Msgs : Hear(m) \/ Ask(m)
 DriverSteps ==
     \/ Take \/ Refuse
@@ -726,7 +741,7 @@ S3 ==
 \* S4: a prompt reaches the driver at most once, across any crash (D-037, D-070).
 S4 == \A p \in Prompts : delivered[p] <= 1
 
-\* S10: catch-up and the live stream hand each message over once, in storage order, with no
+\* S10: the reader hands each message over once, in storage order, with no
 \* gaps (D-037): everything up to a group's mark was handled, and nothing twice, in memory and
 \* in the state file. With the mark only rising, that is storage order.
 Covered(s) ==

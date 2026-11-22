@@ -69,18 +69,21 @@ fn a_name_always_makes_the_same_schedule() {
     );
 }
 
-// A failure leaves a capsule that replays it exactly and shrinks. Found with MDK's contract
-// switched off (the `disorder` family: a message heard before it is stored, or out of order),
-// which loses messages.
+// A failure leaves a capsule that replays it exactly and shrinks. Found with a bug put back,
+// `mark_from_live`, which loses messages MDK announces out of storage order. It was found with
+// MDK's contract switched off (the `disorder` family) until the core read every group from its
+// mark on its tick, which loses nothing there.
+#[cfg(feature = "bugs")]
 #[test]
 fn a_failure_is_found_shrunk_and_replayed() {
     let dir = tempfile::tempdir().unwrap();
     let found = (0..60).find_map(|index| {
-        let schedule = generate(&RunName::new(Family::Disorder, 0, index));
+        let mut schedule = generate(&RunName::new(Family::Live, 0, index));
+        schedule.bugs.mark_from_live = true;
         let report = run(&schedule);
         report.failure.is_some().then_some((schedule, report))
     });
-    let (schedule, report) = found.expect("disorder loses a message within 60 runs");
+    let (schedule, report) = found.expect("mark_from_live loses a message within 60 runs");
     let property = report.failure.as_ref().unwrap().failure.property.clone();
     let (small, small_report) = shrink(&schedule, &report, 300);
     assert!(small.steps.len() < schedule.steps.len());

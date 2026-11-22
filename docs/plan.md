@@ -118,6 +118,12 @@ Built so far, provisional until the owner accepts what others can see:
   a token saved with it, and a send tried again under it, after a lost answer or a restart, gives back the same
   event and sends nothing. A file the agent sends keeps no token: MDK's token form for files carries no tags. See
   [sends that give up](design/verification.md#first-fix-what-is-known).
+- **Catching up after being offline.** On MDK master after 0.19.0 (`7f7dcc6ca`, which holds MDK's fixes for
+  #3602 and #3603), the core reads each chat from its saved mark, a page at a time in the order MDK stored the
+  messages, and moves the mark as it handles each. MDK's live notice of a message only wakes that chat's reader,
+  and the core's tick reads every chat from its mark, so a message MDK announces late, out of order, again, or not
+  at all is read once, in its place. See
+  [a live notice could move the mark past a message](design/verification.md#first-fix-what-is-known).
 
 ### Verification, alongside M4
 

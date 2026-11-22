@@ -219,6 +219,7 @@ impl<'a> Sim<'a> {
                 save_after_send: bugs.save_after_send,
                 retry_ambiguous_with_new_token: bugs.retry_ambiguous_with_new_token,
                 settles_only_from_items: bugs.settles_only_from_items,
+                mark_from_live: bugs.mark_from_live,
             })
         };
         #[cfg(not(feature = "bugs"))]
@@ -343,6 +344,7 @@ impl<'a> Sim<'a> {
             Action::Invite { chat } => lock(&self.world).invite(usize::from(chat)),
             Action::Store { msg } => lock(&self.world).store(msg),
             Action::Hear { msg } | Action::Ask { msg } => lock(&self.world).hear(msg),
+            Action::Reannounce { msg } => lock(&self.world).reannounce(msg),
             Action::Lag => lock(&self.world).lag(),
             Action::Emit { pick, force } => lock(&self.world).emit(pick, force),
             Action::Refuse => lock(&self.world).harness.moves.push_back(Move::Refuse),

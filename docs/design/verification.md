@@ -11,7 +11,8 @@ and waiting for the owner. Of the models, `CoreLifecycle` is built (2026-11-22);
 conformance suite's first phase, for the built-in drivers, is built (2026-11-22); its second, for the socket
 connectors, is designed. The core's sends went over to MDK 0.19.0's token-based sends on 2026-11-22, which ends
 the duplicate a restart could make; how often a send is tried is decided
-([D-109](../decisions.md#d-109-how-the-cores-sends-survive-a-crash-as-built)).
+([D-109](../decisions.md#d-109-how-the-cores-sends-survive-a-crash-as-built)). The same day the core moved to MDK
+master after 0.19.0 (`7f7dcc6ca`) and reads each chat from its mark in MDK's insertion order.
 
 ## Why
 
@@ -159,6 +160,22 @@ fixed on 2026-11-21, each with a test that failed first.
   MDK: on an imported home, MDK at the revision the core uses delivers nothing sent once the core has started, even
   after the pause meant to avoid [MDK #3602](https://github.com/marmot-protocol/mdk/issues/3602), and the check
   passed before only because its message arrived in the second the core started, which is now history.
+- **A live notice could move the mark past a message** (S10, L3). **Fixed** on 2026-11-22, on MDK master after
+  0.19.0 (`7f7dcc6ca`), which can page a chat forward from a saved place in the order messages were stored here
+  ([MDK #3603](https://github.com/marmot-protocol/mdk/issues/3603)). The core moved a chat's read mark to the place of
+  each message MDK announced live. MDK does not promise to announce messages in the order it stored them, can
+  announce one again in its recovery, and stores some with no announcement, as an import does; so a message
+  announced before one stored earlier passed it, and the earlier one was never read. A catch-up read all of a chat
+  each time. Now a notice only wakes the chat's reader, which reads from the mark, a page of 100 at a time, handling
+  each message once and moving the mark past it and past the agent's own messages; a notice of a message already
+  read reads nothing. The core's 10 s tick reads every chat from its mark too, for a message stored with no notice.
+  The simulator's MDK now keeps only that contract: a message heard live brings no earlier one with it, those still
+  to be heard come in any order, and `Reannounce` announces a stored one again (version 4 of `live`, 5 of `mixed`).
+  On the core before the fix, 163 of 200 `live` runs and 122 of 200 `mixed` runs (seed 0) failed L1 or L3; after,
+  every family passes 200 of 200, `disorder` too. The bug switch `mark_from_live` puts the old way back, and the
+  simulator finds it. In `CoreLifecycle` the switch `LiveInOrder` is gone, live messages are taken in any order, and
+  the deliberate defect `MarkFromLive` fails S10. Three tests on a stand-in MDK
+  (`crates/marmot-agent/tests/new_groups.rs`) failed on the old way first.
 - **Settles carried by a message are dropped** (S1). **Fixed.** The core read `settles` only from items that are
   not messages. A pending answer whose approval ends without naming it stayed pending until the driver stopped.
   A driver's event could settle another chat's request.
@@ -289,15 +306,17 @@ what it waits for in turn rather than at random, so a schedule replays exactly. 
 S12 after every step, and L1, L2, L3 and S2 at the end within 900 s of virtual time, from what the simulated MDK
 stored and what the harness saw. Runs are named `family/vVERSION/SEED/INDEX`; a failure leaves a capsule that
 replays exactly, shrunk greedily. Seven families form the gate and run on every pull request. One more shows
-what lies beyond an assumption: `disorder` (a message heard before MDK stores it, or out of order, which MDK does
-not do) loses messages. `late` (a send that lands long after it was handed over) found the accepted duplicate
+what lies beyond an assumption: `disorder` (a message heard before MDK stores it, which MDK does not do) lost
+messages until the core read every chat from its mark on its tick, and loses none since. `late` (a send that lands long after it was handed over) found the accepted duplicate
 until the sends took MDK's tokens, and joined the gate then.
-Three bugs fixed before are put back behind a test-only feature, and each is found. Bounded result, 2026-11-22:
+Four bugs fixed before are put back behind a test-only feature, and each is found. Bounded result, 2026-11-22:
 36,000 runs of the gate (6 families, 1,000 runs each, seeds 0 to 5), one or two chats, up to about 120 steps
 each, all passing. After `ReadFails` joined `live` and `mixed` (version 3 of each), the same day: 18,000 runs
 (seeds 1 to 3), all passing; after it gained a failed list of groups, 6,000 runs of `live` and `mixed` (seeds 1 to
 3), all passing. After the sends took MDK's tokens (version 2 of `sends`, 4 of `mixed`, and `late` in the
-gate): 21,000 runs (7 families, 1,000 runs each, seeds 0 to 2), all passing. Not yet: the connector that
+gate): 21,000 runs (7 families, 1,000 runs each, seeds 0 to 2), all passing. After the core read each chat from its mark in
+MDK's insertion order (version 4 of `live`, 5 of `mixed`, and `Reannounce`): 17,600 runs (8 families with
+`disorder`, 200 runs each at seed 0 and 1,000 each at seeds 1 and 2), all passing. Not yet: the connector that
 drops mid-request and the one that reconnects (left to the conformance suite, which owns the socket), files, and
 the second lane on MDK's real relay.
 

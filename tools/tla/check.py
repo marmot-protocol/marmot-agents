@@ -101,15 +101,19 @@ CASES = [
          what="Without TokenDedupe, as before MDK 0.19.0's token-based sends: a send MDK posted, "
               "a failed save, a restart, and the send tried again, which MDK does not know for "
               "the one it posted; the chat has two first events for one item (S3)."),
-    Case("live-out-of-order", "CoreLifecycle.liveorder.cfg", invariant("S10"),
+    Case("live-out-of-order", FAIR, invariant("S10"),
+         {"Bug": '"MarkFromLive"', "INVARIANTS": "S10", **SAFETY},
          counterexample="live-out-of-order",
-         what="Without LiveInOrder: MDK hands a later message over first; the read mark passes "
-              "the earlier one, which run.rs handle then skips (S10)."),
+         what="MarkFromLive, the core before MDK #3606: MDK hands a later message over first, "
+              "the core handles it and moves the read mark to its place, past the earlier one, "
+              "which is then never read (S10). The core now reads from the mark instead."),
     Case("live-before-store", "CoreLifecycle.livestore.cfg", TEMPORAL,
          counterexample="live-before-store",
-         what="Without LiveAfterStore: MDK hands a message over before storing it; order_of "
-              "gives nothing, so run.rs handle drops it, and MDK does not hand it over again "
-              "once stored. Nothing reads it until the core starts again (L3)."),
+         what="Without LiveAfterStore and without TickCatchUp: MDK hands a message over before "
+              "storing it; the chat's reader finds nothing new, and MDK does not hand it over "
+              "again once stored. Nothing reads it until the core starts again (L3)."),
+    # With the core's tick, which reads every chat from its mark, such a message is read (L3).
+    Case("live-before-store-tick", "CoreLifecycle.livestore.cfg", PASS, {"TickCatchUp": "TRUE"}),
     # A dropped send has something in its place (conversation.rs refused): the item is closed,
     # the requests settled, and the chat told of the gap.
     Case("give-up-closes-item", GIVEUP, PASS),

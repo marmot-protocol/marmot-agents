@@ -104,7 +104,7 @@ fn live() {
             "lag",
             "catch-up that reads something",
             "place error",
-            "order error",
+            "live event again",
             "stored error",
             "groups error",
         ],
