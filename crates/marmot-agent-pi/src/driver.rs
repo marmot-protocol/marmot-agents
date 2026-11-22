@@ -15,6 +15,12 @@
 //! question, which the core can take only once the request has returned. Pi's response is read
 //! like any record, and says what came of the request: for a prompt, the turn it joins.
 //! Only the questions asked when Pi starts are waited for, and only for [`STARTUP_LIMIT`].
+//!
+//! A record is waited for only until the driver's patience runs out ([`PATIENCE`] unless set). A
+//! Pi that has not read it by then has stopped working (D-066): that chat's Pi is stopped, which
+//! ends the task that writes to it, so what was not written never reaches it or a later Pi, and
+//! the request is refused as failed. The chat's next prompt starts a new Pi; other chats' Pis run
+//! on.
 
 use crate::translate::DIALOGS;
 use crate::{Direction, Translator};
@@ -48,6 +54,9 @@ const STOP_GRACE: Duration = Duration::from_secs(10);
 /// input only once its extensions' start-up handlers have finished, so one that waits for an
 /// answer would never let it answer.
 pub const STARTUP_LIMIT: Duration = Duration::from_secs(60);
+
+/// How long a request waits for its record to be written to a chat's Pi, unless set.
+pub const PATIENCE: Duration = Duration::from_secs(60);
 
 /// How Pi is run.
 #[derive(Clone)]
@@ -250,6 +259,8 @@ pub struct Pi {
     /// Events read and not yet handed to the core.
     ready: VecDeque<Emitted>,
     next_id: u64,
+    /// How long a request waits for its record to be written.
+    patience: Duration,
 }
 
 impl Pi {
@@ -279,7 +290,14 @@ impl Pi {
             sender,
             ready: VecDeque::new(),
             next_id: 1,
+            patience: PATIENCE,
         })
+    }
+
+    /// How long a request waits for its record to be written to a chat's Pi before that Pi is
+    /// stopped: [`PATIENCE`] unless set.
+    pub fn set_patience(&mut self, patience: Duration) {
+        self.patience = patience;
     }
 
     fn id(&mut self) -> String {
@@ -461,6 +479,11 @@ impl Pi {
     /// chat's translator; the events it makes settle `settles`. If it could not be written,
     /// nothing waits for its response and the translator never sees it: an answer that did not
     /// reach Pi leaves its question waiting, to be closed unanswered when Pi's end is read.
+    ///
+    /// A Pi that has not read the record within the patience has stopped working (D-066): it is
+    /// stopped, so the record is never written to it or to a later Pi, and what it left open is
+    /// closed. The request is refused, and so does not also count as one of the controls the
+    /// stop fails, or as a prompt Pi had not taken.
     async fn hand(
         &mut self,
         chat: &ChatId,
@@ -469,15 +492,26 @@ impl Pi {
         settles: Vec<RequestId>,
     ) -> Result<(), Refusal> {
         let id = command.as_ref().map(|(id, _)| id.to_string());
+        let control = match &command {
+            Some((_, Waiting::Control(request, _))) => Some(request.clone()),
+            _ => None,
+        };
         let done = self.send(chat, command, text)?;
-        if matches!(done.await, Ok(true)) {
+        let written = tokio::time::timeout(self.patience, done).await;
+        if matches!(written, Ok(Ok(true))) {
             self.feed(chat, Direction::Out, text, settles);
             return Ok(());
         }
-        if let Some(c) = self.chats.get_mut(chat)
-            && let Some(id) = id
-        {
-            c.waiting.remove(&id);
+        if let Some(c) = self.chats.get_mut(chat) {
+            if let Some(id) = id {
+                c.waiting.remove(&id);
+            }
+            if let Some(request) = control {
+                c.unsettled(&request);
+            }
+        }
+        if written.is_err() {
+            self.stopped(chat); // Pi stopped reading
         }
         Err(Refusal::new(Reason::Failed))
     }

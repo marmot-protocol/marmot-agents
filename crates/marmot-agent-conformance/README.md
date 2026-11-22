@@ -5,7 +5,8 @@ One set of scenarios, written once against the `Driver` trait, that every driver
 of its harness. A checker looks at every step and names the property a failure breaks, by the ids the plan gives.
 
 Status: phase one is built (2026-11-22): the suite, fakes for Codex, ACP and Pi, the three built-in drivers run against
-it, and deliberate faults that show each check catches its bug. Two reviews' findings are fixed (2026-11-22).
+it, and deliberate faults that show each check catches its bug. Two reviews' findings are fixed (2026-11-22), and so
+is the Pi driver's stall on a Pi that stops reading (2026-11-22).
 Phase two, the socket connectors, is a design, below. Everything here is internal: it ships in no program.
 
 ## How it fits
@@ -61,7 +62,7 @@ Every driver runs these, but where the table under "What was run" says otherwise
 | `slow_and_out_of_order` | `two_chats` with replies late, after what follows from them, and overtaking each other; for Pi, which answers a prompt before its run reports anything, everything slow instead |
 | `partial_frames` | `two_chats` with every frame from the harness in three pieces |
 | `never_answers` | The harness never answers the request a prompt waits on (Codex `thread/start`, ACP `session/new`, Pi `prompt`); then it answers, late, and nothing may follow from it in a chat whose prompt was refused |
-| `stops_reading` | The harness stops reading its input and keeps it open while a prompt longer than any pipe is written; the prompt must return, and if refused must never reach the harness once it reads again |
+| `stops_reading` | The harness stops reading its input and keeps it open while a prompt longer than any pipe is written; the prompt must return, and if refused must never reach the harness once it reads again. With a harness for each chat (Pi), only chat 1's stops reading: chat 2's must serve a prompt while chat 1's is stuck, without being started again, and chat 1's next prompt must be taken by a new one |
 | `late_replies` | Every reply comes half a second late (for Pi, everything slow): a prompt in a new chat, which waits more than once, is still taken |
 | `restart` | A turn, a restart, a prompt naming the chat's session, a prompt naming none; then a restart in the middle of a turn |
 | `new_session` | A prompt naming the chat's session; a new session, settled by the new session; the next prompt goes to it, and not to the session named before; another chat naming the old one is refused |
@@ -82,7 +83,7 @@ The pipe between driver and harness holds 256 bytes each way, so a dropped wait 
 The faults, set as `Knobs` and changeable between steps: frames written in pieces; replies late; replies after the
 notifications that follow from them and every other reply held back so a later one overtakes it; everything slow;
 requests of a kind held unanswered, and answered once taken off the list; a harness that stops reading its input,
-keeping it open, until told to read again; death on the n-th frame, or when killed, in the middle of a frame when writing in
+keeping it open, until told to read again, every process or only the one with a given tag; death on the n-th frame, or when killed, in the middle of a frame when writing in
 pieces. A killed harness blocked writing to a driver that stopped reading is cut off after a moment, as a killed process
 is; one that dies by its own script writes what it said first. Each line read and each death is logged with the process
 that did it, so a death is matched to the chat whose harness it was. A harness's sessions outlive its processes, so a restart can take them up. A death is counted once both ends of
@@ -102,7 +103,7 @@ nothing.
 | ACP, OpenCode-shaped | all, `dies_at_every_step` (3) | `simple`, `approval_allowed` | `PromptTwice` |
 | ACP, Goose-shaped | `two_chats`, `answered_once`, `answer_after_death`, `dies_mid_turn`, `restart`, `new_session`, `dies_at_every_step` (3) | `simple`, `approval_allowed` | |
 | ACP, Cursor-shaped | `two_chats`, `answered_once`, `answer_after_death`, `restart`, `dies_at_every_step` (4) | `simple`, `approval_allowed` | |
-| Pi | all but `stops_reading`, which fails, `dies_at_every_step` (6) | `gate_allowed`, `command` | 8: those that turn on a harness for each chat, `TakeUnhanded` and `SwallowPrompt` |
+| Pi | all, `dies_at_every_step` (6) | `gate_allowed`, `command` | 8: those that turn on a harness for each chat, `TakeUnhanded` and `SwallowPrompt` |
 
 The faults (`src/faults.rs`), each caught as the property it breaks, by the scenario named. Where more than one check
 names the property, the test also requires the words of the check meant for the fault (`Fault::detail`):
@@ -127,7 +128,7 @@ names the property, the test also requires the words of the check meant for the 
 | `SwallowPrompt`: a chat's later prompts taken and never handed over (Pi only: a later prompt follows a death only there) | S11 | `dies_mid_turn` |
 | `MadeUpStop`: an interrupt refused without reaching the harness, the turn shown stopped all the same | L2: nothing was checked | `dies_with_requests_pending` |
 
-Four driver bugs were found, each fixed after its scenario failed:
+Five driver bugs were found, each fixed after its scenario failed:
 
 - **The ACP driver took an answer the agent could no longer read** (`answer_after_death`). A request's message went to
   the writer task's queue and the request returned at once, then fed the translator, so an answer to an agent that had
@@ -140,12 +141,16 @@ Four driver bugs were found, each fixed after its scenario failed:
   writer task to say a request's message was written, Codex while writing it. Now writing counts against the same
   minute: ACP's driver ends the connection and the writer task with it, and Codex's one minute covers everything a
   request waits for, writing included. In both, nothing the harness says after that is read.
+- **Pi's driver waited for ever on a Pi that stopped reading** (`stops_reading`), for the task that writes to the
+  chat's Pi to say a record was written, so one chat's stuck Pi held up every chat. Now a request waits at most a
+  minute (settable; 2 s in the suite), then that chat's Pi is stopped, as when it is let go: the task that writes
+  ends, so what was queued for it never reaches it or a later Pi, the chat's open items close, and the request is
+  refused as failed. Other chats' Pis run on, and the chat's next prompt takes its session up in a new Pi. Lines from
+  the stopped Pi are dropped, as from any Pi the chat has let go. Shown to catch, besides the old driver: a driver that
+  stops every chat's Pi, and one that refuses the request without stopping the Pi.
 
 Not covered yet, and why:
 
-- **Pi's driver waits for a record to be written with no limit** (`stops_reading` fails, so it is an ignored test
-  in `tests/pi.rs`): a Pi that stops reading its input stalls the request, and every chat with it. Found 2026-11-22;
-  not fixed here.
 - **Codex's greeting** (`Codex::connect`) still waits for `initialize` with no limit. It runs before the core's loop, at
   start. Not changed here.
 - **Pi's start** waits up to `STARTUP_LIMIT` (60 s, fixed), so a Pi that never answers `get_state` is not run: too slow.
@@ -164,7 +169,7 @@ job runs it on every pull request.
 
 The scenarios are listed once, in `with_scenarios!` (`src/scenarios.rs`). A driver that runs them all makes one test
 for each from that list, as `tests/codex.rs` does, so a scenario added there is run at once. A driver that runs only
-some (Goose, Cursor, and Pi for now) names those it runs and those it leaves out, with the reason; its
+some (Goose and Cursor) names those it runs and those it leaves out, with the reason; its
 `every_scenario_is_run_or_left_out` fails unless the two name every scenario once, and a name that is no scenario does
 not compile.
 
