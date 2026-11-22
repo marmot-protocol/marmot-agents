@@ -68,9 +68,10 @@ On its first start the core reads nothing already in a chat as a prompt, so it n
 That also means a message sent to the agent between the import and that first start is not answered: keep the
 gap short, or ask again afterwards.
 
-Known problem, in MDK at the revision the core uses: when `wn-agent` is stopped in the moment after a message
-reaches it, the core afterwards does not hear that chat. The import tests stop `wn-agent` five seconds after
-the last message for that reason. Do not import while people are writing to the agent.
+Up to MDK 0.19.0, a `wn-agent` stopped in the moment after a message reached it left the home deaf to that chat
+for the core ([MDK #3602](https://github.com/marmot-protocol/mdk/issues/3602)). That is fixed in the MDK
+revision the core uses: the import tests stop `wn-agent` at once after the person's last message, and each
+passed 10 runs of 10.
 
 ## What carries over
 

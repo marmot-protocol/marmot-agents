@@ -288,11 +288,8 @@ pub async fn invited(folder: &str, label: &str) -> Invited {
         }
     }
     assert!(stored, "the old connector stored the person's message");
-    // A wn-agent stopped in the moment after a message arrives leaves the home deaf to that chat
-    // for the next program: without this pause the core never hears the person (every run, with
-    // MDK at the revision the core uses). One that has run for a while, as an installed one has,
-    // does not.
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    // Stopped at once: with MDK at the revision the core uses, a wn-agent stopped in the moment
+    // after a message reached it no longer leaves the home deaf to that chat (MDK #3602).
     // Stopped as systemd stops it.
     let pid = connector.id().unwrap().to_string();
     let killed = std::process::Command::new("kill")
