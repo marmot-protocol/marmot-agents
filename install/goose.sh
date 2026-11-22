@@ -54,6 +54,10 @@ harness_settings() {
         say "command = [$(toml_str "$GOOSE"), \"acp\"]"
     fi
     say "cwd = $(toml_str "$CWD")"
+    if [ "$CONTAINER" = 1 ]; then
+        # The container cannot reach the loopback address the file tool listens on (D-110).
+        say "send_files = false"
+    fi
 }
 
 # Goose reads GOOSE_MODE from its environment, in its container or not, and runs in its own default

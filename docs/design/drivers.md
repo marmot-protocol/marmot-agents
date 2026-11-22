@@ -449,8 +449,8 @@ cwd = "/home/me/work"
   as busy: the turn waits on the tool's result, which the core can give only once the prompt returns. When
   the driver stops, a call in flight is answered as not sent, and a connection still sending its request is
   closed within two seconds. An agent that takes no MCP server over HTTP is
-  given none, and has no tool. Goose in its container cannot reach the loopback address, so it has no
-  tool there; on the host it has. What each agent does was read in its source or seen on the wire
+  given none, and has no tool. Goose in its container cannot reach the loopback address, so its
+  installer writes `send_files = false` there, and it has no tool; on the host it has. What each agent does was read in its source or seen on the wire
   ([harness interfaces](../reference/harness-interfaces.md#mcp-servers-from-the-client-over-acp)).
 
 Its capabilities: it can interrupt; a message during a turn restarts it; the core names the sessions, which
