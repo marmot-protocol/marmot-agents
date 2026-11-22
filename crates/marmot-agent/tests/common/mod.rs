@@ -592,17 +592,19 @@ impl Chat<'_> {
         self.allow_once(&target, &read).await
     }
 
-    /// An approval waiting now whose words pass `asks_for`: its title and text, or the command it
-    /// names.
-    pub fn approval_waiting(&self, asks_for: impl Fn(&str) -> bool) -> Option<(EventKey, Read)> {
+    /// An approval waiting now, in `turn`, whose title passes `asks_for`.
+    #[allow(dead_code)] // Only the ACP scenario has a tool approved.
+    pub fn approval_waiting(
+        &self,
+        turn: &TurnId,
+        asks_for: impl Fn(&str) -> bool,
+    ) -> Option<(EventKey, Read)> {
         self.latest().into_iter().find(|(_, r)| {
-            let Body::Approval(approval) = r.item.event.body() else {
-                return false;
-            };
             let header = r.item.event.header();
-            let command = (approval.subject.as_ref()).and_then(|s| self.command_of(s.as_str()));
-            header.state == State::Waiting && (asks_for(&header.title) || asks_for(&header.text))
-                || command.is_some_and(|c| asks_for(&c))
+            matches!(r.item.event.body(), Body::Approval(_))
+                && header.state == State::Waiting
+                && header.turn.as_ref() == Some(turn)
+                && asks_for(&header.title)
         })
     }
 
