@@ -57,7 +57,9 @@ out is reported as the liveness property it stands for (L1 a request, L2 a turn,
 | `dropped_waits` | `two_chats` with every wait for an event dropped at the first point it would wait, and the harness writing in pieces |
 | `slow_and_out_of_order` | `two_chats` with replies late, after what follows from them, and overtaking each other; for Pi, which answers a prompt before its run reports anything, everything slow instead |
 | `partial_frames` | `two_chats` with every frame from the harness in three pieces |
-| `never_answers` | The harness never answers the request a prompt waits on (Codex `thread/start`, ACP `session/new`, Pi `prompt`) |
+| `never_answers` | The harness never answers the request a prompt waits on (Codex `thread/start`, ACP `session/new`, Pi `prompt`); then it answers, late, and nothing may follow from it in a chat whose prompt was refused |
+| `stops_reading` | The harness stops reading its input and keeps it open while a prompt longer than any pipe is written; the prompt must return, and if refused must never reach the harness once it reads again |
+| `late_replies` | Every reply comes half a second late (for Pi, everything slow): a prompt in a new chat, which waits more than once, is still taken |
 | `restart` | A turn, a restart, a prompt naming the chat's session, a prompt naming none; then a restart in the middle of a turn |
 | `new_session` | A new session, settled by the new session; the next prompt goes to it; another chat naming the old one is refused |
 | `settings` | A setting changed, settled once |
@@ -76,9 +78,11 @@ The pipe between driver and harness holds 256 bytes each way, so a dropped wait 
 
 The faults, set as `Knobs` and changeable between steps: frames written in pieces; replies late; replies after the
 notifications that follow from them and every other reply held back so a later one overtakes it; everything slow;
-requests of a kind never answered; death on the n-th frame, or when killed, in the middle of a frame when writing in
+requests of a kind held unanswered, and answered once taken off the list; a harness that stops reading its input,
+keeping it open, until told to read again; death on the n-th frame, or when killed, in the middle of a frame when writing in
 pieces. A harness's sessions outlive its processes, so a restart can take them up. A death is counted once both ends of
-the pipe are closed, so a driver that writes after it is seen writing to a harness that has gone.
+the pipe are closed, so a driver that writes after it is seen writing to a harness that has gone. What a driver leaves
+unfinished when it closes the harness's input is not a line, and is not read as one.
 
 ## What was run, and found
 
@@ -118,9 +122,16 @@ Two driver bugs were found, each fixed after its scenario failed:
 - **The Codex driver waited for ever on a Codex that never answered** (`never_answers`): for its reply to
   `thread/start`, and on a request before it. The core waits for every request (D-066), so every chat stopped. Now a
   request waits at most a minute, then the connection ends, as the ACP driver and the socket's do.
+- **The ACP and Codex drivers waited for ever on a harness that stopped reading** (`stops_reading`): ACP for the
+  writer task to say a request's message was written, Codex while writing it. Now writing counts against the same
+  minute: ACP's driver ends the connection and the writer task with it, and Codex's one minute covers everything a
+  request waits for, writing included. In both, nothing the harness says after that is read.
 
 Not covered yet, and why:
 
+- **Pi's driver waits for a record to be written with no limit** (`stops_reading` fails, so it is an ignored test
+  in `tests/pi.rs`): a Pi that stops reading its input stalls the request, and every chat with it. Found 2026-11-22;
+  not fixed here.
 - **Codex's greeting** (`Codex::connect`) still waits for `initialize` with no limit. It runs before the core's loop, at
   start. Not changed here.
 - **Pi's start** waits up to `STARTUP_LIMIT` (60 s, fixed), so a Pi that never answers `get_state` is not run: too slow.

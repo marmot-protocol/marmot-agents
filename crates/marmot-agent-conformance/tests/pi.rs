@@ -89,10 +89,20 @@ conformance!(
     slow_and_out_of_order,
     partial_frames,
     never_answers,
+    late_replies,
     restart,
     new_session,
     settings,
 );
+
+// Pi's driver waits for a record to be written with no limit, so a Pi that stops reading its input
+// stalls the request, and every chat with it (found by this scenario, 2026-11-22; not yet fixed).
+#[tokio::test]
+#[ignore = "Pi's driver waits for a record to be written with no limit"]
+async fn stops_reading() {
+    let found = scenarios::run("stops_reading", subject()).await;
+    found.unwrap_or_else(|v| panic!("{v}"));
+}
 
 #[test]
 fn every_scenario_is_run() {

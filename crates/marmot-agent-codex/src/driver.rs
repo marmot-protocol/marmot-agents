@@ -38,8 +38,8 @@ use tokio::process::{Child, Command};
 
 type Reader = Lines<BufReader<Box<dyn AsyncRead + Unpin + Send>>>;
 
-/// How long a request waits for Codex before the driver gives up on it: picking a session, or a
-/// request before it that Codex has yet to answer.
+/// How long one of the core's requests waits for Codex before the driver gives up on it: to read
+/// what the driver writes, to pick a session, or to answer a request before it.
 const PATIENCE: Duration = Duration::from_secs(60);
 type Writer = Box<dyn AsyncWrite + Unpin + Send>;
 
@@ -130,6 +130,8 @@ pub struct Codex {
     gone: bool,
     /// How long a request waits for Codex (D-066).
     patience: Duration,
+    /// When the core's request being handled gives up on Codex.
+    deadline: tokio::time::Instant,
     /// Messages for no chat: Codex's own bookkeeping, and anything for a thread no chat has.
     unrouted: u64,
 }
@@ -187,6 +189,7 @@ impl Codex {
             calls: HashMap::new(),
             gone: false,
             patience: PATIENCE,
+            deadline: tokio::time::Instant::now() + PATIENCE,
             unrouted: 0,
         };
         let id = codex.id();
@@ -315,11 +318,26 @@ impl Codex {
             settles,
         };
         self.queue(text, Some(then));
-        if self.flush().await.is_err() {
+        if self.flush_in_time().await.is_err() {
             self.stopped();
             return Err(Refusal::new(Reason::Failed));
         }
         Ok(())
+    }
+
+    /// Writes what is queued, for one of the core's requests, giving up at its deadline. A Codex
+    /// that has not read it by then has stopped working: the connection ends, so a message cut
+    /// short is never finished, and nothing written later follows a request that failed (D-066).
+    async fn flush_in_time(&mut self) -> io::Result<()> {
+        // Safe to give up on: what is written is counted as it goes, and nothing follows a
+        // message until all of it is written.
+        match tokio::time::timeout_at(self.deadline, self.flush()).await {
+            Ok(flushed) => flushed,
+            Err(_) => {
+                self.give_up();
+                Err(io::Error::from(io::ErrorKind::TimedOut))
+            }
+        }
     }
 
     /// Reads one message from Codex and handles it. False once Codex has gone.
@@ -343,26 +361,37 @@ impl Codex {
         }
     }
 
-    /// Reads one message, for a request that waits for Codex, giving up at `deadline`. A Codex
-    /// that has not answered by then has stopped working: the connection ends, so a reply that
-    /// came later cannot pick a session after the request failed (D-066). False once Codex has
-    /// gone.
-    async fn read_until(&mut self, deadline: tokio::time::Instant) -> bool {
+    /// Reads one message, for one of the core's requests, giving up at its deadline. A Codex that
+    /// has not answered by then has stopped working: the connection ends, so a reply that came
+    /// later cannot pick a session after the request failed (D-066). False once Codex has gone.
+    async fn read_in_time(&mut self) -> bool {
         // Safe to give up on: a message cut short stays queued, and nothing of a line is lost.
-        match tokio::time::timeout_at(deadline, self.read()).await {
+        match tokio::time::timeout_at(self.deadline, self.read()).await {
             Ok(more) => more,
             Err(_) => {
-                if let Some(child) = self.child.as_mut() {
-                    let _ = child.start_kill();
-                }
-                self.stopped();
+                self.give_up();
                 false
             }
         }
     }
 
-    fn deadline(&self) -> tokio::time::Instant {
-        tokio::time::Instant::now() + self.patience
+    /// One of the core's requests begins: it has the patience from now, for everything it waits
+    /// for, writing included.
+    fn begin(&mut self) {
+        self.deadline = tokio::time::Instant::now() + self.patience;
+    }
+
+    /// Ends the connection with a Codex that stopped working: it is stopped, nothing more is
+    /// written to it or read from it, and each chat closes what it had open. Nothing Codex says
+    /// later is read, even when the driver did not start it and cannot stop it.
+    fn give_up(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.start_kill();
+        }
+        self.writer = Box::new(tokio::io::sink());
+        let nothing: Box<dyn AsyncRead + Unpin + Send> = Box::new(tokio::io::empty());
+        self.reader = BufReader::new(nothing).lines();
+        self.stopped();
     }
 
     /// Gives a message from Codex to the chat it is for.
@@ -633,7 +662,7 @@ impl Codex {
             };
             self.queue(&text, Some(then));
         }
-        if self.flush().await.is_err() {
+        if self.flush_in_time().await.is_err() {
             self.stopped();
             return Err(Refusal::new(Reason::Failed));
         }
@@ -649,10 +678,9 @@ impl Codex {
         purpose: impl Fn(&Translator, i64) -> Purpose,
         build: impl Fn(&Translator, i64) -> Result<String, Refusal>,
     ) -> Result<i64, Refusal> {
-        let deadline = self.deadline();
         loop {
             // A message cut short is finished first, so the translator builds from what was sent.
-            if self.flush().await.is_err() {
+            if self.flush_in_time().await.is_err() {
                 self.stopped();
                 return Err(Refusal::new(Reason::Failed));
             }
@@ -667,7 +695,7 @@ impl Codex {
                     return Ok(id);
                 }
                 Err(refusal) if refusal.reason == Reason::Busy && translator.waiting_on_codex() => {
-                    if !self.read_until(deadline).await {
+                    if !self.read_in_time().await {
                         return Err(Refusal::new(Reason::Failed));
                     }
                 }
@@ -700,9 +728,8 @@ impl Codex {
         let setup = self.setup.clone();
         let build = |t: &Translator, id| t.pick(id, session, &setup);
         let id = self.ask(chat, |_, _| Purpose::Plain, build).await?;
-        let deadline = self.deadline();
         while self.requests.contains_key(&id) {
-            if !self.read_until(deadline).await {
+            if !self.read_in_time().await {
                 return Err(Refusal::new(Reason::Failed));
             }
         }
@@ -753,6 +780,7 @@ impl Driver for Codex {
         if self.gone {
             return Err(Refusal::new(Reason::Failed));
         }
+        self.begin();
         let chat = prompt.chat.id.clone();
         // The core names a session only to resume it (D-065).
         let wanted = prompt.session.as_ref().map(|s| s.as_str().to_string());
@@ -766,9 +794,8 @@ impl Driver for Codex {
         self.chat(&chat).await?;
         // A session being picked, by a control or an earlier prompt, is waited for before deciding
         // whether this prompt needs one.
-        let deadline = self.deadline();
         while self.chats[&chat].translator.picking() {
-            if !self.read_until(deadline).await {
+            if !self.read_in_time().await {
                 return Err(Refusal::new(Reason::Failed));
             }
         }
@@ -789,8 +816,9 @@ impl Driver for Codex {
         if self.gone {
             return Err(Refusal::new(Reason::Failed));
         }
+        self.begin();
         // A message cut short is finished first: it may be an answer to the same item.
-        if self.flush().await.is_err() {
+        if self.flush_in_time().await.is_err() {
             self.stopped();
             return Err(Refusal::new(Reason::Failed));
         }
@@ -803,6 +831,7 @@ impl Driver for Codex {
         if self.gone {
             return Err(Refusal::new(Reason::Failed));
         }
+        self.begin();
         let request = control.request.clone();
         let (chat, effect) = match &control.action {
             Action::Interrupt { turn } => {
@@ -864,6 +893,7 @@ impl Driver for Codex {
             return;
         };
         let reply = tool_reply(&codex_id, &result);
+        self.begin();
         // A reply Codex cannot be given is lost with Codex, which `send` notes.
         let _ = self.send(&chat, None, &reply, Vec::new()).await;
     }

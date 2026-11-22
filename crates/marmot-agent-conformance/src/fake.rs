@@ -4,9 +4,11 @@
 //! of its own, in the shapes the recordings show. The engine reads the driver's lines, hands each
 //! to the protocol, and writes what it answers, with the faults the [`Knobs`] ask for: frames
 //! written in pieces, replies late, replies after the notifications that follow them and out of
-//! order between requests, requests never answered, and a harness that dies after a given number
-//! of frames or when told to. Every line the driver writes is kept, and a line that is not whole
-//! JSON is kept apart: a driver must never leave half a message on the harness's input (S11).
+//! order between requests, requests never answered (or answered only much later), a harness that
+//! stops reading its input, and a harness that dies after a given number of frames or when told
+//! to. Every line the driver writes is kept, and a line that is not whole JSON is kept apart: a
+//! driver must never leave half a message on the harness's input (S11). What is left unfinished
+//! when the driver closes the input is not a line: a harness never reads it as a message.
 //!
 //! What a fake understood is kept as [`Heard`], the same for every harness, so the suite checks
 //! what reached the harness without knowing its protocol.
@@ -36,8 +38,13 @@ pub struct Knobs {
     pub late: Option<Duration>,
     /// Everything the harness says comes this late, in order.
     pub slow: Option<Duration>,
-    /// Requests and notifications of these methods (or Pi types) are heard and never answered.
+    /// Requests and notifications of these methods (or Pi types) are held, unheard and
+    /// unanswered, for as long as they are listed here. Taken off the list, a held frame is heard
+    /// and answered then, late, as a harness that was stuck would.
     pub never: Vec<String>,
+    /// The harness stops reading its input, and keeps it open, until this is cleared. The driver's
+    /// writes stop once the pipe is full.
+    pub deaf: bool,
     /// A reply comes after the notifications that follow from its request, and every other reply
     /// is held back a little, so a later request's reply overtakes it.
     pub reorder: bool,
@@ -210,6 +217,8 @@ struct Kill {
 pub struct Fake {
     shared: Arc<Mutex<Shared>>,
     kill: Arc<watch::Sender<Kill>>,
+    /// Bumped whenever the knobs change, so a harness waiting to read sees it at once.
+    turned: Arc<watch::Sender<u64>>,
 }
 
 impl Default for Fake {
@@ -222,9 +231,11 @@ impl Fake {
     /// A fake that has heard nothing yet, with no faults.
     pub fn new() -> Self {
         let (kill, _) = watch::channel(Kill::default());
+        let (turned, _) = watch::channel(0);
         Self {
             shared: Arc::default(),
             kill: Arc::new(kill),
+            turned: Arc::new(turned),
         }
     }
 
@@ -240,6 +251,7 @@ impl Fake {
     /// Changes the faults from the next frame on.
     pub fn set_knobs(&self, knobs: Knobs) {
         self.shared().knobs = knobs;
+        self.turned.send_modify(|n| *n += 1);
     }
 
     /// Everything understood so far, in order.
@@ -327,18 +339,36 @@ async fn engine<P: Protocol>(
     mut kill: watch::Receiver<Kill>,
 ) {
     kill.mark_unchanged();
+    let mut turned = fake.turned.subscribe();
     let (tx, rx) = mpsc::unbounded_channel();
     let writes = tokio::spawn(write_loop(writer, rx, fake.clone()));
-    let mut lines = BufReader::new(reader).lines();
+    let mut reader = BufReader::new(reader);
+    // One line as it is read; kept across a wait given up on, so nothing of it is lost.
+    let mut line = Vec::new();
     let mut replies = 0usize;
     let mut out = Outbox::default();
     let mut heard = Vec::new();
     protocol.start(&mut out, &mut heard);
     fake.shared().heard.extend(heard);
     let mut dead = dispatch(out, &fake.knobs(), &tx, &mut replies);
+    // Frames held by `Knobs::never`, to be heard once taken off it.
+    let mut held: Vec<Value> = Vec::new();
     'process: while !dead {
-        let line = tokio::select! {
-            line = lines.next_line() => line,
+        turned.borrow_and_update();
+        let knobs = fake.knobs();
+        // A held frame taken off the list is heard now.
+        let (now, still): (Vec<Value>, Vec<Value>) =
+            held.drain(..).partition(|f| !knobs.never.contains(&key(f)));
+        held = still;
+        for frame in now {
+            dead = hear(&mut protocol, &frame, &fake, &knobs, &tx, &mut replies);
+            if dead {
+                break 'process;
+            }
+        }
+        let read = tokio::select! {
+            read = reader.read_until(b'\n', &mut line), if !knobs.deaf => read,
+            _ = turned.changed() => continue,
             changed = kill.changed() => {
                 if changed.is_err() {
                     continue;
@@ -352,16 +382,22 @@ async fn engine<P: Protocol>(
                 continue;
             }
         };
-        let Ok(Some(line)) = line else {
-            break; // the harness's input closed: it exits, and its output closes
-        };
+        // The harness's input closed, with what was unfinished never a line: it exits, and its
+        // output closes.
+        if !matches!(read, Ok(n) if n > 0) || line.last() != Some(&b'\n') {
+            break;
+        }
+        let text = String::from_utf8_lossy(&line)
+            .trim_end_matches(['\n', '\r'])
+            .to_string();
+        line.clear();
         let total = {
             let mut shared = fake.shared();
             shared.frames += 1;
             shared.frames
         };
-        let Ok(frame) = serde_json::from_str::<Value>(&line) else {
-            fake.shared().malformed.push(line);
+        let Ok(frame) = serde_json::from_str::<Value>(&text) else {
+            fake.shared().malformed.push(text);
             continue;
         };
         let knobs = fake.knobs();
@@ -371,17 +407,14 @@ async fn engine<P: Protocol>(
             break;
         }
         if knobs.never.contains(&key(&frame)) {
+            held.push(frame);
             continue;
         }
-        let mut out = Outbox::default();
-        let mut heard = Vec::new();
-        protocol.hear(&frame, &mut out, &mut heard);
-        fake.shared().heard.extend(heard);
-        dead = dispatch(out, &knobs, &tx, &mut replies);
+        dead = hear(&mut protocol, &frame, &fake, &knobs, &tx, &mut replies);
     }
     protocol.ended();
     drop(tx);
-    drop(lines);
+    drop(reader);
     let _ = writes.await;
     // Counted once both ends are closed, so a driver that writes after a death is seen counts
     // as writing to a harness that has gone.
@@ -390,6 +423,22 @@ async fn engine<P: Protocol>(
         shared.deaths += 1;
         shared.dead.push(tag);
     }
+}
+
+/// Hands one frame to the protocol, and what it answers to the writer. True if the harness died.
+fn hear<P: Protocol>(
+    protocol: &mut P,
+    frame: &Value,
+    fake: &Fake,
+    knobs: &Knobs,
+    tx: &mpsc::UnboundedSender<Write>,
+    replies: &mut usize,
+) -> bool {
+    let mut out = Outbox::default();
+    let mut heard = Vec::new();
+    protocol.hear(frame, &mut out, &mut heard);
+    fake.shared().heard.extend(heard);
+    dispatch(out, knobs, tx, replies)
 }
 
 /// Hands what a protocol answered to the writer, as the knobs say. True if the harness died.

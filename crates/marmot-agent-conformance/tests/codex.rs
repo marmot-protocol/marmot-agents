@@ -91,6 +91,8 @@ conformance!(
     slow_and_out_of_order,
     partial_frames,
     never_answers,
+    stops_reading,
+    late_replies,
     restart,
     new_session,
     settings,

@@ -10,7 +10,7 @@ use marmot_agent_events::{Body, State};
 use std::time::Duration;
 
 /// Every scenario, by name, for a test to run one at a time.
-pub const ALL: [&str; 13] = [
+pub const ALL: [&str; 15] = [
     "one_turn",
     "two_chats",
     "answered_once",
@@ -21,6 +21,8 @@ pub const ALL: [&str; 13] = [
     "slow_and_out_of_order",
     "partial_frames",
     "never_answers",
+    "stops_reading",
+    "late_replies",
     "restart",
     "new_session",
     "settings",
@@ -39,6 +41,8 @@ pub async fn run<S: Subject>(name: &str, subject: S) -> Result<(), Violation> {
         "slow_and_out_of_order" => slow_and_out_of_order(subject).await,
         "partial_frames" => partial_frames(subject).await,
         "never_answers" => never_answers(subject).await,
+        "stops_reading" => stops_reading(subject).await,
+        "late_replies" => late_replies(subject).await,
         "restart" => restart(subject).await,
         "new_session" => new_session(subject).await,
         "settings" => settings(subject).await,
@@ -255,7 +259,8 @@ pub async fn partial_frames<S: Subject>(subject: S) -> Result<(), Violation> {
 
 /// The harness never answers the request a prompt waits on: the prompt still returns, taken or
 /// refused, within the suite's patience (S11, D-066: a harness that never answers is a driver
-/// that stopped working, and ending it is the remedy).
+/// that stopped working, and ending it is the remedy). A refused prompt stays refused: when the
+/// harness answers at last, nothing in the chat follows from it.
 pub async fn never_answers<S: Subject>(subject: S) -> Result<(), Violation> {
     let mut run = Run::start(subject).await;
     let never = run.subject.never().to_string();
@@ -265,8 +270,80 @@ pub async fn never_answers<S: Subject>(subject: S) -> Result<(), Violation> {
     });
     run.patience = Duration::from_secs(6);
     run.loose = true; // the harness heard it, and will not say so
-    let _ = run.prompt("c-1", "hello").await?;
+    let refused = run.prompt("c-1", "hello").await?.is_err();
     run.drain(Duration::from_millis(200)).await;
+    // The harness answers, late.
+    let before = run.seen.len();
+    run.subject.fake().set_knobs(Knobs::default());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    run.drain(Duration::from_millis(100)).await;
+    if refused && run.seen.len() > before {
+        return Err(broke(
+            "S11",
+            "a reply that came after the prompt was refused reached the chat",
+        ));
+    }
+    run.end().await
+}
+
+/// What a prompt says to be longer than any pipe between the driver and the harness, so that
+/// writing it fills the pipe.
+fn longer_than_a_pipe(words: &str) -> String {
+    format!("{words} {}", "x".repeat(1 << 20))
+}
+
+/// The harness stops reading its input, keeping it open, while a prompt too long for the pipe is
+/// written: the prompt still returns, within the suite's patience (S11, D-066). Refused, it stays
+/// refused: when the harness reads again, it never reads the prompt.
+pub async fn stops_reading<S: Subject>(subject: S) -> Result<(), Violation> {
+    let mut run = Run::start(subject).await;
+    let first = taken(run.prompt("c-1", "hello").await?, "the first prompt")?;
+    run.wait("L2", "the first turn's end", ended_turn_of(&first))
+        .await?;
+    run.subject.fake().set_knobs(Knobs {
+        deaf: true,
+        ..Knobs::default()
+    });
+    let stuck = "#stuck";
+    let refused = run
+        .prompt("c-1", &longer_than_a_pipe(stuck))
+        .await?
+        .is_err();
+    // The harness reads again.
+    let fake = run.subject.fake().clone();
+    fake.set_knobs(Knobs::default());
+    let read = |heard: &[Heard]| {
+        (heard.iter()).any(|h| matches!(h, Heard::Prompt { text, .. } if text.contains(stuck)))
+    };
+    if refused && fake.wait_heard(Duration::from_secs(1), read).await {
+        return Err(broke(
+            "S11",
+            "a prompt the driver refused reached the harness once it read again",
+        ));
+    }
+    run.end().await
+}
+
+/// Every reply from the harness comes late, but well within the driver's patience: a prompt in a
+/// new chat, which waits for the harness more than once, is still taken, and its turn ends. For a
+/// harness that keeps its order, everything it says is slow instead.
+pub async fn late_replies<S: Subject>(subject: S) -> Result<(), Violation> {
+    let mut run = Run::start(subject).await;
+    let knobs = if run.subject.reorders() {
+        Knobs {
+            late: Some(Duration::from_millis(500)),
+            ..Knobs::default()
+        }
+    } else {
+        Knobs {
+            slow: Some(Duration::from_millis(100)),
+            ..Knobs::default()
+        }
+    };
+    run.subject.fake().set_knobs(knobs);
+    run.patience = Duration::from_secs(10);
+    let m = taken(run.prompt("c-1", "hello").await?, "the prompt")?;
+    run.wait("L2", "the turn's end", ended_turn_of(&m)).await?;
     run.end().await
 }
 

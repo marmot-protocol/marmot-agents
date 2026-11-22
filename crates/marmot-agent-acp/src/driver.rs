@@ -70,6 +70,9 @@ pub struct Acp {
     /// never leaves half a message on the agent's input. A request's message comes with a channel
     /// the task says on whether it was written.
     writer: tokio::sync::mpsc::UnboundedSender<Line>,
+    /// The task that writes, which holds the agent's input. Ending the connection ends it, so a
+    /// message it has not finished writing never reaches the agent later.
+    writing: tokio::task::JoinHandle<()>,
     /// The process, when the driver started it. It is killed when the driver is dropped.
     child: Option<Child>,
     /// The driver's name for the agent, until the agent names itself.
@@ -152,7 +155,7 @@ impl Acp {
         let output: Box<dyn AsyncRead + Unpin + Send> = Box::new(output);
         let (writer, mut lines) = tokio::sync::mpsc::unbounded_channel::<Line>();
         let mut input = input;
-        tokio::spawn(async move {
+        let writing = tokio::spawn(async move {
             while let Some((line, done)) = lines.recv().await {
                 let written = async {
                     input.write_all(line.as_bytes()).await?;
@@ -176,6 +179,7 @@ impl Acp {
         let mut acp = Self {
             reader: BufReader::new(output).lines(),
             writer,
+            writing,
             child: None,
             name: name.to_string(),
             version: None,
@@ -276,15 +280,21 @@ impl Acp {
 
     /// Hands a message to the task that writes it, and waits until it is written: a request
     /// returns once the agent has it, and an answer the agent cannot read is not shown as given.
+    /// An agent that has not read it within the patience has stopped working: the connection
+    /// ends, so what was not written never reaches the agent after the request failed (D-066).
     async fn write_whole(&mut self, text: &str) -> io::Result<()> {
         let (done, written) = tokio::sync::oneshot::channel();
         let closed = || io::Error::other("the agent's input is closed");
         self.writer
             .send((text.to_string(), Some(done)))
             .map_err(|_| closed())?;
-        match written.await {
-            Ok(true) => Ok(()),
-            _ => Err(closed()),
+        match tokio::time::timeout(self.patience, written).await {
+            Ok(Ok(true)) => Ok(()),
+            Ok(_) => Err(closed()),
+            Err(_) => {
+                self.end();
+                Err(io::Error::other("the agent stopped reading"))
+            }
         }
     }
 
@@ -714,11 +724,16 @@ impl Acp {
         Ok(())
     }
 
-    /// Ends the connection: the agent is stopped, and each chat closes what it had open.
+    /// Ends the connection: the agent is stopped, nothing more is written to it or read from it,
+    /// and each chat closes what it had open. Nothing the agent says later is read, even when the
+    /// driver did not start it and cannot stop it.
     fn end(&mut self) {
         if let Some(child) = self.child.as_mut() {
             let _ = child.start_kill();
         }
+        self.writing.abort();
+        let nothing: Box<dyn AsyncRead + Unpin + Send> = Box::new(tokio::io::empty());
+        self.reader = BufReader::new(nothing).lines();
         self.stopped();
     }
 
