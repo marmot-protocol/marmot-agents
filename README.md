@@ -40,9 +40,14 @@ The script downloads `marmot-agent` from the latest release and checks it agains
 (`--from-source` builds it here instead). It makes the agent's identity and prints its public key, for you to
 invite it from White Noise, and runs it as a service of your account: systemd `--user` on Linux, launchd on
 macOS. Only you may prompt it or approve what it does until you change its settings. The containerised
-harnesses also take `--model-key <file>`, the API key of an OpenAI-compatible model endpoint in a file only you
-can read; it is mounted into the container, read when the harness starts, and never copied. The work folder
-(`--cwd`) must not hold that key or the agents' folder: the script and the container scripts refuse it. Claude
+harnesses run on a model endpoint you bring, and there is no default: give `--model-url <url>`, an
+OpenAI-compatible endpoint, `--model <name>`, the model as it names it, and `--model-key <file>`, its API key in
+a file only you can read, which is mounted into the container, read when the harness starts, and never copied.
+The script stops without them. Goose runs in its own default mode, which asks nothing; `--goose-mode approve`
+makes it ask in the chat before each tool. The work folder (`--cwd`) must not hold that key or the agents'
+folder: the script and the container scripts refuse it. Whatever the work folder, the agent never sends a file
+from its own account home, which holds its keys, unless you allow it in its settings
+([D-099](docs/decisions.md#d-099-files-from-the-agents-own-home-are-refused-by-default-and-the-owner-may-allow-them)). Claude
 Code must be signed in on your account (run `claude`, then `/login`): an `ANTHROPIC_API_KEY` in your shell
 does not reach the service, and the script refuses to rely on one.
 
@@ -53,9 +58,9 @@ does not reach the service, and the script refuses to rely on one.
 - `--no-service` sets up no service; run the agent with the `start` script in its folder (and `connector`, for
   Claude Code, OpenClaw and Hermes), which the service would run.
 - The service is started again whenever the core stops, as when its harness exits, unless you stopped it.
-- `--help` lists the rest: the work folder, the agent's name, its relays, the model.
+- `--help` lists the rest: the work folder, the agent's name, its relays.
 
-Where things go (provisional): `marmot-agent` in `~/.local/bin`, the connectors in
+Where things go ([D-100](docs/decisions.md#d-100-the-installers-defaults)): `marmot-agent` in `~/.local/bin`, the connectors in
 `~/.local/share/marmot-agent/lib`, and each agent in `~/.local/share/marmot-agent/agents/<name>`, with its
 `settings.toml`, its account home and its launchers. An agent's name belongs to the harness it was installed
 with. The service is `marmot-agent-<name>` (and `marmot-agent-<name>-connector`

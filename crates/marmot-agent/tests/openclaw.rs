@@ -5,25 +5,25 @@
 //! on, with nothing run twice (`docs/plan.md`, D-074).
 //!
 //! It approves only the exact command each step asks for, once, in a throwaway folder. It needs
-//! Docker, and a file holding a key for the model endpoint, named by `MODEL_KEY_FILE`
-//! (`MODEL_BASE_URL` and `MODEL_NAME` choose the endpoint and the model, as for
-//! `packages/openclaw/run.sh`). The first run builds the image. The gateway's own log is read only
+//! Docker, and a model: `MODEL_BASE_URL`, `MODEL_NAME` and `MODEL_KEY_FILE`, the file that holds
+//! the endpoint's key, in the environment or in `tests.env` (`tests.env.example` says how; there
+//! is no default). The first run builds the image. The gateway's own log is read only
 //! for the plugin's line that says it connected, and is neither printed nor kept: it may hold what
 //! the agent was told (D-071). It runs only when asked for:
 //!
 //! ```sh
-//! MODEL_KEY_FILE=<key file> cargo test -p marmot-agent --test openclaw -- --ignored --nocapture
+//! cargo test -p marmot-agent --test openclaw -- --ignored --nocapture
 //! ```
 
 mod common;
 
-use common::{Chat, TURN, World, lines, within};
+use common::{Chat, TURN, TestModel, World, lines, within};
 use marmot_agent::carrier::Asked;
 use marmot_agent::run::serve;
 use marmot_agent::socket::Endpoint;
 use marmot_agent_events::State;
 use marmot_agent_events::body::Body;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -46,7 +46,7 @@ struct Folders<'a> {
     home: &'a Path,
     state: &'a Path,
     work: &'a Path,
-    key: &'a Path,
+    model: &'a TestModel,
 }
 
 impl OpenClaw {
@@ -66,7 +66,8 @@ impl OpenClaw {
             .arg(folders.home)
             .arg(folders.state)
             .arg(folders.work)
-            .arg(folders.key)
+            .arg(&folders.model.key_file)
+            .envs(folders.model.env())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true)
@@ -175,18 +176,11 @@ impl Drop for OpenClaw {
     }
 }
 
-fn key_file() -> PathBuf {
-    PathBuf::from(
-        std::env::var_os("MODEL_KEY_FILE")
-            .expect("set MODEL_KEY_FILE to a file holding a key for the model endpoint"),
-    )
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "needs Docker and a key for a model endpoint"]
+#[ignore = "needs Docker and a model"]
 async fn openclaw_end_to_end() {
     let began = Instant::now();
-    let key = key_file();
+    let model = TestModel::read();
     let work = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
@@ -194,7 +188,7 @@ async fn openclaw_end_to_end() {
         home: home.path(),
         state: state.path(),
         work: work.path(),
-        key: &key,
+        model: &model,
     };
     let world = World::new("name = \"OpenClaw\"\n[connector]\n").await;
     world.runtime.start().await.unwrap();

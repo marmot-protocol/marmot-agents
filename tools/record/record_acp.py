@@ -4,7 +4,8 @@
 Usage:
     record_acp.py <scenario> <project-dir> <output.jsonl> [--agent "opencode acp"] [--home DIR] [--config JSON]
 
-For Goose, in a container: --agent "tools/goose/goose-acp.sh <model-key-file>".
+For Goose, in a container: --agent "tools/goose/goose-acp.sh <model-key-file>", with MODEL_BASE_URL and
+MODEL_NAME from the environment or from tests.env at the top of the repository (tests.env.example).
 For Cursor, on its own sign-in:
     --agent "cursor-agent acp" --agent-auto "cursor-agent --force acp" --own-home
     record_acp.py --list
@@ -40,6 +41,8 @@ import threading
 import time
 from pathlib import Path
 
+import tests_env
+
 TURN_TIMEOUT = 240
 PROTOCOL_VERSION = 1
 # The cheapest OpenCode model that worked on 2026-11-21: a free one, which needs no account.
@@ -48,8 +51,9 @@ DEFAULT_CONFIG = {"model": "opencode/deepseek-v4.1-flash-free"}
 ASK = {"permission": {"bash": "ask", "edit": "ask"}}
 # The only variables the agent gets from the recorder's own environment. Everything else it is given
 # is set below: its throwaway home and its configuration. Nothing else of the machine's reaches it.
-# MODEL_* choose the model of an agent run in a container, such as Goose by `tools/goose/goose-acp.sh`.
-PASSED_THROUGH = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "MODEL_HOST", "MODEL_BASE_PATH", "MODEL_NAME")
+# MODEL_* choose the model of an agent run in a container, such as Goose by `tools/goose/goose-acp.sh`;
+# they may come from tests.env (tests_env.py).
+PASSED_THROUGH = ("PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "MODEL_BASE_URL", "MODEL_NAME")
 
 
 class Agent:
@@ -444,6 +448,7 @@ def main():
         return
     if not (args.scenario in SCENARIOS and args.project and args.output):
         sys.exit(__doc__)
+    tests_env.load()
     cwd = str(Path(args.project).resolve())
     # Beside the project, so the scrubber's map for the work folder covers the paths the agent
     # writes into its answers, such as where it kept a command's output.

@@ -9,15 +9,16 @@
 //! ```sh
 //! # OpenCode, on the host, with a throwaway home and a free model: needs `opencode`.
 //! cargo test -p marmot-agent --test acp opencode -- --ignored --nocapture
-//! # Goose, in a throwaway container: needs Docker, and the path of a model key file in GOOSE_KEY_FILE.
-//! GOOSE_KEY_FILE=<model-key-file> cargo test -p marmot-agent --test acp goose -- --ignored --nocapture
+//! # Goose, in a throwaway container: needs Docker, and a model: MODEL_BASE_URL, MODEL_NAME and
+//! # MODEL_KEY_FILE, in the environment or in tests.env (see tests.env.example).
+//! cargo test -p marmot-agent --test acp goose -- --ignored --nocapture
 //! # Cursor, on the host's own sign-in: needs `cursor-agent`, signed in.
 //! cargo test -p marmot-agent --test acp cursor -- --ignored --nocapture
 //! ```
 
 mod common;
 
-use common::{Chat, TURN, World, lines, within};
+use common::{Chat, TURN, TestModel, World, lines, within};
 use marmot_agent::carrier::Asked;
 use marmot_agent_acp::Acp;
 use marmot_agent_events::State;
@@ -56,16 +57,18 @@ const OPENCODE: Agent = Agent {
 const GOOSE: Agent = Agent {
     name: "goose",
     command: |_work, home| {
-        let key = std::env::var("GOOSE_KEY_FILE").expect("GOOSE_KEY_FILE names the model key file");
+        let model = TestModel::read();
         let wrapper = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/goose/goose-acp.sh");
-        // In approve mode Goose asks before every tool call.
-        vec![
-            "env".into(),
-            "GOOSE_MODE=approve".into(),
+        // In approve mode Goose asks before every tool call, which the scenario needs; Goose's own
+        // default, auto, asks nothing.
+        let mut command = vec!["env".into(), "GOOSE_MODE=approve".into()];
+        command.extend(model.env_args());
+        command.extend([
             wrapper.display().to_string(),
-            key,
+            model.key_file,
             home.display().to_string(),
-        ]
+        ]);
+        command
     },
 };
 
@@ -185,7 +188,7 @@ async fn opencode_end_to_end() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "needs Docker and a model key file in GOOSE_KEY_FILE"]
+#[ignore = "needs Docker and a model"]
 async fn goose_end_to_end() {
     scenario(GOOSE).await;
 }

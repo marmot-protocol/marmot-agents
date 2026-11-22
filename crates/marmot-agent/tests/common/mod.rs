@@ -633,3 +633,54 @@ impl Chat<'_> {
             .collect()
     }
 }
+
+/// The model a scenario against a real harness runs on: an OpenAI-compatible endpoint, the model,
+/// and the file that holds the endpoint's key (D-100). Each is read from the environment, or else
+/// from `tests.env` at the top of the repository, which git ignores (`tests.env.example` shows it).
+/// There is no default; CI's nightly workflow sets the same names from its secrets.
+pub struct TestModel {
+    /// `MODEL_BASE_URL`.
+    pub url: String,
+    /// `MODEL_NAME`.
+    pub name: String,
+    /// `MODEL_KEY_FILE`.
+    pub key_file: String,
+}
+
+impl TestModel {
+    pub fn read() -> Self {
+        let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests.env");
+        let text = std::fs::read_to_string(file).unwrap_or_default();
+        let value = |name: &str| {
+            let from_file = || {
+                (text.lines())
+                    .filter_map(|line| line.trim().strip_prefix(name)?.strip_prefix('='))
+                    .map(|value| value.trim().to_string())
+                    .next_back()
+            };
+            (std::env::var(name).ok().filter(|v| !v.is_empty()))
+                .or_else(from_file)
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| {
+                    panic!("set {name}, in the environment or in tests.env (see tests.env.example)")
+                })
+        };
+        Self {
+            url: value("MODEL_BASE_URL"),
+            name: value("MODEL_NAME"),
+            key_file: value("MODEL_KEY_FILE"),
+        }
+    }
+
+    /// The endpoint and the model as the container scripts take them, from their environment.
+    pub fn env(&self) -> [(&'static str, &str); 2] {
+        [("MODEL_BASE_URL", &self.url), ("MODEL_NAME", &self.name)]
+    }
+
+    /// The same, as arguments for `env`, for a program the core starts.
+    pub fn env_args(&self) -> Vec<String> {
+        (self.env().iter())
+            .map(|(name, value)| format!("{name}={value}"))
+            .collect()
+    }
+}
