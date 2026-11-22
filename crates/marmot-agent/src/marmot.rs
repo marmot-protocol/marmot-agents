@@ -707,6 +707,14 @@ fn send_failed(error: &AppError) -> SendFailed {
         AppError::InvalidAppMessagePayload(why) if why.starts_with("pending edit rate limit") => {
             SendFailed::Busy
         }
+        // MDK makes an event's id from its kind, tags, content and second, and keeps the id of
+        // every send it took, even one it dropped: the same bytes under another token in that
+        // second are the same event. MDK took nothing, and in the next second they are another.
+        AppError::InvalidAppMessagePayload(why)
+            if why.starts_with("message identity collision") =>
+        {
+            SendFailed::Busy
+        }
         AppError::InvalidAppMessagePayload(_)
         | AppError::EventTooLarge { .. }
         | AppError::UnknownGroup(_)

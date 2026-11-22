@@ -273,3 +273,109 @@ async fn a_send_tried_again_under_its_token_goes_out_once() {
     assert_eq!(tag("settles").as_deref(), Some("e-r1"));
     world.runtime.shutdown().await;
 }
+
+/// Waits until just after a whole second starts, so what follows at once falls in that second.
+async fn at_a_new_second() {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    let into = now.unwrap().subsec_millis() as u64;
+    tokio::time::sleep(std::time::Duration::from_millis(1000 - into + 20)).await;
+}
+
+/// What the agent sent to `group`, of kind `kind`, as MDK keeps it for the agent.
+fn sent_by_core(world: &World, group: &GroupKey, kind: u64) -> Vec<marmot_app::AppMessageRecord> {
+    let query = marmot_app::AppMessageQuery {
+        group_id_hex: Some(group.as_str().to_string()),
+        kinds: Some(vec![kind]),
+        limit: None,
+    };
+    let sent = (world.marmot.runtime)
+        .messages_with_query(&world.marmot.label, query)
+        .unwrap();
+    sent.into_iter().filter(|m| m.direction == "sent").collect()
+}
+
+/// A direct chat between the person and the agent, with the core stopped once the agent is in it.
+async fn a_quiet_chat(world: &World) -> GroupKey {
+    world.runtime.start().await.unwrap();
+    let core = world.start(Echo::new(Arc::new(AtomicUsize::new(0))));
+    let group = world
+        .runtime
+        .start_direct_conversation(&world.person, &world.agent)
+        .await
+        .unwrap();
+    let group = GroupKey(world.joined(&group).await);
+    core.stop().await;
+    group
+}
+
+/// The group's id, as MDK takes it.
+fn group_id(group: &GroupKey) -> cgka_traits::GroupId {
+    cgka_traits::GroupId::new(hex::decode(group.as_str()).unwrap())
+}
+
+/// The agent's own words in `group`, as the core sends them, with a key and a token named `name`.
+fn words_named(name: &str) -> (marmot_agent::Sending, marmot_agent::Token) {
+    let words = marmot_agent::Sending::Words {
+        key: name.into(),
+        text: "the same words".into(),
+        turn: Some("t1".into()),
+        remark: true,
+        edit: None,
+        settles: Vec::new(),
+    };
+    let token = marmot_agent::Token {
+        send: name.into(),
+        mdk: format!("token {name}"),
+        edits: None,
+    };
+    (words, token)
+}
+
+// MDK makes an event's id from its kind, tags, content and second, and keeps the id of a send it
+// took and dropped. The same words tried again in that second under a new token meet that id:
+// MDK is busy for the rest of the second, which is no refusal (S1, S3). While the agent's own
+// disband of a group is under way, MDK takes each send to it and then drops it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_dropped_send_tried_again_in_the_same_second_is_not_refused() {
+    use marmot_agent::marmot::SendFailed;
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let group = a_quiet_chat(&world).await;
+    let id = group_id(&group);
+    let agent = &world.marmot.label;
+    world
+        .runtime
+        .enable_group_disbanding(agent, &id)
+        .await
+        .unwrap();
+    at_a_new_second().await;
+    world.runtime.disband_group(agent, &id).await.unwrap();
+    let (words, first) = words_named("a");
+    let tried = world.marmot.send(&group, &words, &first).await;
+    assert_eq!(tried, Err(SendFailed::Rejected), "taken, and dropped");
+    let again = marmot_agent::Token {
+        mdk: "token a, again".into(),
+        ..first
+    };
+    let tried = world.marmot.send(&group, &words, &again).await;
+    assert_eq!(tried, Err(SendFailed::Busy), "busy until the next second");
+    world.runtime.shutdown().await;
+}
+
+// Two sends of the same words, with the same tags, in one second would be one event to MDK: the
+// second waits for the next second, and both go out (S1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_same_words_twice_in_one_second_both_go_out() {
+    use marmot_agent::marmot::SendFailed;
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let group = a_quiet_chat(&world).await;
+    let ((a, first), (b, second)) = (words_named("a"), words_named("b"));
+    at_a_new_second().await;
+    let went = world.marmot.send(&group, &a, &first).await.unwrap();
+    let tried = world.marmot.send(&group, &b, &second).await;
+    assert_eq!(tried, Err(SendFailed::Busy), "busy until the next second");
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let also = world.marmot.send(&group, &b, &second).await.unwrap();
+    assert_ne!(went, also, "two events");
+    assert_eq!(sent_by_core(&world, &group, 9).len(), 2, "both went out");
+    world.runtime.shutdown().await;
+}
