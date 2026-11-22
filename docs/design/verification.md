@@ -253,11 +253,14 @@ agent, Codex's fake), that can: write a reply short, answer late or never, answe
 serve two chats at once, and replay a recording.
 
 **Built**, phase one (2026-11-22): [`crates/marmot-agent-conformance`](../../crates/marmot-agent-conformance/README.md).
-Codex, ACP (OpenCode-, Goose- and Cursor-shaped) and Pi run 15 scenarios on fakes of their harnesses (Goose and
+Codex, ACP (OpenCode-, Goose- and Cursor-shaped) and Pi run 17 scenarios on fakes of their harnesses (Goose and
 Cursor the ones where they differ), a death at each frame an approval's turn writes, and seven recordings replayed
 through the transport, which play on only after the recorded answer. The checker names each failure by its
-property: S1, S2, S5, S11, S12, S13, and S4 and `seq` for drivers besides. Seventeen deliberate faults, put in by a
-wrapper driver, are each caught as the property they break, by the check meant for them. It found five driver
+property: S1, S2, S5, S11, S12, S13, and S4 and `seq` for drivers besides. Twenty-two deliberate faults, put in by a
+wrapper driver, are each caught as the property they break, by the check meant for them. One scenario, `send_file`,
+covers the file tool of every built-in driver (Codex, Pi and the three ACP shapes; the ACP driver's listener, off
+until [Q-31](../open-questions.md#q-31-how-does-an-acp-agent-reach-the-drivers-file-tool) is decided, switched on for
+the test), with five faults of its own. It found five driver
 bugs, each fixed after its scenario failed: the ACP driver took, and showed as given, an
 answer the agent could no longer read; the Codex driver waited for ever on a Codex that never answered; and the ACP,
 Codex and Pi drivers waited for ever on a harness that stopped reading its input. Each of the last four held up
