@@ -1,0 +1,23 @@
+//! The driver conformance suite: layer 2 of the verification plan
+//! (`docs/design/verification.md`, "A conformance suite for every driver").
+//!
+//! One set of scenarios, written once against the [`Driver`](marmot_agent_driver::Driver) trait,
+//! that every driver must pass. A [`Subject`](run::Subject) is a driver on a scriptable fake
+//! harness; [`Run`](run::Run) drives it as the core does; the [`Checker`](check::Checker) looks at
+//! every step and names the property a failure breaks (S1, S2, S4, S5, S11, S12, S13, and `seq`).
+//! The fakes ([`fake`]) speak each harness's own protocol, grown from the stand-ins the drivers'
+//! tests had, and can answer late or never, out of order, in pieces, die at any step, serve two
+//! chats, restart, and replay a recording. [`faults`] puts bugs in on purpose, so a test shows
+//! each check catches its own.
+//!
+//! The drivers are run against it in this crate's tests: `tests/codex.rs`, `tests/acp.rs`,
+//! `tests/pi.rs`, and the faults in `tests/faults.rs`. See `README.md` beside this crate.
+
+pub mod check;
+pub mod fake;
+pub mod faults;
+pub mod run;
+pub mod scenarios;
+
+pub use check::{Checker, Violation};
+pub use run::{Run, Subject};
