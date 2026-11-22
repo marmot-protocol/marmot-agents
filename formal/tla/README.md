@@ -188,7 +188,9 @@ with more memory, which is not set up yet:
 | two chats, `p1` and `r1` in `c1`, `r2` in `c2`, item `t1`, 1 down | 9,544,632 | 2 min 5 s |
 
 All of `check.py` takes about 10 minutes here with 4 workers (the fair and give-up configurations take about 3½
-each, since live messages are taken in any order); CI runs it on every pull request with 4 workers. For
+each, since live messages are taken in any order); CI runs it on every pull request with 4 workers, in two
+jobs side by side: the fair model (`--only fair`) and every other case (`--except fair`), each under D-094's
+15 minutes. For
 review round 1 it took 24 minutes, on a machine busy with the simulator and the Rust tests at the same time. The
 larger bounds were not run again for the fix: no send is refused or given up in them.
 
@@ -245,4 +247,4 @@ tools/tla/run.sh formal/tla CoreLifecycle.tla CoreLifecycle.fair.cfg   # TLC on 
 `tools/tla/run.sh` downloads TLC v1.7.4 (the release MDK pins, with the same SHA-256) into
 `~/.cache/marmot-agents/tla` once, and runs it with the local Java, or, when there is none, in a pinned Eclipse
 Temurin 21 image with Docker. `TLC_WORKERS` sets TLC's workers (default 1); `TLC_HEAP` its heap (default 2g).
-CI runs `check.py` in the `TLA+ models` job on every pull request.
+CI runs `check.py` in the two `TLA+ models` jobs on every pull request.

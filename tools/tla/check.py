@@ -263,6 +263,8 @@ def main():
     parser.add_argument("--out", type=Path, default=ROOT / "target" / "tla")
     parser.add_argument("--only", nargs="+", choices=NAMES, metavar="NAME",
                         help=f"run only these cases, from: {', '.join(NAMES)}")
+    parser.add_argument("--except", dest="skip", nargs="+", choices=NAMES, metavar="NAME",
+                        default=[], help="run every case but these")
     parser.add_argument("--counterexamples", action="store_true",
                         help="write the committed counterexample schedules again")
     args = parser.parse_args()
@@ -272,6 +274,8 @@ def main():
     print(f"{'case':32} {'expected':18} {'result':18} {'distinct':>10} {'generated':>11} {'secs':>6}")
     for case in CASES:
         if args.only and case.name not in args.only:
+            continue
+        if case.name in args.skip:
             continue
         folder = args.out / case.name
         if folder.exists():
