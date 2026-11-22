@@ -320,9 +320,11 @@ async fn a_core_stopped_just_after_a_message_hears_the_next() {
     restarted_after(Duration::ZERO).await;
 }
 
-// As above, stopped five seconds after the message, which `wn-agent` survived, and the core does
-// too (7 runs of 7 through `marmot-agent run`; 11 of 11 earlier).
+// As above, stopped five seconds after the message, which `wn-agent` survived. Locally the core
+// did too (7 runs of 7 through `marmot-agent run`; 11 of 11 earlier), but on CI it missed the next
+// message twice (#96), so the pause does not avoid MDK's bug on a loaded machine either.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "MDK #3602: also seen with a 5 s pause on CI (#96)"]
 async fn a_core_stopped_a_while_after_a_message_hears_the_next() {
     restarted_after(Duration::from_secs(5)).await;
 }
