@@ -1140,21 +1140,29 @@ fn section(
     mapped: &mut Vec<String>,
     not_mapped: &mut Vec<String>,
 ) -> String {
-    let program = connector.env_prefix().and_then(|prefix| {
-        lookup(env, &format!("{prefix}_BIN"))
-            .filter(|p| !p.is_empty() && *p != connector.program())
-            .map(String::from)
-    });
-    match (&program, connector) {
-        (None, _) => {}
-        // The Claude Code driver takes no program: it runs the Claude Code its SDK brings.
-        (Some(_), Connector::Claude) => not_mapped.push(
-            "the harness's program, `WN_CLAUDE_BIN`: the Claude Code driver runs the Claude Code \
-             that comes with it"
-                .into(),
-        ),
-        (Some(_), _) => mapped.push("the harness's program".into()),
-    }
+    let named = connector
+        .env_prefix()
+        .and_then(|prefix| lookup(env, &format!("{prefix}_BIN")))
+        .filter(|p| !p.is_empty());
+    let program = match (named, connector) {
+        (None, _) => None,
+        // The Claude Code driver takes no program: it runs the Claude Code its SDK brings. Even
+        // plain `claude` is said, as the old connector looked it up on the service's `PATH`,
+        // which may have found a pinned program or a wrapper.
+        (Some(_), Connector::Claude) => {
+            not_mapped.push(
+                "the harness's program, `WN_CLAUDE_BIN`: the Claude Code driver runs the Claude \
+                 Code that comes with it"
+                    .into(),
+            );
+            None
+        }
+        (Some(p), _) if p == connector.program() => None,
+        (Some(p), _) => {
+            mapped.push("the harness's program".into());
+            Some(p.to_string())
+        }
+    };
     let program = program.unwrap_or_else(|| connector.program().to_string());
     if let Some(profile) =
         lookup(env, "MARMOT_HARNESS_EXECUTION_PROFILE").filter(|p| !p.is_empty() && *p != "inherit")
@@ -2019,31 +2027,39 @@ mod tests {
     }
 
     /// The settings name the harness's program only where its section has one: the Claude Code
-    /// driver runs the Claude Code its SDK brings, so the old program is said not to carry over.
-    /// Once, the plan said it had carried over for Claude Code too.
+    /// driver runs the Claude Code its SDK brings, so the old program is said not to carry over,
+    /// even when it was plain `claude`, which the old connector looked up on the service's `PATH`
+    /// and which may have been a pinned program or a wrapper there. Once, the plan said it had
+    /// carried over for Claude Code too, and then said nothing for plain `claude`.
     #[test]
     fn the_harness_program_carries_over_only_where_the_section_has_one() {
         let root = tempfile::tempdir().unwrap();
         let owner = people(root.path(), 1).remove(0);
-        for (harness, carried) in [("claude", false), ("pi", true), ("opencode", true)] {
+        // The harness, its `_BIN`, whether the settings name it, and whether the plan says it
+        // does not carry over.
+        for (harness, bin, carried, dropped) in [
+            ("claude", "/opt/claude/bin/claude", false, true),
+            ("claude", "claude", false, true),
+            ("pi", "/opt/pi/bin/pi", true, false),
+            ("pi", "pi", false, false),
+            ("opencode", "/opt/opencode/bin/opencode", true, false),
+        ] {
             let (home, ids) = home_with(root.path(), harness, &["x"]);
             welcomers(&home, &ids[0], "allowlist", std::slice::from_ref(&owner));
             let prefix = format!("WN_{}", harness.to_ascii_uppercase());
             std::fs::create_dir_all(home.join("dev")).unwrap();
             std::fs::write(
                 home.join(format!("dev/wn-{harness}.env")),
-                format!(
-                    "{prefix}_ALLOWED_SENDERS_HEX={owner}\n{prefix}_BIN=/opt/{harness}/bin/{harness}\n"
-                ),
+                format!("{prefix}_ALLOWED_SENDERS_HEX={owner}\n{prefix}_BIN={bin}\n"),
             )
             .unwrap();
             let plan = plan(&options(root.path(), &home)).unwrap();
             let named = plan.settings_text.contains("/opt/");
             let mapped = plan.mapped.iter().any(|m| m == "the harness's program");
             let said = plan.not_mapped.iter().any(|m| m.contains("program"));
-            assert_eq!(named, carried, "{harness}: {}", plan.settings_text);
-            assert_eq!(mapped, carried, "{harness}: {:?}", plan.mapped);
-            assert_eq!(said, !carried, "{harness}: {:?}", plan.not_mapped);
+            assert_eq!(named, carried, "{harness} {bin}: {}", plan.settings_text);
+            assert_eq!(mapped, carried, "{harness} {bin}: {:?}", plan.mapped);
+            assert_eq!(said, dropped, "{harness} {bin}: {:?}", plan.not_mapped);
             std::fs::remove_dir_all(&home).unwrap();
         }
     }
