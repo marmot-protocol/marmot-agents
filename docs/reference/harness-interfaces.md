@@ -20,6 +20,8 @@ research.
 - **Pi was read again on 2026-11-21.** Its entry, its part of the `pi-codes` row under "Libraries" and
   [Pi: which library to build on](#pi-which-library-to-build-on) are from that day. Nothing else on this page
   was re-checked.
+- **MCP servers over ACP were checked on 2026-11-22**, for OpenCode 2.3.2, Goose 1.59.2 and Cursor
+  2026.11.22: [MCP servers from the client, over ACP](#mcp-servers-from-the-client-over-acp) says how.
 
 ## Summary
 
@@ -187,6 +189,33 @@ documentation in its npm package and the source of `pi-codes` 1.6.0. The recordi
 - **Extensions are used heavily.** Harness-specific data travels in `_meta` fields and methods with a leading
   underscore. Only `_session/steering` is shared across harnesses.
 - **Transport.** stdio is the only specified transport.
+
+### MCP servers from the client, over ACP
+
+Checked on 2026-11-22, for the ACP driver's `send_file` tool. **How:** OpenCode's ACP code at tag `v2.3.2`
+(`packages/cli/src/acp/service.ts`, `sessions.ts`) and Goose's at tag `v1.59.2` (`crates/goose/src/acp/server.rs`,
+`agents/mcp_client.rs`, `session_context.rs`) were read; Cursor's is not public. Then each agent was run, over
+`opencode acp`, `cursor-agent acp` and Goose's container (`tools/goose`), by a throwaway Python client that handed
+`session/new` a small HTTP MCP server of its own and asked the model to call its one tool. Only message kinds,
+field names and the order of arrival were looked at. Not checked: SSE servers, stdio servers, and what each does
+with more than one server.
+
+| | OpenCode 2.3.2 | Goose 1.59.2 | Cursor 2026.11.22 |
+| --- | --- | --- | --- |
+| `mcpCapabilities` in `initialize` | `http: true, sse: false` | `http: true, sse: false` | `http: true, sse: true` |
+| Takes from `mcpServers` | stdio and HTTP; SSE refused | stdio and streamable HTTP; SSE refused | HTTP (stdio and SSE not tried) |
+| On `session/load`, `session/resume` | taken again (both) | taken again (`load`; no `resume`), replacing a server of the same name | taken again (`load`) |
+| Kept for | every session in the folder: `mcp.add` with `location.directory`, so the server handed over last for a name serves all of them (seen: a call from the first of two sessions arrived at the second's address) | the session: stored with the session's extensions, on disk | the session (seen: two sessions in one folder each called their own address) |
+| Connects | at `session/new`, before replying | lazily, at the first tool list | at `session/new`, before replying |
+| Client-given headers | sent on every request | sent (`headers` of the extension; read in source, not seen) | sent on every request |
+| The calling session, in `tools/call` | `_meta["ai.opencode/sessionID"]`, the ACP session id | `_meta["agent-session-id"]`, the ACP session id, with `agent-working-dir` and `agent-tool-call-request-id` | not named |
+| Before the call | nothing asked (with its default permissions); the model may call it from OpenCode's `execute` code tool, which ACP shows as `execute` with the code as `rawInput` | asks in `approve` mode, as for every tool: title `marmot: send file · <path>` | always asks (`session/request_permission`, title `marmot-send_file: send_file`, `allow-once`, `allow-always`, `reject-once`) |
+| First MCP request | `initialize` (`2025-11-25`) | `server/discover` (draft `2026-07-28`), then `initialize` when refused | `initialize` (`2025-11-25`) |
+| A server it cannot reach | not tried; a request to a server that has gone is logged as a warning with its address (seen: host and port) | the session still opens and the turn runs without the tool (seen in its container, which cannot reach the host's loopback address) | not tried |
+
+OpenCode's log records a server's address when a request to it fails, which is why the driver puts its token in a
+header and not in the address (the log line seen held the host and port only; a path was not tried). Goose stores a session's servers, headers included, in its session store
+(read in source).
 
 ## Libraries
 

@@ -130,10 +130,12 @@ sequenceDiagram
 - **The harness asks with a tool the driver gives it.** Codex gets a dynamic tool, `send_file`, on every
   session the driver starts, and Codex keeps it when a session is resumed. Claude Code gets an in-process MCP
   server from the Agent SDK with the same tool, which Claude Code calls `mcp__marmot__send_file`. Pi gets it
-  from a small extension of the driver's own, loaded into each chat's Pi
-  ([the Pi driver](#the-pi-driver)). All three take one argument, `path`. The model is never asked to write a
-  path into its answer, and nothing in its words is read as a request to send by the driver. A gateway's
-  plugin takes the gateway's own way instead ([below](#a-gateways-files)).
+  from a small extension of the driver's own, loaded into each chat's Pi ([the Pi driver](#the-pi-driver)). An
+  ACP agent (OpenCode, Goose, Cursor) gets an MCP server the ACP driver serves itself, over HTTP on the loopback
+  address, on every session it opens or takes up ([the ACP driver](#the-acp-driver)). All take one
+  argument, `path`. The model is never asked to write a path into its answer, and nothing in its words is read
+  as a request to send by the driver. A gateway's plugin takes the gateway's own way instead
+  ([below](#a-gateways-files)).
 - **The driver hands the core a request.** `next_event` gives either an event or `SendFile`: the driver's own
   id for the request, the chat, and the path. The driver makes a relative path whole by putting the chat's
   session folder in front, leaving any `..` for the core to follow; the core takes only an absolute one. The core answers through `file_sent`, with the result and, for a
@@ -175,9 +177,9 @@ sequenceDiagram
   ([D-071](../decisions.md#d-071-what-may-be-logged)).
 - **Who may.** Calling the tool needs nobody's approval in the chat: the Claude Code connector allows it in
   its permission callback, Codex does not ask for a dynamic tool, and Pi asks nobody before any tool. The
-  folders are the limit, as the owner set them.
-
-The ACP driver does not offer the tool yet.
+  folders are the limit, as the owner set them. An ACP agent that asks its client before an MCP tool (Cursor
+  always; Goose in `approve` mode) asks in the chat, like any approval: the ACP driver answers no approval
+  itself (provisional, [Q-31](../open-questions.md#q-31-how-does-an-acp-agent-reach-the-drivers-file-tool)).
 
 ### A gateway's files
 
@@ -422,10 +424,27 @@ cwd = "/home/me/work"
   has that tool call.
 - **Requests nobody is asked about** are answered at once: Cursor's `cursor/update_todos` is taken, anything
   else unknown is refused, so the agent never waits for ever.
+- **Sending a file** ([sending a file](#sending-a-file)). Built 2026-11-22; provisional, and its security
+  points wait on the owner ([Q-31](../open-questions.md#q-31-how-does-an-acp-agent-reach-the-drivers-file-tool)).
+  An agent that takes MCP servers over HTTP (`mcpCapabilities.http`, which OpenCode, Goose and Cursor all
+  state) is given the driver's own on `session/new`, `session/load` and `session/resume`, named `marmot`, with
+  one tool, `send_file`. The driver serves it with the official MCP library (`rmcp`), on `127.0.0.1` and a
+  port the system picks, stateless, answering in plain JSON; it refuses a `Host` that is not the loopback.
+  Each chat has a token of its own, 128 random bits, which the agent sends in an `Authorization` header and
+  never in the address, since OpenCode writes the address into its log. A request without a token the driver
+  gave is refused before MCP reads it. A tool call goes to the chat whose session the call names in its
+  `_meta` (OpenCode: `ai.opencode/sessionID`; Goose: `agent-session-id`), or, when it names none (Cursor), to
+  the chat whose token it carries. OpenCode keeps one server of a name for every session in a folder, the one
+  handed over last, so its calls carry whichever chat's token came last: the token alone would send one
+  chat's file to another. A call naming a session no chat has, such as one of OpenCode's subagents, is refused,
+  never guessed. A relative path is made whole from the chat's folder. An agent that takes no MCP server over
+  HTTP is given none, and has no tool. Goose in its container cannot reach the loopback address, so it has no
+  tool there; on the host it has. What each agent does was read in its source or seen on the wire
+  ([harness interfaces](../reference/harness-interfaces.md#mcp-servers-from-the-client-over-acp)).
 
 Its capabilities: it can interrupt; a message during a turn restarts it; the core names the sessions, which
 can be resumed when the agent can load or resume them; approvals come to the chat; no approval commands; no
-files ([D-083](../decisions.md#d-083-the-core-passes-no-files-to-a-harness-yet)).
+files passed to the agent ([D-083](../decisions.md#d-083-the-core-passes-no-files-to-a-harness-yet)).
 
 ## The Pi driver
 
