@@ -1,0 +1,184 @@
+Error: Invariant S10 is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+/\ phase = "start"
+/\ drvEmits = [s1 |-> 0]
+/\ drvItems = [s1 |-> "new"]
+/\ acts = <<>>
+/\ drvReqs = {}
+/\ delivered = [p1 |-> 0]
+/\ cv = [ sess |-> [c1 |-> "none"],
+  mark |-> [c1 |-> 0],
+  h |-> [p1 |-> 0, r1 |-> 0],
+  pending |-> {},
+  items |-> [s1 |-> [ver |-> 0, first |-> 0, open |-> FALSE]],
+  ends |-> {},
+  outbox |-> <<>> ]
+/\ shown = [r1 |-> 0]
+/\ dropped = [s1 |-> {}]
+/\ ambig = 0
+/\ drvChats = {}
+/\ inflight = [x |-> "none", k |-> "none", sess |-> "none"]
+/\ nextOrder = 1
+/\ sv = [ sess |-> [c1 |-> "none"],
+  mark |-> [c1 |-> 0],
+  h |-> [p1 |-> 0, r1 |-> 0],
+  pending |-> {},
+  items |-> [s1 |-> [ver |-> 0, first |-> 0, open |-> FALSE]],
+  ends |-> {},
+  outbox |-> <<>> ]
+/\ taken = {}
+/\ deadline = {}
+/\ iposts = [s1 |-> <<>>]
+/\ unk = << >>
+/\ live = <<>>
+/\ downs = 0
+/\ mdkTok = {}
+/\ order = [p1 |-> 0, r1 |-> 0]
+
+State 2: <CatchUpDone line 282, col 5 to line 285, col 82 of module CoreLifecycle>
+/\ phase = "run"
+/\ drvEmits = [s1 |-> 0]
+/\ drvItems = [s1 |-> "new"]
+/\ acts = <<>>
+/\ drvReqs = {}
+/\ delivered = [p1 |-> 0]
+/\ cv = [ sess |-> [c1 |-> "none"],
+  mark |-> [c1 |-> 0],
+  h |-> [p1 |-> 0, r1 |-> 0],
+  pending |-> {},
+  items |-> [s1 |-> [ver |-> 0, first |-> 0, open |-> FALSE]],
+  ends |-> {},
+  outbox |-> <<>> ]
+/\ shown = [r1 |-> 0]
+/\ dropped = [s1 |-> {}]
+/\ ambig = 0
+/\ drvChats = {}
+/\ inflight = [x |-> "none", k |-> "none", sess |-> "none"]
+/\ nextOrder = 1
+/\ sv = [ sess |-> [c1 |-> "none"],
+  mark |-> [c1 |-> 0],
+  h |-> [p1 |-> 0, r1 |-> 0],
+  pending |-> {},
+  items |-> [s1 |-> [ver |-> 0, first |-> 0, open |-> FALSE]],
+  ends |-> {},
+  outbox |-> <<>> ]
+/\ taken = {}
+/\ deadline = {}
+/\ iposts = [s1 |-> <<>>]
+/\ unk = << >>
+/\ live = <<>>
+/\ downs = 0
+/\ mdkTok = {}
+/\ order = [p1 |-> 0, r1 |-> 0]
+
+State 3: <Store line 222, col 5 to line 226, col 45 of module CoreLifecycle>
+/\ phase = "run"
+/\ drvEmits = [s1 |-> 0]
+/\ drvItems = [s1 |-> "new"]
+/\ acts = <<>>
+/\ drvReqs = {}
+/\ delivered = [p1 |-> 0]
+/\ cv = [ sess |-> [c1 |-> "none"],
+  mark |-> [c1 |-> 0],
+  h |-> [p1 |-> 0, r1 |-> 0],
+  pending |-> {},
+  items |-> [s1 |-> [ver |-> 0, first |-> 0, open |-> FALSE]],
+  ends |-> {},
+  outbox |-> <<>> ]
+/\ shown = [r1 |-> 0]
+/\ dropped = [s1 |-> {}]
+/\ ambig = 0
+/\ drvChats = {}
+/\ inflight = [x |-> "none", k |-> "none", sess |-> "none"]
+/\ nextOrder = 2
+/\ sv = [ sess |-> [c1 |-> "none"],
+  mark |-> [c1 |-> 0],
+  h |-> [p1 |-> 0, r1 |-> 0],
+  pending |-> {},
+  items |-> [s1 |-> [ver |-> 0, first |-> 0, open |-> FALSE]],
+  ends |-> {},
+  outbox |-> <<>> ]
+/\ taken = {}
+/\ deadline = {}
+/\ iposts = [s1 |-> <<>>]
+/\ unk = << >>
+/\ live = <<"p1">>
+/\ downs = 0
+/\ mdkTok = {}
+/\ order = [p1 |-> 1, r1 |-> 0]
+
+State 4: <Store line 222, col 5 to line 226, col 45 of module CoreLifecycle>
+/\ phase = "run"
+/\ drvEmits = [s1 |-> 0]
+/\ drvItems = [s1 |-> "new"]
+/\ acts = <<>>
+/\ drvReqs = {}
+/\ delivered = [p1 |-> 0]
+/\ cv = [ sess |-> [c1 |-> "none"],
+  mark |-> [c1 |-> 0],
+  h |-> [p1 |-> 0, r1 |-> 0],
+  pending |-> {},
+  items |-> [s1 |-> [ver |-> 0, first |-> 0, open |-> FALSE]],
+  ends |-> {},
+  outbox |-> <<>> ]
+/\ shown = [r1 |-> 0]
+/\ dropped = [s1 |-> {}]
+/\ ambig = 0
+/\ drvChats = {}
+/\ inflight = [x |-> "none", k |-> "none", sess |-> "none"]
+/\ nextOrder = 3
+/\ sv = [ sess |-> [c1 |-> "none"],
+  mark |-> [c1 |-> 0],
+  h |-> [p1 |-> 0, r1 |-> 0],
+  pending |-> {},
+  items |-> [s1 |-> [ver |-> 0, first |-> 0, open |-> FALSE]],
+  ends |-> {},
+  outbox |-> <<>> ]
+/\ taken = {}
+/\ deadline = {}
+/\ iposts = [s1 |-> <<>>]
+/\ unk = << >>
+/\ live = <<"p1", "r1">>
+/\ downs = 0
+/\ mdkTok = {}
+/\ order = [p1 |-> 1, r1 |-> 2]
+
+State 5: <Ask line 265, col 5 to line 266, col 18 of module CoreLifecycle>
+/\ phase = "run"
+/\ drvEmits = [s1 |-> 0]
+/\ drvItems = [s1 |-> "new"]
+/\ acts = <<[x |-> "r1", k |-> "request", sess |-> "none"]>>
+/\ drvReqs = {}
+/\ delivered = [p1 |-> 0]
+/\ cv = [ sess |-> [c1 |-> "none"],
+  mark |-> [c1 |-> 2],
+  h |-> [p1 |-> 0, r1 |-> 1],
+  pending |-> {"r1"},
+  items |-> [s1 |-> [ver |-> 0, first |-> 0, open |-> FALSE]],
+  ends |-> {},
+  outbox |-> <<>> ]
+/\ shown = [r1 |-> 0]
+/\ dropped = [s1 |-> {}]
+/\ ambig = 0
+/\ drvChats = {}
+/\ inflight = [x |-> "none", k |-> "none", sess |-> "none"]
+/\ nextOrder = 3
+/\ sv = [ sess |-> [c1 |-> "none"],
+  mark |-> [c1 |-> 0],
+  h |-> [p1 |-> 0, r1 |-> 0],
+  pending |-> {},
+  items |-> [s1 |-> [ver |-> 0, first |-> 0, open |-> FALSE]],
+  ends |-> {},
+  outbox |-> <<>> ]
+/\ taken = {}
+/\ deadline = {}
+/\ iposts = [s1 |-> <<>>]
+/\ unk = << >>
+/\ live = <<"p1">>
+/\ downs = 0
+/\ mdkTok = {}
+/\ order = [p1 |-> 1, r1 |-> 2]
+
+The depth of the complete state graph search is 5.
+The average outdegree of the complete state graph is 2 (minimum is 0, the maximum 5 and the 95th percentile is 5).
