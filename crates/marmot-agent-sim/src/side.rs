@@ -447,16 +447,86 @@ fn misshapen(what: &Sending, kind: u64, tags: &[Vec<String>], token: &Token) -> 
         return None;
     };
     let name = format!("{} v{}", item.event.header().item.as_str(), item.version);
-    let own: Vec<Vec<String>> = (tags.iter())
-        .filter(|t| t.first().map(String::as_str) != Some("e"))
-        .cloned()
-        .collect();
+    let edit = kind == EDIT;
+    // A first event is checked as it is sent; an edit without the `e` MDK places itself, as the
+    // real Marmot side hands it over.
+    let own = if edit {
+        carrier::but_target(tags)
+    } else {
+        tags.to_vec()
+    };
     if let Err(error) = cgka_traits::agent_events::validate_agent_item_tags(&own) {
         return Some(format!("{name}: {error}"));
     }
-    let edit = kind == EDIT;
     if edit != item.first.is_some() || (edit && token.edits.is_none()) {
         return Some(format!("{name}: not an edit of its first event"));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use marmot_agent::carrier::Item;
+    use marmot_agent_events::body::{StartedBy, Turn};
+    use marmot_agent_events::{AgentEvent, Header, State};
+
+    fn version(first: Option<&str>) -> Sending {
+        let header = Header {
+            harness: "sim".into(),
+            session: Some("s1".into()),
+            turn: Some("t1".into()),
+            item: "t1".into(),
+            seq: 1,
+            state: State::Running,
+            title: "Turn".into(),
+            text: "turn".into(),
+        };
+        let body = Body::Turn(Turn {
+            started_by: StartedBy::User,
+            duration_ms: None,
+            usage: None,
+        });
+        Sending::Item {
+            key: "t1".into(),
+            item: Box::new(Item {
+                event: AgentEvent::new(header, body, None).expect("no secret"),
+                version: if first.is_some() { 2 } else { 1 },
+                first: first.map(EventKey::from),
+                started_by: None,
+                settles: Vec::new(),
+            }),
+        }
+    }
+
+    // MDK refuses a first event that carries an `e` tag, which is an edit's target for MDK to
+    // place; an edit's own `e` is MDK's, and is not checked as the item's.
+    #[test]
+    fn a_first_event_is_checked_with_every_tag_it_carries() {
+        let token = |edits: Option<&str>| Token {
+            send: "a".into(),
+            mdk: "a".into(),
+            edits: edits.map(Into::into),
+            tried_at: None,
+        };
+        let first = version(None);
+        let Sending::Item { item, .. } = &first else {
+            unreachable!()
+        };
+        let out = carrier::item(item).expect("fits");
+        assert_eq!(misshapen(&first, out.kind, &out.tags, &token(None)), None);
+        let mut tags = out.tags.clone();
+        tags.push(vec!["e".into(), "0".repeat(64)]);
+        assert!(misshapen(&first, out.kind, &tags, &token(None)).is_some());
+
+        let edit = version(Some(&"1".repeat(64)));
+        let Sending::Item { item, .. } = &edit else {
+            unreachable!()
+        };
+        let out = carrier::item(item).expect("fits");
+        assert_eq!(
+            misshapen(&edit, out.kind, &out.tags, &token(Some("a"))),
+            None
+        );
+    }
 }

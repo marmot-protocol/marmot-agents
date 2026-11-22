@@ -46,10 +46,7 @@ impl Outgoing {
 
     /// The tags without the `e` tag of an edit, as MDK takes them for an edit it places.
     pub fn tags_but_target(&self) -> Vec<Vec<String>> {
-        (self.tags.iter())
-            .filter(|t| t.first().map(String::as_str) != Some("e"))
-            .cloned()
-            .collect()
+        but_target(&self.tags)
     }
 
     /// How large the event is: the whole event as a relay gets it, with its id, author, time and
@@ -666,6 +663,15 @@ fn write_item(item: &Item, left_out: &LeftOut) -> Outgoing {
         content: header.text.clone(),
         tags,
     }
+}
+
+/// Tags without an edit's `e` tag, its target, as MDK takes them for an edit it places
+/// ([`Outgoing::tags_but_target`]).
+pub fn but_target(tags: &[Vec<String>]) -> Vec<Vec<String>> {
+    (tags.iter())
+        .filter(|t| t.first().map(String::as_str) != Some("e"))
+        .cloned()
+        .collect()
 }
 
 /// The event an edit names, its one `e` tag: for a later version of an item, the item's first
