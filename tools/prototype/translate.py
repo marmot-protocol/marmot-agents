@@ -1537,10 +1537,7 @@ class Hermes(Translator):
     # the recordings were made with, commit 40d1e95f.
     VERSION = "0.23.2"
     NOT_SENT = {"send_typing", "stop_typing", "connect", "disconnect", "get_chat_info", "format_tool_preview",
-                "format_tool_event", "send_final_ledgered", "send_exec_approval", "render_message_event",
-                # A file Hermes hands the platform to send. The core sends it, and the chat sees the file
-                # itself, or the core's notice that it was refused (D-090); a caption is sent as a message.
-                "send_document", "send_image_file", "send_video", "send_voice", "send_multiple_images"}
+                "format_tool_event", "send_final_ledgered", "send_exec_approval", "render_message_event"}
     # A line Hermes writes about a tool it is running, or a heartbeat during a long turn. There is no
     # structured form of either. Hermes shows them in the chat as its own running commentary, so they
     # are remarks: messages in the commentary phase, which alert nobody (D-078).

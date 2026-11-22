@@ -186,9 +186,10 @@ the gateway hands the platform the file. Each plugin turns that into the core's 
 each file, as today's connectors turn it into `send_media`.
 
 - **Hermes** calls the platform's `send_document`, `send_image_file`, `send_video`, `send_voice` or
-  `send_multiple_images`, after its own checks of the path. The plugin asks the core for each file and answers
-  Hermes with a `SendResult`: sent when one went. When the core refused, the result tells Hermes not to post
-  its own notice, which would name the file: the chat has the core's.
+  `send_multiple_images`, after its own checks, which make the path whole. The plugin asks the core for each
+  file, with the path as Hermes gave it, and answers Hermes with a `SendResult`: sent when one went. When the
+  core refused, the result tells Hermes not to post its own notice, which would name the file: the chat has
+  the core's.
 - **OpenClaw** hands a reply's files to the channel with the reply, as `mediaUrl` and `mediaUrls`. The plugin
   asks the core for each local one once the reply's text is on its way, and does the same for media OpenClaw
   sends to a chat through the channel's outbound adapter, whose caption goes first as the agent's words. That

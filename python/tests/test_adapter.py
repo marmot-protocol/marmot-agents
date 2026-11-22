@@ -178,6 +178,7 @@ class Files(unittest.IsolatedAsyncioTestCase):
     the answer goes back to Hermes as its SendResult (D-090). The core decides what may be sent."""
 
     OUTSIDE = ("not_allowed", "The file is outside the folders the agent may send files from.")
+    NOT_WHOLE = ("invalid", "The agent did not give a whole path.")
 
     async def asyncSetUp(self):
         self.folder = tempfile.TemporaryDirectory()
@@ -186,7 +187,8 @@ class Files(unittest.IsolatedAsyncioTestCase):
         self.adapter.loop = asyncio.get_running_loop()
         self.sent = []
         self.adapter.connector.send_event = self.sent.append
-        self.fake = FakeCore(lambda path: self.OUTSIDE if path.startswith("/etc/") else None)
+        self.fake = FakeCore(lambda path: self.NOT_WHOLE if not path.startswith("/") else
+                             self.OUTSIDE if path.startswith("/etc/") else None)
         socket = str(Path(self.folder.name) / "core.sock")
         self.server = await asyncio.start_unix_server(self.fake.serve, socket)
         self.adapter.core = self.core = await CoreConnection.open(socket)
@@ -224,12 +226,16 @@ class Files(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.success)
         self.assertEqual(self.words(), ["Two charts"])
 
-    async def test_a_relative_path_is_made_whole_from_where_hermes_works(self):
+    async def test_a_path_that_is_not_whole_goes_as_it_is_and_the_core_refuses_it(self):
+        # Hermes hands a platform only whole paths, once its own checks resolved them: no folder of
+        # Hermes's is guessed at for one that is not, from its environment or the plugin's own.
         with mock.patch.dict("os.environ", {"TERMINAL_CWD": "/work/project"}):
-            await self.adapter.send_video(chat_id="c-1", video_path="out/clip.mp4", caption="The clip")
-            await self.adapter.send_voice(chat_id="c-1", audio_path="~/notes.ogg")
-        self.assertEqual([a["path"] for a in self.fake.asked],
-                         ["/work/project/out/clip.mp4", str(Path("~/notes.ogg").expanduser())])
+            video = await self.adapter.send_video(chat_id="c-1", video_path="out/clip.mp4", caption="The clip")
+            voice = await self.adapter.send_voice(chat_id="c-1", audio_path="~/notes.ogg")
+        self.assertEqual([a["path"] for a in self.fake.asked], ["out/clip.mp4", "~/notes.ogg"])
+        for result in (video, voice):
+            self.assertFalse(result.success)
+            self.assertEqual(result.raw_response, {"failure_notice_sent": True})
         self.assertEqual(self.words(), ["The clip"])
 
     async def test_an_image_on_the_web_is_left_to_hermes(self):
