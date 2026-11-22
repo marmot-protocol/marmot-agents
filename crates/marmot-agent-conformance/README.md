@@ -63,7 +63,7 @@ out is reported as the liveness property it stands for (L1 a request, L2 a turn,
 | `restart` | A turn, a restart, a prompt naming the chat's session, a prompt naming none; then a restart in the middle of a turn |
 | `new_session` | A new session, settled by the new session; the next prompt goes to it; another chat naming the old one is refused |
 | `settings` | A setting changed, settled once |
-| `dies_at_step` | The harness dies on its n-th frame after start, in a turn that asks for approval, for every n up to 10 or 12 |
+| `dies_at_every_step` | The harness dies on its n-th frame after start, in a turn that asks for approval, for every n the turn reaches: a run with nothing failing counts them first, and each run must see the harness die before what it left is checked |
 | `replay` | A recording played back through the driver, every approval allowed; every recorded message must be played |
 
 The pipe between driver and harness holds 256 bytes each way, so a dropped wait can fall in the middle of a write.
@@ -86,16 +86,18 @@ unfinished when it closes the harness's input is not a line, and is not read as 
 
 ## What was run, and found
 
-Bounded result, 2026-11-22: one or two chats, up to two sessions each, one restart, a death at each of the first 10
-to 12 frames after start, seven recordings.
+Bounded result, 2026-11-22: one or two chats, up to two sessions each, one restart, a death at each frame an
+approval's turn writes (3 for OpenCode and Goose, 4 for Cursor, 6 for Codex and Pi), seven recordings. Until
+2026-11-22 the sweep ran a fixed 10 or 12 steps and passed a step the harness never reached, so most of it checked
+nothing.
 
 | Driver | Scenarios | Recordings | Deliberate faults caught |
 | --- | --- | --- | --- |
-| Codex | all 13, `dies_at_step` 1 to 12 | `simple`, `approval_allowed`, `command` | all 12 |
-| ACP, OpenCode-shaped | all 13, `dies_at_step` 1 to 10 | `simple`, `approval_allowed` | |
-| ACP, Goose-shaped | `two_chats`, `answered_once`, `answer_after_death`, `dies_mid_turn`, `restart`, `new_session`, `dies_at_step` | `simple`, `approval_allowed` | |
-| ACP, Cursor-shaped | `two_chats`, `answered_once`, `answer_after_death`, `restart`, `dies_at_step` | `simple`, `approval_allowed` | |
-| Pi | all 13, `dies_at_step` 1 to 10 | `gate_allowed`, `command` | 7: those that turn on a harness for each chat, and `TakeUnhanded` |
+| Codex | all, `dies_at_every_step` (6) | `simple`, `approval_allowed`, `command` | all 12 |
+| ACP, OpenCode-shaped | all, `dies_at_every_step` (3) | `simple`, `approval_allowed` | |
+| ACP, Goose-shaped | `two_chats`, `answered_once`, `answer_after_death`, `dies_mid_turn`, `restart`, `new_session`, `dies_at_every_step` (3) | `simple`, `approval_allowed` | |
+| ACP, Cursor-shaped | `two_chats`, `answered_once`, `answer_after_death`, `restart`, `dies_at_every_step` (4) | `simple`, `approval_allowed` | |
+| Pi | all but `stops_reading`, which fails, `dies_at_every_step` (6) | `gate_allowed`, `command` | 7: those that turn on a harness for each chat, and `TakeUnhanded` |
 
 The faults (`src/faults.rs`), each caught as the property it breaks, by the scenario named:
 

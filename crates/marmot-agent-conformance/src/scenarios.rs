@@ -496,9 +496,46 @@ pub async fn settings<S: Subject>(subject: S) -> Result<(), Violation> {
     run.end().await
 }
 
+/// The prompt the crash sweep runs: a turn that asks for approval, which is given.
+const SWEPT: &str = "#ask";
+
+/// Takes what comes until the driver ends or has nothing more, answering every approval.
+async fn answering<S: Subject>(run: &mut Run<S>) -> Result<(), Violation> {
+    loop {
+        match tokio::time::timeout(Duration::from_millis(300), run.next()).await {
+            Ok(Some(Output::Event(e))) if waiting(&e) => {
+                let _ = run.answer(&e, true).await?;
+            }
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => return Ok(()),
+        }
+    }
+}
+
+/// How many frames the driver writes to the harness from its start to the end of the swept
+/// turn, when nothing fails: the steps at which the sweep can make the harness die.
+pub async fn reachable_steps<S: Subject>(subject: S) -> Result<usize, Violation> {
+    let mut run = Run::start(subject).await;
+    let start = run.subject.fake().frames();
+    let m = taken(run.prompt("c-1", SWEPT).await?, "the swept prompt")?;
+    loop {
+        let e = run
+            .until("L2", "the swept turn's end", |e| {
+                waiting(e) || (turn_ended(e) && e.prompts.contains(&m))
+            })
+            .await?;
+        if !waiting(&e) {
+            break;
+        }
+        taken(run.answer(&e, true).await?.1, "the answer")?;
+    }
+    run.end().await?;
+    Ok(run.subject.fake().frames() - start)
+}
+
 /// The harness dies on reading its `step`-th frame after the driver started, in a turn that asks
-/// for approval: whatever the step, every request is settled once, every item closes (S1, S2),
-/// and nothing panics.
+/// for approval: it must die, and then every request is settled once, every item closes (S1,
+/// S2), and nothing panics.
 pub async fn dies_at_step<S: Subject>(subject: S, step: usize) -> Result<(), Violation> {
     let mut run = Run::start(subject).await;
     let fake = run.subject.fake().clone();
@@ -507,24 +544,34 @@ pub async fn dies_at_step<S: Subject>(subject: S, step: usize) -> Result<(), Vio
         ..Knobs::default()
     });
     run.patience = Duration::from_secs(3);
-    if run.prompt("c-1", "#ask").await?.is_ok() {
-        // Whatever comes, until the driver ends or has nothing more: an approval is answered.
-        loop {
-            match tokio::time::timeout(Duration::from_millis(300), run.next()).await {
-                Ok(Some(Output::Event(e))) if waiting(&e) => {
-                    let _ = run.answer(&e, true).await?;
-                }
-                Ok(Some(_)) => {}
-                Ok(None) | Err(_) => break,
-            }
-        }
+    if run.prompt("c-1", SWEPT).await?.is_ok() {
+        answering(&mut run).await?;
     }
     run.drain(Duration::from_millis(150)).await;
-    run.checkpoint().await?;
-    if fake.deaths() > 0 {
-        run.check.closed_after_stop();
+    // A step the driver never reaches checks nothing.
+    if !fake.wait_heard(run.patience, |_| fake.deaths() > 0).await {
+        return Err(broke(
+            "L2",
+            format!("the harness never died at step {step}, so nothing was checked"),
+        ));
     }
+    run.checkpoint().await?;
+    run.check.closed_after_stop();
     run.end().await
+}
+
+/// The crash sweep: the harness dies at each step the swept turn reaches, one run each.
+pub async fn dies_at_every_step<S: Subject>(subject: impl Fn() -> S) -> Result<(), Violation> {
+    let steps = reachable_steps(subject()).await?;
+    if steps == 0 {
+        return Err(broke("L2", "the driver wrote nothing to the harness"));
+    }
+    for step in 1..=steps {
+        dies_at_step(subject(), step)
+            .await
+            .map_err(|v| broke(v.property, format!("step {step} of {steps}: {}", v.detail)))?;
+    }
+    Ok(())
 }
 
 /// Replays a recording through the driver: one prompt, every approval allowed, until its turn

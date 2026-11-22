@@ -94,10 +94,8 @@ macro_rules! conformance {
 
             #[tokio::test]
             async fn dies_at_every_step() {
-                for step in 1..=10 {
-                    let found = scenarios::dies_at_step(subject(Flavor::$flavor), step).await;
-                    found.unwrap_or_else(|v| panic!("dying at step {step}: {v}"));
-                }
+                let found = scenarios::dies_at_every_step(|| subject(Flavor::$flavor)).await;
+                found.unwrap_or_else(|v| panic!("{v}"));
             }
         }
     };

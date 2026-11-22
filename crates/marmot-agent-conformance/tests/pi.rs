@@ -116,10 +116,8 @@ fn every_scenario_is_run() {
 
 #[tokio::test]
 async fn dies_at_every_step() {
-    for step in 1..=10 {
-        let found = scenarios::dies_at_step(subject(), step).await;
-        found.unwrap_or_else(|v| panic!("dying at step {step}: {v}"));
-    }
+    let found = scenarios::dies_at_every_step(subject).await;
+    found.unwrap_or_else(|v| panic!("{v}"));
 }
 
 // The faults that touch what differs with a harness for each chat: settling when one chat's Pi

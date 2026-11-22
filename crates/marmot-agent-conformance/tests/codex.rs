@@ -110,10 +110,8 @@ fn every_scenario_is_run() {
 
 #[tokio::test]
 async fn dies_at_every_step() {
-    for step in 1..=12 {
-        let found = scenarios::dies_at_step(OnFake::default(), step).await;
-        found.unwrap_or_else(|v| panic!("dying at step {step}: {v}"));
-    }
+    let found = scenarios::dies_at_every_step(OnFake::default).await;
+    found.unwrap_or_else(|v| panic!("{v}"));
 }
 
 fn recording(name: &str) -> String {
