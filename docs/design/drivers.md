@@ -130,8 +130,9 @@ sequenceDiagram
   session the driver starts, and Codex keeps it when a session is resumed. Claude Code gets an in-process MCP
   server from the Agent SDK with the same tool, which Claude Code calls `mcp__marmot__send_file`. Pi gets it
   from a small extension of the driver's own, loaded into each chat's Pi
-  ([the Pi driver](#the-pi-driver)). All three take one argument, `path`. The model is never asked to write a path into its answer, and nothing in its words is read
-  as a request to send.
+  ([the Pi driver](#the-pi-driver)). All three take one argument, `path`. The model is never asked to write a
+  path into its answer, and nothing in its words is read as a request to send by the driver. A gateway's
+  plugin takes the gateway's own way instead ([below](#a-gateways-files)).
 - **The driver hands the core a request.** `next_event` gives either an event or `SendFile`: the driver's own
   id for the request, the chat, and the path. The driver makes a relative path whole by putting the chat's
   session folder in front, leaving any `..` for the core to follow; the core takes only an absolute one. The core answers through `file_sent`, with the result and, for a
@@ -141,7 +142,8 @@ sequenceDiagram
 - **The core decides.** It reads only from the folders `files_from` lists. By default that is the chat's
   folder ([a chat's folder](#a-chats-folder)): the one the chat chose, or else the harness's working folder,
   which a harness the core runs (Codex, Pi, an ACP agent) has in the settings and a connector on the socket
-  states in its hello. A connector that states none has no folder until the settings list one. A folder a chat
+  states in its hello. A connector that states none has no folder until the settings list one, as the installers do
+  for Hermes and OpenClaw ([a gateway's files](#a-gateways-files)). A folder a chat
   chose that holds the account home, as `~` does, is used for files like any other, under the rule below that
   keeps the home's files out. The core opens each folder when it starts, or when the file is sent for a chat's own, and
   follows a path from that open folder one part at a time, never letting the system follow a link: a link on
@@ -174,8 +176,45 @@ sequenceDiagram
   its permission callback, Codex does not ask for a dynamic tool, and Pi asks nobody before any tool. The
   folders are the limit, as the owner set them.
 
-The ACP driver, and the Hermes and OpenClaw plugins, do not offer the tool yet. A plugin would send the
-same `send_file` request from its gateway's own message tool.
+The ACP driver does not offer the tool yet.
+
+### A gateway's files
+
+Built 2026-11-22; provisional until the owner accepts it. Hermes and OpenClaw already let their agent send a
+file to any chat platform: the agent writes a `MEDIA:<path>` line in its answer, or a tool attaches a file, and
+the gateway hands the platform the file. Each plugin turns that into the core's `send_file`, one request for
+each file, as today's connectors turn it into `send_media`.
+
+- **Hermes** calls the platform's `send_document`, `send_image_file`, `send_video`, `send_voice` or
+  `send_multiple_images`, after its own checks, which make the path whole. The plugin asks the core for each
+  file, with the path as Hermes gave it, and answers Hermes with a `SendResult`: sent when one went. When the
+  core refused, the result tells Hermes not to post its own notice, which would name the file: the chat has
+  the core's.
+- **OpenClaw** hands a reply's files to the channel with the reply, as `mediaUrl` and `mediaUrls`. The plugin
+  asks the core for each local one once the reply's text is on its way, and does the same for media OpenClaw
+  sends to a chat through the channel's outbound adapter, whose caption goes first as the agent's words. That
+  send fails when the core refuses the file or cannot be asked, and has a receipt only once the core sent
+  it. The channel now says it takes media. OpenClaw hands a reply's file over as a copy in its outbound media
+  store, which the core never allows; the plugin sends the path the agent named, which OpenClaw keeps beside
+  the payload in a record its plugin SDK does not export, and a copy with no path recorded goes as it is
+  named, so the core refuses it. A relative path
+  is taken from the agent's workspace, as OpenClaw takes it; an address on the web, or a stored inbound
+  attachment, is not sent.
+- **A caption goes as the agent's words**, before the files, since `send_file` carries none. A batch keeps one
+  caption, its first, as today's Hermes connector does. In OpenClaw the caption is the reply's own text, or the
+  outbound send's.
+- **The folder is the gateway's.** A plugin states no folder in its hello, so the installer lists the folder
+  the gateway's agent works in as `files_from`, and makes it if it is not there, since the core opens it when
+  it starts: Hermes's `terminal.cwd`, or the workspace of the OpenClaw agent that takes the Marmot chats, as
+  `openclaw agents list` and `openclaw agents bindings` say (`~/.openclaw/workspace` by default). It lists
+  none when that folder is the whole home, as Hermes's default is, or holds or lies in the agents' data, or
+  holds or lies in the gateway's media cache (Hermes's home; OpenClaw's media store), or holds OpenClaw's
+  state folder, or when Hermes runs its commands in a sandbox, or OpenClaw's Marmot chats may go to more than
+  one agent; the settings and the summary then say how to name one. The media caches are never listed: they
+  also hold the files people sent the gateway in any of its chats, on any platform. Settings kept from an
+  earlier install that list no folder get the one found now; a `files_from` already there is left as it is.
+  The containers this project runs Hermes and OpenClaw in mount the work folder at its own path, so a path
+  the agent names is the same for the core.
 
 ## A chat's folder
 

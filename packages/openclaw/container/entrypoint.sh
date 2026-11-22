@@ -8,7 +8,8 @@
 #   MODEL_FALLBACKS          comma-separated models of the same endpoint, tried in turn when it fails
 #   /marmot                  the agent's home: socket/marmot-agent.sock and connector.token
 #   /state                   OpenClaw's state, kept from one run to the next
-#   /work                    the folder the agent works in
+#   MARMOT_WORK              the folder the agent works in, mounted at the path the core knows it by
+#                            (default: /work)
 # Optional:
 #   EXEC_MODE                OpenClaw's tools.exec.mode (default: ask, which asks in the chat before any
 #                            command not on OpenClaw's allow-list)
@@ -86,7 +87,7 @@ cfg.agents = cfg.agents ?? {};
 cfg.agents.defaults = {
   ...(cfg.agents.defaults ?? {}),
   model: { primary: `marmot/${env.MODEL_NAME}`, fallbacks: models.slice(1).map((m) => `marmot/${m}`) },
-  workspace: "/work",
+  workspace: env.MARMOT_WORK || "/work",
   thinkingDefault: env.THINKING ?? "low",
   // Everything the agent does reaches the plugin, which passes it on (D-008). The recordings were made
   // with these.
@@ -96,7 +97,7 @@ cfg.agents.defaults = {
   timeoutSeconds: 1800,
 };
 // Onboarding names the workspace for the main agent too, and that comes first.
-for (const entry of Object.values(cfg.agents.entries ?? {})) entry.workspace = "/work";
+for (const entry of Object.values(cfg.agents.entries ?? {})) entry.workspace = env.MARMOT_WORK || "/work";
 // Who may talk to the agent is the core's to decide (D-010): the channel lets in what the core sends.
 cfg.channels = { ...(cfg.channels ?? {}), marmot: { enabled: true } };
 // Approvals reach the chat: the plugin claims OpenClaw's approval capability, and forwarding is on.

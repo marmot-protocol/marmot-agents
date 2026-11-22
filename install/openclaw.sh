@@ -27,6 +27,7 @@ OUR_APPROVALS='{"enabled":true,"mode":"session","sessionFilter":[":marmot:"]}'
 harness_check() {
     # What harness_connect reads, also when a dry run goes on without OpenClaw.
     OLD_PLUGIN="" OPENCLAW_FOUND=0
+    choose_files_from ""
     need_node
     OPENCLAW=$(program_path openclaw) || {
         OPENCLAW=openclaw
@@ -41,6 +42,7 @@ harness_check() {
         return 0
     fi
     say "found OpenClaw $version at $OPENCLAW"
+    openclaw_files_from
     # One OpenClaw serves one agent: its marmot channel names one agent's home.
     local home
     home=$(oc_get channels.marmot.home)
@@ -106,7 +108,70 @@ harness_prepare() {
         sh "$(canonical "$MA_STAGE/packages/openclaw")"
 }
 
+# The workspace of the OpenClaw agent that takes the Marmot channel's chats, which it writes the files it
+# sends in (D-090), as OpenClaw itself resolves it (docs/concepts/multi-agent.md): the one agent its
+# bindings route the channel's default account to, or, with no binding, its one agent or its system
+# agent. None when the chats may go to more than one agent, or to none OpenClaw names. OpenClaw's state
+# folder, beside its settings and its agents' own folders, and its media store in it are kept out: they
+# hold the files people sent it on any channel.
+openclaw_files_from() {
+    local agents bindings config line state found=""
+    agents=$("$OPENCLAW" agents list --json 2>/dev/null) || agents=""
+    bindings=$("$OPENCLAW" agents bindings --json 2>/dev/null) || bindings=""
+    config=$("$OPENCLAW" config file 2>/dev/null) || config=""
+    case $config in /*) GATEWAY_STATE+=("$(dirname "$config")") ;; esac
+    while IFS= read -r line; do
+        case $line in
+            "workspace "*) found=${line#workspace } ;;
+            "why "*) FILES_WHY=${line#why } ;;
+            "state "*) GATEWAY_STATE+=("${line#state }") ;;
+        esac
+    done <<END
+$(printf '%s' "$agents" | channel_agent "$bindings")
+END
+    for state in ${GATEWAY_STATE[@]+"${GATEWAY_STATE[@]}"}; do GATEWAY_CACHE+=("$state/media"); done
+    if [ -z "$found" ]; then
+        state=${FILES_WHY:-OpenClaw did not say which of its agents takes the Marmot chats}
+        choose_files_from ""
+        FILES_WHY="$state; list the workspace of the agent that takes them"
+        return 0
+    fi
+    choose_files_from "$found"
+}
+
+# Reads OpenClaw's agents (`agents list --json`) on standard input and its bindings (`agents bindings
+# --json`) as an argument, and says "workspace FOLDER" for the agent the Marmot channel's chats go to,
+# or "why WORDS", and "state FOLDER" for the state folder each agent's own folder lies in.
+channel_agent() {
+    # shellcheck disable=SC2016 # read by node
+    "$NODE" -e '
+        let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
+          const read = (t) => { try { return JSON.parse(t); } catch { return null; } };
+          const agents = read(s), bindings = read(process.argv[1]) ?? [];
+          if (!Array.isArray(agents) || !Array.isArray(bindings)) return console.log("why OpenClaw did not list its agents");
+          for (const a of agents) {
+            const m = /^(.*)\/agents\/[^/]+\/agent\/?$/.exec(String(a?.agentDir ?? ""));
+            if (m && m[1]) console.log(`state ${m[1]}`);
+          }
+          // The plugin has one account, "default": a binding names it, or every account, or none.
+          const ours = bindings.filter((b) => b?.match?.channel === "marmot" && [undefined, "", "default", "*"].includes(b.match.accountId));
+          const narrow = (b) => Object.keys(b.match).some((k) => k !== "channel" && k !== "accountId");
+          const ids = [...new Set(ours.map((b) => b.agentId))];
+          const fallback = agents.length === 1 ? agents[0]?.id : agents.find((a) => a?.isDefault === true)?.id;
+          let id;
+          if (ids.length === 0) id = fallback;
+          else if (ids.length === 1 && (ours.some((b) => !narrow(b)) || ids[0] === fallback)) id = ids[0];
+          else return console.log("why OpenClaw may give its Marmot chats to more than one of its agents");
+          const agent = agents.find((a) => a?.id === id);
+          if (id === undefined || agent === undefined) return console.log("why OpenClaw gives its Marmot chats to no agent it names");
+          if (typeof agent.workspace !== "string" || agent.workspace === "") return console.log("why OpenClaw did not say where its agent works");
+          console.log(`workspace ${agent.workspace}`);
+        });' "$1" 2>/dev/null || true
+}
+
 harness_settings() {
+    files_from_settings
+    say ""
     say "[connector]"
 }
 
@@ -154,6 +219,7 @@ json_field() {
 
 harness_summary() {
     say ""
+    files_from_summary
     say "Your OpenClaw loads the plugin when its gateway starts. Restart it: openclaw gateway restart"
     say "(or start it: openclaw gateway run). The plugin connects to the agent once both run."
 }

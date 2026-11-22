@@ -1,8 +1,8 @@
 //! M3's scenario for Hermes: the Hermes plugin (`python/marmot_hermes`) runs inside Hermes in a
 //! container and connects to the core's socket, and through MDK's test relay a person has a prompt
 //! answered, has a command approved and run, interrupts a turn while it waits for an approval,
-//! starts a new session, and has Hermes crash in the middle of a turn and carries on, with nothing
-//! run twice (`docs/plan.md`, D-074).
+//! starts a new session, has Hermes crash in the middle of a turn and carries on, with nothing
+//! run twice (`docs/plan.md`, D-074), and has the agent send a file (D-090).
 //!
 //! Each command it asks for is harmless and runs in a throwaway folder mounted into the container.
 //! It needs Docker, and a model: `MODEL_BASE_URL`, `MODEL_NAME` and `MODEL_KEY_FILE`, the file
@@ -18,7 +18,7 @@
 
 mod common;
 
-use common::{Chat, TestModel, World, lines, within};
+use common::{Chat, TestModel, World, files_sent, lines, within};
 use marmot_agent::carrier::{self, Asked};
 use marmot_agent::run::serve;
 use marmot_agent::socket::Endpoint;
@@ -176,7 +176,12 @@ async fn hermes_end_to_end() {
     let started = Instant::now();
     let work = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    let world = World::new("name = \"Hermes\"\n[connector]\n").await;
+    // The agent may send the files in the work folder, as the installer lists Hermes's (D-090).
+    let settings = format!(
+        "name = \"Hermes\"\nfiles_from = [{:?}]\n[connector]\n",
+        work.path()
+    );
+    let world = World::new(&settings).await;
     world.runtime.start().await.unwrap();
     let (listener, token) = Endpoint::in_home(home.path()).listen().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -228,8 +233,10 @@ async fn hermes_end_to_end() {
     // 2. A command Hermes flags as dangerous, approved once and run.
     let approved = work.path().join("approved");
     std::fs::create_dir(&approved).unwrap();
-    let asked = chat.say(&format!("{only} `rm -rf /work/approved`")).await;
-    let allowed = chat.approve("rm -rf /work/approved").await;
+    // The container mounts the work folder at its own path.
+    let command = format!("rm -rf {}", approved.display());
+    let asked = chat.say(&format!("{only} `{command}`")).await;
+    let allowed = chat.approve(&command).await;
     let answered = chat.effect_of(&allowed).await;
     assert!(matches!(answered.item.event.body(), Body::Approval(_)));
     within(TURN, || (!approved.exists()).then_some(())).await;
@@ -240,7 +247,9 @@ async fn hermes_end_to_end() {
     // 3. A turn interrupted while it waits for an approval, which then never runs.
     let never = work.path().join("never");
     std::fs::create_dir(&never).unwrap();
-    let asked = chat.say(&format!("{only} `rm -rf /work/never`")).await;
+    let asked = chat
+        .say(&format!("{only} `rm -rf {}`", never.display()))
+        .await;
     within(TURN, || {
         chat.latest().into_iter().find(|(_, r)| {
             matches!(r.item.event.body(), Body::Approval(_))
@@ -280,7 +289,10 @@ async fn hermes_end_to_end() {
     //    comes back and carries on in the same session, with nothing run twice.
     let runs = work.path().join("runs.txt");
     let asked = chat
-        .say(&format!("{only} `echo ran >> /work/runs.txt && sleep 30`"))
+        .say(&format!(
+            "{only} `echo ran >> {} && sleep 30`",
+            runs.display()
+        ))
         .await;
     within(TURN, || (lines(&runs) > 0).then_some(())).await;
     let cut_off = chat.turn_for(&asked).await;
@@ -306,9 +318,39 @@ async fn hermes_end_to_end() {
     );
     lap("carried on after the crash");
 
+    // 6. A file the agent names in its answer, in the work folder, reaches the chat as an
+    //    attachment the person can read (D-090).
+    let report = work.path().join("report.txt");
+    std::fs::write(&report, "a report\n").unwrap();
+    let asked = chat
+        .say(&format!(
+            "Reply with only this line, exactly, and nothing else. Do not use any tools.\nMEDIA:{}",
+            report.display()
+        ))
+        .await;
+    let turn = chat.turn_for(&asked).await;
+    chat.turn_at(&turn, State::Done).await;
+    let files = sent_files(&world, &chat).await;
+    assert_eq!(files.len(), 1, "one file sent");
+    assert_eq!(files[0].0, "report.txt");
+    assert_eq!(files[0].1, b"a report\n");
+    lap("sent a file");
+
     watching.abort();
     let _ = stop.send(());
     serving.await.unwrap().unwrap();
     hermes.crash().await;
     world.runtime.shutdown().await;
+}
+
+/// The files the agent sent to the chat, once there is one, or none after a turn's time.
+async fn sent_files(world: &World, chat: &Chat<'_>) -> Vec<(String, Vec<u8>, Option<String>)> {
+    let started = Instant::now();
+    loop {
+        let files = files_sent(world, &chat.group).await;
+        if !files.is_empty() || started.elapsed() > std::time::Duration::from_secs(TURN) {
+            return files;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
 }

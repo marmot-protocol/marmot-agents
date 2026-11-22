@@ -573,6 +573,8 @@ export class Translator {
         return this.deliver(name, p);
       case "message.send.payload":
         return this.sendPayload(name, object(p));
+      case "message.send.media":
+        return this.sendMedia(name, object(p));
       case "approvalCapability.render.exec.buildPendingPayload":
         return this.approvalCard(name, object(p));
       case "approvalCapability.render.exec.buildResolvedPayload":
@@ -1277,6 +1279,13 @@ export class Translator {
   }
 
   /** A message OpenClaw sends outside a reply. In the recordings every one is an approval. */
+  /** Media OpenClaw sends outside a reply: its caption is the agent's words. Its file goes to the core apart. */
+  private sendMedia(method: string, p: Json): void {
+    if (plain(or(p["text"], "")).trim() === "") return this.skip("message.send.media with no caption: its file goes to the core");
+    const ev = this.emit(this.next("message"), "message", "done", "Message", p["text"], {}, `${method} [caption]`, p);
+    this.posting = [method, ev];
+  }
+
   private sendPayload(method: string, p: Json): void {
     const payload = object(p["payload"]);
     const approval = object(object(payload["channelData"])["execApproval"]);

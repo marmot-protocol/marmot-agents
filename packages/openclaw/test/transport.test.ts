@@ -8,7 +8,8 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { CAPABILITIES, Connector, type CoreEvent, type Port, type RunInput } from "../src/connector.ts";
+import { homedir } from "node:os";
+import { CAPABILITIES, Connector, type ConnectorOptions, type CoreEvent, type Port, type RunInput } from "../src/connector.ts";
 import { fitEvent } from "../src/fit.ts";
 import { CoreConnection, MAX_MESSAGE, notificationSize, Refusal } from "../src/socket.ts";
 
@@ -122,7 +123,7 @@ class FakeOpenClaw implements Port {
   }
 }
 
-function setUp(generations: [string, number][] = []) {
+function setUp(generations: [string, number][] = [], more: Partial<ConnectorOptions> = {}) {
   const openclaw = new FakeOpenClaw();
   const events: CoreEvent[] = [];
   const saved: [string, number][][] = [];
@@ -135,6 +136,7 @@ function setUp(generations: [string, number][] = []) {
     generations,
     saveGenerations: (g) => saved.push(g),
     send: (e) => events.push(e),
+    ...more,
   });
   openclaw.connector = connector;
   return { openclaw, events, connector, saved };
@@ -657,19 +659,15 @@ test("an event still too large without its native message is cut to fit, keeping
   assert.equal(event.text, huge);
 });
 
-test("the socket client is the Claude Code driver's, with its opening comment and the Claude Code driver's own requests left out", () => {
-  // Each package stands alone, so the client is copied, not shared (packages/openclaw/src/socket.ts). Only the
-  // Claude Code driver sends the core requests of its own, to send a file (D-090); those parts of its copy are
-  // marked, and this plugin's copy leaves them out.
-  const own = /[ \t]*\/\/ Only the Claude Code driver sends the core requests of its own \(D-090\): begin\n[\s\S]*?[ \t]*\/\/ end\n/g;
+test("the socket client is the Claude Code driver's, with its opening comment left out", () => {
+  // Each package stands alone, so the client is copied, not shared (packages/openclaw/src/socket.ts). Both
+  // connectors send the core requests of their own, to send a file (D-090), so the copies are the same.
   const code = (path: string) => {
     const file = readFileSync(new URL(path, import.meta.url), "utf8");
-    return file.slice(file.indexOf("*/")).replace(own, "").replace(/\n{3,}/g, "\n\n");
+    return file.slice(file.indexOf("*/"));
   };
-  const claude = readFileSync(new URL("../../claude-code/src/socket.ts", import.meta.url), "utf8");
-  assert.equal(claude.match(own)?.length, 5, "the Claude Code driver's own parts are marked");
   assert.equal(code("../src/socket.ts"), code("../../claude-code/src/socket.ts"));
-  assert.ok(!readFileSync(new URL("../src/socket.ts", import.meta.url), "utf8").includes("request(method"));
+  assert.ok(readFileSync(new URL("../src/socket.ts", import.meta.url), "utf8").includes("request(method"));
 });
 
 test("a live payload reaches the core whole: no entry and no level is left out", async () => {
@@ -717,4 +715,110 @@ test("overlapping commands are each answered and settled by their own run, whate
     [["/new", "New session started."], ["/think", "Unrecognized thinking level."]],
   );
   assert.ok(events.some((e) => e.type === "session" && e.session === KEY && e.state === "done"), "the session was replaced");
+});
+
+// -- files the agent sends (D-090)
+
+/** A connector whose core is asked to send files: what it was asked, and a refusal for any path under /etc. */
+function withFiles() {
+  const asked: [string, string][] = [];
+  const warned: string[] = [];
+  const set = setUp([], {
+    sendFile: async (chat, path) => {
+      asked.push([chat, path]);
+      if (path.startsWith("/etc/")) throw new Refusal("not_allowed", "The file is outside the folders the agent may send files from.");
+    },
+    workspace: (agentId) => (agentId === "main" ? "/home/me/.openclaw/workspace" : undefined),
+    warn: (kind) => warned.push(kind),
+  });
+  return { ...set, asked, warned };
+}
+
+test("the files in a reply go to the core, one request each, after the reply's words", async () => {
+  const { openclaw, events, connector, asked } = withFiles();
+  await connector.serve("prompt", prompt("m-1", "make a chart"));
+  const run = openclaw.last();
+  run.start("r-1");
+  const order: string[] = [];
+  const delivered = run.deliver(
+    { text: "Here are the charts.", mediaUrl: "/work/one.png", mediaUrls: ["/work/one.png", "file:///work/two%20charts.png"] },
+    { kind: "final", assistantMessageIndex: 0 },
+  ) as Promise<Json>;
+  order.push(...events.filter((e) => e.type === "message").map((e) => e.text));
+  const receipt = await delivered;
+  assert.ok(typeof receipt["messageId"] === "string");
+  // The caption is the reply's text, already on its way as the agent's words when the files are asked for.
+  assert.deepEqual(order, ["Here are the charts."]);
+  assert.deepEqual(asked, [["c-1", "/work/one.png"], ["c-1", "/work/two charts.png"]]);
+});
+
+test("a path in a reply is made whole from the agent's workspace or the home, and one not on this machine is not sent", async () => {
+  const { openclaw, connector, asked, warned } = withFiles();
+  await connector.serve("prompt", prompt("m-1", "files"));
+  const run = openclaw.last();
+  run.start("r-1");
+  await run.deliver(
+    { text: "", mediaUrls: ["out/report.pdf", "~/notes.txt", "https://example.invalid/a.png", "media://inbound/abc"] },
+    { kind: "final", assistantMessageIndex: 0 },
+  );
+  assert.deepEqual(asked, [["c-1", "/home/me/.openclaw/workspace/out/report.pdf"], ["c-1", join(homedir(), "notes.txt")]]);
+  assert.deepEqual(warned.filter((w) => w.includes("file")), ["a file not on this machine was not sent", "a file not on this machine was not sent"]);
+});
+
+test("a file OpenClaw copied into its media store to send goes as the path the agent named", async () => {
+  // OpenClaw copies each local file of a reply into its outbound media store and names the copy in the
+  // payload; it keeps the path the agent named in its own record of the payload, as 2026.11.5 does.
+  const key = Symbol.for("openclaw.replyPayloadMetadata");
+  const global = globalThis as unknown as Record<symbol, unknown>;
+  const had = Object.hasOwn(global, key);
+  if (!had) global[key] = new WeakMap();
+  try {
+    const { openclaw, connector, asked } = withFiles();
+    await connector.serve("prompt", prompt("m-1", "files"));
+    const run = openclaw.last();
+    run.start("r-1");
+    const copy = "/state/.openclaw/media/outbound/report---0a1b2c3d-0000-4000-8000-000000000000.txt";
+    const unknown = "/state/.openclaw/media/outbound/other---0a1b2c3d-0000-4000-8000-000000000001.txt";
+    const payload = { text: "", mediaUrl: copy, mediaUrls: [copy, unknown], attachments: [{ name: "report.txt", mimeType: "text/plain" }] };
+    (global[key] as WeakMap<object, unknown>).set(payload, { replyMediaSourceUrls: new Map([[copy, ["/work/report.txt"]]]) });
+    await run.deliver(payload, { kind: "block", assistantMessageIndex: 0 });
+    // A copy OpenClaw kept no source for goes as it is named, and the core decides on it.
+    assert.deepEqual(asked, [["c-1", "/work/report.txt"], ["c-1", unknown]]);
+  } finally {
+    if (!had) delete global[key];
+  }
+});
+
+test("a file the core refuses leaves the delivery done and the rest of the batch going", async () => {
+  const { openclaw, connector, asked, warned } = withFiles();
+  await connector.serve("prompt", prompt("m-1", "files"));
+  const run = openclaw.last();
+  run.start("r-1");
+  const receipt = (await run.deliver({ text: "Two files", mediaUrls: ["/etc/passwd", "/work/b.txt"] }, { kind: "final", assistantMessageIndex: 0 })) as Json;
+  assert.ok(typeof receipt["messageId"] === "string");
+  assert.deepEqual(asked.map(([, p]) => p), ["/etc/passwd", "/work/b.txt"]);
+  // By kind only: the core shows its own notice in the chat, naming no path.
+  assert.ok(warned.includes("a file was not sent (not_allowed)"));
+});
+
+test("media on a tool's delivery is not sent again, and with no core to ask nothing is", async () => {
+  const { openclaw, connector, asked } = withFiles();
+  await connector.serve("prompt", prompt("m-1", "files"));
+  const run = openclaw.last();
+  run.start("r-1");
+  await run.deliver({ text: "tool says", mediaUrl: "/work/a.png" }, { kind: "tool" });
+  assert.deepEqual(asked, []);
+  const bare = setUp([], {});
+  await bare.connector.serve("prompt", prompt("m-1", "files"));
+  bare.openclaw.last().start("r-1");
+  await bare.openclaw.last().deliver({ text: "x", mediaUrl: "/work/a.png" }, { kind: "final", assistantMessageIndex: 0 });
+});
+
+test("media OpenClaw sends to a chat outside a run goes to the core too, after its caption", async () => {
+  const { connector, asked, events } = withFiles();
+  const receipt = { receipt: { primaryPlatformMessageId: "out-1" } };
+  const sent = await connector.sendMedia({ to: "marmot:c-9", text: "Generated", mediaUrl: "file:///work/generated.png" }, () => receipt);
+  assert.equal(sent, receipt);
+  assert.deepEqual(asked, [["c-9", "/work/generated.png"]]);
+  assert.deepEqual(events.map((e) => [e.chat, e.type, e.text]), [["c-9", "message", "Generated"]]);
 });

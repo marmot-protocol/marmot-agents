@@ -257,6 +257,29 @@ are from before that change.
    translates controls into slash commands.
 9. **Typing calls are four fifths of the traffic** and must never become events.
 
+## Media a platform is handed
+
+Read in Hermes's source at commit `40d1e95f` (`gateway/platforms/base.py`, `gateway/cwd_placeholder.py`,
+`hermes_cli/config_defaults.py`) on 2026-11-22. Not recorded: no session sent a file. What the plugin does with
+it is in [a gateway's files](../design/drivers.md#a-gateways-files).
+
+- **How the agent asks.** A `MEDIA:<path>` line in its answer, which Hermes takes out of the text, or a bare
+  path to a local file it recognises. Other parts of Hermes (scheduled jobs, notifications, `/export`) call the
+  same methods.
+- **What the platform is called with.** `_deliver_media_attachments` sends images in one
+  `send_multiple_images(chat_id, images, metadata, human_delay)`, as `(file://<quoted path>, "")` pairs, unless
+  the answer asks for documents; then each other file through `send_voice` (audio from a `MEDIA:` line),
+  `send_video` or `send_document(chat_id, file_path, metadata=…)`. The base class's own versions post a notice
+  that the file could not be sent. Each returns a `SendResult`; when it fails, Hermes posts its own notice,
+  naming the file, unless `raw_response` holds `failure_notice_sent: true`.
+- **Which paths reach the platform.** `validate_media_delivery_path` resolves links and passes an absolute path
+  to an existing file, outside a list of system and credential folders (`/etc`, `~/.ssh`, `~/.config`, Hermes's
+  own credential files and more). In strict mode (`HERMES_MEDIA_DELIVERY_STRICT`) only Hermes's caches, the
+  folders in `HERMES_MEDIA_ALLOW_DIRS` and files made in the last ten minutes pass.
+- **Where its files are.** Generated images, speech and screenshots go to `$HERMES_HOME/cache/…`, beside the
+  files people sent in on any platform (inferred from the cache folders Hermes trusts and their names). Its commands run in `terminal.cwd`; the default, `.`, means the home of
+  the account Hermes runs as, for a gateway with the local terminal backend.
+
 ## Controls and sessions
 
 Added on 2026-11-18. The design gives every harness three shared controls: interrupt, new session, and set

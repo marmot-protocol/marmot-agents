@@ -357,6 +357,50 @@ without it counts as the reply is inferred from these two runs.
 - **Command output, approval notices and the stop notice** arrive beside the agent's words.
 - No notice appeared on the first message of a session. Hermes sends one every time.
 
+## Media a channel is handed
+
+Read on 2026-11-22 in the documentation shipped with release 2026.11.5 (`docs/reference/rich-output-protocol.md`,
+`docs/tools/index.md`, `docs/concepts/agent-workspace.md`, `docs/plugins/sdk-channel-plugins.md`) and its type
+declarations, and the workspace call tried in that release; how a reply's file reaches the channel was read in
+its bundled code and seen in the end-to-end scenario's run on the same day, with a debug line that was not
+kept. Not recorded: no session in `fixtures/` sent a file. What the plugin does with it is in
+[a gateway's files](../design/drivers.md#a-gateways-files).
+
+- **How the agent asks.** A standalone `MEDIA:<path>` line in a final reply, or a tool's structured
+  attachment. A reply payload carries them as `mediaUrl` and `mediaUrls`, beside its `text`. A local path may
+  be absolute, relative to the agent's workspace, or start with `~/`; a stored inbound attachment is
+  `media://inbound/<id>`.
+- **What the channel is called with.** A reply goes to the dispatcher's `deliver(payload, info)`, media
+  included (inferred: the recorder's channel said it takes no media, and no recording holds media). Sends
+  outside a run go to the message adapter's `send.media` with `to`, `text` (the caption), `mediaUrl`, and the
+  folders and reader OpenClaw allows (`mediaLocalRoots`, `mediaReadFile`).
+- **A reply's file is a copy.** Before it hands a reply to the channel, OpenClaw copies each local file the
+  agent named into its outbound media store and names the copy in the payload:
+  `<state folder>/media/outbound/<name>---<uuid>.<ext>` (`saveMediaBuffer(…, "outbound", …)`, in
+  `src/auto-reply/reply/reply-media-paths.ts`). Seen in the scenario: a `MEDIA:` line naming `<work>/report.txt`
+  reached `deliver` (`info.kind` `block`) with `mediaUrl` and `mediaUrls` naming the copy, `attachments`
+  `[{name: "report.txt", mimeType: "text/plain", trustedLocalMedia: true}]` and `trustedLocalMedia: true`, and
+  nothing in the payload naming the original. The original is kept only in OpenClaw's own record of the payload:
+  a `WeakMap` at `globalThis[Symbol.for("openclaw.replyPayloadMetadata")]`, whose entry for the payload has
+  `replyMediaSourceUrls`, a `Map` from the copy (normalized as `path.normalize`) to the paths the agent named.
+  Neither the plugin SDK's exports nor any type declaration names it. Only the internal web chat
+  (`mediaNormalizationOwner: "gateway"`) skips the copy. A durable send also copies queued media into
+  `<state folder>/delivery-queue-media` for a replay after a restart (read in `src/infra/outbound/deliver.ts`,
+  not seen).
+- **Where its files are.** The workspace is `agents.entries.<id>.workspace`, then `agents.defaults.workspace`,
+  then `~/.openclaw/workspace` (`~/.openclaw-<profile>/workspace` with `OPENCLAW_PROFILE`).
+  `resolveAgentWorkspaceDir(cfg, agentId)` from `openclaw/plugin-sdk/agent-runtime` gives it. Generated media
+  and staged inbound attachments are in OpenClaw's media store, `<state folder>/media` (`getMediaDir` in its
+  bundled code).
+- **Which agent a channel's chats go to.** Its bindings decide (`docs/concepts/multi-agent.md`): a binding
+  with no `accountId` names the `default` account, `*` every account, and one with a `peer` or another field
+  only some chats. With no binding, the one agent takes them, or else the system agent
+  (`agents.defaults.systemAgent.agentId`); with neither, a message is not dispatched. Tried in the release's
+  container on 2026-11-22: `openclaw agents bindings --json` prints the bindings as configured, and
+  `openclaw agents list --json` each agent's `id`, its resolved `workspace`, its `agentDir`
+  (`<state folder>/agents/<id>/agent`) and `isDefault`, both without a gateway running. A roster of two
+  agents needs `agents.ownership: "explicit"` or the commands refuse the configuration.
+
 ## Compared with Hermes
 
 | | Hermes | OpenClaw |

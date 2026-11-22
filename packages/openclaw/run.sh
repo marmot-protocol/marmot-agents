@@ -5,8 +5,8 @@
 #   packages/openclaw/run.sh --name <openclaw state folder>    the container's name, to stop it
 #
 # The script waits, for two minutes at most, until the core serves its socket in the agent's home. The
-# container gets the socket folder, the token (read-only), OpenClaw's state folder and the work folder,
-# and runs as the calling user, so the socket's folder, which only that user may open, can be used. The
+# container gets the socket folder, the token (read-only), OpenClaw's state folder and the work folder, at
+# its own path, which is the agent's workspace, and runs as the calling user, so the socket's folder, which only that user may open, can be used. The
 # work folder is mounted read-write, so it must not hold the agent's home, the state folder or the key
 # file, nor be inside the home or the state folder, nor hold or be inside MARMOT_AGENT_DATA (the folder of
 # every agent, which the installer sets): the script refuses to start if it does, links resolved. The
@@ -52,6 +52,9 @@ fi
 # A connector started with the core waits for it. The socket and the token are mounted with --mount,
 # which fails on a missing source where -v would make an empty folder in its place.
 case $home in *,*) echo "error: the agent's home must not have a comma in its path" >&2; exit 2 ;; esac
+# The work folder is mounted at its own path, so a file the agent names there is the one the core sends
+# (D-090), and with --mount too.
+case $work in *,*) echo "error: the work folder must not have a comma in its path" >&2; exit 2 ;; esac
 tries=0
 until [ -S "$home/socket/marmot-agent.sock" ] && [ -s "$home/connector.token" ]; do
     [ $tries -lt 240 ] || { echo "error: no core socket in $home/socket" >&2; exit 2; }
@@ -71,7 +74,9 @@ run=(docker run --rm -i --log-driver=none \
     --mount "type=bind,source=$home/socket,target=/marmot/socket" \
     --mount "type=bind,source=$home/connector.token,target=/marmot/connector.token,readonly" \
     -v "$state:/state" \
-    -v "$work:/work" \
+    --mount "type=bind,source=$work,target=$work" \
+    -w "$work" \
+    -e MARMOT_WORK="$work" \
     -v "$key:/run/secrets/model_key:ro" \
     -e MODEL_BASE_URL="$MODEL_BASE_URL" \
     -e MODEL_NAME="$model" \
@@ -88,6 +93,7 @@ messages="$messages|an event could not be sent $kind|connected to the core|the c
 messages="$messages|the core could not be reached|a call for no chat this plugin knows $kind"
 messages="$messages|a run went on after it was cancelled|OpenClaw did not let a message in $kind"
 messages="$messages|OpenClaw's run of a message failed|OpenClaw refused a call $kind"
+messages="$messages|a file was not sent $kind|a file was not sent: the core cannot be asked|a file not on this machine was not sent"
 plugin_line="^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+([+-][0-9:]+|Z) )?marmot-agent-openclaw: ($messages)\$"
 "${run[@]}" 2>&1 | { grep -E --line-buffered "$plugin_line" >&2 || true; }
 exit "${PIPESTATUS[0]}"

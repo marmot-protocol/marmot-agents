@@ -5,7 +5,8 @@
 On the first start of a Hermes home it writes the configuration, replacing the one the image's build
 left; later starts keep it, so that what a chat changed survives a restart. At every start it takes the
 model key out of the configuration and its backups, where an earlier version of the entrypoint wrote
-it: the configuration names the variable that holds the key (`key_env`), never the key.
+it: the configuration names the variable that holds the key (`key_env`), never the key. And at every
+start it points Hermes's commands at the work folder the container mounts (MARMOT_WORK).
 """
 
 import json
@@ -105,6 +106,26 @@ def scrub(home: pathlib.Path, key: str, yaml) -> None:
                   file=sys.stderr)
 
 
+def work(home: pathlib.Path, folder: str, yaml) -> None:
+    """Points Hermes's commands at the work folder (terminal.cwd), at the path the container mounts it
+    at, which is the core's: at every start, as the folder may move between them. A configuration that
+    cannot be read is left as it is."""
+    config_path = home / "config.yaml"
+    if not folder or not config_path.is_file():
+        return
+    try:
+        config = yaml.safe_load(config_path.read_text())
+    except Exception:
+        return
+    if not isinstance(config, dict):
+        return
+    terminal = config.setdefault("terminal", {})
+    if not isinstance(terminal, dict) or terminal.get("cwd") == folder:
+        return
+    terminal["cwd"] = folder
+    write(config_path, yaml.safe_dump(config))
+
+
 def main() -> None:
     import hermes_yaml
 
@@ -116,6 +137,7 @@ def main() -> None:
         configured.parent.mkdir(parents=True, exist_ok=True)
         configured.touch()
     scrub(home, os.environ.get(KEY_ENV, "").strip(), hermes_yaml)
+    work(home, os.environ.get("MARMOT_WORK", ""), hermes_yaml)
 
 
 if __name__ == "__main__":

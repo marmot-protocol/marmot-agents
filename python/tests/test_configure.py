@@ -73,3 +73,29 @@ class Scrub(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Work(unittest.TestCase):
+    """Hermes's commands run in the work folder the container mounts, at the path the core knows it by
+    (MARMOT_WORK), set at every start: a file the agent names is then one the core can find (D-090)."""
+
+    def setUp(self):
+        self.home = Path(tempfile.mkdtemp(prefix="hermes-home-"))
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.home, True))
+        self.config = self.home / "config.yaml"
+
+    def test_the_work_folder_is_where_hermess_commands_run_and_the_rest_is_kept(self):
+        self.config.write_text(json.dumps({"terminal": {"cwd": "/work", "timeout": 60}, "other": 1}))
+        configure.work(self.home, "/srv/agents/work", yaml)
+        self.assertEqual(json.loads(self.config.read_text()),
+                         {"terminal": {"cwd": "/srv/agents/work", "timeout": 60}, "other": 1})
+        self.config.write_text(json.dumps({"other": 1}))
+        configure.work(self.home, "/srv/agents/work", yaml)
+        self.assertEqual(json.loads(self.config.read_text()), {"other": 1, "terminal": {"cwd": "/srv/agents/work"}})
+        self.assertEqual(stat.S_IMODE(self.config.stat().st_mode), 0o600)
+
+    def test_with_no_work_folder_named_nothing_changes(self):
+        self.config.write_text("not: [json")
+        configure.work(self.home, "", yaml)
+        configure.work(self.home, "/srv/agents/work", yaml)
+        self.assertEqual(self.config.read_text(), "not: [json")

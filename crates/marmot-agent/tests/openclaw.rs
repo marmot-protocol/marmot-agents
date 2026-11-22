@@ -1,8 +1,8 @@
 //! M3's scenario for OpenClaw: the OpenClaw plugin (`packages/openclaw`), running inside a real
 //! OpenClaw in a container, connects to the core's socket, and through MDK's test relay a person
 //! invites the agent, has a command approved and run, stops a turn while it waits for an approval,
-//! starts a new session, and has the plugin's process crash in the middle of a turn and carries
-//! on, with nothing run twice (`docs/plan.md`, D-074).
+//! starts a new session, has the plugin's process crash in the middle of a turn and carries on,
+//! with nothing run twice (`docs/plan.md`, D-074), and has the agent send a file (D-090).
 //!
 //! It approves only the exact command each step asks for, once, in a throwaway folder. It needs
 //! Docker, and a model: `MODEL_BASE_URL`, `MODEL_NAME` and `MODEL_KEY_FILE`, the file that holds
@@ -17,7 +17,7 @@
 
 mod common;
 
-use common::{Chat, TURN, TestModel, World, lines, within};
+use common::{Chat, TURN, TestModel, World, files_sent, lines, within};
 use marmot_agent::carrier::Asked;
 use marmot_agent::run::serve;
 use marmot_agent::socket::Endpoint;
@@ -190,7 +190,12 @@ async fn openclaw_end_to_end() {
         work: work.path(),
         model: &model,
     };
-    let world = World::new("name = \"OpenClaw\"\n[connector]\n").await;
+    // The agent may send the files in its workspace, as the installer lists OpenClaw's (D-090).
+    let settings = format!(
+        "name = \"OpenClaw\"\nfiles_from = [{:?}]\n[connector]\n",
+        work.path()
+    );
+    let world = World::new(&settings).await;
     world.runtime.start().await.unwrap();
     let (listener, token) = Endpoint::in_home(home.path()).listen().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -326,6 +331,31 @@ async fn openclaw_end_to_end() {
         "the prompt started one turn"
     );
     println!("carried on after the crash, in {:.0?}", step.elapsed());
+
+    // 5. A file the agent names in its answer, in its workspace, reaches the chat as an attachment
+    //    the person can read (D-090).
+    let step = Instant::now();
+    std::fs::write(work.path().join("report.txt"), "a report\n").unwrap();
+    let asked = chat
+        .say(&format!(
+            "Without running anything, reply with only this line, exactly:\nMEDIA:{}",
+            work.path().join("report.txt").display()
+        ))
+        .await;
+    let turn = chat.turn_for(&asked).await;
+    chat.turn_at(&turn, State::Done).await;
+    let mut files = Vec::new();
+    for _ in 0..TURN {
+        files = files_sent(&world, &chat.group).await;
+        if !files.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    assert_eq!(files.len(), 1, "one file sent");
+    assert_eq!(files[0].0, "report.txt");
+    assert_eq!(files[0].1, b"a report\n");
+    println!("sent a file, in {:.0?}", step.elapsed());
 
     tracing.abort();
     let _ = stop.send(());

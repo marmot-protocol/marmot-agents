@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 
 from marmot_hermes.connector import Connector
-from marmot_hermes.core import PROTOCOL, CoreConnection, Refusal
+from marmot_hermes.core import PROTOCOL, CoreConnection, Refusal, Refused
 
 CHAT = {"id": "c-1", "group": False, "name": "Alice"}
 GROUP = {"id": "c-2", "group": True, "name": "Family"}
@@ -467,6 +467,58 @@ class Socket(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(by_id[8]["error"]["data"], {"reason": "not_supported", "detail": "Not here."})
             self.assertEqual(by_id[None]["method"], "event")
             await asyncio.wait_for(connection.done(), 5)
+            server.close()
+
+    async def test_the_plugins_own_requests_are_answered_by_their_ids(self):
+        """`send_file` (D-090): numbered after the hello, answered once the core has done it or with its
+        refusal, and failed when the connection closes before the answer."""
+        with tempfile.TemporaryDirectory() as folder:
+            path = str(Path(folder) / "core.sock")
+            asked = asyncio.Queue()
+
+            async def core(reader, writer):
+                async def line():
+                    return json.loads(await reader.readline())
+
+                hello = await line()
+                writer.write(json.dumps({"jsonrpc": "2.0", "id": hello["id"], "result": {}}).encode() + b"\n")
+                first, second, third = await line(), await line(), await line()
+                for m in (first, second, third):
+                    await asked.put(m)
+                # Answered out of order: the second first.
+                writer.write(json.dumps({"jsonrpc": "2.0", "id": second["id"], "error": {
+                    "code": -32000, "message": "not_allowed", "data": {
+                        "reason": "not_allowed", "detail": "The file is outside the folders."}}}).encode() + b"\n")
+                writer.write(json.dumps({"jsonrpc": "2.0", "id": first["id"], "result": {}}).encode() + b"\n")
+                await writer.drain()
+                writer.close()
+
+            server = await asyncio.start_unix_server(core, path)
+            connection = await CoreConnection.open(path)
+
+            async def serve(method, params):
+                pass
+
+            await connection.hello({"token": "t", "capabilities": {}}, serve)
+            sent = asyncio.ensure_future(connection.request("send_file", {"chat": "c-1", "path": "/w/a.txt"}))
+            refused = asyncio.ensure_future(connection.request("send_file", {"chat": "c-1", "path": "/etc/b"}))
+            cut = asyncio.ensure_future(connection.request("send_file", {"chat": "c-1", "path": "/w/c.txt"}))
+            got = [await asked.get() for _ in range(3)]
+            self.assertEqual([m["method"] for m in got], ["send_file"] * 3)
+            self.assertEqual(got[0]["params"], {"chat": "c-1", "path": "/w/a.txt"})
+            ids = [m["id"] for m in got]
+            self.assertEqual(len(set(ids)), 3)
+            self.assertNotIn(1, ids)  # the hello's
+            self.assertIsNone(await asyncio.wait_for(sent, 5))
+            with self.assertRaises(Refused) as no:
+                await asyncio.wait_for(refused, 5)
+            self.assertEqual((no.exception.reason, no.exception.detail), ("not_allowed", "The file is outside the folders."))
+            with self.assertRaises(Refused) as gone:
+                await asyncio.wait_for(cut, 5)
+            self.assertEqual(gone.exception.reason, "failed")
+            # Once closed, a request fails at once.
+            with self.assertRaises(Refused):
+                await asyncio.wait_for(connection.request("send_file", {}), 5)
             server.close()
 
 

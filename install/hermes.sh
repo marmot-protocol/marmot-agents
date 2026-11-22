@@ -24,6 +24,7 @@ OUR_PLUGIN="marmot-agent's local socket"
 harness_check() {
     # What harness_connect reads, also when a dry run goes on without a Hermes to add the plugin to.
     HERMES_CONFIG="" HERMES_ENV="" PLUGIN="" OLD_PLUGIN=0
+    choose_files_from ""
     HERMES=$(program_path hermes) || {
         HERMES=hermes
         missing "Hermes" "$HERMES_HOW"
@@ -46,6 +47,7 @@ harness_check() {
         /*/config.yaml) ;;
         *) missing "Hermes's configuration" "hermes config path named no config.yaml. $HERMES_HOW"; return 0 ;;
     esac
+    hermes_files_from
     PLUGIN=$(dirname "$HERMES_CONFIG")/plugins/marmot
     no_control "Hermes's plugins folder" "$PLUGIN"
     # One Hermes serves one agent: its marmot platform names one agent's home.
@@ -69,9 +71,32 @@ ours() {
     [ -f "$1/plugin.yaml" ] && grep -qF "$OUR_PLUGIN" "$1/plugin.yaml"
 }
 
+# The folder Hermes's commands run in, which its agent writes the files it sends in (D-090):
+# terminal.cwd. Unset, or ".", "auto" or "cwd", it is the home of the account Hermes runs as, which is not
+# listed. With a terminal backend other than local, Hermes's commands run in a sandbox, whose files are
+# not on this machine where Hermes names them. Hermes keeps its media cache, the files people sent it on
+# any platform and the ones it made, in its home, beside config.yaml: a folder that holds or lies in it
+# is not listed either.
+hermes_files_from() {
+    GATEWAY_CACHE=("$(dirname "$HERMES_CONFIG")")
+    local cwd backend
+    cwd=$("$HERMES" config get terminal.cwd 2>/dev/null) || cwd=""
+    backend=$("$HERMES" config get terminal.backend 2>/dev/null) || backend=""
+    case $backend in
+        "" | local) ;;
+        *) FILES_FROM="" FILES_WHY="Hermes runs its commands elsewhere (terminal.backend is $backend)"; return 0 ;;
+    esac
+    case $cwd in
+        "" | . | auto | cwd) cwd="~" ;;
+    esac
+    choose_files_from "$cwd"
+}
+
 harness_prepare() { :; }
 
 harness_settings() {
+    files_from_settings
+    say ""
     say "[connector]"
 }
 
@@ -111,6 +136,7 @@ harness_connect() {
 
 harness_summary() {
     say ""
+    files_from_summary
     say "Your Hermes loads the plugin when its gateway starts. Restart it: hermes gateway restart"
     say "(or start it: hermes gateway run). The plugin connects to the agent once both run."
 }
