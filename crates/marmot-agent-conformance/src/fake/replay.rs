@@ -11,6 +11,8 @@
 use super::{Heard, Outbox, Protocol, is_reply, key};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Replays one recording, with a fallback for what it does not hold.
 pub struct Replay<P> {
@@ -19,29 +21,36 @@ pub struct Replay<P> {
     /// The driver's id for each recorded request id, as text.
     ids: HashMap<String, Value>,
     fallback: P,
+    /// How many recorded messages are still to be played, for a test to see that all were.
+    left: Arc<AtomicUsize>,
 }
 
 impl<P: Protocol> Replay<P> {
     /// A replay of a recording's text. Lines the recorder wrote about itself are left out.
     pub fn new(recording: &str, fallback: P) -> Self {
-        let lines = recording
+        let lines: Vec<(bool, Value)> = recording
             .lines()
             .filter(|l| !l.trim().is_empty())
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())
             .filter(|r| r["msg"].get("_recorder").is_none())
             .map(|r| (r["dir"] == "out", r["msg"].clone()))
             .collect();
+        let left = Arc::new(AtomicUsize::new(lines.len()));
         Self {
             lines,
             at: 0,
             ids: HashMap::new(),
             fallback,
+            left,
         }
     }
 
-    /// Whether every recorded message has been played.
-    pub fn done(&self) -> bool {
-        self.at >= self.lines.len()
+    /// Counts what is left to play in `left`, which a test keeps: a replay that played nothing
+    /// passes nothing.
+    pub fn counting(mut self, left: Arc<AtomicUsize>) -> Self {
+        left.store(self.lines.len(), Ordering::SeqCst);
+        self.left = left;
+        self
     }
 }
 
@@ -73,6 +82,8 @@ impl<P: Protocol> Protocol for Replay<P> {
                 out.say(message);
             }
         }
+        let left = self.lines.len().saturating_sub(self.at);
+        self.left.store(left, Ordering::SeqCst);
     }
 
     fn ended(&mut self) {

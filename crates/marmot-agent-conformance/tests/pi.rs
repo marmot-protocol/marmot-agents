@@ -10,12 +10,17 @@ use marmot_agent_pi::{Pi, Setup};
 struct OnFake {
     fake: Fake,
     server: Server,
+    replay: bool,
 }
 
 fn subject() -> OnFake {
     let fake = Fake::new();
     let server = Server::start(&fake).expect("the fake listens");
-    OnFake { fake, server }
+    OnFake {
+        fake,
+        server,
+        replay: false,
+    }
 }
 
 impl Subject for OnFake {
@@ -50,6 +55,10 @@ impl Subject for OnFake {
 
     fn reorders(&self) -> bool {
         false
+    }
+
+    fn loose(&self) -> bool {
+        self.replay
     }
 
     fn chat_of(&self, tag: &str) -> Option<ChatId> {
@@ -126,4 +135,26 @@ async fn faults_are_caught() {
         missed.is_empty(),
         "not caught as they should be: {missed:#?}"
     );
+}
+
+#[tokio::test]
+async fn replays_recordings() {
+    for name in ["gate_allowed.jsonl", "command.jsonl"] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/recordings/pi")
+            .join(name);
+        let recording = std::fs::read_to_string(path).expect("the recording");
+        let fake = Fake::new();
+        let left = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+        let server = Server::replaying(&fake, &recording, left.clone()).expect("the fake listens");
+        let subject = OnFake {
+            fake,
+            server,
+            replay: true,
+        };
+        let found = scenarios::replay(subject, "as recorded").await;
+        found.unwrap_or_else(|v| panic!("{name}: {v}"));
+        let left = left.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(left, 0, "{name}: {left} recorded messages never played");
+    }
 }

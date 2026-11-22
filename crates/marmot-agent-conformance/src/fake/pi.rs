@@ -327,6 +327,23 @@ impl Drop for Server {
 impl Server {
     /// Listens for Pi processes, each served by `fake`.
     pub fn start(fake: &Fake) -> std::io::Result<Self> {
+        Self::serving(fake, None)
+    }
+
+    /// Listens for Pi processes, each replaying `recording`, with the fake for what it does not
+    /// hold.
+    pub fn replaying(
+        fake: &Fake,
+        recording: &str,
+        left: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> std::io::Result<Self> {
+        Self::serving(fake, Some((recording.to_string(), left)))
+    }
+
+    fn serving(
+        fake: &Fake,
+        recording: Option<(String, Arc<std::sync::atomic::AtomicUsize>)>,
+    ) -> std::io::Result<Self> {
         let dir = tempfile::tempdir()?;
         std::fs::write(dir.path().join("relay.py"), include_str!("relay.py"))?;
         let listener = UnixListener::bind(dir.path().join("pi.sock"))?;
@@ -336,6 +353,7 @@ impl Server {
             while let Ok((stream, _)) = listener.accept().await {
                 let (read, write) = stream.into_split();
                 let (store, fake) = (shared.clone(), serving.clone());
+                let recording = recording.clone();
                 tokio::spawn(async move {
                     let mut read = BufReader::new(read);
                     let mut hello = String::new();
@@ -348,7 +366,13 @@ impl Server {
                         .filter_map(|a| a.as_str().map(String::from))
                         .collect();
                     let pi = Pi::new(&args, &tag, store);
-                    fake.serve(read, write, pi, Some(tag));
+                    let protocol: Box<dyn Protocol> = match &recording {
+                        Some((text, left)) => {
+                            Box::new(super::Replay::new(text, pi).counting(left.clone()))
+                        }
+                        None => Box::new(pi),
+                    };
+                    fake.serve(read, write, protocol, Some(tag));
                 });
             }
         });

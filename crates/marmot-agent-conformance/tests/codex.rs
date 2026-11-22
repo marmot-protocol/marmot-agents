@@ -16,6 +16,8 @@ struct OnFake {
     fake: Fake,
     store: codex::Shared,
     recording: Option<String>,
+    /// For a replay: how much of the recording is left to play.
+    left: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pending: Pending,
 }
 
@@ -28,7 +30,7 @@ impl Subject for OnFake {
         let (driver_reads, driver_writes) = tokio::io::split(driver_side);
         let codex = codex::Codex::new(self.store.clone());
         let protocol: Box<dyn Protocol> = match &self.recording {
-            Some(text) => Box::new(Replay::new(text, codex)),
+            Some(text) => Box::new(Replay::new(text, codex).counting(self.left.clone())),
             None => Box::new(codex),
         };
         self.fake.serve(fake_reads, fake_writes, protocol, None);
@@ -122,12 +124,16 @@ fn recording(name: &str) -> String {
 #[tokio::test]
 async fn replays_recordings() {
     for name in ["simple.jsonl", "approval_allowed.jsonl", "command.jsonl"] {
+        let left = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
         let subject = OnFake {
             recording: Some(recording(name)),
+            left: left.clone(),
             ..OnFake::default()
         };
         let found = scenarios::replay(subject, "as recorded").await;
         found.unwrap_or_else(|v| panic!("{name}: {v}"));
+        let left = left.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(left, 0, "{name}: {left} recorded messages never played");
     }
 }
 

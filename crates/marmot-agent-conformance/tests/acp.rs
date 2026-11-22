@@ -17,6 +17,8 @@ struct OnFake {
     fake: Fake,
     store: acp::Shared,
     recording: Option<String>,
+    /// For a replay: how much of the recording is left to play.
+    left: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 fn subject(flavor: Flavor) -> OnFake {
@@ -25,6 +27,7 @@ fn subject(flavor: Flavor) -> OnFake {
         fake: Fake::new(),
         store: acp::Shared::default(),
         recording: None,
+        left: Default::default(),
     }
 }
 
@@ -37,7 +40,7 @@ impl Subject for OnFake {
         let (driver_reads, driver_writes) = tokio::io::split(driver_side);
         let agent = acp::Acp::new(self.flavor, self.store.clone());
         let protocol: Box<dyn Protocol> = match &self.recording {
-            Some(text) => Box::new(Replay::new(text, agent)),
+            Some(text) => Box::new(Replay::new(text, agent).counting(self.left.clone())),
             None => Box::new(agent),
         };
         self.fake.serve(fake_reads, fake_writes, protocol, None);
@@ -166,12 +169,19 @@ async fn replays_recordings() {
         (Flavor::Cursor, "cursor"),
     ] {
         for name in ["simple.jsonl", "approval_allowed.jsonl"] {
+            let left = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
             let subject = OnFake {
                 recording: Some(recording(folder, name)),
+                left: left.clone(),
                 ..subject(flavor)
             };
             let found = scenarios::replay(subject, "as recorded").await;
             found.unwrap_or_else(|v| panic!("{folder}/{name}: {v}"));
+            let left = left.load(std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(
+                left, 0,
+                "{folder}/{name}: {left} recorded messages never played"
+            );
         }
     }
 }
