@@ -5,7 +5,8 @@ Status: decided on 2026-11-21, as [D-076](../decisions.md#d-076-the-tags-of-kind
 the Marmot specification; MDK may rename a tag to fit its conventions. How an agent event travels was decided
 before ([the carrier](event-carrier.md), D-022 to D-027); the exact tags were not. This page fixes them, from what the first end-to-end test (M1 of the [plan](../plan.md)) sent and read back, under the
 temporary kinds of [D-069](../decisions.md#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind).
-The code that writes and reads them is `crates/marmot-agent/src/carrier.rs`.
+The code that writes and reads them is `crates/marmot-agent/src/carrier.rs`. The section
+[provisional additions](#provisional-additions) is a proposal, built and waiting for the owner.
 
 ## What M1 showed
 
@@ -50,6 +51,36 @@ nothing about agents shows.
 A notice the core makes itself, to say why an answer, a control or a message was not acted on, is an item of
 type `notice` with the kind `refused`, a `reason` such as `not_allowed` or `busy`, and a `settles` tag for the
 request it answers.
+
+## Provisional additions
+
+Built on 2026-11-21 while fixing the known gaps of [testing and verification](verification.md). These are
+**provisional**: the owner has not accepted them, and they are not in `docs/decisions.md`.
+
+- **The agent's words carry `settles`.** A chat message of the agent's words carries a `settles` tag for each
+  answer or control whose effect it shows, as an item does. An edit of words cannot carry tags, so what the
+  changed words settle is carried by the next version of their turn, the same as the last, sent right after the
+  edit. So is what final words that come again unchanged name. If MDK refuses the edit, that version settles
+  nothing, and those requests are settled as `failed`.
+- **At most 200 `settles` on one event.** An item's version, or the agent's words, that would settle more goes
+  out as several versions of the same item, the same and numbered on, each settling at most 200; words leave the
+  rest to their turn's next versions. So every event that settles fits in 64 KB.
+- **`no_effect`.** An answer the driver took whose item stopped waiting without naming it is settled at once by a
+  `refused` notice with the reason `no_effect`, not left pending until the driver stops.
+- **`failed` for a send MDK refuses.** A send MDK will not take, and is not an edit of words that were removed, is
+  dropped. A `refused` notice with the reason `failed` tells the chat, and settles what the send settled. An
+  edit of words whose message is gone goes out as a new message.
+- **The `cut` tag.** One tag for each kind of field cut, with the full length of all that was cut of that kind:
+  `text`, `title`, `command`, `error`, `input`, `plan`, `steps`, `choices`, `questions`, `description`. `output`
+  keeps its full length and `diffs` its count, as before. A list thinned in its middle: `entries` or `changes`,
+  with how many it held. A session's commands whose descriptions were dropped to fit: `descriptions`, with how
+  many; every command keeps its name and hint
+  ([D-045](../decisions.md#d-045-a-session-items-commands-keep-their-names-and-lose-descriptions-first)).
+- **A stand-in for an item that cannot fit.** When what is never cut (ids, names, hints, values) is over 64 KB
+  alone, the item's version goes out as a notice of kind `warning` with the reason `too_large`, keeping the
+  item's id, state, version, first event and `settles`, and a `cut` tag `item` with the size of the event it
+  stands in for. Nothing over 64 KB is sent: a send that would be, stand-in included, is refused before MDK
+  sees it, and dropped with a `failed` notice.
 
 ## Updating an item
 

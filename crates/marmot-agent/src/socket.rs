@@ -416,15 +416,17 @@ impl SocketDriver {
             .get("session")
             .and_then(|raw| serde_json::from_str::<String>(raw.get()).ok())
             .unwrap_or_default();
-        let seq = self.seq.entry(session).or_insert(0);
-        *seq += 1;
+        // The next number in the session, taken only once the event is read, so one the core
+        // passes over leaves no gap.
+        let seq = self.seq.get(&session).copied().unwrap_or(0) + 1;
         fields.insert(
             "harness".into(),
             serde_json::value::to_raw_value(&self.harness.name).ok()?,
         );
-        fields.insert("seq".into(), serde_json::value::to_raw_value(&*seq).ok()?);
+        fields.insert("seq".into(), serde_json::value::to_raw_value(&seq).ok()?);
         let whole = serde_json::to_string(&fields).ok()?;
         let event: AgentEvent = serde_json::from_str(&whole).ok()?;
+        self.seq.insert(session, seq);
         Some(Emitted {
             event,
             chat: chat.map(marmot_agent_driver::ChatId),

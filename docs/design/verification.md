@@ -5,7 +5,9 @@ Status: the approach is decided
 so is the CI budget ([D-094](../decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)),
 on 2026-11-21. The property list, the models and the layers below are the plan; their details are internal and
 change as the work goes. It comes from reading all the code after M3 and the M4 work in progress, and from how MDK
-tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules).
+tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules). Under
+[first, fix what is known](#first-fix-what-is-known), the behaviour the fixes made visible is provisional: built,
+and waiting for the owner.
 
 ## Why
 
@@ -66,28 +68,68 @@ The properties come from the decisions. Each gets an id that the models, tests a
 ## First, fix what is known
 
 Reading the core and the drivers found these, all **inferred from the code and not yet reproduced**. Each becomes
-a failing test first, then a fix, and later a counterexample the model must find.
+a failing test first, then a fix, and later a counterexample the model must find. Those marked **fixed** were
+fixed on 2026-11-21, each with a test that failed first.
 
-- **Crash windows in the run loop** (S1, S3). A version sent but not yet saved is sent again with the same number
-  and a new first event after a restart, and the request it settled is settled again as failed. A request the
-  core took but had not saved is never settled. A failed save of the read mark is ignored, so a crash can run a
-  prompt twice (S4). Closing everything on a stop and then crashing sends the closes again.
-- **Sends that give up** (S1, S3). The core stops trying a send after five failures, which loses settles and
-  starts a new row for the next version. Part of this waits for crash-safe sends in MDK.
-- **Settles carried by a message are dropped** (S1). The core reads `settles` only from items that are not
-  messages. A pending answer whose approval ends without naming it stays pending until the driver stops.
-- **An open item can be forgotten** (S2, S3). The cache of finished items can evict one that opened again.
-- **Refusals before the rights check** (S6). Someone with no rights is told an item's state instead of
-  `not_allowed`.
-- **Only tool output is cut** (S7). A long message or plan goes out over 64 KB.
-- **An owner key in the wrong form locks the owner out** (S6). An uppercase key or an npub in the settings never
-  matches, silently. The installers now convert npubs; the settings file should refuse what it cannot read.
-- **Two cores on one home** overwrite each other's state. There is no lock.
+- **Crash windows in the run loop** (S1, S3). **Fixed.** A version sent but not yet saved was sent again with the
+  same number and a new first event after a restart, and the request it settled was settled again as failed. A
+  request the core took but had not saved was never settled, including one whose read mark was saved before the
+  request was. A failed save of the read mark was ignored, so a crash could run a prompt twice (S4). Closing
+  everything on a stop and then crashing sent the closes again. A group accepted just before a failed save
+  started, after the restart, at its latest message, skipping what had arrived.
+- **Sends that give up** (S1, S3). **Fixed, as far as the core can.** The core stopped trying a send after five
+  failures, which lost settles and started a new row for the next version. A send whose outcome was not known,
+  as when the wait for MDK ran out, may have gone out, and was sent again blindly. Now a send is kept until it
+  goes. One the core handed to MDK, and whose outcome is not known, is looked for in what MDK stored before it is
+  sent again: at once after a restart, and after 15 seconds while running; when MDK cannot be asked, the core
+  asks again later. After its tenth try it is looked for once more, and only then given up. One MDK refuses is
+  dropped with a notice.
+
+  **What a restart still cannot recover.** A crash between MDK storing a send and the core saving that it went
+  leaves the core to find it by looking. An item's version is found by its id, its version and its first
+  event. The agent's words are found by their text and tags; when an earlier message of the agent's is the same
+  in both, the core cannot tell the two apart. When the lookup cannot identify the earlier send, the send goes
+  out again, and the chat shows a duplicate first event. That ends when MDK's crash-safe sends take tagged
+  events, and the token each send keeps is handed to MDK.
+- **Settles carried by a message are dropped** (S1). **Fixed.** The core read `settles` only from items that are
+  not messages. A pending answer whose approval ends without naming it stayed pending until the driver stopped.
+  A driver's event could settle another chat's request.
+- **An open item can be forgotten** (S2, S3). **Fixed.** The cache of finished items could evict one that opened
+  again.
+- **Refusals before the rights check** (S6). **Fixed.** Someone with no rights was told an item's state instead
+  of `not_allowed`.
+- **Only tool output is cut** (S7). **Fixed.** A long message or plan went out over 64 KB, and the general cutter
+  could still return an oversized item or drop a session's commands.
+- **An owner key in the wrong form locks the owner out** (S6). **Fixed.** An uppercase key or an npub in the
+  settings never matched, silently. The installers now convert npubs; the settings file should refuse what it
+  cannot read.
+- **Two cores on one home** overwrite each other's state. **Fixed:** MDK already refuses the second; a test shows
+  it.
 - **OpenClaw vouches a sender for every chat** (S5, S6). The core's own check is the backstop.
-- **MDK's test relay limits each connection to 60 events a minute** by default. Our longer scenarios likely hit
-  it, which may explain some flaky real-harness runs. The tests should lift the limit, as MDK's own do.
+- **MDK's test relay limits each connection to 60 events a minute** by default. **Fixed:** the tests lift the
+  limit, as MDK's own do.
 - **Messages missing after an abrupt stop**, seen while building the importer: the next program on the same home
-  sometimes never got later messages. This looks like MDK's, and goes to MDK as an issue.
+  sometimes never got later messages. This looks like MDK's, and goes to MDK as an issue. A related case was seen
+  in the tests: right after a person makes a second group with the agent, messages between them sometimes do not
+  arrive.
+
+### Provisional, from these fixes
+
+Built, and not yet accepted by the owner, so not in `docs/decisions.md`. What other programs see is in
+[kinds 1201 and 1202](agent-kinds.md#provisional-additions): `settles` on the agent's words, `no_effect`, `failed`
+for a refused send, the `cut` tags and the stand-in. Besides those:
+
+- **The settings refuse a key they cannot read.** `owner`, `invite`, and the people in `prompt` and `approve` are
+  read as hex in either case or as an npub; anything else stops the core at start, naming the setting.
+- **A failed save stops the core**, as a crash would, and the next start takes up what is on disk.
+- **The state file** (`marmot-agent-state.json` in the home) keeps, besides what it kept before: the sends not
+  yet made, oldest first, each with a token that stays the same across tries, whether it was handed to MDK, and,
+  for a turn's version that settles what the agent's words showed, the send of those words; where recently
+  forgotten items stood; for a turn, the message that started it; and for the agent's words, the requests they
+  settle, held until a message carries them.
+- **A group's read mark is saved before the agent accepts the group.**
+- **One chat sends at most eight events in each turn of the core's loop**, then the others go; a stop sends all
+  it can.
 
 ## The layers
 

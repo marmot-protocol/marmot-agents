@@ -111,19 +111,54 @@ fn the_prompt(acts: Vec<Act>) -> Prompt {
     }
 }
 
-/// The one item sent, with the group it went to.
-fn the_item(acts: Vec<Act>) -> (GroupKey, String, Item) {
-    match <[Act; 1]>::try_from(acts) {
-        Ok(
-            [
-                Act::Send {
-                    group,
-                    what: Sending::Item { key, item },
-                },
-            ],
-        ) => (group, key, *item),
-        Ok([other]) => panic!("not an item: {other:?}"),
-        Err(acts) => panic!("not one act: {acts:?}"),
+/// What the acts queued to send, each with its group, as it would be sent now: read from the
+/// queue, the one place what is sent is kept. Other acts are passed over.
+fn sends(talk: &Conversation, acts: Vec<Act>) -> Vec<(GroupKey, Sending)> {
+    let groups: Vec<GroupKey> = (acts.into_iter())
+        .filter_map(|act| match act {
+            Act::Send { group } => Some(group),
+            _ => None,
+        })
+        .collect();
+    let mut taken: Vec<(GroupKey, usize)> = Vec::new();
+    let mut found = Vec::new();
+    for group in &groups {
+        let queued = talk.queued(group);
+        let wanted = groups.iter().filter(|g| *g == group).count();
+        let used = match taken.iter_mut().find(|(g, _)| g == group) {
+            Some((_, used)) => used,
+            None => {
+                taken.push((group.clone(), 0));
+                &mut taken.last_mut().unwrap().1
+            }
+        };
+        let (_, what) = queued[queued.len() - wanted + *used].clone();
+        *used += 1;
+        found.push((group.clone(), what));
+    }
+    found
+}
+
+/// Every item the acts queued.
+fn items_of(talk: &Conversation, acts: Vec<Act>) -> Vec<Item> {
+    (sends(talk, acts).into_iter())
+        .map(|(_, what)| match what {
+            Sending::Item { item, .. } => *item,
+            other => panic!("{other:?}"),
+        })
+        .collect()
+}
+
+/// The one item `act` sent, with the group it went to.
+fn the_item(
+    talk: &mut Conversation,
+    act: impl FnOnce(&mut Conversation) -> Vec<Act>,
+) -> (GroupKey, String, Item) {
+    let acts = act(talk);
+    assert_eq!(acts.len(), 1, "not one act: {acts:?}");
+    match sends(talk, acts).pop() {
+        Some((group, Sending::Item { key, item })) => (group, key, *item),
+        other => panic!("not an item: {other:?}"),
     }
 }
 
@@ -184,7 +219,7 @@ fn started() -> (Conversation, Prompt) {
 
 /// Sends an item for the direct chat and records that it went out as `first`.
 fn sent(talk: &mut Conversation, chat: &str, event: AgentEvent, first: &str) -> Item {
-    let (_, key, item) = the_item(talk.emitted(emitted(chat, event)));
+    let (_, key, item) = the_item(talk, |t| t.emitted(emitted(chat, event)));
     talk.sent(&key, EventKey::from(first));
     item
 }
@@ -257,7 +292,7 @@ fn someone_who_may_not_prompt_is_told() {
     let mut talk = conversation(Saved::default());
     let mut mention = heard(group(), "e1", STRANGER, "delete everything");
     mention.mentions_agent = true;
-    let (group_key, _, item) = the_item(talk.heard(mention));
+    let (group_key, _, item) = the_item(&mut talk, |t| t.heard(mention));
     assert_eq!(group_key, GroupKey::from("g-group"));
     assert!(is_refused(&item, "not_allowed"));
     assert_eq!(item.started_by, Some(EventKey::from("e1")));
@@ -268,7 +303,10 @@ fn someone_who_may_not_prompt_is_told() {
 fn a_typed_approval_needs_the_right_to_approve() {
     let mut talk = conversation(Saved::default());
     let typed = heard(direct(), "e1", FRIEND, "fine, /approve it");
-    assert!(is_refused(&the_item(talk.heard(typed)).2, "not_allowed"));
+    assert!(is_refused(
+        &the_item(&mut talk, |t| t.heard(typed)).2,
+        "not_allowed"
+    ));
     let mentioned = heard(direct(), "e2", FRIEND, "what does /approved mean?");
     the_prompt(talk.heard(mentioned));
     let owner = heard(direct(), "e3", OWNER, "/approve");
@@ -282,7 +320,7 @@ fn a_typed_approval_needs_the_right_to_approve() {
     ] {
         let typed = heard(direct(), event, FRIEND, text);
         assert!(
-            is_refused(&the_item(talk.heard(typed)).2, "not_allowed"),
+            is_refused(&the_item(&mut talk, |t| t.heard(typed)).2, "not_allowed"),
             "{text}"
         );
     }
@@ -303,7 +341,10 @@ fn the_saved_session_is_named_until_the_driver_takes_a_prompt() {
     let again = the_prompt(after_restart.heard(heard(direct(), "e2", OWNER, "where were we")));
     assert_eq!(again.session, Some(SessionId::from("th1")));
     let refused = after_restart.prompted(&again, Err(Refusal::new(Reason::Busy)));
-    assert!(is_refused(&the_item(refused).2, "busy"));
+    assert!(is_refused(
+        &the_item(&mut after_restart, |_| refused).2,
+        "busy"
+    ));
     let retry = the_prompt(after_restart.heard(heard(direct(), "e3", OWNER, "where were we?")));
     assert_eq!(
         retry.session,
@@ -345,7 +386,9 @@ fn an_items_later_versions_name_its_first() {
         "e-cmd",
     );
     assert_eq!((first.version, first.first.clone()), (1, None));
-    let (_, _, second) = the_item(talk.emitted(emitted(&chat, event("cmd", State::Done, turn()))));
+    let (_, _, second) = the_item(&mut talk, |t| {
+        t.emitted(emitted(&chat, event("cmd", State::Done, turn())))
+    });
     assert_eq!(second.version, 2);
     assert_eq!(second.first, Some(EventKey::from("e-cmd")));
 }
@@ -356,7 +399,7 @@ fn a_turn_names_the_message_that_started_it() {
     let (mut talk, prompt) = started();
     let mut started_turn = emitted(&prompt.chat.id.0, event("t1", State::Running, turn()));
     started_turn.prompts = vec![prompt.message.clone()];
-    let (_, _, item) = the_item(talk.emitted(started_turn));
+    let (_, _, item) = the_item(&mut talk, |t| t.emitted(started_turn));
     assert_eq!(item.started_by, Some(EventKey::from("e1")));
 }
 
@@ -372,12 +415,12 @@ fn the_agents_words_are_a_chat_message() {
             .is_empty()
     );
     let acts = talk.emitted(emitted(&chat, words(State::Done)));
-    let Some(Act::Send {
-        what: Sending::Words {
+    let Some((
+        _,
+        Sending::Words {
             key, text, edit, ..
         },
-        ..
-    }) = acts.into_iter().next()
+    )) = sends(&talk, acts).pop()
     else {
         panic!("no words")
     };
@@ -421,7 +464,7 @@ fn an_answer_is_settled_once_by_its_effect() {
 
     let mut done = emitted(&chat, event("ap", State::Done, approval()));
     done.settles = vec![answer.request.clone()];
-    let (_, _, item) = the_item(talk.emitted(done));
+    let (_, _, item) = the_item(&mut talk, |t| t.emitted(done));
     assert_eq!(item.settles, vec![EventKey::from("r1")]);
     assert!(
         talk.requested(&answer.request, Err(Refusal::new(Reason::Failed)), 0)
@@ -448,7 +491,7 @@ fn an_approval_from_someone_who_may_only_prompt_is_refused() {
             choice: "allow".into(),
         },
     );
-    let (_, _, item) = the_item(talk.asked(asked));
+    let (_, _, item) = the_item(&mut talk, |t| t.asked(asked));
     assert!(is_refused(&item, "not_allowed"));
     assert_eq!(item.settles, vec![EventKey::from("r1")]);
 }
@@ -460,7 +503,7 @@ fn unknown_repeated_and_late_requests() {
     let (mut talk, _) = started();
     let unknown = request(direct(), "r1", OWNER, Some("e-nothing"), Asked::Interrupt);
     assert!(is_refused(
-        &the_item(talk.asked(unknown.clone())).2,
+        &the_item(&mut talk, |t| t.asked(unknown.clone())).2,
         "unknown_item"
     ));
     assert!(talk.asked(unknown).is_empty());
@@ -481,8 +524,9 @@ fn a_refused_control_is_settled_by_a_notice() {
         control.action,
         Action::NewSession { session: None, .. }
     ));
-    let (_, _, item) =
-        the_item(talk.requested(&control.request, Err(Refusal::new(Reason::Busy)), 0));
+    let (_, _, item) = the_item(&mut talk, |t| {
+        t.requested(&control.request, Err(Refusal::new(Reason::Busy)), 0)
+    });
     assert!(is_refused(&item, "busy"));
     assert_eq!(item.settles, vec![EventKey::from("r1")]);
 }
@@ -520,7 +564,7 @@ fn a_secret_answer_is_refused_in_a_group() {
             questions: vec![reply],
         },
     );
-    let (_, _, item) = the_item(talk.asked(answer));
+    let (_, _, item) = the_item(&mut talk, |t| t.asked(answer));
     assert!(is_refused(&item, "not_supported"));
     assert!(!item.event.header().text.contains("hunter2"));
 }
@@ -545,7 +589,7 @@ fn a_marked_setting_needs_the_right_to_approve() {
         )
     };
     assert!(is_refused(
-        &the_item(talk.asked(set("r1", "sandbox"))).2,
+        &the_item(&mut talk, |t| t.asked(set("r1", "sandbox"))).2,
         "not_allowed"
     ));
     let acts = talk.asked(set("r2", "model"));
@@ -576,16 +620,7 @@ fn a_stop_closes_items_and_settles_requests() {
     let saved = talk.saved().clone();
 
     let acts = talk.ended();
-    let items: Vec<Item> = acts
-        .into_iter()
-        .map(|a| match a {
-            Act::Send {
-                what: Sending::Item { item, .. },
-                ..
-            } => *item,
-            other => panic!("{other:?}"),
-        })
-        .collect();
+    let items = items_of(&talk, acts);
     assert!(
         items
             .iter()
@@ -599,17 +634,8 @@ fn a_stop_closes_items_and_settles_requests() {
     );
 
     let mut restarted = conversation(saved);
-    let items: Vec<Item> = restarted
-        .recover()
-        .into_iter()
-        .map(|a| match a {
-            Act::Send {
-                what: Sending::Item { item, .. },
-                ..
-            } => *item,
-            other => panic!("{other:?}"),
-        })
-        .collect();
+    let acts = restarted.recover();
+    let items = items_of(&restarted, acts);
     assert_eq!(items.len(), 2, "the turn closed and the interrupt settled");
     assert!(
         items
@@ -636,7 +662,7 @@ fn an_item_survives_the_carrier() {
         started_by: Some(EventKey::from("e-prompt")),
         settles: vec![EventKey::from("r1")],
     };
-    let out = carrier::item(&item);
+    let out = carrier::item(&item).unwrap();
     assert_eq!(out.kind, carrier::ITEM_KIND);
     let read = carrier::read_item(&out.content, &out.tags).unwrap();
     assert!(read.item == item);
@@ -675,7 +701,7 @@ fn an_item_over_the_limit_loses_its_native_message_then_output() {
         started_by: None,
         settles: Vec::new(),
     };
-    let out = carrier::item(&item);
+    let out = carrier::item(&item).unwrap();
     assert!(out.size() <= carrier::LIMIT, "{}", out.size());
     let read = carrier::read_item(&out.content, &out.tags).unwrap();
     assert!(read.item.event.native().is_none());
@@ -717,13 +743,17 @@ fn a_request_about_a_finished_item_does_nothing() {
         "e-t1",
     );
     assert_eq!(
-        the_item(talk.emitted(emitted(&chat, event("t1", State::Done, turn()))))
-            .2
-            .version,
+        the_item(&mut talk, |t| t
+            .emitted(emitted(&chat, event("t1", State::Done, turn()))))
+        .2
+        .version,
         2
     );
     let late = request(direct(), "r1", OWNER, Some("e-t1"), Asked::NewSession);
-    assert!(is_refused(&the_item(talk.asked(late)).2, "nothing_to_do"));
+    assert!(is_refused(
+        &the_item(&mut talk, |t| t.asked(late)).2,
+        "nothing_to_do"
+    ));
     sent(
         &mut talk,
         &chat,
@@ -740,7 +770,10 @@ fn a_request_about_a_finished_item_does_nothing() {
             choice: "allow".into(),
         },
     );
-    assert!(is_refused(&the_item(talk.asked(answer)).2, "not_waiting"));
+    assert!(is_refused(
+        &the_item(&mut talk, |t| t.asked(answer)).2,
+        "not_waiting"
+    ));
 }
 
 // Codex puts a file edit's whole diff in the item, so a large diff is cut like large output,
@@ -772,7 +805,7 @@ fn a_large_diff_and_escaped_output_are_cut_to_fit() {
         started_by: None,
         settles: Vec::new(),
     };
-    let out = carrier::item(&item);
+    let out = carrier::item(&item).unwrap();
     assert!(out.size() <= carrier::LIMIT, "{}", out.size());
     let read = carrier::read_item(&out.content, &out.tags).unwrap();
     assert_eq!(read.left_out.diffs, 1);
@@ -806,7 +839,7 @@ fn a_second_answer_is_refused() {
         [Act::Answer(_)]
     ));
     assert!(is_refused(
-        &the_item(talk.asked(allow("r2"))).2,
+        &the_item(&mut talk, |t| t.asked(allow("r2"))).2,
         "already_answered"
     ));
 }
@@ -817,9 +850,9 @@ fn a_closed_turn_still_names_its_message() {
     let (mut talk, prompt) = started();
     let mut started_turn = emitted(&prompt.chat.id.0, event("t1", State::Running, turn()));
     started_turn.prompts = vec![prompt.message.clone()];
-    let (_, key, _) = the_item(talk.emitted(started_turn));
+    let (_, key, _) = the_item(&mut talk, |t| t.emitted(started_turn));
     talk.sent(&key, EventKey::from("e-t1"));
-    let (_, _, closed) = the_item(talk.ended());
+    let (_, _, closed) = the_item(&mut talk, |t| t.ended());
     assert_eq!(closed.started_by, Some(EventKey::from("e1")));
 }
 
@@ -836,26 +869,26 @@ fn a_remark_is_marked_and_the_answer_is_not() {
         };
         event(item, State::Done, Body::Message(message))
     };
-    let remark = |acts: Vec<Act>| match acts.into_iter().next() {
-        Some(Act::Send {
-            what: Sending::Words { remark, .. },
-            ..
-        }) => remark,
-        other => panic!("no words: {other:?}"),
+    let remark = |talk: &mut Conversation, event| {
+        let acts = talk.emitted(emitted(&chat, event));
+        match sends(talk, acts).pop() {
+            Some((_, Sending::Words { remark, .. })) => remark,
+            other => panic!("no words: {other:?}"),
+        }
     };
     let commentary = Some(body::Phase::Commentary);
-    assert!(remark(talk.emitted(emitted(&chat, said("m1", commentary)))));
+    assert!(remark(&mut talk, said("m1", commentary)));
     let answer = Some(body::Phase::Final);
-    assert!(!remark(talk.emitted(emitted(&chat, said("m2", answer)))));
-    assert!(!remark(talk.emitted(emitted(&chat, said("m3", None)))));
+    assert!(!remark(&mut talk, said("m2", answer)));
+    assert!(!remark(&mut talk, said("m3", None)));
     let turn = marmot_agent_events::TurnId::from("t1");
     let tag = |a: &str, b: &str| vec![a.to_string(), b.to_string()];
     assert_eq!(
-        carrier::words_tags(Some(&turn), true),
+        carrier::words_tags(Some(&turn), true, &[]),
         vec![tag("turn", "t1"), tag("phase", "commentary")]
     );
     assert_eq!(
-        carrier::words_tags(Some(&turn), false),
+        carrier::words_tags(Some(&turn), false, &[]),
         vec![tag("turn", "t1")]
     );
 }
@@ -929,11 +962,1067 @@ fn a_control_whose_effect_never_shows_is_settled_in_the_end() {
     assert!(talk.overdue(1_119).is_empty(), "not yet");
     let mut settled = Vec::new();
     for _ in 0..2 {
-        let (_, _, item) = the_item(talk.overdue(1_120));
+        let (_, _, item) = the_item(&mut talk, |t| t.overdue(1_120));
         assert!(is_refused(&item, "no_effect"));
         settled.extend(item.settles);
     }
     settled.sort();
     assert_eq!(settled, vec![EventKey::from("r1"), EventKey::from("r2")]);
     assert!(talk.overdue(5_000).is_empty(), "each settled once");
+}
+
+// Someone without the right a request needs learns nothing about the item it names: whether the
+// item exists, is waiting, was answered or has finished, they are told only `not_allowed` (S6).
+#[test]
+fn a_request_without_the_right_learns_nothing_of_the_item() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("ap", State::Waiting, approval()),
+        "e-ap",
+    );
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    talk.emitted(emitted(&chat, event("t1", State::Done, turn())));
+    let allow = Asked::Choice {
+        choice: "allow".into(),
+    };
+    assert!(matches!(
+        talk.asked(request(direct(), "r0", OWNER, Some("e-ap"), allow.clone()))
+            .as_slice(),
+        [Act::Answer(_)]
+    ));
+    let cases = [
+        // Unknown item.
+        (STRANGER, Some("e-nothing"), Asked::Interrupt),
+        // Already answered, and the friend may only prompt.
+        (FRIEND, Some("e-ap"), allow.clone()),
+        (STRANGER, Some("e-ap"), allow),
+        // Finished.
+        (STRANGER, Some("e-t1"), Asked::NewSession),
+        // Nothing to interrupt.
+        (STRANGER, None, Asked::Interrupt),
+    ];
+    for (n, (author, target, asked)) in cases.into_iter().enumerate() {
+        let event = format!("r{}", n + 1);
+        let (_, _, item) = the_item(&mut talk, |t| {
+            t.asked(request(direct(), &event, author, target, asked))
+        });
+        assert!(is_refused(&item, "not_allowed"), "case {n}");
+        assert_eq!(item.settles, vec![EventKey::from(event.as_str())]);
+    }
+}
+
+fn words(state: State) -> AgentEvent {
+    event("w1", state, Body::Message(Message::default()))
+}
+
+/// The one chat message `act` sent, with the requests it settles.
+fn the_words(
+    talk: &mut Conversation,
+    act: impl FnOnce(&mut Conversation) -> Vec<Act>,
+) -> (String, Vec<EventKey>) {
+    let acts = act(talk);
+    assert_eq!(acts.len(), 1, "not one act: {acts:?}");
+    match sends(talk, acts).pop() {
+        Some((_, Sending::Words { text, settles, .. })) => (text, settles),
+        other => panic!("not words: {other:?}"),
+    }
+}
+
+// An event of any type can show a request's effect: the agent's words settle what they name, as a
+// tag on the chat message, and the request is not settled again when the driver stops (S1, D-028).
+// Words that can only go out as an edit cannot carry a tag, so the turn's next version, queued
+// right after the edit, settles what they name: by the effect, not as `no_effect` or failed.
+#[test]
+fn the_agents_words_settle_what_they_name() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    let take = |talk: &mut Conversation, event: &str| {
+        let interrupt = request(direct(), event, OWNER, Some("e-t1"), Asked::Interrupt);
+        let Some(Act::Control(control)) = talk.asked(interrupt).into_iter().next() else {
+            panic!("no control")
+        };
+        assert!(talk.requested(&control.request, Ok(()), 0).is_empty());
+        control
+    };
+    // Still running: nothing is sent yet, and the request waits for the words that go out.
+    let first = take(&mut talk, "r1");
+    let mut running = emitted(&chat, words(State::Running));
+    running.settles = vec![first.request.clone()];
+    assert!(talk.emitted(running).is_empty());
+    let (text, settles) = the_words(&mut talk, |t| t.emitted(emitted(&chat, words(State::Done))));
+    assert_eq!(text, "the plain rendering");
+    assert_eq!(settles, vec![EventKey::from("r1")]);
+    talk.sent("c-1/w1", EventKey::from("e-w1"));
+
+    // An edit: the turn's next version settles the request, after the edit.
+    let second = take(&mut talk, "r2");
+    let mut changed = emitted(&chat, words(State::Done));
+    changed.event = AgentEvent::new(
+        Header {
+            text: "other words".into(),
+            ..changed.event.header().clone()
+        },
+        changed.event.body().clone(),
+        None,
+    )
+    .unwrap();
+    changed.settles = vec![second.request.clone()];
+    let acts = talk.emitted(changed);
+    let mut queued = sends(&talk, acts).into_iter();
+    assert!(
+        matches!(queued.next(), Some((_, Sending::Words { edit: Some(_), settles, .. }))
+            if settles.is_empty()),
+        "the edit first"
+    );
+    let settled: Vec<(String, u64, Vec<EventKey>)> = queued
+        .filter_map(|(_, what)| match what {
+            Sending::Item { item, .. } => Some((
+                item.event.header().item.as_str().to_string(),
+                item.version,
+                item.settles,
+            )),
+            Sending::Words { .. } => None,
+        })
+        .collect();
+    assert_eq!(settled, vec![("t1".into(), 2, vec![EventKey::from("r2")])]);
+    let acts = talk.ended();
+    let failed: Vec<EventKey> = (items_of(&talk, acts).into_iter())
+        .filter(|item| is_refused(item, "failed"))
+        .flat_map(|item| item.settles)
+        .collect();
+    assert!(failed.is_empty(), "each was settled once: {failed:?}");
+}
+
+// A driver's event settles only requests from its own chat: one that names another chat's
+// request, by mistake, settles nothing there, whether it is an item or the agent's words (S1, S5).
+#[test]
+fn an_event_settles_only_its_own_chats_requests() {
+    let (mut talk, prompt) = started();
+    let a = prompt.chat.id.0.clone();
+    let mut mention = heard(group(), "e-team", OWNER, "hi");
+    mention.mentions_agent = true;
+    let b = the_prompt(talk.heard(mention)).chat.id.0;
+    sent(&mut talk, &a, event("t1", State::Running, turn()), "e-t1");
+    let interrupt = request(direct(), "r1", OWNER, Some("e-t1"), Asked::Interrupt);
+    let Some(Act::Control(control)) = talk.asked(interrupt).into_iter().next() else {
+        panic!("no control")
+    };
+    assert!(talk.requested(&control.request, Ok(()), 0).is_empty());
+
+    let mut said = emitted(&b, words(State::Done));
+    said.settles = vec![control.request.clone()];
+    let (_, settles) = the_words(&mut talk, |t| t.emitted(said));
+    assert!(settles.is_empty(), "nothing of chat A's settled");
+    let mut item = emitted(&b, event("tb", State::Running, turn()));
+    item.settles = vec![control.request.clone()];
+    let (group, _, sent_item) = the_item(&mut talk, |t| t.emitted(item));
+    assert_eq!(group, GroupKey::from("g-group"));
+    assert!(sent_item.settles.is_empty(), "nothing of chat A's settled");
+
+    let acts = talk.ended();
+    let failed: Vec<(GroupKey, Vec<EventKey>)> = (sends(&talk, acts).into_iter())
+        .filter_map(|(group, what)| match what {
+            Sending::Item { item, .. } if is_refused(&item, "failed") => {
+                Some((group, item.settles))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        failed,
+        vec![(GroupKey::from("g-direct"), vec![EventKey::from("r1")])],
+        "still pending in chat A, settled there when the driver stops"
+    );
+}
+
+// An answer the driver took whose item stops waiting without naming it had no effect: it is
+// settled then, with `no_effect`, and not left pending until the driver stops (S1, D-087).
+#[test]
+fn an_answer_is_settled_when_its_item_stops_waiting() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("ap", State::Waiting, approval()),
+        "e-ap",
+    );
+    let asked = request(
+        direct(),
+        "r1",
+        OWNER,
+        Some("e-ap"),
+        Asked::Choice {
+            choice: "allow".into(),
+        },
+    );
+    let Some(Act::Answer(answer)) = talk.asked(asked).into_iter().next() else {
+        panic!("no answer")
+    };
+    assert!(talk.requested(&answer.request, Ok(()), 0).is_empty());
+    // Still waiting: nothing yet.
+    let (_, _, item) = the_item(&mut talk, |t| {
+        t.emitted(emitted(&chat, event("ap", State::Waiting, approval())))
+    });
+    assert!(item.settles.is_empty());
+
+    let acts = talk.emitted(emitted(&chat, event("ap", State::Cancelled, approval())));
+    let items = items_of(&talk, acts);
+    assert_eq!(items.len(), 2, "the item, then the notice");
+    assert_eq!(items[0].event.header().state, State::Cancelled);
+    assert!(is_refused(&items[1], "no_effect"));
+    assert_eq!(items[1].settles, vec![EventKey::from("r1")]);
+    assert!(talk.ended().is_empty(), "nothing left to settle");
+}
+
+/// Finishes `count` items of their own in the chat, each sent once.
+fn finish_many(talk: &mut Conversation, chat: &str, count: usize) {
+    for n in 0..count {
+        let item = format!("done-{n}");
+        let (_, key, _) = the_item(talk, |t| {
+            t.emitted(emitted(chat, event(&item, State::Done, turn())))
+        });
+        talk.sent(&key, EventKey::from(format!("e-{item}").as_str()));
+    }
+}
+
+/// Marks every send queued for the direct chat as gone, so no record is kept for want of it.
+fn ack_all(talk: &mut Conversation) {
+    let mut n = 0;
+    while let Some((_, what)) = talk.next_send(&direct().group) {
+        let key = match what {
+            Sending::Item { key, .. } | Sending::Words { key, .. } => key,
+        };
+        n += 1;
+        talk.sent(&key, EventKey::from(format!("e-ack-{n}").as_str()));
+    }
+}
+
+/// The names of the items the conversation keeps a record of.
+fn kept_items(talk: &Conversation) -> Vec<String> {
+    let saved = serde_json::to_value(talk.saved()).unwrap();
+    saved["items"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect()
+}
+
+// The core forgets finished items after a while, but never one that is open again, nor the chat's
+// session, which a restart closes and the next prompt resumes: their next versions go on from the
+// last, naming the first event, and never start a new row at version 1 (S2, S3). Every send is
+// acknowledged before the pressure, so only those rules keep them.
+#[test]
+fn an_item_that_opens_again_is_not_forgotten() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let session = |state| event("s", state, Body::Session(session_item(false)));
+    sent(&mut talk, &chat, session(State::Running), "e-s");
+    sent(
+        &mut talk,
+        &chat,
+        event("task", State::Running, turn()),
+        "e-task",
+    );
+    talk.emitted(emitted(&chat, event("task", State::Done, turn())));
+    let (_, _, again) = the_item(&mut talk, |t| {
+        t.emitted(emitted(&chat, event("task", State::Running, turn())))
+    });
+    assert_eq!(again.version, 3);
+    ack_all(&mut talk);
+    // Open again, it is kept however many items finish after it: more than the core keeps, and
+    // more than it remembers the place of.
+    finish_many(&mut talk, &chat, 5000);
+    let (_, _, task) = the_item(&mut talk, |t| {
+        t.emitted(emitted(&chat, event("task", State::Done, turn())))
+    });
+    assert_eq!(
+        (task.version, task.first),
+        (4, Some(EventKey::from("e-task")))
+    );
+
+    // A stop closes the session; it stays the chat's to resume (D-070).
+    let mut talk = conversation(talk.saved().clone());
+    let _ = talk.ended();
+    ack_all(&mut talk);
+    finish_many(&mut talk, &chat, 5000);
+    let (_, _, resumed) = the_item(&mut talk, |t| {
+        t.emitted(emitted(&chat, session(State::Running)))
+    });
+    assert_eq!(resumed.first, Some(EventKey::from("e-s")));
+    assert_eq!(resumed.version, 3);
+}
+
+// An item the core has forgotten whose events come again goes on from where it was, for as long
+// as the core remembers where that was, rather than starting a new row (S3).
+#[test]
+fn a_forgotten_item_goes_on_from_its_last_version() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("old", State::Running, turn()),
+        "e-old",
+    );
+    talk.emitted(emitted(&chat, event("old", State::Done, turn())));
+    ack_all(&mut talk);
+    finish_many(&mut talk, &chat, 3000);
+    let old = format!("{chat}/old");
+    assert!(!kept_items(&talk).contains(&old), "forgotten");
+    let (_, _, late) = the_item(&mut talk, |t| {
+        t.emitted(emitted(&chat, event("old", State::Done, turn())))
+    });
+    assert_eq!(
+        (late.version, late.first),
+        (3, Some(EventKey::from("e-old")))
+    );
+}
+
+// Finished items kept only because their last version waited to be sent are forgotten once it
+// has gone, without waiting for another item to finish.
+#[test]
+fn finished_items_are_forgotten_once_their_sends_have_gone() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    for n in 0..2100 {
+        let item = format!("done-{n}");
+        talk.emitted(emitted(&chat, event(&item, State::Done, turn())));
+    }
+    assert!(kept_items(&talk).len() >= 2100, "kept while queued");
+    ack_all(&mut talk);
+    assert!(
+        kept_items(&talk).len() <= 2048,
+        "{}",
+        kept_items(&talk).len()
+    );
+}
+
+// ------------------------------------------------------------------ every item fits (S7)
+
+/// A small generator of test values, the same on every run.
+struct Dice(u64);
+
+impl Dice {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn below(&mut self, n: u64) -> usize {
+        (self.next() % n) as usize
+    }
+
+    /// Text of about `bytes` bytes, with letters of one to four bytes and characters JSON
+    /// escapes, the control ones to six bytes each.
+    fn text(&mut self, bytes: usize) -> String {
+        let mix = ["a", "é", "€", "𝄞", "\"", "\\", "\n", "\u{1}", " ", "z"];
+        let mut text = String::new();
+        while text.len() < bytes {
+            text.push_str(mix[self.below(mix.len() as u64)]);
+        }
+        text
+    }
+
+    /// Text that is mostly short and sometimes very long.
+    fn long(&mut self) -> String {
+        let bytes = self.size();
+        self.text(bytes)
+    }
+
+    /// Mostly short, sometimes very long.
+    fn size(&mut self) -> usize {
+        match self.below(4) {
+            0 => self.below(40),
+            1 => self.below(2_000),
+            _ => 10_000 + self.below(150_000),
+        }
+    }
+}
+
+/// An item of some type, with long text in its plain rendering, its title and its fields.
+fn a_large_item(dice: &mut Dice) -> Item {
+    let body = match dice.below(6) {
+        0 => Body::Reasoning(body::Reasoning {}),
+        1 => Body::Tool(body::Tool {
+            kind: body::ToolKind::Command,
+            name: dice.text(10),
+            command: Some(dice.long()),
+            cwd: None,
+            exit_code: None,
+            duration_ms: None,
+            output: Some(dice.long()),
+            changes: (0..dice.below(4))
+                .map(|_| body::Change {
+                    path: dice.text(20),
+                    diff: dice.long(),
+                    change: None,
+                })
+                .collect(),
+            query: None,
+            path: None,
+            input: Some(serde_json::json!({ "args": [dice.long(), 3] })),
+            error: Some(dice.long()),
+        }),
+        2 => Body::Plan(body::Plan {
+            text: Some(dice.long()),
+            entries: (0..dice.below(6_000))
+                .map(|n| body::PlanEntry {
+                    text: format!("step {n}"),
+                    state: body::PlanEntryState::Pending,
+                })
+                .collect(),
+        }),
+        3 => Body::Approval(Approval {
+            subject: None,
+            choices: vec![Choice {
+                id: "allow".into(),
+                label: dice.long(),
+                effect: Effect::Allow,
+            }],
+            answer: None,
+        }),
+        4 => Body::Question(
+            body::Question::new(
+                body::AnswerVia::Request,
+                None,
+                vec![body::Asked {
+                    id: "q1".into(),
+                    header: Some(dice.long()),
+                    text: dice.long(),
+                    options: Vec::new(),
+                    multiple: false,
+                    allow_text: true,
+                    secret: false,
+                }],
+            )
+            .unwrap(),
+        ),
+        _ => Body::Task(body::Task {
+            kind: "subagent".into(),
+            description: Some(dice.long()),
+            subject: None,
+        }),
+    };
+    let header = Header {
+        harness: "codex".into(),
+        session: Some("th1".into()),
+        turn: Some("t1".into()),
+        item: "big".into(),
+        seq: 7,
+        state: State::Running,
+        title: dice.long(),
+        text: dice.long(),
+    };
+    let native = (dice.below(2) == 0).then(|| marmot_agent_events::Native {
+        kind: "item".into(),
+        payload: serde_json::value::to_raw_value(&dice.long()).unwrap(),
+    });
+    Item {
+        event: AgentEvent::new(header, body, native).unwrap(),
+        version: 2,
+        first: Some(EventKey::from("e-first")),
+        started_by: None,
+        settles: vec![EventKey::from("r1")],
+    }
+}
+
+/// The size of the event a relay gets, counted here on its own: id, author, time, signature,
+/// and the content and tags escaped as JSON.
+fn on_the_wire(out: &carrier::Outgoing) -> usize {
+    serde_json::json!({
+        "id": "0".repeat(64), "pubkey": "0".repeat(64), "created_at": u64::MAX,
+        "kind": out.kind, "tags": out.tags, "content": out.content, "sig": "0".repeat(128),
+    })
+    .to_string()
+    .len()
+}
+
+// Every item fits in 64 KB, whatever holds its bulk: the plain rendering, the title, a tool's
+// output, input, error or diffs, a plan's text or its many steps, an approval's or a question's
+// words. Measured as the whole event, escaped; what was cut is named, ids are never cut, and the
+// item reads back (S7, D-026, D-057).
+#[test]
+fn every_item_is_cut_to_fit() {
+    let mut dice = Dice(0x5eed_1234_abcd_0042);
+    for case in 0..150 {
+        let item = a_large_item(&mut dice);
+        let out = carrier::item(&item).unwrap();
+        assert!(
+            on_the_wire(&out) <= carrier::LIMIT,
+            "case {case}: {}",
+            on_the_wire(&out)
+        );
+        let read = carrier::read_item(&out.content, &out.tags).expect("reads back");
+        let (sent, got) = (item.event.header(), read.item.event.header());
+        assert_eq!(
+            (got.item.as_str(), got.seq, got.state),
+            ("big", sent.seq, sent.state)
+        );
+        assert_eq!((read.item.version, &read.item.settles), (2, &item.settles));
+        if let (Body::Approval(a), Body::Approval(b)) = (item.event.body(), read.item.event.body())
+        {
+            assert_eq!(a.choices[0].id, b.choices[0].id, "case {case}");
+        }
+        let was_cut = got != sent || read.item.event.body() != item.event.body();
+        assert!(
+            !was_cut
+                || read.left_out.output.is_some()
+                || read.left_out.diffs > 0
+                || !read.left_out.fields.is_empty(),
+            "case {case}: cut without saying so"
+        );
+    }
+}
+
+// The agent's words, a chat message, fit too, cut in the middle on a character's boundary.
+#[test]
+fn the_agents_words_are_cut_to_fit() {
+    let mut dice = Dice(7);
+    for _ in 0..50 {
+        let text = dice.long();
+        let tags = carrier::words_tags(None, false, &[]);
+        let fitted = carrier::fit_words(&text, &tags).unwrap();
+        let out = carrier::Outgoing {
+            kind: 9,
+            content: fitted.clone(),
+            tags,
+        };
+        assert!(on_the_wire(&out) <= carrier::LIMIT);
+        if fitted != text {
+            assert!(fitted.contains("cut:"));
+        }
+    }
+}
+
+/// What is queued next for the direct chat, as it would be sent now: the item's key, version,
+/// first event and what it settles.
+type Next = (String, u64, Option<EventKey>, Vec<EventKey>);
+
+fn queued(talk: &Conversation) -> Option<Next> {
+    match talk.next_send(&direct().group)? {
+        (_, Sending::Item { key, item }) => Some((key, item.version, item.first, item.settles)),
+        (_, other) => panic!("{other:?}"),
+    }
+}
+
+// A send keeps its place until it has gone out, however often it fails: a later version of the
+// item waits behind it and, once it has gone, names its first event, never going out as if it
+// were new (S3). After a restart the queue is as it was, in order (S1).
+#[test]
+fn a_send_keeps_its_place_until_it_goes() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    // The approval's first version is queued and has not gone out.
+    the_item(&mut talk, |t| {
+        t.emitted(emitted(&chat, event("ap", State::Waiting, approval())))
+    });
+    // A request for an item not yet sent is refused as unknown; its notice queues behind.
+    let asked = request(direct(), "r1", OWNER, Some("e-not-yet"), Asked::Interrupt);
+    the_item(&mut talk, |t| t.asked(asked));
+    the_item(&mut talk, |t| {
+        t.emitted(emitted(&chat, event("ap", State::Declined, approval())))
+    });
+
+    let ap = "c-1/ap".to_string();
+    assert_eq!(queued(&talk), Some((ap.clone(), 1, None, Vec::new())));
+    let mut talk = conversation(talk.saved().clone());
+    assert_eq!(
+        queued(&talk),
+        Some((ap.clone(), 1, None, Vec::new())),
+        "kept"
+    );
+    assert!(talk.recover().is_empty(), "nothing open, nothing pending");
+    talk.sent(&ap, EventKey::from("e-ap"));
+    let (notice, version, _, settles) = queued(&talk).unwrap();
+    assert_eq!((version, settles), (1, vec![EventKey::from("r1")]));
+    talk.sent(&notice, EventKey::from("e-notice"));
+    assert_eq!(
+        queued(&talk),
+        Some((ap.clone(), 2, Some(EventKey::from("e-ap")), Vec::new())),
+        "the later version names the first"
+    );
+    talk.sent(&ap, EventKey::from("e-ap2"));
+    assert_eq!(queued(&talk), None);
+}
+
+// A version that settles a request is queued with it: after a restart before it went out, it is
+// sent as it was, and the request is not also settled as failed (S1).
+#[test]
+fn a_queued_version_settles_its_request_after_a_restart() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("ap", State::Waiting, approval()),
+        "e-ap",
+    );
+    let asked = request(
+        direct(),
+        "r1",
+        OWNER,
+        Some("e-ap"),
+        Asked::Choice {
+            choice: "allow".into(),
+        },
+    );
+    let Some(Act::Answer(answer)) = talk.asked(asked).into_iter().next() else {
+        panic!("no answer")
+    };
+    assert!(talk.requested(&answer.request, Ok(()), 0).is_empty());
+    let mut done = emitted(&chat, event("ap", State::Done, approval()));
+    done.settles = vec![answer.request.clone()];
+    the_item(&mut talk, |t| t.emitted(done));
+
+    let mut restarted = conversation(talk.saved().clone());
+    assert!(restarted.recover().is_empty(), "not settled again");
+    assert_eq!(
+        queued(&restarted),
+        Some((
+            "c-1/ap".into(),
+            2,
+            Some(EventKey::from("e-ap")),
+            vec![EventKey::from("r1")]
+        ))
+    );
+}
+
+/// A session item with `count` slash commands, each with a name, a hint and a description of
+/// these lengths.
+fn commands_item(count: usize, name: usize, hint: usize, description: usize) -> Item {
+    let session = body::Session {
+        harness_version: "1".into(),
+        settings: Vec::new(),
+        actions: Vec::new(),
+        commands: (0..count)
+            .map(|n| body::Command {
+                name: format!("c{n:05}{}", "n".repeat(name.saturating_sub(6))),
+                description: Some("d".repeat(description)),
+                hint: "h".repeat(hint),
+            })
+            .collect(),
+    };
+    Item {
+        event: event("s", State::Running, Body::Session(session)),
+        version: 2,
+        first: Some(EventKey::from("e-first")),
+        started_by: None,
+        settles: vec![EventKey::from("r1")],
+    }
+}
+
+/// How many `cut` and `left_out` tags an event carries.
+fn cut_tags(out: &carrier::Outgoing) -> usize {
+    (out.tags.iter())
+        .filter(|t| t[0] == "cut" || t[0] == "left_out")
+        .count()
+}
+
+// A session over the limit drops its commands' descriptions first, and keeps every command with
+// its name and hint (D-045): many short descriptions are dropped, never the commands (S7).
+#[test]
+fn a_session_keeps_every_command_name_and_hint() {
+    let item = commands_item(800, 12, 8, 40);
+    let out = carrier::item(&item).unwrap();
+    assert!(on_the_wire(&out) <= carrier::LIMIT, "{}", on_the_wire(&out));
+    let read = carrier::read_item(&out.content, &out.tags).unwrap();
+    let (Body::Session(sent), Body::Session(got)) = (item.event.body(), read.item.event.body())
+    else {
+        panic!("not a session")
+    };
+    assert_eq!(
+        got.commands.len(),
+        sent.commands.len(),
+        "no command dropped"
+    );
+    for (a, b) in sent.commands.iter().zip(&got.commands) {
+        assert_eq!((&a.name, &a.hint), (&b.name, &b.hint));
+    }
+    assert!(cut_tags(&out) <= 8, "{} cut tags", cut_tags(&out));
+}
+
+// A plan of thousands of steps fits, and what was cut is said in a few tags, not one a step (S7).
+#[test]
+fn a_plan_of_thousands_of_steps_fits_with_few_cut_tags() {
+    let plan = Body::Plan(body::Plan {
+        text: Some("the plan".into()),
+        entries: (0..4000)
+            .map(|n| body::PlanEntry {
+                text: format!("step {n} {}", "s".repeat(200)),
+                state: body::PlanEntryState::Pending,
+            })
+            .collect(),
+    });
+    let item = Item {
+        event: event("p", State::Running, plan),
+        version: 1,
+        first: None,
+        started_by: None,
+        settles: Vec::new(),
+    };
+    let started = std::time::Instant::now();
+    let out = carrier::item(&item).unwrap();
+    assert!(on_the_wire(&out) <= carrier::LIMIT, "{}", on_the_wire(&out));
+    assert!(cut_tags(&out) <= 8, "{} cut tags", cut_tags(&out));
+    assert!(started.elapsed().as_secs() < 5, "fitting took too long");
+    let read = carrier::read_item(&out.content, &out.tags).unwrap();
+    assert!(matches!(read.item.event.body(), Body::Plan(_)));
+}
+
+// When what is never cut is over the limit alone, as a session with thousands of long command
+// names, nothing over the limit is sent: a short stand-in goes instead, the same item at the same
+// version, naming its first event and settling what the version settled (S1, S3, S7).
+#[test]
+fn an_item_that_cannot_fit_is_sent_as_a_stand_in() {
+    let item = commands_item(3000, 40, 20, 0);
+    let out = carrier::item(&item).unwrap();
+    assert!(on_the_wire(&out) <= carrier::LIMIT, "{}", on_the_wire(&out));
+    let read = carrier::read_item(&out.content, &out.tags).unwrap();
+    assert!(
+        matches!(read.item.event.body(), Body::Notice(_)),
+        "a stand-in, not a session with commands missing"
+    );
+    let got = read.item.event.header();
+    assert_eq!((got.item.as_str(), got.state), ("s", State::Running));
+    assert_eq!(read.item.version, item.version);
+    assert_eq!(read.item.first, item.first);
+    assert_eq!(read.item.settles, item.settles);
+}
+
+/// `count` requests' events, as many as an event may settle.
+fn many_settles(count: usize) -> Vec<EventKey> {
+    (0..count)
+        .map(|n| EventKey::from(format!("{n:064x}").as_str()))
+        .collect()
+}
+
+// An item that settles very many requests is never sent over the limit, the stand-in included:
+// what is never cut, the settles among it, cannot make it over 64 KB (S7).
+#[test]
+fn an_item_that_settles_very_many_is_never_over_the_limit() {
+    let item = Item {
+        event: event("t", State::Done, turn()),
+        version: 2,
+        first: Some(EventKey::from("e-first")),
+        started_by: None,
+        settles: many_settles(3000),
+    };
+    if let Ok(out) = carrier::item(&item) {
+        assert!(on_the_wire(&out) <= carrier::LIMIT, "{}", on_the_wire(&out));
+    }
+    // As many as one version settles always fit, in a stand-in at worst.
+    let item = Item {
+        settles: many_settles(carrier::SETTLES_MAX),
+        ..commands_item(3000, 40, 20, 0)
+    };
+    let out = carrier::item(&item).expect("fits");
+    assert!(on_the_wire(&out) <= carrier::LIMIT, "{}", on_the_wire(&out));
+    assert_eq!(
+        carrier::read_item(&out.content, &out.tags)
+            .unwrap()
+            .item
+            .settles
+            .len(),
+        carrier::SETTLES_MAX
+    );
+}
+
+// The agent's words with very many settles are never handed back over the limit (S7).
+#[test]
+fn words_that_settle_very_many_are_never_over_the_limit() {
+    let tags = carrier::words_tags(None, false, &many_settles(3000));
+    if let Ok(fitted) = carrier::fit_words("hello", &tags) {
+        let out = carrier::Outgoing {
+            kind: 9,
+            content: fitted,
+            tags,
+        };
+        assert!(on_the_wire(&out) <= carrier::LIMIT, "{}", on_the_wire(&out));
+    }
+}
+
+// A session whose native message alone takes it over the limit loses only that: its commands
+// keep their descriptions, which drop only when the item is still too large without it (D-057).
+#[test]
+fn a_session_keeps_its_descriptions_when_leaving_out_the_native_message_is_enough() {
+    let mut item = commands_item(20, 12, 8, 40);
+    let native = marmot_agent_events::Native {
+        kind: "session".into(),
+        payload: serde_json::value::RawValue::from_string(format!(
+            "{{\"x\":\"{}\"}}",
+            "n".repeat(80_000)
+        ))
+        .unwrap(),
+    };
+    item.event = AgentEvent::new(
+        item.event.header().clone(),
+        item.event.body().clone(),
+        Some(native),
+    )
+    .unwrap();
+    let out = carrier::item(&item).unwrap();
+    let read = carrier::read_item(&out.content, &out.tags).unwrap();
+    assert!(read.left_out.native.is_some());
+    let Body::Session(got) = read.item.event.body() else {
+        panic!("not a session")
+    };
+    assert!(
+        got.commands.iter().all(|c| c.description.is_some()),
+        "descriptions kept"
+    );
+    assert!(
+        read.left_out.fields.is_empty(),
+        "{:?}",
+        read.left_out.fields
+    );
+}
+
+// A plan thinned in its middle still says, for the steps it kept, the full length of what was cut
+// of them: the steps after the gap moved up, and what was noted of them moves with them (S7).
+#[test]
+fn a_thinned_plan_counts_what_was_cut_of_every_step_it_kept() {
+    let plan = Body::Plan(body::Plan {
+        text: None,
+        entries: (0..4000)
+            .map(|n| body::PlanEntry {
+                text: format!("{n:05}{}", "s".repeat(295)),
+                state: body::PlanEntryState::Pending,
+            })
+            .collect(),
+    });
+    let item = Item {
+        event: event("p", State::Running, plan),
+        version: 1,
+        first: None,
+        started_by: None,
+        settles: Vec::new(),
+    };
+    let out = carrier::item(&item).unwrap();
+    let read = carrier::read_item(&out.content, &out.tags).unwrap();
+    let Body::Plan(got) = read.item.event.body() else {
+        panic!("not a plan")
+    };
+    let cut = (got.entries.iter())
+        .filter(|e| e.text.contains("… cut: 300 bytes in all …"))
+        .count();
+    assert!(cut > 0);
+    let said = (read.left_out.fields.iter())
+        .find(|(kind, _)| kind == "steps")
+        .map(|(_, total)| *total);
+    assert_eq!(said, Some(cut * 300));
+}
+
+// The output is cut first, before any other text, as D-057 orders: a long command stays whole
+// when cutting the output is enough.
+#[test]
+fn the_output_is_cut_before_other_text() {
+    let command = "c".repeat(50_000);
+    let tool = Body::Tool(body::Tool {
+        kind: body::ToolKind::Command,
+        name: "shell".into(),
+        command: Some(command.clone()),
+        cwd: None,
+        exit_code: Some(0),
+        duration_ms: None,
+        output: Some("o".repeat(30_000)),
+        changes: Vec::new(),
+        query: None,
+        path: None,
+        input: None,
+        error: None,
+    });
+    let item = Item {
+        event: event("cmd", State::Done, tool),
+        version: 1,
+        first: None,
+        started_by: None,
+        settles: Vec::new(),
+    };
+    let out = carrier::item(&item).unwrap();
+    assert!(on_the_wire(&out) <= carrier::LIMIT);
+    let read = carrier::read_item(&out.content, &out.tags).unwrap();
+    let Body::Tool(got) = read.item.event.body() else {
+        panic!("not a tool")
+    };
+    assert_eq!(got.command.as_ref(), Some(&command), "the command is whole");
+    assert_eq!(read.left_out.output, Some(30_000));
+}
+
+/// An interrupt of the turn whose first event is `e-t1`, from the owner as `event`, that the
+/// driver took.
+fn interrupt_taken(talk: &mut Conversation, event: &str) -> marmot_agent_driver::RequestId {
+    let interrupt = request(direct(), event, OWNER, Some("e-t1"), Asked::Interrupt);
+    let Some(Act::Control(control)) = talk.asked(interrupt).into_iter().next() else {
+        panic!("no control")
+    };
+    assert!(talk.requested(&control.request, Ok(()), 0).is_empty());
+    control.request
+}
+
+/// Every request a stop settles as failed.
+fn failed_at_the_end(talk: &mut Conversation) -> Vec<EventKey> {
+    let acts = talk.ended();
+    (items_of(talk, acts).into_iter())
+        .filter(|item| is_refused(item, "failed"))
+        .flat_map(|item| item.settles)
+        .collect()
+}
+
+// An event that settles more requests than one event can carry settles them over as many
+// versions as it takes, each the same, numbered on, and each fitting in 64 KB: none is lost and
+// none is sent over the limit (S1, S3, S7).
+#[test]
+fn an_event_that_settles_very_many_spreads_them_over_versions() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    let requests: Vec<_> = (0..450)
+        .map(|n| interrupt_taken(&mut talk, &format!("r{n}")))
+        .collect();
+    let mut done = emitted(&chat, event("t1", State::Done, turn()));
+    done.settles = requests.clone();
+    let acts = talk.emitted(done);
+    let items = items_of(&talk, acts);
+    let versions: Vec<u64> = items.iter().map(|i| i.version).collect();
+    assert_eq!(versions, vec![2, 3, 4]);
+    let mut settled = Vec::new();
+    for item in &items {
+        assert!(item.settles.len() <= carrier::SETTLES_MAX);
+        let out = carrier::item(item).expect("fits");
+        assert!(on_the_wire(&out) <= carrier::LIMIT);
+        settled.extend(item.settles.clone());
+    }
+    settled.sort();
+    settled.dedup();
+    assert_eq!(settled.len(), 450);
+    assert!(failed_at_the_end(&mut talk).is_empty());
+}
+
+// The agent's words carry at most what one event can; the turn's next versions settle the rest.
+#[test]
+fn words_that_settle_very_many_leave_the_rest_to_the_turn() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    let requests: Vec<_> = (0..450)
+        .map(|n| interrupt_taken(&mut talk, &format!("r{n}")))
+        .collect();
+    let mut said = emitted(&chat, words(State::Done));
+    said.settles = requests;
+    let acts = talk.emitted(said);
+    let mut settled = Vec::new();
+    for (_, what) in sends(&talk, acts) {
+        let settles = match what {
+            Sending::Words { settles, .. } => settles,
+            Sending::Item { item, .. } => item.settles,
+        };
+        assert!(settles.len() <= carrier::SETTLES_MAX);
+        settled.extend(settles);
+    }
+    settled.sort();
+    settled.dedup();
+    assert_eq!(settled.len(), 450);
+    assert!(failed_at_the_end(&mut talk).is_empty());
+}
+
+// Words that come again unchanged, and final, still settle what they name: the turn's next
+// version carries it, and it is not left to be settled as failed (S1, D-028).
+#[test]
+fn final_words_that_do_not_change_still_settle_what_they_name() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    the_words(&mut talk, |t| t.emitted(emitted(&chat, words(State::Done))));
+    talk.sent(&format!("{chat}/w1"), EventKey::from("e-w1"));
+    let request = interrupt_taken(&mut talk, "r1");
+    let mut again = emitted(&chat, words(State::Done));
+    again.settles = vec![request];
+    let acts = talk.emitted(again);
+    let items = items_of(&talk, acts);
+    assert_eq!(items.len(), 1, "the turn's next version");
+    assert_eq!(
+        (items[0].event.header().item.as_str(), &items[0].settles),
+        ("t1", &vec![EventKey::from("r1")])
+    );
+    assert!(failed_at_the_end(&mut talk).is_empty());
+}
+
+// When MDK refuses an edit of the agent's words, the turn's version queued to settle what the
+// edit showed settles nothing: those requests are settled as failed, as the edit failed (S1).
+#[test]
+fn a_refused_edit_leaves_its_turn_version_settling_nothing() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    the_words(&mut talk, |t| t.emitted(emitted(&chat, words(State::Done))));
+    talk.sent(&format!("{chat}/w1"), EventKey::from("e-w1"));
+    let request = interrupt_taken(&mut talk, "r2");
+    let mut changed = emitted(&chat, words(State::Done));
+    changed.event = AgentEvent::new(
+        Header {
+            text: "other words".into(),
+            ..changed.event.header().clone()
+        },
+        changed.event.body().clone(),
+        None,
+    )
+    .unwrap();
+    changed.settles = vec![request];
+    talk.emitted(changed);
+    let queued = talk.queued(&direct().group);
+    let edit = (queued.iter())
+        .find(|(_, what)| matches!(what, Sending::Words { edit: Some(_), .. }))
+        .map(|(token, _)| token.clone())
+        .expect("the edit is queued");
+    talk.refused(&edit, false);
+    let mut failed = Vec::new();
+    for (_, what) in talk.queued(&direct().group) {
+        let Sending::Item { item, .. } = what else {
+            panic!("the edit is gone")
+        };
+        if is_refused(&item, "failed") {
+            failed.extend(item.settles);
+        } else {
+            assert!(item.settles.is_empty(), "the turn shows nothing");
+        }
+    }
+    assert_eq!(failed, vec![EventKey::from("r2")]);
 }

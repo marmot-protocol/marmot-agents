@@ -19,7 +19,7 @@
 //! - a stopped driver, or a core that stopped, leaves no item open and no request unsettled
 //!   (D-058, D-070).
 
-use crate::carrier::{Asked, Item};
+use crate::carrier::{Asked, Item, SETTLES_MAX};
 use crate::keys::{EventKey, GroupKey, PubKey};
 use crate::rights::{Right, Rights, needed_for};
 use marmot_agent_driver::{
@@ -35,7 +35,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 pub const LATE_SECS: u64 = 5 * 60;
 /// How many handled events are remembered, so that one delivered twice acts once.
 const SEEN: usize = 4096;
-/// How many finished items are kept, beyond those still open and each chat's session item.
+/// How many finished items are kept, beyond those still open and each chat's session item; and
+/// how many forgotten ones the core still knows where they stood.
 const KEPT: usize = 2048;
 
 /// A chat as the Marmot side knows it.
@@ -113,19 +114,22 @@ pub enum Act {
     Answer(Answer),
     /// Hand a control to the driver, then call [`Conversation::requested`].
     Control(Control),
-    /// Send something to a group, then call [`Conversation::sent`] with the event's id. The
-    /// conversation counts on every send going out, since an item's later versions, and the
-    /// requests they settle, follow from it: the program tries a failed send again until it goes
-    /// out or the core stops.
+    /// Something to send to a group is queued. The program saves the conversation, so the send
+    /// is on disk with its version and what it settles before it goes (S1, S3), then sends what
+    /// [`Conversation::next_send`] gives for the group, in order, calling
+    /// [`Conversation::sent`] with each event's id. The conversation counts on every send going
+    /// out, since an item's later versions, and the requests they settle, follow from it: a send
+    /// that fails is tried again until it goes out, one MDK refuses is handed to
+    /// [`Conversation::refused`], and one still queued when the core stops is sent when it
+    /// starts again. What is sent lives only in the queue.
     Send {
         /// The group.
         group: GroupKey,
-        /// What to send.
-        what: Sending,
     },
 }
 
 /// What to send to a group.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub enum Sending {
     /// A version of an agent item.
     Item {
@@ -147,6 +151,9 @@ pub enum Sending {
         remark: bool,
         /// The message they replace, when the words changed after they were sent.
         edit: Option<EventKey>,
+        /// The answers and controls whose effect they show (D-028). Only a new message carries
+        /// them: an edit cannot carry tags.
+        settles: Vec<EventKey>,
     },
 }
 
@@ -180,8 +187,16 @@ pub struct Saved {
     items: BTreeMap<String, Record>,
     /// The order finished items were finished in, oldest first, so the oldest are forgotten.
     finished: VecDeque<String>,
+    /// Where the items forgotten most recently stood, oldest first, so one whose events come
+    /// again goes on from there instead of starting a new row.
+    #[serde(default)]
+    forgotten: VecDeque<Forgotten>,
     /// Requests handed to the driver and not settled, by the core's id for them.
     pending: BTreeMap<String, Pending>,
+    /// What is to be sent and has not been sent yet, oldest first: kept so a send that failed,
+    /// or that the core stopped before, goes out as it was when the core starts again (S1, S3).
+    #[serde(default)]
+    outbox: VecDeque<Queued>,
     /// The next number for an id the core makes up.
     next: u64,
 }
@@ -211,6 +226,45 @@ struct Record {
     /// For a turn: the message that started it, carried by every version.
     #[serde(default)]
     started_by: Option<EventKey>,
+    /// For the agent's words: the requests they settle, held until the words go out as a new
+    /// chat message, which carries them (D-028).
+    #[serde(default)]
+    held: Vec<String>,
+}
+
+/// Something queued to be sent to a group.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+struct Queued {
+    group: GroupKey,
+    /// The same for this send each time it is tried, across restarts: for an item, its key and
+    /// version. MDK takes no such token yet; when it gives sends that are safe across a crash,
+    /// this is what tells it a send tried again is the one it already made.
+    token: String,
+    what: Sending,
+    /// For a turn's version that settles what the agent's words showed: the send of those words,
+    /// so that if MDK refuses them, the version settles nothing (S1).
+    #[serde(default)]
+    shown_by: Option<String>,
+    /// Whether it was handed to MDK at least once: only then may it have gone out.
+    #[serde(default)]
+    attempted: bool,
+}
+
+impl Sending {
+    /// The core's name for the item.
+    fn key(&self) -> &str {
+        match self {
+            Self::Item { key, .. } | Self::Words { key, .. } => key,
+        }
+    }
+}
+
+/// Where a forgotten item stood: enough for its next version to follow on.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+struct Forgotten {
+    key: String,
+    first: Option<EventKey>,
+    version: u64,
 }
 
 impl Record {
@@ -239,6 +293,12 @@ struct Pending {
 
 /// How long a control the driver took may wait for its effect before the core settles it.
 pub const EFFECT_LIMIT_SECS: u64 = 120;
+
+/// What a send MDK refused is settled with.
+const NOT_DELIVERED: &str = "Something the agent sent could not be delivered to the chat.";
+
+/// What a request the driver took and that had no effect is settled with (D-087).
+const NO_EFFECT: &str = "The agent took this, but nothing has come of it.";
 
 /// The conversation: every rule about people, sessions and items.
 pub struct Conversation {
@@ -292,11 +352,14 @@ impl Conversation {
     /// The driver stopped: closes every item still open, and settles every request still open as
     /// failed (D-058, D-070).
     pub fn ended(&mut self) -> Vec<Act> {
-        let mut acts = self.close_open();
+        // Requests first, so an answer whose item closes now is settled as failed (D-070), not
+        // by the net for an item that stopped waiting.
+        let mut acts = Vec::new();
         let pending: Vec<String> = self.saved.pending.keys().cloned().collect();
         for request in pending {
             acts.extend(self.refuse(&request, Refusal::new(Reason::Failed)));
         }
+        acts.extend(self.close_open());
         acts
     }
 
@@ -378,13 +441,29 @@ impl Conversation {
             return Vec::new();
         }
         let chat = self.chat(&heard.chat);
+        if heard.target.is_none() && heard.age_secs > LATE_SECS {
+            return Vec::new();
+        }
+        // The right comes first: someone without it is told only that, and nothing of the item
+        // the request names, whether it exists, waits or was answered (S6).
+        let right = match &heard.asked {
+            Asked::Choice { .. } => Right::Approve,
+            Asked::Set { setting, .. } => self.right_to_set(&chat.id.0, setting),
+            _ => Right::Prompt,
+        };
+        if !self.rights.allows(&heard.author, right) {
+            let notice = self.notice(&heard.chat.group, &chat, "not_allowed", not_allowed(right));
+            return vec![self.send_notice(
+                &heard.chat.group,
+                notice,
+                None,
+                vec![heard.event.clone()],
+            )];
+        }
         let target = heard
             .target
             .as_ref()
             .and_then(|t| self.item_by_first(&heard.chat.group, t));
-        if heard.target.is_none() && heard.age_secs > LATE_SECS {
-            return Vec::new();
-        }
         if heard.target.is_some() && target.is_none() {
             return self.refuse_now(&heard, &chat, Refusal::new(Reason::UnknownItem));
         }
@@ -412,19 +491,10 @@ impl Conversation {
         let target = target.map(|record| record.last);
         let by = self.person(&heard.author, heard.author_name.clone());
         let request = RequestId(self.make_id("r"));
-        let (right, act) = match self.translate(&heard, &chat, target.as_ref(), &request, by) {
-            Ok(found) => found,
+        let act = match self.translate(&heard, &chat, target.as_ref(), &request, by) {
+            Ok(act) => act,
             Err(refusal) => return self.refuse_now(&heard, &chat, refusal),
         };
-        if !self.rights.allows(&heard.author, right) {
-            let notice = self.notice(&heard.chat.group, &chat, "not_allowed", not_allowed(right));
-            return vec![self.send_notice(
-                &heard.chat.group,
-                notice,
-                None,
-                vec![heard.event.clone()],
-            )];
-        }
         let new_session = matches!(heard.asked, Asked::NewSession);
         self.saved.pending.insert(
             request.0.clone(),
@@ -440,7 +510,7 @@ impl Conversation {
         vec![act]
     }
 
-    /// The right a request needs and the driver request it becomes, or why it cannot be one.
+    /// The driver request a request becomes, or why it cannot be one.
     fn translate(
         &self,
         heard: &HeardRequest,
@@ -448,7 +518,7 @@ impl Conversation {
         target: Option<&AgentEvent>,
         request: &RequestId,
         by: Person,
-    ) -> Result<(Right, Act), Refusal> {
+    ) -> Result<Act, Refusal> {
         let control = |action| {
             Act::Control(Control {
                 request: request.clone(),
@@ -472,7 +542,7 @@ impl Conversation {
                     by: by.clone(),
                     given: Given::Choice(choice.clone()),
                 };
-                (Right::Approve, Act::Answer(answer))
+                Act::Answer(answer)
             }
             Asked::Questions { questions } => {
                 let target = target.ok_or(Refusal::new(Reason::UnknownItem))?;
@@ -501,7 +571,7 @@ impl Conversation {
                     by: by.clone(),
                     given: Given::Questions(replies),
                 };
-                (Right::Prompt, Act::Answer(answer))
+                Act::Answer(answer)
             }
             Asked::Interrupt => {
                 let turn = match target {
@@ -509,7 +579,7 @@ impl Conversation {
                     None => self.open_turn(&chat.id.0),
                 };
                 let turn = turn.ok_or(Refusal::new(Reason::NothingToDo))?;
-                (Right::Prompt, control(Action::Interrupt { turn }))
+                control(Action::Interrupt { turn })
             }
             Asked::NewSession => {
                 let session = match target {
@@ -517,28 +587,22 @@ impl Conversation {
                     None => self.saved.sessions.get(&chat.id.0).cloned(),
                 };
                 let chat = chat.clone();
-                (Right::Prompt, control(Action::NewSession { chat, session }))
+                control(Action::NewSession { chat, session })
             }
             Asked::Set { setting, value } => {
                 let session = session_of(target)?;
-                (
-                    self.right_to_set(&chat.id.0, setting),
-                    control(Action::Set {
-                        session,
-                        setting: setting.clone(),
-                        value: value.clone(),
-                    }),
-                )
+                control(Action::Set {
+                    session,
+                    setting: setting.clone(),
+                    value: value.clone(),
+                })
             }
             Asked::Own { id } => {
                 let session = session_of(target)?;
-                (
-                    Right::Prompt,
-                    control(Action::Own {
-                        session,
-                        id: id.clone(),
-                    }),
-                )
+                control(Action::Own {
+                    session,
+                    id: id.clone(),
+                })
             }
         })
     }
@@ -581,11 +645,7 @@ impl Conversation {
             .find(|(_, p)| p.deadline.is_some_and(|deadline| now >= deadline))
             .map(|(request, _)| request.clone());
         match late {
-            Some(request) => self.settle_pending(
-                &request,
-                "no_effect",
-                "The agent took this, but nothing has come of it.".into(),
-            ),
+            Some(request) => self.settle_pending(&request, "no_effect", NO_EFFECT.into()),
             None => Vec::new(),
         }
     }
@@ -624,6 +684,13 @@ impl Conversation {
                 .and_then(|m| self.messages.get(&m.0).cloned()),
             _ => None,
         };
+        let (first, version) = match self.saved.forgotten.iter().position(|f| f.key == key) {
+            Some(at) if !self.saved.items.contains_key(&key) => {
+                let forgotten = self.saved.forgotten.remove(at).expect("found");
+                (forgotten.first, forgotten.version)
+            }
+            _ => (None, 0),
+        };
         let record = self
             .saved
             .items
@@ -631,57 +698,96 @@ impl Conversation {
             .or_insert_with(|| Record {
                 group: group.clone(),
                 chat: chat.clone(),
-                first: None,
-                version: 0,
+                first,
+                version,
                 last: emitted.event.clone(),
                 words: None,
                 started_by: None,
+                held: Vec::new(),
             });
+        let was_waiting = record.last.header().state == State::Waiting;
         record.last = emitted.event.clone();
         if record.started_by.is_none() {
             record.started_by = started_by;
         }
-        let act = if let Body::Message(message) = emitted.event.body() {
+        let open = record.open();
+        // What the turn's next version settles: what words sent as an edit name, since an edit
+        // cannot carry tags; what words that do not change name; and what is over the most one
+        // event carries.
+        let mut by_turn = Vec::new();
+        let mut words = None;
+        if let Body::Message(message) = emitted.event.body() {
+            for request in &emitted.settles {
+                let ours = (self.saved.pending.get(&request.0)).is_some_and(|p| p.group == group);
+                if ours && !record.held.contains(&request.0) {
+                    record.held.push(request.0.clone());
+                }
+            }
             let text = message_text(&header, message);
-            if text.is_empty() || record.words.as_deref() == Some(text.as_str()) {
-                None
-            } else {
+            if !text.is_empty() && record.words.as_deref() != Some(text.as_str()) {
                 record.words = Some(text.clone());
-                Some(Sending::Words {
+                // A new chat message carries what the words settle.
+                let mut held = std::mem::take(&mut record.held);
+                let first_words = record.first.is_none()
+                    && !(self.saved.outbox.iter()).any(|q| q.what.key() == key);
+                let settles = if first_words {
+                    by_turn = held.split_off(held.len().min(SETTLES_MAX));
+                    take_pending(&mut self.saved.pending, &group, &held)
+                } else {
+                    by_turn = held;
+                    Vec::new()
+                };
+                words = Some(Sending::Words {
                     key: key.clone(),
                     text,
                     turn: header.turn.clone(),
                     remark: message.phase == Some(marmot_agent_events::body::Phase::Commentary),
                     edit: record.first.clone(),
-                })
+                    settles,
+                });
+            } else if !open {
+                // The words are final and go out no more: what they name is not lost.
+                by_turn = std::mem::take(&mut record.held);
+            }
+        }
+        let mut acts: Vec<Act> = Vec::new();
+        if let Some(words) = words {
+            acts.push(self.queue(&group, words, None));
+        }
+        if matches!(emitted.event.body(), Body::Message(_)) {
+            if !by_turn.is_empty() {
+                // Shown by words still to go out: if MDK refuses them, the turn shows nothing.
+                let words = (self.saved.outbox.iter().rev())
+                    .find(|q| q.what.key() == key && matches!(q.what, Sending::Words { .. }))
+                    .map(|q| q.token.clone());
+                let turn = header.turn.as_ref();
+                acts.extend(self.settle_by_turn(&key, &chat, &group, turn, by_turn, words));
             }
         } else {
-            let pending = &mut self.saved.pending;
-            let settles = emitted
-                .settles
-                .iter()
-                .filter_map(|r| pending.remove(&r.0))
-                .map(|p| p.event)
+            let requests: Vec<String> = emitted.settles.iter().map(|r| r.0.clone()).collect();
+            let settles = take_pending(&mut self.saved.pending, &group, &requests);
+            acts.extend(self.queue_versions(&key, &group, emitted.event.clone(), settles, None));
+        }
+        // An answer the driver took whose item stopped waiting without naming it had no effect,
+        // and is settled now rather than when the driver stops (D-087).
+        if was_waiting && header.state != State::Waiting {
+            let unsettled: Vec<String> = (self.saved.pending.iter())
+                .filter(|(_, p)| p.answers.as_deref() == Some(key.as_str()))
+                .map(|(request, _)| request.clone())
                 .collect();
-            record.version += 1;
-            Some(Sending::Item {
-                key: key.clone(),
-                item: Box::new(Item {
-                    event: emitted.event.clone(),
-                    version: record.version,
-                    first: record.first.clone(),
-                    started_by: record.started_by.clone(),
-                    settles,
-                }),
-            })
-        };
-        let open = record.open();
-        if !open {
+            for request in unsettled {
+                acts.extend(self.settle_pending(&request, "no_effect", NO_EFFECT.into()));
+            }
+        }
+        if open {
+            // Open again: it is not finished, and is not forgotten while it is open.
+            if let Some(at) = self.saved.finished.iter().position(|k| *k == key) {
+                self.saved.finished.remove(at);
+            }
+        } else {
             self.finished(key);
         }
-        act.map(|what| Act::Send { group, what })
-            .into_iter()
-            .collect()
+        acts
     }
 
     /// Where a file the agent asks to send goes (D-090): the chat's group, and the chat's running
@@ -710,13 +816,240 @@ impl Conversation {
         vec![self.send_notice(&group, notice, None, Vec::new())]
     }
 
-    /// Something was sent, and `event` is its id. The first event of an item is what its later
-    /// versions name.
+    /// Settles `requests` that the agent's words named and could not carry: by the next version of
+    /// the words' turn, the same as the last and carrying what it settles, queued after the words.
+    /// `shown_by` is the send of the words that show the effect, when it is still queued: if MDK
+    /// refuses it, the turn's version settles nothing, and the requests are settled as failed.
+    /// When the core has no such turn, they are held for the words' next new message, or for the
+    /// net when the driver stops.
+    fn settle_by_turn(
+        &mut self,
+        words: &str,
+        chat: &str,
+        group: &GroupKey,
+        turn: Option<&TurnId>,
+        requests: Vec<String>,
+        shown_by: Option<String>,
+    ) -> Vec<Act> {
+        let found = turn.and_then(|turn| {
+            (self.saved.items.iter())
+                .find(|(_, r)| {
+                    r.chat == chat
+                        && matches!(r.last.body(), Body::Turn(_))
+                        && r.last.header().turn.as_ref() == Some(turn)
+                })
+                .map(|(key, _)| key.clone())
+        });
+        let Some(key) = found else {
+            if let Some(record) = self.saved.items.get_mut(words) {
+                record.held.extend(requests);
+            }
+            return Vec::new();
+        };
+        let settles = take_pending(&mut self.saved.pending, group, &requests);
+        if settles.is_empty() {
+            return Vec::new();
+        }
+        let last = self.saved.items[&key].last.clone();
+        self.queue_versions(&key, group, last, settles, shown_by)
+    }
+
+    /// Queues the next version of the item named `key`, with `event`, settling `settles`: as
+    /// many versions, each the same, as it takes to carry them, at most [`SETTLES_MAX`] each, so
+    /// every one fits (S7). `shown_by` is the send that shows their effect, if it is not this one.
+    fn queue_versions(
+        &mut self,
+        key: &str,
+        group: &GroupKey,
+        event: AgentEvent,
+        settles: Vec<EventKey>,
+        shown_by: Option<String>,
+    ) -> Vec<Act> {
+        let mut chunks: Vec<Vec<EventKey>> =
+            settles.chunks(SETTLES_MAX).map(<[_]>::to_vec).collect();
+        if chunks.is_empty() {
+            chunks.push(Vec::new());
+        }
+        let mut acts = Vec::new();
+        for settles in chunks {
+            let record = self
+                .saved
+                .items
+                .get_mut(key)
+                .expect("an item the core knows");
+            record.version += 1;
+            let what = Sending::Item {
+                key: key.to_string(),
+                item: Box::new(Item {
+                    event: event.clone(),
+                    version: record.version,
+                    first: record.first.clone(),
+                    started_by: record.started_by.clone(),
+                    settles,
+                }),
+            };
+            acts.push(self.queue(group, what, shown_by.clone()));
+        }
+        acts
+    }
+
+    /// MDK refused the send named `token`, and will refuse it again. When it was an edit of words
+    /// whose message is gone (`gone`), the words go as a new message instead. Anything else is
+    /// dropped, and the chat is told in a `failed` notice that settles, as failed, what it
+    /// settled, and what a turn's version queued to settle for it would have (S1). A notice MDK
+    /// refuses is dropped and not answered by another, so nothing loops. The notices are queued
+    /// for the same group.
+    pub fn refused(&mut self, token: &str, gone: bool) {
+        let Some(at) = self.saved.outbox.iter().position(|q| q.token == token) else {
+            return;
+        };
+        let key = self.saved.outbox[at].what.key().to_string();
+        if gone && matches!(self.saved.outbox[at].what, Sending::Words { .. }) {
+            if let Some(record) = self.saved.items.get_mut(&key) {
+                record.first = None;
+            }
+            if let Sending::Words { edit, .. } = &mut self.saved.outbox[at].what {
+                *edit = None;
+            }
+            return;
+        }
+        let queued = self.saved.outbox.remove(at).expect("found");
+        self.forget_old();
+        if key.starts_with("notice/") {
+            return;
+        }
+        let mut settles = match queued.what {
+            Sending::Item { item, .. } => item.settles,
+            Sending::Words { settles, .. } => settles,
+        };
+        // A turn's version that was to settle what these words showed shows nothing now.
+        for later in &mut self.saved.outbox {
+            if later.shown_by.as_deref() == Some(token)
+                && let Sending::Item { item, .. } = &mut later.what
+            {
+                settles.append(&mut item.settles);
+            }
+        }
+        let chat = (self.saved.items.get(&key).map(|r| r.chat.clone()))
+            .or_else(|| self.saved.chats.get(&queued.group).cloned())
+            .unwrap_or_default();
+        let chat = Chat {
+            id: ChatId(chat),
+            group: true,
+            name: None,
+        };
+        let mut chunks: Vec<Vec<EventKey>> =
+            settles.chunks(SETTLES_MAX).map(<[_]>::to_vec).collect();
+        if chunks.is_empty() {
+            chunks.push(Vec::new());
+        }
+        for settles in chunks {
+            let notice = self.notice(&queued.group, &chat, "failed", NOT_DELIVERED.into());
+            self.send_notice(&queued.group, notice, None, settles);
+        }
+    }
+
+    /// The send named `token` is about to be handed to MDK. Whether that is new, and so to be
+    /// saved before it is: a send never handed to MDK cannot have gone out, and is not looked for.
+    pub fn attempting(&mut self, token: &str) -> bool {
+        match self.saved.outbox.iter_mut().find(|q| q.token == token) {
+            Some(queued) if !queued.attempted => {
+                queued.attempted = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The tokens of every send still queued that was handed to MDK: after a restart, any of
+    /// them may have gone out just before the core stopped.
+    pub fn attempted_tokens(&self) -> Vec<String> {
+        (self.saved.outbox.iter())
+            .filter(|q| q.attempted)
+            .map(|q| q.token.clone())
+            .collect()
+    }
+
+    /// Whether `event` is already known as the first event of an item or of the agent's words.
+    pub fn is_first(&self, event: &EventKey) -> bool {
+        (self.saved.items.values()).any(|r| r.first.as_ref() == Some(event))
+            || (self.saved.forgotten.iter()).any(|f| f.first.as_ref() == Some(event))
+    }
+
+    /// Everything queued for `group`, oldest first, each with its token, as
+    /// [`Conversation::next_send`] gives it.
+    pub fn queued(&self, group: &GroupKey) -> Vec<(String, Sending)> {
+        (self.saved.outbox.iter())
+            .filter(|q| q.group == *group)
+            .map(|q| self.as_sent(q))
+            .collect()
+    }
+
+    /// The next thing to send to `group`, and the token that names this send each time it is
+    /// tried. An item's first event is filled in now, from the version before it that went out,
+    /// so a later version always names it, and the agent's words become an edit once their first
+    /// message has gone. `None` when nothing is queued for the group.
+    pub fn next_send(&self, group: &GroupKey) -> Option<(String, Sending)> {
+        let queued = self.saved.outbox.iter().find(|q| q.group == *group)?;
+        Some(self.as_sent(queued))
+    }
+
+    fn as_sent(&self, queued: &Queued) -> (String, Sending) {
+        let mut what = queued.what.clone();
+        if let Some(first) = (self.saved.items.get(what.key())).and_then(|r| r.first.clone()) {
+            match &mut what {
+                Sending::Item { item, .. } => item.first = Some(first),
+                Sending::Words { edit, settles, .. } => {
+                    *edit = Some(first);
+                    // Never: words carry what they settle only when they are the first message.
+                    settles.clear();
+                }
+            }
+        }
+        (queued.token.clone(), what)
+    }
+
+    /// The groups something is queued for, in the order of their oldest send.
+    pub fn queued_groups(&self) -> Vec<GroupKey> {
+        let mut groups: Vec<GroupKey> = Vec::new();
+        for queued in &self.saved.outbox {
+            if !groups.contains(&queued.group) {
+                groups.push(queued.group.clone());
+            }
+        }
+        groups
+    }
+
+    /// The oldest send queued for the item named `key` went out, and `event` is its id. The first
+    /// event of an item is what its later versions name.
     pub fn sent(&mut self, key: &str, event: EventKey) {
+        if let Some(at) = self.saved.outbox.iter().position(|q| q.what.key() == key) {
+            self.saved.outbox.remove(at);
+        }
         if let Some(record) = self.saved.items.get_mut(key)
             && record.first.is_none()
         {
             record.first = Some(event);
+        }
+        self.forget_old();
+    }
+
+    /// Queues something to send, and says so. `shown_by` names the send that shows the effect of
+    /// what it settles, when that is another.
+    fn queue(&mut self, group: &GroupKey, what: Sending, shown_by: Option<String>) -> Act {
+        let token = match &what {
+            Sending::Item { key, item } => format!("{key}@{}", item.version),
+            Sending::Words { key, .. } => format!("{key}@{}", self.make_id("w")),
+        };
+        self.saved.outbox.push_back(Queued {
+            group: group.clone(),
+            token,
+            what,
+            shown_by,
+            attempted: false,
+        });
+        Act::Send {
+            group: group.clone(),
         }
     }
 
@@ -837,15 +1170,51 @@ impl Conversation {
         {
             record.last = crate::carrier::rebuild(&record.last, record.last.body().clone());
         }
-        if self.saved.finished.contains(&key) {
+        if !self.saved.finished.contains(&key) {
+            self.saved.finished.push_back(key);
+        }
+        self.forget_old();
+    }
+
+    /// Forgets the oldest finished items over [`KEPT`] that may be forgotten: when an item
+    /// finishes, and when a send goes, since a version waiting to be sent keeps its item.
+    fn forget_old(&mut self) {
+        if self.saved.finished.len() <= KEPT {
             return;
         }
-        self.saved.finished.push_back(key);
+        let queued: HashSet<String> = (self.saved.outbox.iter())
+            .map(|q| q.what.key().to_string())
+            .collect();
         while self.saved.finished.len() > KEPT {
-            if let Some(old) = self.saved.finished.pop_front() {
-                self.saved.items.remove(&old);
+            let at = (self.saved.finished.iter()).position(|k| self.may_forget(k, &queued));
+            let Some(at) = at else {
+                break;
+            };
+            let old = self.saved.finished.remove(at).expect("found");
+            if let Some(record) = self.saved.items.remove(&old) {
+                self.saved.forgotten.push_back(Forgotten {
+                    key: old,
+                    first: record.first,
+                    version: record.version,
+                });
+            }
+            while self.saved.forgotten.len() > KEPT {
+                self.saved.forgotten.pop_front();
             }
         }
+    }
+
+    /// Whether a finished item may be forgotten: not when it is open, nor when it is its chat's
+    /// session, which a stop closes and the next prompt resumes (D-065, D-070), nor while a
+    /// version of it waits to be sent (it is among `queued`).
+    fn may_forget(&self, key: &str, queued: &HashSet<String>) -> bool {
+        let Some(record) = self.saved.items.get(key) else {
+            return true;
+        };
+        let session = matches!(record.last.body(), Body::Session(_))
+            && record.last.header().session.is_some()
+            && self.saved.sessions.get(&record.chat) == record.last.header().session.as_ref();
+        !record.open() && !session && !queued.contains(key)
     }
 
     /// Closes every open item as interrupted.
@@ -930,20 +1299,36 @@ impl Conversation {
         about: Option<EventKey>,
         settles: Vec<EventKey>,
     ) -> Act {
-        Act::Send {
-            group: group.clone(),
-            what: Sending::Item {
-                key: format!("notice/{}", event.header().item.as_str()),
-                item: Box::new(Item {
-                    event,
-                    version: 1,
-                    first: None,
-                    started_by: about,
-                    settles,
-                }),
-            },
+        let what = Sending::Item {
+            key: format!("notice/{}", event.header().item.as_str()),
+            item: Box::new(Item {
+                event,
+                version: 1,
+                first: None,
+                started_by: about,
+                settles,
+            }),
+        };
+        self.queue(group, what, None)
+    }
+}
+
+/// Removes from `pending` each of `requests` that belongs to `group`, and gives their events: what
+/// an event in that group settles. A request from another chat is left as it is (S1, S5).
+fn take_pending(
+    pending: &mut BTreeMap<String, Pending>,
+    group: &GroupKey,
+    requests: &[String],
+) -> Vec<EventKey> {
+    let mut events = Vec::new();
+    for request in requests {
+        if pending.get(request).is_some_and(|p| p.group == *group)
+            && let Some(taken) = pending.remove(request)
+        {
+            events.push(taken.event);
         }
     }
+    events
 }
 
 /// The text of the agent's words: the plain rendering, which for a message is what it said.

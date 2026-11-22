@@ -136,3 +136,71 @@ async fn a_named_group_of_two_is_a_group_and_a_restart_repeats_nothing() {
     core.stop().await;
     world.runtime.shutdown().await;
 }
+
+// A long chat is not throttled by the test relay: MDK's mock relay takes 60 events a minute from
+// each connection by default, and a scenario that sends more must not stall on it, as MDK's own
+// harness relay does not.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_long_chat_is_not_throttled_by_the_test_relay() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let prompts = Arc::new(AtomicUsize::new(0));
+    world.runtime.start().await.unwrap();
+    let core = world.start(Echo::new(prompts.clone()));
+    let group = world
+        .runtime
+        .start_direct_conversation(&world.person, &world.agent)
+        .await
+        .unwrap();
+    let group_hex = world.joined(&group).await;
+    // Each prompt makes three events: the turn, the words, and the turn again, 150 in all. On the
+    // throttled relay this took about three minutes; without the limit, a few seconds.
+    let chat = async {
+        for n in 0..50 {
+            let text = format!("n{n}");
+            world
+                .runtime
+                .send_message(&world.person, &group, text.into_bytes())
+                .await
+                .unwrap();
+            world.words(&group_hex, &format!("echo: n{n}")).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(60), chat)
+        .await
+        .expect("throttled: the chat took over a minute");
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
+// The agent's words that went out are found in what MDK stored by all they carry, so a send whose
+// outcome was not known is not sent twice; words that differ only in what they settle, or in
+// their phase, are not taken for them (S3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_agents_words_are_found_by_all_they_carry() {
+    use marmot_agent::{EventKey, GroupKey, Sending};
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let core = world.start(Echo::new(Arc::new(AtomicUsize::new(0))));
+    let group = world
+        .runtime
+        .start_direct_conversation(&world.person, &world.agent)
+        .await
+        .unwrap();
+    let group = GroupKey(world.joined(&group).await);
+    core.stop().await;
+    let words = |remark: bool, settles: &[&str]| Sending::Words {
+        key: "w".into(),
+        text: "the words".into(),
+        turn: Some("t1".into()),
+        remark,
+        edit: None,
+        settles: settles.iter().map(|s| EventKey::from(*s)).collect(),
+    };
+    let sent = words(true, &["e-r1", "e-r2"]);
+    let went = world.marmot.send(&group, &sent, "w@1").await.unwrap();
+    let found = |what: &Sending| world.marmot.find_sent(&group, what, |_| false).unwrap();
+    assert_eq!(found(&sent), Some(went));
+    assert_eq!(found(&words(true, &["e-r1"])), None);
+    assert_eq!(found(&words(false, &["e-r1", "e-r2"])), None);
+    world.runtime.shutdown().await;
+}
