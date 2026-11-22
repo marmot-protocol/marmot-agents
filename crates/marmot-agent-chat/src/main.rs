@@ -2,8 +2,9 @@
 //!
 //! It holds one person's account, talks to the agent in a Marmot group, shows each of the agent's
 //! items as it changes, and sends answers and controls. How it shows an item is a plain reference
-//! for the apps. It reads an item's first version, kind 1201, and its later ones, MDK's edits of it,
-//! and sends answers and controls as kind 1202 (D-076). How to try the core with it is in
+//! for the apps. When an item's first version, kind 1201, or a later one, MDK's edit of it, arrives,
+//! it shows the item as MDK keeps it, one row at its first event with its latest version; and it
+//! sends answers and controls as kind 1202 (D-076). How to try the core with it is in
 //! `docs/try.md`.
 //!
 //! Typed lines are messages, sent exactly as typed, slash commands included (D-031). Lines that
@@ -24,7 +25,7 @@
 
 use cgka_traits::{GroupId, TransportEndpoint};
 use marmot_account::AccountHome;
-use marmot_agent::carrier::{self, Asked, AskedReply, Read};
+use marmot_agent::carrier::{self, Asked, AskedReply, EDIT_KIND, ITEM_KIND, Read};
 use marmot_agent::{EventKey, PubKey};
 use marmot_agent_events::State;
 use marmot_agent_events::body::{Body, Choice, Effect};
@@ -43,10 +44,25 @@ struct Client {
     me: String,
     /// The chat being talked in, and the agent in it.
     chat: Option<(GroupId, PubKey)>,
-    /// Each item's latest version, by its first event, with where it came from and when.
-    items: HashMap<EventKey, Seen>,
+    /// Each item's latest version, as the chat shows it.
+    items: Items,
+}
+
+/// Each item's latest version, by its first event, with where it came from and when.
+#[derive(Default)]
+struct Items {
+    known: HashMap<EventKey, Seen>,
     /// How many item versions have arrived, to tell the latest.
     arrived: u64,
+}
+
+/// An item as MDK keeps it: one row at its first event, holding the latest version its sender
+/// made, an edit that came before its first event held until it does
+/// (`TimelineMessageRecord::agent_item`).
+struct Row {
+    sender: String,
+    plaintext: String,
+    tags: Vec<Vec<String>>,
 }
 
 /// An item's latest version, and where and when it arrived.
@@ -126,8 +142,7 @@ async fn run(home: &str, options: &[String]) -> Result<(), String> {
         runtime: runtime.clone(),
         me,
         chat: None,
-        items: HashMap::new(),
-        arrived: 0,
+        items: Items::default(),
     };
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     loop {
@@ -276,8 +291,7 @@ impl Client {
     fn waiting(&self, kind: impl Fn(&Body) -> bool) -> Option<(&EventKey, &Seen)> {
         let (group, agent) = self.chat.as_ref()?;
         let group = hex::encode(group.as_slice());
-        self.items
-            .iter()
+        (self.items.known.iter())
             .filter(|(_, s)| s.group == group && s.sender == agent.as_str())
             .filter(|(_, s)| s.read.item.event.header().state == State::Waiting)
             .filter(|(_, s)| kind(s.read.item.event.body()))
@@ -308,31 +322,65 @@ impl Client {
             println!("{name}: {}", clean(&message.plaintext));
             return;
         }
-        let Some(read) = carrier::read_item(message.kind, &message.plaintext, &message.tags) else {
-            return;
+        let group = hex::encode(message.group_id.as_slice());
+        let row = |first: &str| {
+            let row = self
+                .runtime
+                .timeline_message(&self.me, &group, first)
+                .ok()??;
+            (row.kind == ITEM_KIND && row.agent_item.is_some()).then_some(Row {
+                sender: row.sender,
+                plaintext: row.plaintext,
+                tags: row.tags,
+            })
         };
-        let first = read
-            .item
-            .first
-            .clone()
-            .unwrap_or_else(|| EventKey(message.message_id_hex.clone()));
-        // The highest version wins, and only the sender of an item may change it, as MDK has it.
-        if self.items.get(&first).is_some_and(|known| {
-            known.sender != message.sender || known.read.item.version >= read.item.version
-        }) {
-            return;
-        }
-        for line in lines_for(&read) {
+        for line in self.items.arrived(&message, row) {
             println!("{line}");
         }
+    }
+}
+
+impl Items {
+    /// Takes in an item event that arrived, its first version or a later one, and gives the lines
+    /// to show for it: none when it changes nothing the chat shows. `row` gives the item as MDK
+    /// keeps it, by its first event.
+    fn arrived(
+        &mut self,
+        message: &marmot_app::ReceivedMessage,
+        row: impl FnOnce(&str) -> Option<Row>,
+    ) -> Vec<String> {
+        // Only to know which item changed: what it now is comes from MDK's row of it, which
+        // takes a version only from the item's sender and holds an edit until its first event.
+        let first = match message.kind {
+            ITEM_KIND => message.message_id_hex.clone(),
+            EDIT_KIND => match carrier::edit_target(&message.tags) {
+                Some(first) => first.to_string(),
+                None => return Vec::new(),
+            },
+            _ => return Vec::new(),
+        };
+        let Some(row) = row(&first) else {
+            return Vec::new();
+        };
+        let Some(read) = carrier::read_item(ITEM_KIND, &row.plaintext, &row.tags) else {
+            return Vec::new();
+        };
+        let first = EventKey(first);
+        if (self.known.get(&first))
+            .is_some_and(|known| known.read.item.version >= read.item.version)
+        {
+            return Vec::new();
+        }
+        let lines = lines_for(&read);
         self.arrived += 1;
         let seen = Seen {
             read,
             group: hex::encode(message.group_id.as_slice()),
-            sender: message.sender,
+            sender: row.sender,
             order: self.arrived,
         };
-        self.items.insert(first, seen);
+        self.known.insert(first, seen);
+        lines
     }
 }
 
@@ -404,4 +452,108 @@ fn lines_for(read: &Read) -> Vec<String> {
         _ => {}
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use marmot_agent::carrier::Item;
+    use marmot_agent_events::body::{StartedBy, Turn};
+    use marmot_agent_events::{AgentEvent, Header};
+
+    const AGENT: &str = "aa";
+    const STRANGER: &str = "bb";
+
+    /// Version `version` of one item, as an event of its sender: its first, or an edit of
+    /// `first`.
+    fn version(id: &str, sender: &str, version: u64, first: Option<&str>) -> ReceivedVersion {
+        let header = Header {
+            harness: "stub".into(),
+            session: None,
+            turn: None,
+            item: "t".into(),
+            seq: 1,
+            state: State::Running,
+            title: format!("v{version}"),
+            text: format!("version {version}"),
+        };
+        let body = Body::Turn(Turn {
+            started_by: StartedBy::User,
+            duration_ms: None,
+            usage: None,
+        });
+        let item = Item {
+            event: AgentEvent::new(header, body, None).unwrap(),
+            version,
+            first: first.map(EventKey::from),
+            started_by: None,
+            settles: Vec::new(),
+        };
+        let out = carrier::item(&item).unwrap();
+        ReceivedVersion(marmot_app::ReceivedMessage {
+            authority: None,
+            message_id_hex: id.into(),
+            source_message_id_hex: id.into(),
+            sender: sender.into(),
+            sender_display_name: None,
+            group_id: GroupId::new(vec![1; 16]),
+            source_epoch: 1,
+            retention: None,
+            plaintext: out.content.clone(),
+            kind: out.kind,
+            tags: out.tags.clone(),
+            recorded_at: 1,
+            received_at: 1,
+        })
+    }
+
+    struct ReceivedVersion(marmot_app::ReceivedMessage);
+
+    impl ReceivedVersion {
+        /// The row MDK would keep for the item, if this were its latest version from its
+        /// sender.
+        fn row(&self) -> Row {
+            Row {
+                sender: self.0.sender.clone(),
+                plaintext: self.0.plaintext.clone(),
+                tags: (self.0.tags.iter())
+                    .filter(|t| t[0] != "e")
+                    .cloned()
+                    .collect(),
+            }
+        }
+    }
+
+    fn shown(items: &Items) -> Vec<(String, u64)> {
+        (items.known.values())
+            .map(|s| (s.sender.clone(), s.read.item.version))
+            .collect()
+    }
+
+    // An edit that comes before its first event shows nothing until the first event comes, and
+    // then the item as MDK has it, with the edit's version.
+    #[test]
+    fn an_edit_before_its_first_event_is_held() {
+        let mut items = Items::default();
+        let edit = version("e2", AGENT, 2, Some("e1"));
+        assert!(items.arrived(&edit.0, |_| None).is_empty(), "nothing yet");
+        assert!(shown(&items).is_empty());
+        let first = version("e1", AGENT, 1, None);
+        let lines = items.arrived(&first.0, |id| (id == "e1").then(|| edit.row()));
+        assert_eq!(lines.len(), 1);
+        assert_eq!(shown(&items), [(AGENT.to_string(), 2)]);
+    }
+
+    // An edit from anyone but the item's sender changes nothing, even when it comes first.
+    #[test]
+    fn an_edit_from_another_sender_changes_nothing() {
+        let mut items = Items::default();
+        let first = version("e1", AGENT, 1, None);
+        let forged = version("e9", STRANGER, 5, Some("e1"));
+        assert!(items.arrived(&forged.0, |_| None).is_empty(), "nothing yet");
+        items.arrived(&first.0, |_| Some(first.row()));
+        assert_eq!(shown(&items), [(AGENT.to_string(), 1)]);
+        assert!(items.arrived(&forged.0, |_| Some(first.row())).is_empty());
+        assert_eq!(shown(&items), [(AGENT.to_string(), 1)]);
+    }
 }

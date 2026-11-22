@@ -668,6 +668,14 @@ fn write_item(item: &Item, left_out: &LeftOut) -> Outgoing {
     }
 }
 
+/// The event an edit names, its one `e` tag: for a later version of an item, the item's first
+/// event. `None` without exactly one.
+pub fn edit_target(tags: &[Vec<String>]) -> Option<&str> {
+    let mut targets = values(tags, "e");
+    let target = targets.next()?;
+    targets.next().is_none().then_some(target)
+}
+
 /// Reads an item back from an event: its first version, of kind [`ITEM_KIND`], or a later one,
 /// an edit of kind [`EDIT_KIND`] whose one `e` tag names the first. `None` when it is neither, as
 /// an edit of the agent's words is not. Who sent an edit is the reader's to check: only the
@@ -676,7 +684,7 @@ pub fn read_item(kind: u64, content: &str, tags: &[Vec<String>]) -> Option<Read>
     let one = |name: &str| value(tags, name);
     let first = match kind {
         ITEM_KIND => None,
-        EDIT_KIND => Some(one("e")?),
+        EDIT_KIND => Some(edit_target(tags)?),
         _ => return None,
     };
     if values(tags, "e").count() != usize::from(first.is_some()) {

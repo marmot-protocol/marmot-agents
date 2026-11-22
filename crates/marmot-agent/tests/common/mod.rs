@@ -320,13 +320,23 @@ impl World {
     }
 
     /// Every version of every agent item in a group, read back, oldest first, each with the id
-    /// of its own event.
+    /// of its own event. A later version counts, as MDK has it, only once its first event is
+    /// there, from the same sender.
     pub fn items(&self, group_hex: &str) -> Vec<(EventKey, carrier::Read)> {
-        self.sent_by_agent(group_hex, ITEM_KIND)
-            .into_iter()
+        let rows = self.sent_by_agent(group_hex, ITEM_KIND);
+        let firsts: std::collections::HashMap<&str, &str> = (rows.iter())
+            .filter(|m| m.kind == ITEM_KIND)
+            .map(|m| (m.message_id_hex.as_str(), m.sender.as_str()))
+            .collect();
+        (rows.iter())
             .filter_map(|m| {
                 let read = carrier::read_item(m.kind, &m.plaintext, &m.tags)?;
-                Some((EventKey(m.message_id_hex), read))
+                if let Some(first) = &read.item.first
+                    && firsts.get(first.as_str()) != Some(&m.sender.as_str())
+                {
+                    return None;
+                }
+                Some((EventKey(m.message_id_hex.clone()), read))
             })
             .collect()
     }
