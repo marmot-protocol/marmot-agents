@@ -31,7 +31,7 @@ use crate::marmot::{FileFailed, Incoming, Live, Marmot, Message, NotNow, SendFai
 use crate::socket::SocketDriver;
 use marmot_agent_driver::{Driver, Output, Reason, Refusal, SendFile};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -45,6 +45,12 @@ use tokio::time::Instant;
 
 /// The longest a group's sends wait before the next try, after failing again and again.
 const SEND_WAIT_MAX: Duration = Duration::from_secs(10);
+
+/// The longest a group waits before it asks again after a send MDK has queued.
+const QUEUED_WAIT_MAX: Duration = Duration::from_millis(500);
+
+/// How long a stop waits, in all, for MDK to take into its engine the sends it has queued.
+const STOP_WAIT: Duration = Duration::from_secs(60);
 
 /// How many tries of one send MDK may take and drop before it went out, before the core gives
 /// it up as refused. Each such try sent nothing, so the next is made under a new token.
@@ -231,6 +237,8 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     started: Instant,
     /// For each group whose last send failed: when to try again, and how long it waited last.
     retry: HashMap<GroupKey, (Instant, Duration)>,
+    /// The groups whose next send MDK has queued, not yet taken into its engine.
+    queued: HashSet<GroupKey>,
     /// For each group MDK could not read for a moment: when to read it again from its mark.
     /// Nothing more of it is read until then, so what comes after the message that could not be
     /// read never goes ahead of it. In order, so groups due at the same moment are read again in
@@ -314,6 +322,7 @@ impl<D: Driver, M: Side> Core<D, M> {
             config: config.clone(),
             started: Instant::now(),
             retry: HashMap::new(),
+            queued: HashSet::new(),
             unread: BTreeMap::new(),
             starts: BTreeMap::new(),
             listing: None,
@@ -455,7 +464,20 @@ impl<D: Driver, M: Side> Core<D, M> {
         self.retry.clear();
         self.bounded = false;
         self.carry_out(ended).await?;
-        self.flush_all().await
+        self.flush_all().await?;
+        // What MDK has queued is asked after until its engine takes it, for a while, and what
+        // comes after it is sent then. What MDK is busy for waits for the next start.
+        let stopped = Instant::now();
+        while !self.queued.is_empty() && stopped.elapsed() < STOP_WAIT {
+            let next = (self.queued.iter())
+                .filter_map(|g| self.retry.get(g).map(|(at, _)| *at))
+                .min();
+            tokio::time::sleep_until(next.unwrap_or_else(Instant::now)).await;
+            for group in self.queued.clone() {
+                self.flush(&group).await?;
+            }
+        }
+        Ok(())
     }
 
     /// Starts sending a file the agent asked to send, as a task of its own so the chats go on
@@ -804,6 +826,7 @@ impl<D: Driver, M: Side> Core<D, M> {
             match self.marmot.send(group, &what, &token).await {
                 Ok(event) => {
                     self.retry.remove(group);
+                    self.queued.remove(group);
                     self.conversation.sent(&key, event);
                     self.save()?;
                 }
@@ -824,6 +847,12 @@ impl<D: Driver, M: Side> Core<D, M> {
                         self.wait_longer(group);
                         return Ok(());
                     }
+                    // MDK has it queued: asked after again soon, under the same token, and the
+                    // core goes on meanwhile.
+                    SendFailed::Pending => {
+                        self.wait_queued(group);
+                        return Ok(());
+                    }
                     failed @ (SendFailed::Busy | SendFailed::Unknown) => {
                         if failed == SendFailed::Unknown {
                             eprintln!("marmot-agent: a send failed; it will be tried again");
@@ -835,6 +864,7 @@ impl<D: Driver, M: Side> Core<D, M> {
             }
         }
         self.retry.remove(group);
+        self.queued.remove(group);
         Ok(())
     }
 
@@ -850,8 +880,19 @@ impl<D: Driver, M: Side> Core<D, M> {
 
     /// The group's sends wait before they are tried again, longer each time.
     fn wait_longer(&mut self, group: &GroupKey) {
+        self.queued.remove(group);
         let wait = (self.retry.get(group)).map_or(Duration::from_millis(100), |(_, w)| {
             (*w * 2).clamp(Duration::from_millis(100), SEND_WAIT_MAX)
+        });
+        (self.retry).insert(group.clone(), (Instant::now() + wait, wait));
+    }
+
+    /// MDK has the group's next send queued: it is asked after again soon, a little later each
+    /// time, up to [`QUEUED_WAIT_MAX`], and the group's sends after it wait for it.
+    fn wait_queued(&mut self, group: &GroupKey) {
+        self.queued.insert(group.clone());
+        let wait = (self.retry.get(group)).map_or(Duration::from_millis(10), |(_, w)| {
+            (*w * 2).clamp(Duration::from_millis(10), QUEUED_WAIT_MAX)
         });
         (self.retry).insert(group.clone(), (Instant::now() + wait, wait));
     }

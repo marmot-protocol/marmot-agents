@@ -241,16 +241,13 @@ async fn a_send_tried_again_under_its_token_goes_out_once() {
         mdk: "a token".into(),
         edits: None,
     };
-    let went = world.marmot.send(&group, &words("the words"), &token).await;
+    let went = world.send(&group, &words("the words"), &token).await;
     let went = went.unwrap();
     // A second send of the same event in the same second would be the same event, so a later one.
     tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-    let again = world.marmot.send(&group, &words("the words"), &token).await;
+    let again = world.send(&group, &words("the words"), &token).await;
     assert_eq!(again, Ok(went.clone()), "the same event");
-    let other = world
-        .marmot
-        .send(&group, &words("other words"), &token)
-        .await;
+    let other = world.send(&group, &words("other words"), &token).await;
     assert_eq!(other, Err(SendFailed::Refused { gone: false }));
     let query = marmot_app::AppMessageQuery {
         group_id_hex: Some(group.as_str().to_string()),
@@ -350,13 +347,13 @@ async fn a_dropped_send_tried_again_in_the_same_second_is_not_refused() {
     at_a_new_second().await;
     world.runtime.disband_group(agent, &id).await.unwrap();
     let (words, first) = words_named("a");
-    let tried = world.marmot.send(&group, &words, &first).await;
+    let tried = world.send(&group, &words, &first).await;
     assert_eq!(tried, Err(SendFailed::Rejected), "taken, and dropped");
     let again = marmot_agent::Token {
         mdk: "token a, again".into(),
         ..first
     };
-    let tried = world.marmot.send(&group, &words, &again).await;
+    let tried = world.send(&group, &words, &again).await;
     assert_eq!(tried, Err(SendFailed::Busy), "busy until the next second");
     world.runtime.shutdown().await;
 }
@@ -370,11 +367,11 @@ async fn the_same_words_twice_in_one_second_both_go_out() {
     let group = a_quiet_chat(&world).await;
     let ((a, first), (b, second)) = (words_named("a"), words_named("b"));
     at_a_new_second().await;
-    let went = world.marmot.send(&group, &a, &first).await.unwrap();
-    let tried = world.marmot.send(&group, &b, &second).await;
+    let went = world.send(&group, &a, &first).await.unwrap();
+    let tried = world.send(&group, &b, &second).await;
     assert_eq!(tried, Err(SendFailed::Busy), "busy until the next second");
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    let also = world.marmot.send(&group, &b, &second).await.unwrap();
+    let also = world.send(&group, &b, &second).await.unwrap();
     assert_ne!(went, also, "two events");
     assert_eq!(sent_by_core(&world, &group, 9).len(), 2, "both went out");
     world.runtime.shutdown().await;
@@ -389,10 +386,7 @@ async fn a_send_to_a_group_disbanded_or_unknown_is_refused() {
     let group = a_quiet_chat(&world).await;
     let (words, _) = words_named("a");
     let unknown = GroupKey("ab".repeat(16));
-    let tried = world
-        .marmot
-        .send(&unknown, &words, &words_named("a").1)
-        .await;
+    let tried = world.send(&unknown, &words, &words_named("a").1).await;
     assert_eq!(tried, Err(SendFailed::Refused { gone: false }), "unknown");
 
     let id = group_id(&group);
@@ -415,7 +409,7 @@ async fn a_send_to_a_group_disbanded_or_unknown_is_refused() {
             mdk: format!("token {n}"),
             edits: None,
         };
-        let tried = world.marmot.send(&group, &words, &token).await;
+        let tried = world.send(&group, &words, &token).await;
         if tried == Err(SendFailed::Refused { gone: false }) {
             break;
         }

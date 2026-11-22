@@ -17,17 +17,12 @@ use marmot_app::{
     AppError, AppMessageQuery, AppMessageRecord, LocalSendStatus, MarmotApp, MarmotAppConfig,
     MarmotAppEvent, MarmotAppRuntime, MediaUploadAttachmentRequest, MediaUploadRequest,
 };
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The kind of a chat message.
 const CHAT: u64 = 9;
-
-/// How long a send waits for MDK to take it into its engine, after MDK has kept it under its
-/// token, before the core is told the outcome is not known yet. The send then goes on in MDK, and
-/// the core tries it again later under the same token, which MDK answers with the same event.
-const SEND_WAIT: Duration = Duration::from_secs(60);
 
 /// Opens the account home the settings name: its accounts, and MDK's app and runtime on it.
 /// This is what first opens the store, which MDK upgrades forward only. MDK holds the home for as
@@ -161,7 +156,11 @@ pub struct Marmot {
 /// Faults the next sends, and the next readings of where a group is, or of where its messages end,
 /// meet, one each, oldest first.
 #[derive(Clone, Default)]
-pub struct Faults(Arc<Mutex<VecDeque<Fault>>>);
+pub struct Faults {
+    next: Arc<Mutex<VecDeque<Fault>>>,
+    /// The tokens of sends MDK keeps queued ([`Fault::Held`]), and until when.
+    held: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+}
 
 /// What a send meets.
 pub enum Fault {
@@ -177,12 +176,15 @@ pub enum Fault {
     PlaceFails,
     /// MDK cannot say where a group's messages end, the next time the core asks.
     LatestFails,
+    /// MDK takes the send and keeps it queued this long before its engine takes it, as when the
+    /// engine is held up: until then MDK says it is queued.
+    Held(Duration),
 }
 
 impl Faults {
     /// The next send meets `fault`.
     pub fn push(&self, fault: Fault) {
-        self.0.lock().expect("never poisoned").push_back(fault);
+        self.next.lock().expect("never poisoned").push_back(fault);
     }
 
     /// The oldest fault for a send, one that is neither of the others.
@@ -190,9 +192,23 @@ impl Faults {
         self.next(|f| !matches!(f, Fault::PlaceFails | Fault::LatestFails))
     }
 
+    /// Keeps the send under `token` queued for `long`, from its first try.
+    fn hold(&self, token: &str, long: Duration) {
+        let mut held = self.held.lock().expect("never poisoned");
+        let until = std::time::Instant::now() + long;
+        held.entry(token.to_string()).or_insert(until);
+    }
+
+    /// Whether the send under `token` is kept queued now.
+    fn held(&self, token: &str) -> bool {
+        let held = self.held.lock().expect("never poisoned");
+        held.get(token)
+            .is_some_and(|until| *until > std::time::Instant::now())
+    }
+
     /// The oldest fault `which` picks.
     fn next(&self, which: impl Fn(&Fault) -> bool) -> Option<Fault> {
-        let mut faults = self.0.lock().expect("never poisoned");
+        let mut faults = self.next.lock().expect("never poisoned");
         let at = faults.iter().position(which)?;
         faults.remove(at)
     }
@@ -320,9 +336,12 @@ impl Marmot {
     /// Sends something to a group under `token`, and gives back the id of the event it became.
     /// MDK keeps the send under [`Token::mdk`] before it answers (its `submit_*` calls), and a
     /// send tried again under the same token, after an answer that was lost or a restart, gives
-    /// back the same event and sends nothing: what went out goes out once. The answer comes once
-    /// MDK has taken the send into its engine, which delivers it from there; MDK may drop it
-    /// before that ([`SendFailed::Rejected`]), and then nothing of it went out.
+    /// back the same event and sends nothing: what went out goes out once. The event comes back
+    /// once MDK has taken the send into its engine, which delivers it from there. MDK is asked
+    /// once: while it still has the send queued the answer is [`SendFailed::Pending`], and the
+    /// core asks again later by trying it again under the same token, with nothing held up
+    /// meanwhile. MDK may drop it before its engine takes it ([`SendFailed::Rejected`]), and then
+    /// nothing of it went out.
     pub async fn send(
         &self,
         group: &GroupKey,
@@ -334,6 +353,7 @@ impl Marmot {
         match fault {
             Some(Fault::Refuse(error)) => return Err(send_failed(&error)),
             Some(Fault::Reject) => return Err(SendFailed::Rejected),
+            Some(Fault::Held(long)) => self.faults.hold(&token.mdk, long),
             _ => {}
         }
         let taken = match self.submit(&id, what, token).await {
@@ -342,8 +362,7 @@ impl Marmot {
             // again, it shows the same text, and adds nothing anyone sees.
             Ok(Taken::Sent(event)) => return Ok(event),
             Err(error) => {
-                let status = (self.runtime).local_send_status(&self.label, &id, &token.mdk);
-                return Err(match status {
+                return Err(match self.status(&id, &token.mdk) {
                     // A try MDK dropped is refused if tried again; that is the drop, not a
                     // refusal.
                     Ok(Some(LocalSendStatus::Rejected)) => SendFailed::Rejected,
@@ -354,7 +373,12 @@ impl Marmot {
                 });
             }
         };
-        self.settled(&id, &token.mdk).await?;
+        match self.status(&id, &token.mdk) {
+            Ok(Some(LocalSendStatus::EngineOwned | LocalSendStatus::Completed(_))) => {}
+            Ok(Some(LocalSendStatus::Rejected)) => return Err(SendFailed::Rejected),
+            // Queued, or not to be read for a moment: MDK has it, and goes on with it.
+            Ok(Some(LocalSendStatus::Queued) | None) | Err(_) => return Err(SendFailed::Pending),
+        }
         if let Some(Fault::LoseReply) = fault {
             return Err(SendFailed::Unknown);
         }
@@ -408,26 +432,12 @@ impl Marmot {
         Ok(Taken::Kept(EventKey(accepted.message_id_hex)))
     }
 
-    /// Waits for MDK to take the send kept under `token` into its engine, or to drop it, for up
-    /// to [`SEND_WAIT`].
-    async fn settled(&self, id: &GroupId, token: &str) -> Result<(), SendFailed> {
-        let started = tokio::time::Instant::now();
-        let mut wait = Duration::from_millis(10);
-        loop {
-            match (self.runtime).local_send_status(&self.label, id, token) {
-                Ok(Some(LocalSendStatus::EngineOwned | LocalSendStatus::Completed(_))) => {
-                    return Ok(());
-                }
-                Ok(Some(LocalSendStatus::Rejected)) => return Err(SendFailed::Rejected),
-                // Queued, or not to be read for a moment: MDK has it, and goes on with it.
-                Ok(Some(LocalSendStatus::Queued) | None) | Err(_) => {}
-            }
-            if started.elapsed() >= SEND_WAIT {
-                return Err(SendFailed::Unknown);
-            }
-            tokio::time::sleep(wait).await;
-            wait = (wait * 2).min(Duration::from_millis(250));
+    /// What MDK says became of the send it keeps under `token`.
+    fn status(&self, id: &GroupId, token: &str) -> Result<Option<LocalSendStatus>, AppError> {
+        if self.faults.held(token) {
+            return Ok(Some(LocalSendStatus::Queued));
         }
+        (self.runtime).local_send_status(&self.label, id, token)
     }
 
     /// Sends a file to a group as an encrypted attachment, tagged with its turn like the agent's
@@ -685,6 +695,9 @@ pub enum SendFailed {
     /// MDK took it, and dropped it before it went out: nothing of it went. MDK refuses its token
     /// from now on, so it is tried again under a new one.
     Rejected,
+    /// MDK keeps it under its token, queued, and its engine has not taken it yet: it is tried
+    /// again soon under the same token, which MDK answers from what it keeps.
+    Pending,
 }
 
 /// What a failed file send means.

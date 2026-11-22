@@ -555,7 +555,7 @@ async fn a_send_that_went_out_before_a_crash_is_not_sent_again() {
     let group = GroupKey(chat.hex.clone());
     let (token, what) = talk.next_send(&group).unwrap();
     talk.attempting(&token.send);
-    let went = world.marmot.send(&group, &what, &token).await.unwrap();
+    let went = world.send(&group, &what, &token).await.unwrap();
     // A second send of the same event in the same second would be the same event, so a later one.
     tokio::time::sleep(Duration::from_millis(1500)).await;
     store
@@ -870,7 +870,6 @@ async fn a_send_never_tried_is_sent_and_not_taken_for_an_older_one() {
     let group = GroupKey(chat.hex.clone());
     let text = "the same words";
     world
-        .marmot
         .send(&group, &said_before(text), &earlier_token())
         .await
         .unwrap();
@@ -928,7 +927,6 @@ async fn a_send_tried_is_not_taken_for_an_older_one_like_it() {
     let group = GroupKey(chat.hex.clone());
     let text = "the same words";
     world
-        .marmot
         .send(&group, &said_before(text), &earlier_token())
         .await
         .unwrap();
@@ -979,7 +977,7 @@ async fn an_edit_that_went_out_before_a_crash_is_not_sent_again() {
     let (token, what) = talk.next_send(&group).unwrap();
     assert!(matches!(what, Sending::Words { edit: Some(_), .. }));
     talk.attempting(&token.send);
-    world.marmot.send(&group, &what, &token).await.unwrap();
+    world.send(&group, &what, &token).await.unwrap();
     // The same edit made again in the same second would be the same event, so a later one.
     tokio::time::sleep(Duration::from_millis(1500)).await;
     let read = kept.read;
@@ -1031,6 +1029,46 @@ async fn a_state_with_sends_tried_before_tokens_is_refused() {
         panic!("the core starts on a state from before tokens");
     };
     assert!(why.contains("older"), "says why: {why}");
+    world.runtime.shutdown().await;
+}
+
+// A send MDK keeps queued, and has not yet taken into its engine, does not hold up the core: the
+// core asks after it again later, and meanwhile reads what the chat says and hands it on. Once
+// MDK takes the send, it goes out once.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_mdk_keeps_queued_holds_up_nothing_else() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, id) = a_chat(&world, &seen).await;
+    world
+        .marmot
+        .faults
+        .push(Fault::Held(Duration::from_secs(8)));
+    let emit = Emitted {
+        event: event("t", State::Done, turn()),
+        chat: Some(id.clone()),
+        prompts: Vec::new(),
+        settles: Vec::new(),
+    };
+    events.send(emit).unwrap();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    chat.say("meanwhile").await;
+    let prompts = || seen.lock().unwrap().prompts.clone();
+    within(4, || {
+        prompts().iter().any(|p| p == "meanwhile").then_some(())
+    })
+    .await;
+    let store = Store::new(world.state.path());
+    let queued =
+        || (json(&store.load().unwrap())["conversation"]["outbox"].as_array()).map(Vec::len);
+    assert_eq!(queued(), Some(1), "still queued");
+    within(20, || (queued() == Some(0)).then_some(())).await;
+    within(10, || (!versions(&chat, "t").is_empty()).then_some(())).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(versions(&chat, "t").len(), 1, "went out once");
+    core.stop().await;
     world.runtime.shutdown().await;
 }
 
