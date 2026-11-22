@@ -81,6 +81,17 @@ Built on 2026-11-21 while fixing the known gaps of [testing and verification](ve
   item's id, state, version, first event and `settles`, and a `cut` tag `item` with the size of the event it
   stands in for. Nothing over 64 KB is sent: a send that would be, stand-in included, is refused before MDK
   sees it, and dropped with a `failed` notice.
+- **The core's close of an item whose closing version was dropped** (2026-11-22). When MDK refuses an item's
+  closing version, or the core gives it up after its tries, and nothing later of the item is queued, the core
+  sends the item's next version itself, so the chat does not show it open for good: the item's ids, its final
+  state and the next version number, naming its first event, as a notice of kind `warning` with the reason
+  `not_delivered`, the title "Not delivered" and a one-line text, with no native message, settling nothing.
+  It is not sent when the chat already shows the item closed by an earlier version that went out. When a session
+  or turn id, which the driver chose, would make it over 64 KB, it leaves them out; its item id, first event,
+  version and state stay. When a notice that settled requests is dropped, or a `failed` notice that told of a
+  dropped send, a `failed` notice takes its place, settling what it settled. The core's `failed` notices carry no
+  session. Each of these is the last: if MDK refuses it too, as in a group that is gone, nothing more is sent for
+  it.
 
 ## Updating an item
 

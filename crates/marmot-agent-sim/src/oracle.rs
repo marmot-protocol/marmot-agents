@@ -426,13 +426,19 @@ pub fn liveness(world: &World) -> Vec<Failure> {
         }
     }
     // A send MDK refuses for good is answered by a `failed` notice that settles what it
-    // settled; a notice it refuses is dropped, so nothing loops, and what that notice settled
-    // stays unsettled, by design (`Conversation::refused`). Only that: a request whose other send
-    // was refused must still be settled, by the notice.
-    let refused: BTreeSet<&EventKey> = (world.refused.iter())
-        .filter(|r| r.notice)
-        .flat_map(|r| &r.settles)
-        .collect();
+    // settled, and a notice it refuses by one in its place, which is the last: when MDK refuses
+    // that too, the core takes the group as one MDK refuses everything for, as a gone one, and
+    // stops there, so nothing loops (`Conversation::refused`). Only then is a request let off:
+    // when two notices of its own chat that settled it were refused, the notice and the one in
+    // its place, each known by its id: one notice refused twice, as when the core tried it again
+    // after a crash took back the first refusal, is still one, with nothing yet in its place.
+    let mut refused_notices: BTreeMap<(usize, &EventKey), BTreeSet<&str>> = BTreeMap::new();
+    for r in (world.refused.iter()).filter(|r| r.notice.is_some()) {
+        let Some((id, _)) = &r.item else { continue };
+        for request in &r.settles {
+            (refused_notices.entry((r.chat, request)).or_default()).insert(id.as_str());
+        }
+    }
     let versions = versions(world);
     let about: BTreeSet<&EventKey> = versions
         .iter()
@@ -456,7 +462,10 @@ pub fn liveness(world: &World) -> Vec<Failure> {
             continue;
         }
         if m.posted.is_request() {
-            if settled.get(&m.event).copied().unwrap_or(0) == 1 || refused.contains(&m.event) {
+            let chat = usize::from(m.posted.chat);
+            let chain_ended =
+                (refused_notices.get(&(chat, &m.event))).is_some_and(|n| n.len() >= 2);
+            if settled.get(&m.event).copied().unwrap_or(0) == 1 || chain_ended {
                 continue;
             }
             // A request that names nothing and was older than five minutes when the core
@@ -500,8 +509,21 @@ pub fn liveness(world: &World) -> Vec<Failure> {
     }
     // The latest thing the running driver emitted of each item reaches the chat (L2): a turn
     // ends where people see it, and nothing waits in the outbox for good; unless MDK refused the
-    // very version that carried it. Each emission is known by its `seq`, which the core keeps.
+    // very version that carried it while the item was open. A closing version MDK refused is
+    // followed by the core's own close of the item, which keeps its `seq`, unless the chat
+    // already showed the item closed, by the version stored before it: the core leaves that close
+    // as it is (`close_undelivered`). Each emission is known by its `seq`, which the core keeps.
+    let closed_before = |r: &crate::world::RefusedSend| {
+        let Some((id, version)) = &r.item else {
+            return false;
+        };
+        (versions.iter())
+            .filter(|v| v.row.chat == r.chat && v.id == *id && v.version < *version)
+            .max_by_key(|v| v.version)
+            .is_some_and(|v| final_state(v.state))
+    };
     let refused: BTreeSet<(&str, u64)> = (world.refused.iter())
+        .filter(|r| !r.state.is_some_and(final_state) || closed_by_core(r) || closed_before(r))
         .filter_map(|r| Some((r.item.as_ref()?.0.as_str(), r.seq?)))
         .collect();
     if world.harness.out.is_some() {
@@ -551,24 +573,36 @@ pub fn liveness(world: &World) -> Vec<Failure> {
     failures
 }
 
-/// The last version of each item, leaving out an item whose closing version MDK refused: the
-/// core gives up on that version with a notice, by design, and has nothing left to send, so the
-/// chat may show the item open (S2 and L2 assume MDK takes what it does not refuse for good). An
-/// item MDK refused an open version of is still to be closed.
+/// Whether a refused send was the core's own close of an item whose closing version was
+/// dropped: the last thing sent for it.
+fn closed_by_core(refused: &crate::world::RefusedSend) -> bool {
+    refused.item.is_some() && refused.notice.as_deref() == Some("not_delivered")
+}
+
+/// The last version of each item, as the chat last saw it. A closing version MDK refused is
+/// followed by the core's own close, so the item does not stay open (S2, L2); only when MDK
+/// refused that close too is the item left out: the close is the last, so nothing loops, and the
+/// core takes the group as one MDK refuses everything for, as a gone one. That holds only while
+/// the refused close is the item's newest: a version stored after it, as when the item opens
+/// again, counts as any.
 fn last_versions<'a>(
     world: &World,
     versions: &'a [Version<'a>],
 ) -> BTreeMap<(usize, String), &'a Version<'a>> {
-    let refused: BTreeSet<(usize, &str)> = (world.refused.iter())
-        .filter(|r| r.state.is_some_and(final_state))
-        .filter_map(|r| r.item.as_ref().map(|(id, _)| (r.chat, id.as_str())))
-        .collect();
-    let mut last = BTreeMap::new();
-    for v in versions {
-        if !refused.contains(&(v.row.chat, v.id.as_str())) {
-            last.insert((v.row.chat, v.id.clone()), v);
+    let mut refused: BTreeMap<(usize, &str), u64> = BTreeMap::new();
+    for r in (world.refused.iter()).filter(|r| closed_by_core(r)) {
+        if let Some((id, version)) = &r.item {
+            let newest = refused.entry((r.chat, id.as_str())).or_default();
+            *newest = (*newest).max(*version);
         }
     }
+    let mut last: BTreeMap<(usize, String), &'a Version<'a>> = BTreeMap::new();
+    for v in versions {
+        last.insert((v.row.chat, v.id.clone()), v);
+    }
+    last.retain(|(chat, id), v| {
+        (refused.get(&(*chat, id.as_str()))).is_none_or(|close| v.version > *close)
+    });
     last
 }
 

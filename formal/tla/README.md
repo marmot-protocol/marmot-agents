@@ -3,7 +3,8 @@
 Status: built and checked with TLC on small bounds, as
 [D-093](../../docs/decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top) and
 [the verification page](../../docs/design/verification.md) plan. The model, its bounds and its switches are
-internal and change as the work goes. Read on 2026-11-22 against master `74b56d6`.
+internal and change as the work goes. Read on 2026-11-22 against master `74b56d6`, and again for the fix of
+`conversation.rs` `refused` on branch `dropped-sends` the same day, and for its review round 1.
 
 `CoreLifecycle.tla` models the core between MDK and one driver: requests pending and settled, items and their
 versions, read marks, sessions, the outbox, saves and crashes. It owns S1, S2, S3, S4, S10, S12 and L1 to L3 for
@@ -25,7 +26,8 @@ drive it.
 | `Take`, `Refuse` | the driver's answer to the request it was handed (`prompted`, `requested`). A new-session control the driver takes marks the chat taken, as a prompt does, so a prompt after it names no session (D-065) |
 | `Emit(i, S, fin)` | `emitted`: the driver's event for item `i`, settling `S`, closing it when `fin`; the core counts the version and queues it |
 | `Tick(r)` | `overdue`: a taken control with no effect by its deadline is settled with `no_effect` |
-| `Send(c, outcome)` | `flush` for the oldest send of a group: saved as attempted first, then MDK says `sent`, `busy`, `ambiguous-posted`, `ambiguous-lost` or `refused`: every send to a gone group, and up to `MaxRefusals` sends to a live one (`run.rs` `failed`: `EventTooLarge`, `InvalidAppMessagePayload`), each refused again whenever it is sent; the group stays live |
+| `Send(c, outcome)` | `flush` for the oldest send of a group: saved as attempted first, then MDK says `sent`, `busy`, `ambiguous-posted`, `ambiguous-lost` or `refused`: every send to a gone group, and up to `MaxRefusals` sends to a live one (`run.rs` `failed`: `EventTooLarge`, `InvalidAppMessagePayload`), each refused again whenever it is sent; the group stays live. A refused send goes to `refused`, below |
+| (in `Send` and `Lookup`) | `conversation.rs` `refused`, for a send MDK refused or the core gave up: it is dropped, and, unless it is itself a last resort (`last_resort`), something stands in for it (`stand_in_for`): for an item's version, the item's close when that version closed it and nothing later is queued (`close_undelivered`, a last resort), then a `failed` notice settling what the version settled; for a notice that settled requests, or a `failed` notice (`tells`), a `failed` notice settling what it settled, a last resort. A `failed` notice tells the chat of the version it stands in for, or of what the notice it replaces told of (`ToldBy`) |
 | `Lookup(c, outcome, …)` | `find_sent` for a send whose outcome is unknown: `found`, or `absent` and then given up after its tries or sent again at once |
 | `Crash` | the process dies: memory, the event stream and the driver are lost |
 | `DriverStops`, `Stop` | the loop ends: `ended` closes every open item and settles every pending request, all queued and saved before any is sent |
@@ -45,7 +47,13 @@ nothing, so it is a stuttering step and is left out.
 - **Rights, chats and people** (S5, S6): everyone may do everything. **Invitations**: every group is joined at
   start with mark 0.
 - **Sizes and caps** (S7): `SETTLES_MAX`, the eight sends per group per turn, the cache of finished items
-  (`KEPT`). The outbox is in order per group, and the core may send whenever it is idle.
+  (`KEPT`). The outbox is in order per group, and the core may send whenever it is idle. So the versions that
+  spread what one event settles are not modelled, nor is what stands in for a dropped send leaving out a session
+  id that is too large.
+- **A later final version after a close that went out.** The core does not close an item again whose close went
+  out (`closed_in_chat`). The model does not reach that case: a driver's item ends with the driver, and the
+  versions that spread settles are not modelled (inferred from the model; the simulator reaches it, and its
+  oracle allows it).
 - **Time.** No clock: `Tick` may fire for any taken control, and a lookup may come at once.
 - **Files the agent sends** (D-090).
 
@@ -57,6 +65,7 @@ nothing, so it is a stuttering step and is left out.
 | `TokenDedupe` | MDK keeps a send's token, posts it once, and answers a lookup by it | (off in the fair configuration; on, S3 holds without `ExactLookup`) |
 | `LiveInOrder` | MDK hands live messages over in storage order | a message skipped (`CoreLifecycle.liveorder.cfg`) |
 | `LiveAfterStore` | MDK hands a live message over only once it has stored it | a message dropped until the core starts again (`CoreLifecycle.livestore.cfg`) |
+| `LastResortTaken` | MDK never refuses a last-resort send to a live group: the core's close of an item, or a `failed` notice in place of a dropped one, is as small as the core makes anything | an item left open in the chat, the accepted limit (`last-resort-refused`, below) |
 
 Besides the switches: a save is atomic (`Store::save` writes a new file and renames it); the driver goes when the
 core goes (a built-in driver is its child, and a socket connector starts again with a new core); MDK keeps what
@@ -95,7 +104,8 @@ must pass on 4 workers, those that must fail on one, so their traces and counts 
 moves, since TLC checks liveness on a timer during the search; its trace does not). The small bounds, every pull
 request: **one chat `c1`, one prompt `p1`, one control `r1` (a new-session control), the session item `s1` (2
 events from the driver, so 3 versions with the core's close), 1 down (a crash, a failed save, a driver stop or a
-stop), 1 send with an unknown outcome, 2 tries, no refusal in a live group, and, in the fair configuration, a
+stop), 1 send with an unknown outcome, 2 tries, no refusal in a live group, MDK taking every last-resort send
+(`LastResortTaken`), and, in the fair configuration, a
 live stream that may lag at any idle moment.** Each configuration says how it differs. A second chat multiplies
 the states by about 60, since its activity interleaves freely with the first's, so it is left to the larger
 bounds below.
@@ -108,13 +118,14 @@ bounds below.
 | token dedupe | `CoreLifecycle.dedupe.cfg` (no `ExactLookup`, `TokenDedupe`, no lag) | every property holds | 102,702 | |
 | live out of order | `CoreLifecycle.liveorder.cfg` (no `LiveInOrder`) | S10 fails | 56 | [`live-out-of-order`](counterexamples/live-out-of-order.json) |
 | live before store | `CoreLifecycle.livestore.cfg` (no `LiveAfterStore`; only `p1`) | L3 fails | 115 | [`live-before-store`](counterexamples/live-before-store.json) |
-| give up, item | `CoreLifecycle.giveup.cfg` (1 try) | S2 fails | 4,115 | [`give-up-leaves-item-open`](counterexamples/give-up-leaves-item-open.json) |
-| give up, notice | `CoreLifecycle.giveup-notice.cfg` (1 try, no item) | L1 fails | 3,472 | [`give-up-drops-settles`](counterexamples/give-up-drops-settles.json) |
-| give up, told | `CoreLifecycle.giveup.cfg`, no prompt, without S2 | S3Told holds | 14,089 | |
-| refused, item | `CoreLifecycle.refuse.cfg` (1 refusal in the live group) | S2 fails | 1,905 | [`refuse-leaves-item-open`](counterexamples/refuse-leaves-item-open.json) |
-| refused, notice | `CoreLifecycle.refuse-notice.cfg` (1 refusal, no item) | L1 fails | 2,239 | [`refuse-drops-settles`](counterexamples/refuse-drops-settles.json) |
-| refused, told | `CoreLifecycle.refuse.cfg`, no prompt, without S2 | S3Told holds | 9,534 | |
-| gone group | `CoreLifecycle.gone.cfg` (MDK refuses every send) | every property holds | 38,767 | |
+| give up, item | `CoreLifecycle.giveup.cfg` (1 try) | every property holds | 218,202 | |
+| give up, notice | `CoreLifecycle.giveup-notice.cfg` (1 try, no item) | every property holds | 4,113 | |
+| refused, item | `CoreLifecycle.refuse.cfg` (1 refusal in the live group) | every property holds | 157,485 | |
+| refused, notice | `CoreLifecycle.refuse-notice.cfg` (1 refusal, no item) | every property holds | 2,880 | |
+| refused twice | `CoreLifecycle.refuse.cfg`, 2 refusals, no prompt, `LastResortTaken` | every property holds, S3Told too | 23,594 | |
+| last resort refused | the same, without `LastResortTaken`, safety only | S2 fails | 2,077 | [`last-resort-refused`](counterexamples/last-resort-refused.json) |
+| last resort given up | `CoreLifecycle.refuse.cfg`, 1 refusal, 1 unknown outcome, 1 try, no prompt, safety only | S2 fails | 5,988 | [`last-resort-given-up`](counterexamples/last-resort-given-up.json) |
+| gone group | `CoreLifecycle.gone.cfg` (MDK refuses every send) | every property holds | 100,588 | |
 
 The counterexamples are schedules in the shared action names, made from TLC's traces by a program;
 [their README](counterexamples/README.md) says how, and what step 5 must add to drive the simulator with them.
@@ -130,7 +141,10 @@ property named, on the fair configuration with only that property, unless the ta
 | `RecoverKeepsOpen` | a restart leaves open items open | S2 | 187 |
 | `NoAttemptedFlag` | a send handed to MDK is not saved as such; a restart sends it blindly | S3 | 778 |
 | `BlindResend` | a send whose outcome is unknown is sent again without a lookup | S3 | 181 |
-| `NoFailedNotice` | a version MDK refuses is dropped with no failed notice (on the refused-told configuration) | S3Told | 5,653 |
+| `NoFailedNotice` | a version MDK refuses is dropped with no failed notice (on the refused configuration, no prompt, S3Told only) | S3Told | 6,704 |
+| `NoRetell` | a dropped failed notice that settled nothing is not replaced: the code before review round 1 (on the refused configuration, 2 refusals, no prompt, S3Told only) | S3Told | 7,146 |
+| `NoReplacement` | nothing stands in for a dropped send: the code before the fix (on the give-up configuration) | S2 | 4,115 |
+| `NoReplacement` | the same (on the refused-notice configuration, L1 only) | L1 | 2,239 |
 | `DeliverBeforeSave` | a prompt reaches the driver before its read mark is saved | S4 | 580 |
 | `MarkNotLoaded` | a restart reads every group from its start | S10 | 485 |
 | `CatchUpAnyOrder` | catch-up takes any stored message after the mark | S10 | 19 |
@@ -144,10 +158,12 @@ fair configuration: `NeverSettled` (a request is settled), `NeverSettledByEvent`
 stop or restart closes an item in the chat), `NeverLookedUpAfterCrash` (after the core went down, a lookup takes
 its found branch), `NeverDeliveredInCatchUp` (a request reaches the driver during the catch-up after a restart),
 `NeverPromptAfterNewSession` (a prompt reaches the driver while the driver has taken a new-session control and not
-yet named it). On the gone configuration, `NeverDropped` (a version is refused). On the refused-told and
-give-up-told configurations, `NeverTold` (a failed notice for a dropped version is posted). On the live-before-store
-configuration, `NeverDroppedEarly` (a message handed over before it was stored is dropped, then stored). All
-eleven are reached within 3,000 distinct states.
+yet named it). On the gone configuration, `NeverDropped` (a version is refused). On the refused and give-up
+configurations, with no prompt, `NeverTold` (a failed notice for a dropped version is posted) and
+`NeverClosedUndelivered` (the core's close of an item whose closing version was dropped is posted). On the
+refused-notice and give-up-notice configurations, `NeverResettled` (a failed notice in place of a dropped notice
+that settled requests is posted). On the live-before-store configuration, `NeverDroppedEarly` (a message handed
+over before it was stored is dropped, then stored). All fifteen are reached within 3,000 distinct states.
 
 **Larger bounds**, safety only, on the same day with 8 workers and a 6 GB heap, the other constants as in the fair
 configuration. Liveness at these sizes did not finish in 15 minutes with a 2 GB heap, so it is for a nightly run
@@ -158,22 +174,42 @@ with more memory, which is not set up yet:
 | one chat, `p1`, `r1`, items `t1` and `s1`, 2 downs | 8,366,684 | 2 min 3 s |
 | two chats, `p1` and `r1` in `c1`, `r2` in `c2`, item `t1`, 1 down | 9,544,632 | 2 min 5 s |
 
-All of `check.py` takes about 3 minutes here; CI runs it on every pull request with 4 workers.
+All of `check.py` takes about 6 minutes here with 4 workers (the give-up and refused configurations, which
+now check liveness with a prompt, take about 3 of them); CI runs it on every pull request with 4 workers. For
+review round 1 it took 24 minutes, on a machine busy with the simulator and the Rust tests at the same time. The
+larger bounds were not run again for the fix: no send is refused or given up in them.
 
 ## What the model found
 
 Two gaps in dropping a send, each reached two ways: when the core gives a send up after ten tries whose outcome
 stays unknown and a lookup that does not find it (`run.rs` `flush`, then `give_up`), and when MDK refuses one
 send to a group that stays live (`run.rs` `failed`: `EventTooLarge`, `InvalidAppMessagePayload`, then
-`give_up`). Both end in `conversation.rs` `refused`. Neither is fixed here; both are for the owner:
+`give_up`). Both end in `conversation.rs` `refused`. **Both are fixed** (2026-11-22, branch `dropped-sends`),
+and the model follows the fix:
 
-- **An item whose closing version is dropped stays open in the chat** (S2, L2). `refused` drops the version and
-  queues a `failed` notice, but the item is already closed in the core, so nothing sends a close again, not even
-  a restart: `recover` closes only items that are open.
-- **A notice that is dropped takes the requests it settles with it** (L1). `refused` drops a notice with nothing
-  in its place, and its requests are no longer pending, so they stay pending in every app.
+- **An item whose closing version is dropped stayed open in the chat** (S2, L2). `refused` dropped the version
+  and queued a `failed` notice, but the item was already closed in the core, so nothing sent a close again, not
+  even a restart: `recover` closes only items that are open. Now the core queues the item's next version, a
+  close of its own, as a last resort.
+- **A notice that is dropped took the requests it settles with it** (L1). `refused` dropped a notice with
+  nothing in its place, and its requests were no longer pending, so they stayed pending in every app. Now a
+  `failed` notice settles them in its place, as a last resort.
 
-The `failed` notice for a dropped item version is posted (S3Told holds, with one refusal or one give-up).
+The give-up and refused configurations, which failed before, now pass every property, and the deliberate
+defect `NoReplacement`, the code before the fix, fails S2 and L1 again. What stands in for a dropped send is the
+last: nothing stands in for it in turn, so nothing loops in a group that refuses everything (the gone
+configuration). Two limits follow, each a committed counterexample:
+
+- **The accepted limit** (`last-resort-refused`): if MDK refuses the last resort too in a group that stays live,
+  the item stays open in the chat (S2, L2), or the requests unsettled (L1). The passing configurations assume
+  MDK does not (`LastResortTaken`), since what stands in is as small as the core makes anything. The same
+  follows when the last resort is given up after its tries (`last-resort-given-up`: one refusal, then a give-up;
+  `LastResortTaken` speaks only of refusals).
+- **Untold gaps**, closed in review round 1: if MDK refused an item's version and then the `failed` notice that
+  told of it, and that notice settled nothing, nothing told the chat again (S3Told failed). Now such a notice is
+  replaced once too, as a last resort, and a failed notice that replaces one tells of what that one told of
+  (`ToldBy`; before, the model counted only a failed notice naming a version, so a replacement did not count).
+  `refuse-twice` now passes S3Told; `NoRetell` puts the old way back and fails it.
 
 One case that is not a bug in the code: an event from the driver that ends a session, lost in a crash before it
 is saved, is never seen, so the next prompt after the restart resumes that session (S12 speaks of the sessions the

@@ -112,9 +112,11 @@ pub struct RefusedSend {
     pub state: Option<State>,
     /// For an item: the `seq` of the emission the refused version showed.
     pub seq: Option<u64>,
-    /// Whether it was a notice of the core's own, such as the `failed` notice that answers a
-    /// refused send: the core drops a refused notice, so nothing loops.
-    pub notice: bool,
+    /// For a notice of the core's own, its reason: `failed` for the notice that answers a
+    /// dropped send, `not_delivered` for the core's close of an item whose closing version was
+    /// dropped. What stands in for a dropped send is the last: one refused in its turn is not
+    /// answered again, so nothing loops.
+    pub notice: Option<String>,
 }
 
 /// A send that goes out later than the core looked for it.
@@ -341,8 +343,13 @@ pub struct World {
     pub crashed: bool,
     /// Sends that land later.
     pub landings: Vec<Landing>,
-    /// Sends MDK refused.
+    /// Sends MDK refused, and sends the core gave up after its tries.
     pub refused: Vec<RefusedSend>,
+    /// For each chat, the send last tried there whose outcome was not known and that stored
+    /// nothing, by its token: the core may give it up. Sends to a chat go one at a time, oldest
+    /// first, so when the core tries another there instead, it gave this one up, and dropped it
+    /// as MDK's refusal is dropped: it goes to `refused`.
+    pub unknown: BTreeMap<usize, (String, RefusedSend)>,
     /// The scripted harness.
     pub harness: Harness,
     /// What happened.
@@ -394,6 +401,7 @@ impl World {
             crashed: false,
             landings: Vec::new(),
             refused: Vec::new(),
+            unknown: BTreeMap::new(),
             harness: Harness::default(),
             trace: Vec::new(),
             step: None,
@@ -401,6 +409,16 @@ impl World {
             stopping: false,
             unsaved: false,
             reading: None,
+        }
+    }
+
+    /// The core tries the send named `token` in `chat`. One left unknown there that it tries
+    /// no more was given up: it is recorded among the sends dropped.
+    pub fn trying(&mut self, chat: usize, token: &str) {
+        if self.unknown.get(&chat).is_some_and(|(t, _)| t != token) {
+            let (_, dropped) = self.unknown.remove(&chat).expect("found");
+            self.note(format!("Send(c{chat}): the one before was given up"));
+            self.refused.push(dropped);
         }
     }
 

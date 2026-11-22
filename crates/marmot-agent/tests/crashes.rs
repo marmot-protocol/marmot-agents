@@ -1012,3 +1012,111 @@ impl Stub {
         stub(false).0.capabilities()
     }
 }
+
+/// What makes the next send fail for good: MDK refuses it in a group that stays live, or, with
+/// `give_up`, its outcome is not known and a lookup does not find it, so the core gives it up
+/// after its one try. The core is started with one try for an unknown send.
+fn dropped_next(world: &World, give_up: bool) {
+    let error = if give_up {
+        marmot_app::AppError::AccountWorkerResponseTimedOut
+    } else {
+        marmot_app::AppError::InvalidAppMessagePayload("refused".into())
+    };
+    world.marmot.faults.push(Fault::Refuse(error));
+}
+
+/// An item whose closing version MDK refuses, or that the core gives up, is closed in the chat
+/// all the same, by a later version of the core's own; the chat is told in a `failed` notice
+/// (S2, L2). Found by the TLA+ model, whose cases `give-up-closes-item` and `refuse-closes-item`
+/// now check the fix.
+async fn closing_version_dropped(give_up: bool) {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, events, seen) = stub(false);
+    let core = world.core(driver, Store::new(world.state.path()));
+    let core = world.run(core.unknown_sends(1, Duration::from_millis(300)));
+    let (chat, id) = a_chat(&world, &seen).await;
+    let emit = |state| Emitted {
+        event: event("t", state, turn()),
+        chat: Some(id.clone()),
+        prompts: Vec::new(),
+        settles: Vec::new(),
+    };
+    events.send(emit(State::Running)).unwrap();
+    within(20, || (!versions(&chat, "t").is_empty()).then_some(())).await;
+    dropped_next(&world, give_up);
+    events.send(emit(State::Done)).unwrap();
+    let (_, read) = within(30, || {
+        (chat.items().into_iter())
+            .find(|(_, r)| r.item.event.header().item.as_str() == "t" && r.item.version > 2)
+    })
+    .await;
+    let first = versions(&chat, "t")
+        .into_iter()
+        .find(|v| v.1 == 1)
+        .map(|v| v.0);
+    assert!(
+        versions(&chat, "t").iter().all(|v| v.1 != 2),
+        "the closing version never went out"
+    );
+    assert_eq!(read.item.version, 3, "the close follows on");
+    assert_eq!(read.item.first, first, "and names the item's first event");
+    assert_eq!(read.item.event.header().state, State::Done);
+    assert!(read.item.event.native().is_none());
+    assert!(read.item.settles.is_empty());
+    within(20, || {
+        (chat.items().into_iter())
+            .any(|(_, r)| refused(&r.item.event).as_deref() == Some("failed"))
+            .then_some(())
+    })
+    .await;
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_item_whose_closing_version_mdk_refuses_is_closed_after_all() {
+    closing_version_dropped(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_item_whose_closing_version_is_given_up_is_closed_after_all() {
+    closing_version_dropped(true).await;
+}
+
+/// A notice that settles a request, which MDK refuses or the core gives up, is followed by a
+/// `failed` notice that settles the request in its place (L1). Found by the TLA+ model, whose
+/// cases `give-up-settles` and `refuse-settles` now check the fix.
+async fn settling_notice_dropped(give_up: bool) {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, _events, seen) = stub(false);
+    let core = world.core(driver, Store::new(world.state.path()));
+    let core = world.run(core.unknown_sends(1, Duration::from_millis(300)));
+    let (chat, _) = a_chat(&world, &seen).await;
+    // A message of the person's, which is no item: an interrupt that names it is refused as for
+    // an unknown item, in a notice that settles it.
+    let message = chat.say("not an item").await;
+    within(20, || {
+        (seen.lock().unwrap().prompts.len() == 2).then_some(())
+    })
+    .await;
+    dropped_next(&world, give_up);
+    let request = chat.ask(Some(&message), &Asked::Interrupt, "Stop").await;
+    let settled = settled_by(&chat, &request, 30).await;
+    assert_eq!(refused(&settled).as_deref(), Some("failed"));
+    let settling = (chat.items().into_iter()).filter(|(_, r)| r.item.settles.contains(&request));
+    assert_eq!(settling.count(), 1, "settled once");
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_whose_notice_mdk_refuses_is_settled_after_all() {
+    settling_notice_dropped(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_request_whose_notice_is_given_up_is_settled_after_all() {
+    settling_notice_dropped(true).await;
+}

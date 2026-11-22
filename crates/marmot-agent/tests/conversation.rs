@@ -2026,3 +2026,232 @@ fn a_refused_edit_leaves_its_turn_version_settling_nothing() {
     }
     assert_eq!(failed, vec![EventKey::from("r2")]);
 }
+
+// In a group MDK refuses everything for, as one that is gone, a dropped send is followed by what
+// stands in for it, once: the item's close of the core's own, and a `failed` notice in place of
+// one that settled a request. Those are the last; when they are dropped too, nothing takes their
+// place, so nothing loops (S2, L1).
+#[test]
+fn what_stands_in_for_a_dropped_send_is_the_last() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    let request = interrupt_taken(&mut talk, "r1");
+    let mut done = emitted(&chat, event("t1", State::Done, turn()));
+    done.settles = vec![request];
+    talk.emitted(done);
+    let group = direct().group;
+    let mut dropped = Vec::new();
+    while let Some((token, what)) = talk.next_send(&group) {
+        assert!(dropped.len() < 10, "it loops");
+        let Sending::Item { item, .. } = what else {
+            panic!("no words were queued")
+        };
+        let header = item.event.header();
+        let reason = match item.event.body() {
+            Body::Notice(n) => n.reason.clone(),
+            _ => None,
+        };
+        dropped.push((
+            header.item.as_str().starts_with("core-"),
+            item.version,
+            header.state,
+            reason,
+            item.settles.clone(),
+        ));
+        talk.refused(&token, false);
+    }
+    let r1 = vec![EventKey::from("r1")];
+    let failed = Some("failed".to_string());
+    assert_eq!(
+        dropped,
+        vec![
+            (false, 2, State::Done, None, r1.clone()),
+            // The item's close, as small as it can be, and the notice that tells of the drop.
+            (
+                false,
+                3,
+                State::Done,
+                Some("not_delivered".into()),
+                Vec::new()
+            ),
+            (true, 1, State::Done, failed.clone(), r1.clone()),
+            // In place of that notice, which settled r1: the last.
+            (true, 1, State::Done, failed, r1),
+        ]
+    );
+    assert!(talk.queued(&group).is_empty());
+}
+
+/// Sends everything queued for the direct chat as MDK would, with the real carrier: what it
+/// cannot fit in 64 KB is refused, as `marmot.rs` refuses it. Gives what went out, in order.
+fn deliver_all(talk: &mut Conversation) -> Vec<Item> {
+    let group = direct().group;
+    let mut out = Vec::new();
+    let mut tries = 0;
+    while let Some((token, what)) = talk.next_send(&group) {
+        tries += 1;
+        assert!(tries < 20, "it loops");
+        let Sending::Item { key, item } = what else {
+            panic!("no words were queued")
+        };
+        if carrier::item(&item).is_ok() {
+            talk.sent(&key, EventKey::from(format!("e-sent-{tries}").as_str()));
+            out.push(*item);
+        } else {
+            talk.refused(&token, false);
+        }
+    }
+    out
+}
+
+fn reason(item: &Item) -> Option<String> {
+    match item.event.body() {
+        Body::Notice(n) => n.reason.clone(),
+        _ => None,
+    }
+}
+
+// An item whose close went out stays closed as it went out: a later version, also final, that
+// is dropped (one of the versions that spread what an event settles) is not followed by the
+// core's close, which would show "not delivered" over the close the chat has. What that version
+// settled is settled by the `failed` notice (S1, S2).
+#[test]
+fn a_final_version_dropped_after_a_delivered_close_leaves_the_close() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    let requests: Vec<_> = (0..450)
+        .map(|n| interrupt_taken(&mut talk, &format!("r{n}")))
+        .collect();
+    let mut done = emitted(&chat, event("t1", State::Done, turn()));
+    done.settles = requests.clone();
+    talk.emitted(done);
+    let group = direct().group;
+    // Versions 2 and 3 go out, each closing the item; version 4 is refused.
+    let mut carried = Vec::new();
+    for n in 2..=4 {
+        let Some((token, Sending::Item { key, item })) = talk.next_send(&group) else {
+            panic!("no version")
+        };
+        assert_eq!(item.version, n);
+        if n < 4 {
+            talk.sent(&key, EventKey::from(format!("e-v{n}").as_str()));
+        } else {
+            carried = item.settles.clone();
+            talk.refused(&token, false);
+        }
+    }
+    assert_eq!(carried.len(), 50);
+    let queued = talk.queued(&group);
+    let mut settled = Vec::new();
+    for (_, what) in queued {
+        let Sending::Item { item, .. } = what else {
+            panic!("no words were queued")
+        };
+        assert!(
+            item.event.header().item.as_str().starts_with("core-"),
+            "only the `failed` notice follows, not v{} of {}",
+            item.version,
+            item.event.header().item.as_str()
+        );
+        assert_eq!(reason(&item).as_deref(), Some("failed"));
+        settled.extend(item.settles);
+    }
+    assert_eq!(settled, carried);
+}
+
+// A `failed` notice that tells of a dropped version, and settles nothing, is replaced once when
+// it is dropped too, so the chat is told of the gap; what replaces it is the last (S3).
+#[test]
+fn a_dropped_notice_that_tells_of_a_gap_is_replaced_once() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    talk.emitted(emitted(&chat, event("t1", State::Done, turn())));
+    let group = direct().group;
+    let mut dropped = Vec::new();
+    while let Some((token, what)) = talk.next_send(&group) {
+        assert!(dropped.len() < 10, "it loops");
+        let Sending::Item { key, item } = what else {
+            panic!("no words were queued")
+        };
+        let core = item.event.header().item.as_str().starts_with("core-");
+        dropped.push((core, item.version, reason(&item), item.settles.clone()));
+        if reason(&item).as_deref() == Some("not_delivered") {
+            talk.sent(&key, EventKey::from("e-close"));
+        } else {
+            talk.refused(&token, false);
+        }
+    }
+    let failed = Some("failed".to_string());
+    assert_eq!(
+        dropped,
+        vec![
+            (false, 2, None, Vec::new()),
+            (false, 3, Some("not_delivered".into()), Vec::new()),
+            (true, 1, failed.clone(), Vec::new()),
+            // In place of the notice that told of version 2: the last.
+            (true, 1, failed, Vec::new()),
+        ]
+    );
+}
+
+// What stands in for a dropped send does not inherit the size that got it dropped: a session id
+// over 64 KB, which the driver chose, makes every version of its item too large, and the core's
+// own notices would carry it too. The `failed` notices leave the session out, and the core's
+// close of the item leaves out its session and turn, keeping its id, version and final state, so
+// the chat is told and the item is closed (S2, S3).
+#[test]
+fn what_stands_in_for_a_dropped_send_fits_when_the_session_id_does_not() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let huge = "s".repeat(70_000);
+    let session = |state| {
+        let header = Header {
+            harness: "codex".into(),
+            session: Some(huge.as_str().into()),
+            turn: Some("t1".into()),
+            item: "sess".into(),
+            seq: 1,
+            state,
+            title: "Session".into(),
+            text: "the plain rendering".into(),
+        };
+        AgentEvent::new(header, Body::Session(session_item(false)), None).unwrap()
+    };
+    talk.emitted(emitted(&chat, session(State::Running)));
+    let first = deliver_all(&mut talk);
+    assert_eq!(
+        (first.iter().map(reason)).collect::<Vec<_>>(),
+        vec![Some("failed".to_string())],
+        "the chat is told of the dropped version"
+    );
+    assert_eq!(first[0].event.header().session, None);
+    talk.emitted(emitted(&chat, session(State::Done)));
+    let then = deliver_all(&mut talk);
+    let close = (then.iter())
+        .find(|i| i.event.header().item.as_str() == "sess")
+        .expect("the item is closed in the chat");
+    assert_eq!(reason(close).as_deref(), Some("not_delivered"));
+    assert_eq!(close.version, 3);
+    assert_eq!(close.event.header().state, State::Done);
+    assert_eq!(close.event.header().session, None);
+    assert_eq!(close.event.header().turn, None);
+    assert!(then.iter().any(|i| reason(i).as_deref() == Some("failed")));
+}

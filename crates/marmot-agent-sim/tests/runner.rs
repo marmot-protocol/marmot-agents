@@ -135,3 +135,24 @@ fn one_prompt_after(before: &[Action], then: &[Action]) -> Schedule {
         ..one_prompt(&[], Faults::default())
     }
 }
+
+// Review round 1 of `dropped-sends`. The old S3 forgave a skipped version only when MDK refused
+// it: a core that gave a send up after its ten tries, each with an outcome not known and none
+// stored, as designed, failed the run, since nothing recorded the give-up.
+#[test]
+fn a_send_given_up_after_its_tries_is_a_gap_the_oracles_allow() {
+    let tries = [Action::Send {
+        outcome: Outcome::Ambiguous,
+    }; 10];
+    let then = [
+        Action::Emit {
+            pick: 0,
+            force: false,
+        },
+        Action::Tick { ms: 300_000 },
+    ];
+    let report = run(&one_prompt_after(&tries, &then));
+    assert_eq!(property(&report), None, "{:?}", report.failure);
+    let given_up = (report.trace.iter()).any(|t| t.what.contains("given up"));
+    assert!(given_up, "{:#?}", report.trace);
+}

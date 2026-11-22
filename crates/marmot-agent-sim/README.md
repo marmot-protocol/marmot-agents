@@ -38,10 +38,18 @@ harness finishes its turns, a send that lands late lands, and the clock runs. By
 - A prompt whose delivery a crash cut off is lost (D-037: at most once, not at least once).
 - A request with no target read more than five minutes late is dropped (D-028), also when it was read in time and a
   crash undid that before it was saved.
-- A request settled only by a core notice that MDK refused for good stays unsettled: the core drops a refused notice so
-  nothing loops. A request whose other send MDK refused is not let off: the core's `failed` notice must settle it.
-- An item whose closing version MDK refused may stay open as the chat last saw it. One MDK refused an open version of
-  must still be closed.
+- A send MDK refuses, or that the core gives up after its tries, is answered once, and what answers it is the last: a
+  request whose settling notice was dropped must be settled by the `failed` notice in its place, and an item whose
+  closing version was dropped must be closed by the core's own close (`not_delivered`), unless the chat already showed
+  it closed by the version before; only when that one is dropped too is the request or the item let off, since the core
+  then takes the group as one MDK refuses everything for, as a gone one, and stops so nothing loops. The request is
+  let off only by two different notices of its own chat, and the item only while the dropped close is the newest of
+  its versions. These two were let off whenever the first send was refused, until the TLA+ model showed the core left
+  them for good; with that limit removed, 80 of 1,200 gate runs failed (seed 0, 200 runs per family) until the core
+  was fixed.
+- The world sees a give-up from outside: a send whose last try came back unknown and stored nothing, when the core
+  tries another send to the same chat instead (sends to a chat go one at a time, oldest first). It is recorded with
+  the sends MDK refused.
 
 A run also fails, with its schedule and trace, when the core's task panics, ends when no stop, driver end or failed
 save explains it, or does not end cleanly after the last stop.

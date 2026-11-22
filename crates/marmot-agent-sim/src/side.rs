@@ -214,7 +214,7 @@ impl Side for SimSide {
         &self,
         group: &GroupKey,
         what: &Sending,
-        _token: &str,
+        token: &str,
     ) -> Result<EventKey, SendFailed> {
         let (result, crash) = {
             let mut world = lock(&self.world);
@@ -222,7 +222,7 @@ impl Side for SimSide {
             if world.effect("Send") {
                 (Err(SendFailed::Busy), true)
             } else {
-                send(&mut world, group, what)
+                send(&mut world, group, what, token)
             }
         };
         if crash {
@@ -272,10 +272,12 @@ fn send(
     world: &mut World,
     group: &GroupKey,
     what: &Sending,
+    token: &str,
 ) -> (Result<EventKey, SendFailed>, bool) {
     let Some(chat) = world.chat_of(group) else {
         return (Err(SendFailed::Refused { gone: false }), false);
     };
+    world.trying(chat, token);
     // What MDK would store, as the real Marmot side builds it.
     let built = match what {
         Sending::Item { item, .. } => {
@@ -320,26 +322,38 @@ fn send(
     let (state, notice) = match what {
         Sending::Item { item, .. } => (
             Some(item.event.header().state),
-            matches!(item.event.body(), Body::Notice(n) if n.kind == NoticeKind::Refused),
+            match item.event.body() {
+                Body::Notice(n) if matches!(n.kind, NoticeKind::Refused | NoticeKind::Warning) => {
+                    n.reason.clone()
+                }
+                _ => None,
+            },
         ),
-        Sending::Words { .. } => (None, false),
+        Sending::Words { .. } => (None, None),
+    };
+    let dropped = RefusedSend {
+        chat,
+        item,
+        settles,
+        words,
+        state,
+        seq,
+        notice,
     };
     let Ok((kind, content, tags, edits)) = built else {
-        world.refused.push(RefusedSend {
-            chat,
-            item,
-            settles,
-            words,
-            state,
-            seq,
-            notice,
-        });
+        world.refused.push(dropped);
+        world.unknown.remove(&chat);
         world.note(format!("Send(c{chat}): Refused, too large"));
         return (Err(SendFailed::Refused { gone: false }), false);
     };
     let row = world.store_sent(chat, kind, content, tags, edits);
     let described = describe(&row);
     let outcome = world.outcomes.pop_front();
+    // Busy leaves the send as the core last knew it; any other outcome but an unknown one that
+    // stored nothing settles what became of it.
+    if !matches!(outcome, Some(Outcome::Busy | Outcome::Ambiguous)) {
+        world.unknown.remove(&chat);
+    }
     match outcome {
         None => {
             let event = world.keep(row);
@@ -351,19 +365,12 @@ fn send(
             (Err(SendFailed::Busy), false)
         }
         Some(Outcome::Refused) => {
-            world.refused.push(RefusedSend {
-                chat,
-                item,
-                settles,
-                words,
-                state,
-                seq,
-                notice,
-            });
+            world.refused.push(dropped);
             world.note(format!("Send({described}): Refused"));
             (Err(SendFailed::Refused { gone: false }), false)
         }
         Some(Outcome::Ambiguous) => {
+            world.unknown.insert(chat, (token.to_string(), dropped));
             world.note(format!("Send({described}): Ambiguous, not sent"));
             (Err(SendFailed::Unknown), false)
         }

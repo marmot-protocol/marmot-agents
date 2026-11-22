@@ -28,7 +28,8 @@ All are on the small bounds of [the model's README](../README.md#configurations-
   `Tick(req)`, `Send(chat, send, outcome)` with the outcome `sent`, `busy`, `ambiguous` (it did not go out),
   `ambiguous_landed` (it did) or `refused`, `Lookup(chat, send, result)` with `found` or `absent` (an absent one
   either `gives_up` or is followed by the `Send` that tries again), `Save`, `SaveFails`, `Crash`, `Restart`,
-  `DriverStops`, `Stop`. A `send` names an item's version, or a notice and what it is about.
+  `DriverStops`, `Stop`. A `send` names an item's version, or a notice and what it is about, and carries
+  `"last_resort": true` when it stands in for a dropped send.
 - `end` says how the trace ends: `violation` (the invariant `breaks` names is false after the last step),
   `stutter` (nothing happens again, for ever) or `loop` (from step `from_step` on, the steps repeat for ever).
 
@@ -40,10 +41,14 @@ All are on the small bounds of [the model's README](../README.md#configurations-
 | [`duplicate-first-event`](duplicate-first-event.json) | S3 | The known limit until MDK has crash-safe tagged sends: MDK posts a first version, the save after it fails, and after the restart a lookup misses it, so it goes again |
 | [`live-out-of-order`](live-out-of-order.json) | S10 | Without `LiveInOrder`: `p1` is stored before `r1`, but `r1` is handed over first; the mark passes `p1`, which `run.rs` `handle` then skips |
 | [`live-before-store`](live-before-store.json) | L3 | Without `LiveAfterStore`: `p1` is heard before it is stored, so `order_of` gives nothing and it is dropped; MDK does not hand it over again, and nothing reads it until the core starts again |
-| [`give-up-leaves-item-open`](give-up-leaves-item-open.json) | S2 | A finding in the code: an item's closing version is given up, and nothing closes the item in the chat, not even a restart |
-| [`give-up-drops-settles`](give-up-drops-settles.json) | L1 | A finding in the code: a notice that settles `r1` is given up, and `r1` is settled nowhere |
-| [`refuse-leaves-item-open`](refuse-leaves-item-open.json) | S2 | The same finding, when MDK refuses the closing version in a live group (too large, or a payload it will not take) |
-| [`refuse-drops-settles`](refuse-drops-settles.json) | L1 | The same finding, when MDK refuses the notice that settles `r1` in a live group |
+| [`last-resort-refused`](last-resort-refused.json) | S2 | The accepted limit, without `LastResortTaken`: MDK refuses an item's closing version in a live group, and then the core's close that stands in for it (`"last_resort": true`). Nothing stands in for a last resort, so the item stays open in the chat |
+| [`last-resort-given-up`](last-resort-given-up.json) | S2 | The same limit reached another way, with `LastResortTaken`, which speaks only of refusals: MDK refuses an item's closing version, and the core's close that stands in for it meets an unknown outcome and is given up after its tries. The item stays open in the chat |
+
+The four schedules of the gaps the model found in dropping a send (`give-up-leaves-item-open`,
+`give-up-drops-settles`, `refuse-leaves-item-open`, `refuse-drops-settles`) are gone: the code was fixed on
+2026-11-22, and those configurations now pass. The deliberate defect `NoReplacement`, the code before the fix,
+shows the check still catches them. So is `refuse-twice-untold`, a gap left untold when MDK refused the `failed`
+notice that told of it: since review round 1 such a notice is replaced too, and `NoRetell` puts the old way back.
 
 ## Driving the simulator with them (step 5)
 

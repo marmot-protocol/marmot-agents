@@ -14,7 +14,8 @@ docs/design/verification.md names the actions. A step names what the model's act
 - Store(msg), Hear(msg) and Ask(msg) (`handled` says whether the core read it; a message heard
   before it is stored is dropped), CatchUp(chat, msg), CatchUpDone;
 - Deliver(msg, kind, session), Take(msg), Refuse(msg), Emit(item, settles, fin), Tick(req);
-- Send(chat, send, outcome), where `send` names the item and version, or the notice, and the
+- Send(chat, send, outcome), where `send` names the item and version, or the notice and what it
+  is about, and `last_resort` when it stands in for a dropped send; and the
   outcome is sent, busy, ambiguous (it did not go out), ambiguous_landed (it went out) or refused;
 - Lookup(chat, send, result): found, or absent; an absent one either gives the send up
   (`gives_up`) or is followed by the Send that tries it again;
@@ -193,14 +194,26 @@ def variables(body):
 # ---------------------------------------------------------------------------------------------
 # What each step did
 
-def send_of(entry):
-    tok = entry["tok"]
-    if entry["i"] != "notice":
-        return {"item": entry["i"], "version": entry["v"]}
+ITEMS = {"t1", "s1", "t2"}
+
+
+def about_of(tok):
+    """What a token names: an item's version, or a notice and what it is about, in turn."""
+    if tok[0] in ITEMS:
+        return {"item": tok[0], "version": tok[1]}
     kind, about = tok
-    if isinstance(about, tuple):
-        about = {"item": about[0], "version": about[1]}
-    return {"notice": kind, "about": about}
+    return {"notice": kind, "about": about_of(about) if isinstance(about, tuple) else about}
+
+
+def send_of(entry):
+    """The send an outbox entry is, marked when it stands in for a dropped send (a last resort)."""
+    if entry["i"] != "notice":
+        out = {"item": entry["i"], "version": entry["v"]}
+    else:
+        out = about_of(entry["tok"])
+    if entry.get("lr"):
+        out["last_resort"] = True
+    return out
 
 
 def head_for(cv, chat):

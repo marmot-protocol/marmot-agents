@@ -108,6 +108,25 @@ fixed on 2026-11-21, each with a test that failed first.
 - **OpenClaw vouches a sender for every chat** (S5, S6). The core's own check is the backstop.
 - **MDK's test relay limits each connection to 60 events a minute** by default. **Fixed:** the tests lift the
   limit, as MDK's own do.
+- **A dropped send leaves an item open, or a request unsettled** (S2, L1, L2). **Fixed** on 2026-11-22, found by
+  the TLA+ model (`CoreLifecycle`, the give-up and refused configurations) and then by the simulator once its
+  oracle stopped letting these cases off. When the core gave up a send after ten unknown outcomes, or MDK refused
+  one in a group that stays live, an item's closing version was dropped with the item already closed in the
+  core, so nothing closed it in the chat, not even a restart; and a notice that settled requests was dropped
+  with nothing in its place, so those requests were settled nowhere. Now the core closes such an item with a
+  small version of its own, and settles such requests with a `failed` notice in place of the dropped one. What
+  stands in for a dropped send is the last: if it is dropped too, as in a group that is gone, nothing takes its
+  place, so nothing loops. The model checks the fix: with one send given up, or one or two refused in a live
+  group, every item closes, every request is settled and the chat is told of every gap. Review found three more
+  cases, fixed the same way, each with a test that failed first: an item whose close had gone out was closed
+  again, as "not delivered", when a later final version was dropped; what stands in for a dropped send carried
+  a session id over 64 KB that the driver chose, and was refused for it too; and a dropped `failed` notice that
+  settled nothing was not replaced, so the gap went untold. **The accepted limit:** if what stands in for a
+  dropped send is dropped too, in a group that stays live, the item stays open in the chat; the model assumes
+  MDK does not refuse it (`LastResortTaken`), since it is as small as the core makes anything, and shows what
+  happens when it does ([`last-resort-refused`](../../formal/tla/counterexamples/last-resort-refused.json)) or
+  when it is given up after its tries
+  ([`last-resort-given-up`](../../formal/tla/counterexamples/last-resort-given-up.json)).
 - **Messages missing after an abrupt stop**, seen while building the importer: the next program on the same home
   sometimes never got later messages. This looks like MDK's, and goes to MDK as an issue. A related case was seen
   in the tests: right after a person makes a second group with the agent, messages between them sometimes do not
@@ -117,13 +136,16 @@ fixed on 2026-11-21, each with a test that failed first.
 
 Built, and not yet accepted by the owner, so not in `docs/decisions.md`. What other programs see is in
 [kinds 1201 and 1202](agent-kinds.md#provisional-additions): `settles` on the agent's words, `no_effect`, `failed`
-for a refused send, the `cut` tags and the stand-in. Besides those:
+for a refused send, the `cut` tags, the stand-in, and the core's close of an item whose closing version was
+dropped. Besides those:
 
 - **The settings refuse a key they cannot read.** `owner`, `invite`, and the people in `prompt` and `approve` are
   read as hex in either case or as an npub; anything else stops the core at start, naming the setting.
 - **A failed save stops the core**, as a crash would, and the next start takes up what is on disk.
 - **The state file** (`marmot-agent-state.json` in the home) keeps, besides what it kept before: the sends not
-  yet made, oldest first, each with a token that stays the same across tries, whether it was handed to MDK, and,
+  yet made, oldest first, each with a token that stays the same across tries, whether it was handed to MDK,
+  whether it stands in for a dropped send (and so is the last), whether it is a `failed` notice that tells of
+  a dropped send, for each item whether the latest version of it that went out closed it, and,
   for a turn's version that settles what the agent's words showed, the send of those words; where recently
   forgotten items stood; for a turn, the message that started it; and for the agent's words, the requests they
   settle, held until a message carries them.
@@ -188,7 +210,7 @@ simulator scenario. A test checks that the model's actions and the code's still 
 
 | Model | What it covers | Owns | Status |
 | --- | --- | --- | --- |
-| `CoreLifecycle` | The conversation, the run loop, saving and crashing: requests pending and settled, items and versions, read marks, sessions | S1 to S4, S10, S12, L1 to L3 | Built, in [`formal/tla`](../../formal/tla/README.md): checked on small bounds on every pull request, with its counterexamples, defects and reachability probes. It found two gaps when a send is given up or refused in a live group (S2, L1, L2); see its README |
+| `CoreLifecycle` | The conversation, the run loop, saving and crashing: requests pending and settled, items and versions, read marks, sessions | S1 to S4, S10, S12, L1 to L3 | Built, in [`formal/tla`](../../formal/tla/README.md): checked on small bounds on every pull request, with its counterexamples, defects and reachability probes. It found two gaps when a send is given up or refused in a live group (S2, L1, L2), since fixed and checked; see its README |
 | `DriverTransport` | One driver's side, for any harness: requests in flight, effects awaiting settlement, a dropped wait, a restart of the harness, two chats | S1, S5, S11, S13, L1, L2 | Planned |
 | `SocketProtocol` | The hello, a request answered while events arrive, a connector going and another coming, one at a time | S11, L4 | Planned |
 | `Gateways` | Small models of OpenClaw's approval vouching and Hermes's held turn end | S5, S6, S1 | Planned |

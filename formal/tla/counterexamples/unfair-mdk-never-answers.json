@@ -5,7 +5,7 @@
   "breaks": "L1",
   "what": "Without FairMdk, MDK never takes a step again once the core waits on a lookup: the notice that settles r1 is never posted (L1). The lookup stays enabled; it is never taken, so the trace ends in a stutter.",
   "generated_by": "python3 tools/tla/check.py --counterexamples",
-  "constants": {"Prompts": ["p1"], "Requests": ["r1"], "NewSession": ["r1"], "Items": ["s1"], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 1, "MaxRefusals": 0, "UnknownTries": 2, "GoneChats": [], "ExactLookup": true, "TokenDedupe": false, "LagCatchUp": false, "LiveInOrder": true, "LiveAfterStore": true, "FairMdk": false, "FairDriver": true, "FairTime": true, "Bug": "none"},
+  "constants": {"Prompts": ["p1"], "Requests": ["r1"], "NewSession": ["r1"], "Items": ["s1"], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 1, "MaxRefusals": 0, "UnknownTries": 2, "GoneChats": [], "ExactLookup": true, "TokenDedupe": false, "LagCatchUp": false, "LiveInOrder": true, "LiveAfterStore": true, "LastResortTaken": true, "FairMdk": false, "FairDriver": true, "FairTime": true, "Bug": "none"},
   "messages": [{"id": "p1", "chat": "c1", "kind": "prompt"}, {"id": "r1", "chat": "c1", "kind": "control", "new_session": true}],
   "steps": [
     {"action": "CatchUpDone"},
