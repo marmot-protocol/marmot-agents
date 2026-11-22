@@ -6,9 +6,13 @@
 //! else on the machine may use it: every request must carry a chat's token, a random secret the
 //! driver gives the agent in a header, never in the address, since an agent may log the address.
 //!
-//! A call goes to the driver as a [`Call`], with what tells which chat made it: the token, and the
-//! session the call itself names in its `_meta`, which OpenCode and Goose add and Cursor does not.
-//! The driver decides; this module only carries the call there and the answer back.
+//! A call goes to the driver as a [`Call`], with what tells which chat made it: the token, which
+//! names a chat and the folder its session was opened in, and the session the call itself names in
+//! its `_meta`, which OpenCode and Goose add and Cursor does not. The driver decides; this module
+//! only carries the call there and the answer back.
+//!
+//! The driver starts the server only when the settings switch file sending on: whether it may
+//! listen on the loopback address waits on the project owner (Q-31).
 
 use marmot_agent_driver::{ChatId, Reason, Refusal};
 use rmcp::model::{
@@ -36,16 +40,35 @@ pub const SERVER: &str = "marmot";
 /// 2.3.2 and Goose 1.59.2, read in their sources and seen on the wire 2026-11-22.
 const SESSION_KEYS: [&str; 2] = ["ai.opencode/sessionID", "agent-session-id"];
 
-/// Each chat's token, and the chat it is for. The driver adds one when it first sees a chat.
-pub(crate) type Tokens = Arc<Mutex<HashMap<String, ChatId>>>;
+/// Who a token was given to: a chat, for a session it opened in a folder.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Owner {
+    pub chat: ChatId,
+    pub folder: String,
+}
+
+/// Each token, and who it was given to. The driver adds one for each chat and folder it opens a
+/// session in.
+pub(crate) type Tokens = Arc<Mutex<HashMap<String, Owner>>>;
+
+/// The session a call names in its `_meta`.
+pub(crate) enum Named {
+    /// A session, as the agent names it.
+    Session(String),
+    /// A key for the session, with no session the driver can read in it.
+    Malformed,
+    /// No key for the session at all.
+    Nothing,
+}
 
 /// A call of the tool, for the driver to route and answer.
 pub(crate) struct Call {
-    /// The chat whose token the call carried. An agent that keeps one server for every session in
-    /// a folder (OpenCode) sends the token of whichever chat opened a session there last.
-    pub chat: ChatId,
-    /// The ACP session the call names in its `_meta`, when it names one.
-    pub session: Option<String>,
+    /// Who the token the call carried was given to. An agent that keeps one server for every
+    /// session in a folder (OpenCode) sends the token of whichever chat opened a session there
+    /// last.
+    pub owner: Owner,
+    /// The ACP session the call names in its `_meta`.
+    pub session: Named,
     /// The tool's argument, as the agent gave it.
     pub path: Option<String>,
     /// Where the answer goes: sent, or refused and why.
@@ -83,8 +106,7 @@ impl Server {
         let config = StreamableHttpServerConfig::default()
             .with_legacy_session_mode(false)
             .with_json_response(true)
-            .with_sse_keep_alive(None)
-            .with_cancellation_token(stop.child_token());
+            .with_sse_keep_alive(None);
         let service = StreamableHttpService::new(
             move || Ok(handler.clone()),
             Arc::new(NeverSessionManager::default()),
@@ -113,8 +135,8 @@ pub(crate) fn token() -> io::Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// The chat whose token a request carries, if it carries one the driver gave.
-fn chat_of(headers: &http::HeaderMap, tokens: &Tokens) -> Option<ChatId> {
+/// Who the token a request carries was given to, if it carries one the driver gave.
+fn owner_of(headers: &http::HeaderMap, tokens: &Tokens) -> Option<Owner> {
     let value = headers.get(http::header::AUTHORIZATION)?.to_str().ok()?;
     let token = value.strip_prefix("Bearer ")?;
     tokens.lock().ok()?.get(token).cloned()
@@ -142,7 +164,7 @@ async fn serve(
         tokio::spawn(async move {
             let guarded = hyper::service::service_fn(move |request: http::Request<_>| {
                 let mut service = service.clone();
-                let known = chat_of(request.headers(), &tokens).is_some();
+                let known = owner_of(request.headers(), &tokens).is_some();
                 async move {
                     if !known {
                         let refused = http::Response::builder()
@@ -157,9 +179,15 @@ async fn serve(
             let io = hyper_util::rt::TokioIo::new(stream);
             let connection =
                 hyper::server::conn::http1::Builder::new().serve_connection(io, guarded);
+            let mut connection = std::pin::pin!(connection);
+            // Once stopped, a call in flight is still answered, as not sent: the driver that
+            // would have answered it has gone. Then the connection closes.
             tokio::select! {
-                () = stop.cancelled() => {}
-                _ = connection => {}
+                () = stop.cancelled() => {
+                    connection.as_mut().graceful_shutdown();
+                    let _ = connection.await;
+                }
+                _ = connection.as_mut() => {}
             }
         });
     }
@@ -231,7 +259,7 @@ impl rmcp::ServerHandler for Handler {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
         let parts = context.extensions.get::<http::request::Parts>();
-        let Some(chat) = parts.and_then(|p| chat_of(&p.headers, &self.tokens)) else {
+        let Some(owner) = parts.and_then(|p| owner_of(&p.headers, &self.tokens)) else {
             return Err(rmcp::ErrorData::invalid_request("unknown client", None));
         };
         if request.name != SEND_FILE {
@@ -244,18 +272,19 @@ impl rmcp::ServerHandler for Handler {
         // The session is named in the call's `_meta`, which rmcp hands over as the context's.
         let meta = request.meta.as_ref().map(|m| &m.0.0);
         let meta = meta.or(Some(&context.meta.0.0));
-        let session = meta.and_then(|m| {
-            SESSION_KEYS
-                .iter()
-                .find_map(|k| m.get(*k).and_then(|v| v.as_str()).map(String::from))
-        });
+        let named = (SESSION_KEYS.iter()).find_map(|k| meta.and_then(|m| m.get(*k)));
+        let session = match named {
+            None => Named::Nothing,
+            Some(serde_json::Value::String(s)) if !s.is_empty() => Named::Session(s.clone()),
+            Some(_) => Named::Malformed,
+        };
         let path = (request.arguments.as_ref())
             .and_then(|a| a.get("path"))
             .and_then(|p| p.as_str())
             .map(String::from);
         let (reply, answer) = oneshot::channel();
         let call = Call {
-            chat,
+            owner,
             session,
             path,
             reply,

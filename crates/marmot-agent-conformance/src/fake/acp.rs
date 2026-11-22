@@ -75,6 +75,9 @@ pub struct Acp {
     /// or `None` when it could not be used.
     called: Called,
     waker: Arc<tokio::sync::Notify>,
+    /// The sessions whose `send_file` call is still out, and whether the turn was cancelled
+    /// meanwhile: like an agent awaiting its tool, the turn ends only once the call comes back.
+    filing: HashMap<String, bool>,
 }
 
 fn update(session: &str, update: Value) -> Value {
@@ -101,6 +104,7 @@ impl Acp {
             folders: HashMap::new(),
             called: Arc::default(),
             waker: Arc::default(),
+            filing: HashMap::new(),
         }
     }
 
@@ -143,11 +147,12 @@ impl Acp {
             Flavor::Goose => Some(json!({"agent-session-id": session})),
             Flavor::Cursor => None,
         };
+        self.filing.insert(session.to_string(), false);
         let (called, waker, session) =
             (self.called.clone(), self.waker.clone(), session.to_string());
         tokio::spawn(async move {
             let result = server.call("send_file", json!({"path": path}), meta).await;
-            let result = result.map(|r| {
+            let result = result.ok().map(|r| {
                 let text = r["content"][0]["text"].as_str().unwrap_or_default();
                 (r["isError"] != true, text.to_string())
             });
@@ -447,6 +452,11 @@ impl Protocol for Acp {
                 if self.own_runs.remove(&session) {
                     self.run(&session, false, out);
                 }
+                // A turn waiting on its tool ends once the call comes back.
+                if let Some(cancelled) = self.filing.get_mut(&session) {
+                    *cancelled = true;
+                    return;
+                }
                 self.finish(&session, None, "cancelled", out);
             }
             "session/set_config_option" => {
@@ -481,6 +491,10 @@ impl Protocol for Acp {
                     sent: *sent,
                     text: text.clone(),
                 });
+            }
+            if self.filing.remove(&session) == Some(true) {
+                self.finish(&session, None, "cancelled", out);
+                continue;
             }
             let words = match result {
                 Some((true, _)) => "sent",

@@ -1,22 +1,26 @@
-//! Sending a file (D-090): the driver gives every session it opens its own MCP server, with one
-//! tool, `send_file`; a call of it reaches the core as a request to send a file for the chat that
-//! made the call, and the core's answer goes back as the tool's result.
+//! Sending a file (D-090): once the settings switch it on, the driver gives every session it opens
+//! its own MCP server, with one tool, `send_file`; a call of it reaches the core as a request to send
+//! a file for the chat that made the call, and the core's answer goes back as the tool's result.
 //!
 //! The stand-in agent here plays the agent's part over a pipe, and calls the tool over HTTP as
-//! OpenCode, Goose and Cursor do: `initialize`, `notifications/initialized`, `tools/list`, then
-//! `tools/call`, each a request of its own.
+//! OpenCode, Goose and Cursor do, with the conformance suite's MCP client.
 
 use marmot_agent_acp::Acp;
-use marmot_agent_driver::{Chat, Driver, Output, Person, Prompt, Reason, Refusal, SendFile};
+use marmot_agent_conformance::fake::mcp::Server;
+use marmot_agent_driver::{
+    Action, Chat, Control, Driver, Output, Person, Prompt, Reason, Refusal, RequestId, SendFile,
+};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, DuplexStream, Lines};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, Lines};
 
 /// The stand-in's side of the pipe.
 struct Stand {
     lines: Lines<BufReader<tokio::io::ReadHalf<DuplexStream>>>,
     out: tokio::io::WriteHalf<DuplexStream>,
+    /// The prompts the driver sent, in order.
+    prompts: Vec<Value>,
 }
 
 impl Stand {
@@ -25,12 +29,16 @@ impl Stand {
         serde_json::from_str(&line).unwrap()
     }
 
-    async fn reply(&mut self, to: &Value, result: Value) {
-        let message = json!({"jsonrpc": "2.0", "id": to["id"], "result": result});
+    async fn send(&mut self, message: Value) {
         self.out
             .write_all(format!("{message}\n").as_bytes())
             .await
             .unwrap();
+    }
+
+    async fn reply(&mut self, to: &Value, result: Value) {
+        self.send(json!({"jsonrpc": "2.0", "id": to["id"], "result": result}))
+            .await;
     }
 
     /// Answers the driver's `session/new` with `session`, and gives back what it asked.
@@ -40,19 +48,43 @@ impl Stand {
         self.reply(&new, json!({"sessionId": session})).await;
         let prompt = self.next().await;
         assert_eq!(prompt["method"], "session/prompt");
+        self.prompts.push(prompt);
         new
     }
 }
 
-/// A stand-in agent that says it takes MCP servers over HTTP when `http`.
-async fn connected(http: bool) -> (Acp, Stand) {
+/// How the stand-in greets the driver, and whether the driver serves it files.
+struct Agent {
+    /// Whether it says it takes MCP servers over HTTP.
+    http: bool,
+    /// The name it gives: OpenCode's keeps one server for every session in a folder.
+    name: &'static str,
+    /// Whether the settings switch file sending on.
+    serve: bool,
+}
+
+const STAND_IN: Agent = Agent {
+    http: true,
+    name: "Stand In",
+    serve: true,
+};
+
+const OPENCODE: Agent = Agent {
+    http: true,
+    name: "OpenCode",
+    serve: true,
+};
+
+async fn connected(agent: Agent) -> (Acp, Stand) {
     let (driver_side, stand_side) = tokio::io::duplex(1 << 16);
     let (read, write) = tokio::io::split(stand_side);
     let mut stand = Stand {
         lines: BufReader::new(read).lines(),
         out: write,
+        prompts: Vec::new(),
     };
     let (driver_read, driver_write) = tokio::io::split(driver_side);
+    let (http, name) = (agent.http, agent.name);
     let greeting = tokio::spawn(async move {
         let hello = stand.next().await;
         let mut capabilities = json!({"loadSession": true});
@@ -60,26 +92,34 @@ async fn connected(http: bool) -> (Acp, Stand) {
             capabilities["mcpCapabilities"] = json!({"http": true, "sse": false});
         }
         let agent = json!({"protocolVersion": 1, "agentCapabilities": capabilities,
-                           "agentInfo": {"name": "Stand In", "version": "1.0.0"}});
+                           "agentInfo": {"name": name, "version": "1.0.0"}});
         stand.reply(&hello, agent).await;
         stand
     });
-    let acp = Acp::connect(driver_read, driver_write, "/work/demo", "standin")
+    let mut acp = Acp::connect(driver_read, driver_write, "/work/demo", "standin")
         .await
         .unwrap();
+    if agent.serve {
+        let served = acp.serve_files().await.unwrap();
+        assert_eq!(served, agent.http, "served only to an agent that takes it");
+    }
     (acp, greeting.await.unwrap())
 }
 
-fn prompt(chat: &str, message: &str, folder: Option<&str>, session: Option<&str>) -> Prompt {
+fn chat(id: &str, folder: Option<&str>) -> Chat {
+    Chat {
+        id: id.into(),
+        group: false,
+        name: None,
+        folder: folder.map(PathBuf::from),
+    }
+}
+
+fn prompt(chat_id: &str, message: &str, folder: Option<&str>, session: Option<&str>) -> Prompt {
     Prompt {
         message: message.into(),
         text: "send it".into(),
-        chat: Chat {
-            id: chat.into(),
-            group: false,
-            name: None,
-            folder: folder.map(PathBuf::from),
-        },
+        chat: chat(chat_id, folder),
         sender: Person {
             id: "u-1".into(),
             name: "Alice".into(),
@@ -90,92 +130,32 @@ fn prompt(chat: &str, message: &str, folder: Option<&str>, session: Option<&str>
     }
 }
 
-/// The server a session request handed the agent: its address and the chat's token.
-fn server_of(request: &Value) -> (String, String) {
+/// The server a session request handed the agent, checked for its shape: its address and token.
+fn server_of(request: &Value) -> (Server, String) {
     let servers = request["params"]["mcpServers"].as_array().expect("a list");
     assert_eq!(servers.len(), 1, "one server: {servers:?}");
     let server = &servers[0];
     assert_eq!(server["type"], "http");
     assert_eq!(server["name"], "marmot");
-    let url = server["url"].as_str().expect("an address").to_string();
     let header = &server["headers"][0];
     assert_eq!(header["name"], "Authorization");
     let token = header["value"].as_str().unwrap();
     let token = token.strip_prefix("Bearer ").expect("a bearer token");
-    (url, token.to_string())
-}
-
-/// One HTTP request to the server, as an MCP client makes it: the status, and the JSON answer.
-async fn post(url: &str, token: Option<&str>, body: &Value) -> (u16, Value) {
-    let address = url
-        .strip_prefix("http://")
-        .and_then(|rest| rest.split('/').next())
-        .expect("an http address");
-    let path = &url[url.find(address).unwrap() + address.len()..];
-    let mut stream = tokio::net::TcpStream::connect(address).await.unwrap();
-    let body = body.to_string();
-    let auth = token.map_or(String::new(), |t| format!("Authorization: Bearer {t}\r\n"));
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\n\
-         Accept: application/json, text/event-stream\r\nMCP-Protocol-Version: 2025-11-25\r\n\
-         {auth}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    stream.write_all(request.as_bytes()).await.unwrap();
-    let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).await.unwrap();
-    let raw = String::from_utf8_lossy(&raw).into_owned();
-    let (head, rest) = raw.split_once("\r\n\r\n").expect("an HTTP response");
-    let status = head.split(' ').nth(1).and_then(|s| s.parse().ok()).unwrap();
-    let chunked = head.to_lowercase().contains("transfer-encoding: chunked");
-    let text = if chunked {
-        unchunk(rest)
-    } else {
-        rest.to_string()
-    };
-    (status, serde_json::from_str(&text).unwrap_or(Value::Null))
-}
-
-fn unchunk(mut rest: &str) -> String {
-    let mut text = String::new();
-    while let Some((size, after)) = rest.split_once("\r\n") {
-        let size = usize::from_str_radix(size.trim(), 16).unwrap_or(0);
-        if size == 0 {
-            break;
-        }
-        text.push_str(&after[..size]);
-        rest = &after[size + 2..];
-    }
-    text
+    let mut found = Server::from_params(&request["params"]);
+    (found.remove(0), token.to_string())
 }
 
 /// What an agent does to call the tool: greet the server, list its tools, call it with `path` and
 /// `meta`. Gives back the call's result.
-async fn call_tool(url: &str, token: &str, path: &str, meta: Value) -> Value {
-    let hello = json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
-        "protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "stand-in", "version": "0"}}});
-    let (status, greeted) = post(url, Some(token), &hello).await;
-    assert_eq!(status, 200, "{greeted}");
-    let initialized = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
-    let (status, _) = post(url, Some(token), &initialized).await;
-    assert!(status == 202 || status == 200, "{status}");
-    let list = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"});
-    let (_, tools) = post(url, Some(token), &list).await;
-    let tools = tools["result"]["tools"].as_array().expect("tools").clone();
-    assert_eq!(tools.len(), 1);
-    assert_eq!(tools[0]["name"], "send_file");
-    assert_eq!(tools[0]["inputSchema"]["required"], json!(["path"]));
-    let mut params = json!({"name": "send_file", "arguments": {"path": path}});
-    if !meta.is_null() {
-        params["_meta"] = meta;
-    }
-    let call = json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": params});
-    let (status, answered) = post(url, Some(token), &call).await;
-    assert_eq!(status, 200, "{answered}");
-    answered["result"].clone()
+async fn call_tool(server: &Server, path: &str, meta: Value) -> Value {
+    let meta = (!meta.is_null()).then_some(meta);
+    server
+        .call("send_file", json!({"path": path}), meta)
+        .await
+        .expect("the server answers the call")
 }
 
-/// The text of a tool's result.
+/// The text of a tool's result, and whether it is an error.
 fn said(result: &Value) -> (String, bool) {
     let text = result["content"][0]["text"].as_str().unwrap_or_default();
     (text.to_string(), result["isError"] == true)
@@ -195,16 +175,45 @@ async fn next_file(acp: &mut Acp) -> SendFile {
     }
 }
 
-/// Two chats open sessions in that order: as OpenCode keeps one server for every session in a
-/// folder, the second chat's token is the one the agent then sends for both.
-async fn two_chats(acp: &mut Acp, stand: Stand) -> (Stand, [Value; 2]) {
+/// Reads what the agent has said until it says nothing for a moment. No file may be asked.
+async fn settle(acp: &mut Acp) {
+    while let Ok(Some(output)) =
+        tokio::time::timeout(Duration::from_millis(100), acp.next_event()).await
+    {
+        assert!(matches!(output, Output::Event(_)), "a file was asked");
+    }
+}
+
+/// The call is refused at once, and nothing is handed to the core.
+async fn refused(acp: &mut Acp, server: Server, meta: Value) -> String {
+    let call = tokio::spawn(async move { call_tool(&server, "notes.txt", meta).await });
+    let handed = async {
+        loop {
+            match acp.next_event().await {
+                Some(Output::SendFile(_)) => return true,
+                Some(Output::Event(_)) => {}
+                None => return false,
+            }
+        }
+    };
+    let result = tokio::select! {
+        result = call => result.unwrap(),
+        _ = handed => panic!("a file was handed to the core"),
+    };
+    let (text, error) = said(&result);
+    assert!(error && text.starts_with("Not sent"), "{text}");
+    text
+}
+
+/// Two chats open sessions `s1` and `s2` in that order, chat 1 in `folder`, chat 2 in the driver's.
+async fn two_chats(acp: &mut Acp, stand: Stand, folder: Option<&str>) -> (Stand, [Value; 2]) {
     let agent = tokio::spawn(async move {
         let mut stand = stand;
         let first = stand.opens("s1").await;
         let second = stand.opens("s2").await;
         (stand, [first, second])
     });
-    acp.prompt(prompt("c-1", "m-1", Some("/work/other"), None))
+    acp.prompt(prompt("c-1", "m-1", folder, None))
         .await
         .unwrap();
     acp.prompt(prompt("c-2", "m-2", None, None)).await.unwrap();
@@ -213,19 +222,27 @@ async fn two_chats(acp: &mut Acp, stand: Stand) -> (Stand, [Value; 2]) {
 
 #[tokio::test]
 async fn each_session_is_given_the_drivers_server_with_its_chats_own_token() {
-    let (mut acp, stand) = connected(true).await;
-    let (mut stand, [first, second]) = two_chats(&mut acp, stand).await;
-    let (url, one) = server_of(&first);
+    let (mut acp, stand) = connected(STAND_IN).await;
+    let (mut stand, [first, second]) = two_chats(&mut acp, stand, Some("/work/other")).await;
+    let (server, one) = server_of(&first);
     let (same, two) = server_of(&second);
-    assert_eq!(url, same, "one server for every chat");
-    assert!(url.starts_with("http://127.0.0.1:"), "{url}");
+    assert_eq!(server.url, same.url, "one server for every chat");
     assert!(
-        !url.contains(&one) && !url.contains(&two),
+        server.url.starts_with("http://127.0.0.1:"),
+        "{}",
+        server.url
+    );
+    assert!(
+        !server.url.contains(&one) && !server.url.contains(&two),
         "no token in an address"
     );
     assert_ne!(one, two, "each chat has its own token");
     assert_eq!(one.len(), 32);
     assert!(one.chars().all(|c| c.is_ascii_hexdigit()));
+    let tools = server.tools().await.unwrap();
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["name"], "send_file");
+    assert_eq!(tools[0]["inputSchema"]["required"], json!(["path"]));
     // A session taken up again is given the server too.
     let agent = tokio::spawn(async move {
         let load = stand.next().await;
@@ -251,39 +268,91 @@ async fn each_session_is_given_the_drivers_server_with_its_chats_own_token() {
     }
 }
 
+// Q-31 waits on the owner: until the settings switch file sending on, the driver listens on
+// nothing and hands the agent no server, even one that takes it.
+#[tokio::test]
+async fn no_server_is_given_until_the_settings_switch_file_sending_on() {
+    let off = Agent {
+        serve: false,
+        ..STAND_IN
+    };
+    let (mut acp, stand) = connected(off).await;
+    let (_stand, [first, second]) = two_chats(&mut acp, stand, None).await;
+    assert_eq!(first["params"]["mcpServers"], json!([]));
+    assert_eq!(second["params"]["mcpServers"], json!([]));
+}
+
 #[tokio::test]
 async fn an_agent_that_takes_no_server_over_http_is_given_none() {
-    let (mut acp, stand) = connected(false).await;
-    let (_stand, [first, _]) = two_chats(&mut acp, stand).await;
+    let none = Agent {
+        http: false,
+        ..STAND_IN
+    };
+    let (mut acp, stand) = connected(none).await;
+    let (_stand, [first, _]) = two_chats(&mut acp, stand, None).await;
     assert_eq!(first["params"]["mcpServers"], json!([]));
 }
 
-// OpenCode names the session in `_meta["ai.opencode/sessionID"]` and sends the last chat's token
-// for every session in a folder: the call goes to the chat whose session it names, and a relative
-// path is made whole from that chat's folder.
+// OpenCode names the session in `_meta["ai.opencode/sessionID"]` and keeps one server for every
+// session in a folder, with the token of the chat that opened a session there last: the call goes
+// to the chat whose session it names, and a relative path is made whole from that chat's folder.
 #[tokio::test]
-async fn a_call_goes_to_the_chat_whose_session_it_names() {
-    let (mut acp, stand) = connected(true).await;
-    let (_stand, [_, second]) = two_chats(&mut acp, stand).await;
-    let (url, token) = server_of(&second);
+async fn opencode_calls_go_to_the_chat_in_the_folder_whose_session_they_name() {
+    let (mut acp, stand) = connected(OPENCODE).await;
+    let (_stand, [_, second]) = two_chats(&mut acp, stand, None).await;
+    let (server, _) = server_of(&second);
     let meta = json!({"ai.opencode/sessionID": "s1", "progressToken": 2});
-    let call = tokio::spawn(async move { call_tool(&url, &token, "out/notes.txt", meta).await });
+    let call = tokio::spawn(async move { call_tool(&server, "out/notes.txt", meta).await });
     let file = next_file(&mut acp).await;
     assert_eq!(file.chat.as_str(), "c-1");
-    assert_eq!(file.path, PathBuf::from("/work/other/out/notes.txt"));
+    assert_eq!(file.path, PathBuf::from("/work/demo/out/notes.txt"));
     acp.file_sent(file.id, Ok(())).await;
     let result = call.await.unwrap();
     assert_eq!(said(&result), ("Sent.".to_string(), false));
 }
 
-// Goose names it in `_meta["agent-session-id"]`.
+// An OpenCode token is good for its folder's chats only: a call naming a chat in another folder is
+// refused, and so is one that names no session, or names it in a shape the driver cannot read. The
+// driver never falls back to the chat whose token it is.
 #[tokio::test]
-async fn goose_names_the_session_under_its_own_key() {
-    let (mut acp, stand) = connected(true).await;
-    let (_stand, [first, _]) = two_chats(&mut acp, stand).await;
-    let (url, token) = server_of(&first);
+async fn opencode_calls_outside_the_tokens_folder_or_without_a_session_are_refused() {
+    let (mut acp, stand) = connected(OPENCODE).await;
+    let (_stand, [first, second]) = two_chats(&mut acp, stand, Some("/work/other")).await;
+    let (other, _) = server_of(&first);
+    let (own, _) = server_of(&second);
+    for (server, meta) in [
+        (&own, json!({"ai.opencode/sessionID": "s1"})),
+        (&other, json!({"ai.opencode/sessionID": "s2"})),
+        (&own, Value::Null),
+        (&own, json!({"progressToken": 2})),
+        (&own, json!({"ai.opencode/sessionID": 7})),
+        (&own, json!({"ai.opencode/sessionID": ""})),
+    ] {
+        refused(&mut acp, server.clone(), meta).await;
+    }
+    // Each chat's own session, through its own folder's server, still works.
+    let meta = json!({"ai.opencode/sessionID": "s1"});
+    let call = tokio::spawn(async move { call_tool(&other, "notes.txt", meta).await });
+    let file = next_file(&mut acp).await;
+    assert_eq!(file.chat.as_str(), "c-1");
+    assert_eq!(file.path, PathBuf::from("/work/other/notes.txt"));
+    acp.file_sent(file.id, Ok(())).await;
+    call.await.unwrap();
+}
+
+// Goose keeps a server for each session and names the session in `_meta["agent-session-id"]`: the
+// session must be the token's chat's own. A call through one chat's server naming another chat's
+// session is refused.
+#[tokio::test]
+async fn goose_calls_must_name_a_session_of_the_tokens_chat() {
+    let (mut acp, stand) = connected(STAND_IN).await;
+    let (_stand, [first, second]) = two_chats(&mut acp, stand, None).await;
+    let (one, _) = server_of(&first);
+    let (two, _) = server_of(&second);
+    refused(&mut acp, one, json!({"agent-session-id": "s2"})).await;
+    refused(&mut acp, two.clone(), json!({"agent-session-id": 2})).await;
     let meta = json!({"agent-session-id": "s2", "agent-working-dir": "/somewhere/else"});
-    let call = tokio::spawn(async move { call_tool(&url, &token, "notes.txt", meta).await });
+    let call = tokio::spawn(async move { call_tool(&two, "notes.txt", meta).await });
     let file = next_file(&mut acp).await;
     assert_eq!(file.chat.as_str(), "c-2");
     // The chat's own folder, never the one the agent says.
@@ -296,11 +365,10 @@ async fn goose_names_the_session_under_its_own_key() {
 // token it carries. An absolute path stays as it is, and a refusal reaches the agent in words.
 #[tokio::test]
 async fn a_call_that_names_no_session_goes_to_the_chat_of_its_token() {
-    let (mut acp, stand) = connected(true).await;
-    let (_stand, [_, second]) = two_chats(&mut acp, stand).await;
-    let (url, token) = server_of(&second);
-    let call =
-        tokio::spawn(async move { call_tool(&url, &token, "/etc/hostname", Value::Null).await });
+    let (mut acp, stand) = connected(STAND_IN).await;
+    let (_stand, [_, second]) = two_chats(&mut acp, stand, None).await;
+    let (server, _) = server_of(&second);
+    let call = tokio::spawn(async move { call_tool(&server, "/etc/hostname", Value::Null).await });
     let file = next_file(&mut acp).await;
     assert_eq!(file.chat.as_str(), "c-2");
     assert_eq!(file.path, PathBuf::from("/etc/hostname"));
@@ -323,61 +391,112 @@ async fn a_call_that_names_no_session_goes_to_the_chat_of_its_token() {
 // belongs, and never guesses.
 #[tokio::test]
 async fn a_call_naming_a_session_no_chat_has_is_refused() {
-    let (mut acp, stand) = connected(true).await;
-    let (_stand, [first, _]) = two_chats(&mut acp, stand).await;
-    let (url, token) = server_of(&first);
-    let meta = json!({"ai.opencode/sessionID": "child-of-s1"});
-    let call = tokio::spawn(async move { call_tool(&url, &token, "notes.txt", meta).await });
-    let handed = async {
-        loop {
-            match acp.next_event().await {
-                Some(Output::SendFile(_)) => return true,
-                Some(Output::Event(_)) => {}
-                None => return false,
-            }
-        }
+    let (mut acp, stand) = connected(OPENCODE).await;
+    let (_stand, [first, _]) = two_chats(&mut acp, stand, None).await;
+    let (server, _) = server_of(&first);
+    refused(
+        &mut acp,
+        server,
+        json!({"ai.opencode/sessionID": "child-of-s1"}),
+    )
+    .await;
+}
+
+// A chat's folder changes only once the agent has opened a session there: after a move the agent
+// refused, a relative path is still made whole from the folder the chat's session works in.
+#[tokio::test]
+async fn a_relative_path_after_a_refused_move_is_from_the_old_folder() {
+    let (mut acp, stand) = connected(STAND_IN).await;
+    let (mut stand, [first, _]) = two_chats(&mut acp, stand, None).await;
+    let (server, _) = server_of(&first);
+    let control = Control {
+        request: RequestId("r-1".into()),
+        by: Person {
+            id: "u-1".into(),
+            name: "Alice".into(),
+        },
+        action: Action::NewSession {
+            chat: chat("c-1", Some("/work/other")),
+            session: Some("s1".into()),
+        },
     };
-    let result = tokio::select! {
-        result = call => result.unwrap(),
-        _ = handed => panic!("a file was handed to the core"),
-    };
-    let (text, error) = said(&result);
-    assert!(error, "{text}");
-    assert!(text.starts_with("Not sent"), "{text}");
+    // Chat 1's turn ends; a session is replaced only when it is idle.
+    let ended = stand.prompts[0].clone();
+    stand.reply(&ended, json!({"stopReason": "end_turn"})).await;
+    settle(&mut acp).await;
+    let agent = tokio::spawn(async move {
+        let new = stand.next().await;
+        assert_eq!(new["method"], "session/new");
+        assert_eq!(new["params"]["cwd"], "/work/other");
+        let error = json!({"code": -32603, "message": "no such folder"});
+        stand
+            .send(json!({"jsonrpc": "2.0", "id": new["id"], "error": error}))
+            .await;
+        stand
+    });
+    acp.control(control).await.unwrap();
+    let _stand = agent.await.unwrap();
+    settle(&mut acp).await;
+    let meta = json!({"agent-session-id": "s1"});
+    let call = tokio::spawn(async move { call_tool(&server, "notes.txt", meta).await });
+    let file = next_file(&mut acp).await;
+    assert_eq!(file.chat.as_str(), "c-1");
+    assert_eq!(file.path, PathBuf::from("/work/demo/notes.txt"));
+    acp.file_sent(file.id, Ok(())).await;
+    call.await.unwrap();
 }
 
 #[tokio::test]
 async fn a_request_without_a_token_the_driver_gave_is_forbidden() {
-    let (mut acp, stand) = connected(true).await;
-    let (_stand, [first, _]) = two_chats(&mut acp, stand).await;
-    let (url, _) = server_of(&first);
+    let (mut acp, stand) = connected(STAND_IN).await;
+    let (_stand, [first, _]) = two_chats(&mut acp, stand, None).await;
+    let (server, _) = server_of(&first);
     let hello = json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
         "protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "x", "version": "0"}}});
-    assert_eq!(post(&url, None, &hello).await.0, 403);
-    let wrong = "0".repeat(32);
-    assert_eq!(post(&url, Some(&wrong), &hello).await.0, 403);
+    let without = Server {
+        headers: Vec::new(),
+        ..server.clone()
+    };
+    assert_eq!(without.post(&hello).await.unwrap().0, 403);
+    let wrong = Server {
+        headers: vec![("Authorization".into(), format!("Bearer {}", "0".repeat(32)))],
+        ..server
+    };
+    assert_eq!(wrong.post(&hello).await.unwrap().0, 403);
 }
 
 #[tokio::test]
 async fn a_call_the_driver_can_no_longer_answer_is_not_sent() {
-    let (mut acp, stand) = connected(true).await;
-    let (_stand, [first, _]) = two_chats(&mut acp, stand).await;
-    let (url, token) = server_of(&first);
-    let call = tokio::spawn(async move { call_tool(&url, &token, "notes.txt", Value::Null).await });
-    let _file = next_file(&mut acp).await;
-    // Holding the server open, the driver is dropped before the core answers.
-    let held = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        drop(acp);
+    let (mut acp, stand) = connected(STAND_IN).await;
+    let (_stand, [first, _]) = two_chats(&mut acp, stand, None).await;
+    let (server, _) = server_of(&first);
+    let call = tokio::spawn(async move {
+        server
+            .call("send_file", json!({"path": "notes.txt"}), None)
+            .await
     });
+    let _file = next_file(&mut acp).await;
+    // The driver is dropped before the core answers.
+    drop(acp);
     let ended = tokio::time::timeout(Duration::from_secs(5), call).await;
-    held.await.unwrap();
     // The call ends: answered as not sent, or cut off with its connection as the server stops.
-    match ended.expect("the call ends once the driver has gone") {
+    match ended
+        .expect("the call ends once the driver has gone")
+        .unwrap()
+    {
         Ok(result) => {
             let (text, error) = said(&result);
             assert!(error && text.starts_with("Not sent"), "{text}");
         }
-        Err(cut_off) => assert!(cut_off.is_panic(), "{cut_off}"),
+        // Cut off: the connection closed with no answer, or was reset. An answer that is not
+        // 200, or anything else, fails.
+        Err(cut_off) => assert!(
+            cut_off.to_string() == "no answer"
+                || matches!(
+                    cut_off.kind(),
+                    std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::BrokenPipe
+                ),
+            "{cut_off}"
+        ),
     }
 }

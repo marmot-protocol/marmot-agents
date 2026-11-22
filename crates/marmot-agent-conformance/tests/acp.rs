@@ -49,6 +49,9 @@ impl Subject for OnFake {
         let mut acp = Acp::connect(driver_reads, tap, "/work/demo", &name)
             .await
             .expect("the fake greets the driver");
+        // File sending is switched on, as the settings do with `send_files = true`.
+        let served = acp.serve_files().await.expect("the driver serves its tool");
+        assert!(served, "every flavour takes MCP servers over HTTP");
         // The suite waits five seconds for a request; the driver gives up on the agent sooner.
         acp.set_patience(Duration::from_secs(2));
         acp

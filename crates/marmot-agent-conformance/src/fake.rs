@@ -15,7 +15,7 @@
 
 pub mod acp;
 pub mod codex;
-mod mcp;
+pub mod mcp;
 pub mod pi;
 mod replay;
 

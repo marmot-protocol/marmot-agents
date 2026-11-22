@@ -33,5 +33,7 @@ tokio-util = "0.7"
 getrandom = "0.3"
 
 [dev-dependencies]
+# Its MCP client calls the driver's tool in the tests, as it does in the suite.
+marmot-agent-conformance = { path = "../marmot-agent-conformance" }
 # The transport is tested against a stand-in agent over an in-memory pipe.
 tokio = { version = "1", features = ["io-util", "macros", "rt", "sync", "time"] }
