@@ -5,6 +5,7 @@ import asyncio
 import dataclasses
 import enum
 import logging
+import os
 import sys
 import tempfile
 import threading
@@ -150,6 +151,26 @@ class Diagnostics(unittest.TestCase):
             lines = path.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 1)
             self.assertTrue(lines[0].endswith(" marmot: the core closed the socket"))
+
+
+class Home(unittest.TestCase):
+    """Where the core's socket is: MARMOT_AGENT_HOME, as the container sets it, or else the platform's
+    `home` setting, as the installer writes it into the person's own Hermes."""
+
+    def adapter(self, config, variable=None):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict("os.environ", {"HERMES_HOME": folder}):
+            os.environ.pop("MARMOT_AGENT_HOME", None)
+            if variable:
+                os.environ["MARMOT_AGENT_HOME"] = variable
+            return MarmotAdapter(config)
+
+    def test_the_setting_names_the_home(self):
+        config = types.SimpleNamespace(extra={"home": "/agents/a/home"})
+        self.assertEqual(self.adapter(config).home, Path("/agents/a/home"))
+
+    def test_the_environment_comes_first(self):
+        config = types.SimpleNamespace(extra={"home": "/agents/a/home"})
+        self.assertEqual(self.adapter(config, "/run/marmot-agent").home, Path("/run/marmot-agent"))
 
 
 if __name__ == "__main__":
