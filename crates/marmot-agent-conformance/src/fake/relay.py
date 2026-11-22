@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Stands in for a harness program that a driver starts on standard input and output, such as
 `pi --mode rpc`. It connects to the fake harness's Unix socket (the first argument), says which
-chat it serves and how it was started, then passes bytes both ways until the fake hangs up. The
-fake, in the test program, answers as the harness would. `--version` is answered here."""
+chat it serves, how it was started and in which folder, then passes bytes both ways until the fake
+hangs up. The fake, in the test program, answers as the harness would. `--version` is answered
+here."""
 
 import json
 import os
@@ -18,7 +19,7 @@ def main():
         return
     sock = socket.socket(socket.AF_UNIX)
     sock.connect(path)
-    hello = {"chat": os.environ.get("MARMOT_AGENT_CHAT", ""), "args": args}
+    hello = {"chat": os.environ.get("MARMOT_AGENT_CHAT", ""), "args": args, "cwd": os.getcwd()}
     sock.sendall((json.dumps(hello) + "\n").encode())
 
     def up():

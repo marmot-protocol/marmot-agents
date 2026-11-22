@@ -277,18 +277,25 @@ token is `connector.token` there, which the core writes the first time ([D-038](
                    "approvals": true, "files_in": "images", "approval_commands": []}}}
 ```
 
-The seven flags of D-058, every one. The core answers `{"core": {"version"}, "agent": {"name"}}`, or an error:
+The seven flags of D-058, every one. A connector whose harness works in a folder a chat may move adds
+`"folder": "/home/me/work"`, a whole path, beside `capabilities`: where the harness works when a chat chose
+none ([D-101](../decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder); provisional, added
+2026-11-22). One that leaves it out, as a gateway's plugin does, is offered no folder setting. The core answers `{"core": {"version"}, "agent": {"name"}}`, or an error:
 `-32001` for another protocol version, `-32002` for a token that is not this agent's, `-32600` or `-32602` for a
-hello it cannot read.
+hello it cannot read, such as a `folder` that is not a whole path.
 
-**`prompt`**: `message`, `text`, `chat` (`id`, `group`, `name`), `sender` (`id`, `name`), `attachments`
-(`path`, `name`, `media_type`), and when there are any, `reply_to` (`message`, `text`, `author`) and `session`.
+**`prompt`**: `message`, `text`, `chat` (`id`, `group`, `name`, and `folder` when the chat chose one),
+`sender` (`id`, `name`), `attachments` (`path`, `name`, `media_type`), and when there are any, `reply_to`
+(`message`, `text`, `author`) and `session`. `folder` is a whole path, links resolved: the connector starts
+the chat's next session there, and leaves a running one where it is (provisional, D-101).
 
 **`answer`**: `request`, `item`, `by` (`id`, `name`) and `given`: `{"choice": <id>}` for an approval, or
 `{"questions": [{"question", "options", "text"}]}`.
 
 **`control`**: `request`, `by` and `action`, by `type`: `interrupt` (`turn`), `new_session` (`chat`,
-`session`), `set` (`session`, `setting`, `value`), `own` (`session`, `id`).
+`session`), `set` (`session`, `setting`, `value`), `own` (`session`, `id`). A `set` of the core's own
+`folder` setting never reaches a connector: the core turns it into a `new_session` whose `chat` names the
+new folder (provisional, D-101).
 
 A connector answers each with `{}` once it has taken it, or with an error whose `data` holds a `reason` (one of
 the eight words above) and, if it likes, a `detail` for the chat.

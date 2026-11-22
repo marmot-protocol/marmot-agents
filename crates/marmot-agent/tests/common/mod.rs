@@ -632,6 +632,21 @@ impl Chat<'_> {
             .filter_map(|(_, r)| r.item.event.header().session.clone())
             .collect()
     }
+
+    /// The folder a session's item shows, the core's own setting (D-101).
+    #[allow(dead_code)] // Not every scenario moves a chat.
+    pub fn folder_of(&self, session: &SessionId) -> Option<String> {
+        self.items().into_iter().find_map(|(_, r)| {
+            let Body::Session(shown) = r.item.event.body() else {
+                return None;
+            };
+            if r.item.event.header().session.as_ref() != Some(session) {
+                return None;
+            }
+            let setting = shown.settings.iter().find(|s| s.id == "folder")?;
+            setting.value.clone()
+        })
+    }
 }
 
 /// The model a scenario against a real harness runs on: an OpenAI-compatible endpoint, the model,

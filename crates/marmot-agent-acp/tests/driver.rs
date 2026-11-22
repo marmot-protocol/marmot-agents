@@ -88,6 +88,7 @@ fn prompt(text: &str) -> Prompt {
             id: "c-1".into(),
             group: false,
             name: None,
+            folder: None,
         },
         sender: person(),
         reply_to: None,
@@ -273,6 +274,7 @@ fn prompt_in(chat: &str, message: &str, session: Option<&str>) -> Prompt {
             id: chat.into(),
             group: false,
             name: None,
+            folder: None,
         },
         session: session.map(Into::into),
         ..prompt("hello")

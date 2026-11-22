@@ -229,6 +229,37 @@ test("the hello names the protocol, the token, Claude Code and its seven capabil
     approval_commands: [],
   });
   assert.deepEqual(params["capabilities"], CAPABILITIES);
+  // The folder it works in when a chat chose none, so the core can let a chat move it (D-101).
+  assert.equal(params["folder"], "/nowhere");
+  await done();
+});
+
+test("a chat's folder starts its next query there, and a file it names is taken from there", async () => {
+  const { core, queries, done } = await start();
+  const { q } = await turn(core, queries);
+  assert.equal(q.options["cwd"], "/nowhere", "a chat that chose none works in the connector's folder");
+  // A running query stays where it is: the folder applies from the next session (D-101).
+  await core.request("prompt", { ...PROMPT, message: "m2", chat: { ...PROMPT.chat, folder: "/elsewhere/a" } });
+  assert.equal(queries.length, 1);
+  q.say(DONE);
+  await until(() => core.event((e) => e["type"] === "turn" && e["state"] === "done") !== undefined, "the turn's end");
+  const moved = { type: "new_session", chat: { ...PROMPT.chat, folder: "/elsewhere/a" }, session: "s1" };
+  assert.deepEqual((await core.request("control", { request: "n1", by: { id: "p1", name: "Alice" }, action: moved }))["result"], {});
+  await core.request("prompt", { ...PROMPT, message: "m3", chat: { ...PROMPT.chat, folder: "/elsewhere/a" } });
+  assert.equal(queries.length, 2);
+  const fresh = queries[1]!;
+  assert.equal(fresh.options["cwd"], "/elsewhere/a");
+  assert.equal("resume" in fresh.options, false);
+  const { send } = (fresh.options["mcpServers"] as Record<string, { send: SendFile }>)["marmot"]!;
+  await send("out.txt");
+  assert.deepEqual(core.files[0], { chat: "c1", path: "/elsewhere/a/out.txt" });
+  // A folder that is not a whole path is refused, on a prompt and on a new session.
+  const relative = { ...PROMPT.chat, id: "c2", folder: "a" };
+  const refused = await core.request("prompt", { ...PROMPT, message: "m4", chat: relative });
+  assert.equal(((refused["error"] as Json)["data"] as Json)["reason"], "invalid");
+  const bad = { type: "new_session", chat: relative, session: null };
+  const control = await core.request("control", { request: "n2", by: { id: "p1", name: "Alice" }, action: bad });
+  assert.equal(((control["error"] as Json)["data"] as Json)["reason"], "invalid");
   await done();
 });
 

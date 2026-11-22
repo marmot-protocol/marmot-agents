@@ -214,6 +214,15 @@ pub trait Driver: Send {
     /// What the harness can do.
     fn capabilities(&self) -> Capabilities;
 
+    /// The folder the driver starts a chat's session in when the chat chose none: the agent's
+    /// install folder (D-101). A driver that states one starts each chat's sessions in the folder
+    /// [`Chat::folder`] names, when it names one, and the core offers each chat a setting to move
+    /// it. `None`, the default, for a harness that keeps a workspace of its own, such as a gateway:
+    /// the core then offers no such setting and names no folder.
+    fn folder(&self) -> Option<PathBuf> {
+        None
+    }
+
     /// Pass a message to the harness. During a turn the harness does with it what it does
     /// natively, which [`Capabilities::mid_turn`] names (D-040).
     fn prompt(&mut self, prompt: Prompt) -> impl Future<Output = Result<(), Refusal>> + Send;
@@ -285,6 +294,7 @@ mod tests {
                 id: "c-2".into(),
                 group: true,
                 name: Some("Family Chat".into()),
+                folder: Some("/home/alice/secret-project".into()),
             },
             sender: alice(),
             reply_to: Some(Quoted {
@@ -304,6 +314,7 @@ mod tests {
                 "what is the code",
                 "Alice Example",
                 "Family Chat",
+                "secret-project",
             ],
         );
 

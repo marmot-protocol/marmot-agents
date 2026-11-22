@@ -72,9 +72,9 @@ hand with this client; if the group names none, the chat shows the file refused 
 
 The same steps work with Claude Code in place of Codex, through the socket. It also needs Node 24.
 
-1. In the agent's settings, replace the `[codex]` section with an empty `[connector]` section. To let the agent
-   send files from its folder, add `files_from = ["/tmp/try/work"]` above it: the core does not know a
-   connector's folder, so it allows none until told.
+1. In the agent's settings, replace the `[codex]` section with an empty `[connector]` section. The driver tells
+   the core the folder it works in, so the agent sends files from there, and a chat may move it to a folder
+   inside it (D-101).
 2. Install the driver's packages once: `npm ci` in `packages/claude-code`.
 3. Run `marmot-agent run agent.toml` as before. It now waits for the driver.
 4. Start the driver, giving it the agent's home and the folder to work in:

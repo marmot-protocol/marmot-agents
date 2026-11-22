@@ -63,6 +63,8 @@ pub struct Pi {
     resumed: bool,
     /// The session asked for has no file: the process exits as it starts.
     missing: bool,
+    /// The folder the process was started in, as the relay says.
+    folder: Option<String>,
     thinking: String,
     run: Option<Run>,
 }
@@ -90,8 +92,8 @@ fn assistant(content: Value, stop: &str, out: &mut Outbox) {
 }
 
 impl Pi {
-    /// A process started with `args`, for the chat Pi's driver names `tag`.
-    pub fn new(args: &[String], tag: &str, store: Shared) -> Self {
+    /// A process started with `args`, in `folder`, for the chat Pi's driver names `tag`.
+    pub fn new(args: &[String], tag: &str, folder: Option<String>, store: Shared) -> Self {
         let after = |flag: &str| {
             let at = args.iter().position(|a| a == flag)?;
             args.get(at + 1).cloned()
@@ -110,6 +112,7 @@ impl Pi {
             session,
             resumed,
             missing,
+            folder,
             thinking: "low".into(),
             run: None,
         }
@@ -202,6 +205,7 @@ impl Protocol for Pi {
         heard.push(Heard::Opened {
             session: self.session.clone(),
             resumed: self.resumed,
+            folder: self.folder.clone(),
         });
     }
 
@@ -280,6 +284,7 @@ impl Protocol for Pi {
                 heard.push(Heard::Opened {
                     session: self.session.clone(),
                     resumed: false,
+                    folder: self.folder.clone(),
                 });
                 respond(command, Some(json!({"cancelled": false})), out);
             }
@@ -366,7 +371,8 @@ impl Server {
                     let args: Vec<String> = (hello["args"].as_array().into_iter().flatten())
                         .filter_map(|a| a.as_str().map(String::from))
                         .collect();
-                    let pi = Pi::new(&args, &tag, store);
+                    let folder = hello["cwd"].as_str().map(String::from);
+                    let pi = Pi::new(&args, &tag, folder, store);
                     let protocol: Box<dyn Protocol> = match &recording {
                         Some((text, progress)) => {
                             Box::new(super::Replay::new(text, pi).counting(progress.clone()))

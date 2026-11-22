@@ -82,3 +82,32 @@ fn a_second_core_on_the_same_home_is_refused() {
         "free again once the first has gone"
     );
 }
+
+// The folders a chat may move a coding harness to are whole paths, or start with `~`, the home;
+// any other is refused when the settings are read, naming the setting (D-101).
+#[test]
+fn the_folders_a_chat_may_use_are_whole_paths() {
+    let text = |folders: &str| {
+        format!(
+            "home = \"/unused\"\nrelays = []\nowner = \"{HEX}\"\nfolders = {folders}\n[connector]\n"
+        )
+    };
+    let config = Config::parse(&text("[\"/srv/work\", \"~\", \"~/projects\"]")).unwrap();
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    assert_eq!(
+        config.folders,
+        Some(vec![
+            "/srv/work".into(),
+            home.clone(),
+            home.join("projects")
+        ])
+    );
+    assert!(matches!(
+        Config::parse(&text("[\"projects\"]")),
+        Err(ConfigError::Value("folders"))
+    ));
+    assert_eq!(
+        Config::parse(&text("[]")).unwrap().folders,
+        Some(Vec::new())
+    );
+}

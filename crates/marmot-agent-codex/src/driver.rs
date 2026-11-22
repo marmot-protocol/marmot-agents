@@ -31,6 +31,7 @@ use marmot_agent_events::{AgentEvent, Body, State};
 use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::io;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, Lines};
@@ -80,15 +81,17 @@ enum Effect {
     Setting(String, String),
     /// A turn started by the driver's request with this id has started.
     TurnStartedBy(i64),
-    /// A session other than this one is running.
-    NewSession(Option<String>),
+    /// A session other than this one is running, started in this folder, the chat's (D-101).
+    NewSession(Option<String>, Option<PathBuf>),
 }
 
-/// One chat: its translator, and the controls waiting for their effect.
+/// One chat: its translator, the controls waiting for their effect, and the folder its session
+/// was started in, when the chat chose one (D-101).
 #[derive(Default)]
 struct Chat {
     translator: Translator,
     effects: Vec<(RequestId, Effect)>,
+    folder: Option<PathBuf>,
 }
 
 /// The Codex driver: one `codex app-server` process, serving every chat of one agent.
@@ -495,7 +498,9 @@ impl Codex {
         };
         // A path the agent gives relative to its working folder is made whole here: the core
         // takes only an absolute one. An absolute path stays as it is.
-        let path = std::path::Path::new(&self.setup.cwd).join(path);
+        let cwd = (self.chats.get(chat).and_then(|c| c.folder.clone()))
+            .unwrap_or_else(|| PathBuf::from(&self.setup.cwd));
+        let path = cwd.join(path);
         let key = id.to_string();
         self.calls.insert(key.clone(), (chat.clone(), id));
         self.ready.push_back(Output::SendFile(SendFile {
@@ -562,6 +567,7 @@ impl Codex {
         let turn = header.turn.as_ref().map(|t| t.as_str().to_string());
         let ended = !matches!(header.state, State::Running | State::Waiting);
         let session = header.session.as_ref().map(|s| s.as_str().to_string());
+        let mut moved = None;
         c.effects.retain(|(request, effect)| {
             let shown = seen
                 && match (effect, event.body()) {
@@ -572,8 +578,12 @@ impl Codex {
                         let started = turn.as_deref().and_then(|t| c.translator.turn_request(t));
                         started == Some(*r)
                     }
-                    (Effect::NewSession(old), Body::Session(_)) => {
-                        header.state == State::Running && session != *old
+                    (Effect::NewSession(old, folder), Body::Session(_)) => {
+                        let new = header.state == State::Running && session != *old;
+                        if new {
+                            moved = Some(folder.clone());
+                        }
+                        new
                     }
                     _ => false,
                 };
@@ -582,6 +592,10 @@ impl Codex {
             }
             !shown
         });
+        // The chat works in the new session's folder once Codex has started it.
+        if let Some(folder) = moved {
+            c.folder = folder;
+        }
         let prompts = match (event.body(), turn) {
             (Body::Turn(_), Some(turn)) => {
                 let key = (chat.clone(), turn);
@@ -704,8 +718,24 @@ impl Codex {
         }
     }
 
-    /// Makes `session` the chat's session, starting a new one if it is none, and waits for Codex.
-    async fn pick(&mut self, chat: &ChatId, session: Option<&str>) -> Result<(), Refusal> {
+    /// The setup for a session in `folder`, the chat's, or the driver's own when it is none
+    /// (D-101).
+    fn setup_in(&self, folder: Option<&Path>) -> Setup {
+        let mut setup = self.setup.clone();
+        if let Some(folder) = folder {
+            setup.cwd = folder.to_string_lossy().into_owned();
+        }
+        setup
+    }
+
+    /// Makes `session` the chat's session, starting a new one in `folder` if it is none, and waits
+    /// for Codex.
+    async fn pick(
+        &mut self,
+        chat: &ChatId,
+        session: Option<&str>,
+        folder: Option<&Path>,
+    ) -> Result<(), Refusal> {
         // A session to resume is the chat's from the moment it is asked for, so no other chat can
         // ask for it meanwhile; if Codex refuses, a reservation made here is let go.
         let reserved = session
@@ -714,7 +744,7 @@ impl Codex {
         if let Some(thread) = &reserved {
             self.owners.insert(thread.clone(), chat.clone());
         }
-        let picked = self.pick_now(chat, session).await;
+        let picked = self.pick_now(chat, session, folder).await;
         if picked.is_err()
             && let Some(thread) = reserved
             && self.chats[chat].translator.session() != Some(thread.as_str())
@@ -724,8 +754,13 @@ impl Codex {
         picked
     }
 
-    async fn pick_now(&mut self, chat: &ChatId, session: Option<&str>) -> Result<(), Refusal> {
-        let setup = self.setup.clone();
+    async fn pick_now(
+        &mut self,
+        chat: &ChatId,
+        session: Option<&str>,
+        folder: Option<&Path>,
+    ) -> Result<(), Refusal> {
+        let setup = self.setup_in(folder);
         let build = |t: &Translator, id| t.pick(id, session, &setup);
         let id = self.ask(chat, |_, _| Purpose::Plain, build).await?;
         while self.requests.contains_key(&id) {
@@ -734,11 +769,17 @@ impl Codex {
             }
         }
         let now = self.chats[chat].translator.session().map(String::from);
-        match (now, session) {
+        let picked = match (now, session) {
             (Some(now), Some(wanted)) if now == wanted => Ok(()),
             (Some(_), None) => Ok(()),
             _ => Err(Refusal::new(Reason::Failed)), // Codex refused it; the chat shows why
+        };
+        if picked.is_ok()
+            && let Some(c) = self.chats.get_mut(chat)
+        {
+            c.folder = folder.map(Path::to_path_buf);
         }
+        picked
     }
 
     /// The chat that has the answer's item waiting, and the reply to send it, or else the most
@@ -776,6 +817,10 @@ impl Driver for Codex {
         }
     }
 
+    fn folder(&self) -> Option<PathBuf> {
+        Some(PathBuf::from(&self.setup.cwd))
+    }
+
     async fn prompt(&mut self, prompt: Prompt) -> Result<(), Refusal> {
         if self.gone {
             return Err(Refusal::new(Reason::Failed));
@@ -801,7 +846,9 @@ impl Driver for Codex {
         }
         let current = self.chats[&chat].translator.session().map(String::from);
         if current.is_none() || (wanted.is_some() && wanted != current) {
-            self.pick(&chat, wanted.as_deref()).await?;
+            let folder = prompt.chat.folder.clone();
+            self.pick(&chat, wanted.as_deref(), folder.as_deref())
+                .await?;
         }
         // Built during a turn, it joins that turn: the translator builds it that way.
         let message = prompt.message.clone();
@@ -842,10 +889,11 @@ impl Driver for Codex {
                 (chat, Effect::TurnEnded(turn.as_str().to_string()))
             }
             Action::NewSession { chat, session } => {
+                let folder = chat.folder.clone();
                 let chat = chat.id.clone();
                 self.chat(&chat).await?;
                 let old = session.as_ref().map(|s| s.as_str().to_string());
-                (chat, Effect::NewSession(old))
+                (chat, Effect::NewSession(old, folder))
             }
             Action::Set {
                 session,
@@ -862,7 +910,12 @@ impl Driver for Codex {
                 (chat, Effect::TurnStartedBy(0))
             }
         };
-        let setup = self.setup.clone();
+        // A new session starts in the chat's folder (D-101).
+        let folder = match &effect {
+            Effect::NewSession(_, folder) => folder.clone(),
+            _ => None,
+        };
+        let setup = self.setup_in(folder.as_deref());
         let action = control.action.clone();
         let build = |t: &Translator, id| t.control(id, &action, &setup);
         // Its effect is watched for from the moment it is written.

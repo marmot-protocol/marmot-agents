@@ -3,6 +3,7 @@
 //! with are checked.
 
 use marmot_agent::carrier::{self, Asked, AskedReply, Item};
+use marmot_agent::chat_folder::FolderRule;
 use marmot_agent::{
     Act, Conversation, EventKey, GroupKey, Heard, HeardQuote, HeardRequest, PubKey, Rights, Saved,
     Sending, Where, Who,
@@ -15,6 +16,7 @@ use marmot_agent_events::body::{
     self, Approval, Body, Choice, Effect, Message, NoticeKind, Setting, StartedBy, Turn,
 };
 use marmot_agent_events::{AgentEvent, Header, SessionId, State};
+use std::path::PathBuf;
 
 const AGENT: &str = "agent-key";
 const OWNER: &str = "owner-key";
@@ -2254,4 +2256,389 @@ fn what_stands_in_for_a_dropped_send_fits_when_the_session_id_does_not() {
     assert_eq!(close.event.header().session, None);
     assert_eq!(close.event.header().turn, None);
     assert!(then.iter().any(|i| reason(i).as_deref() == Some("failed")));
+}
+
+// ---------------------------------------------------------------------------------- folders
+
+/// A throwaway layout for a chat's folder (D-101): the install folder `work`, holding `a`, a file,
+/// a link to `a`, a link out of it, a link to nothing outside, a link to nothing inside, and the
+/// agent's account home; and `outside`, beside it.
+struct Layout {
+    _dir: tempfile::TempDir,
+    work: PathBuf,
+    outside: PathBuf,
+    home: PathBuf,
+}
+
+fn layout() -> Layout {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let work = root.join("work");
+    let outside = root.join("outside");
+    let home = work.join("agent-home");
+    for folder in [&work, &outside, &home, &work.join("a").join("deeper")] {
+        std::fs::create_dir_all(folder).unwrap();
+    }
+    std::fs::write(work.join("notes.txt"), "not a folder").unwrap();
+    std::os::unix::fs::symlink(work.join("a"), work.join("to-a")).unwrap();
+    std::os::unix::fs::symlink(&outside, work.join("to-outside")).unwrap();
+    std::os::unix::fs::symlink(outside.join("nope"), work.join("to-nowhere")).unwrap();
+    std::os::unix::fs::symlink(work.join("gone"), work.join("to-gone")).unwrap();
+    Layout {
+        _dir: dir,
+        work,
+        outside,
+        home,
+    }
+}
+
+/// A conversation whose driver works in `work` by default, with the owner listing `listed`.
+fn moving(layout: &Layout, listed: Option<Vec<PathBuf>>, saved: Saved) -> Conversation {
+    let rule = FolderRule::new(&layout.work, listed.as_deref(), &layout.home);
+    conversation(saved).with_folders(rule)
+}
+
+fn set_folder(event: &str, author: &str, target: Option<&str>, value: &str) -> HeardRequest {
+    request(
+        direct(),
+        event,
+        author,
+        target,
+        Asked::Set {
+            setting: "folder".into(),
+            value: value.into(),
+        },
+    )
+}
+
+/// The folder setting a session item shows.
+fn folder_shown(item: &Item) -> Option<Setting> {
+    let Body::Session(session) = item.event.body() else {
+        panic!("not a session item")
+    };
+    (session.settings.iter())
+        .find(|s| s.id == "folder")
+        .cloned()
+}
+
+/// The new session a control asks for, and the folder it starts in.
+fn the_new_session(acts: Vec<Act>) -> (marmot_agent_driver::Control, Option<SessionId>, PathBuf) {
+    match <[Act; 1]>::try_from(acts) {
+        Ok([Act::Control(control)]) => match &control.action {
+            Action::NewSession { chat, session } => {
+                let (session, folder) = (session.clone(), chat.folder.clone());
+                (control, session, folder.expect("a folder"))
+            }
+            other => panic!("not a new session: {other:?}"),
+        },
+        other => panic!("not one control: {other:?}"),
+    }
+}
+
+// A chat moves its harness to another folder from its next session (D-101): the session item
+// shows the folder, marked as needing the right to approve; setting it starts a new session in
+// the folder, resolved; it is the chat's once the driver has taken that new session, and every
+// prompt after names it; the new session shows it, and the old one, ending, keeps its own.
+#[test]
+fn a_chat_moves_its_folder_from_its_next_session() {
+    let place = layout();
+    let mut talk = moving(&place, None, Saved::default());
+    let first = the_prompt(talk.heard(heard(direct(), "e1", OWNER, "hello")));
+    assert_eq!(first.chat.folder, None, "the driver's own folder");
+    let chat = first.chat.id.0.clone();
+    let session = |item: &str, session: &str, state| {
+        let mut header = event(item, state, Body::Session(session_item(false)))
+            .header()
+            .clone();
+        header.session = Some(session.into());
+        AgentEvent::new(header, Body::Session(session_item(false)), None).unwrap()
+    };
+    let shown = sent(
+        &mut talk,
+        &chat,
+        session("s1", "th1", State::Running),
+        "es1",
+    );
+    let setting = folder_shown(&shown).expect("the folder setting");
+    assert_eq!(setting.value, Some(place.work.display().to_string()));
+    assert!(setting.approve, "it needs the right to approve");
+    assert_eq!(setting.options, None, "any folder the owner allows");
+    // The harness's own settings stay as they were.
+    let Body::Session(body) = shown.event.body() else {
+        panic!()
+    };
+    assert!(body.settings.iter().any(|s| s.id == "sandbox"));
+
+    let asked = talk.asked(set_folder("r1", OWNER, Some("es1"), "a/deeper/.."));
+    let (control, ends, folder) = the_new_session(asked);
+    assert_eq!(folder, place.work.join("a"));
+    assert_eq!(
+        ends,
+        Some(SessionId::from("th1")),
+        "the chat's session ends"
+    );
+    let before = the_prompt(talk.heard(heard(direct(), "e2", OWNER, "meanwhile")));
+    assert_eq!(before.chat.folder, None, "not the chat's until taken");
+    assert!(talk.requested(&control.request, Ok(()), 0).is_empty());
+    let after = the_prompt(talk.heard(heard(direct(), "e3", OWNER, "now")));
+    assert_eq!(after.chat.folder, Some(place.work.join("a")));
+
+    let ended = sent(&mut talk, &chat, session("s1", "th1", State::Done), "es1b");
+    assert_eq!(
+        folder_shown(&ended).and_then(|s| s.value),
+        Some(place.work.display().to_string()),
+        "a session keeps the folder it started in"
+    );
+    let mut fresh = emitted(&chat, session("s2", "th2", State::Running));
+    fresh.settles = vec![control.request.clone()];
+    let (_, _, item) = the_item(&mut talk, |t| t.emitted(fresh));
+    assert_eq!(item.settles, vec![EventKey::from("r1")]);
+    assert_eq!(
+        folder_shown(&item).and_then(|s| s.value),
+        Some(place.work.join("a").display().to_string())
+    );
+    assert_eq!(
+        talk.chat_folder(&ChatId(chat)),
+        Some(place.work.join("a")),
+        "a file it sends comes from there"
+    );
+}
+
+// Only someone with the right to approve moves a chat, since a folder changes what the agent can
+// touch (D-101, D-043): someone who may only prompt is refused, with or without a session item.
+#[test]
+fn only_someone_who_may_approve_moves_a_chat() {
+    let place = layout();
+    let mut talk = moving(&place, None, Saved::default());
+    let _ = the_prompt(talk.heard(heard(direct(), "e1", OWNER, "hello")));
+    let (_, _, refused) = the_item(&mut talk, |t| t.asked(set_folder("r1", FRIEND, None, "a")));
+    assert!(is_refused(&refused, "not_allowed"));
+    let (_, _, refused) = the_item(&mut talk, |t| {
+        t.asked(set_folder("r2", STRANGER, None, "/nowhere"))
+    });
+    assert!(is_refused(&refused, "not_allowed"));
+}
+
+// A chat that has had no session yet may choose its folder: the new session ends none.
+#[test]
+fn a_chat_with_no_session_yet_chooses_its_folder() {
+    let place = layout();
+    let mut talk = moving(&place, None, Saved::default());
+    let path = place.work.join("a").display().to_string();
+    let (control, ends, folder) = the_new_session(talk.asked(set_folder("r1", OWNER, None, &path)));
+    assert_eq!((ends, folder), (None, place.work.join("a")));
+    assert!(talk.requested(&control.request, Ok(()), 0).is_empty());
+    let prompt = the_prompt(talk.heard(heard(direct(), "e1", OWNER, "hello")));
+    assert_eq!(prompt.chat.folder, Some(place.work.join("a")));
+}
+
+// A folder is resolved, links followed and `..` taken away, and must lie inside one the owner
+// listed: one outside, or that leads outside through a link or a `..`, is refused as not allowed;
+// so is the account home, which holds the agent's keys; one that is not there, or is a file, is
+// refused as invalid, but only once it is known to be inside, so a chat cannot learn what exists
+// elsewhere. Nothing is handed to the driver, and the refusal names no path (D-071).
+#[test]
+fn a_folder_outside_the_owners_list_is_refused() {
+    let place = layout();
+    let mut talk = moving(&place, None, Saved::default());
+    let _ = the_prompt(talk.heard(heard(direct(), "e1", OWNER, "hello")));
+    let outside = place.outside.display().to_string();
+    let home = place.home.display().to_string();
+    let deep_home = place
+        .home
+        .join("..")
+        .join("agent-home")
+        .display()
+        .to_string();
+    let cases = [
+        (outside.as_str(), "not_allowed"),
+        ("..", "not_allowed"),
+        ("a/../../outside", "not_allowed"),
+        ("to-outside", "not_allowed"),
+        ("/", "not_allowed"),
+        (home.as_str(), "not_allowed"),
+        (deep_home.as_str(), "not_allowed"),
+        ("../no-such-folder", "not_allowed"),
+        // A link out says the same whether what it leads to is there or not.
+        ("to-nowhere", "not_allowed"),
+        ("to-nowhere/deeper", "not_allowed"),
+        ("to-outside/nope", "not_allowed"),
+        ("no-such-folder", "invalid"),
+        ("to-gone", "invalid"),
+        ("notes.txt", "invalid"),
+        ("", "invalid"),
+    ];
+    for (n, (value, reason)) in cases.into_iter().enumerate() {
+        let (_, _, refused) = the_item(&mut talk, |t| {
+            t.asked(set_folder(&format!("r{n}"), OWNER, None, value))
+        });
+        assert!(
+            is_refused(&refused, reason),
+            "{value:?}: {:?}",
+            refused.event.body()
+        );
+        let text = &refused.event.header().text;
+        assert!(
+            !text.contains('/'),
+            "{value:?}: the refusal names a path: {text}"
+        );
+    }
+    // A link that stays inside is followed.
+    let (_, _, folder) = the_new_session(talk.asked(set_folder("ok", OWNER, None, "to-a")));
+    assert_eq!(folder, place.work.join("a"));
+}
+
+// The owner's list replaces the install folder as the limit; listing a folder allows every folder
+// inside it, so listing `~` lifts the limit within the home (D-101).
+#[test]
+fn the_owners_list_sets_the_limit() {
+    let place = layout();
+    let mut talk = moving(&place, Some(vec![place.outside.clone()]), Saved::default());
+    let _ = the_prompt(talk.heard(heard(direct(), "e1", OWNER, "hello")));
+    let (_, _, refused) = the_item(&mut talk, |t| t.asked(set_folder("r1", OWNER, None, "a")));
+    assert!(
+        is_refused(&refused, "not_allowed"),
+        "the install folder is not listed"
+    );
+    let outside = place.outside.display().to_string();
+    let (_, _, folder) = the_new_session(talk.asked(set_folder("r2", OWNER, None, &outside)));
+    assert_eq!(folder, place.outside);
+}
+
+// A new session the driver refuses leaves the chat's folder as it was, and the chat is told; one
+// still pending when the core stops is settled as failed when it starts again, and moves nothing
+// (D-070).
+#[test]
+fn a_move_that_does_not_happen_leaves_the_folder() {
+    let place = layout();
+    let mut talk = moving(&place, None, Saved::default());
+    let _ = the_prompt(talk.heard(heard(direct(), "e1", OWNER, "hello")));
+    let (control, _, _) = the_new_session(talk.asked(set_folder("r1", OWNER, None, "a")));
+    let refused = talk.requested(&control.request, Err(Refusal::new(Reason::Busy)), 0);
+    assert!(is_refused(&the_item(&mut talk, |_| refused).2, "busy"));
+    let prompt = the_prompt(talk.heard(heard(direct(), "e2", OWNER, "still here?")));
+    assert_eq!(prompt.chat.folder, None);
+
+    let _ = the_new_session(talk.asked(set_folder("r2", OWNER, None, "a")));
+    let mut restarted = moving(&place, None, talk.saved().clone());
+    let recovered = restarted.recover();
+    let settled = items_of(&restarted, recovered);
+    assert!(settled.iter().any(|i| is_refused(i, "failed")));
+    let prompt = the_prompt(restarted.heard(heard(direct(), "e3", OWNER, "and now?")));
+    assert_eq!(prompt.chat.folder, None);
+}
+
+/// A session item for `session`.
+fn session_event(item: &str, session: &str, state: State) -> AgentEvent {
+    let mut header = event(item, state, Body::Session(session_item(false)))
+        .header()
+        .clone();
+    header.session = Some(session.into());
+    AgentEvent::new(header, Body::Session(session_item(false)), None).unwrap()
+}
+
+/// A conversation whose direct chat has moved from `th1` to the folder `a`, where its session is
+/// `th2`.
+fn moved(place: &Layout) -> (Conversation, ChatId) {
+    let mut talk = moving(place, None, Saved::default());
+    let chat = the_prompt(talk.heard(heard(direct(), "e1", OWNER, "hello")))
+        .chat
+        .id;
+    let _ = sent(
+        &mut talk,
+        &chat.0,
+        session_event("s1", "th1", State::Running),
+        "es1",
+    );
+    let (control, _, _) = the_new_session(talk.asked(set_folder("r1", OWNER, None, "a")));
+    assert!(talk.requested(&control.request, Ok(()), 0).is_empty());
+    let mut fresh = emitted(&chat.0, session_event("s2", "th2", State::Running));
+    fresh.settles = vec![control.request];
+    let _ = the_item(&mut talk, |t| t.emitted(fresh));
+    (talk, chat)
+}
+
+// A chat's folder is kept across a restart, with its session there: the next core's prompts name
+// both (D-101).
+#[test]
+fn a_chats_folder_survives_a_restart() {
+    let place = layout();
+    let (talk, chat) = moved(&place);
+    assert_eq!(talk.chosen_folder(&chat), Some(place.work.join("a")));
+    let mut restarted = moving(&place, None, talk.saved().clone());
+    let prompt = the_prompt(restarted.heard(heard(direct(), "e2", OWNER, "again")));
+    assert_eq!(
+        (prompt.chat.folder, prompt.session),
+        (Some(place.work.join("a")), Some(SessionId::from("th2")))
+    );
+}
+
+// The driver taking a new session is not the harness starting it: a harness can still refuse it.
+// Until the new session shows, the chat keeps its folder and its session, together, and a core
+// stopped meanwhile starts again with both; a move that never shows leaves them (D-101).
+#[test]
+fn a_move_is_the_chats_only_once_its_session_shows() {
+    let place = layout();
+    let mut talk = moving(&place, None, Saved::default());
+    let chat = the_prompt(talk.heard(heard(direct(), "e1", OWNER, "hello")))
+        .chat
+        .id;
+    let _ = sent(
+        &mut talk,
+        &chat.0,
+        session_event("s1", "th1", State::Running),
+        "es1",
+    );
+    let (control, _, _) = the_new_session(talk.asked(set_folder("r1", OWNER, None, "a")));
+    assert!(talk.requested(&control.request, Ok(()), 0).is_empty());
+    assert_eq!(talk.chosen_folder(&chat), None);
+    assert_eq!(talk.chat_folder(&chat), Some(place.work.clone()));
+
+    let mut restarted = moving(&place, None, talk.saved().clone());
+    let _ = restarted.recover();
+    let prompt = the_prompt(restarted.heard(heard(direct(), "e2", OWNER, "again")));
+    assert_eq!(
+        (prompt.chat.folder, prompt.session),
+        (None, Some(SessionId::from("th1")))
+    );
+
+    // The harness refused it, and showed nothing: it is settled for want of an effect.
+    let settled = talk.overdue(u64::MAX / 2);
+    assert!(!settled.is_empty());
+    assert_eq!(talk.chosen_folder(&chat), None);
+    let prompt = the_prompt(talk.heard(heard(direct(), "e3", OWNER, "still here?")));
+    assert_eq!(prompt.chat.folder, None);
+}
+
+// A saved folder is checked again when the core starts: one the owner no longer allows is the
+// chat's no more, and the chat's session there is not taken up again, so its next prompt starts
+// a session in the driver's own folder (D-101).
+#[test]
+fn a_saved_folder_the_owner_no_longer_allows_is_dropped() {
+    let place = layout();
+    let (talk, chat) = moved(&place);
+    let mut narrowed = moving(
+        &place,
+        Some(vec![place.outside.clone()]),
+        talk.saved().clone(),
+    );
+    assert_eq!(narrowed.chosen_folder(&chat), None);
+    let prompt = the_prompt(narrowed.heard(heard(direct(), "e2", OWNER, "and now?")));
+    assert_eq!((prompt.chat.folder, prompt.session), (None, None));
+}
+
+// A harness that keeps its own workspace, such as a gateway, states no folder: the core adds no
+// folder setting to its session item, and a `set` of a setting named `folder` goes to the driver
+// as any setting does.
+#[test]
+fn a_harness_with_its_own_workspace_gets_no_folder_setting() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let session = event("s", State::Running, Body::Session(session_item(false)));
+    let shown = sent(&mut talk, &chat, session, "es");
+    assert_eq!(folder_shown(&shown), None);
+    let acts = talk.asked(set_folder("r1", FRIEND, Some("es"), "/anywhere"));
+    assert!(
+        matches!(acts.as_slice(), [Act::Control(c)] if matches!(&c.action, Action::Set { setting, .. } if setting == "folder"))
+    );
 }

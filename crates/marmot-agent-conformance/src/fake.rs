@@ -58,8 +58,13 @@ pub struct Knobs {
 /// What a fake harness understood the driver to say, the same for every harness.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Heard {
-    /// A session opened: a new one, or one taken up again by its id.
-    Opened { session: String, resumed: bool },
+    /// A session opened: a new one, or one taken up again by its id, in the folder the harness
+    /// was told to work in, when it says (D-101).
+    Opened {
+        session: String,
+        resumed: bool,
+        folder: Option<String>,
+    },
     /// A prompt's text, in a session: a new turn, or one added to a running turn. `refused` when
     /// the harness turned it away, as when the session is busy: it reached the harness all the
     /// same, so a copy refused still counts against S4.

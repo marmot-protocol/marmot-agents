@@ -54,6 +54,7 @@ fn new_session(request: &str, session: Option<&str>) -> Control {
         id: ChatId("c-1".into()),
         group: false,
         name: None,
+        folder: None,
     };
     let session = session.map(Into::into);
     control(request, Action::NewSession { chat, session })

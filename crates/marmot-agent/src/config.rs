@@ -11,8 +11,12 @@
 //! white_noise = true                   # false: only the relays above, for a local try
 //! allow_loopback_relays = false        # true: relays on this machine may be used
 //! files_from = ["/home/me/work/out"]   # where the agent may send files from; by default the
-//!                                      # harness's working folder, and none for a connector
+//!                                      # chat's folder, and none for a harness with no folder
 //! send_files_from_agent_home = false   # true: files inside the account home may be sent too
+//! folders = ["~/projects"]             # the folders a chat may move a coding harness to, and any
+//!                                      # folder inside them; by default the harness's working
+//!                                      # folder. `~` is the home: listing it allows any folder
+//!                                      # in the home (D-101)
 //!
 //! [codex]                              # Codex, built in; or, for a connector on the socket,
 //! cwd = "/home/me/work"                # an empty [connector] section in its place
@@ -74,9 +78,8 @@ pub struct Config {
     /// default; off, the core uses only the relays listed, as a try against a local relay should.
     #[serde(default = "yes")]
     pub white_noise: bool,
-    /// The folders the agent may send files from (D-090). By default the working folder of a
-    /// harness the core runs, and none for a connector on the socket, whose folder the core does
-    /// not know. A folder listed here may not be the account home, hold it or lie inside it: the
+    /// The folders the agent may send files from (D-090). By default the chat's folder (D-101),
+    /// and none for a harness that states no folder. A folder listed here may not be the account home, hold it or lie inside it: the
     /// core refuses to start on one, unless `send_files_from_agent_home` is set.
     #[serde(default)]
     pub files_from: Option<Vec<PathBuf>>,
@@ -85,6 +88,12 @@ pub struct Config {
     /// place is inside the home, wherever the allowed folders are.
     #[serde(default)]
     pub send_files_from_agent_home: bool,
+    /// The folders a chat may move a coding harness to, each with every folder inside it (D-101).
+    /// By default the harness's own working folder. A `~` at the start stands for the home, so
+    /// listing `~` allows any folder in it; every other entry is a whole path. The agent's account
+    /// home is never a chat's folder, whatever is listed.
+    #[serde(default)]
+    pub folders: Option<Vec<PathBuf>>,
     /// Codex, when the agent is Codex, built in.
     #[serde(default)]
     pub codex: Option<CodexConfig>,
@@ -146,6 +155,20 @@ pub struct CodexConfig {
     /// When Codex asks: `on-request` by default.
     #[serde(default)]
     pub approval_policy: Option<String>,
+}
+
+/// A folder from the settings as a whole path: one that starts with `~` is taken from `home`; any
+/// other must be whole already.
+fn whole(folder: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    let mut parts = folder.components();
+    match parts.next() {
+        Some(std::path::Component::Normal(first)) if first == "~" => {
+            let home = home.filter(|h| h.is_absolute())?;
+            Some(home.join(parts.as_path()))
+        }
+        _ if folder.is_absolute() => Some(folder.to_path_buf()),
+        _ => None,
+    }
 }
 
 fn codex() -> String {
@@ -242,6 +265,12 @@ impl Config {
         }
         if config.codex.is_some() {
             config.setup()?;
+        }
+        if let Some(folders) = &mut config.folders {
+            let home = std::env::var_os("HOME").map(PathBuf::from);
+            for folder in folders {
+                *folder = whole(folder, home.as_deref()).ok_or(ConfigError::Value("folders"))?;
+            }
         }
         Ok(config)
     }

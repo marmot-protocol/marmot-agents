@@ -236,3 +236,88 @@ async fn an_event_the_core_cannot_read_takes_no_number() {
     assert_eq!(emitted.event.header().seq, 1, "the first event read");
     drop(connector.await.unwrap());
 }
+
+// A connector may state, in its hello, the folder its harness works in when a chat chose none; the
+// core then hands it each chat's chosen folder on a prompt and on a new session, and only when the
+// chat chose one (D-101). A folder that is not a whole path is refused, and a hello with none is
+// taken as before.
+#[tokio::test]
+async fn a_connector_states_its_folder_and_is_given_each_chats() {
+    use marmot_agent::socket::SocketDriver;
+    use marmot_agent_driver::{
+        Action, Chat, Control, Driver, MessageId, Person, Prompt, RequestId,
+    };
+    let greet = |folder: Option<Value>| async move {
+        let (core_side, connector) = UnixStream::pair().unwrap();
+        let (read, mut write) = connector.into_split();
+        let mut said = hello("token");
+        if let Some(folder) = folder {
+            said["params"]["folder"] = folder;
+        }
+        send(&mut write, said).await;
+        let greeted = SocketDriver::greet(core_side, "token", "agent").await;
+        (greeted, BufReader::new(read).lines(), write)
+    };
+    let (greeted, ..) = greet(Some(json!("relative/work"))).await;
+    assert!(greeted.is_err(), "a folder that is not whole");
+    let (greeted, ..) = greet(None).await;
+    assert_eq!(greeted.unwrap().folder(), None);
+
+    let (greeted, mut lines, mut write) = greet(Some(json!("/srv/work"))).await;
+    let mut driver = greeted.unwrap();
+    assert_eq!(driver.folder(), Some("/srv/work".into()));
+    let _welcome = lines.next_line().await.unwrap().unwrap();
+    let chat = |folder: Option<&str>| Chat {
+        id: "c-1".into(),
+        group: false,
+        name: None,
+        folder: folder.map(Into::into),
+    };
+    let person = Person {
+        id: "u-1".into(),
+        name: "Alice".into(),
+    };
+    let answering = tokio::spawn(async move {
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            let line = lines.next_line().await.unwrap().unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            send(
+                &mut write,
+                json!({"jsonrpc": "2.0", "id": request["id"], "result": {}}),
+            )
+            .await;
+            seen.push(request["params"].clone());
+        }
+        seen
+    });
+    for folder in [None, Some("/srv/work/a")] {
+        let prompt = Prompt {
+            message: MessageId("m-1".into()),
+            text: "hello".into(),
+            chat: chat(folder),
+            sender: person.clone(),
+            reply_to: None,
+            attachments: Vec::new(),
+            session: None,
+        };
+        driver.prompt(prompt).await.unwrap();
+    }
+    let control = Control {
+        request: RequestId("r-1".into()),
+        by: person.clone(),
+        action: Action::NewSession {
+            chat: chat(Some("/srv/work/b")),
+            session: None,
+        },
+    };
+    driver.control(control).await.unwrap();
+    let seen = answering.await.unwrap();
+    assert_eq!(
+        seen[0]["chat"].get("folder"),
+        None,
+        "none chosen, none named"
+    );
+    assert_eq!(seen[1]["chat"]["folder"], "/srv/work/a");
+    assert_eq!(seen[2]["action"]["chat"]["folder"], "/srv/work/b");
+}

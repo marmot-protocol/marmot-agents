@@ -64,6 +64,14 @@ impl Subject for OnFake {
         self.replay
     }
 
+    // Pi's driver starts each chat's Pi in the chat's folder, so it must be on disk.
+    fn other_folder(&self) -> std::path::PathBuf {
+        let (_, _, cwd) = self.server.program();
+        let other = cwd.join("elsewhere");
+        std::fs::create_dir_all(&other).expect("a folder to move to");
+        other
+    }
+
     fn chat_of(&self, tag: &str) -> Option<ChatId> {
         self.server.chat_of(tag).map(ChatId)
     }

@@ -470,6 +470,7 @@ impl Checker {
                 Heard::Opened {
                     session,
                     resumed: true,
+                    ..
                 } => {
                     let Some(owner) = self.owners.get(session).cloned() else {
                         self.fail("S12", "a session no chat had was taken up");

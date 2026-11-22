@@ -286,6 +286,7 @@ impl Protocol for Acp {
                 heard.push(Heard::Opened {
                     session,
                     resumed: false,
+                    folder: params["cwd"].as_str().map(String::from),
                 });
             }
             "session/resume" | "session/load" => {
@@ -321,6 +322,7 @@ impl Protocol for Acp {
                 heard.push(Heard::Opened {
                     session,
                     resumed: true,
+                    folder: params["cwd"].as_str().map(String::from),
                 });
             }
             "session/prompt" => {

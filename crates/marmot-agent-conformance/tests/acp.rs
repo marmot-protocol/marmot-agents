@@ -122,7 +122,7 @@ marmot_agent_conformance::with_scenarios!(conformance!(OpenCode));
 // own, and in Cursor's to-do list: they run the scenarios that reach those, and the answer to an
 // agent that has gone. The rest go through the same code as OpenCode's.
 conformance!(Goose:
-    run: [two_chats, answered_once, answer_after_death, dies_mid_turn, restart, new_session];
+    run: [two_chats, answered_once, answer_after_death, dies_mid_turn, restart, new_session, folder];
     left_out: [
         one_turn,
         dies_with_requests_pending,
@@ -149,6 +149,7 @@ conformance!(Cursor:
         stops_reading,
         late_replies,
         new_session,
+        folder,
         settings,
     ]
 );

@@ -3,7 +3,8 @@
 //! approved and run, interrupts a turn while it waits for an approval, starts a new session, and
 //! has the driver crash in the middle of a turn and carries on, with nothing run twice
 //! (`docs/plan.md`, D-074). Then the agent sends a file from its working folder, which the person
-//! downloads and reads (D-090).
+//! downloads and reads (D-090), and the chat moves the agent to a folder inside it, where its next
+//! session works (D-101).
 //!
 //! It approves only the exact command each step asks for, once, in a throwaway folder. It needs
 //! Node 24, `npm ci` run in `packages/claude-code`, and a signed-in Claude Code, so it runs only
@@ -45,11 +46,8 @@ fn driver(home: &Path, work: &Path) -> Child {
 async fn claude_code_end_to_end() {
     let work = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
-    // The core does not know a connector's folder, so the settings name it (D-090).
-    let settings = format!(
-        "name = \"Claude\"\nfiles_from = [\"{}\"]\n[connector]\n",
-        work.path().display()
-    );
+    // The connector states its folder in its hello, and files come from there (D-090, D-101).
+    let settings = "name = \"Claude\"\n[connector]\n".to_string();
     let world = World::new(&settings).await;
     world.runtime.start().await.unwrap();
     let (listener, token) = Endpoint::in_home(home.path()).listen().unwrap();
@@ -173,6 +171,27 @@ async fn claude_code_end_to_end() {
     assert_eq!(files[0].0, "runs.txt");
     assert_eq!(files[0].1, b"ran\n");
     println!("sent a file");
+
+    // 6. The chat moves the agent to a folder inside its own: the session ends, the next prompt
+    //    opens one there, and a command runs there.
+    std::fs::create_dir(work.path().join("sub")).unwrap();
+    let sub = std::fs::canonicalize(work.path().join("sub")).unwrap();
+    let folder = Asked::Set {
+        setting: "folder".into(),
+        value: "sub".into(),
+    };
+    let moved = chat.ask(None, &folder, "Move to sub").await;
+    let ended = chat.effect_of(&moved).await;
+    assert!(matches!(ended.item.event.body(), Body::Session(_)));
+    let asked = chat.say(&format!("{only} `touch moved.txt`")).await;
+    chat.approve("touch moved.txt").await;
+    within(TURN, || sub.join("moved.txt").exists().then_some(())).await;
+    let turn = chat.turn_for(&asked).await;
+    let done = chat.turn_at(&turn, State::Done).await;
+    let moved_to = done.item.event.header().session.clone().unwrap();
+    assert_ne!(moved_to, session, "a new session");
+    assert_eq!(chat.folder_of(&moved_to), Some(sub.display().to_string()));
+    println!("moved to another folder");
 
     let _ = stop.send(());
     serving.await.unwrap().unwrap();

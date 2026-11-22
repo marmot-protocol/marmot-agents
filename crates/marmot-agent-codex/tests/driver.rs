@@ -91,6 +91,7 @@ fn prompt(message: &str, text: &str) -> Prompt {
             id: "c-1".into(),
             group: false,
             name: None,
+            folder: None,
         },
         sender: alice(),
         reply_to: None,

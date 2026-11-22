@@ -60,6 +60,7 @@ fn prompt(chat: &str, message: &str, text: &str) -> Prompt {
             id: chat.into(),
             group: false,
             name: None,
+            folder: None,
         },
         sender: person(),
         reply_to: None,

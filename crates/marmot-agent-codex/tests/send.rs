@@ -52,6 +52,7 @@ fn prompt(text: &str, group: bool) -> Prompt {
             id: "c-1".into(),
             group,
             name: None,
+            folder: None,
         },
         sender: alice(),
         reply_to: None,
@@ -771,10 +772,18 @@ fn a_new_session_asked_for_an_old_one_is_out_of_date() {
             id: "c-1".into(),
             group: false,
             name: None,
+            folder: None,
         },
         session: session.map(Into::into),
     };
     let mut translator = Translator::new();
+    // A driver started again has no thread yet, and the core names the chat's saved one: with no
+    // thread running there is nothing for the request to be out of date with (D-101).
+    assert!(
+        Translator::new()
+            .control(1, &new_session(Some("th-saved")), &setup)
+            .is_ok()
+    );
     assert!(translator.control(1, &new_session(None), &setup).is_ok());
     started(&mut translator);
     let stale = translator

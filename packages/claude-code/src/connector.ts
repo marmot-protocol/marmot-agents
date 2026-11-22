@@ -62,7 +62,7 @@ export type CoreEvent = Omit<AgentEvent, "harness" | "seq"> & {
 
 export interface ConnectorOptions {
   query: QueryFn;
-  /** The folder Claude Code works in. */
+  /** The folder Claude Code works in when a chat chose none (D-101). */
   cwd: string;
   model?: string;
   permissionMode?: string;
@@ -176,6 +176,16 @@ function settingValues(body: Json): Map<unknown, unknown> {
   return values;
 }
 
+/**
+ * The folder a chat chose, as the core names it on a prompt or a new session (D-101): a whole path, `null`
+ * when the chat chose none, and `undefined` when what is named is not a whole path.
+ */
+function chatFolder(chat: unknown): string | null | undefined {
+  const folder = object(chat)["folder"];
+  if (folder === undefined || folder === null) return null;
+  return typeof folder === "string" && isAbsolute(folder) ? folder : undefined;
+}
+
 function push(map: Map<string, string[]>, key: string, value: string): void {
   map.set(key, [...(map.get(key) ?? []), value]);
 }
@@ -233,13 +243,16 @@ export class Connector {
     if (message === "" || chatId === "") throw new Refusal("invalid");
     const chat = this.chat(chatId);
     const session = typeof params["session"] === "string" ? params["session"] : null;
+    const folder = chatFolder(params["chat"]);
+    if (folder === undefined) throw new Refusal("invalid");
     // A session another chat has had is never taken into this one, open or closed (D-065).
     if (session !== null && (this.owners.get(session) ?? chatId) !== chatId) throw new Refusal("invalid");
     // A prompt names a session only to take it up again (D-065).
     if (session !== null && chat.run !== null && chat.translator.currentSession !== session) {
       this.endRun(chat, []);
     }
-    if (chat.run === null) this.start(chat, session ?? chat.resumable);
+    // A session starts in the chat's folder, and a running one stays where it is (D-101).
+    if (chat.run === null) this.start(chat, session ?? chat.resumable, folder ?? this.options.cwd);
     const run = chat.run!;
     const msg: UserMessage = {
       type: "user",
@@ -253,15 +266,15 @@ export class Connector {
     run.inbox.push(msg);
   }
 
-  /** Starts the chat's `query()`, resuming `resume` when it is given. */
-  private start(chat: Chat, resume: string | null): void {
+  /** Starts the chat's `query()` in `folder`, resuming `resume` when it is given. */
+  private start(chat: Chat, resume: string | null, folder: string): void {
     const inbox = new Inbox();
     // No Claude Code settings file is read: an allow rule or a hook in the owner's own settings would
     // otherwise approve or run things in a chat without the chat's approval.
     // Summarized thinking, as `tools/record/claude/record_claude.ts` recorded it: without it Claude Code
     // sends its thinking blocks empty, and a turn shows no reasoning.
     const options: Json = {
-      cwd: this.options.cwd,
+      cwd: folder,
       settingSources: [],
       thinking: { type: "adaptive", display: "summarized" },
     };
@@ -282,7 +295,7 @@ export class Connector {
     chat.resumable = null;
     this.feed(chat, { dir: "out", via: "call", msg: { method: "query", options } });
     const canUseTool: CanUseTool = (toolName, input, opts) => this.permission(chat, run, toolName, input, opts);
-    const q = this.options.query({ prompt: inbox, options: { ...options, ...this.fileTool(chat), canUseTool } });
+    const q = this.options.query({ prompt: inbox, options: { ...options, ...this.fileTool(chat, folder), canUseTool } });
     const run: Run = { q, inbox, closed: false };
     chat.run = run;
     void this.read(chat, run);
@@ -300,16 +313,15 @@ export class Connector {
 
   /**
    * The options that give a query the tool to send a file, when the core can be asked. A relative path is
-   * made whole by putting the working folder, whole since the start, in front of it, and nothing more: a
+   * made whole by putting the query's folder, whole since the start, in front of it, and nothing more: a
    * `..` in it is left for the core to follow, since only following it on disk says where it leads. The
    * core takes only an absolute path. What the model reads back names no path the core did not already have
    * from it.
    */
-  private fileTool(chat: Chat): Json {
+  private fileTool(chat: Chat, cwd: string): Json {
     const sendFile = this.options.sendFile;
     if (sendFile === undefined) return {};
     const send = async (path: string) => {
-      const cwd = this.options.cwd;
       const whole = isAbsolute(path) ? path : cwd.endsWith(sep) ? cwd + path : cwd + sep + path;
       try {
         await sendFile(chat.id, whole);
@@ -494,7 +506,8 @@ export class Connector {
     if (type === "interrupt") return this.interrupt(request, text(action["turn"]));
     if (type === "new_session") {
       const chatId = text(object(action["chat"])["id"]);
-      if (chatId === "") throw new Refusal("invalid");
+      // The new session starts in the chat's folder with the next prompt, which names it (D-101).
+      if (chatId === "" || chatFolder(action["chat"]) === undefined) throw new Refusal("invalid");
       const chat = this.chat(chatId);
       this.endRun(chat, request === "" ? [] : [request]);
       return;
@@ -754,6 +767,8 @@ export async function run(options: RunOptions): Promise<void> {
         harness,
         token,
         capabilities: CAPABILITIES,
+        // Each chat may move Claude Code to another folder; this is where it works until then (D-101).
+        folder: resolve(options.cwd),
       },
       (method, params) => connector.serve(method, params),
     );

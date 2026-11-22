@@ -199,6 +199,9 @@ pub struct SocketDriver {
     writer: OwnedWriteHalf,
     harness: Harness,
     capabilities: Capabilities,
+    /// The folder the harness works in when a chat chose none, when the connector states one in
+    /// its hello (D-101).
+    folder: Option<PathBuf>,
     next_id: i64,
     /// Events, and files to send, read while a request waited for its response, for the next call
     /// of `next_event`.
@@ -250,6 +253,18 @@ impl SocketDriver {
             let _ = write_line(&mut writer, &refusal).await;
             return Err(HelloError::NotHello);
         };
+        // Optional: a connector whose harness keeps a workspace of its own states none (D-101).
+        let folder = match params.get("folder") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(folder)) if Path::new(folder).is_absolute() => {
+                Some(PathBuf::from(folder))
+            }
+            Some(_) => {
+                let refusal = refuse(-32602, "folder is not a whole path");
+                let _ = write_line(&mut writer, &refusal).await;
+                return Err(HelloError::NotHello);
+            }
+        };
         let harness = Harness {
             name: params["harness"]["name"]
                 .as_str()
@@ -270,6 +285,7 @@ impl SocketDriver {
             writer,
             harness,
             capabilities,
+            folder,
             next_id: 0,
             held: VecDeque::new(),
             files: HashMap::new(),
@@ -445,12 +461,16 @@ impl Driver for SocketDriver {
         self.capabilities.clone()
     }
 
+    fn folder(&self) -> Option<PathBuf> {
+        self.folder.clone()
+    }
+
     async fn prompt(&mut self, prompt: Prompt) -> Result<(), Refusal> {
         let person = |p: &marmot_agent_driver::Person| json!({"id": p.id.0, "name": p.name});
         let mut params = json!({
             "message": prompt.message.0,
             "text": prompt.text,
-            "chat": {"id": prompt.chat.id.0, "group": prompt.chat.group, "name": prompt.chat.name},
+            "chat": chat(&prompt.chat),
             "sender": person(&prompt.sender),
             "attachments": prompt.attachments.iter().map(|a| json!({
                 "path": a.path.to_string_lossy(), "name": a.name, "media_type": a.media_type,
@@ -488,7 +508,7 @@ impl Driver for SocketDriver {
             Action::Interrupt { turn } => json!({"type": "interrupt", "turn": turn.as_str()}),
             Action::NewSession { chat, session } => json!({
                 "type": "new_session",
-                "chat": {"id": chat.id.0, "group": chat.group, "name": chat.name},
+                "chat": self::chat(chat),
                 "session": session.as_ref().map(|s| s.as_str()),
             }),
             Action::Set {
@@ -608,6 +628,16 @@ fn reason_word(reason: Reason) -> &'static str {
         Reason::Failed => "failed",
         Reason::NotAllowed => "not_allowed",
     }
+}
+
+/// A chat as the connector reads it: its id, whether it is a group, its name, and the folder it
+/// chose, only when it chose one (D-101).
+fn chat(chat: &marmot_agent_driver::Chat) -> Value {
+    let mut value = json!({"id": chat.id.0, "group": chat.group, "name": chat.name});
+    if let Some(folder) = &chat.folder {
+        value["folder"] = folder.to_string_lossy().into();
+    }
+    value
 }
 
 /// The seven capability flags, every one, every time (D-058).
