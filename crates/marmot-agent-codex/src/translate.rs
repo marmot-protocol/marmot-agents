@@ -1823,8 +1823,11 @@ impl Translator {
             }
             DriverAction::NewSession { session, .. } => {
                 // The session it replaces must still be the chat's: one asked for before another
-                // replaced it is out of date.
-                if session.as_ref().map(|s| s.as_str()) != self.session.as_deref() {
+                // replaced it is out of date. With no thread running, as in a driver started
+                // again, the core names the chat's saved session, and nothing is out of date.
+                if self.session.is_some()
+                    && session.as_ref().map(|s| s.as_str()) != self.session.as_deref()
+                {
                     return refuse(Reason::UnknownItem);
                 }
                 self.pick(id, None, setup)

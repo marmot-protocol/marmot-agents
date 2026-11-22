@@ -81,8 +81,8 @@ enum Effect {
     Setting(String, String),
     /// A turn started by the driver's request with this id has started.
     TurnStartedBy(i64),
-    /// A session other than this one is running.
-    NewSession(Option<String>),
+    /// A session other than this one is running, started in this folder, the chat's (D-101).
+    NewSession(Option<String>, Option<PathBuf>),
 }
 
 /// One chat: its translator, the controls waiting for their effect, and the folder its session
@@ -567,6 +567,7 @@ impl Codex {
         let turn = header.turn.as_ref().map(|t| t.as_str().to_string());
         let ended = !matches!(header.state, State::Running | State::Waiting);
         let session = header.session.as_ref().map(|s| s.as_str().to_string());
+        let mut moved = None;
         c.effects.retain(|(request, effect)| {
             let shown = seen
                 && match (effect, event.body()) {
@@ -577,8 +578,12 @@ impl Codex {
                         let started = turn.as_deref().and_then(|t| c.translator.turn_request(t));
                         started == Some(*r)
                     }
-                    (Effect::NewSession(old), Body::Session(_)) => {
-                        header.state == State::Running && session != *old
+                    (Effect::NewSession(old, folder), Body::Session(_)) => {
+                        let new = header.state == State::Running && session != *old;
+                        if new {
+                            moved = Some(folder.clone());
+                        }
+                        new
                     }
                     _ => false,
                 };
@@ -587,6 +592,10 @@ impl Codex {
             }
             !shown
         });
+        // The chat works in the new session's folder once Codex has started it.
+        if let Some(folder) = moved {
+            c.folder = folder;
+        }
         let prompts = match (event.body(), turn) {
             (Body::Turn(_), Some(turn)) => {
                 let key = (chat.clone(), turn);
@@ -880,10 +889,11 @@ impl Driver for Codex {
                 (chat, Effect::TurnEnded(turn.as_str().to_string()))
             }
             Action::NewSession { chat, session } => {
+                let folder = chat.folder.clone();
                 let chat = chat.id.clone();
                 self.chat(&chat).await?;
                 let old = session.as_ref().map(|s| s.as_str().to_string());
-                (chat, Effect::NewSession(old))
+                (chat, Effect::NewSession(old, folder))
             }
             Action::Set {
                 session,
@@ -901,8 +911,8 @@ impl Driver for Codex {
             }
         };
         // A new session starts in the chat's folder (D-101).
-        let folder = match &control.action {
-            Action::NewSession { chat, .. } => chat.folder.clone(),
+        let folder = match &effect {
+            Effect::NewSession(_, folder) => folder.clone(),
             _ => None,
         };
         let setup = self.setup_in(folder.as_deref());
@@ -917,9 +927,6 @@ impl Driver for Codex {
             Purpose::Control(request.clone(), Some(effect))
         };
         self.ask(&chat, purpose, build).await?;
-        if let (Action::NewSession { .. }, Some(c)) = (&control.action, self.chats.get_mut(&chat)) {
-            c.folder = folder;
-        }
         Ok(())
     }
 

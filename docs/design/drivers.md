@@ -180,25 +180,29 @@ OpenClaw keep the workspace they manage. Built 2026-11-22; what other programs a
 
 - **The core owns the rule.** A driver states its own folder, the install folder, through `Driver::folder`
   (a connector, as `folder` in its hello). Only then does the core offer the setting. It keeps each chat's
-  folder in its state file, so it survives a restart.
+  folder in its state file, so it survives a restart, and checks it again when it starts: a folder the
+  settings no longer allow is dropped, with the chat's session there, and the chat goes back to the install
+  folder.
 - **The chat sees it as a setting.** The core adds a setting `folder` ("Folder") to every session item of such
   a harness, after the harness's own: its value is the folder the session started in, its accepted values are
   not listed, and it is marked as needing the right to approve
   ([D-043](../decisions.md#d-043-a-setting-says-which-right-it-needs)). A session keeps the folder it started
   in.
 - **Someone who may approve sets it**, with a `set` control naming `folder` and a path. A path may start with
-  `~`, the home; a relative one is taken from the chat's current folder. The core resolves it, links followed
-  and `..` taken away, and takes it only if it is a folder inside one of those the settings list in `folders`
-  (by default the install folder; listing `~` allows any folder in the home). The agent's account home, and
-  any folder inside it, is never allowed (provisional). A path outside is refused, before anything on disk is
-  read, with the core's refused notice, reason `not_allowed`; one inside that is not there, or is not a
-  folder, with `invalid`. Neither names the path, and nothing about it is logged
+  `~`, the home; a relative one is taken from the chat's current folder. The core resolves it one name at a
+  time, links followed and `..` taken away, and takes it only if it is a folder inside one of those the
+  settings list in `folders` (by default the install folder; listing `~` allows any folder in the home). The
+  agent's account home, and any folder inside it, is never allowed (provisional). Nothing outside those
+  folders is read on disk: a path that leads outside, as written or through a link, is refused with the core's
+  refused notice, reason `not_allowed`, whether what it leads to is there or not; one inside that is not
+  there, or is not a folder, with `invalid`. Neither names the path, and nothing about it is logged
   ([D-071](../decisions.md#d-071-what-may-be-logged)).
 - **It applies from the next session, so setting it starts one.** The core hands the driver a new session for
-  the chat, with the new folder on the chat (`Chat::folder`). The folder is the chat's once the driver has
-  taken that request; a refused one moves nothing. The new session's item settles the `set`. Every prompt
-  after names the folder, and the driver starts the chat's next session there, or takes up its session there
-  after a restart. A chat that chose none is named no folder, and works in the driver's own.
+  the chat, with the new folder on the chat (`Chat::folder`). The folder is the chat's once the new
+  session's item shows, which settles the `set`: the folder and the session are saved together, and a new
+  session the driver or the harness refuses moves nothing. A session the driver starts for a prompt meanwhile
+  starts in the new folder. Every prompt after names the folder, and the driver starts the chat's next session
+  there, or takes up its session there after a restart. A chat that chose none is named no folder, and works in the driver's own.
 - **Each driver:** Codex gives the folder as `cwd` on `thread/start` and `thread/resume`; an ACP agent as
   `cwd` on `session/new`, `session/load` and `session/resume`; Claude Code as the query's `cwd`. Pi works where
   it was started, so its driver starts each chat's Pi in the chat's folder, and a new session in another folder

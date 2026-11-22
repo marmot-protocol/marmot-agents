@@ -12,9 +12,10 @@
 //! keys, is never a chat's folder, nor is any folder inside it.
 //!
 //! A chat could learn which paths exist elsewhere on the machine from the reason it is given, so a
-//! path is first looked at only as written: one that, `..` taken away, is not inside a listed
-//! folder is refused as not allowed before anything on disk is read. Only then is it resolved, and
-//! one that is not there, or is not a folder, is refused as invalid.
+//! path is resolved one name at a time, and nothing is read on disk that is not inside a listed
+//! folder or on the way to one: a path that leads anywhere else, as written or through a link, is
+//! refused as not allowed, whether what it leads to is there or not. Only a path whose every
+//! name so far lies inside is refused as invalid when it is not there or is not a folder.
 //!
 //! Nothing here prints a path (D-071). A refusal says why in words the chat can read, and names no
 //! path.
@@ -101,11 +102,15 @@ impl FolderRule {
             Some(listed) => listed.to_vec(),
             None => vec![default.to_path_buf()],
         };
+        // Only a whole path names a folder: an empty name, as `.` becomes by its words, would hold
+        // every path. A folder with no whole name allows nothing.
         let roots = roots
             .iter()
             .map(|root| {
-                let mut names = vec![lexical(root)];
-                if let Ok(real) = std::fs::canonicalize(root)
+                let as_written = Some(lexical(root)).filter(|name| name.is_absolute());
+                let real = std::fs::canonicalize(root).ok();
+                let mut names: Vec<PathBuf> = as_written.into_iter().collect();
+                if let Some(real) = real
                     && !names.contains(&real)
                 {
                     names.push(real);
@@ -116,7 +121,7 @@ impl FolderRule {
         let account_home =
             std::fs::canonicalize(account_home).unwrap_or_else(|_| lexical(account_home));
         Self {
-            default: default.to_path_buf(),
+            default: std::fs::canonicalize(default).unwrap_or_else(|_| default.to_path_buf()),
             roots,
             account_home,
             home: std::env::var_os("HOME")
@@ -148,25 +153,85 @@ impl FolderRule {
         if !whole.is_absolute() {
             return Err(missing());
         }
-        // As written, before anything is read: a chat learns nothing of what lies outside.
-        let written = lexical(&whole);
-        let inside = |path: &Path| {
-            (self.roots.iter()).any(|names| names.iter().any(|name| path.starts_with(name)))
-        };
-        if !inside(&written) {
-            return Err(outside());
-        }
-        let real = std::fs::canonicalize(&whole).map_err(|_| missing())?;
-        if !real.is_dir() {
-            return Err(missing());
-        }
-        if !inside(&real) {
-            return Err(outside());
-        }
+        let real = self.resolve(&whole)?;
         if real.starts_with(&self.account_home) {
             return Err(keys());
         }
         Ok(real)
+    }
+}
+
+impl FolderRule {
+    /// Whether `path`, a real path, lies inside a listed folder.
+    fn inside(&self, path: &Path) -> bool {
+        (self.roots.iter()).any(|names| names.iter().any(|name| path.starts_with(name)))
+    }
+
+    /// Whether `path` lies on the way to a listed folder: a folder that holds one.
+    fn on_the_way(&self, path: &Path) -> bool {
+        (self.roots.iter()).any(|names| names.iter().any(|name| name.starts_with(path)))
+    }
+
+    /// `whole`, an absolute path, resolved one name at a time: every link followed and every `..`
+    /// taken away. Nothing is read on disk that is neither inside a listed folder nor on the way
+    /// to one: a path that leads elsewhere is refused as not allowed before it is read, so the
+    /// answer is the same whether what lies there exists. A name inside that is not there, or is
+    /// not a folder, is refused as invalid.
+    fn resolve(&self, whole: &Path) -> Result<PathBuf, Refusal> {
+        /// More links than this on the way is a loop.
+        const LINKS_MAX: usize = 40;
+        let mut parts: std::collections::VecDeque<std::ffi::OsString> =
+            std::collections::VecDeque::new();
+        push_front(&mut parts, whole);
+        let mut at = PathBuf::from("/");
+        let mut links = 0;
+        while let Some(part) = parts.pop_front() {
+            if part == ".." {
+                // `at` holds no link, so its parent is the real one.
+                at.pop();
+                continue;
+            }
+            let next = at.join(&part);
+            let inside = self.inside(&next);
+            if !inside && !self.on_the_way(&next) {
+                return Err(outside());
+            }
+            let not_there = || if inside { missing() } else { outside() };
+            let kind = std::fs::symlink_metadata(&next).map_err(|_| not_there())?;
+            if kind.is_symlink() {
+                links += 1;
+                let target = std::fs::read_link(&next).map_err(|_| not_there())?;
+                if links > LINKS_MAX {
+                    return Err(not_there());
+                }
+                if target.is_absolute() {
+                    at = PathBuf::from("/");
+                }
+                push_front(&mut parts, &target);
+            } else if kind.is_dir() {
+                at = next;
+            } else {
+                return Err(not_there());
+            }
+        }
+        if !self.inside(&at) {
+            return Err(outside());
+        }
+        Ok(at)
+    }
+}
+
+/// Puts the names of `path` in front of `parts`, in order, leaving out its root and every `.`.
+fn push_front(parts: &mut std::collections::VecDeque<std::ffi::OsString>, path: &Path) {
+    let names: Vec<_> = (path.components())
+        .filter_map(|c| match c {
+            Component::Normal(name) => Some(name.to_os_string()),
+            Component::ParentDir => Some("..".into()),
+            Component::RootDir | Component::CurDir | Component::Prefix(_) => None,
+        })
+        .collect();
+    for name in names.into_iter().rev() {
+        parts.push_front(name);
     }
 }
 
@@ -199,6 +264,27 @@ mod tests {
             rule.check("~/project", Path::new("/")).unwrap_err().reason,
             Reason::Invalid
         );
+    }
+
+    // A driver folder given as a relative path, such as `.`, limits a chat to where it really
+    // is, and one that names no folder there allows nothing: no name of a listed folder is empty,
+    // which every path would lie inside.
+    #[test]
+    fn a_relative_driver_folder_never_allows_everything() {
+        let elsewhere = tempfile::tempdir().unwrap();
+        let elsewhere = elsewhere.path().display().to_string();
+        for default in [".", "no-such-folder/.."] {
+            let rule = FolderRule::new(Path::new(default), None, Path::new("/no-such-home"));
+            assert_eq!(
+                rule.check(&elsewhere, Path::new("/")).unwrap_err().reason,
+                Reason::NotAllowed,
+                "{default}"
+            );
+        }
+        let here = std::fs::canonicalize(".").unwrap();
+        let rule = FolderRule::new(Path::new("."), None, Path::new("/no-such-home"));
+        assert_eq!(rule.default_folder(), here);
+        assert_eq!(rule.check("src", &here).unwrap(), here.join("src"));
     }
 
     #[test]

@@ -303,8 +303,8 @@ struct Pending {
     chat: String,
     /// For a new session: the driver took it, so the chat's saved session is not named again.
     new_session: bool,
-    /// For a new session that moves the chat to a folder: the folder, the chat's once the driver
-    /// has taken it (D-101).
+    /// For a new session that moves the chat to a folder: the folder, the chat's once the new
+    /// session shows (D-101).
     #[serde(default)]
     folder: Option<PathBuf>,
     /// For an answer: the item it answers, so a second answer to it is refused.
@@ -379,7 +379,20 @@ impl Conversation {
 
     /// Offers each chat a folder setting, by `rule`: for a driver that works in a folder of its own,
     /// which a chat may move (D-101).
+    ///
+    /// A folder a chat chose earlier is checked again by `rule`, since the owner may have changed
+    /// the settings: one no longer allowed, or no longer there, is the chat's no more, and nor is
+    /// its session there, so the chat's next prompt starts a session in the driver's own folder.
     pub fn with_folders(mut self, rule: FolderRule) -> Self {
+        let chosen = std::mem::take(&mut self.saved.folders);
+        for (chat, folder) in chosen {
+            let still = (folder.to_str()).and_then(|f| rule.check(f, rule.default_folder()).ok());
+            if still.as_ref() == Some(&folder) {
+                self.saved.folders.insert(chat, folder);
+            } else {
+                self.saved.sessions.remove(&chat);
+            }
+        }
         self.folders = Some(rule);
         self
     }
@@ -469,6 +482,10 @@ impl Conversation {
         } else {
             self.saved.sessions.get(&chat.id.0).cloned()
         };
+        let mut chat = chat;
+        if let Some(folder) = self.moving_to(&chat.id.0) {
+            chat.folder = Some(folder);
+        }
         vec![Act::Prompt(Prompt {
             message: MessageId(message),
             text: heard.text,
@@ -722,9 +739,6 @@ impl Conversation {
                     if pending.new_session {
                         self.taken.insert(pending.chat.clone());
                     }
-                    if let Some(folder) = pending.folder.take() {
-                        self.saved.folders.insert(pending.chat.clone(), folder);
-                    }
                 }
                 Vec::new()
             }
@@ -760,6 +774,7 @@ impl Conversation {
         let Some(chat) = chat else {
             return Vec::new();
         };
+        self.moved(&chat, &emitted);
         let emitted = self.show_folder(&chat, emitted);
         let Some(group) = self.group_of(&chat) else {
             return Vec::new();
@@ -1378,6 +1393,31 @@ impl Conversation {
             .filter(|r| r.chat == chat && r.open() && matches!(r.last.body(), Body::Turn(_)))
             .max_by_key(|r| r.last.header().seq)
             .and_then(|r| r.last.header().turn.clone())
+    }
+
+    /// The folder a move the driver took is starting `chat`'s new session in, before the session
+    /// has shown: a session the driver starts for a prompt meanwhile starts there (D-101).
+    fn moving_to(&self, chat: &str) -> Option<PathBuf> {
+        (self.saved.pending.values())
+            .filter(|p| p.chat == chat && p.deadline.is_some())
+            .find_map(|p| p.folder.clone())
+    }
+
+    /// A session item that shows the effect of a move makes the move's folder the chat's, as the
+    /// session item makes the session the chat's: both are saved together, and a move the harness
+    /// refuses changes neither (D-101).
+    fn moved(&mut self, chat: &str, emitted: &Emitted) {
+        if !matches!(emitted.event.body(), Body::Session(_)) {
+            return;
+        }
+        for request in &emitted.settles {
+            if let Some(pending) = self.saved.pending.get_mut(&request.0)
+                && pending.chat == chat
+                && let Some(folder) = pending.folder.take()
+            {
+                self.saved.folders.insert(chat.to_string(), folder);
+            }
+        }
     }
 
     /// Whether a `set` of `setting` moves the chat's folder: the core's own setting, for a driver
