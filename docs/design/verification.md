@@ -7,7 +7,7 @@ on 2026-11-21. The property list, the models and the layers below are the plan; 
 change as the work goes. It comes from reading all the code after M3 and the M4 work in progress, and from how MDK
 tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules). Under
 [first, fix what is known](#first-fix-what-is-known), the behaviour the fixes made visible is provisional: built,
-and waiting for the owner.
+and waiting for the owner. Of the models, `CoreLifecycle` is built (2026-11-22); the others are planned.
 
 ## Why
 
@@ -186,12 +186,12 @@ the second lane on MDK's real relay.
 fair configuration that must pass, and an unfair one that must produce a counterexample, which is committed as a
 simulator scenario. A test checks that the model's actions and the code's still match.
 
-| Model | What it covers | Owns |
-| --- | --- | --- |
-| `CoreLifecycle` | The conversation, the run loop, saving and crashing: requests pending and settled, items and versions, read marks, sessions | S1 to S4, S10, S12, L1 to L3 |
-| `DriverTransport` | One driver's side, for any harness: requests in flight, effects awaiting settlement, a dropped wait, a restart of the harness, two chats | S1, S5, S11, S13, L1, L2 |
-| `SocketProtocol` | The hello, a request answered while events arrive, a connector going and another coming, one at a time | S11, L4 |
-| `Gateways` | Small models of OpenClaw's approval vouching and Hermes's held turn end | S5, S6, S1 |
+| Model | What it covers | Owns | Status |
+| --- | --- | --- | --- |
+| `CoreLifecycle` | The conversation, the run loop, saving and crashing: requests pending and settled, items and versions, read marks, sessions | S1 to S4, S10, S12, L1 to L3 | Built, in [`formal/tla`](../../formal/tla/README.md): checked on small bounds on every pull request, with its counterexamples, defects and reachability probes. It found two gaps when a send is given up or refused in a live group (S2, L1, L2); see its README |
+| `DriverTransport` | One driver's side, for any harness: requests in flight, effects awaiting settlement, a dropped wait, a restart of the harness, two chats | S1, S5, S11, S13, L1, L2 | Planned |
+| `SocketProtocol` | The hello, a request answered while events arrive, a connector going and another coming, one at a time | S11, L4 | Planned |
+| `Gateways` | Small models of OpenClaw's approval vouching and Hermes's held turn end | S5, S6, S1 | Planned |
 
 Model traces then drive the code: a trace the checker produces is replayed against the real conversation, and
 against the simulator, to show the code takes the same steps (trace validation).

@@ -1,0 +1,17 @@
+{
+  "case": "live-out-of-order",
+  "model": "CoreLifecycle",
+  "config": "CoreLifecycle.liveorder.cfg",
+  "breaks": "S10",
+  "what": "Without LiveInOrder: MDK hands a later message over first; the read mark passes the earlier one, which run.rs handle then skips (S10).",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"Prompts": ["p1"], "Requests": ["r1"], "NewSession": ["r1"], "Items": ["s1"], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 1, "MaxRefusals": 0, "UnknownTries": 2, "GoneChats": [], "ExactLookup": true, "TokenDedupe": false, "LagCatchUp": false, "LiveInOrder": false, "LiveAfterStore": true, "FairMdk": true, "FairDriver": true, "FairTime": true, "Bug": "none"},
+  "messages": [{"id": "p1", "chat": "c1", "kind": "prompt"}, {"id": "r1", "chat": "c1", "kind": "control", "new_session": true}],
+  "steps": [
+    {"action": "CatchUpDone"},
+    {"action": "Store", "msg": "p1"},
+    {"action": "Store", "msg": "r1"},
+    {"action": "Ask", "msg": "r1", "stored": true, "handled": true}
+  ],
+  "end": {"kind": "violation"}
+}

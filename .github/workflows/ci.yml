@@ -261,10 +261,39 @@ jobs:
       - name: The install scripts pass ShellCheck
         run: |
           shellcheck --version
-          shellcheck -x install/*.sh tools/release/package.sh
+          shellcheck -x install/*.sh tools/release/package.sh tools/tla/run.sh
 
       - name: Each install script runs against a throwaway home, with stand-ins for what it calls
         run: python3 -m unittest discover -s install -p 'test_*.py'
+
+  models:
+    name: TLA+ models
+    runs-on: ubuntu-24.04
+    # D-094: pull requests stay under 15 minutes. These are the small bounds; larger ones are
+    # for the nightly workflow.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Java
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Cache the TLC jar
+        # Keyed by the checksum tools/tla/run.sh pins, which checks the jar again on every run.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/marmot-agents/tla
+          key: tla2tools-936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
+
+      - name: The fair model passes, and every counterexample, defect and probe fails as stated
+        env:
+          TLC_WORKERS: "4"
+        run: python3 tools/tla/check.py
 
   documents:
     name: Documents

@@ -1,0 +1,21 @@
+{
+  "case": "duplicate-first-event",
+  "model": "CoreLifecycle",
+  "config": "CoreLifecycle.duplicate.cfg",
+  "breaks": "S3",
+  "what": "The known limit until MDK has crash-safe tagged sends: a send MDK posted, a failed save, a restart, and a lookup that misses it; the send goes again and the chat has two first events for one item (S3).",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"Prompts": ["p1"], "Requests": ["r1"], "NewSession": ["r1"], "Items": ["s1"], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 0, "MaxRefusals": 0, "UnknownTries": 2, "GoneChats": [], "ExactLookup": false, "TokenDedupe": false, "LagCatchUp": false, "LiveInOrder": true, "LiveAfterStore": true, "FairMdk": true, "FairDriver": true, "FairTime": true, "Bug": "none"},
+  "messages": [{"id": "p1", "chat": "c1", "kind": "prompt"}, {"id": "r1", "chat": "c1", "kind": "control", "new_session": true}],
+  "steps": [
+    {"action": "CatchUpDone"},
+    {"action": "Emit", "item": "s1", "settles": [], "fin": true},
+    {"action": "Save"},
+    {"action": "Send", "chat": "c1", "send": {"item": "s1", "version": 1}, "outcome": "sent"},
+    {"action": "SaveFails"},
+    {"action": "Restart"},
+    {"action": "Lookup", "chat": "c1", "send": {"item": "s1", "version": 1}, "result": "absent"},
+    {"action": "Send", "chat": "c1", "send": {"item": "s1", "version": 1}, "outcome": "sent"}
+  ],
+  "end": {"kind": "violation"}
+}
