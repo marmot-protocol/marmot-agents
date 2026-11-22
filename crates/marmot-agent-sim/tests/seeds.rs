@@ -35,7 +35,20 @@ fn gate(family: Family, expected: &[&str]) {
         BugSet::default(),
         Some(&out()),
         300,
-    );
+    )
+    .expect("the campaign runs");
+    // The failures first: a run that stopped short may be why a fault was not seen.
+    let failures: Vec<String> = (done.failures.iter())
+        .map(|(name, failed, path)| {
+            format!(
+                "{name}: {} {} (step {:?}), capsule {:?}",
+                failed.failure.property, failed.failure.detail, failed.step, path
+            )
+        })
+        .chain(done.unwritten.iter().cloned())
+        .collect();
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert_eq!(done.runs, runs());
     for what in expected {
         assert!(
             done.seen.get(what).copied().unwrap_or(0) > 0,
@@ -44,16 +57,6 @@ fn gate(family: Family, expected: &[&str]) {
             done.seen
         );
     }
-    let failures: Vec<String> = (done.failures.iter())
-        .map(|(name, failed, path)| {
-            format!(
-                "{name}: {} {} (step {:?}), capsule {:?}",
-                failed.failure.property, failed.failure.detail, failed.step, path
-            )
-        })
-        .collect();
-    assert!(failures.is_empty(), "{}", failures.join("\n"));
-    assert_eq!(done.runs, runs());
 }
 
 #[test]

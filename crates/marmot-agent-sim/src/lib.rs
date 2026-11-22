@@ -48,6 +48,8 @@ pub struct Campaign {
     /// How often each kind of event the trace names happened, over all runs ([`MARKS`]): to
     /// show a family's faults did happen, and its checks did not pass empty.
     pub seen: BTreeMap<&'static str, u32>,
+    /// Capsules of failed runs that could not be written, each with the run and the reason.
+    pub unwritten: Vec<String>,
 }
 
 /// The kinds of event a campaign counts, each with what marks it in a trace entry.
@@ -96,7 +98,10 @@ fn tally(seen: &mut BTreeMap<&'static str, u32>, trace: &[world::Trace]) {
 
 /// Runs `count` runs of `family`'s campaign `seed`, from index `first`, with `bugs` put back.
 /// Each schedule is written to `out` before it runs, when given, and each failure leaves a
-/// capsule there, shrunk within `shrink_budget` runs.
+/// capsule there, shrunk within `shrink_budget` runs. An error, before anything runs, for a range
+/// that goes past the last index; and, before that run, for a schedule that cannot be written,
+/// since a run that then hung would leave nothing behind. A capsule that cannot be written is
+/// noted in [`Campaign::unwritten`].
 pub fn campaign(
     family: Family,
     seed: u64,
@@ -105,14 +110,27 @@ pub fn campaign(
     bugs: BugSet,
     out: Option<&Path>,
     shrink_budget: usize,
-) -> Campaign {
+) -> Result<Campaign, String> {
+    let last = u64::from(first) + u64::from(count);
+    if last > u64::from(u32::MAX) + 1 {
+        return Err(format!(
+            "runs {first} to {} go past the last index, {}",
+            last - 1,
+            u32::MAX
+        ));
+    }
     let mut campaign = Campaign::default();
-    for index in first..first + count {
+    for index in (u64::from(first)..last).map(|i| u32::try_from(i).expect("checked above")) {
         let name = RunName::new(family, seed, index);
         let mut schedule = generate(&name);
         schedule.bugs = bugs;
         if let Some(out) = out {
-            let _ = write_schedule(&schedule, out);
+            write_schedule(&schedule, out).map_err(|e| {
+                format!(
+                    "{name}: cannot write its schedule to {}: {e}",
+                    out.display()
+                )
+            })?;
         }
         let report = run(&schedule);
         campaign.runs += 1;
@@ -121,15 +139,23 @@ pub fn campaign(
         tally(&mut campaign.seen, &report.trace);
         if let Some(failed) = report.failure.clone() {
             let (small, small_report) = shrink(&schedule, &report, shrink_budget);
-            let path = out.and_then(|out| {
-                let mut capsule = Capsule::new(small, &small_report)?;
+            let mut path = None;
+            if let Some(out) = out
+                && let Some(mut capsule) = Capsule::new(small, &small_report)
+            {
                 capsule.original = Some(schedule.clone());
-                capsule.write(out).ok()
-            });
+                match capsule.write(out) {
+                    Ok(written) => path = Some(written),
+                    Err(e) => campaign.unwritten.push(format!(
+                        "{name}: cannot write its capsule to {}: {e}",
+                        out.display()
+                    )),
+                }
+            }
             campaign.failures.push((name, failed, path));
         } else if let Some(out) = out {
             let _ = std::fs::remove_file(out.join(format!("{}.schedule.json", name.file_stem())));
         }
     }
-    campaign
+    Ok(campaign)
 }

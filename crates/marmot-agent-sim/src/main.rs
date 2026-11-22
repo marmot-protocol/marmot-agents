@@ -77,7 +77,7 @@ fn run_campaigns(args: &[String]) -> Result<bool, String> {
     let mut passed = true;
     for family in families {
         let started = Instant::now();
-        let done = campaign(family, seed, from, runs, bugs, out.as_deref(), shrink);
+        let done = campaign(family, seed, from, runs, bugs, out.as_deref(), shrink)?;
         println!(
             "{family}: {} runs, {} steps, {} virtual s, {} failed, {:.1} s",
             done.runs,
@@ -101,6 +101,10 @@ fn run_campaigns(args: &[String]) -> Result<bool, String> {
                     .map(|p| format!(", capsule {}", p.display()))
                     .unwrap_or_default()
             );
+        }
+        for unwritten in &done.unwritten {
+            passed = false;
+            println!("  {unwritten}");
         }
     }
     Ok(passed)
