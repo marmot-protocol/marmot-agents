@@ -33,9 +33,12 @@ impl Subject for OnFake {
         };
         self.fake.serve(fake_reads, fake_writes, protocol, None);
         let tap = Tap::new(driver_writes, self.pending.clone());
-        Codex::connect(driver_reads, tap, Setup::new("/work/demo"))
+        let mut codex = Codex::connect(driver_reads, tap, Setup::new("/work/demo"))
             .await
-            .expect("the fake greets the driver")
+            .expect("the fake greets the driver");
+        // The suite waits five seconds for a request; the driver gives up on Codex sooner.
+        codex.set_patience(std::time::Duration::from_secs(2));
+        codex
     }
 
     fn fake(&self) -> &Fake {
@@ -85,18 +88,11 @@ conformance!(
     dropped_waits,
     slow_and_out_of_order,
     partial_frames,
+    never_answers,
     restart,
     new_session,
     settings,
 );
-
-// Found a bug in the driver: it waits for ever for a session Codex never starts.
-#[tokio::test]
-#[ignore = "the Codex driver waits for ever on a harness that never answers; fixed next"]
-async fn never_answers() {
-    let found = scenarios::run("never_answers", OnFake::default()).await;
-    found.unwrap_or_else(|v| panic!("{v}"));
-}
 
 #[test]
 fn every_scenario_is_run() {

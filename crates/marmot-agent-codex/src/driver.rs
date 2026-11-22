@@ -32,10 +32,15 @@ use serde_json::Value;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, Command};
 
 type Reader = Lines<BufReader<Box<dyn AsyncRead + Unpin + Send>>>;
+
+/// How long a request waits for Codex before the driver gives up on it: picking a session, or a
+/// request before it that Codex has yet to answer.
+const PATIENCE: Duration = Duration::from_secs(60);
 type Writer = Box<dyn AsyncWrite + Unpin + Send>;
 
 /// What a request the driver sent is for.
@@ -123,6 +128,8 @@ pub struct Codex {
     calls: HashMap<String, (ChatId, Value)>,
     /// Codex has gone.
     gone: bool,
+    /// How long a request waits for Codex (D-066).
+    patience: Duration,
     /// Messages for no chat: Codex's own bookkeeping, and anything for a thread no chat has.
     unrouted: u64,
 }
@@ -179,6 +186,7 @@ impl Codex {
             ready: VecDeque::new(),
             calls: HashMap::new(),
             gone: false,
+            patience: PATIENCE,
             unrouted: 0,
         };
         let id = codex.id();
@@ -210,6 +218,11 @@ impl Codex {
         codex.queue(&initialized(), None);
         codex.flush().await?;
         Ok(codex)
+    }
+
+    /// How long a request waits for Codex before the driver gives up on it: a minute unless set.
+    pub fn set_patience(&mut self, patience: Duration) {
+        self.patience = patience;
     }
 
     /// Messages that went to no chat.
@@ -328,6 +341,28 @@ impl Codex {
                 false
             }
         }
+    }
+
+    /// Reads one message, for a request that waits for Codex, giving up at `deadline`. A Codex
+    /// that has not answered by then has stopped working: the connection ends, so a reply that
+    /// came later cannot pick a session after the request failed (D-066). False once Codex has
+    /// gone.
+    async fn read_until(&mut self, deadline: tokio::time::Instant) -> bool {
+        // Safe to give up on: a message cut short stays queued, and nothing of a line is lost.
+        match tokio::time::timeout_at(deadline, self.read()).await {
+            Ok(more) => more,
+            Err(_) => {
+                if let Some(child) = self.child.as_mut() {
+                    let _ = child.start_kill();
+                }
+                self.stopped();
+                false
+            }
+        }
+    }
+
+    fn deadline(&self) -> tokio::time::Instant {
+        tokio::time::Instant::now() + self.patience
     }
 
     /// Gives a message from Codex to the chat it is for.
@@ -614,6 +649,7 @@ impl Codex {
         purpose: impl Fn(&Translator, i64) -> Purpose,
         build: impl Fn(&Translator, i64) -> Result<String, Refusal>,
     ) -> Result<i64, Refusal> {
+        let deadline = self.deadline();
         loop {
             // A message cut short is finished first, so the translator builds from what was sent.
             if self.flush().await.is_err() {
@@ -631,7 +667,7 @@ impl Codex {
                     return Ok(id);
                 }
                 Err(refusal) if refusal.reason == Reason::Busy && translator.waiting_on_codex() => {
-                    if !self.read().await {
+                    if !self.read_until(deadline).await {
                         return Err(Refusal::new(Reason::Failed));
                     }
                 }
@@ -664,8 +700,9 @@ impl Codex {
         let setup = self.setup.clone();
         let build = |t: &Translator, id| t.pick(id, session, &setup);
         let id = self.ask(chat, |_, _| Purpose::Plain, build).await?;
+        let deadline = self.deadline();
         while self.requests.contains_key(&id) {
-            if !self.read().await {
+            if !self.read_until(deadline).await {
                 return Err(Refusal::new(Reason::Failed));
             }
         }
@@ -729,8 +766,9 @@ impl Driver for Codex {
         self.chat(&chat).await?;
         // A session being picked, by a control or an earlier prompt, is waited for before deciding
         // whether this prompt needs one.
+        let deadline = self.deadline();
         while self.chats[&chat].translator.picking() {
-            if !self.read().await {
+            if !self.read_until(deadline).await {
                 return Err(Refusal::new(Reason::Failed));
             }
         }

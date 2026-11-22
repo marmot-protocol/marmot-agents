@@ -173,7 +173,9 @@ Hand-written test messages are a guess about what the harness sends. Recordings 
 The Codex driver is tested this way: each of its recordings must give the events the prototype gives
 ([`crates/marmot-agent-codex/tests/replay.rs`](../../crates/marmot-agent-codex/tests/replay.rs)). Every driver
 is tested so, and by one end-to-end scenario
-([D-074](../decisions.md#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)).
+([D-074](../decisions.md#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)). Every
+driver also passes the [conformance suite](../../crates/marmot-agent-conformance/README.md), on a fake harness
+that can fail in each way review found drivers mishandle.
 
 ## The Codex driver
 
@@ -189,7 +191,11 @@ server is declined for now ([D-064](../decisions.md#d-064-the-codex-driver-decli
 ([`crates/marmot-agent-codex`](../../crates/marmot-agent-codex)). The transport runs one Codex for every chat of an
 agent, and starts it with subagents switched off until how a chat shows them is decided
 ([subagents as threads](subagents.md)). Every session it starts gets the driver's `send_file` tool
-([sending a file](#sending-a-file)); a call becomes a `tool` item, of kind `other`, like any tool.
+([sending a file](#sending-a-file)); a call becomes a `tool` item, of kind `other`, like any tool. A
+request waits for Codex at most a minute, to pick a session or for a request before it; a Codex that has not
+answered by then has stopped working, and the connection ends
+([D-066](../decisions.md#d-066-the-core-finishes-every-request-it-starts); found by the conformance suite's
+`never_answers`, 2026-11-22).
 
 ## The Claude Code driver
 
