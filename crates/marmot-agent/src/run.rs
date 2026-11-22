@@ -248,11 +248,10 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// A core for the agent on `marmot`, driving `driver`, with the settings in `config`, keeping
     /// its state in `store`.
     pub fn new(marmot: M, driver: D, config: &Config, store: Store) -> Result<Self, String> {
-        // The working folder, the default, is the person's to choose; a listed folder is
-        // checked, since an import or a hand may have put one in the wrong place.
-        if let Some(listed) = &config.files_from {
-            crate::files::apart_from_home(listed, &config.home)?;
-        }
+        // A listed folder is checked against the home, since an import or a hand may have put
+        // one in the wrong place; whatever the folders, no file inside the home is sent unless
+        // the owner allows it (D-099).
+        let folders = Folders::from_config(config)?;
         let kept = store.load()?;
         let conversation = Conversation::new(
             marmot.agent().clone(),
@@ -268,7 +267,7 @@ impl<D: Driver, M: Side> Core<D, M> {
             conversation,
             read: kept.read,
             store,
-            folders: Folders::new(&config.file_folders()),
+            folders,
             config: config.clone(),
             started: Instant::now(),
             retry: HashMap::new(),

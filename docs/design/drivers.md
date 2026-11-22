@@ -136,6 +136,13 @@ sequenceDiagram
   and a `..` never climbs above the folder. A folder on the way swapped for a link meanwhile cannot lead out
   either. It also refuses a file with a second name (a hard link, which could be outside), anything but an
   ordinary file, an empty file, and one over 64 MiB, well under the 512 MiB MDK uploads in one piece.
+- **Never the agent's own home.** Whatever the folders, the core refuses a file inside the account home, which
+  holds the agent's keys ([D-099](../decisions.md#d-099-files-from-the-agents-own-home-are-refused-by-default-and-the-owner-may-allow-them)):
+  one whose way from the allowed folder passes through the home, known by its device and inode however it is
+  named or linked, or one in an allowed folder that lies inside the home. So a working folder of `~` lets the
+  agent send its work but not its keys. A folder in `files_from` that is, holds or lies inside the home stops
+  the core from starting. The owner may allow both with one line in the settings,
+  `send_files_from_agent_home = true`.
 - **Sending runs on the side.** Uploading can take long, so it runs as a task of its own while the chats go
   on, and the core tells the driver once it is done. The core offers the file to MDK again only while MDK says
   it is busy, which it says only before it has taken the file, for about half a minute. Any other failure is
