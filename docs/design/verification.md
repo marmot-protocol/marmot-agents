@@ -117,10 +117,16 @@ fixed on 2026-11-21, each with a test that failed first.
   small version of its own, and settles such requests with a `failed` notice in place of the dropped one. What
   stands in for a dropped send is the last: if it is dropped too, as in a group that is gone, nothing takes its
   place, so nothing loops. The model checks the fix: with one send given up, or one or two refused in a live
-  group, every item closes and every request is settled. **The accepted limit:** if MDK refuses what stands in
-  for a dropped send too, in a group that stays live, the item stays open in the chat; the model assumes MDK
-  does not (`LastResortTaken`), since it is as small as the core makes anything, and shows what happens when it
-  does ([`last-resort-refused`](../../formal/tla/counterexamples/last-resort-refused.json)).
+  group, every item closes, every request is settled and the chat is told of every gap. Review found three more
+  cases, fixed the same way, each with a test that failed first: an item whose close had gone out was closed
+  again, as "not delivered", when a later final version was dropped; what stands in for a dropped send carried
+  a session id over 64 KB that the driver chose, and was refused for it too; and a dropped `failed` notice that
+  settled nothing was not replaced, so the gap went untold. **The accepted limit:** if what stands in for a
+  dropped send is dropped too, in a group that stays live, the item stays open in the chat; the model assumes
+  MDK does not refuse it (`LastResortTaken`), since it is as small as the core makes anything, and shows what
+  happens when it does ([`last-resort-refused`](../../formal/tla/counterexamples/last-resort-refused.json)) or
+  when it is given up after its tries
+  ([`last-resort-given-up`](../../formal/tla/counterexamples/last-resort-given-up.json)).
 - **Messages missing after an abrupt stop**, seen while building the importer: the next program on the same home
   sometimes never got later messages. This looks like MDK's, and goes to MDK as an issue. A related case was seen
   in the tests: right after a person makes a second group with the agent, messages between them sometimes do not
@@ -138,7 +144,8 @@ dropped. Besides those:
 - **A failed save stops the core**, as a crash would, and the next start takes up what is on disk.
 - **The state file** (`marmot-agent-state.json` in the home) keeps, besides what it kept before: the sends not
   yet made, oldest first, each with a token that stays the same across tries, whether it was handed to MDK,
-  whether it stands in for a dropped send (and so is the last), and,
+  whether it stands in for a dropped send (and so is the last), whether it is a `failed` notice that tells of
+  a dropped send, for each item whether the latest version of it that went out closed it, and,
   for a turn's version that settles what the agent's words showed, the send of those words; where recently
   forgotten items stood; for a turn, the message that started it; and for the agent's words, the requests they
   settle, held until a message carries them.

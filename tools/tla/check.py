@@ -118,14 +118,8 @@ CASES = [
     Case("refuse-closes-item", REFUSE, PASS),
     Case("refuse-settles", "CoreLifecycle.refuse-notice.cfg", PASS),
     # Two refusals, so a failed notice in place of a version is refused too, and what stands in
-    # for it settles; MDK never refuses a last resort (LastResortTaken).
-    Case("refuse-twice", REFUSE, PASS, {"PROPERTIES": "L1 L2 L3", **TWICE}),
-    Case("refuse-twice-untold", REFUSE, TEMPORAL, {"PROPERTIES": "S3Told", **TWICE},
-         counterexample="refuse-twice-untold",
-         what="Not a bug, as the code means it: MDK refuses an item's version, then the failed "
-              "notice that tells of it, which settles nothing. A notice that settles nothing only "
-              "tells the chat something, so nothing stands in for it, and the gap is never told "
-              "of (S3Told). The item is closed and every request settled."),
+    # for it settles and tells of the gap; MDK never refuses a last resort (LastResortTaken).
+    Case("refuse-twice", REFUSE, PASS, {"PROPERTIES": "L1 L2 L3 S3Told", **TWICE}),
     Case("last-resort-refused", REFUSE, invariant("S2"),
          {"LastResortTaken": "FALSE", **SAFETY, **TWICE},
          counterexample="last-resort-refused",
@@ -133,6 +127,14 @@ CASES = [
               "the core's close that stands in for it, though it is as small as the core makes "
               "anything. Nothing stands in for a last resort, so nothing loops, and the item "
               "stays open in the chat (S2; L2 too)."),
+    Case("last-resort-given-up", REFUSE, invariant("S2"),
+         {"MaxAmbiguous": "1", "UnknownTries": "1", **SAFETY, **NO_PROMPT},
+         counterexample="last-resort-given-up",
+         what="The same limit, reached by a give-up: MDK refuses an item's closing version in a "
+              "live group, and the core's close that stands in for it meets an unknown outcome "
+              "and is given up after its tries (one here; the code: ten). LastResortTaken speaks "
+              "only of refusals. Nothing stands in for a last resort, so the item stays open in "
+              "the chat (S2)."),
     Case("gone-group", "CoreLifecycle.gone.cfg", PASS),
     mutant("SaveAfterSend", "S1"),
     mutant("SettleUnpending", "S1"),
@@ -140,6 +142,7 @@ CASES = [
     mutant("NoAttemptedFlag", "S3"),
     mutant("BlindResend", "S3"),
     temporal_mutant("NoFailedNotice", "S3Told", REFUSE, **NO_PROMPT),
+    temporal_mutant("NoRetell", "S3Told", REFUSE, **TWICE),
     mutant("NoReplacement", "S2", GIVEUP),
     temporal_mutant("NoReplacement", "L1", "CoreLifecycle.refuse-notice.cfg",
                     name="bug-NoReplacement-L1"),

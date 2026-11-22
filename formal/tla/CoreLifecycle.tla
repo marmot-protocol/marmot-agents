@@ -6,7 +6,7 @@
 (* file, the outbox and its sends), conversation.rs (what each message and *)
 (* event becomes) and marmot.rs (sends and lookups), as of master 74b56d6, *)
 (* with conversation.rs `refused` as fixed on 2026-11-22: what stands in   *)
-(* for a dropped send, and `last_resort`.                                  *)
+(* for a dropped send, `last_resort` and `tells`.                          *)
 (*                                                                         *)
 (* Action names are the ones the simulator uses, so a trace from here can  *)
 (* drive it (docs/design/verification.md, step 5): Hear, Store, CatchUp,   *)
@@ -71,7 +71,8 @@ Bugs == {"none",
          "KeepEndedSession",   \* S12: a session that ended stays the chat's
          "NewSessionUntaken",  \* S12: a new-session control the driver took leaves the chat untaken
          "NoFailedNotice",     \* S3Told: a version MDK refuses is dropped with no failed notice
-         "NoReplacement"}      \* S2, L1: a dropped close or settling notice has nothing in its place
+         "NoReplacement",      \* S2, L1: a dropped close or settling notice has nothing in its place
+         "NoRetell"}           \* S3Told: a dropped failed notice that settled nothing is not replaced
 
 ASSUME Bug \in Bugs
 ASSUME Prompts \subseteq {"p1", "p2", "p3"} /\ Requests \subseteq {"r1", "r2"}
@@ -132,7 +133,8 @@ VARIABLES
     iposts,     \* for each item, the versions posted, in order: [v, f (first event named), fin, by,
                 \* s, lr]
     dropped,    \* for each item, the versions MDK refused or the core gave up
-    told,       \* the versions <<item, version>> a posted failed notice tells the chat of
+    told,       \* the versions <<item, version>> a posted failed notice tells the chat of, itself
+                \* or by replacing a failed notice that did (ToldBy)
     found,      \* whether a lookup after the core went down found a send that went out
     downs,      \* how many times the core went down
     ambig       \* how many sends had an unknown outcome
@@ -443,6 +445,13 @@ FoundId(e) ==
             /\ iposts[e.i][k].v = e.v
             /\ \A j \in DOMAIN iposts[e.i] : iposts[e.i][j].v = e.v => j <= k
 
+\* The versions a notice with token t tells the chat of: a failed notice tells of the version it
+\* stands in for, or of what the failed notice it replaces told of; any other notice, of nothing.
+RECURSIVE ToldBy(_)
+ToldBy(t) == IF t[1] # "failed" THEN {}
+             ELSE IF t[2][1] \in Items THEN {t[2]}
+             ELSE ToldBy(t[2])
+
 \* MDK posts e, filled in as conversation.rs `next_send` fills it: a later version names the
 \* item's first event.
 Post(s, e) ==
@@ -453,9 +462,7 @@ Post(s, e) ==
                       ELSE [iposts EXCEPT ![e.i] = Append(@,
                              [v |-> e.v, f |-> s.items[e.i].first, fin |-> e.fin, by |-> e.by,
                               s |-> e.s, lr |-> e.lr])]
-         \* A failed notice tells of a version; one in place of a dropped notice, of nothing.
-         /\ told' = IF e.i = "notice" /\ e.tok[1] = "failed" /\ e.tok[2][1] \in Items
-                    THEN told \cup {e.tok[2]} ELSE told
+         /\ told' = IF e.i = "notice" THEN told \cup ToldBy(e.tok) ELSE told
     ELSE UNCHANGED <<mdkTok, shown, iposts, told>>
 
 \* conversation.rs `sent`: the entry goes, and the item's first event is kept.
@@ -476,8 +483,9 @@ CloseUndelivered(s, i) ==
 \* send is dropped, and something stands in for it (`stand_in_for`), unless it is itself a last
 \* resort, so nothing loops. In place of an item's version: the item's close, when that version
 \* closed it and nothing later is queued, then a failed notice that settles what the version
-\* settled. In place of a notice that settled requests: a failed notice that settles them, as a
-\* last resort. A notice that settled nothing is not replaced.
+\* settled. In place of a notice that settled requests, or of a failed notice (which tells of a
+\* dropped send, and is marked `tells` in the code): a failed notice that settles what it settled,
+\* as a last resort. Any other notice that settled nothing is not replaced.
 Refused(s, k) ==
     LET e == s.outbox[k]
         s1 == [s EXCEPT !.outbox = RemoveAt(@, k)]
@@ -485,7 +493,9 @@ Refused(s, k) ==
     IN CASE e.lr -> s1
          \* The code before the fix: a version gets its failed notice only; a notice, nothing.
          [] Bug = "NoReplacement" -> IF e.i = "notice" THEN s1 ELSE Queue(s1, failed)
-         [] e.i = "notice" -> IF e.s = {} THEN s1 ELSE Queue(s1, LastResort(failed))
+         [] e.i = "notice" ->
+                IF e.s = {} /\ (e.tok[1] # "failed" \/ Bug = "NoRetell") THEN s1
+                ELSE Queue(s1, LastResort(failed))
          [] Bug = "NoFailedNotice" -> CloseUndelivered(s1, e.i)
          [] OTHER -> Queue(CloseUndelivered(s1, e.i), failed)
 DropGhost(e) ==

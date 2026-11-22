@@ -41,13 +41,14 @@ All are on the small bounds of [the model's README](../README.md#configurations-
 | [`duplicate-first-event`](duplicate-first-event.json) | S3 | The known limit until MDK has crash-safe tagged sends: MDK posts a first version, the save after it fails, and after the restart a lookup misses it, so it goes again |
 | [`live-out-of-order`](live-out-of-order.json) | S10 | Without `LiveInOrder`: `p1` is stored before `r1`, but `r1` is handed over first; the mark passes `p1`, which `run.rs` `handle` then skips |
 | [`live-before-store`](live-before-store.json) | L3 | Without `LiveAfterStore`: `p1` is heard before it is stored, so `order_of` gives nothing and it is dropped; MDK does not hand it over again, and nothing reads it until the core starts again |
-| [`refuse-twice-untold`](refuse-twice-untold.json) | S3Told | Not a bug, as the code means it: MDK refuses an item's closing version, and then the `failed` notice that tells of it, which settles nothing. Nothing stands in for a notice that settles nothing, so the gap is never told of; the core's close of the item goes out |
 | [`last-resort-refused`](last-resort-refused.json) | S2 | The accepted limit, without `LastResortTaken`: MDK refuses an item's closing version in a live group, and then the core's close that stands in for it (`"last_resort": true`). Nothing stands in for a last resort, so the item stays open in the chat |
+| [`last-resort-given-up`](last-resort-given-up.json) | S2 | The same limit reached another way, with `LastResortTaken`, which speaks only of refusals: MDK refuses an item's closing version, and the core's close that stands in for it meets an unknown outcome and is given up after its tries. The item stays open in the chat |
 
 The four schedules of the gaps the model found in dropping a send (`give-up-leaves-item-open`,
 `give-up-drops-settles`, `refuse-leaves-item-open`, `refuse-drops-settles`) are gone: the code was fixed on
 2026-11-22, and those configurations now pass. The deliberate defect `NoReplacement`, the code before the fix,
-shows the check still catches them.
+shows the check still catches them. So is `refuse-twice-untold`, a gap left untold when MDK refused the `failed`
+notice that told of it: since review round 1 such a notice is replaced too, and `NoRetell` puts the old way back.
 
 ## Driving the simulator with them (step 5)
 
