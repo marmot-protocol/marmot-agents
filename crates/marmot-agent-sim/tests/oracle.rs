@@ -103,15 +103,18 @@ fn refused(world: &mut World, chat: usize, item: &Item) {
         settles: item.settles.clone(),
         words: None,
         state: Some(item.event.header().state),
+        seq: Some(item.event.header().seq),
         notice,
     });
 }
 
 /// The harness was handed the prompt `msg`, under the core's chat id `chat`.
 fn handed(world: &mut World, msg: usize, chat: &str) {
+    let stored = world.last_order();
     world.harness.deliveries.push(Delivery {
         life: 1,
         ms: 0,
+        stored,
         msg: Some(msg),
         kind: "prompt",
         chat: Some(chat.into()),
@@ -128,6 +131,7 @@ fn emitted(world: &mut World, ms: u64, chat: &str, item: &str, words: Option<&st
         ms,
         chat: chat.into(),
         item: item.into(),
+        seq: 1,
         settles: Vec::new(),
         session: None,
         state: State::Done,
@@ -260,5 +264,134 @@ fn no_choice() -> Approval {
         subject: None,
         choices: Vec::new(),
         answer: None,
+    }
+}
+
+// Review round 2, S3. The old check of an item's first stored version looked only at `first`: a
+// core that sent v3 as the item's first event, with v1 and v2 never stored nor refused, passed.
+#[test]
+fn a_first_stored_version_that_skips_versions_fails_s3() {
+    let v = |n: u64| item("turn-t1-2", n, State::Running, turn(), Vec::new());
+    let mut skipped = world(1, &[]);
+    sent(&mut skipped, 0, &v(3));
+    assert_eq!(property(oracle::safety(&skipped)), Some("S3".into()));
+    // v1 and v2 refused: what MDK refused may be skipped.
+    let mut refused_first = world(1, &[]);
+    refused(&mut refused_first, 0, &v(1));
+    refused(&mut refused_first, 0, &v(2));
+    sent(&mut refused_first, 0, &v(3));
+    assert_eq!(property(oracle::safety(&refused_first)), None);
+    // Only v1 refused: v2 is still skipped.
+    let mut one_refused = world(1, &[]);
+    refused(&mut one_refused, 0, &v(1));
+    sent(&mut one_refused, 0, &v(3));
+    assert_eq!(property(oracle::safety(&one_refused)), Some("S3".into()));
+    let mut first = world(1, &[]);
+    sent(&mut first, 0, &v(1));
+    assert_eq!(property(oracle::safety(&first)), None);
+}
+
+// Review round 2, S12. The old check took the session's state from the versions stored in or
+// before the prompt's millisecond: a prompt handed over before the session's end was stored, in
+// the same millisecond, failed though it named a session still running. Storage order decides.
+#[test]
+fn a_session_ended_in_the_same_millisecond_counts_only_if_stored_before() {
+    let make = |close_first: bool| {
+        let mut w = world(1, &[prompt(0)]);
+        w.harness.sessions_started.push(("A".into(), "s1-1".into()));
+        let session = |state| item("sess-s1-1", 1, state, Body::Approval(no_choice()), vec![]);
+        let first = sent(&mut w, 0, &session(State::Running));
+        let mut done = session(State::Done);
+        done.version = 2;
+        done.first = Some(first);
+        if close_first {
+            sent(&mut w, 0, &done);
+        }
+        handed(&mut w, 0, "A");
+        w.harness.deliveries.last_mut().unwrap().session = Some("s1-1".into());
+        if !close_first {
+            sent(&mut w, 0, &done);
+        }
+        // Everything in the same millisecond.
+        assert!(w.rows.iter().all(|r| r.ms == w.rows[0].ms));
+        w
+    };
+    assert_eq!(property(oracle::safety(&make(true))), Some("S12".into()));
+    assert_eq!(property(oracle::safety(&make(false))), None);
+}
+
+// Review round 2, L2. The old check found the item's last stored version and compared its state:
+// a core that dropped the second of two `running` versions passed, since the first was stored as
+// `running` too. Each emission is known by its `seq`.
+#[test]
+fn a_dropped_later_version_in_the_same_state_fails_l2() {
+    let make = |second_stored: bool| {
+        let mut w = world(1, &[prompt(0)]);
+        let (_, events) = w.new_life();
+        handed(&mut w, 0, "A");
+        for seq in [1, 2] {
+            let mut e = emitted(&mut w, seq, "A", "sess-s1-1", None);
+            e.seq = seq;
+            e.state = State::Running;
+            *w.harness.emissions.last_mut().unwrap() = e;
+        }
+        let v1 = item(
+            "sess-s1-1",
+            1,
+            State::Running,
+            Body::Approval(no_choice()),
+            vec![],
+        );
+        sent(&mut w, 0, &with_seq(v1, 1));
+        let mut v2 = with_seq(
+            item(
+                "sess-s1-1",
+                2,
+                State::Running,
+                Body::Approval(no_choice()),
+                vec![],
+            ),
+            2,
+        );
+        v2.first = Some(w.rows.last().unwrap().event.clone());
+        if second_stored {
+            sent(&mut w, 0, &v2);
+        }
+        (w, events, v2)
+    };
+    let (dropped, _events, _) = make(false);
+    let found = properties(oracle::liveness(&dropped));
+    assert_eq!(found, vec!["L2"], "{found:?}");
+    let (kept, _events, _) = make(true);
+    assert_eq!(properties(oracle::liveness(&kept)), Vec::<String>::new());
+    // MDK refused the first version: that does not let off the second.
+    let (mut first_refused, _events, _) = make(false);
+    let v1 = with_seq(
+        item(
+            "sess-s1-1",
+            1,
+            State::Running,
+            Body::Approval(no_choice()),
+            vec![],
+        ),
+        1,
+    );
+    refused(&mut first_refused, 0, &v1);
+    assert_eq!(properties(oracle::liveness(&first_refused)), vec!["L2"]);
+    // MDK refused the second: let off.
+    let (mut second_refused, _events, v2) = make(false);
+    refused(&mut second_refused, 0, &v2);
+    assert_eq!(
+        properties(oracle::liveness(&second_refused)),
+        Vec::<String>::new()
+    );
+}
+
+fn with_seq(item: Item, seq: u64) -> Item {
+    let mut header = item.event.header().clone();
+    header.seq = seq;
+    Item {
+        event: AgentEvent::new(header, item.event.body().clone(), None).expect("no secret"),
+        ..item
     }
 }

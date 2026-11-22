@@ -2,7 +2,7 @@
 //! decides what to do with it, and hands the core what the harness emits.
 
 use crate::side::{Shared, lock};
-use crate::world::Decision;
+use crate::world::{Decision, Handed};
 use marmot_agent_driver::{
     Answer, Capabilities, Control, Driver, FilesIn, Harness, MidTurn, Output, Prompt, Refusal,
     Sessions,
@@ -21,12 +21,15 @@ pub struct SimDriver {
 }
 
 impl SimDriver {
-    async fn answer_with(decision: Decision) -> Result<(), Refusal> {
+    /// Hands the harness a request, and answers as it decides: at once, after a `Slow` move's
+    /// time (when the harness takes it, and only then acts on it), or never.
+    async fn hand(&self, request: Handed<'_>) -> Result<(), Refusal> {
+        let decision = lock(&self.world).handed(self.life, request);
         match decision {
             Decision::Now(result) => result,
-            Decision::Slow(ms, result) => {
+            Decision::Later(ms, take) => {
                 tokio::time::sleep(Duration::from_millis(ms)).await;
-                result
+                lock(&self.world).take(self.life, request, take)
             }
             Decision::Crash | Decision::Hang => std::future::pending().await,
         }
@@ -54,18 +57,15 @@ impl Driver for SimDriver {
     }
 
     async fn prompt(&mut self, prompt: Prompt) -> Result<(), Refusal> {
-        let decision = lock(&self.world).prompt(self.life, &prompt);
-        Self::answer_with(decision).await
+        self.hand(Handed::Prompt(&prompt)).await
     }
 
     async fn answer(&mut self, answer: Answer) -> Result<(), Refusal> {
-        let decision = lock(&self.world).answer(self.life, &answer);
-        Self::answer_with(decision).await
+        self.hand(Handed::Answer(&answer)).await
     }
 
     async fn control(&mut self, control: Control) -> Result<(), Refusal> {
-        let decision = lock(&self.world).control(self.life, &control);
-        Self::answer_with(decision).await
+        self.hand(Handed::Control(&control)).await
     }
 
     async fn next_event(&mut self) -> Option<Output> {

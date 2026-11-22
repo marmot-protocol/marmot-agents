@@ -8,7 +8,7 @@ use marmot_agent::carrier::{self, Asked, ITEM_KIND, REQUEST_KIND};
 use marmot_agent::marmot::{Live, Message};
 use marmot_agent::{EventKey, GroupKey, PubKey};
 use marmot_agent_driver::{
-    Action as DriverAction, Answer, Control, Emitted, Given, Output, Prompt, Reason, Refusal,
+    Action as DriverAction, Answer, Control, Emitted, Output, Prompt, Reason, Refusal,
 };
 use marmot_agent_events::body::{
     Approval, Body, Choice, Effect, Message as Words, Session, StartedBy, Turn,
@@ -110,6 +110,8 @@ pub struct RefusedSend {
     pub words: Option<String>,
     /// For an item: the state the refused version had.
     pub state: Option<State>,
+    /// For an item: the `seq` of the emission the refused version showed.
+    pub seq: Option<u64>,
     /// Whether it was a notice of the core's own, such as the `failed` notice that answers a
     /// refused send: the core drops a refused notice, so nothing loops.
     pub notice: bool,
@@ -137,16 +139,41 @@ pub enum Move {
     Ignore,
 }
 
+// A `Slow` request is delivered when it arrives and taken only after its time: until then the
+// harness has not acted on it, and a crash before then leaves nothing of it.
+
 /// What the driver does with a request, decided when it arrives.
 pub enum Decision {
     /// A crash is due here: the request never reaches the harness.
     Crash,
     /// Answer at once.
     Now(Result<(), Refusal>),
-    /// Answer after this many milliseconds.
-    Slow(u64, Result<(), Refusal>),
+    /// Take it after this many milliseconds, with [`World::take`], and answer then.
+    Later(u64, Take),
     /// Never answer.
     Hang,
+}
+
+/// A request the harness is handed.
+#[derive(Clone, Copy)]
+pub enum Handed<'a> {
+    /// A prompt.
+    Prompt(&'a Prompt),
+    /// An answer.
+    Answer(&'a Answer),
+    /// A control.
+    Control(&'a Control),
+}
+
+/// What the harness knows of a request it is to take.
+#[derive(Clone, Debug)]
+pub struct Take {
+    /// The message it came from.
+    msg: Option<usize>,
+    /// How the trace names it.
+    what: String,
+    /// Whether it is taken and its effect never shown.
+    ignore: bool,
 }
 
 /// What the harness was handed, for the oracles.
@@ -156,7 +183,11 @@ pub struct Delivery {
     pub life: u32,
     /// When.
     pub ms: u64,
-    /// The message it came from, when the harness can tell.
+    /// How many places in storage order were given out before it: a row whose `order` is at
+    /// most this was stored before the harness was handed it, whatever the milliseconds say.
+    pub stored: i64,
+    /// The message it came from: a prompt's text names it, and an answer or a control is the
+    /// request message the core read last.
     pub msg: Option<usize>,
     /// Its kind: `prompt`, `answer` or `control`.
     pub kind: &'static str,
@@ -181,6 +212,8 @@ pub struct Emission {
     pub chat: String,
     /// The item's id.
     pub item: String,
+    /// Its `seq`, which the core keeps in each version it sends of it: unique to the emission.
+    pub seq: u64,
     /// The requests it settles, by the core's ids.
     pub settles: Vec<String>,
     /// For a session item: its session.
@@ -224,7 +257,9 @@ enum Effecting {
     NewSession {
         request: String,
         chat: String,
-        old: Option<String>,
+        /// The session the request named, if any. The one ended is the chat's session when the
+        /// effect shows, which an earlier new session may have changed.
+        target: Option<String>,
     },
     Set {
         request: String,
@@ -256,7 +291,9 @@ pub struct Harness {
     pub emissions: Vec<Emission>,
     /// Messages whose delivery a crash cut off: they never reached the harness.
     pub lost: Vec<usize>,
-    /// For an answer or a setting taken: the message it came from, and when it was taken.
+    /// For an answer or a setting taken: the message it came from, and when it was taken, which
+    /// is when the driver answered the core (after a `Slow` move's time) and the core set the
+    /// deadline of its `no_effect` net.
     pub requests: BTreeMap<String, (usize, u64)>,
     /// Every session started, with the core's id for its chat.
     pub sessions_started: Vec<(String, String)>,
@@ -264,6 +301,8 @@ pub struct Harness {
     ended: BTreeSet<String>,
     /// Whether this life holds a request it never answers.
     pub hung: bool,
+    /// Requests this life holds for a `Slow` move, not yet taken.
+    taking: u32,
 }
 
 /// The simulated world.
@@ -316,6 +355,8 @@ pub struct World {
     pub stopping: bool,
     /// A save failed in this life, so the core stops with an error.
     pub unsaved: bool,
+    /// The request message the core read last, until the harness is handed what it became.
+    pub reading: Option<usize>,
 }
 
 /// A 64-character hex id.
@@ -359,6 +400,7 @@ impl World {
             faults: Faults::default(),
             stopping: false,
             unsaved: false,
+            reading: None,
         }
     }
 
@@ -436,6 +478,8 @@ impl World {
     pub fn post(&mut self, msg: usize) -> Option<&mut Msg> {
         let posted = *self.posted.get(msg)?;
         if self.msgs[msg].is_none() {
+            // What MDK has stored by now, whether a core runs or not, is what the app shows.
+            self.land();
             let chat = usize::from(posted.chat);
             if chat >= self.chats.len() {
                 return None;
@@ -454,8 +498,9 @@ impl World {
                     let (target, asked) = match what {
                         What::Answer => (
                             self.latest_approval(chat),
+                            // The one choice the approval offers (D-028).
                             Asked::Choice {
-                                choice: format!("allow-{msg}"),
+                                choice: "allow".into(),
                             },
                         ),
                         What::Interrupt => (None, Asked::Interrupt),
@@ -690,6 +735,11 @@ impl World {
         }
     }
 
+    /// The last place in storage order given out.
+    pub fn last_order(&self) -> i64 {
+        self.next_order
+    }
+
     /// Puts a row in storage now.
     pub fn keep(&mut self, mut row: Row) -> EventKey {
         row.order = self.new_order();
@@ -713,6 +763,7 @@ impl World {
         h.scripts.clear();
         h.effects.clear();
         h.hung = false;
+        h.taking = 0;
         (h.life, events)
     }
 
@@ -720,68 +771,142 @@ impl World {
         self.harness.moves.pop_front()
     }
 
-    fn decided(&mut self, what: &str, result: Result<(), Refusal>, mv: Option<Move>) -> Decision {
-        match mv {
+    /// The harness is handed a request (`Deliver`): it is noted as delivered, and meets the next
+    /// move. A request it takes is taken at once, or after a `Slow` move's time, when the driver
+    /// calls [`World::take`]; only then does the harness act on it.
+    pub fn handed(&mut self, life: u32, request: Handed<'_>) -> Decision {
+        if life != self.harness.life {
+            return Decision::Hang;
+        }
+        // A prompt carries its message's number; an answer or a control is the request message
+        // the core has just read, which it hands on before it reads another (`Core::handle`).
+        let (kind, msg, chat, session, item) = match request {
+            Handed::Prompt(p) => (
+                "prompt",
+                msg_number(&p.text, "p"),
+                Some(p.chat.id.0.clone()),
+                p.session.as_ref().map(|s| s.as_str().to_string()),
+                None,
+            ),
+            Handed::Answer(a) => {
+                let item = a.item.as_str().to_string();
+                let chat = (self.harness.scripts.iter())
+                    .find(|s| format!("appr-{}", s.turn) == item)
+                    .map(|s| s.chat.clone());
+                ("answer", self.reading.take(), chat, None, Some(item))
+            }
+            Handed::Control(c) => {
+                let chat = match &c.action {
+                    DriverAction::NewSession { chat, .. } => Some(chat.id.0.clone()),
+                    _ => None,
+                };
+                ("control", self.reading.take(), chat, None, None)
+            }
+        };
+        if self.effect("Deliver") {
+            if let (Handed::Prompt(_), Some(msg)) = (request, msg) {
+                self.harness.lost.push(msg);
+            }
+            return Decision::Crash;
+        }
+        let chat_taken = (kind == "prompt")
+            && chat
+                .as_ref()
+                .is_some_and(|c| self.harness.taken.contains(c));
+        let stored = self.next_order;
+        self.harness.deliveries.push(Delivery {
+            life,
+            ms: self.ms(),
+            stored,
+            msg,
+            kind,
+            chat,
+            session,
+            chat_taken,
+            item,
+        });
+        let name = match request {
+            Handed::Prompt(_) => "prompt",
+            Handed::Answer(_) => "answer",
+            Handed::Control(c) => match &c.action {
+                DriverAction::Interrupt { .. } => "interrupt",
+                DriverAction::NewSession { .. } => "new session",
+                DriverAction::Set { .. } => "set",
+                DriverAction::Own { .. } => "own",
+            },
+        };
+        let take = Take {
+            msg,
+            what: format!("{name} m{}", msg.map_or("?".into(), |m| m.to_string())),
+            ignore: false,
+        };
+        match self.next_move() {
+            Some(Move::Refuse) => {
+                self.note(format!("Deliver({}), Refuse", take.what));
+                Decision::Now(Err(Refusal::new(Reason::Busy)))
+            }
             Some(Move::Hang) => {
                 self.harness.hung = true;
-                self.note(format!("Deliver({what}), hangs"));
+                self.note(format!("Deliver({}), hangs", take.what));
                 Decision::Hang
             }
             Some(Move::Slow(ms)) => {
-                self.note(format!(
-                    "Deliver({what}), {} after {ms} ms",
-                    verdict(&result)
-                ));
-                Decision::Slow(ms, result)
+                self.note(format!("Deliver({}), after {ms} ms", take.what));
+                self.harness.taking += 1;
+                Decision::Later(ms, take)
             }
-            _ => {
+            mv => {
+                let take = Take {
+                    ignore: mv == Some(Move::Ignore),
+                    ..take
+                };
+                let what = take.what.clone();
+                let result = self.act(request, take);
                 self.note(format!("Deliver({what}), {}", verdict(&result)));
                 Decision::Now(result)
             }
         }
     }
 
-    /// The harness is handed a prompt.
-    pub fn prompt(&mut self, life: u32, prompt: &Prompt) -> Decision {
-        let msg = msg_number(&prompt.text, "p");
+    /// The harness takes a request a `Slow` move held: now it acts on it. One whose life has
+    /// ended meanwhile is dropped: its core is gone, or sees the driver end next.
+    pub fn take(&mut self, life: u32, request: Handed<'_>, take: Take) -> Result<(), Refusal> {
         if life != self.harness.life {
-            return Decision::Hang;
+            return Ok(());
         }
-        if self.effect("Deliver") {
-            if let Some(msg) = msg {
-                self.harness.lost.push(msg);
+        self.harness.taking -= 1;
+        if self.harness.out.is_none() {
+            return Ok(());
+        }
+        let what = take.what.clone();
+        let result = self.act(request, take);
+        self.note(format!("{}({what})", verdict(&result)));
+        result
+    }
+
+    /// What the harness does with a request it takes.
+    fn act(&mut self, request: Handed<'_>, take: Take) -> Result<(), Refusal> {
+        match request {
+            Handed::Prompt(prompt) => {
+                self.take_prompt(prompt, take.ignore);
+                Ok(())
             }
-            return Decision::Crash;
+            Handed::Answer(answer) => self.take_answer(answer, take),
+            Handed::Control(control) => self.take_control(control, take),
         }
+    }
+
+    fn take_prompt(&mut self, prompt: &Prompt, ignore: bool) {
         let chat = prompt.chat.id.0.clone();
-        let session = prompt.session.as_ref().map(|s| s.as_str().to_string());
-        let ms = self.ms();
-        let chat_taken = self.harness.taken.contains(&chat);
-        self.harness.deliveries.push(Delivery {
-            life,
-            ms,
-            msg,
-            kind: "prompt",
-            chat: Some(chat.clone()),
-            session: session.clone(),
-            chat_taken,
-            item: None,
-        });
-        let mv = self.next_move();
-        let what = format!("prompt m{}", msg.map_or("?".into(), |m| m.to_string()));
-        if mv == Some(Move::Refuse) {
-            return self.decided(&what, Err(Refusal::new(Reason::Busy)), mv);
-        }
-        if mv != Some(Move::Hang) {
-            self.harness.taken.insert(chat.clone());
-        }
-        if mv == Some(Move::Ignore) || mv == Some(Move::Hang) {
-            return self.decided(&what, Ok(()), mv);
-        }
         let h = &mut self.harness;
+        h.taken.insert(chat.clone());
+        if ignore {
+            return;
+        }
         // A session named is resumed; otherwise this life's session for the chat goes on, or a
         // new one starts.
-        let (session, start) = match (session, h.sessions.get(&chat)) {
+        let named = prompt.session.as_ref().map(|s| s.as_str().to_string());
+        let (session, start) = match (named, h.sessions.get(&chat)) {
             (Some(s), _) => (s, true),
             (None, Some(s)) => (s.clone(), false),
             (None, None) => {
@@ -808,94 +933,30 @@ impl World {
             answer: None,
             interrupt: None,
         });
-        self.decided(&what, Ok(()), mv)
     }
 
-    /// The harness is handed an answer.
-    pub fn answer(&mut self, life: u32, answer: &Answer) -> Decision {
-        if life != self.harness.life {
-            return Decision::Hang;
-        }
-        let msg = match &answer.given {
-            Given::Choice(choice) => msg_number(choice, "allow-"),
-            Given::Questions(_) => None,
-        };
-        if self.effect("Deliver") {
-            return Decision::Crash;
-        }
-        let ms = self.ms();
-        let item = answer.item.as_str().to_string();
-        let chat = (self.harness.scripts.iter())
-            .find(|s| format!("appr-{}", s.turn) == item)
-            .map(|s| s.chat.clone());
-        self.harness.deliveries.push(Delivery {
-            life,
-            ms,
-            msg,
-            kind: "answer",
-            chat,
-            session: None,
-            chat_taken: false,
-            item: Some(item.clone()),
-        });
-        let mv = self.next_move();
-        let what = format!("answer m{}", msg.map_or("?".into(), |m| m.to_string()));
-        if mv == Some(Move::Refuse) {
-            return self.decided(&what, Err(Refusal::new(Reason::Busy)), mv);
-        }
-        if mv == Some(Move::Hang) {
-            return self.decided(&what, Ok(()), mv);
-        }
+    fn take_answer(&mut self, answer: &Answer, take: Take) -> Result<(), Refusal> {
+        let item = answer.item.as_str();
         let request = answer.request.0.clone();
         let Some(script) = (self.harness.scripts.iter_mut()).find(|s| {
             format!("appr-{}", s.turn) == item && s.stage == Stage::Waiting && s.answer.is_none()
         }) else {
-            return self.decided(&what, Err(Refusal::new(Reason::NotWaiting)), mv);
+            return Err(Refusal::new(Reason::NotWaiting));
         };
-        script.answer = Some((request.clone(), mv == Some(Move::Ignore)));
-        if let Some(msg) = msg {
+        script.answer = Some((request.clone(), take.ignore));
+        if let Some(msg) = take.msg {
+            let ms = self.ms();
             self.harness.requests.insert(request, (msg, ms));
         }
-        self.decided(&what, Ok(()), mv)
+        Ok(())
     }
 
-    /// The harness is handed a control.
-    pub fn control(&mut self, life: u32, control: &Control) -> Decision {
-        if life != self.harness.life {
-            return Decision::Hang;
-        }
-        let (kind, msg, chat) = match &control.action {
-            DriverAction::Interrupt { .. } => ("interrupt", None, None),
-            DriverAction::NewSession { chat, .. } => ("new session", None, Some(chat.id.0.clone())),
-            DriverAction::Set { value, .. } => ("set", msg_number(value, "v"), None),
-            DriverAction::Own { .. } => ("own", None, None),
-        };
-        if self.effect("Deliver") {
-            return Decision::Crash;
-        }
-        let ms = self.ms();
-        self.harness.deliveries.push(Delivery {
-            life,
-            ms,
-            msg,
-            kind: "control",
-            chat: chat.clone(),
-            session: None,
-            chat_taken: false,
-            item: None,
-        });
-        let mv = self.next_move();
-        let what = format!("{kind} m{}", msg.map_or("?".into(), |m| m.to_string()));
-        if mv == Some(Move::Refuse) {
-            return self.decided(&what, Err(Refusal::new(Reason::Busy)), mv);
-        }
-        if mv == Some(Move::Hang) {
-            return self.decided(&what, Ok(()), mv);
-        }
+    fn take_control(&mut self, control: &Control, take: Take) -> Result<(), Refusal> {
         let request = control.request.0.clone();
-        let ignore = mv == Some(Move::Ignore);
+        let ignore = take.ignore;
+        let ms = self.ms();
         let h = &mut self.harness;
-        let result = match &control.action {
+        match &control.action {
             DriverAction::Interrupt { turn } => {
                 match (h.scripts.iter_mut())
                     .find(|s| s.turn == turn.as_str() && s.stage != Stage::Done)
@@ -912,10 +973,13 @@ impl World {
             DriverAction::NewSession { chat, session } => {
                 let chat = chat.id.0.clone();
                 h.taken.insert(chat.clone());
-                let old = (h.sessions.get(&chat).cloned())
-                    .or_else(|| session.as_ref().map(|s| s.as_str().to_string()));
                 if !ignore {
-                    h.effects.push(Effecting::NewSession { request, chat, old });
+                    let target = session.as_ref().map(|s| s.as_str().to_string());
+                    h.effects.push(Effecting::NewSession {
+                        request,
+                        chat,
+                        target,
+                    });
                 } else {
                     h.sessions.remove(&chat);
                 }
@@ -932,7 +996,7 @@ impl World {
                     });
                 // Shown by the session's item or by the agent's words, or by nothing, which
                 // leaves it to the core's net.
-                let variant = msg.unwrap_or(0) % 3;
+                let variant = take.msg.unwrap_or(0) % 3;
                 if let (Some(chat), false, true) = (chat, ignore, variant != 0) {
                     let by_words =
                         variant == 2 || !h.sessions.values().any(|s| s == session.as_str());
@@ -942,21 +1006,22 @@ impl World {
                         by_words,
                     });
                 }
-                if let Some(msg) = msg {
+                if let Some(msg) = take.msg {
                     h.requests.insert(request, (msg, ms));
                 }
                 Ok(())
             }
             DriverAction::Own { .. } => Err(Refusal::new(Reason::NotSupported)),
-        };
-        self.decided(&what, result, mv)
+        }
     }
 
-    /// Whether the harness has anything left to emit.
+    /// Whether the harness has anything left to emit, or holds a request it is still to take
+    /// (which holds up the core, even once the driver has stopped).
     pub fn has_work(&self) -> bool {
-        self.harness.out.is_some()
-            && (self.harness.scripts.iter().any(|s| s.stage != Stage::Done)
-                || !self.harness.effects.is_empty())
+        self.harness.taking > 0
+            || (self.harness.out.is_some()
+                && (self.harness.scripts.iter().any(|s| s.stage != Stage::Done)
+                    || !self.harness.effects.is_empty()))
     }
 
     /// The harness emits the next event of one of its turns or effects (`Emit`). With `force`, an
@@ -1127,8 +1192,13 @@ impl World {
 
     fn emit_effect(&mut self, effect: Effecting) {
         match effect {
-            Effecting::NewSession { request, chat, old } => {
-                if let Some(old) = old {
+            Effecting::NewSession {
+                request,
+                chat,
+                target,
+            } => {
+                let old = (self.harness.sessions.get(&chat).cloned()).or(target);
+                if let Some(old) = old.filter(|s| !self.harness.ended.contains(s)) {
                     self.send_session(&chat, &old, State::Done, Vec::new());
                     self.harness.ended.insert(old);
                 }
@@ -1246,6 +1316,7 @@ impl World {
             ms,
             chat: script.chat.clone(),
             item: item.to_string(),
+            seq: self.harness.seq,
             settles: settles.clone(),
             session: is_session.then(|| script.session.clone()),
             state,

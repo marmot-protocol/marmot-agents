@@ -35,6 +35,7 @@ struct Version<'a> {
     version: u64,
     first: Option<EventKey>,
     state: State,
+    seq: u64,
     turn: bool,
     started_by: Option<EventKey>,
     notice: Option<String>,
@@ -52,6 +53,7 @@ fn versions(world: &World) -> Vec<Version<'_>> {
                 version: read.item.version,
                 first: read.item.first.clone(),
                 state: header.state,
+                seq: header.seq,
                 turn: matches!(read.item.event.body(), Body::Turn(_)),
                 started_by: read.item.started_by.clone(),
                 notice: match read.item.event.body() {
@@ -104,9 +106,10 @@ pub fn safety(world: &World) -> Option<Failure> {
 }
 
 /// The earliest the core's `no_effect` net may settle a request after the harness took it, in
-/// milliseconds: the core waits [`EFFECT_LIMIT_SECS`] on a clock of whole seconds, so it may fire
-/// up to a second early, and later by up to its 10-second tick. An effect shown before this was
-/// shown in time.
+/// milliseconds. The harness takes a request as the driver answers the core, which is when the
+/// core sets its deadline; it waits [`EFFECT_LIMIT_SECS`] from there on a clock of whole seconds,
+/// so it may fire up to a second early, and later by up to its 10-second tick. An effect shown
+/// before this was shown in time.
 pub const NET_EARLIEST_MS: u64 = (EFFECT_LIMIT_SECS - 1) * 1000;
 
 /// S1: every answer and control is settled at most once, in its own chat (S5), and not by the
@@ -184,6 +187,17 @@ fn s3(world: &World) -> Option<Failure> {
                             key.0, v.id, v.version
                         ),
                     ));
+                }
+                for missing in 1..v.version {
+                    if !refused.contains(&(key.0, v.id.clone(), missing)) {
+                        return Some(fail(
+                            "S3",
+                            format!(
+                                "c{} {} v{} is the first stored, skipping v{missing}",
+                                key.0, v.id, v.version
+                            ),
+                        ));
+                    }
                 }
                 seen.insert(key, (v.row.event.clone(), v.version));
             }
@@ -368,10 +382,10 @@ fn s10(world: &World) -> Option<Failure> {
 /// S12: a prompt names a session only to resume it: one the chat had, that has not ended, on the
 /// first prompt of a driver's life.
 fn s12(world: &World) -> Option<Failure> {
-    // Each session item's versions, as the chat saw them, oldest first.
-    let sessions: Vec<(String, u64, State)> = (versions(world).into_iter())
+    // Each session item's versions, as the chat saw them, in storage order.
+    let sessions: Vec<(String, i64, State)> = (versions(world).into_iter())
         .filter(|v| v.id.starts_with("sess-"))
-        .map(|v| (v.id["sess-".len()..].to_string(), v.row.ms, v.state))
+        .map(|v| (v.id["sess-".len()..].to_string(), v.row.order, v.state))
         .collect();
     let h = &world.harness;
     for d in (h.deliveries.iter()).filter(|d| d.kind == "prompt") {
@@ -391,8 +405,9 @@ fn s12(world: &World) -> Option<Failure> {
                 format!("{what} names a session the chat never had"),
             ));
         }
-        // As the chat last saw the session before the prompt.
-        let last = (sessions.iter()).rfind(|(s, ms, _)| s == session && *ms <= d.ms);
+        // As the chat last saw the session before the prompt: by storage order, which tells
+        // apart what happened in the same millisecond.
+        let last = (sessions.iter()).rfind(|(s, order, _)| s == session && *order <= d.stored);
         if last.is_some_and(|(_, _, state)| *state == State::Done) {
             return Some(fail("S12", format!("{what} names a session that ended")));
         }
@@ -483,11 +498,11 @@ pub fn liveness(world: &World) -> Vec<Failure> {
             failures.push(fail("L2", format!("c{chat} {id} never ends")));
         }
     }
-    // Everything the running driver emitted reaches the chat in the state it last gave (L2): a
-    // turn ends where people see it, and nothing waits in the outbox for good; unless MDK refused
-    // the very version that showed that state.
-    let refused: Vec<(&str, State)> = (world.refused.iter())
-        .filter_map(|r| Some((r.item.as_ref()?.0.as_str(), r.state?)))
+    // The latest thing the running driver emitted of each item reaches the chat (L2): a turn
+    // ends where people see it, and nothing waits in the outbox for good; unless MDK refused the
+    // very version that carried it. Each emission is known by its `seq`, which the core keeps.
+    let refused: BTreeSet<(&str, u64)> = (world.refused.iter())
+        .filter_map(|r| Some((r.item.as_ref()?.0.as_str(), r.seq?)))
         .collect();
     if world.harness.out.is_some() {
         let mut emitted: BTreeMap<&str, &crate::world::Emission> = BTreeMap::new();
@@ -495,7 +510,7 @@ pub fn liveness(world: &World) -> Vec<Failure> {
             emitted.insert(e.item.as_str(), e);
         }
         for (item, e) in emitted {
-            if refused.contains(&(item, e.state)) {
+            if refused.contains(&(item, e.seq)) {
                 continue;
             }
             let reached = match &e.words {
@@ -503,9 +518,7 @@ pub fn liveness(world: &World) -> Vec<Failure> {
                 Some(text) => (world.rows.iter()).any(|r| {
                     r.from_agent && r.content == *text && (r.kind == CHAT || r.kind == EDIT)
                 }),
-                None => (versions.iter())
-                    .rfind(|v| v.id == item)
-                    .is_some_and(|v| v.state == e.state),
+                None => (versions.iter()).any(|v| v.id == item && v.seq == e.seq),
             };
             if !reached {
                 failures.push(fail(

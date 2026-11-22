@@ -106,6 +106,9 @@ impl Side for SimSide {
         };
         if message.kind == REQUEST_KIND {
             let (target, asked) = carrier::read_request(&world.agent, &message.tags)?;
+            // The core hands on what this request becomes before it reads another.
+            world.reading = (world.msgs.iter())
+                .position(|m| m.as_ref().is_some_and(|m| m.event == message.event));
             return Some(Incoming::Asked(HeardRequest {
                 chat: place,
                 event: message.event,
@@ -310,6 +313,10 @@ fn send(
         Sending::Item { item, .. } => item.settles.clone(),
         Sending::Words { settles, .. } => settles.clone(),
     };
+    let seq = match what {
+        Sending::Item { item, .. } => Some(item.event.header().seq),
+        Sending::Words { .. } => None,
+    };
     let (state, notice) = match what {
         Sending::Item { item, .. } => (
             Some(item.event.header().state),
@@ -324,6 +331,7 @@ fn send(
             settles,
             words,
             state,
+            seq,
             notice,
         });
         world.note(format!("Send(c{chat}): Refused, too large"));
@@ -349,6 +357,7 @@ fn send(
                 settles,
                 words,
                 state,
+                seq,
                 notice,
             });
             world.note(format!("Send({described}): Refused"));
