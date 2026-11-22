@@ -269,11 +269,20 @@ jobs:
         run: python3 -m unittest discover -s install -p 'test_*.py'
 
   models:
-    name: TLA+ models
+    name: TLA+ models (${{ matrix.part }})
     runs-on: ubuntu-24.04
     # D-094: pull requests stay under 15 minutes. These are the small bounds; larger ones are
-    # for the nightly workflow.
+    # for the nightly workflow. The fair model alone takes most of that, so it runs beside the
+    # other cases rather than before them.
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - part: fair
+            cases: --only fair
+          - part: the other cases
+            cases: --except fair
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -295,7 +304,7 @@ jobs:
       - name: The fair model passes, and every counterexample, defect and probe fails as stated
         env:
           TLC_WORKERS: "4"
-        run: python3 tools/tla/check.py
+        run: python3 tools/tla/check.py ${{ matrix.cases }}
 
   documents:
     name: Documents

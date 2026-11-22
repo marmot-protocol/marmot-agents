@@ -16,11 +16,15 @@
 //! of an item is queued on disk, with what it settles and the token MDK keeps it under, before it
 //! is sent, so a crash leaves it to be sent again as it was, and MDK, which knows the token,
 //! sends nothing twice (S1, S3). When the file cannot be written the core stops where it is,
-//! as a crash would, and the next start takes up what is on disk. MDK does not replay what
-//! arrived while a program was down, so on start, and whenever it falls behind, the core reads
-//! what was stored after the read mark. A message MDK cannot read for a moment is not taken as
-//! read: its group waits, and is read again from its mark, a little later each time, while the
-//! other groups go on (S10, L3).
+//! as a crash would, and the next start takes up what is on disk. A group is only ever read from
+//! its mark, page by page, in the order MDK stored its messages, a few in each turn of the loop,
+//! and its mark moves as each is handled. MDK's live notice of a message only wakes its group's reader: MDK may announce a
+//! message again, or one before another stored earlier, or store one without a notice, so a
+//! notice never moves a mark (MDK #3603). MDK does not replay what arrived while a program was
+//! down, so on start, whenever the core falls behind, and on the core's tick, every group is read
+//! from its mark. A message MDK cannot read for a moment is not taken as read: its group waits,
+//! and is read again from its mark, a little later each time, while the other groups go on (S10,
+//! L3).
 
 use crate::chat_folder::FolderRule;
 use crate::config::Config;
@@ -63,6 +67,13 @@ pub const REJECTED_TRIES: u32 = 10;
 /// was released.
 const TRIED_WITHOUT_TOKENS: &str = "the state file was left by an older marmot-agent with sends \
     that may have gone out; move it away to start afresh";
+
+/// How many stored rows the core reads from MDK at a time.
+const PAGE: usize = 100;
+
+/// How many stored messages one group hands on in one turn of the core's loop, so a long
+/// catch-up, or a harness slow to take prompts, does not hold up a stop or the other chats.
+const READS: usize = 8;
 
 /// How many sends one group makes in one turn of the core's loop, so one chat's backlog, or a slow
 /// MDK, does not hold up the others.
@@ -114,6 +125,11 @@ pub struct Kept {
     pub conversation: Saved,
     /// For each group, the place in storage order of the last message read.
     pub read: BTreeMap<GroupKey, i64>,
+    /// For each group the core had no mark for when it first read it, the second it had
+    /// subscribed in then: what arrived by then is the group's history (D-111). Saved with the
+    /// group's first mark, so it holds after a restart too.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub history: BTreeMap<GroupKey, u64>,
 }
 
 /// Which save fails: one that would write a state it matches.
@@ -240,10 +256,14 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// When this core subscribed to MDK's live events ([`Subscribed`]), by the machine's clock,
     /// in whole seconds as MDK gives the time a message arrived; zero until it runs.
     since: u64,
-    /// The groups the core had no read mark for when it first read them in this run, as on an
-    /// imported account's first run or after a lost state file: what arrived in them by
-    /// [`Core::since`] is their history, marked read and never handed on (L3).
-    fresh: BTreeSet<GroupKey>,
+    /// For each group the core had no read mark for when it first read it, as on an imported
+    /// account's first run or after a lost state file, the second the core had subscribed in
+    /// then: what arrived in it by that second is its history, marked read and never handed on,
+    /// in this run and every one after (L3, D-111). Kept with the marks.
+    history: BTreeMap<GroupKey, u64>,
+    /// The groups with more stored after their marks than one turn of the core's loop reads:
+    /// each is read on from its mark in the next turn, so a long catch-up holds up nothing else.
+    behind: BTreeSet<GroupKey>,
     /// For each group whose last send failed: when to try again, and how long it waited last.
     retry: HashMap<GroupKey, (Instant, Duration)>,
     /// The groups whose next send MDK has queued, not yet taken into its engine.
@@ -253,8 +273,7 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// read never goes ahead of it. In order, so groups due at the same moment are read again in
     /// the same order every time.
     unread: BTreeMap<GroupKey, Again>,
-    /// When to list the groups again, for a catch-up that MDK could not list them for. Until then
-    /// no live message moves a mark, which could pass messages whose notices were lost.
+    /// When to list the groups again, for a catch-up that MDK could not list them for.
     listing: Option<Again>,
     /// How many tries of a send MDK may drop before it is given up: [`REJECTED_TRIES`].
     rejected_tries: u32,
@@ -284,6 +303,9 @@ pub struct Bugs {
     pub retry_ambiguous_with_new_token: bool,
     /// What the agent's words settle is ignored: settles are read only from items (S1).
     pub settles_only_from_items: bool,
+    /// A live message in a group with a mark is handled itself, and moves the mark to its place,
+    /// as before MDK #3606: one announced before a message stored earlier passes it (S10, L3).
+    pub mark_from_live: bool,
 }
 
 impl<D: Driver, M: Side> Core<D, M> {
@@ -323,12 +345,13 @@ impl<D: Driver, M: Side> Core<D, M> {
             driver,
             conversation,
             read: kept.read,
+            history: kept.history,
             store,
             folders,
             config: config.clone(),
             started: Instant::now(),
             since: 0,
-            fresh: BTreeSet::new(),
+            behind: BTreeSet::new(),
             retry: HashMap::new(),
             queued: HashSet::new(),
             unread: BTreeMap::new(),
@@ -396,7 +419,9 @@ impl<D: Driver, M: Side> Core<D, M> {
             self.drained.clear();
             let sends = self.retry.values().map(|(at, _)| *at);
             let reads = (self.unread.values().chain(&self.listing)).filter_map(|a| a.at);
-            let retry = sends.chain(reads).min();
+            // A group with more to read is read on in this turn, after other work.
+            let behind = (!self.behind.is_empty()).then(Instant::now);
+            let retry = sends.chain(reads).chain(behind).min();
             let retry = async move {
                 match retry {
                     Some(at) => tokio::time::sleep_until(at).await,
@@ -437,13 +462,20 @@ impl<D: Driver, M: Side> Core<D, M> {
                 .await
             };
             match woke {
-                Woke::Tick => loop {
-                    let acts = self.conversation.overdue(self.clock());
-                    if acts.is_empty() {
-                        break;
+                Woke::Tick => {
+                    loop {
+                        let acts = self.conversation.overdue(self.clock());
+                        if acts.is_empty() {
+                            break;
+                        }
+                        self.carry_out(acts).await?;
                     }
-                    self.carry_out(acts).await?;
-                },
+                    // MDK can store a message with no notice, as one imported: every group is
+                    // read from its mark now and then, unless a catch-up waits to list them.
+                    if self.listing.is_none() {
+                        self.catch_up().await?;
+                    }
+                }
                 Woke::Retry => {
                     self.flush_all().await?;
                     self.read_again().await?;
@@ -457,9 +489,6 @@ impl<D: Driver, M: Side> Core<D, M> {
                 }
                 Woke::Driver(None) => break,
                 Woke::Uploaded(done) => self.file_done(done).await?,
-                // While the groups are to be listed again, the catch-up reads what came.
-                Woke::Marmot(Live::Message(message))
-                    if self.listing.is_some() && self.read.contains_key(&message.group) => {}
                 Woke::Marmot(Live::Message(message)) => self.live(message).await?,
                 Woke::Marmot(Live::Groups) => self.consider_invitations().await?,
                 Woke::Marmot(Live::Other) => {}
@@ -572,7 +601,7 @@ impl<D: Driver, M: Side> Core<D, M> {
         if !accepting.is_empty() {
             for group in accepting {
                 self.read.insert(group.clone(), 0);
-                self.fresh.remove(group);
+                self.history.remove(group);
             }
             self.save()?;
         }
@@ -588,9 +617,10 @@ impl<D: Driver, M: Side> Core<D, M> {
     }
 
     /// Reads what was stored for each group after its mark: what arrived while the core was down,
-    /// or while it fell behind. A group with no mark is read from its start ([`Core::catch_up_group`]). A
-    /// group waiting to be read again is left to its time. When MDK cannot list the groups, the
-    /// whole catch-up is tried again later: a failed list is not an account with no groups.
+    /// while it fell behind, or with no notice. A group with no mark starts where
+    /// [`Core::start_of`] says. A group waiting to be read again is left to its time. When MDK
+    /// cannot list the groups, the whole catch-up is tried again later: a failed list is not an
+    /// account with no groups.
     async fn catch_up(&mut self) -> Result<(), Unsaved> {
         let groups = match self.marmot.groups() {
             Ok(groups) => groups,
@@ -618,8 +648,8 @@ impl<D: Driver, M: Side> Core<D, M> {
         self.unread.get(group).is_some_and(|a| a.at.is_some())
     }
 
-    /// Reads again what is due: the catch-up MDK could not list the groups for, then each group,
-    /// from its mark, in order.
+    /// Reads again what is due: the catch-up MDK could not list the groups for, each group with
+    /// more to read, then each group MDK could not read, from its mark, in order.
     async fn read_again(&mut self) -> Result<(), Unsaved> {
         let now = Instant::now();
         let due = |again: &Again| again.at.is_some_and(|at| at <= now);
@@ -631,6 +661,12 @@ impl<D: Driver, M: Side> Core<D, M> {
             .filter(|(_, again)| due(again))
             .map(|(group, _)| group.clone())
             .collect();
+        // A group that waits is read at its time, as one of `groups` if that is now.
+        for group in std::mem::take(&mut self.behind) {
+            if !self.waits(&group) {
+                self.catch_up_group(group).await?;
+            }
+        }
         for group in groups {
             if let Some(again) = self.unread.get_mut(&group) {
                 again.at = None;
@@ -640,37 +676,86 @@ impl<D: Driver, M: Side> Core<D, M> {
         Ok(())
     }
 
-    /// Reads what was stored for one group after its mark. When MDK cannot be read, or a message
-    /// in it cannot, the group waits to be read again; when all of it was read, it waits no more.
-    /// A group with no mark is read from its start, as MDK stored it: what arrived by the time the
-    /// core subscribed is its history, marked read, and the group starts just before the first
+    /// Reads on in one group from its mark, in storage order: one page of what was stored after
+    /// it, of which at most [`READS`] messages are handed on, each once, the mark moving past
+    /// each, and past what the core does not read, such as the agent's own messages. When more
+    /// is left, the group is read on from its mark in the next turn of the core's loop
+    /// ([`Core::behind`]). When MDK cannot be read, or a message in it cannot, the group waits to
+    /// be read again from its mark; when it was read, it waits no more. A group with no mark
+    /// starts where [`Core::start_of`] says.
+    async fn catch_up_group(&mut self, group: GroupKey) -> Result<(), Unsaved> {
+        self.behind.remove(&group);
+        let mark = match self.read.get(&group) {
+            Some(&mark) => mark,
+            None => match self.start_of(&group)? {
+                Some(start) => start,
+                None => return Ok(()),
+            },
+        };
+        let Ok(page) = self.marmot.stored(&group, mark, PAGE) else {
+            self.read_later(&group);
+            return Ok(());
+        };
+        let Some(last) = page.last else {
+            self.read_through(&group);
+            return Ok(());
+        };
+        for (handed, message) in page.messages.into_iter().enumerate() {
+            if handed == READS {
+                // The rest of the page is read again from the mark next turn.
+                self.read_through(&group);
+                self.behind.insert(group);
+                return Ok(());
+            }
+            self.handle(message).await?;
+            if self.waits(&group) {
+                return Ok(());
+            }
+        }
+        // Past the rows the core does not read too, so the next page starts after them. Not
+        // saved now: read again after a crash, they are passed again.
+        let mark = last.max(self.read.get(&group).copied().unwrap_or(last));
+        self.read.insert(group.clone(), mark);
+        self.read_through(&group);
+        if page.more {
+            self.behind.insert(group);
+        }
+        Ok(())
+    }
+
+    /// Where a group with no mark starts, saved with the mark: what arrived by the time the core
+    /// subscribed is its history, marked read, and the group starts just before the first
     /// message that arrived after, so neither is its history read as prompts nor is anything new
     /// skipped (L3). MDK gives that time in whole seconds, so a message that arrived in the second
     /// the core subscribed is history too. Which messages are history is never told by where
     /// MDK says the group ends, nor by which message is heard first: MDK stores a message some
     /// time after it arrived, and announces a sync's messages only once it has stored them all.
-    async fn catch_up_group(&mut self, group: GroupKey) -> Result<(), Unsaved> {
-        let mark = self.read.get(&group).copied();
-        let Ok(stored) = self.marmot.stored(&group, mark.unwrap_or(i64::MIN)) else {
-            self.read_later(&group);
-            return Ok(());
-        };
-        if mark.is_none() {
-            let since = self.since;
-            let start = match stored.iter().find(|m| m.received_at > since) {
-                Some(first) => first.order.map(|order| order - 1),
-                None => stored.last().and_then(|m| m.order),
+    /// `None` when MDK could not be read: the group waits to be read again.
+    fn start_of(&mut self, group: &GroupKey) -> Result<Option<i64>, Unsaved> {
+        let since = self.since;
+        let (mut after, mut start) = (i64::MIN, None);
+        loop {
+            let Ok(page) = self.marmot.stored(group, after, PAGE) else {
+                self.read_later(group);
+                return Ok(None);
             };
-            self.fresh.insert(group.clone());
-            // Where it starts is kept, so its first new message is read there after a crash.
-            self.read.insert(group.clone(), start.unwrap_or(0));
-            self.save()?;
+            if let Some(first) = page.messages.iter().find(|m| m.received_at > since) {
+                start = first.order.map(|order| order - 1);
+                break;
+            }
+            let Some(last) = page.last else { break };
+            (after, start) = (last, Some(last));
+            if !page.more {
+                break;
+            }
         }
-        for message in stored {
-            self.handle(message).await?;
-        }
-        self.read_through(&group);
-        Ok(())
+        let start = start.unwrap_or(0);
+        // Where it starts is kept, and what is its history, so its first new message is read
+        // there after a crash, and its history is never read as prompts.
+        self.history.insert(group.clone(), since);
+        self.read.insert(group.clone(), start);
+        self.save()?;
+        Ok(Some(start))
     }
 
     /// A group was read through: unless it waits again, it no longer waits at all.
@@ -680,52 +765,46 @@ impl<D: Driver, M: Side> Core<D, M> {
         }
     }
 
-    /// A message heard live. A group with no mark is read from storage instead, where its
+    /// A message heard live wakes its group's reader, which reads the group from its mark: the
+    /// notice moves no mark, so a message announced again, or before one stored earlier, is
+    /// read in its place and once. A group with no mark is read from storage too, where its
     /// history is told apart from what is new whatever order MDK announces messages in
-    /// ([`Core::catch_up_group`]): a message that arrived by the time the core subscribed starts
-    /// no read, and one that arrived after has the group read now, unless it waits to be read
-    /// again anyway.
+    /// ([`Core::start_of`]): a message that arrived by the time the core subscribed starts no
+    /// read. A group that waits to be read again is read at its time.
     async fn live(&mut self, message: Message) -> Result<(), Unsaved> {
-        if self.read.contains_key(&message.group) {
-            return self.handle(message).await;
+        #[cfg(feature = "sim-bugs")]
+        if self.bugs.mark_from_live && self.read.contains_key(&message.group) {
+            return self.bug_mark_from_live(message).await;
         }
-        if message.received_at <= self.since || self.waits(&message.group) {
-            return Ok(());
-        }
-        self.catch_up_group(message.group).await
-    }
-
-    /// Hands one message of a group with a mark to the conversation, once. What the conversation
-    /// makes of it, such as a request pending for the driver or a refusal queued, is saved in one
-    /// write with the mark that says it was read, before anything reaches the driver: a crash
-    /// before that write leaves the message to be read again, and one after it leaves the request
-    /// to be settled (D-037, D-070). A mark that cannot be saved stops the core before the message
-    /// reaches the driver. A message MDK cannot read for a moment is not marked read, and neither
-    /// is anything after it in its group: the group is read again from its mark later (S10, L3).
-    /// In a group the core had no mark for, a message that arrived by the time the core
-    /// subscribed is history, even one stored after a message that arrived later: it is marked
-    /// read and never handed on (L3).
-    async fn handle(&mut self, message: Message) -> Result<(), Unsaved> {
-        let group = message.group.clone();
-        // A group with no mark is read from its start instead ([`Core::live`]).
-        let Some(&read) = self.read.get(&group) else {
-            return Ok(());
-        };
+        let group = message.group;
         if self.waits(&group) {
             return Ok(());
         }
-        let order = match self.marmot.order_of(&message) {
-            Ok(Some(order)) => order,
-            Ok(None) => return Ok(()),
-            Err(NotNow) => {
-                self.read_later(&group);
-                return Ok(());
-            }
+        if !self.read.contains_key(&group) && message.received_at <= self.since {
+            return Ok(());
+        }
+        self.catch_up_group(group).await
+    }
+
+    /// Hands one stored message of a group with a mark to the conversation, once. What the
+    /// conversation makes of it, such as a request pending for the driver or a refusal queued, is
+    /// saved in one write with the mark that says it was read, before anything reaches the
+    /// driver: a crash before that write leaves the message to be read again, and one after it
+    /// leaves the request to be settled (D-037, D-070). A mark that cannot be saved stops the
+    /// core before the message reaches the driver. A message MDK cannot read for a moment is not
+    /// marked read, and neither is anything after it in its group: the group is read again from
+    /// its mark later (S10, L3). In a group the core had no mark for, a message that arrived by
+    /// the time the core subscribed is history, even one stored after a message that arrived
+    /// later: it is marked read and never handed on (L3).
+    async fn handle(&mut self, message: Message) -> Result<(), Unsaved> {
+        let group = message.group.clone();
+        let (Some(&read), Some(order)) = (self.read.get(&group), message.order) else {
+            return Ok(());
         };
         if order <= read {
             return Ok(());
         }
-        if self.fresh.contains(&group) && message.received_at <= self.since {
+        if (self.history.get(&group)).is_some_and(|&since| message.received_at <= since) {
             self.read.insert(group, order);
             return self.save();
         }
@@ -924,6 +1003,25 @@ impl<D: Driver, M: Side> Core<D, M> {
         (self.retry).insert(group.clone(), (Instant::now() + wait, wait));
     }
 
+    /// The bug "a live message moves the mark to its place": the message is found in storage, by
+    /// reading its group from its start, and handled itself.
+    #[cfg(feature = "sim-bugs")]
+    async fn bug_mark_from_live(&mut self, message: Message) -> Result<(), Unsaved> {
+        let mut after = i64::MIN;
+        loop {
+            let Ok(page) = self.marmot.stored(&message.group, after, PAGE) else {
+                return Ok(());
+            };
+            let Some(last) = page.last else {
+                return Ok(());
+            };
+            if let Some(found) = (page.messages.into_iter()).find(|m| m.event == message.event) {
+                return self.handle(found).await;
+            }
+            after = last;
+        }
+    }
+
     /// Whether the bug "a send is saved only after it went" is put back.
     #[cfg(feature = "sim-bugs")]
     fn bug_save_after_send(&self) -> bool {
@@ -950,6 +1048,7 @@ impl<D: Driver, M: Side> Core<D, M> {
         let kept = Kept {
             conversation: self.conversation.saved().clone(),
             read: self.read.clone(),
+            history: self.history.clone(),
         };
         self.store.save(&kept).map_err(|_| Unsaved)
     }

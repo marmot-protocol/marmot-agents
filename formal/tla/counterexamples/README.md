@@ -16,13 +16,14 @@ All are on the small bounds of [the model's README](../README.md#configurations-
   "case": "...", "model": "CoreLifecycle", "config": "CoreLifecycle.<name>.cfg",
   "breaks": "S2", "what": "...", "constants": {...},
   "messages": [{"id": "r1", "chat": "c1", "kind": "control", "new_session": true}],
-  "steps": [{"action": "Store", "msg": "r1"}, {"action": "Ask", "msg": "r1", "stored": true, "handled": true}],
+  "steps": [{"action": "Store", "msg": "r1"}, {"action": "Ask", "msg": "r1", "stored": true, "reads": "r1"}],
   "end": {"kind": "violation"}
 }
 ```
 
 - `steps` are the model's actions in order, with what each did: `Store(msg)`, `Hear(msg)` and `Ask(msg)`
-  (`handled` says whether the core read it: a message heard before it is stored is dropped), `CatchUp(chat,
+  (`reads` names the message the chat's reader then handled, the oldest stored after the mark, or is `null`
+  when there was none, as for a message heard before it is stored), `CatchUp(chat,
   msg)`, `CatchUpDone`, `Deliver(msg, kind, session)`, `Take(msg)`, `Refuse(msg)`, `Emit(item, settles, fin)`,
   `Tick(req)`, `Send(chat, send, outcome)` with the outcome `sent`, `busy`, `ambiguous` (it did not go out),
   `ambiguous_landed` (it did), `refused`, or `rejected` (MDK took it and dropped it before it went out, and the
@@ -38,8 +39,8 @@ All are on the small bounds of [the model's README](../README.md#configurations-
 | --- | --- | --- |
 | [`unfair-mdk-never-answers`](unfair-mdk-never-answers.json) | L1 | Without `FairMdk`: a send is queued, and MDK never takes another step. The send stays enabled and is never taken (it does not fail), so the notice that settles `r1` is never posted |
 | [`duplicate-first-event`](duplicate-first-event.json) | S3 | Without `TokenDedupe`, as before MDK 0.19.0's token-based sends: MDK posts a first version, the save after it fails, and after the restart the version is tried again, which MDK does not know for the one it posted, so it goes again |
-| [`live-out-of-order`](live-out-of-order.json) | S10 | Without `LiveInOrder`: `p1` is stored before `r1`, but `r1` is handed over first; the mark passes `p1`, which `run.rs` `handle` then skips |
-| [`live-before-store`](live-before-store.json) | L3 | Without `LiveAfterStore`: `p1` is heard before it is stored, so `order_of` gives nothing and it is dropped; MDK does not hand it over again, and nothing reads it until the core starts again |
+| [`live-out-of-order`](live-out-of-order.json) | S10 | With `MarkFromLive`, the core before MDK #3606: `p1` is stored before `r1`, but `r1` is handed over first; the core handles `r1` itself and the mark passes `p1`, which is then never read. The core now reads from the mark, which reads `p1` first; MDK does not promise storage order since #3606. Before, this was the case without the switch `LiveInOrder`, now removed |
+| [`live-before-store`](live-before-store.json) | L3 | Without `LiveAfterStore` and without `TickCatchUp`: `p1` is heard before it is stored, so the reader finds nothing new; MDK does not hand it over again, and nothing reads it until the core starts again |
 | [`last-resort-refused`](last-resort-refused.json) | S2 | The accepted limit, without `LastResortTaken`: MDK refuses an item's closing version in a live group, and then the core's close that stands in for it (`"last_resort": true`). Nothing stands in for a last resort, so the item stays open in the chat |
 | [`last-resort-given-up`](last-resort-given-up.json) | S2 | The same limit reached another way, with `LastResortTaken`, which speaks only of refusals: MDK refuses an item's closing version, and MDK takes the core's close that stands in for it and drops it before it goes out, which gives it up after its tries. The item stays open in the chat |
 

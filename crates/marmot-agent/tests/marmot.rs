@@ -153,8 +153,9 @@ async fn a_named_group_of_two_is_a_group_and_a_restart_repeats_nothing() {
     assert!(
         world
             .marmot
-            .stored(&group, mark)
+            .stored(&group, mark, 1000)
             .unwrap()
+            .messages
             .iter()
             .any(|m| m.event.as_str() == gap_id),
         "the recipient stored the gap message after the saved mark"

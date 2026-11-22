@@ -57,3 +57,16 @@ fn settles_only_from_items_is_found() {
     let (property, index) = found(Family::Calm, bugs, 40);
     assert_eq!(property, "S1", "at {index}");
 }
+
+#[test]
+fn mark_from_live_is_found() {
+    let bugs = BugSet {
+        mark_from_live: true,
+        ..BugSet::default()
+    };
+    let (property, index) = found(Family::Live, bugs, 40);
+    assert!(
+        ["S10", "L1", "L3"].contains(&property.as_str()),
+        "{property} at {index}"
+    );
+}

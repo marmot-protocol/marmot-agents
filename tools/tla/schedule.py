@@ -11,8 +11,9 @@ the trace ends (an invariant broken at its last step, a stutter for ever, or a l
 
 docs/design/verification.md names the actions. A step names what the model's action did:
 
-- Store(msg), Hear(msg) and Ask(msg) (`handled` says whether the core read it; a message heard
-  before it is stored is dropped), CatchUp(chat, msg), CatchUpDone;
+- Store(msg), Hear(msg) and Ask(msg) (`reads` names the message the chat's reader then handled,
+  the oldest stored after the mark, or is null when there was none), CatchUp(chat, msg),
+  CatchUpDone;
 - Deliver(msg, kind, session), Take(msg), Refuse(msg), Emit(item, settles, fin), Tick(req);
 - Send(chat, send, outcome), where `send` names the item and version, or the notice and what it
   is about, `last_resort` when it stands in for a dropped send, and `try` the number of its tries
@@ -302,8 +303,9 @@ def step(action, s, t, constants):
             for m in t["live"]:
                 live.remove(m)
             (msg,) = live
-        handled = t["cv"]["h"][msg] > s["cv"]["h"][msg]
-        return [{"action": action, "msg": msg, "stored": s["order"][msg] > 0, "handled": handled}]
+        read = [m for m in t["cv"]["h"] if t["cv"]["h"][m] != s["cv"]["h"][m]]
+        return [{"action": action, "msg": msg, "stored": s["order"][msg] > 0,
+                 "reads": read[0] if read else None}]
     if action == "CatchUp":
         (msg,) = [m for m in t["cv"]["h"] if t["cv"]["h"][m] != s["cv"]["h"][m]]
         return [{"action": "CatchUp", "chat": chat_of(msg), "msg": msg}]

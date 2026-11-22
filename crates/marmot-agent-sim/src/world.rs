@@ -633,8 +633,8 @@ impl World {
     }
 
     /// A message arrives live (`Hear`, or `Ask` for a request). Within MDK's contract it is
-    /// stored first, and every message of its chat stored before it and not yet heard is heard
-    /// first, in order.
+    /// stored first; the messages of its chat stored before it and not yet heard may be heard
+    /// later, or only at the end (MDK #3606).
     pub fn hear(&mut self, msg: usize) {
         let Some(m) = self.post(msg) else { return };
         if m.heard {
@@ -651,36 +651,37 @@ impl World {
         }
         if self.contract {
             self.store(msg);
-            let order = self.msgs[msg].as_ref().and_then(|m| m.stored);
-            let earlier: Vec<usize> = (0..self.msgs.len())
-                .filter(|&i| {
-                    self.msgs[i].as_ref().is_some_and(|m| {
-                        usize::from(m.posted.chat) == chat
-                            && !m.heard
-                            && m.stored.is_some()
-                            && m.stored <= order
-                    })
-                })
-                .collect();
-            let mut earlier = earlier;
-            earlier.sort_by_key(|&i| self.msgs[i].as_ref().and_then(|m| m.stored));
-            for i in earlier {
-                self.deliver_live(i);
-            }
-        } else {
-            self.deliver_live(msg);
         }
+        self.deliver_live(msg, false);
     }
 
-    fn deliver_live(&mut self, msg: usize) {
+    /// MDK announces a message it stored again, as its recovery may (`Reannounce`, MDK #3606).
+    /// Nothing for a message not stored.
+    pub fn reannounce(&mut self, msg: usize) {
+        if self
+            .msgs
+            .get(msg)
+            .and_then(|m| m.as_ref()?.stored)
+            .is_none()
+        {
+            return;
+        }
+        self.deliver_live(msg, true);
+    }
+
+    fn deliver_live(&mut self, msg: usize, again: bool) {
         // When it arrived: when it was stored, or now for one heard before it is stored.
         let event = self.msgs[msg].as_ref().expect("posted").event.clone();
         let arrived = (self.rows.iter())
             .find(|r| r.event == event)
             .map_or(self.ms(), |r| r.ms);
         let m = self.msgs[msg].as_mut().expect("posted");
-        m.heard = true;
-        let name = if m.posted.is_request() { "Ask" } else { "Hear" };
+        let name = if again {
+            "Reannounce"
+        } else {
+            m.heard = true;
+            if m.posted.is_request() { "Ask" } else { "Hear" }
+        };
         let message = Message {
             group: self.chats[usize::from(m.posted.chat)].group.clone(),
             event: m.event.clone(),

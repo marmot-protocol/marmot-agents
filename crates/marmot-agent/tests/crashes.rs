@@ -347,6 +347,7 @@ async fn a_version_saved_but_not_sent_goes_out_after_a_restart() {
         .save(&Kept {
             conversation: talk.saved().clone(),
             read: kept.read,
+            history: kept.history,
         })
         .unwrap();
 
@@ -479,7 +480,7 @@ async fn a_message_that_arrives_while_a_new_group_cannot_be_read_is_read() {
     let events = world.runtime.subscribe();
     chat.say("while away").await;
     let group = GroupKey(chat.hex.clone());
-    let stored = || world.marmot.stored(&group, 0).ok().filter(|m| m.len() == 2);
+    let stored = || (world.marmot.stored(&group, 0, 1000).ok()).filter(|p| p.messages.len() == 2);
     within(30, || stored().map(|_| ())).await;
     let live = Subscribed {
         events,
@@ -530,7 +531,7 @@ async fn a_message_that_arrives_while_the_harness_starts_is_read() {
     // the prompt comes in a later second than the core subscribed.
     within(5, || (now() >= subscribed + 2).then_some(())).await;
     chat.say("new").await;
-    let stored = || world.marmot.stored(&group, 0).ok().filter(|m| m.len() == 2);
+    let stored = || (world.marmot.stored(&group, 0, 1000).ok()).filter(|p| p.messages.len() == 2);
     within(30, || stored().map(|_| ())).await;
     within(5, || (now() >= subscribed + 4).then_some(())).await;
     let (driver, _events, seen) = stub(false);
@@ -617,6 +618,7 @@ async fn a_send_that_went_out_before_a_crash_is_not_sent_again() {
         .save(&Kept {
             conversation: talk.saved().clone(),
             read: kept.read,
+            history: kept.history,
         })
         .unwrap();
 
@@ -935,7 +937,13 @@ async fn a_send_never_tried_is_sent_and_not_taken_for_an_older_one() {
     talk.emitted(words_done(text, &id, Vec::new()));
     let read = kept.read;
     let conversation = talk.saved().clone();
-    store.save(&Kept { conversation, read }).unwrap();
+    store
+        .save(&Kept {
+            conversation,
+            read,
+            ..Kept::default()
+        })
+        .unwrap();
 
     let (driver, _events, _) = stub(false);
     let core = world.start(driver);
@@ -996,7 +1004,13 @@ async fn a_send_tried_is_not_taken_for_an_older_one_like_it() {
     talk.attempting(&token.send, unix_now());
     let read = kept.read;
     let conversation = talk.saved().clone();
-    store.save(&Kept { conversation, read }).unwrap();
+    store
+        .save(&Kept {
+            conversation,
+            read,
+            ..Kept::default()
+        })
+        .unwrap();
 
     let (driver, _events, _) = stub(false);
     let core = world.start(driver);
@@ -1038,7 +1052,13 @@ async fn an_edit_that_went_out_before_a_crash_is_not_sent_again() {
     tokio::time::sleep(Duration::from_millis(1500)).await;
     let read = kept.read;
     let conversation = talk.saved().clone();
-    store.save(&Kept { conversation, read }).unwrap();
+    store
+        .save(&Kept {
+            conversation,
+            read,
+            ..Kept::default()
+        })
+        .unwrap();
 
     let (driver, _events, _) = stub(false);
     let core = world.start(driver);
@@ -1072,7 +1092,13 @@ async fn a_state_with_sends_tried_before_tokens_is_refused() {
     talk.attempting(&token.send, unix_now());
     let read = kept.read;
     let conversation = talk.saved().clone();
-    store.save(&Kept { conversation, read }).unwrap();
+    store
+        .save(&Kept {
+            conversation,
+            read,
+            ..Kept::default()
+        })
+        .unwrap();
     // As an older core left it: no salt.
     let mut file = json(&store.load().unwrap());
     file["conversation"].as_object_mut().unwrap().remove("salt");
@@ -1198,7 +1224,13 @@ async fn a_chats_backlog_does_not_hold_up_another() {
     open(&team_id, "b", 99);
     let read = kept.read;
     let conversation = talk.saved().clone();
-    store.save(&Kept { conversation, read }).unwrap();
+    store
+        .save(&Kept {
+            conversation,
+            read,
+            ..Kept::default()
+        })
+        .unwrap();
 
     let (driver, _events, _) = stub(false);
     let core = world.start(driver);

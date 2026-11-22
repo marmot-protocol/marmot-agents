@@ -3,32 +3,30 @@
 use marmot_agent_sim::{Action, BugSet, Family, RunName, campaign, generate};
 use std::collections::BTreeSet;
 
-// Review round 2. The old generator kept a message on its list still to be heard after a later
-// message of its chat was heard live, which (within MDK's contract) hears every message stored
-// before it: a later step spent on hearing it again did nothing.
+// Review round 2. The old generator kept a message on its list still to be heard after it was
+// heard, so a later step spent on hearing it again did nothing. Since MDK #3606, within its
+// contract, a message heard live brings only itself, once it is stored, and a notice of it again
+// is a step of its own (`Reannounce`): no `Hear` or `Ask` names a message twice, nor one not yet
+// stored.
 #[test]
-fn no_step_hears_again_what_a_live_message_already_brought() {
+fn no_step_hears_a_message_twice_or_before_it_is_stored() {
     for family in [Family::Live, Family::Mixed] {
         for index in 0..300 {
             let schedule = generate(&RunName::new(family, 0, index));
-            let chat = |msg: usize| schedule.messages[msg].chat;
-            let mut stored: Vec<usize> = Vec::new();
+            let mut stored: BTreeSet<usize> = BTreeSet::new();
             let mut heard: BTreeSet<usize> = BTreeSet::new();
             for (at, step) in schedule.steps.iter().enumerate() {
                 match *step {
-                    Action::Store { msg } => stored.push(msg),
+                    Action::Store { msg } => {
+                        stored.insert(msg);
+                    }
                     Action::Hear { msg } | Action::Ask { msg } => {
+                        let name = &schedule.name;
                         assert!(
-                            !heard.contains(&msg),
-                            "{}: step {at} hears m{msg} again",
-                            schedule.name
+                            stored.contains(&msg),
+                            "{name}: step {at} hears m{msg} unstored"
                         );
-                        let upto = stored.iter().position(|&m| m == msg).expect("stored");
-                        for &m in &stored[..=upto] {
-                            if chat(m) == chat(msg) {
-                                heard.insert(m);
-                            }
-                        }
+                        assert!(heard.insert(msg), "{name}: step {at} hears m{msg} again");
                     }
                     _ => {}
                 }

@@ -26,9 +26,10 @@ pub enum Family {
     Driver,
     /// All of the above, less often each.
     Mixed,
-    /// Beyond MDK's contract: a live message heard before it is stored, or out of storage order.
-    /// MDK emits a message only after storing it, in order (inferred from its account worker),
-    /// so this family is not part of the gate: it shows what the core would do.
+    /// Beyond MDK's contract: a live message heard before it is stored. MDK announces a message
+    /// only after storing it (its `MessageReceived`, since MDK #3606), so this family is not part
+    /// of the gate: it shows what the core would do. That MDK may announce messages out of
+    /// storage order, or again, is within its contract, and the gate's `live` family does both.
     Disorder,
     /// A send whose outcome is not known goes out long after, while the core tries it again.
     /// Beyond what the core once assumed, when it looked for such a send in what MDK stored and
@@ -85,18 +86,21 @@ impl Family {
     /// a message heard live takes the ones stored before it off the list still to be heard, and
     /// a `Hang` goes ahead of the moves still queued. Version 3 of `live` and `mixed`: reads that
     /// fail for a moment (`ReadFails`). Version 2 of `sends` and 4 of `mixed`: sends MDK drops
-    /// (`Rejected`) in place of lookups that fail, which the core no longer makes.
+    /// (`Rejected`) in place of lookups that fail, which the core no longer makes. Version 4 of
+    /// `live` and 5 of `mixed`, MDK's contract since #3606: a message heard live no longer has
+    /// those stored before it heard with it, the ones still to be heard are heard in any order,
+    /// MDK announces a stored message again (`Reannounce`), and no read of a live message's place
+    /// fails, since the core makes none.
     pub fn version(self) -> u32 {
         match self {
-            Family::Mixed => 4,
-            Family::Live => 3,
+            Family::Mixed => 5,
+            Family::Live => 4,
             Family::Driver | Family::Sends => 2,
             _ => 1,
         }
     }
 
-    /// Whether the simulated MDK keeps its contract: a message is heard only once it is stored,
-    /// and in storage order.
+    /// Whether the simulated MDK keeps its contract: a message is heard only once it is stored.
     pub fn within_contract(self) -> bool {
         self != Family::Disorder
     }
@@ -125,6 +129,7 @@ impl Family {
             Family::Live => Mix {
                 lag: 4,
                 late_hear: 6,
+                reannounce: 3,
                 crash: 1,
                 read: 4,
                 ..none
@@ -148,6 +153,7 @@ impl Family {
                 rejected: 1,
                 lag: 1,
                 late_hear: 2,
+                reannounce: 1,
                 read: 1,
                 refuse: 1,
                 slow: 1,
@@ -299,8 +305,6 @@ pub enum Outcome {
 pub enum ReadStep {
     /// Where a message's group is, as when its state cannot be read for a moment.
     Place,
-    /// A live message's place in storage order.
-    Order,
     /// What was stored after the read mark, in a catch-up.
     Stored,
     /// Which groups the agent is in, as a catch-up begins.
@@ -328,6 +332,12 @@ pub enum Action {
     },
     /// An answer or a control arrives live (`Ask(req)`).
     Ask {
+        /// The message.
+        msg: usize,
+    },
+    /// MDK announces a message it stored again, as its recovery may (`Reannounce(msg)`, MDK
+    /// #3606); nothing when it is not stored.
+    Reannounce {
         /// The message.
         msg: usize,
     },
@@ -394,12 +404,18 @@ pub struct BugSet {
     /// What the agent's words settle is ignored.
     #[serde(default)]
     pub settles_only_from_items: bool,
+    /// A live message moves the read mark to its place, as before MDK #3606.
+    #[serde(default)]
+    pub mark_from_live: bool,
 }
 
 impl BugSet {
     /// Whether any is put back.
     pub fn any(&self) -> bool {
-        self.save_after_send || self.retry_ambiguous_with_new_token || self.settles_only_from_items
+        self.save_after_send
+            || self.retry_ambiguous_with_new_token
+            || self.settles_only_from_items
+            || self.mark_from_live
     }
 }
 
@@ -455,6 +471,7 @@ struct Mix {
     read: u32,
     lag: u32,
     late_hear: u32,
+    reannounce: u32,
     refuse: u32,
     slow: u32,
     hang: u32,
@@ -481,14 +498,6 @@ pub fn generate(name: &RunName) -> Schedule {
             Action::Ask { msg }
         } else {
             Action::Hear { msg }
-        }
-    };
-    // A message heard live, within MDK's contract: every message of its chat stored before it is
-    // heard with it, so none of them is still to be heard.
-    let contract = name.family.within_contract();
-    let heard_live = |chat: u8, unheard: &mut [Vec<usize>]| {
-        if contract {
-            unheard[usize::from(chat)].clear();
         }
     };
     while steps.len() < length {
@@ -525,6 +534,11 @@ pub fn generate(name: &RunName) -> Schedule {
             mix.driver_stops,
             mix.late,
             mix.read,
+            if messages.is_empty() {
+                0
+            } else {
+                mix.reannounce
+            },
             2, // a restart, which does nothing while the core runs
         ];
         let mut down = |rng: &mut Rng| restart_in = Some(rng.below(4) as u32);
@@ -552,7 +566,6 @@ pub fn generate(name: &RunName) -> Schedule {
                 if mix.late_hear > 0 && rng.below(10) < u64::from(mix.late_hear) {
                     unheard[usize::from(chat)].push(msg);
                 } else {
-                    heard_live(chat, &mut unheard);
                     steps.push(hear(msg, &messages));
                 }
             }
@@ -561,11 +574,16 @@ pub fn generate(name: &RunName) -> Schedule {
                     .filter(|c| !unheard[*c].is_empty())
                     .collect();
                 let chat = rng.pick(&chats_waiting);
-                let msg = if mix.disorder > 0 && rng.one_in(2) {
-                    // The newest first, which MDK does not do.
-                    unheard[chat].pop().expect("not empty")
+                let msg = if mix.disorder > 0 {
+                    if rng.one_in(2) {
+                        unheard[chat].pop().expect("not empty")
+                    } else {
+                        unheard[chat].remove(0)
+                    }
                 } else {
-                    unheard[chat].remove(0)
+                    // Any of them: MDK need not announce them in storage order.
+                    let at = rng.below(unheard[chat].len() as u64) as usize;
+                    unheard[chat].remove(at)
                 };
                 if mix.disorder > 0 && !steps.contains(&Action::Store { msg }) {
                     steps.push(Action::Store { msg });
@@ -632,7 +650,6 @@ pub fn generate(name: &RunName) -> Schedule {
                     what: What::Prompt { approval: false },
                 });
                 steps.push(Action::Store { msg });
-                heard_live(chat, &mut unheard);
                 steps.push(Action::Hear { msg });
                 for _ in 0..rng.below(3) {
                     steps.push(Action::Emit {
@@ -654,12 +671,14 @@ pub fn generate(name: &RunName) -> Schedule {
                 },
             }),
             19 => steps.push(Action::ReadFails {
-                at: match rng.weighted(&[2, 1, 1, 1]) {
+                at: match rng.weighted(&[2, 1, 1]) {
                     0 => ReadStep::Place,
-                    1 => ReadStep::Order,
-                    2 => ReadStep::Stored,
+                    1 => ReadStep::Stored,
                     _ => ReadStep::Groups,
                 },
+            }),
+            20 => steps.push(Action::Reannounce {
+                msg: rng.below(messages.len() as u64) as usize,
             }),
             _ => steps.push(Action::Restart),
         }
