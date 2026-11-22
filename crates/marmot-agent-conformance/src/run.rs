@@ -182,15 +182,40 @@ impl<S: Subject> Run<S> {
     async fn handed(
         &mut self,
         what: &str,
-        done: impl Fn(&[Heard]) -> bool,
+        done: impl Fn(&Self, &[Heard]) -> bool,
     ) -> Result<(), Violation> {
-        if self.fake().wait_heard(self.patience, done).await {
-            return Ok(());
+        let deadline = tokio::time::Instant::now() + self.patience;
+        loop {
+            let heard = self.fake().heard();
+            if done(self, &heard) {
+                return Ok(());
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
         }
         self.half_lines()?;
         let v = broke("S11", format!("{what} returned before the harness had it"));
         self.check.record(v.clone());
         Err(v)
+    }
+
+    /// Whether, since `mark`, the harness serving `chat` read something and then died, so that it
+    /// may have died reading what the driver wrote for `chat`. A death of another chat's harness
+    /// does not count. `unknown` counts a harness that has served no chat yet: Pi's driver starts
+    /// one for a chat's first prompt, and it can die before it reads the prompt that names it.
+    fn died_reading(&self, mark: usize, chat: Option<&ChatId>, unknown: bool) -> bool {
+        let shared = self.subject.shared_harness();
+        self.fake().died_reading(mark, |tag| {
+            if shared {
+                return true;
+            }
+            match tag.and_then(|t| self.subject.chat_of(t)) {
+                Some(served) => chat == Some(&served),
+                None => unknown,
+            }
+        })
     }
 
     /// Sends a prompt from `chat` with `words`, which tell the fake what to do
@@ -214,7 +239,8 @@ impl<S: Subject> Run<S> {
         let message = MessageId(format!("m-{}", self.next_message));
         let text = format!("{} {} {words}", mark(chat_id), message.0);
         let chat_id_owned = ChatId::from(chat_id);
-        self.check.prompting(&message, &chat_id_owned, session);
+        let (heard, malformed) = (self.fake().heard(), self.fake().malformed());
+        (self.check).prompting(&message, &chat_id_owned, session, &heard, &malformed);
         let prompt = Prompt {
             message: message.clone(),
             text,
@@ -226,6 +252,7 @@ impl<S: Subject> Run<S> {
         };
         self.notice_deaths();
         let frames = self.fake().frames();
+        let mark = self.fake().mark();
         let returned = tokio::time::timeout(self.patience, self.driver.prompt(prompt)).await;
         let result = self.returned("a prompt", returned)?;
         if result.is_ok() {
@@ -233,14 +260,15 @@ impl<S: Subject> Run<S> {
                 self.check.harness_back(&chat_id_owned); // a chat's harness starts again
             }
             let token = format!(" {} ", message.0);
-            let fake = self.fake().clone();
             let loose = self.subject.loose() || self.loose;
             // A replay cannot say what it read: that it read more is then all there is to check.
-            // Nor can a harness that has died; `answer_after_death` checks what a driver does then.
-            self.handed("a prompt", move |heard| {
-                let read = fake.frames() > frames;
+            // Nor can a harness that died reading what was written for this prompt. A death
+            // before, or of another chat's harness, shows nothing of this prompt.
+            let chat = chat_id_owned.clone();
+            self.handed("a prompt", move |run, heard| {
+                let read = run.fake().frames() > frames;
                 (read && loose)
-                    || fake.deaths() > 0
+                    || run.died_reading(mark, Some(&chat), true)
                     || heard.iter().any(|h| {
                         matches!(h, Heard::Prompt { text, .. } if format!("{text} ").contains(&token))
                     })
@@ -264,7 +292,7 @@ impl<S: Subject> Run<S> {
         asked: &Emitted,
         allow: bool,
     ) -> Result<(RequestId, Result<(), Refusal>), Violation> {
-        let (given, expect) = match asked.event.body() {
+        let (given, expect, expect_text) = match asked.event.body() {
             Body::Approval(a) => {
                 let wanted = if allow { Effect::Allow } else { Effect::Deny };
                 let once = |c: &&marmot_agent_events::body::Choice| {
@@ -278,9 +306,16 @@ impl<S: Subject> Run<S> {
                 (
                     Given::Choice(choice.id.clone()),
                     Some(choice.effect == Effect::Allow),
+                    None,
                 )
             }
             Body::Question(q) => {
+                // The words the harness should hear for the first question: the label of the
+                // option chosen, or what was typed.
+                let words = q.questions().first().map(|asked| {
+                    let at = usize::from(!allow).min(asked.options.len().saturating_sub(1));
+                    (asked.options.get(at)).map_or_else(|| "yes".to_string(), |o| o.label.clone())
+                });
                 let replies = (q.questions().iter())
                     .map(|asked| {
                         let at = usize::from(!allow).min(asked.options.len().saturating_sub(1));
@@ -296,7 +331,7 @@ impl<S: Subject> Run<S> {
                         }
                     })
                     .collect();
-                (Given::Questions(replies), None)
+                (Given::Questions(replies), None, words)
             }
             _ => panic!("only an approval or a question takes an answer"),
         };
@@ -311,24 +346,22 @@ impl<S: Subject> Run<S> {
         };
         let before = self.answers_heard();
         let frames = self.fake().frames();
-        let deaths = self.fake().deaths();
+        let mark = self.fake().mark();
         let returned = tokio::time::timeout(self.patience, self.driver.answer(answer)).await;
         let result = self.returned("an answer", returned)?;
         self.check.requested(&request, &result);
         if result.is_ok() && self.subject.loose() {
-            let fake = self.fake().clone();
-            self.handed("an answer", move |_| fake.frames() > frames)
+            self.handed("an answer", move |run, _| run.fake().frames() > frames)
                 .await?;
         } else if result.is_ok() {
             if let Some(chat) = &chat {
-                self.check.expect_answer(chat, expect);
+                self.check.expect_answer(chat, expect, expect_text);
             }
-            // The harness heard it, or died on reading what the driver wrote after it was given,
-            // and cannot say what it heard. A harness that had died before cannot have read it.
-            let fake = self.fake().clone();
-            self.handed("an answer", move |heard| {
-                let died_reading = fake.frames() > frames && fake.deaths() > deaths;
-                count_answers(heard) > before || died_reading
+            // The harness heard it, or the chat's own harness died on reading what the driver
+            // wrote after it was given, and cannot say what it heard. A harness that had died
+            // before cannot have read it, nor can another chat's.
+            self.handed("an answer", move |run, heard| {
+                count_answers(heard) > before || run.died_reading(mark, chat.as_ref(), false)
             })
             .await?;
         }
@@ -360,8 +393,7 @@ impl<S: Subject> Run<S> {
         if result.is_ok() {
             // A control may be a harness's own message that it never answers, or a new process
             // (Pi, for a chat with none): handed is that the harness read something more.
-            let fake = self.fake().clone();
-            self.handed("a control", move |_| fake.frames() > frames)
+            self.handed("a control", move |run, _| run.fake().frames() > frames)
                 .await?;
         }
         Ok((request, result))

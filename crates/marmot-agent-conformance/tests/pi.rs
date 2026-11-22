@@ -1,8 +1,8 @@
 //! The Pi driver against the conformance suite. Pi's driver starts a program for each chat; here
 //! that program is the relay, and each chat's Pi is a fake in this test program.
 
-use marmot_agent_conformance::fake::Fake;
 use marmot_agent_conformance::fake::pi::Server;
+use marmot_agent_conformance::fake::{Fake, Progress};
 use marmot_agent_conformance::{Subject, scenarios};
 use marmot_agent_driver::ChatId;
 use marmot_agent_pi::{Pi, Setup};
@@ -137,6 +137,7 @@ async fn faults_are_caught() {
         Fault::ReuseItem,
         Fault::ResumeUnasked,
         Fault::TakeUnhanded,
+        Fault::SwallowPrompt,
     ] {
         let found = faults::caught(subject(), fault, None).await;
         if !fault.caught_as(&found) {
@@ -157,8 +158,9 @@ async fn replays_recordings() {
             .join(name);
         let recording = std::fs::read_to_string(path).expect("the recording");
         let fake = Fake::new();
-        let left = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
-        let server = Server::replaying(&fake, &recording, left.clone()).expect("the fake listens");
+        let progress = std::sync::Arc::new(Progress::default());
+        let server =
+            Server::replaying(&fake, &recording, progress.clone()).expect("the fake listens");
         let subject = OnFake {
             fake,
             server,
@@ -166,29 +168,26 @@ async fn replays_recordings() {
         };
         let found = scenarios::replay(subject, "as recorded").await;
         found.unwrap_or_else(|v| panic!("{name}: {v}"));
-        let left = left.load(std::sync::atomic::Ordering::SeqCst);
+        let left = progress.left();
         assert_eq!(left, 0, "{name}: {left} recorded messages never played");
     }
 }
 
 // A replay plays on only when the driver answers as recorded: answered the other way, the recording
-// stops, and the turn never ends.
+// stops at the dialog, and the turn never ends.
 #[tokio::test]
 async fn a_replay_stops_on_another_answer() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/recordings/pi/gate_allowed.jsonl");
     let recording = std::fs::read_to_string(path).expect("the recording");
     let fake = Fake::new();
-    let left = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
-    let server = Server::replaying(&fake, &recording, left).expect("the fake listens");
+    let progress = std::sync::Arc::new(Progress::default());
+    let server = Server::replaying(&fake, &recording, progress.clone()).expect("the fake listens");
     let subject = OnFake {
         fake,
         server,
         replay: true,
     };
-    let found = scenarios::replay_answering(subject, "as recorded", false).await;
-    assert!(
-        found.is_err(),
-        "an answer the other way played the recording on"
-    );
+    let found = scenarios::replay_refused(subject, "as recorded", &progress).await;
+    found.unwrap_or_else(|wrong| panic!("{wrong}"));
 }

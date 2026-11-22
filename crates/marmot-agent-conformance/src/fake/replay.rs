@@ -16,6 +16,26 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+/// How far a replay got, for a test to see: how many recorded messages are still to be played,
+/// and how many answers it turned away as not the recorded one.
+#[derive(Debug, Default)]
+pub struct Progress {
+    left: AtomicUsize,
+    refused: AtomicUsize,
+}
+
+impl Progress {
+    /// Recorded messages not yet played.
+    pub fn left(&self) -> usize {
+        self.left.load(Ordering::SeqCst)
+    }
+
+    /// Answers to the harness's own requests that were not the recorded one.
+    pub fn refused(&self) -> usize {
+        self.refused.load(Ordering::SeqCst)
+    }
+}
+
 /// Replays one recording, with a fallback for what it does not hold.
 pub struct Replay<P> {
     lines: Vec<(bool, Value)>,
@@ -23,8 +43,8 @@ pub struct Replay<P> {
     /// The driver's id for each recorded request id, as text.
     ids: HashMap<String, Value>,
     fallback: P,
-    /// How many recorded messages are still to be played, for a test to see that all were.
-    left: Arc<AtomicUsize>,
+    /// How far it got, for a test to see that all was played.
+    progress: Arc<Progress>,
 }
 
 impl<P: Protocol> Replay<P> {
@@ -37,21 +57,24 @@ impl<P: Protocol> Replay<P> {
             .filter(|r| r["msg"].get("_recorder").is_none())
             .map(|r| (r["dir"] == "out", r["msg"].clone()))
             .collect();
-        let left = Arc::new(AtomicUsize::new(lines.len()));
+        let progress = Arc::new(Progress {
+            left: AtomicUsize::new(lines.len()),
+            refused: AtomicUsize::new(0),
+        });
         Self {
             lines,
             at: 0,
             ids: HashMap::new(),
             fallback,
-            left,
+            progress,
         }
     }
 
-    /// Counts what is left to play in `left`, which a test keeps: a replay that played nothing
+    /// Counts how far it got in `progress`, which a test keeps: a replay that played nothing
     /// passes nothing.
-    pub fn counting(mut self, left: Arc<AtomicUsize>) -> Self {
-        left.store(self.lines.len(), Ordering::SeqCst);
-        self.left = left;
+    pub fn counting(mut self, progress: Arc<Progress>) -> Self {
+        progress.left.store(self.lines.len(), Ordering::SeqCst);
+        self.progress = progress;
         self
     }
 }
@@ -59,11 +82,16 @@ impl<P: Protocol> Replay<P> {
 impl<P: Protocol> Protocol for Replay<P> {
     fn hear(&mut self, frame: &Value, out: &mut Outbox, heard: &mut Vec<Heard>) {
         let next = (self.at..self.lines.len()).find(|&i| self.lines[i].0);
-        let matched = next.filter(|&i| {
+        let kind = next.filter(|&i| key(&self.lines[i].1) == key(frame));
+        let matched = kind.filter(|&i| {
             let recorded = &self.lines[i].1;
-            key(recorded) == key(frame) && (!answers_harness(recorded) || same(recorded, frame))
+            !answers_harness(recorded) || same(recorded, frame)
         });
         let Some(at) = matched else {
+            if kind.is_some() {
+                // The answer the recording waits for, given otherwise: nothing more is played.
+                self.progress.refused.fetch_add(1, Ordering::SeqCst);
+            }
             self.fallback.hear(frame, out, heard);
             return;
         };
@@ -88,7 +116,7 @@ impl<P: Protocol> Protocol for Replay<P> {
             }
         }
         let left = self.lines.len().saturating_sub(self.at);
-        self.left.store(left, Ordering::SeqCst);
+        self.progress.left.store(left, Ordering::SeqCst);
     }
 
     fn ended(&mut self) {

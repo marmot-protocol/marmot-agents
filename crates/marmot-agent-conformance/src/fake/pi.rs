@@ -234,6 +234,7 @@ impl Protocol for Pi {
                 heard.push(Heard::Prompt {
                     session: self.session.clone(),
                     text: text.clone(),
+                    refused: false,
                 });
                 if let Some(run) = &mut self.run {
                     run.steered.push(text);
@@ -335,14 +336,14 @@ impl Server {
     pub fn replaying(
         fake: &Fake,
         recording: &str,
-        left: Arc<std::sync::atomic::AtomicUsize>,
+        progress: Arc<super::Progress>,
     ) -> std::io::Result<Self> {
-        Self::serving(fake, Some((recording.to_string(), left)))
+        Self::serving(fake, Some((recording.to_string(), progress)))
     }
 
     fn serving(
         fake: &Fake,
-        recording: Option<(String, Arc<std::sync::atomic::AtomicUsize>)>,
+        recording: Option<(String, Arc<super::Progress>)>,
     ) -> std::io::Result<Self> {
         let dir = tempfile::tempdir()?;
         std::fs::write(dir.path().join("relay.py"), include_str!("relay.py"))?;
@@ -367,8 +368,8 @@ impl Server {
                         .collect();
                     let pi = Pi::new(&args, &tag, store);
                     let protocol: Box<dyn Protocol> = match &recording {
-                        Some((text, left)) => {
-                            Box::new(super::Replay::new(text, pi).counting(left.clone()))
+                        Some((text, progress)) => {
+                            Box::new(super::Replay::new(text, pi).counting(progress.clone()))
                         }
                         None => Box::new(pi),
                     };

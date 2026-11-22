@@ -11,7 +11,8 @@
 //! each check catches its own.
 //!
 //! The drivers are run against it in this crate's tests: `tests/codex.rs`, `tests/acp.rs`,
-//! `tests/pi.rs`, and the faults in `tests/faults.rs`. See `README.md` beside this crate.
+//! `tests/pi.rs`, each with the deliberate faults it shows; the fakes themselves in
+//! `tests/fake.rs`. See `README.md` beside this crate.
 
 pub mod check;
 pub mod fake;

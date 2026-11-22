@@ -18,7 +18,7 @@ pub mod codex;
 pub mod pi;
 mod replay;
 
-pub use replay::Replay;
+pub use replay::{Progress, Replay};
 
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -58,8 +58,14 @@ pub struct Knobs {
 pub enum Heard {
     /// A session opened: a new one, or one taken up again by its id.
     Opened { session: String, resumed: bool },
-    /// A prompt's text, in a session: a new turn, or one added to a running turn.
-    Prompt { session: String, text: String },
+    /// A prompt's text, in a session: a new turn, or one added to a running turn. `refused` when
+    /// the harness turned it away, as when the session is busy: it reached the harness all the
+    /// same, so a copy refused still counts against S4.
+    Prompt {
+        session: String,
+        text: String,
+        refused: bool,
+    },
     /// An answer to an approval (allowed or not) or a question (the text typed or chosen), in the
     /// session that asked.
     Answer {
@@ -193,6 +199,13 @@ pub fn is_reply(frame: &Value) -> bool {
         || frame["type"] == "response"
 }
 
+/// One thing a harness process did, by its tag: read a line, or died.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Did {
+    Read(Option<String>),
+    Died(Option<String>),
+}
+
 #[derive(Default)]
 struct Shared {
     knobs: Knobs,
@@ -202,7 +215,13 @@ struct Shared {
     deaths: usize,
     /// The tag of each process that died, not yet taken.
     dead: Vec<Option<String>>,
+    /// Every line read and every death, in order, with the tag of the process.
+    log: Vec<Did>,
 }
+
+/// How long a killed harness may go on writing what it had said before its output is cut off. A
+/// driver that stops reading leaves the harness blocked in a write; a kill still ends it.
+const KILL_GRACE: Duration = Duration::from_millis(100);
 
 /// Which running harnesses a kill is for: all of them, or those serving one tag (Pi's chat key).
 #[derive(Clone, Debug, Default)]
@@ -274,6 +293,25 @@ impl Fake {
         self.shared().deaths
     }
 
+    /// Where the record of lines read and deaths stands now, for [`Fake::died_reading`].
+    pub fn mark(&self) -> usize {
+        self.shared().log.len()
+    }
+
+    /// Whether, since `mark`, a harness process that `mine` accepts by its tag read a line and
+    /// then died: it may have died reading what the driver wrote, and cannot say what it heard.
+    /// A process that died, or read, for another chat does not count.
+    pub fn died_reading(&self, mark: usize, mine: impl Fn(Option<&str>) -> bool) -> bool {
+        // Copied, so `mine` runs with the fake unlocked.
+        let since = self.shared().log.get(mark..).unwrap_or_default().to_vec();
+        since.iter().enumerate().any(|(at, did)| match did {
+            Did::Read(tag) if mine(tag.as_deref()) => since[at..]
+                .iter()
+                .any(|later| *later == Did::Died(tag.clone())),
+            _ => false,
+        })
+    }
+
     /// The processes that died since this was last asked, by their tags.
     pub fn take_dead(&self) -> Vec<Option<String>> {
         std::mem::take(&mut self.shared().dead)
@@ -341,7 +379,7 @@ async fn engine<P: Protocol>(
     kill.mark_unchanged();
     let mut turned = fake.turned.subscribe();
     let (tx, rx) = mpsc::unbounded_channel();
-    let writes = tokio::spawn(write_loop(writer, rx, fake.clone()));
+    let mut writes = tokio::spawn(write_loop(writer, rx, fake.clone()));
     let mut reader = BufReader::new(reader);
     // One line as it is read; kept across a wait given up on, so nothing of it is lost.
     let mut line = Vec::new();
@@ -353,6 +391,7 @@ async fn engine<P: Protocol>(
     let mut dead = dispatch(out, &fake.knobs(), &tx, &mut replies);
     // Frames held by `Knobs::never`, to be heard once taken off it.
     let mut held: Vec<Value> = Vec::new();
+    let mut killed = false;
     'process: while !dead {
         turned.borrow_and_update();
         let knobs = fake.knobs();
@@ -377,6 +416,7 @@ async fn engine<P: Protocol>(
                 if k.tag.is_none() || k.tag == tag {
                     let _ = tx.send(Write::Die);
                     dead = true;
+                    killed = true;
                     break 'process;
                 }
                 continue;
@@ -394,6 +434,7 @@ async fn engine<P: Protocol>(
         let total = {
             let mut shared = fake.shared();
             shared.frames += 1;
+            shared.log.push(Did::Read(tag.clone()));
             shared.frames
         };
         let Ok(frame) = serde_json::from_str::<Value>(&text) else {
@@ -415,12 +456,22 @@ async fn engine<P: Protocol>(
     protocol.ended();
     drop(tx);
     drop(reader);
-    let _ = writes.await;
+    if killed {
+        // A process killed in the middle of a write that the driver no longer reads is cut off
+        // there; one that dies by its own script writes what it said first.
+        if tokio::time::timeout(KILL_GRACE, &mut writes).await.is_err() {
+            writes.abort();
+            let _ = writes.await;
+        }
+    } else {
+        let _ = writes.await;
+    }
     // Counted once both ends are closed, so a driver that writes after a death is seen counts
     // as writing to a harness that has gone.
     if dead {
         let mut shared = fake.shared();
         shared.deaths += 1;
+        shared.log.push(Did::Died(tag.clone()));
         shared.dead.push(tag);
     }
 }

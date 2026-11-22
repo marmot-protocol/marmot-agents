@@ -1,7 +1,9 @@
 //! The Codex driver against the conformance suite, on the fake `codex app-server`.
 
 use marmot_agent_codex::{Codex, Setup};
-use marmot_agent_conformance::fake::{Fake, Pending, Protocol, Replay, Tap, codex, injector};
+use marmot_agent_conformance::fake::{
+    Fake, Pending, Progress, Protocol, Replay, Tap, codex, injector,
+};
 use marmot_agent_conformance::faults::{self, Fault};
 use marmot_agent_conformance::{Subject, scenarios};
 use marmot_agent_driver::ChatId;
@@ -16,8 +18,8 @@ struct OnFake {
     fake: Fake,
     store: codex::Shared,
     recording: Option<String>,
-    /// For a replay: how much of the recording is left to play.
-    left: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// For a replay: how far it got.
+    progress: std::sync::Arc<Progress>,
     pending: Pending,
 }
 
@@ -30,7 +32,7 @@ impl Subject for OnFake {
         let (driver_reads, driver_writes) = tokio::io::split(driver_side);
         let codex = codex::Codex::new(self.store.clone());
         let protocol: Box<dyn Protocol> = match &self.recording {
-            Some(text) => Box::new(Replay::new(text, codex).counting(self.left.clone())),
+            Some(text) => Box::new(Replay::new(text, codex).counting(self.progress.clone())),
             None => Box::new(codex),
         };
         self.fake.serve(fake_reads, fake_writes, protocol, None);
@@ -99,24 +101,28 @@ fn recording(name: &str) -> String {
 #[tokio::test]
 async fn replays_recordings() {
     for name in ["simple.jsonl", "approval_allowed.jsonl", "command.jsonl"] {
-        let left = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+        let progress = std::sync::Arc::new(Progress::default());
         let subject = OnFake {
             recording: Some(recording(name)),
-            left: left.clone(),
+            progress: progress.clone(),
             ..OnFake::default()
         };
         let found = scenarios::replay(subject, "as recorded").await;
         found.unwrap_or_else(|v| panic!("{name}: {v}"));
-        let left = left.load(std::sync::atomic::Ordering::SeqCst);
+        let left = progress.left();
         assert_eq!(left, 0, "{name}: {left} recorded messages never played");
     }
 }
 
-// Each deliberate fault is caught by the scenario meant for it, and as the property it breaks.
+// Each deliberate fault is caught by the scenario meant for it, and as the property it breaks, but
+// those only a harness for each chat can show (Pi's test runs them).
 #[tokio::test]
 async fn every_fault_is_caught() {
     let mut missed = Vec::new();
-    for fault in Fault::ALL {
+    for fault in Fault::ALL
+        .into_iter()
+        .filter(|f| !f.needs_a_harness_per_chat())
+    {
         let subject = OnFake::default();
         let inject = injector(&subject.pending);
         let found = faults::caught(subject, fault, Some(inject)).await;
@@ -131,13 +137,15 @@ async fn every_fault_is_caught() {
 }
 
 // A replay plays on only when the driver answers as recorded: refused, the recording that allowed
-// stops, and the turn never ends.
+// stops at the approval, and the turn never ends.
 #[tokio::test]
 async fn a_replay_stops_on_another_answer() {
+    let progress = std::sync::Arc::new(Progress::default());
     let subject = OnFake {
         recording: Some(recording("approval_allowed.jsonl")),
+        progress: progress.clone(),
         ..OnFake::default()
     };
-    let found = scenarios::replay_answering(subject, "as recorded", false).await;
-    assert!(found.is_err(), "a refused approval played the recording on");
+    let found = scenarios::replay_refused(subject, "as recorded", &progress).await;
+    found.unwrap_or_else(|wrong| panic!("{wrong}"));
 }

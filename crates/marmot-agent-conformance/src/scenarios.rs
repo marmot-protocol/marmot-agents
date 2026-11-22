@@ -3,7 +3,7 @@
 //! only what it alone can tell, such as that a named session was taken up.
 
 use crate::check::{Violation, broke};
-use crate::fake::{Heard, Knobs};
+use crate::fake::{Heard, Knobs, Progress};
 use crate::run::{Run, Subject, turn_ended, waiting};
 use marmot_agent_driver::{ChatId, Emitted, MessageId, Output};
 use marmot_agent_events::{Body, State};
@@ -248,11 +248,23 @@ pub async fn dies_with_requests_pending<S: Subject>(subject: S) -> Result<(), Vi
     let turn = run.wait("L2", "chat 1's turn", turn_of(&sleeping)).await?;
     let turn = turn.event.header().turn.clone().expect("a turn has an id");
     let fake = run.subject.fake().clone();
+    let deaths = fake.deaths();
     fake.set_knobs(Knobs {
         die_after: Some(fake.frames() + 1),
         ..Knobs::default()
     });
+    // The driver may take the interrupt or refuse it once the harness has gone, but it must write
+    // it: a harness that never read it never died, and nothing below would be checked.
     let _ = run.interrupt("c-1", &turn).await?;
+    if !fake
+        .wait_heard(run.patience, |_| fake.deaths() > deaths)
+        .await
+    {
+        return Err(broke(
+            "L2",
+            "the harness did not die on the interrupt, so nothing was checked",
+        ));
+    }
     run.wait(
         "S2",
         "chat 1's turn's end, after the harness died",
@@ -419,9 +431,11 @@ pub async fn restart<S: Subject>(subject: S) -> Result<(), Violation> {
     run.checkpoint().await?;
     let heard = run.subject.fake().heard();
     let went = heard.iter().rev().find_map(|h| match h {
-        Heard::Prompt { session, text } if text.contains(&format!(" {} ", more.0)) => {
-            Some(session.clone())
-        }
+        Heard::Prompt {
+            session,
+            text,
+            refused: false,
+        } if text.contains(&format!(" {} ", more.0)) => Some(session.clone()),
         _ => None,
     });
     if went.as_ref() != Some(&session) {
@@ -458,7 +472,8 @@ async fn resumes<S: Subject>(run: &mut Run<S>, session: &str) -> Result<(), Viol
 }
 
 /// A new session for a chat: settled once, by the new session (S1); the next prompt goes to it
-/// (S12); and another chat naming the old session is refused (S5).
+/// (S12), and the session a prompt named before it is not taken up again (S12); and another
+/// chat naming the old session is refused (S5).
 pub async fn new_session<S: Subject>(subject: S) -> Result<(), Violation> {
     let mut run = Run::start(subject).await;
     let first = taken(run.prompt("c-1", "hello").await?, "the first prompt")?;
@@ -467,6 +482,14 @@ pub async fn new_session<S: Subject>(subject: S) -> Result<(), Violation> {
     let chat = ChatId::from("c-1");
     let old = (run.check.session_of(&chat).cloned())
         .ok_or_else(|| broke("L2", "the chat's session was never shown"))?;
+    // A prompt naming the chat's own session, as the core names it (D-065): it may take it up,
+    // but that leaves no later prompt free to.
+    let named = taken(
+        run.prompt_in("c-1", "still here", Some(&old)).await?,
+        "a prompt naming the chat's session",
+    )?;
+    run.wait("L2", "that turn's end", ended_turn_of(&named))
+        .await?;
     let (request, result) = run.new_session("c-1", Some(&old)).await?;
     taken(result, "the new session")?;
     let fresh = run
@@ -492,9 +515,11 @@ pub async fn new_session<S: Subject>(subject: S) -> Result<(), Violation> {
     run.checkpoint().await?;
     let heard = run.subject.fake().heard();
     let went = heard.iter().rev().find_map(|h| match h {
-        Heard::Prompt { session, text } if text.contains(&format!(" {} ", next.0)) => {
-            Some(session.clone())
-        }
+        Heard::Prompt {
+            session,
+            text,
+            refused: false,
+        } if text.contains(&format!(" {} ", next.0)) => Some(session.clone()),
         _ => None,
     });
     if went.as_deref() != Some(new.as_str()) {
@@ -611,21 +636,7 @@ pub async fn dies_at_every_step<S: Subject>(subject: impl Fn() -> S) -> Result<(
 /// Replays a recording through the driver: one prompt, every approval allowed, until its turn
 /// ends. The subject's fake is a [`Replay`](crate::fake::Replay).
 pub async fn replay<S: Subject>(subject: S, words: &str) -> Result<(), Violation> {
-    replay_answering(subject, words, true).await
-}
-
-/// Replays a recording, answering every approval as `allow` says. A recording that allowed one
-/// is not played on when the driver refuses it instead: that the turn never ends shows the replay
-/// checks what the driver answers.
-pub async fn replay_answering<S: Subject>(
-    subject: S,
-    words: &str,
-    allow: bool,
-) -> Result<(), Violation> {
     let mut run = Run::start(subject).await;
-    if !allow {
-        run.patience = Duration::from_secs(2);
-    }
     let m = taken(run.prompt("c-1", words).await?, "the prompt")?;
     loop {
         let e = run
@@ -636,9 +647,58 @@ pub async fn replay_answering<S: Subject>(
         if !waiting(&e) {
             break;
         }
-        taken(run.answer(&e, allow).await?.1, "the answer")?;
+        taken(run.answer(&e, true).await?.1, "the answer")?;
     }
     run.drain(Duration::from_millis(100)).await;
     run.check.all_settled();
     run.ok()
+}
+
+/// Replays a recording that allowed its first approval, refusing it instead, to show the replay
+/// checks what the driver answers. Gives back what is wrong, if the test shows nothing: the prompt
+/// must be taken and the approval asked, as recorded; the answer must be taken, reach the replay
+/// and be turned away there as not the recorded one; and nothing more of the recording may play,
+/// so the turn never ends. `progress` is the replay's own count.
+pub async fn replay_refused<S: Subject>(
+    subject: S,
+    words: &str,
+    progress: &Progress,
+) -> Result<(), String> {
+    let mut run = Run::start(subject).await;
+    run.patience = Duration::from_secs(2);
+    let found = async {
+        let m = taken(run.prompt("c-1", words).await?, "the prompt")?;
+        let asked = run
+            .until("L2", "the recorded approval", |e| {
+                waiting(e) || (turn_ended(e) && e.prompts.contains(&m))
+            })
+            .await?;
+        Ok::<_, Violation>((m, asked))
+    }
+    .await;
+    let (m, asked) = found.map_err(|v| format!("before the approval: {v}"))?;
+    if !waiting(&asked) {
+        return Err("the recorded turn ended before its approval".into());
+    }
+    let (left, refused) = (progress.left(), progress.refused());
+    let (_, result) = (run.answer(&asked, false).await).map_err(|v| format!("the answer: {v}"))?;
+    result.map_err(|r| format!("the answer was refused: {r:?}"))?;
+    if progress.refused() <= refused {
+        return Err("the replay never turned the other answer away".into());
+    }
+    let ended = run
+        .until("L2", "the recorded turn's end", ended_turn_of(&m))
+        .await;
+    match ended {
+        Ok(_) => return Err("the turn ended after the other answer".into()),
+        Err(v) if v.property == "L2" && v.detail.ends_with("never came") => {}
+        Err(v) => return Err(format!("after the other answer: {v}")),
+    }
+    if progress.left() != left {
+        let played = left.saturating_sub(progress.left());
+        return Err(format!(
+            "{played} recorded messages played after the other answer"
+        ));
+    }
+    Ok(())
 }

@@ -241,13 +241,16 @@ impl Protocol for Codex {
                     .as_str()
                     .unwrap_or_default()
                     .to_string();
-                if !matches!(self.threads.get(&thread), Some(None)) {
-                    return Self::refuse(id, out); // no such thread here, or a turn running
-                }
+                // Heard even when refused: a copy turned away still reached the harness.
+                let refused = !matches!(self.threads.get(&thread), Some(None));
                 heard.push(Heard::Prompt {
                     session: thread.clone(),
                     text: text.clone(),
+                    refused,
                 });
+                if refused {
+                    return Self::refuse(id, out); // no such thread here, or a turn running
+                }
                 self.start_turn(id, &thread, &text, out);
             }
             "turn/steer" => {
@@ -255,18 +258,20 @@ impl Protocol for Codex {
                     .as_str()
                     .unwrap_or_default()
                     .to_string();
-                let Some(Some(turn)) = self.threads.get_mut(&thread) else {
-                    return Self::refuse(id, out);
+                let running = match self.threads.get_mut(&thread) {
+                    Some(Some(turn)) if params["expectedTurnId"] == turn.id.as_str() => Some(turn),
+                    _ => None,
                 };
-                if params["expectedTurnId"] != turn.id.as_str() {
-                    return Self::refuse(id, out);
-                }
-                turn.steered.push(text.clone());
-                out.reply(json!({"id": id, "result": {"turnId": turn.id}}));
                 heard.push(Heard::Prompt {
                     session: thread,
-                    text,
+                    text: text.clone(),
+                    refused: running.is_none(),
                 });
+                let Some(turn) = running else {
+                    return Self::refuse(id, out); // no turn running, or another one
+                };
+                turn.steered.push(text);
+                out.reply(json!({"id": id, "result": {"turnId": turn.id}}));
             }
             "turn/interrupt" => {
                 let running = matches!(self.threads.get(&thread), Some(Some(t)) if params["turnId"] == t.id.as_str());

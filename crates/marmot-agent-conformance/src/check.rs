@@ -9,10 +9,10 @@
 //! | --- | --- |
 //! | S1 | Each answer and control is settled at most once: by a refusal, or by the `settles` of one event that is not a message, of its own chat. An event the driver made up, with no native message (D-059, point 3), such as an item it closes when the harness stops, shows no effect and settles nothing, unless it is an error that settles it as failed. At the end, each request the driver took is settled, unless the driver ended, when the core settles it. A request from before a restart is never settled after it. |
 //! | S2 | After the harness stops, every item of the chats it served is closed, but for the session's own item: a session outlives its harness (Pi's driver takes it up again in a new Pi), and when the driver ends the core closes what is left (D-034). |
-//! | S4 | No prompt reaches the harness twice. |
-//! | S5 | Every event names its chat, and a session, a turn and an item stay with the chat they were first seen in. An event whose text carries a chat's mark is that chat's, as is every prompt a turn names. An answer reaches the harness in the session of its own chat, and with what was chosen. |
+//! | S4 | No prompt reaches the harness twice; a copy the harness refused counts, since it reached it. |
+//! | S5 | Every event names its chat, and a session, a turn and an item id stay with the chat they were first seen in. Every chat mark an event's text carries is its own chat's, as is every prompt a turn names. An answer reaches the harness in the session of its own chat, and with what was chosen: allowed or not, or the option's words. |
 //! | S11 | A request returns, and once it has returned the harness has it, with the driver not polled again. No line the harness reads is half a message. Dropping the wait for an event at any point loses nothing (the scenario that drops waits checks what arrives). |
-//! | S12 | The harness takes up a session again only when a prompt named it, or when it was the chat's current session as the chat's last prompt was made (a driver restarting a harness that died). Not the session a resume itself just made current. Never a session no chat had. |
+//! | S12 | The harness takes up a session again only when the chat's last prompt named it, or when it was the chat's current session as that prompt was made (a driver restarting a harness that died). Not a session an earlier prompt named, nor the session a resume itself just made current. Never a session no chat had. What the harness heard is checked before each prompt, against what the prompts before it allowed. |
 //! | S13 | An item id, once closed, is never used again in its chat, and an id from before a restart is never used after it; only a session's own item returns with its session. An item keeps its session. |
 //! | SEQ | `seq` rises within a session (D-059, point 4). Not in the property table; named here so a search finds it. |
 
@@ -52,11 +52,34 @@ pub fn mark(chat: &str) -> String {
     format!("<<{chat}>>")
 }
 
-/// The chat whose mark a text carries.
+/// The chat whose mark a text carries first: for a prompt, its own chat.
 pub fn marked_chat(text: &str) -> Option<String> {
-    let start = text.find("<<")? + 2;
-    let end = start + text[start..].find(">>")?;
-    Some(text[start..end].to_string())
+    marked_chats(text).into_iter().next()
+}
+
+/// Every chat whose mark a text carries, in order.
+pub fn marked_chats(text: &str) -> Vec<String> {
+    let mut chats = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("<<") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find(">>") else {
+            break;
+        };
+        chats.push(after[..end].to_string());
+        rest = &after[end + 2..];
+    }
+    chats
+}
+
+/// An answer the harness should hear.
+#[derive(Debug)]
+struct Expected {
+    chat: ChatId,
+    /// Allowed or not, for an approval.
+    allow: Option<bool>,
+    /// What was chosen or typed, for a question.
+    text: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,10 +110,13 @@ struct Item {
 pub struct Checker {
     requests: HashMap<RequestId, Request>,
     prompts: HashMap<MessageId, ChatId>,
-    /// Sessions a prompt named, by chat.
-    named: HashMap<ChatId, HashSet<String>>,
+    /// The session the chat's last prompt named, if it named one: only that prompt may take it
+    /// up.
+    named: HashMap<ChatId, String>,
     owners: HashMap<String, ChatId>,
     turns: HashMap<String, ChatId>,
+    /// The chat each item id was first seen in, across restarts.
+    item_chats: HashMap<String, ChatId>,
     items: HashMap<(ChatId, String), Item>,
     /// Item ids from before a restart, with the session of a session's item.
     retired: HashMap<(ChatId, String), Option<String>>,
@@ -104,8 +130,8 @@ pub struct Checker {
     stopped: HashSet<ChatId>,
     everything: bool,
     ended: bool,
-    /// What answers the harness should hear: the chat, and what was chosen.
-    expected: Vec<(ChatId, Option<bool>)>,
+    /// What answers the harness should hear.
+    expected: Vec<Expected>,
     /// How much of what the harness heard has been checked.
     heard_at: usize,
     prompts_heard: HashSet<String>,
@@ -151,17 +177,27 @@ impl Checker {
 
     // -- what the suite asks
 
-    /// A prompt is about to be handed to the driver.
-    pub fn prompting(&mut self, message: &MessageId, chat: &ChatId, session: Option<&str>) {
+    /// A prompt is about to be handed to the driver. What the harness heard so far is checked
+    /// first (`heard`, `malformed`), against what the earlier prompts allowed, since this one
+    /// changes what a resume may take up.
+    pub fn prompting(
+        &mut self,
+        message: &MessageId,
+        chat: &ChatId,
+        session: Option<&str>,
+        heard: &[Heard],
+        malformed: &[String],
+    ) {
+        self.heard(heard, malformed);
         self.prompts.insert(message.clone(), chat.clone());
         match self.current.get(chat) {
             Some(current) => self.resumable.insert(chat.clone(), current.clone()),
             None => self.resumable.remove(chat),
         };
-        if let Some(session) = session {
-            let named = self.named.entry(chat.clone()).or_default();
-            named.insert(session.to_string());
-        }
+        match session {
+            Some(session) => self.named.insert(chat.clone(), session.to_string()),
+            None => self.named.remove(chat),
+        };
     }
 
     /// An answer or a control for `chat` is about to be handed to the driver.
@@ -177,9 +213,14 @@ impl Checker {
         );
     }
 
-    /// The harness should hear an answer in `chat`'s session: allowed or not, for an approval.
-    pub fn expect_answer(&mut self, chat: &ChatId, allow: Option<bool>) {
-        self.expected.push((chat.clone(), allow));
+    /// The harness should hear an answer in `chat`'s session: allowed or not, for an approval;
+    /// what was chosen or typed, for a question.
+    pub fn expect_answer(&mut self, chat: &ChatId, allow: Option<bool>, text: Option<String>) {
+        self.expected.push(Expected {
+            chat: chat.clone(),
+            allow,
+            text,
+        });
     }
 
     /// The driver answered an answer or a control.
@@ -287,11 +328,21 @@ impl Checker {
                 }
             }
         }
-        if let Some(marked) = marked_chat(&header.text)
-            && marked != chat.0
-        {
-            let detail = format!("words from chat {marked} shown in {chat:?} (item {item})");
-            self.fail("S5", detail);
+        for marked in marked_chats(&header.text) {
+            if marked != chat.0 {
+                let detail = format!("words from chat {marked} shown in {chat:?} (item {item})");
+                self.fail("S5", detail);
+            }
+        }
+        match self.item_chats.get(&item) {
+            Some(owner) if *owner != chat => {
+                let detail = format!("an item of {owner:?} shown in {chat:?} (item {item})");
+                self.fail("S5", detail);
+            }
+            Some(_) => {}
+            None => {
+                self.item_chats.insert(item.clone(), chat.clone());
+            }
         }
         for prompt in &e.prompts {
             match self.prompts.get(prompt) {
@@ -400,7 +451,8 @@ impl Checker {
         self.heard_at = heard.len();
         for h in fresh {
             match h {
-                Heard::Prompt { session, text } => {
+                Heard::Prompt { session, text, .. } => {
+                    // A copy the harness refused reached it all the same.
                     let message = text.split_whitespace().nth(1).unwrap_or_default();
                     if !self.prompts_heard.insert(message.to_string()) {
                         self.fail("S4", format!("prompt {message} reached the harness twice"));
@@ -423,24 +475,31 @@ impl Checker {
                         self.fail("S12", "a session no chat had was taken up");
                         continue;
                     };
-                    let named = self.named.get(&owner).is_some_and(|n| n.contains(session));
+                    let named = self.named.get(&owner) == Some(session);
                     let current = self.resumable.get(&owner) == Some(session);
                     if !named && !current {
                         let detail = format!("a session of {owner:?} taken up, unasked");
                         self.fail("S12", detail);
                     }
                 }
-                Heard::Answer { session, allow, .. } => {
+                Heard::Answer {
+                    session,
+                    allow,
+                    text,
+                } => {
                     let owner = self.owners.get(session).cloned();
-                    let at = (self.expected.iter())
-                        .position(|(chat, a)| Some(chat) == owner.as_ref() && a == allow);
+                    let at = self.expected.iter().position(|e| {
+                        Some(&e.chat) == owner.as_ref()
+                            && e.allow == *allow
+                            && (e.text.is_none() || e.text == *text)
+                    });
                     match at {
                         Some(at) => {
                             self.expected.remove(at);
                         }
                         None => {
                             let detail = format!(
-                                "the harness heard an answer in a session of {owner:?} that no one in that chat gave"
+                                "the harness heard an answer in a session of {owner:?} that no one in that chat gave, or not as given"
                             );
                             self.fail("S5", detail);
                         }

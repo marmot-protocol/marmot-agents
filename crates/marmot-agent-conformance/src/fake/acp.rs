@@ -328,15 +328,17 @@ impl Protocol for Acp {
                     .as_str()
                     .unwrap_or_default()
                     .to_string();
-                if !matches!(self.sessions.get(&session), Some(None))
-                    || self.own_runs.contains(&session)
-                {
-                    return Self::refuse(id, out); // no such session, or busy
-                }
+                // Heard even when refused: a copy turned away still reached the agent.
+                let refused = !matches!(self.sessions.get(&session), Some(None))
+                    || self.own_runs.contains(&session);
                 heard.push(Heard::Prompt {
                     session: session.clone(),
                     text: text.clone(),
+                    refused,
                 });
+                if refused {
+                    return Self::refuse(id, out); // no such session, or busy
+                }
                 self.prompt(id, &session, &text, out);
             }
             "session/cancel" => {

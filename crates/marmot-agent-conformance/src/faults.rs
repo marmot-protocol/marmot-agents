@@ -4,15 +4,15 @@
 //! found real drivers break them. A test runs the scenario that should catch it, and expects that
 //! property, and only that cause, to fail. A check that has never failed proves nothing.
 
-use crate::check::Violation;
+use crate::check::{Violation, marked_chat};
 use crate::fake::Fake;
 use crate::run::Subject;
 use marmot_agent_driver::{
-    Action, Answer, Capabilities, ChatId, Control, Driver, Harness, Output, Prompt, Refusal,
-    RequestId,
+    Action, Answer, Capabilities, ChatId, Control, Driver, Emitted, Given, Harness, Output, Prompt,
+    Reason, Refusal, RequestId,
 };
 use marmot_agent_events::{AgentEvent, Body, State};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -35,6 +35,13 @@ pub enum Fault {
     PromptTwice,
     /// S5: chat 2's events are handed over as chat 1's.
     WrongChat,
+    /// S5: an event that carries its own chat's words carries the last words another chat's
+    /// events carried after them, as a driver that mixes up its buffers would.
+    MixWords,
+    /// S5: chat 2's turns take chat 1's first turn's item id.
+    ShareItem,
+    /// S5: a question's answer is handed to the harness with another option than the one chosen.
+    SwapChoice,
     /// S12: a prompt that names no session is sent naming the chat's first session.
     ResumeUnasked,
     /// S13: every later turn of a chat takes its first turn's item id.
@@ -47,6 +54,12 @@ pub enum Fault {
     LoseOnDrop,
     /// S11: an answer the driver could not hand over is taken anyway, and nothing settles it.
     TakeUnhanded,
+    /// S11: every prompt after a chat's first is taken and never handed over. Caught only with a
+    /// harness for each chat, which a later prompt starts again after a death.
+    SwallowPrompt,
+    /// L2 (the scenario checks nothing): an interrupt is refused without reaching the harness,
+    /// and the turn is shown stopped all the same, with an event the driver makes up.
+    MadeUpStop,
 }
 
 impl Fault {
@@ -56,11 +69,14 @@ impl Fault {
             Fault::DropSettle | Fault::SettleTwice | Fault::SettleOnStop => "S1",
             Fault::LeaveOpen => "S2",
             Fault::PromptTwice => "S4",
-            Fault::WrongChat => "S5",
+            Fault::WrongChat | Fault::MixWords | Fault::ShareItem | Fault::SwapChoice => "S5",
             Fault::ResumeUnasked => "S12",
             Fault::ReuseItem => "S13",
             Fault::SeqBack => "SEQ",
-            Fault::HalfFrame | Fault::LoseOnDrop | Fault::TakeUnhanded => "S11",
+            Fault::HalfFrame | Fault::LoseOnDrop | Fault::TakeUnhanded | Fault::SwallowPrompt => {
+                "S11"
+            }
+            Fault::MadeUpStop => "L2",
         }
     }
 
@@ -70,6 +86,11 @@ impl Fault {
         match self {
             Fault::ResumeUnasked => Some("taken up, unasked"),
             Fault::HalfFrame => Some("not whole messages"),
+            Fault::MixWords => Some("words from chat"),
+            Fault::ShareItem => Some("an item of"),
+            Fault::SwapChoice => Some("not as given"),
+            Fault::SwallowPrompt => Some("a prompt returned before the harness had it"),
+            Fault::MadeUpStop => Some("did not die on the interrupt"),
             _ => None,
         }
     }
@@ -92,7 +113,10 @@ impl Fault {
             Fault::SettleOnStop => "dies_with_requests_pending",
             Fault::LeaveOpen => "dies_mid_turn",
             Fault::PromptTwice => "two_chats",
-            Fault::WrongChat => "two_chats",
+            Fault::WrongChat | Fault::MixWords | Fault::ShareItem => "two_chats",
+            Fault::SwapChoice => "answered_once",
+            Fault::SwallowPrompt => "dies_mid_turn",
+            Fault::MadeUpStop => "dies_with_requests_pending",
             Fault::ResumeUnasked => "new_session",
             Fault::ReuseItem => "new_session",
             Fault::SeqBack => "one_turn",
@@ -102,20 +126,30 @@ impl Fault {
     }
 
     /// Every fault.
-    pub const ALL: [Fault; 12] = [
+    pub const ALL: [Fault; 17] = [
         Fault::DropSettle,
         Fault::SettleTwice,
         Fault::SettleOnStop,
         Fault::LeaveOpen,
         Fault::PromptTwice,
         Fault::WrongChat,
+        Fault::MixWords,
+        Fault::ShareItem,
+        Fault::SwapChoice,
         Fault::ResumeUnasked,
         Fault::ReuseItem,
         Fault::SeqBack,
         Fault::HalfFrame,
         Fault::LoseOnDrop,
         Fault::TakeUnhanded,
+        Fault::SwallowPrompt,
+        Fault::MadeUpStop,
     ];
+
+    /// Whether only a driver with a harness for each chat can show the fault.
+    pub fn needs_a_harness_per_chat(self) -> bool {
+        self == Fault::SwallowPrompt
+    }
 }
 
 /// A subject whose driver has a fault.
@@ -163,6 +197,12 @@ impl<S: Subject> Subject for Faulty<S> {
             first_turn: HashMap::new(),
             first_session: HashMap::new(),
             count: 0,
+            words: HashMap::new(),
+            options: HashMap::new(),
+            turns: HashMap::new(),
+            seqs: HashMap::new(),
+            queued: VecDeque::new(),
+            prompted: HashSet::new(),
         }
     }
 
@@ -211,6 +251,18 @@ pub struct FaultyDriver<D> {
     first_turn: HashMap<ChatId, String>,
     first_session: HashMap<ChatId, String>,
     count: u64,
+    /// The last words each chat's events carried with its own mark.
+    words: HashMap<ChatId, String>,
+    /// Each question item's options, by question.
+    options: HashMap<String, Vec<(String, Vec<String>)>>,
+    /// The last event of each turn.
+    turns: HashMap<String, Emitted>,
+    /// The last `seq` of each session.
+    seqs: HashMap<String, u64>,
+    /// Events the driver made up, handed over before the next from the driver.
+    queued: VecDeque<Output>,
+    /// Chats that have prompted.
+    prompted: HashSet<ChatId>,
 }
 
 /// Fires the injector if dropped before it is disarmed.
@@ -256,6 +308,25 @@ impl<D: Driver> FaultyDriver<D> {
                 .entry(chat.clone())
                 .or_insert_with(|| session.as_str().to_string());
         }
+        if let Some(session) = &header.session {
+            let last = self.seqs.entry(session.as_str().to_string()).or_default();
+            *last = (*last).max(header.seq);
+        }
+        if let (Body::Turn(_), Some(turn)) = (e.event.body(), &header.turn) {
+            self.turns.insert(turn.as_str().to_string(), e.clone());
+        }
+        if let Body::Question(q) = e.event.body() {
+            let options = (q.questions().iter())
+                .map(|a| {
+                    (
+                        a.id.clone(),
+                        a.options.iter().map(|o| o.id.clone()).collect(),
+                    )
+                })
+                .collect();
+            self.options
+                .insert(header.item.as_str().to_string(), options);
+        }
         match self.fault {
             Fault::DropSettle => {
                 if !e.settles.is_empty() && self.settled.is_empty() {
@@ -291,6 +362,30 @@ impl<D: Driver> FaultyDriver<D> {
                     e.chat = Some("c-1".into());
                 }
             }
+            Fault::MixWords => {
+                let own = chat
+                    .as_ref()
+                    .filter(|c| marked_chat(&header.text) == Some(c.0.clone()));
+                if let Some(own) = own {
+                    let other = (self.words.iter()).find(|(c, _)| *c != own);
+                    if let Some((_, words)) = other {
+                        let mixed = format!("{} {words}", header.text);
+                        e.event = rebuilt(&e.event, |h| h.text = mixed);
+                    }
+                    self.words.insert(own.clone(), header.text.clone());
+                }
+            }
+            Fault::ShareItem => {
+                if let (Body::Turn(_), Some(chat)) = (e.event.body(), &chat) {
+                    (self.first_turn)
+                        .entry(chat.clone())
+                        .or_insert_with(|| header.item.as_str().to_string());
+                    let theirs = self.first_turn.get(&ChatId::from("c-1")).cloned();
+                    if let (true, Some(theirs)) = (chat.0 == "c-2", theirs) {
+                        e.event = rebuilt(&e.event, |h| h.item = theirs.as_str().into());
+                    }
+                }
+            }
             Fault::ReuseItem => {
                 if let (Body::Turn(_), Some(chat)) = (e.event.body(), &chat) {
                     let first = (self.first_turn)
@@ -322,6 +417,10 @@ impl<D: Driver> Driver for FaultyDriver<D> {
 
     async fn prompt(&mut self, prompt: Prompt) -> Result<(), Refusal> {
         let mut prompt = prompt;
+        let again = !self.prompted.insert(prompt.chat.id.clone());
+        if self.fault == Fault::SwallowPrompt && again {
+            return Ok(());
+        }
         if self.fault == Fault::ResumeUnasked && prompt.session.is_none() {
             let first = self.first_session.get(&prompt.chat.id);
             prompt.session = first.map(|s| s.as_str().into());
@@ -333,6 +432,18 @@ impl<D: Driver> Driver for FaultyDriver<D> {
     }
 
     async fn answer(&mut self, answer: Answer) -> Result<(), Refusal> {
+        let mut answer = answer;
+        if let (Fault::SwapChoice, Given::Questions(replies)) = (self.fault, &mut answer.given) {
+            let asked = self.options.get(answer.item.as_str());
+            for reply in replies.iter_mut() {
+                let offered = (asked.into_iter().flatten()).find(|(q, _)| *q == reply.question);
+                let other =
+                    offered.and_then(|(_, ids)| ids.iter().find(|o| !reply.options.contains(o)));
+                if let Some(other) = other {
+                    reply.options = vec![other.clone()];
+                }
+            }
+        }
         let taken = self.inner.answer(answer).await;
         if self.fault == Fault::TakeUnhanded {
             return Ok(());
@@ -341,6 +452,24 @@ impl<D: Driver> Driver for FaultyDriver<D> {
     }
 
     async fn control(&mut self, control: Control) -> Result<(), Refusal> {
+        if let (Fault::MadeUpStop, Action::Interrupt { turn }) = (self.fault, &control.action) {
+            let stopped = self.turns.get(turn.as_str()).and_then(|last| {
+                let session = last.event.header().session.as_ref()?.as_str().to_string();
+                let seq = self.seqs.get(&session).copied().unwrap_or_default() + 1;
+                let mut made_up = last.clone();
+                let mut header = last.event.header().clone();
+                header.state = State::Cancelled;
+                header.seq = seq;
+                made_up.event = AgentEvent::new(header, last.event.body().clone(), None).ok()?;
+                made_up.settles.clear();
+                Some((session, seq, made_up))
+            });
+            if let Some((session, seq, made_up)) = stopped {
+                self.seqs.insert(session, seq);
+                self.queued.push_back(Output::Event(made_up));
+            }
+            return Err(Refusal::new(Reason::Failed));
+        }
         let interrupt = matches!(control.action, Action::Interrupt { .. });
         let request = control.request.clone();
         let result = self.inner.control(control).await;
@@ -351,6 +480,9 @@ impl<D: Driver> Driver for FaultyDriver<D> {
     }
 
     async fn next_event(&mut self) -> Option<Output> {
+        if let Some(made_up) = self.queued.pop_front() {
+            return Some(made_up);
+        }
         loop {
             let mut guard = Guard {
                 injector: self.injector.clone(),

@@ -3,7 +3,7 @@
 
 use marmot_agent_acp::Acp;
 use marmot_agent_conformance::fake::acp::{self, Flavor};
-use marmot_agent_conformance::fake::{Fake, Protocol, Replay, Tap};
+use marmot_agent_conformance::fake::{Fake, Progress, Protocol, Replay, Tap};
 use marmot_agent_conformance::{Subject, scenarios};
 use marmot_agent_driver::ChatId;
 use std::path::Path;
@@ -17,8 +17,8 @@ struct OnFake {
     fake: Fake,
     store: acp::Shared,
     recording: Option<String>,
-    /// For a replay: how much of the recording is left to play.
-    left: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    /// For a replay: how far it got.
+    progress: std::sync::Arc<Progress>,
 }
 
 fn subject(flavor: Flavor) -> OnFake {
@@ -27,7 +27,7 @@ fn subject(flavor: Flavor) -> OnFake {
         fake: Fake::new(),
         store: acp::Shared::default(),
         recording: None,
-        left: Default::default(),
+        progress: Default::default(),
     }
 }
 
@@ -40,7 +40,7 @@ impl Subject for OnFake {
         let (driver_reads, driver_writes) = tokio::io::split(driver_side);
         let agent = acp::Acp::new(self.flavor, self.store.clone());
         let protocol: Box<dyn Protocol> = match &self.recording {
-            Some(text) => Box::new(Replay::new(text, agent).counting(self.left.clone())),
+            Some(text) => Box::new(Replay::new(text, agent).counting(self.progress.clone())),
             None => Box::new(agent),
         };
         self.fake.serve(fake_reads, fake_writes, protocol, None);
@@ -169,15 +169,15 @@ async fn replays_recordings() {
         (Flavor::Cursor, "cursor"),
     ] {
         for name in ["simple.jsonl", "approval_allowed.jsonl"] {
-            let left = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
+            let progress = std::sync::Arc::new(Progress::default());
             let subject = OnFake {
                 recording: Some(recording(folder, name)),
-                left: left.clone(),
+                progress: progress.clone(),
                 ..subject(flavor)
             };
             let found = scenarios::replay(subject, "as recorded").await;
             found.unwrap_or_else(|v| panic!("{folder}/{name}: {v}"));
-            let left = left.load(std::sync::atomic::Ordering::SeqCst);
+            let left = progress.left();
             assert_eq!(
                 left, 0,
                 "{folder}/{name}: {left} recorded messages never played"
@@ -186,8 +186,22 @@ async fn replays_recordings() {
     }
 }
 
+// A prompt handed to the agent twice is caught. The driver restarts a running turn for a prompt
+// that comes during it (`mid_turn: restart`), so the agent takes both copies; one it refused would
+// count as well (`tests/fake.rs`).
+#[tokio::test]
+async fn a_prompt_twice_is_caught() {
+    use marmot_agent_conformance::faults::{self, Fault};
+    let fault = Fault::PromptTwice;
+    let found = faults::caught(subject(Flavor::OpenCode), fault, None).await;
+    assert!(
+        fault.caught_as(&found),
+        "not caught as it should be: {found:?}"
+    );
+}
+
 // A replay plays on only when the driver answers as recorded: refused, the recording that allowed
-// stops, and the turn never ends.
+// stops at the approval, and the turn never ends.
 #[tokio::test]
 async fn a_replay_stops_on_another_answer() {
     for (flavor, folder) in [
@@ -195,14 +209,13 @@ async fn a_replay_stops_on_another_answer() {
         (Flavor::Goose, "goose"),
         (Flavor::Cursor, "cursor"),
     ] {
+        let progress = std::sync::Arc::new(Progress::default());
         let subject = OnFake {
             recording: Some(recording(folder, "approval_allowed.jsonl")),
+            progress: progress.clone(),
             ..subject(flavor)
         };
-        let found = scenarios::replay_answering(subject, "as recorded", false).await;
-        assert!(
-            found.is_err(),
-            "{folder}: a refused approval played the recording on"
-        );
+        let found = scenarios::replay_refused(subject, "as recorded", &progress).await;
+        found.unwrap_or_else(|wrong| panic!("{folder}: {wrong}"));
     }
 }
