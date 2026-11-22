@@ -3,7 +3,7 @@
 //! runs the same schedule and must give the same trace; the shrinker cuts the schedule down to
 //! a short one that still fails the same property.
 
-use crate::schedule::Schedule;
+use crate::schedule::{Action, Schedule};
 use crate::sim::{self, Failed, Report};
 use crate::world::Trace;
 use serde::{Deserialize, Serialize};
@@ -88,9 +88,11 @@ pub fn write_schedule(schedule: &Schedule, dir: &Path) -> std::io::Result<PathBu
 }
 
 /// Cuts a failing schedule down, greedily: it drops runs of steps, halving their length down to
-/// one, and keeps each cut after which the run still fails the same property; then it drops
-/// messages no step names any more. At most `budget` runs. Gives the shortest failing schedule
-/// found, with its report.
+/// one, and keeps each cut after which the run still fails the same property; then it shortens
+/// the clock's steps; then it drops each message no step names any more, numbering the rest
+/// again, when the run still fails without it (the fair part at the end posts every message, so
+/// one no step names may still matter). At most `budget` runs. Gives the shortest failing
+/// schedule found, with its report.
 pub fn shrink(schedule: &Schedule, report: &Report, budget: usize) -> (Schedule, Report) {
     let Some(failed) = &report.failure else {
         return (schedule.clone(), report.clone());
@@ -139,13 +141,13 @@ pub fn shrink(schedule: &Schedule, report: &Report, budget: usize) -> (Schedule,
         if runs >= budget {
             break;
         }
-        if let crate::schedule::Action::Tick { ms } = best.steps[at] {
+        if let Action::Tick { ms } = best.steps[at] {
             for shorter in [1, ms / 10, ms / 2] {
                 if shorter == 0 || shorter >= ms || runs >= budget {
                     continue;
                 }
                 let mut candidate = best.clone();
-                candidate.steps[at] = crate::schedule::Action::Tick { ms: shorter };
+                candidate.steps[at] = Action::Tick { ms: shorter };
                 if let Some(report) = still_fails(&candidate, &mut runs) {
                     best = candidate;
                     best_report = report;
@@ -154,5 +156,67 @@ pub fn shrink(schedule: &Schedule, report: &Report, budget: usize) -> (Schedule,
             }
         }
     }
+    // Drop the messages no step names, the newest first.
+    for msg in (0..best.messages.len()).rev() {
+        if runs >= budget {
+            break;
+        }
+        if let Some(candidate) = without_message(&best, msg)
+            && let Some(report) = still_fails(&candidate, &mut runs)
+        {
+            best = candidate;
+            best_report = report;
+        }
+    }
     (best, best_report)
+}
+
+/// The message a step names.
+fn named(action: &Action) -> Option<usize> {
+    match action {
+        Action::Store { msg } | Action::Hear { msg } | Action::Ask { msg } => Some(*msg),
+        _ => None,
+    }
+}
+
+/// The schedule without message `msg`, the later ones numbered one less; `None` when a step names
+/// it.
+fn without_message(schedule: &Schedule, msg: usize) -> Option<Schedule> {
+    if schedule.steps.iter().any(|a| named(a) == Some(msg)) {
+        return None;
+    }
+    let mut out = schedule.clone();
+    out.messages.remove(msg);
+    for step in &mut out.steps {
+        if let Action::Store { msg: m } | Action::Hear { msg: m } | Action::Ask { msg: m } = step
+            && *m > msg
+        {
+            *m -= 1;
+        }
+    }
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schedule::{Posted, What};
+
+    #[test]
+    fn a_message_no_step_names_is_dropped_and_the_rest_numbered_again() {
+        let posted = |chat| Posted {
+            chat,
+            what: What::Prompt { approval: false },
+        };
+        let mut schedule = crate::generate(&crate::RunName::new(crate::Family::Calm, 0, 0));
+        schedule.messages = vec![posted(0), posted(0), posted(0)];
+        schedule.steps = vec![Action::Store { msg: 0 }, Action::Hear { msg: 2 }];
+        assert_eq!(without_message(&schedule, 0), None);
+        let cut = without_message(&schedule, 1).expect("no step names m1");
+        assert_eq!(cut.messages.len(), 2);
+        assert_eq!(
+            cut.steps,
+            vec![Action::Store { msg: 0 }, Action::Hear { msg: 1 }]
+        );
+    }
 }

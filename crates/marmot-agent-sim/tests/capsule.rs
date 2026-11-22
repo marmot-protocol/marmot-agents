@@ -47,6 +47,10 @@ fn the_accepted_limit_is_found_when_its_assumption_is_off() {
     assert!(["S1", "S3"].contains(&property.as_str()), "{property}");
     let (small, small_report) = shrink(&schedule, &report, 300);
     assert!(small.steps.len() < schedule.steps.len());
+    assert!(
+        small.messages.len() < schedule.messages.len(),
+        "the messages no step names are dropped"
+    );
     let capsule = Capsule::new(small, &small_report).unwrap();
     let path = capsule.write(dir.path()).unwrap();
     let read = Capsule::read(&path).unwrap();
