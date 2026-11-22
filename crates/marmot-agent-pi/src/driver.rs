@@ -16,11 +16,12 @@
 //! like any record, and says what came of the request: for a prompt, the turn it joins.
 //! Only the questions asked when Pi starts are waited for, and only for [`STARTUP_LIMIT`].
 //!
-//! A record is waited for only until the driver's patience runs out ([`PATIENCE`] unless set). A
-//! Pi that has not read it by then has stopped working (D-066): that chat's Pi is stopped, which
-//! ends the task that writes to it, so what was not written never reaches it or a later Pi, and
-//! the request is refused as failed. The chat's next prompt starts a new Pi; other chats' Pis run
-//! on.
+//! A record is waited for only until the driver's patience runs out ([`PATIENCE`] unless set).
+//! The task that writes to a chat's Pi keeps that deadline itself and says once what came of the
+//! record: written in full, or not, in which case it has already let go of Pi's standard input
+//! and of everything queued behind the record. A Pi that has not read it by then has stopped
+//! working (D-066, D-098): that chat's Pi is stopped, and the request is refused as failed. The
+//! chat's next prompt starts a new Pi; other chats' Pis run on.
 
 use crate::translate::DIALOGS;
 use crate::{Direction, Translator};
@@ -37,10 +38,11 @@ use std::io;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 /// The environment variable that names the chat a Pi serves, as a hash of the chat's id in
 /// lowercase hex. A script that runs Pi elsewhere, such as `tools/pi/pi.sh`, keeps each chat's
@@ -164,10 +166,24 @@ enum Unstarted {
     Failed,
 }
 
-/// A record to write to a Pi, and who waits until it is written.
+/// A record to write to a Pi, by when, and who waits to hear what came of it.
 struct Write {
     bytes: Vec<u8>,
-    written: oneshot::Sender<bool>,
+    deadline: Instant,
+    written: oneshot::Sender<Written>,
+}
+
+/// What came of a record handed to the task that writes to a Pi. It says so once, and only after
+/// it is settled: a record not written in full by its deadline never reaches Pi whole, as the task
+/// has dropped Pi's standard input, and its queue, before it says so.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Written {
+    /// Every byte, the record's last newline included, is in the pipe.
+    Yes,
+    /// Pi's input closed: it has gone.
+    Failed,
+    /// Pi did not read it by the deadline: it has stopped reading.
+    Stalled,
 }
 
 /// A running Pi.
@@ -325,7 +341,7 @@ impl Pi {
             command.args([flag, session]);
         }
         let mut child = command.spawn().map_err(|_| Unstarted::Failed)?;
-        let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
             return Err(Unstarted::Failed);
         };
         let version = self.version.clone();
@@ -352,20 +368,8 @@ impl Pi {
                 text: None,
             });
         });
-        let (writes, mut queue) = mpsc::unbounded_channel::<Write>();
-        let writer = tokio::spawn(async move {
-            while let Some(write) = queue.recv().await {
-                let written = async {
-                    stdin.write_all(&write.bytes).await?;
-                    stdin.flush().await
-                };
-                let ok = written.await.is_ok();
-                let _ = write.written.send(ok);
-                if !ok {
-                    return; // Pi has gone: its output ends too, and the reader says so
-                }
-            }
-        });
+        let (writes, queue) = mpsc::unbounded_channel::<Write>();
+        let writer = tokio::spawn(write_records(stdin, queue));
         c.process = Some(Process {
             writes,
             child: Some(child),
@@ -429,8 +433,10 @@ impl Pi {
         let text = record.to_string();
         let written = self.send(chat, Some((id, Waiting::Reply)), &text);
         let written = written.map_err(|_| Unstarted::Failed)?;
-        if !matches!(written.await, Ok(true)) {
-            return Err(Unstarted::Exited);
+        match written.await.unwrap_or(Written::Failed) {
+            Written::Yes => {}
+            Written::Failed => return Err(Unstarted::Exited),
+            Written::Stalled => return Err(Unstarted::Failed),
         }
         self.feed(chat, Direction::Out, &text, Vec::new());
         loop {
@@ -448,15 +454,16 @@ impl Pi {
         }
     }
 
-    /// Hands a record to the chat's Pi. A command with an id waits as `waiting` says. What is
-    /// given back says when the record has been written, and whether it could be. The caller
-    /// feeds the record to the translator once it is written.
+    /// Hands a record to the chat's Pi, to be written within the patience. A command with an id
+    /// waits as `waiting` says. What is given back says, once it is settled, what came of the
+    /// record. The caller feeds the record to the translator once it is written.
     fn send(
         &mut self,
         chat: &ChatId,
         command: Option<(&str, Waiting)>,
         text: &str,
-    ) -> Result<oneshot::Receiver<bool>, Refusal> {
+    ) -> Result<oneshot::Receiver<Written>, Refusal> {
+        let deadline = Instant::now() + self.patience;
         let Some(c) = self.chats.get_mut(chat) else {
             return Err(Refusal::new(Reason::Failed));
         };
@@ -466,7 +473,12 @@ impl Pi {
         let mut bytes = text.as_bytes().to_vec();
         bytes.push(b'\n');
         let (written, done) = oneshot::channel();
-        if process.writes.send(Write { bytes, written }).is_err() {
+        let write = Write {
+            bytes,
+            deadline,
+            written,
+        };
+        if process.writes.send(write).is_err() {
             return Err(Refusal::new(Reason::Failed));
         }
         if let Some((id, waiting)) = command {
@@ -479,11 +491,6 @@ impl Pi {
     /// chat's translator; the events it makes settle `settles`. If it could not be written,
     /// nothing waits for its response and the translator never sees it: an answer that did not
     /// reach Pi leaves its question waiting, to be closed unanswered when Pi's end is read.
-    ///
-    /// A Pi that has not read the record within the patience has stopped working (D-066): it is
-    /// stopped, so the record is never written to it or to a later Pi, and what it left open is
-    /// closed. The request is refused, and so does not also count as one of the controls the
-    /// stop fails, or as a prompt Pi had not taken.
     async fn hand(
         &mut self,
         chat: &ChatId,
@@ -491,26 +498,38 @@ impl Pi {
         text: &str,
         settles: Vec<RequestId>,
     ) -> Result<(), Refusal> {
+        self.write(chat, command, text).await?;
+        self.feed(chat, Direction::Out, text, settles);
+        Ok(())
+    }
+
+    /// Hands a record to the chat's Pi and waits to hear what came of it. If it was not written,
+    /// nothing waits for its response.
+    ///
+    /// A Pi that has not read the record within the patience has stopped working (D-066,
+    /// D-098): the task that writes to it has already let go of its input, so the record never
+    /// reaches it or a later Pi. It is stopped, and what it left open is closed. The request is
+    /// refused, and so does not also count as one of the controls the stop fails, or as a prompt
+    /// Pi had not taken.
+    async fn write(
+        &mut self,
+        chat: &ChatId,
+        command: Option<(&str, Waiting)>,
+        text: &str,
+    ) -> Result<(), Refusal> {
         let id = command.as_ref().map(|(id, _)| id.to_string());
-        let control = match &command {
-            Some((_, Waiting::Control(request, _))) => Some(request.clone()),
-            _ => None,
-        };
         let done = self.send(chat, command, text)?;
-        let written = tokio::time::timeout(self.patience, done).await;
-        if matches!(written, Ok(Ok(true))) {
-            self.feed(chat, Direction::Out, text, settles);
+        // The writer says by the deadline; if it is gone, so is Pi.
+        let written = done.await.unwrap_or(Written::Failed);
+        if written == Written::Yes {
             return Ok(());
         }
-        if let Some(c) = self.chats.get_mut(chat) {
-            if let Some(id) = id {
-                c.waiting.remove(&id);
-            }
-            if let Some(request) = control {
-                c.unsettled(&request);
-            }
+        if let Some(c) = self.chats.get_mut(chat)
+            && let Some(id) = id
+        {
+            c.waiting.remove(&id);
         }
-        if written.is_err() {
+        if written == Written::Stalled {
             self.stopped(chat); // Pi stopped reading
         }
         Err(Refusal::new(Reason::Failed))
@@ -744,8 +763,8 @@ impl Pi {
         started.map_err(|_| Refusal::new(Reason::Failed))
     }
 
-    /// Sends a control that settles once its effect shows, and forgets the effect if the control
-    /// never reached Pi.
+    /// Sends a control that settles once its effect shows. The effect waits only once the control
+    /// has reached Pi: one that did not is refused, and leaves nothing to clean up.
     async fn effect(
         &mut self,
         chat: &ChatId,
@@ -757,16 +776,48 @@ impl Pi {
         let id = self.id();
         let mut record = record;
         record["id"] = Value::String(id.clone());
-        let c = self.chats.get_mut(chat).expect("a chat");
-        c.effects.push((request.clone(), effect));
+        let record = record.to_string();
         let waiting = Waiting::Control(request.clone(), then);
-        let sent = (self.hand(chat, Some((&id, waiting)), &record.to_string(), Vec::new())).await;
-        if sent.is_err()
-            && let Some(c) = self.chats.get_mut(chat)
-        {
-            c.unsettled(request);
+        self.write(chat, Some((&id, waiting)), &record).await?;
+        let c = self
+            .chats
+            .get_mut(chat)
+            .expect("a chat that was written to");
+        c.effects.push((request.clone(), effect));
+        self.feed(chat, Direction::Out, &record, Vec::new());
+        Ok(())
+    }
+}
+
+/// Writes the records queued for a Pi, in order, each by its deadline, and says what came of
+/// each once it is settled. On the first that is not written in full, Pi's input and the queue
+/// are dropped before anyone hears, so nothing more ever reaches that Pi.
+async fn write_records<W: AsyncWrite + Unpin>(
+    mut stdin: W,
+    mut queue: mpsc::UnboundedReceiver<Write>,
+) {
+    while let Some(write) = queue.recv().await {
+        let writing = async {
+            stdin.write_all(&write.bytes).await?;
+            stdin.flush().await
+        };
+        // The write is polled before the deadline: one that finishes at the deadline
+        // counts. One that does not is dropped, so its last newline never goes.
+        let written = match tokio::time::timeout_at(write.deadline, writing).await {
+            Ok(Ok(())) => Written::Yes,
+            Ok(Err(_)) => Written::Failed,
+            Err(_) => Written::Stalled,
+        };
+        if written != Written::Yes {
+            // Nothing more can reach this Pi before anyone hears, nor anything queued:
+            // those waiting for it hear that it failed. If Pi has gone, its output ends
+            // too, and the reader says so.
+            drop(stdin);
+            drop(queue);
+            let _ = write.written.send(written);
+            return;
         }
-        sent
+        let _ = write.written.send(written);
     }
 }
 
@@ -955,6 +1006,75 @@ impl Driver for Pi {
                 return Some(event.into());
             }
             self.read().await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    /// A Pi that reads again right at a record's deadline either gets the record whole, and the
+    /// writer says so, or never gets its last newline, nor anything queued after it, and the
+    /// writer says it was not written. Pi starts reading from a few milliseconds before the
+    /// deadline to just after it, so runs land on either side of the race and on it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_record_is_written_whole_or_never_reaches_pi() {
+        let mut record = vec![b'x'; 63];
+        record.push(b'\n');
+        for run in 0..60u64 {
+            let (pi, mut reads) = tokio::io::duplex(16); // the pipe holds less than the record
+            let (writes, queue) = mpsc::unbounded_channel();
+            let writer = tokio::spawn(write_records(pi, queue));
+            let deadline = Instant::now() + Duration::from_millis(20);
+            let (written, first) = oneshot::channel();
+            let (also, second) = oneshot::channel();
+            let bytes = record.clone();
+            writes
+                .send(Write {
+                    bytes,
+                    deadline,
+                    written,
+                })
+                .unwrap();
+            let bytes = b"after\n".to_vec();
+            (writes.send(Write {
+                bytes,
+                deadline: deadline + Duration::from_secs(5),
+                written: also,
+            }))
+            .unwrap();
+            // Pi reads again at the deadline, until its input ends or both records are in.
+            let reader = tokio::spawn(async move {
+                let early = Duration::from_micros(500 * (run % 6));
+                tokio::time::sleep_until(deadline + Duration::from_micros(500) - early).await;
+                let mut got = Vec::new();
+                let mut buf = [0u8; 64];
+                while got.iter().filter(|b| **b == b'\n').count() < 2 {
+                    match reads.read(&mut buf).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => got.extend_from_slice(&buf[..n]),
+                    }
+                }
+                got
+            });
+            let first = first.await.unwrap_or(Written::Failed);
+            let second = second.await.unwrap_or(Written::Failed);
+            drop(writes);
+            let got = reader.await.unwrap();
+            writer.await.unwrap();
+            if first == Written::Yes {
+                assert_eq!(second, Written::Yes);
+                assert_eq!(got, [record.as_slice(), b"after\n"].concat());
+            } else {
+                assert_eq!(first, Written::Stalled);
+                assert_ne!(second, Written::Yes);
+                assert!(
+                    !got.contains(&b'\n'),
+                    "a record not written reached Pi whole"
+                );
+            }
         }
     }
 }
