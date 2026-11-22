@@ -1,0 +1,23 @@
+{
+  "case": "give-up-drops-settles",
+  "model": "CoreLifecycle",
+  "config": "CoreLifecycle.giveup-notice.cfg",
+  "breaks": "L1",
+  "what": "A finding in the code: a notice that settles r1 is given up; refused drops a notice with nothing in its place, and r1 is no longer pending, so it is settled nowhere (L1).",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"Prompts": ["p1"], "Requests": ["r1"], "NewSession": ["r1"], "Items": [], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 1, "MaxRefusals": 0, "UnknownTries": 1, "GoneChats": [], "ExactLookup": true, "TokenDedupe": false, "LagCatchUp": false, "LiveInOrder": true, "LiveAfterStore": true, "FairMdk": true, "FairDriver": true, "FairTime": true, "Bug": "none"},
+  "messages": [{"id": "p1", "chat": "c1", "kind": "prompt"}, {"id": "r1", "chat": "c1", "kind": "control", "new_session": true}],
+  "steps": [
+    {"action": "CatchUpDone"},
+    {"action": "Store", "msg": "r1"},
+    {"action": "Ask", "msg": "r1", "stored": true, "handled": true},
+    {"action": "Save"},
+    {"action": "Deliver", "msg": "r1", "kind": "request", "session": null},
+    {"action": "Refuse", "msg": "r1"},
+    {"action": "Save"},
+    {"action": "Send", "chat": "c1", "send": {"notice": "settle", "about": "r1"}, "outcome": "ambiguous"},
+    {"action": "Lookup", "chat": "c1", "send": {"notice": "settle", "about": "r1"}, "result": "absent", "gives_up": true},
+    {"action": "Save"}
+  ],
+  "end": {"kind": "stutter"}
+}

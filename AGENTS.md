@@ -282,8 +282,9 @@ which), with Java 21, or Docker when there is no Java (the script then runs TLC 
 
 ```sh
 python3 tools/tla/check.py   # the fair model passes; every counterexample, deliberate defect and
-                             # reachability probe fails as stated. TLC is downloaded once, pinned by
-                             # version and checksum, by tools/tla/run.sh
+                             # reachability probe fails as stated, and each counterexample's schedule
+                             # is the committed one. TLC is downloaded once, pinned by version and
+                             # checksum, by tools/tla/run.sh
 ```
 
 For a change to a diagram, which CI does not check:

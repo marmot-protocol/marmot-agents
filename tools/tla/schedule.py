@@ -1,0 +1,343 @@
+"""Turns a TLC error trace of the CoreLifecycle model into a schedule in the shared action names.
+
+TLC v1.7.4 prints each state of a trace in full, headed by the name of the action that led to it,
+without the action's arguments. The arguments, and the outcome of each send and lookup, are read
+here from what changed between one state and the next, so a schedule is made from the trace by a
+program and never by hand. The schedule is plain JSON: the messages people post, the steps, and how
+the trace ends (an invariant broken at its last step, a stutter for ever, or a loop back to a step).
+
+    from schedule import schedule_of
+    schedule_of(log_text, constants)   # -> {"messages": [...], "steps": [...], "end": {...}}
+
+docs/design/verification.md names the actions. A step names what the model's action did:
+
+- Store(msg), Hear(msg) and Ask(msg) (`handled` says whether the core read it; a message heard
+  before it is stored is dropped), CatchUp(chat, msg), CatchUpDone;
+- Deliver(msg, kind, session), Take(msg), Refuse(msg), Emit(item, settles, fin), Tick(req);
+- Send(chat, send, outcome), where `send` names the item and version, or the notice, and the
+  outcome is sent, busy, ambiguous (it did not go out), ambiguous_landed (it went out) or refused;
+- Lookup(chat, send, result): found, or absent; an absent one either gives the send up
+  (`gives_up`) or is followed by the Send that tries it again;
+- Save, SaveFails, Crash, Restart, DriverStops, Stop.
+"""
+
+import re
+
+CHAT_ONE = {"p1", "p2", "r1", "t1", "s1"}
+
+
+def chat_of(x):
+    return "c1" if x in CHAT_ONE else "c2"
+
+
+# ---------------------------------------------------------------------------------------------
+# TLC's values
+
+TOKEN = re.compile(r'\s*(<<|>>|\|->|:>|@@|"(?:[^"\\]|\\.)*"|-?\d+|[A-Za-z_][A-Za-z0-9_]*|[\[\]{}(),])')
+
+
+def tokens(text):
+    at, out = 0, []
+    text = text.rstrip()
+    while at < len(text):
+        found = TOKEN.match(text, at)
+        if not found:
+            raise ValueError(f"cannot read TLC's value at: {text[at:at + 40]!r}")
+        out.append(found.group(1))
+        at = found.end()
+    return out
+
+
+class Reader:
+    def __init__(self, text):
+        self.toks = tokens(text)
+        self.at = 0
+
+    def peek(self):
+        return self.toks[self.at] if self.at < len(self.toks) else None
+
+    def take(self, want=None):
+        tok = self.toks[self.at]
+        if want is not None and tok != want:
+            raise ValueError(f"expected {want}, got {tok}")
+        self.at += 1
+        return tok
+
+    def value(self):
+        tok = self.peek()
+        if tok == "<<":
+            self.take()
+            items = []
+            while self.peek() != ">>":
+                items.append(self.value())
+                if self.peek() == ",":
+                    self.take()
+            self.take(">>")
+            return tuple(items)
+        if tok == "{":
+            self.take()
+            items = []
+            while self.peek() != "}":
+                items.append(self.value())
+                if self.peek() == ",":
+                    self.take()
+            self.take("}")
+            return frozenset(items)
+        if tok == "[":
+            self.take()
+            fields = {}
+            while self.peek() != "]":
+                key = self.take()
+                key = key[1:-1] if key.startswith('"') else key
+                self.take("|->")
+                fields[key] = self.value()
+                if self.peek() == ",":
+                    self.take()
+            self.take("]")
+            return fields
+        if tok == "(":
+            # A function written k1 :> v1 @@ k2 :> v2.
+            self.take()
+            pairs = {}
+            while True:
+                key = self.value()
+                self.take(":>")
+                pairs[key] = self.value()
+                if self.peek() == "@@":
+                    self.take()
+                    continue
+                break
+            self.take(")")
+            return pairs
+        self.take()
+        if tok.startswith('"'):
+            return tok[1:-1]
+        if tok in ("TRUE", "FALSE"):
+            return tok == "TRUE"
+        if re.fullmatch(r"-?\d+", tok):
+            return int(tok)
+        raise ValueError(f"unexpected {tok}")
+
+
+def parse(text):
+    reader = Reader(text)
+    value = reader.value()
+    if reader.peek() is not None:
+        raise ValueError(f"left over: {reader.toks[reader.at:]}")
+    return value
+
+
+def as_map(value):
+    """An empty function prints as << >>; anything else is a dict already."""
+    return {} if value == () else value
+
+
+# ---------------------------------------------------------------------------------------------
+# TLC's trace
+
+HEAD = re.compile(r"^State (\d+): (?:<(\w+)[ (].*>|<Initial predicate>|(Stuttering))$")
+BACK = re.compile(r"^(?:State \d+: )?Back to state (\d+)")
+
+
+def states(log):
+    """The states of the trace, each (action, {variable: value}), and how it ends."""
+    lines = log.splitlines()
+    out, end = [], {"kind": "violation"}
+    current, name, body = None, None, []
+
+    def close():
+        if current is not None:
+            out.append((name, variables(body)))
+
+    for line in lines:
+        back = BACK.match(line)
+        if back:
+            close()
+            current = None
+            end = {"kind": "loop", "to_state": int(back.group(1))}
+            break
+        head = HEAD.match(line)
+        if head:
+            close()
+            if head.group(3):
+                current = None
+                end = {"kind": "stutter"}
+                break
+            current, name, body = int(head.group(1)), head.group(2) or "Init", []
+            continue
+        if current is not None:
+            if line.strip() == "" or line.startswith("Error:") or line.startswith("Finished"):
+                close()
+                current = None
+                continue
+            body.append(line)
+    close()
+    return out, end
+
+
+def variables(body):
+    found, name, text = {}, None, []
+    for line in body:
+        head = re.match(r"^/\\ (\w+) = (.*)$", line)
+        if head:
+            if name:
+                found[name] = parse(" ".join(text))
+            name, text = head.group(1), [head.group(2)]
+        else:
+            text.append(line.strip())
+    if name:
+        found[name] = parse(" ".join(text))
+    return found
+
+
+# ---------------------------------------------------------------------------------------------
+# What each step did
+
+def send_of(entry):
+    tok = entry["tok"]
+    if entry["i"] != "notice":
+        return {"item": entry["i"], "version": entry["v"]}
+    kind, about = tok
+    if isinstance(about, tuple):
+        about = {"item": about[0], "version": about[1]}
+    return {"notice": kind, "about": about}
+
+
+def head_for(cv, chat):
+    for entry in cv["outbox"]:
+        if entry["c"] == chat:
+            return entry
+    return None
+
+
+def toks(cv):
+    return {entry["tok"] for entry in cv["outbox"]}
+
+
+def posted(s, t):
+    return s["iposts"] != t["iposts"] or s["shown"] != t["shown"] or s["mdkTok"] != t["mdkTok"]
+
+
+def send_outcome(s, t, entry):
+    tok = entry["tok"]
+    if t["ambig"] > s["ambig"]:
+        landed = (tok in t["mdkTok"] and tok not in s["mdkTok"]) or posted(s, t)
+        return "ambiguous_landed" if landed else "ambiguous"
+    if tok in toks(t["cv"]):
+        return "busy"
+    # Gone from the outbox: refused (MDK took note of it, or the version was dropped, or nothing
+    # was posted for it), or else sent (posted now, or, with TokenDedupe, posted before).
+    if t["mdkRefused"] != s["mdkRefused"] or t["dropped"] != s["dropped"] \
+            or tok not in t["mdkTok"]:
+        return "refused"
+    return "sent"
+
+
+def chats_with(cv):
+    seen = []
+    for entry in cv["outbox"]:
+        if entry["c"] not in seen:
+            seen.append(entry["c"])
+    return seen
+
+
+def changed_head(s, t, need_unknown):
+    """The chat whose oldest send the step acted on."""
+    unk = as_map(s["unk"])
+    picks = []
+    for chat in chats_with(s["cv"]):
+        entry = head_for(s["cv"], chat)
+        if (entry["tok"] in unk) != need_unknown:
+            continue
+        after = [e for e in t["cv"]["outbox"] if e["tok"] == entry["tok"]]
+        if after != [entry] or as_map(t["unk"]).get(entry["tok"]) != unk.get(entry["tok"]) \
+                or t["mdkTok"] != s["mdkTok"] or t["sv"] != s["sv"]:
+            picks.append((chat, entry))
+    if len(picks) != 1:
+        raise ValueError(f"cannot tell which send the step acted on: {picks}")
+    return picks[0]
+
+
+def step(action, s, t, constants):
+    if action in ("Save", "SaveFails", "Crash", "Restart", "DriverStops", "Stop", "CatchUpDone"):
+        return [{"action": action}]
+    if action == "Store":
+        (msg,) = [m for m in t["order"] if t["order"][m] != s["order"][m]]
+        return [{"action": "Store", "msg": msg}]
+    if action in ("Hear", "Ask"):
+        early = t["early"] - s["early"]
+        if early:
+            (msg,) = early
+        else:
+            live = list(s["live"])
+            for m in t["live"]:
+                live.remove(m)
+            (msg,) = live
+        handled = t["cv"]["h"][msg] > s["cv"]["h"][msg]
+        return [{"action": action, "msg": msg, "stored": s["order"][msg] > 0, "handled": handled}]
+    if action == "CatchUp":
+        (msg,) = [m for m in t["cv"]["h"] if t["cv"]["h"][m] != s["cv"]["h"][m]]
+        return [{"action": "CatchUp", "chat": chat_of(msg), "msg": msg}]
+    if action == "Deliver":
+        act = t["inflight"]
+        session = None if act["sess"] == "none" else act["sess"]
+        return [{"action": "Deliver", "msg": act["x"], "kind": act["k"], "session": session}]
+    if action in ("Take", "Refuse"):
+        return [{"action": action, "msg": s["inflight"]["x"]}]
+    if action == "Emit":
+        (item,) = [i for i in t["drvEmits"] if t["drvEmits"][i] != s["drvEmits"][i]]
+        settles = sorted(s["drvReqs"] - t["drvReqs"])
+        return [{"action": "Emit", "item": item, "settles": settles,
+                 "fin": t["drvItems"][item] == "done"}]
+    if action == "Tick":
+        (req,) = s["deadline"] - t["deadline"]
+        return [{"action": "Tick", "req": req}]
+    if action == "Send":
+        chat, entry = changed_head(s, t, need_unknown=False)
+        return [{"action": "Send", "chat": chat, "send": send_of(entry),
+                 "outcome": send_outcome(s, t, entry)}]
+    if action == "Lookup":
+        chat, entry = changed_head(s, t, need_unknown=True)
+        tok, what = entry["tok"], send_of(entry)
+        tries = as_map(s["unk"])[tok]
+        still = tok in toks(t["cv"])
+        if not still and tok in s["mdkTok"] and not posted(s, t) and t["dropped"] == s["dropped"] \
+                and t["sv"] == s["sv"]:
+            return [{"action": "Lookup", "chat": chat, "send": what, "result": "found"}]
+        if not still and tries >= constants["UnknownTries"] and t["sv"] == s["sv"] \
+                and t["mdkRefused"] == s["mdkRefused"]:
+            return [{"action": "Lookup", "chat": chat, "send": what, "result": "absent",
+                     "gives_up": True}]
+        return [{"action": "Lookup", "chat": chat, "send": what, "result": "absent"},
+                {"action": "Send", "chat": chat, "send": what,
+                 "outcome": send_outcome(s, t, entry)}]
+    raise ValueError(f"no rule for the action {action}")
+
+
+def schedule_of(log, constants):
+    trace, end = states(log)
+    if not trace:
+        raise ValueError("no trace in the log")
+    steps, first_step_of = [], {1: 0}
+    for number, ((_, s), (action, t)) in enumerate(zip(trace, trace[1:]), start=2):
+        first_step_of[number] = len(steps)
+        steps.extend(step(action, s, t, constants))
+    if end["kind"] == "loop":
+        # From the step after that state on, the behaviour repeats for ever.
+        end = {"kind": "loop", "from_step": first_step_of.get(end["to_state"] + 1, len(steps))}
+    messages = [{"id": m, "chat": chat_of(m), "kind": "prompt"} for m in sorted(constants["Prompts"])]
+    messages += [{"id": r, "chat": chat_of(r), "kind": "control",
+                  "new_session": r in constants["NewSession"]}
+                 for r in sorted(constants["Requests"])]
+    return {"messages": messages, "steps": steps, "end": end}
+
+
+def constants_of(cfg_text):
+    found = {}
+    for line in cfg_text.splitlines():
+        line = line.split("\\*")[0].rstrip()
+        got = re.match(r"^\s+(\w+)\s*=\s*(.+)$", line)
+        if got:
+            value = parse(got.group(2))
+            found[got.group(1)] = sorted(value) if isinstance(value, frozenset) else value
+    return found

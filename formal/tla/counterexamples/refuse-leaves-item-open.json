@@ -1,0 +1,22 @@
+{
+  "case": "refuse-leaves-item-open",
+  "model": "CoreLifecycle",
+  "config": "CoreLifecycle.refuse.cfg",
+  "breaks": "S2",
+  "what": "A finding in the code, the same as the give-up one: MDK refuses an item's closing version in a live group (run.rs failed: EventTooLarge, InvalidAppMessagePayload), and nothing closes the item in the chat (S2; L2 too).",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"Prompts": ["p1"], "Requests": ["r1"], "NewSession": ["r1"], "Items": ["s1"], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 0, "MaxRefusals": 1, "UnknownTries": 2, "GoneChats": [], "ExactLookup": true, "TokenDedupe": false, "LagCatchUp": false, "LiveInOrder": true, "LiveAfterStore": true, "FairMdk": true, "FairDriver": true, "FairTime": true, "Bug": "none"},
+  "messages": [{"id": "p1", "chat": "c1", "kind": "prompt"}, {"id": "r1", "chat": "c1", "kind": "control", "new_session": true}],
+  "steps": [
+    {"action": "CatchUpDone"},
+    {"action": "Emit", "item": "s1", "settles": [], "fin": false},
+    {"action": "Save"},
+    {"action": "Emit", "item": "s1", "settles": [], "fin": true},
+    {"action": "Save"},
+    {"action": "Send", "chat": "c1", "send": {"item": "s1", "version": 1}, "outcome": "sent"},
+    {"action": "Save"},
+    {"action": "Send", "chat": "c1", "send": {"item": "s1", "version": 2}, "outcome": "refused"},
+    {"action": "Save"}
+  ],
+  "end": {"kind": "violation"}
+}

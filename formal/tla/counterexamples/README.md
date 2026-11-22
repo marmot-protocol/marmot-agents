@@ -1,68 +1,67 @@
 # CoreLifecycle counterexamples
 
-TLC's traces for the configurations that must fail, written by `python3 tools/tla/check.py --counterexamples`.
-Each becomes a simulator scenario when `marmot-agent-sim` exists (step 5 of
-[the verification plan](../../../docs/design/verification.md#in-what-order)). The schedules below use the shared
-action names. TLC does not print an action's arguments, so the outcome of each `Send` and `Lookup` is read from
-the state that follows it, and is written here. All are on the small bounds: one chat `c1`, prompt `p1`,
-control `r1`, session item `s1`, one down.
+One file per configuration that must fail, each a schedule in the shared action names of
+[the verification plan](../../../docs/design/verification.md). Nothing here is written by hand:
+`python3 tools/tla/check.py --counterexamples` runs TLC, reads its trace, and writes each file with
+`tools/tla/schedule.py`. Without the flag, `check.py` makes each schedule again and fails if it is not the
+committed one, so a schedule cannot drift from the model. TLC prints a trace without the actions' arguments;
+`schedule.py` reads them, and the outcome of each send and lookup, from what changed between one state and the
+next.
 
-## `unfair-mdk-never-answers` (L1, `CoreLifecycle.unfair.cfg`)
+All are on the small bounds of [the model's README](../README.md#configurations-and-results).
 
-MDK stops answering. Expected: L1 fails, since without `FairMdk` nothing promises a send goes out.
+## The format
 
-1. `CatchUpDone`, `Store(r1)`, `Ask(r1)`, `Save`: the control is pending, saved with its read mark.
-2. `Deliver(r1)`, `Refuse(r1)`, `Save`: the driver refuses it; a notice that settles `r1` is queued and saved.
-3. `Send(c1, ambiguous-lost)`: MDK's reply is lost and the notice did not go out; it is now looked for.
-4. Then nothing: every `Lookup` fails (a stuttering step) and no send is accepted, for ever. `r1` is never settled
-   in the chat.
+```json
+{
+  "case": "...", "model": "CoreLifecycle", "config": "CoreLifecycle.<name>.cfg",
+  "breaks": "S2", "what": "...", "constants": {...},
+  "messages": [{"id": "r1", "chat": "c1", "kind": "control", "new_session": true}],
+  "steps": [{"action": "Store", "msg": "r1"}, {"action": "Ask", "msg": "r1", "stored": true, "handled": true}],
+  "end": {"kind": "violation"}
+}
+```
 
-## `duplicate-first-event` (S3, `CoreLifecycle.duplicate.cfg`)
+- `steps` are the model's actions in order, with what each did: `Store(msg)`, `Hear(msg)` and `Ask(msg)`
+  (`handled` says whether the core read it: a message heard before it is stored is dropped), `CatchUp(chat,
+  msg)`, `CatchUpDone`, `Deliver(msg, kind, session)`, `Take(msg)`, `Refuse(msg)`, `Emit(item, settles, fin)`,
+  `Tick(req)`, `Send(chat, send, outcome)` with the outcome `sent`, `busy`, `ambiguous` (it did not go out),
+  `ambiguous_landed` (it did) or `refused`, `Lookup(chat, send, result)` with `found` or `absent` (an absent one
+  either `gives_up` or is followed by the `Send` that tries again), `Save`, `SaveFails`, `Crash`, `Restart`,
+  `DriverStops`, `Stop`. A `send` names an item's version, or a notice and what it is about.
+- `end` says how the trace ends: `violation` (the invariant `breaks` names is false after the last step),
+  `stutter` (nothing happens again, for ever) or `loop` (from step `from_step` on, the steps repeat for ever).
 
-The known limit until MDK has crash-safe tagged sends (`ExactLookup = FALSE`, `TokenDedupe = FALSE`).
+## The cases
 
-1. `CatchUpDone`, `Emit(s1, {}, fin)`, `Save`: the item's first version is queued and saved.
-2. `Send(c1, sent)`: MDK posts version 1 (marked as attempted, and saved, before MDK had it).
-3. `SaveFails`: the save that records the send fails, and the core stops: the state file still holds version 1 in
-   the outbox, attempted.
-4. `Restart`: the send is to be looked for.
-5. `Lookup(c1, absent, sent)`: the lookup does not find it (MDK published it and did not store it, or the core
-   cannot tell it from an earlier one), so it is sent again, and MDK posts it again. The chat has two first
-   events for one item.
+| File | Breaks | What it shows |
+| --- | --- | --- |
+| [`unfair-mdk-never-answers`](unfair-mdk-never-answers.json) | L1 | Without `FairMdk`: a send's outcome is unknown, and MDK never takes another step. The lookup stays enabled and is never taken (it does not fail), so the notice that settles `r1` is never posted |
+| [`duplicate-first-event`](duplicate-first-event.json) | S3 | The known limit until MDK has crash-safe tagged sends: MDK posts a first version, the save after it fails, and after the restart a lookup misses it, so it goes again |
+| [`live-out-of-order`](live-out-of-order.json) | S10 | Without `LiveInOrder`: `p1` is stored before `r1`, but `r1` is handed over first; the mark passes `p1`, which `run.rs` `handle` then skips |
+| [`live-before-store`](live-before-store.json) | L3 | Without `LiveAfterStore`: `p1` is heard before it is stored, so `order_of` gives nothing and it is dropped; MDK does not hand it over again, and nothing reads it until the core starts again |
+| [`give-up-leaves-item-open`](give-up-leaves-item-open.json) | S2 | A finding in the code: an item's closing version is given up, and nothing closes the item in the chat, not even a restart |
+| [`give-up-drops-settles`](give-up-drops-settles.json) | L1 | A finding in the code: a notice that settles `r1` is given up, and `r1` is settled nowhere |
+| [`refuse-leaves-item-open`](refuse-leaves-item-open.json) | S2 | The same finding, when MDK refuses the closing version in a live group (too large, or a payload it will not take) |
+| [`refuse-drops-settles`](refuse-drops-settles.json) | L1 | The same finding, when MDK refuses the notice that settles `r1` in a live group |
 
-With `TokenDedupe` (`CoreLifecycle.dedupe.cfg`) the second send gives back the first event, and S3 holds.
+## Driving the simulator with them (step 5)
 
-## `live-out-of-order` (S10, `CoreLifecycle.liveorder.cfg`)
+The simulator's schedule (`crates/marmot-agent-sim/src/schedule.rs` on the `core-simulator` branch) uses the
+same names, but most of its steps arm what happens next rather than say what happened, and the core takes its
+own steps. These files cannot be fed to it as they are. Trace validation, step 5, has to add:
 
-Without `LiveInOrder`: MDK hands live messages over out of storage order.
-
-1. `CatchUpDone`, `Store(r1)` (place 1), `Store(p1)` (place 2).
-2. `Hear(p1)`: `p1` comes first; the read mark moves to 2 with `r1` unread. `run.rs` `handle` would then skip
-   `r1`, whose place is at or before the mark.
-
-## `give-up-leaves-item-open` (S2, `CoreLifecycle.giveup.cfg`)
-
-A finding in the code, not a known limit: an item whose closing version is given up stays open in the chat. It
-needs a send whose outcome is unknown on every try (`UnknownTries = 1` here; the code tries ten times) and that a
-lookup does not find.
-
-1. `CatchUpDone`, `Emit(s1, {}, open)`, `Save`, `Emit(s1, {}, fin)`, `Save`: versions 1 (open) and 2 (closing) are
-   queued.
-2. `Send(c1, sent)`, `Save`: version 1 is posted; the chat shows the item open.
-3. `Send(c1, ambiguous-lost)`: version 2 did not go out, and the core does not know.
-4. `Lookup(c1, absent, …)`: not found, and its tries are used up, so it is given up: `conversation.rs` `refused`
-   drops it and queues a `failed` notice. `Save`.
-5. The state file has the item closed and nothing queued for it, so nothing will close it in the chat, not even a
-   restart (`recover` closes only open items). S2 fails here; L2 would fail too.
-
-## `give-up-drops-settles` (L1, `CoreLifecycle.giveup-notice.cfg`)
-
-A finding in the code: a notice that is given up takes the requests it settles with it. Same conditions as the one
-above; there is no item, so that one cannot come first.
-
-1. `CatchUpDone`, `Store(r1)`, `Ask(r1)`, `Save`, `Deliver(r1)`, `Refuse(r1)`, `Save`: a notice that settles `r1`
-   is queued, and `r1` is no longer pending.
-2. `Send(c1, ambiguous-lost)`: it did not go out, and the core does not know.
-3. `Lookup(c1, absent, …)`: given up. `refused` drops a notice with nothing in its place, so `r1` is settled
-   nowhere. `Save`.
-4. Then nothing more happens: `r1` stays pending in every app for ever.
+- **Messages by number.** Model ids (`p1`, `r1`) become indices into its `messages`; a new-session control is
+  `What::NewSession`, a prompt `What::Prompt { approval: false }`.
+- **The core's own steps as expectations.** `CatchUp`, `CatchUpDone`, `Save`, `Deliver`, and `Lookup` with `found`
+  or `absent`, are things the core does, not things a schedule makes happen. Step 5 has to record them from the
+  run and check them against the model's steps, in order.
+- **An `Emit` that names its item, what it settles and whether it closes it**, where the simulator's `Emit`
+  picks from the driver's script by number.
+- **A `Send` that names the send it meets.** The simulator's `Send { outcome }` arms the next send, whatever it is.
+  `sent` is the default (no step); `busy`, `ambiguous`, `ambiguous_landed` and `refused` map to its outcomes.
+- **The number of tries.** The model gives up after one or two; the code's `unknown_tries` knob must match.
+- **`Tick(req)`** as a `Tick { ms }` past the 120-second no-effect limit.
+- **An unfair end.** A `stutter` or `loop` end means MDK, or another party, never takes the step that would end
+  it. The simulator always runs a fair tail; step 5 needs a schedule that stops MDK answering, and an oracle that
+  then reports the property `breaks` names.
