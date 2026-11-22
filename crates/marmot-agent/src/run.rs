@@ -37,7 +37,7 @@ use crate::marmot::{
 use crate::socket::SocketDriver;
 use marmot_agent_driver::{Driver, Output, Reason, Refusal, SendFile};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -121,6 +121,11 @@ pub struct Kept {
     pub conversation: Saved,
     /// For each group, the place in storage order of the last message read.
     pub read: BTreeMap<GroupKey, i64>,
+    /// For each group the core had no mark for when it first read it, the second it had
+    /// subscribed in then: what arrived by then is the group's history (D-111). Saved with the
+    /// group's first mark, so it holds after a restart too.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub history: BTreeMap<GroupKey, u64>,
 }
 
 /// Which save fails: one that would write a state it matches.
@@ -247,10 +252,11 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// When this core subscribed to MDK's live events ([`Subscribed`]), by the machine's clock,
     /// in whole seconds as MDK gives the time a message arrived; zero until it runs.
     since: u64,
-    /// The groups the core had no read mark for when it first read them in this run, as on an
-    /// imported account's first run or after a lost state file: what arrived in them by
-    /// [`Core::since`] is their history, marked read and never handed on (L3).
-    fresh: BTreeSet<GroupKey>,
+    /// For each group the core had no read mark for when it first read it, as on an imported
+    /// account's first run or after a lost state file, the second the core had subscribed in
+    /// then: what arrived in it by that second is its history, marked read and never handed on,
+    /// in this run and every one after (L3, D-111). Kept with the marks.
+    history: BTreeMap<GroupKey, u64>,
     /// For each group whose last send failed: when to try again, and how long it waited last.
     retry: HashMap<GroupKey, (Instant, Duration)>,
     /// The groups whose next send MDK has queued, not yet taken into its engine.
@@ -332,12 +338,12 @@ impl<D: Driver, M: Side> Core<D, M> {
             driver,
             conversation,
             read: kept.read,
+            history: kept.history,
             store,
             folders,
             config: config.clone(),
             started: Instant::now(),
             since: 0,
-            fresh: BTreeSet::new(),
             retry: HashMap::new(),
             queued: HashSet::new(),
             unread: BTreeMap::new(),
@@ -585,7 +591,7 @@ impl<D: Driver, M: Side> Core<D, M> {
         if !accepting.is_empty() {
             for group in accepting {
                 self.read.insert(group.clone(), 0);
-                self.fresh.remove(group);
+                self.history.remove(group);
             }
             self.save()?;
         }
@@ -718,8 +724,9 @@ impl<D: Driver, M: Side> Core<D, M> {
             }
         }
         let start = start.unwrap_or(0);
-        self.fresh.insert(group.clone());
-        // Where it starts is kept, so its first new message is read there after a crash.
+        // Where it starts is kept, and what is its history, so its first new message is read
+        // there after a crash, and its history is never read as prompts.
+        self.history.insert(group.clone(), since);
         self.read.insert(group.clone(), start);
         self.save()?;
         Ok(Some(start))
@@ -771,7 +778,7 @@ impl<D: Driver, M: Side> Core<D, M> {
         if order <= read {
             return Ok(());
         }
-        if self.fresh.contains(&group) && message.received_at <= self.since {
+        if (self.history.get(&group)).is_some_and(|&since| message.received_at <= since) {
             self.read.insert(group, order);
             return self.save();
         }
@@ -1015,6 +1022,7 @@ impl<D: Driver, M: Side> Core<D, M> {
         let kept = Kept {
             conversation: self.conversation.saved().clone(),
             read: self.read.clone(),
+            history: self.history.clone(),
         };
         self.store.save(&kept).map_err(|_| Unsaved)
     }

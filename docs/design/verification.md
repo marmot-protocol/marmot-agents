@@ -155,7 +155,11 @@ fixed on 2026-11-21, each with a test that failed first.
   ([D-111](../decisions.md#d-111-a-group-the-core-has-never-read-starts-after-what-arrived-before-the-core-did)). Review found three ways the first fix still let one through, each with a test that failed first:
   history stored after a new prompt reached the driver; the second was taken only once the harness was up, so a
   prompt that came while it started was dropped; and a read that succeeded after failing jumped the mark past a
-  prompt it had found, whose announcement then came too late. The simulator does not reach this: its groups always
+  prompt it had found, whose announcement then came too late. A later review found a fourth: the second was kept
+  only for the run, so a core that stopped after saving where a new group starts and before it could read the group
+  left the next run to read, as a prompt, history stored after a new prompt. The state file now keeps the second
+  with the group's first mark, and every run after goes by it (`history_is_history_after_a_restart`, which failed
+  first). The simulator does not reach this: its groups always
   start from an invitation, with a mark. The import test's check that the agent answers after the move waited for
   MDK: on an imported home, MDK up to 0.19.0 delivered nothing sent once the core had started, even after the pause
   meant to avoid [MDK #3602](https://github.com/marmot-protocol/mdk/issues/3602), and the check passed before only

@@ -32,11 +32,13 @@ fn group() -> GroupKey {
     GroupKey(format!("6c{:062x}", 1))
 }
 
-/// What the stand-in MDK stored, and how many of the next reads of it fail.
+/// What the stand-in MDK stored, and how many of the next reads of it fail, after how many that
+/// do not.
 #[derive(Default)]
 struct Storage {
     rows: Vec<Message>,
     fails: usize,
+    first_ok: usize,
 }
 
 /// A stand-in MDK with one accepted group, whose storage the test fills.
@@ -83,8 +85,18 @@ impl Mdk {
         self.storage.lock().unwrap().fails = n;
     }
 
+    /// The `n` reads of what was stored after the next `ok` fail.
+    fn fail_reads_after(&self, ok: usize, n: usize) {
+        let mut storage = self.storage.lock().unwrap();
+        (storage.first_ok, storage.fails) = (ok, n);
+    }
+
     fn read_fails(&self) -> bool {
         let mut storage = self.storage.lock().unwrap();
+        if storage.first_ok > 0 {
+            storage.first_ok -= 1;
+            return false;
+        }
         let fails = storage.fails > 0;
         storage.fails = storage.fails.saturating_sub(1);
         fails
@@ -216,7 +228,6 @@ impl Driver for Taker {
 
 /// The core running on a stand-in MDK, with no read mark for its group.
 struct Running {
-    mdk: Mdk,
     live: mpsc::UnboundedSender<Live>,
     prompts: Arc<Mutex<Vec<String>>>,
     state: tempfile::TempDir,
@@ -225,9 +236,13 @@ struct Running {
 }
 
 impl Running {
-    /// Starts the core on `mdk`, subscribed in second [`SINCE`].
+    /// Starts the core on `mdk`, subscribed in second [`SINCE`], with no state.
     fn start(mdk: Mdk) -> Self {
-        let state = tempfile::tempdir().unwrap();
+        Self::start_in(mdk, tempfile::tempdir().unwrap(), SINCE)
+    }
+
+    /// Starts the core on `mdk` with the state in `state`, subscribed in second `since`.
+    fn start_in(mdk: Mdk, state: tempfile::TempDir, since: u64) -> Self {
         let settings = format!(
             "home = \"/unused\"\nrelays = [\"wss://relay.invalid\"]\nowner = \"{}\"\n[connector]\n",
             owner().as_str()
@@ -238,15 +253,11 @@ impl Running {
         let core = Core::new(mdk.clone(), driver, &config, Store::new(state.path())).unwrap();
         let (announce, events) = mpsc::unbounded_channel();
         let (stop, stopped) = oneshot::channel::<()>();
-        let live = Subscribed {
-            events,
-            since: SINCE,
-        };
+        let live = Subscribed { events, since };
         let task = tokio::spawn(core.run(live, async {
             let _ = stopped.await;
         }));
         Self {
-            mdk,
             live: announce,
             prompts,
             state,
@@ -275,11 +286,12 @@ impl Running {
         tokio::time::sleep(Duration::from_secs(30)).await;
     }
 
-    async fn stop(mut self) {
+    /// Stops the core, and gives back its state.
+    async fn stop(mut self) -> tempfile::TempDir {
         let _ = self.stop.take().unwrap().send(());
         let ended = self.task.take().unwrap().await.unwrap();
         assert!(ended.is_ok(), "the core ends cleanly");
-        drop(self.mdk);
+        self.state
     }
 }
 
@@ -378,5 +390,27 @@ async fn more_than_a_page_is_read_in_order() {
     let expected: Vec<String> = (0..250).map(|n| n.to_string()).collect();
     assert_eq!(core.prompts(), expected);
     assert_eq!(core.mark(), Some(250));
+    core.stop().await;
+}
+
+// A new group's mark is saved with the second the core subscribed in, so what arrived before it
+// is history after a restart too: here MDK stored a prompt and then a message that arrived
+// before the core subscribed, and the first run stopped before it could read the group.
+#[tokio::test(start_paused = true)]
+async fn history_is_history_after_a_restart() {
+    let mdk = Mdk::new();
+    mdk.store("new", SINCE + 1);
+    mdk.store("old", SINCE);
+    // Where the group starts is found and saved, and the read after that fails.
+    mdk.fail_reads_after(1, 1);
+    let core = Running::start(mdk.clone());
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert_eq!(core.mark(), Some(0), "the group starts before the prompt");
+    assert!(core.prompts().is_empty());
+    let state = core.stop().await;
+    let core = Running::start_in(mdk, state, SINCE + 60);
+    core.settle().await;
+    assert_eq!(core.prompts(), ["new"]);
+    assert_eq!(core.mark(), Some(2), "the history is marked read");
     core.stop().await;
 }
