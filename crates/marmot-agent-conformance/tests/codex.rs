@@ -68,45 +68,20 @@ impl Subject for OnFake {
     }
 }
 
+// One test for each scenario, made from the suite's one list of them.
 macro_rules! conformance {
-    ($($name:ident),* $(,)?) => {
+    ($make:expr; $($name:ident),* $(,)?) => {
         $(
             #[tokio::test]
             async fn $name() {
-                let found = scenarios::run(stringify!($name), OnFake::default()).await;
+                let found = scenarios::$name($make).await;
                 found.unwrap_or_else(|v| panic!("{v}"));
             }
         )*
     };
 }
 
-conformance!(
-    one_turn,
-    two_chats,
-    answered_once,
-    answer_after_death,
-    dies_mid_turn,
-    dies_with_requests_pending,
-    dropped_waits,
-    slow_and_out_of_order,
-    partial_frames,
-    never_answers,
-    stops_reading,
-    late_replies,
-    restart,
-    new_session,
-    settings,
-);
-
-#[test]
-fn every_scenario_is_run() {
-    let here = include_str!("codex.rs");
-    for name in scenarios::ALL {
-        let listed = here.contains(&format!("    {name},\n"));
-        let alone = here.contains(&format!("async fn {name}()"));
-        assert!(listed || alone, "{name} is not run");
-    }
-}
+marmot_agent_conformance::with_scenarios!(conformance!(OnFake::default()));
 
 #[tokio::test]
 async fn dies_at_every_step() {

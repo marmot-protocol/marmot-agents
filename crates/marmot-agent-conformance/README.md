@@ -46,6 +46,8 @@ out is reported as the liveness property it stands for (L1 a request, L2 a turn,
 
 ## The scenarios
 
+Every driver runs these, but where the table under "What was run" says otherwise.
+
 | Scenario | What happens |
 | --- | --- |
 | `one_turn` | A prompt answered in words |
@@ -152,8 +154,14 @@ cargo test -p marmot-agent-conformance --test acp # one driver
 The Pi tests need `python3` for the relay, as Pi's own tests do. The suite is part of the workspace's tests, so CI's Rust
 job runs it on every pull request.
 
-To add a driver: write a `Subject` for it in `tests/`, on a fake of its harness (a `Protocol`), and list every scenario;
-`every_scenario_is_run` fails if one is left out.
+The scenarios are listed once, in `with_scenarios!` (`src/scenarios.rs`). A driver that runs them all makes one test
+for each from that list, as `tests/codex.rs` does, so a scenario added there is run at once. A driver that runs only
+some (Goose, Cursor, and Pi for now) names those it runs and those it leaves out, with the reason; its
+`every_scenario_is_run_or_left_out` fails unless the two name every scenario once, and a name that is no scenario does
+not compile.
+
+To add a driver: write a `Subject` for it in `tests/`, on a fake of its harness (a `Protocol`), and make its tests
+from `with_scenarios!`.
 
 ## Phase two: the socket connectors (design)
 

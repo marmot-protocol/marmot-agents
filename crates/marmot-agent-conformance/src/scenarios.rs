@@ -9,44 +9,78 @@ use marmot_agent_driver::{ChatId, Emitted, MessageId, Output};
 use marmot_agent_events::{Body, State};
 use std::time::Duration;
 
-/// Every scenario, by name, for a test to run one at a time.
-pub const ALL: [&str; 15] = [
-    "one_turn",
-    "two_chats",
-    "answered_once",
-    "answer_after_death",
-    "dies_mid_turn",
-    "dies_with_requests_pending",
-    "dropped_waits",
-    "slow_and_out_of_order",
-    "partial_frames",
-    "never_answers",
-    "stops_reading",
-    "late_replies",
-    "restart",
-    "new_session",
-    "settings",
-];
+/// The one list of the scenarios every driver must pass. It calls the macro it is given with what
+/// it was given, then `;` and every scenario's name: a test file generates one test for each,
+/// and the suite's own [`ALL`] and [`run`] are made from it, so a scenario added here is run by
+/// every driver that runs them all, and must be named by every driver that runs only some.
+///
+/// ```ignore
+/// macro_rules! conformance {
+///     ($make:expr; $($name:ident),*) => { $( #[tokio::test] async fn $name() { ... } )* };
+/// }
+/// marmot_agent_conformance::with_scenarios!(conformance!(OnFake::default()));
+/// ```
+#[macro_export]
+macro_rules! with_scenarios {
+    ($then:ident ! ($($given:tt)*)) => {
+        $then!(
+            $($given)*;
+            one_turn,
+            two_chats,
+            answered_once,
+            answer_after_death,
+            dies_mid_turn,
+            dies_with_requests_pending,
+            dropped_waits,
+            slow_and_out_of_order,
+            partial_frames,
+            never_answers,
+            stops_reading,
+            late_replies,
+            restart,
+            new_session,
+            settings
+        );
+    };
+}
 
-/// Runs the scenario called `name`.
-pub async fn run<S: Subject>(name: &str, subject: S) -> Result<(), Violation> {
-    match name {
-        "one_turn" => one_turn(subject).await,
-        "two_chats" => two_chats(subject).await,
-        "answered_once" => answered_once(subject).await,
-        "answer_after_death" => answer_after_death(subject).await,
-        "dies_mid_turn" => dies_mid_turn(subject).await,
-        "dies_with_requests_pending" => dies_with_requests_pending(subject).await,
-        "dropped_waits" => dropped_waits(subject).await,
-        "slow_and_out_of_order" => slow_and_out_of_order(subject).await,
-        "partial_frames" => partial_frames(subject).await,
-        "never_answers" => never_answers(subject).await,
-        "stops_reading" => stops_reading(subject).await,
-        "late_replies" => late_replies(subject).await,
-        "restart" => restart(subject).await,
-        "new_session" => new_session(subject).await,
-        "settings" => settings(subject).await,
-        other => panic!("no scenario called {other}"),
+macro_rules! registry {
+    (; $($name:ident),*) => {
+        /// Every scenario, by name, from [`with_scenarios`](crate::with_scenarios).
+        pub const ALL: &[&str] = &[$(stringify!($name)),*];
+
+        /// Runs the scenario called `name`.
+        pub async fn run<S: Subject>(name: &str, subject: S) -> Result<(), Violation> {
+            match name {
+                $(stringify!($name) => $name(subject).await,)*
+                other => panic!("no scenario called {other}"),
+            }
+        }
+    };
+}
+
+crate::with_scenarios!(registry!());
+
+/// For a driver that runs only some scenarios: those it runs and those it leaves out, with a
+/// reason, between them name every scenario, once. Gives back what is wrong.
+pub fn covered(run: &[&str], left_out: &[&str]) -> Result<(), String> {
+    let mut wrong = Vec::new();
+    for name in ALL {
+        match (run.contains(name), left_out.contains(name)) {
+            (true, true) => wrong.push(format!("{name} is both run and left out")),
+            (false, false) => wrong.push(format!("{name} is neither run nor left out")),
+            _ => {}
+        }
+    }
+    for name in run.iter().chain(left_out) {
+        if !ALL.contains(name) {
+            wrong.push(format!("{name} is no scenario"));
+        }
+    }
+    if wrong.is_empty() {
+        Ok(())
+    } else {
+        Err(wrong.join("; "))
     }
 }
 

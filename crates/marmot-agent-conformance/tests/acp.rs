@@ -79,15 +79,18 @@ impl Subject for OnFake {
     }
 }
 
+// The scenarios a flavour runs, one test each, with the crash sweep. A flavour that runs only some
+// names those it leaves out; a check that the two lists name every scenario in the suite's one list,
+// once, is made from the same names.
 macro_rules! conformance {
-    ($flavor:ident: $($name:ident),* $(,)?) => {
+    ($flavor:ident: run: [$($name:ident),* $(,)?]; left_out: [$($out:ident),* $(,)?]) => {
         #[allow(non_snake_case)]
         mod $flavor {
             use super::*;
             $(
                 #[tokio::test]
                 async fn $name() {
-                    let found = scenarios::run(stringify!($name), subject(Flavor::$flavor)).await;
+                    let found = scenarios::$name(subject(Flavor::$flavor)).await;
                     found.unwrap_or_else(|v| panic!("{v}"));
                 }
             )*
@@ -97,61 +100,58 @@ macro_rules! conformance {
                 let found = scenarios::dies_at_every_step(|| subject(Flavor::$flavor)).await;
                 found.unwrap_or_else(|v| panic!("{v}"));
             }
+
+            #[test]
+            fn every_scenario_is_run_or_left_out() {
+                $(let _ = scenarios::$out::<OnFake>;)*
+                let found =
+                    scenarios::covered(&[$(stringify!($name)),*], &[$(stringify!($out)),*]);
+                found.unwrap_or_else(|wrong| panic!("{wrong}"));
+            }
         }
+    };
+    // Every scenario, from the suite's one list.
+    ($flavor:ident; $($name:ident),* $(,)?) => {
+        conformance!($flavor: run: [$($name),*]; left_out: []);
     };
 }
 
-conformance!(OpenCode:
-    one_turn,
-    two_chats,
-    answered_once,
-    dies_mid_turn,
-    dies_with_requests_pending,
-    dropped_waits,
-    slow_and_out_of_order,
-    partial_frames,
-    never_answers,
-    stops_reading,
-    late_replies,
-    restart,
-    new_session,
-    settings,
-);
+marmot_agent_conformance::with_scenarios!(conformance!(OpenCode));
 
 // Goose and Cursor differ from OpenCode in how a session is taken up again, in Goose's runs of its
-// own, and in Cursor's to-do list: the scenarios that reach those.
+// own, and in Cursor's to-do list: they run the scenarios that reach those, and the answer to an
+// agent that has gone. The rest go through the same code as OpenCode's.
 conformance!(Goose:
-    two_chats,
-    answered_once,
-    dies_mid_turn,
-    restart,
-    new_session,
+    run: [two_chats, answered_once, answer_after_death, dies_mid_turn, restart, new_session];
+    left_out: [
+        one_turn,
+        dies_with_requests_pending,
+        dropped_waits,
+        slow_and_out_of_order,
+        partial_frames,
+        never_answers,
+        stops_reading,
+        late_replies,
+        settings,
+    ]
 );
 
 conformance!(Cursor:
-    two_chats,
-    answered_once,
-    restart,
+    run: [two_chats, answered_once, answer_after_death, restart];
+    left_out: [
+        one_turn,
+        dies_mid_turn,
+        dies_with_requests_pending,
+        dropped_waits,
+        slow_and_out_of_order,
+        partial_frames,
+        never_answers,
+        stops_reading,
+        late_replies,
+        new_session,
+        settings,
+    ]
 );
-
-// Found a bug in the driver: an answer written after the agent had gone was shown as given.
-#[tokio::test]
-async fn answer_after_death() {
-    for flavor in [Flavor::OpenCode, Flavor::Goose, Flavor::Cursor] {
-        let found = scenarios::run("answer_after_death", subject(flavor)).await;
-        found.unwrap_or_else(|v| panic!("{flavor:?}: {v}"));
-    }
-}
-
-#[test]
-fn every_scenario_is_run() {
-    let here = include_str!("acp.rs");
-    for name in scenarios::ALL {
-        let listed = here.contains(&format!("    {name},\n"));
-        let alone = here.contains(&format!("async fn {name}()"));
-        assert!(listed || alone, "{name} is not run");
-    }
-}
 
 fn recording(folder: &str, name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
