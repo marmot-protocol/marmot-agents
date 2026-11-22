@@ -150,8 +150,8 @@ fixed on 2026-11-21, each with a test that failed first.
   arrived after is read, once, in storage order, whatever order MDK stored or announced them in. The core reads such
   a group from its start, and starts it just before the first new message. The second is taken where the program
   subscribes, before MDK starts and before the harness starts or a connector comes, so a prompt that arrives while a
-  slow harness starts is read. A message that arrived in that very second is taken as history: provisional, waiting
-  for the owner. Review found three ways the first fix still let one through, each with a test that failed first:
+  slow harness starts is read. A message that arrived in that very second is taken as history
+  ([D-111](../decisions.md#d-111-a-group-the-core-has-never-read-starts-after-what-arrived-before-the-core-did)). Review found three ways the first fix still let one through, each with a test that failed first:
   history stored after a new prompt reached the driver; the second was taken only once the harness was up, so a
   prompt that came while it started was dropped; and a read that succeeded after failing jumped the mark past a
   prompt it had found, whose announcement then came too late. The simulator does not reach this: its groups always
