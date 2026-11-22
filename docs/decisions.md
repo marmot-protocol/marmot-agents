@@ -1771,3 +1771,16 @@ after 100 ms and then doubling up to 10 s, with no limit on how often. Other gro
 writes names no group ([D-071](#d-071-what-may-be-logged)).
 
 Decided 2026-11-22. The project owner decided.
+
+## D-107 Every harness that lets an agent send a file gets file sending, before the swap
+
+**Decision.** File sending ([D-090](#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder))
+is a hard requirement for every harness whose interface lets an agent send a file, or lets a client give the agent
+a tool that can. This applies to the coding harnesses (Codex, Claude Code, Pi, OpenCode, Goose, Cursor) and the
+gateways (Hermes, OpenClaw). A harness that offers no way is named, with the evidence, and is the only exception.
+The swap waits for it.
+
+**Why.** Sending a file to the chat is part of what an agent is for. Today's connectors for Hermes and OpenClaw
+already send media, and the new system must not do less than they do on any harness that can.
+
+Decided 2026-11-22. The project owner decided.

@@ -99,7 +99,7 @@ Also before the swap: a chat can move a coding harness to another folder
 harness the person already has, on Linux and macOS
 ([D-102](decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)).
 **Done when** an install of each of today's connectors has moved over, on a test machine, without being
-invited again.
+invited again, and every harness that allows it can send a file.
 
 Built so far, provisional until the owner accepts what others can see:
 
@@ -108,7 +108,8 @@ Built so far, provisional until the owner accepts what others can see:
   connectors on the socket send a `send_file` request. See
   [sending a file](design/drivers.md#sending-a-file) and
   [the socket's `send_file`](design/socket-protocol.md#the-messages-as-built). Pi and the ACP agents, and the
-  Hermes and OpenClaw plugins, do not offer it yet.
+  Hermes and OpenClaw plugins, do not offer it yet; every harness that allows it must before the swap
+  ([D-107](decisions.md#d-107-every-harness-that-lets-an-agent-send-a-file-gets-file-sending-before-the-swap)).
 
 ### Verification, alongside M4
 
