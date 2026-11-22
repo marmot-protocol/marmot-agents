@@ -3166,6 +3166,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "marmot-agent-sim"
+version = "0.1.0"
+dependencies = [
+ "marmot-agent",
+ "marmot-agent-driver",
+ "marmot-agent-events",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "marmot-app"
 version = "0.19.0-dev"
 source = "git+https://github.com/marmot-protocol/mdk.git?rev=bf4778a3388be58006a498ba84bf5df541630220#bf4778a3388be58006a498ba84bf5df541630220"
