@@ -342,13 +342,16 @@ impl Marmot {
             // again, it shows the same text, and adds nothing anyone sees.
             Ok(Taken::Sent(event)) => return Ok(event),
             Err(error) => {
-                // A try MDK dropped is refused if tried again; that is the drop, not a refusal.
-                if let Ok(Some(LocalSendStatus::Rejected)) =
-                    (self.runtime).local_send_status(&self.label, &id, &token.mdk)
-                {
-                    return Err(SendFailed::Rejected);
-                }
-                return Err(send_failed(&error));
+                let status = (self.runtime).local_send_status(&self.label, &id, &token.mdk);
+                return Err(match status {
+                    // A try MDK dropped is refused if tried again; that is the drop, not a
+                    // refusal.
+                    Ok(Some(LocalSendStatus::Rejected)) => SendFailed::Rejected,
+                    // MDK answers a token it took with what it made of it, before it looks at
+                    // the group: so it never took this one, and the group is going or gone.
+                    Ok(None) if group_ended(&error) => SendFailed::Refused { gone: false },
+                    _ => send_failed(&error),
+                });
             }
         };
         self.settled(&id, &token.mdk).await?;
@@ -691,6 +694,16 @@ pub enum FileFailed {
     Busy,
     /// Anything else, which may have come after MDK took it.
     Failed,
+}
+
+/// Whether MDK refused a send because its group is being disbanded, or because MDK has no such
+/// group: for good, unlike other failures to read its storage, which pass.
+fn group_ended(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::GroupDisbanding(_)
+            | AppError::Storage(cgka_traits::storage::StorageError::NotFound)
+    )
 }
 
 /// What MDK's error says of a send: whether MDK took it.

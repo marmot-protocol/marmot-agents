@@ -379,3 +379,47 @@ async fn the_same_words_twice_in_one_second_both_go_out() {
     assert_eq!(sent_by_core(&world, &group, 9).len(), 2, "both went out");
     world.runtime.shutdown().await;
 }
+
+// A send to a group that is disbanded, or that MDK does not have, is refused for good, so the
+// core drops it with its notice and the chat's later sends are not held up behind it for ever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_to_a_group_disbanded_or_unknown_is_refused() {
+    use marmot_agent::marmot::SendFailed;
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let group = a_quiet_chat(&world).await;
+    let (words, _) = words_named("a");
+    let unknown = GroupKey("ab".repeat(16));
+    let tried = world
+        .marmot
+        .send(&unknown, &words, &words_named("a").1)
+        .await;
+    assert_eq!(tried, Err(SendFailed::Refused { gone: false }), "unknown");
+
+    let id = group_id(&group);
+    world
+        .runtime
+        .enable_group_disbanding(&world.person, &id)
+        .await
+        .unwrap();
+    world
+        .runtime
+        .disband_group(&world.person, &id)
+        .await
+        .unwrap();
+    // MDK takes sends a while longer, until the disband has gone through; a send it took and
+    // dropped is refused under its token after, so each try has one of its own.
+    for n in 0.. {
+        assert!(n < 300, "refused within 30 seconds");
+        let token = marmot_agent::Token {
+            send: "a".into(),
+            mdk: format!("token {n}"),
+            edits: None,
+        };
+        let tried = world.marmot.send(&group, &words, &token).await;
+        if tried == Err(SendFailed::Refused { gone: false }) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    world.runtime.shutdown().await;
+}
