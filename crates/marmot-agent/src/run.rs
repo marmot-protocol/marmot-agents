@@ -50,6 +50,12 @@ const SEND_WAIT_MAX: Duration = Duration::from_secs(10);
 /// it up as refused. Each such try sent nothing, so the next is made under a new token.
 pub const REJECTED_TRIES: u32 = 10;
 
+/// Why the core does not start on a state file an older core left with sends it handed to MDK
+/// before MDK kept tokens: sent again under a token, any of them could go out twice. No such core
+/// was released.
+const TRIED_WITHOUT_TOKENS: &str = "the state file was left by an older marmot-agent with sends \
+    that may have gone out; move it away to start afresh";
+
 /// How many sends one group makes in one turn of the core's loop, so one chat's backlog, or a slow
 /// MDK, does not hold up the others.
 const DRAIN: usize = 8;
@@ -275,6 +281,9 @@ impl<D: Driver, M: Side> Core<D, M> {
         // the owner allows it (D-099).
         let folders = Folders::from_config(config)?;
         let kept = store.load()?;
+        if kept.conversation.tried_without_tokens() {
+            return Err(TRIED_WITHOUT_TOKENS.into());
+        }
         let mut conversation = Conversation::new(
             marmot.agent().clone(),
             driver.harness().name,

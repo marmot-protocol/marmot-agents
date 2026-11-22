@@ -7,7 +7,7 @@ mod common;
 use common::{Chat, World, first, within};
 use marmot_agent::carrier::Asked;
 use marmot_agent::marmot::Fault;
-use marmot_agent::run::{Kept, Store};
+use marmot_agent::run::{Core, Kept, Store};
 use marmot_agent::{Conversation, EventKey, GroupKey, Heard, PubKey, Sending, Where};
 use marmot_agent_driver::{
     Answer, Capabilities, ChatId, Control, Driver, Emitted, FilesIn, Harness, MidTurn, Output,
@@ -996,6 +996,41 @@ async fn an_edit_that_went_out_before_a_crash_is_not_sent_again() {
     let edits = sent_by_core(&chat, 1009);
     assert_eq!(edits.len(), 1, "the edit went out once");
     core.stop().await;
+    world.runtime.shutdown().await;
+}
+
+// A state file that has sends handed to MDK but no salt was written by a core from before MDK
+// kept tokens, which sent without one: under a token now, such a send could go out a second time.
+// No such core was released, so the core does not look those sends up: it refuses to start, and
+// says why (S3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_state_with_sends_tried_before_tokens_is_refused() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, _events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, id) = a_chat(&world, &seen).await;
+    core.stop().await;
+    let group = GroupKey(chat.hex.clone());
+    let (store, kept, mut talk) = taken_up(&world);
+    talk.emitted(words_done("the words", &id, Vec::new()));
+    let (token, _) = talk.next_send(&group).unwrap();
+    talk.attempting(&token.send);
+    let read = kept.read;
+    let conversation = talk.saved().clone();
+    store.save(&Kept { conversation, read }).unwrap();
+    // As an older core left it: no salt.
+    let mut file = json(&store.load().unwrap());
+    file["conversation"].as_object_mut().unwrap().remove("salt");
+    let path = world.state.path().join("marmot-agent-state.json");
+    std::fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+
+    let (driver, _events, _) = stub(false);
+    let started = Core::new(world.marmot.clone(), driver, &world.config, store);
+    let Err(why) = started else {
+        panic!("the core starts on a state from before tokens");
+    };
+    assert!(why.contains("older"), "says why: {why}");
     world.runtime.shutdown().await;
 }
 

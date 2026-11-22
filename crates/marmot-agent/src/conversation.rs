@@ -250,6 +250,14 @@ pub struct Saved {
     salt: String,
 }
 
+impl Saved {
+    /// Whether a core from before MDK kept tokens wrote this: it has sends it handed to MDK,
+    /// without a token, and no salt. Under a token now, any of them could go out a second time.
+    pub fn tried_without_tokens(&self) -> bool {
+        self.salt.is_empty() && self.outbox.iter().any(|q| q.attempted)
+    }
+}
+
 /// Prints how much is kept, and nothing of it (D-071).
 impl std::fmt::Debug for Saved {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
