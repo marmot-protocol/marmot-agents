@@ -23,17 +23,17 @@ emitted (`src/oracle.rs`).
 
 | Id | Checked | How |
 | --- | --- | --- |
-| S1 | every step | Each request is settled at most once, only in its own chat, and never by the `no_effect` net when the harness showed its effect before the net could first fire: 119 s after it took the request, since the core waits `EFFECT_LIMIT_SECS` (120 s) on a clock of whole seconds and looks on a 10 s tick |
-| S3 | every step | Each item's stored versions rise by one, skipping only versions MDK refused; every later version names the first; the agent's words go out as a new message once |
+| S1 | every step | Each request is settled at most once, only in its own chat, and never by the `no_effect` net when the harness showed its effect before the net could first fire: 119 s after it took the request, which is when the driver answered the core (after a `Slow` move's time) and the core set its deadline, since the core waits `EFFECT_LIMIT_SECS` (120 s) on a clock of whole seconds and looks on a 10 s tick |
+| S3 | every step | Each item's stored versions rise by one from v1, skipping only versions MDK refused (before the first stored one too); every later version names the first; the agent's words go out as a new message once |
 | S4 | every step | No prompt reaches the harness twice, across every crash |
 | S5 | every step | A chat id stands for one chat; an item, the agent's words and a settle reach only their own chat, and an edit of the agent's words edits their own message there |
-| S10 | every step | What reaches the harness from a chat comes in storage order |
-| S12 | every step | A prompt names a session only on a driver's first prompt for the chat, only one the chat had, never one that ended |
-| L1, L2, L3 | at the end | Every chat joined and everything posted stored; every request settled once; every turn ended, everything the running driver emitted seen by the chat in its last state (nothing waits in the outbox for good), and no harness work left; every prompt handled; within 900 s of virtual time |
+| S10 | every step | What reaches the harness from a chat comes in storage order, each message once: a prompt by its text, an answer or a control as the request message the core read last, which it hands on before reading another |
+| S12 | every step | A prompt names a session only on a driver's first prompt for the chat, only one the chat had, never one whose end was stored before the prompt reached the harness (by storage order) |
+| L1, L2, L3 | at the end | Every chat joined and everything posted stored; every request settled once; every turn ended, the latest emission of each item of the running driver stored or refused, known by its `seq` (nothing waits in the outbox for good), no harness work left and no send still to land; every prompt handled; within 900 s of virtual time from the start of the fair part |
 | S2 | at the end | Before the last stop, nothing an earlier driver left is open; after it, nothing at all |
 
 The end is fair: faults stop, everything posted is stored and heard, a harness that hangs is restarted once, the
-harness finishes its turns, and the clock runs. By design, and so not counted as failures:
+harness finishes its turns, a send that lands late lands, and the clock runs. By design, and so not counted as failures:
 
 - A prompt whose delivery a crash cut off is lost (D-037: at most once, not at least once).
 - A request with no target read more than five minutes late is dropped (D-028), also when it was read in time and a
@@ -57,7 +57,7 @@ makes raises the family's version.
 | `crash` | `Crash` before any effect (a save, a send, a request to the driver, an accept), `SaveFails`, `Stop`, a send that goes out just before a crash | yes |
 | `sends` | `Send` outcomes `Busy`, `Ambiguous` (gone out or not), `Refused`, `Lookup` errors, crashes | yes |
 | `live` | `Lag`, live messages that come late | yes |
-| `driver` | `Refuse`, `Slow`, `Hang` (then a crash), `Ignore` (taken, never shown), `DriverStops` | yes |
+| `driver` | `Refuse`, `Slow` (taken, and acted on, only after its time), `Hang` (the very next request, then a crash), `Ignore` (taken, never shown), `DriverStops` | yes |
 | `mixed` | all of the above | yes |
 | `disorder` | beyond MDK's contract: a message heard before it is stored, or out of order | no: shows what the core does |
 | `late` | beyond the core's assumption: a send of unknown outcome lands after the core looked for it | no: must find the accepted duplicate |
@@ -81,7 +81,8 @@ cargo run --release -p marmot-agent-sim -- schedule FILE          # run a schedu
 ```
 
 `run` writes each schedule to `--out` before it runs, and removes it when the run passes; a run that hangs or panics
-leaves it behind. A failure leaves `NAME.capsule.json`: the schedule shrunk to a short one that fails the same
+leaves it behind. A schedule that cannot be written stops `run` before that run, and a capsule that cannot be written
+is reported and fails it. A failure leaves `NAME.capsule.json`: the schedule shrunk to a short one that fails the same
 property, the original, the property and the trace. The seed tests write theirs under the target folder
 (`target/tmp/marmot-agent-sim`), and CI keeps that folder as the `simulator-capsules` artifact of a failed run.
 

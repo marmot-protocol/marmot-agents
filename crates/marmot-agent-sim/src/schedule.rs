@@ -77,9 +77,14 @@ impl Family {
     }
 
     /// The generator's version for the family. A change to what a seed generates raises it, so
-    /// an old name never stands for a new schedule.
+    /// an old name never stands for a new schedule. Version 2 of `live`, `driver` and `mixed`:
+    /// a message heard live takes the ones stored before it off the list still to be heard, and
+    /// a `Hang` goes ahead of the moves still queued.
     pub fn version(self) -> u32 {
-        1
+        match self {
+            Family::Live | Family::Driver | Family::Mixed => 2,
+            _ => 1,
+        }
     }
 
     /// Whether the simulated MDK keeps its contract: a message is heard only once it is stored,
@@ -447,6 +452,14 @@ pub fn generate(name: &RunName) -> Schedule {
             Action::Hear { msg }
         }
     };
+    // A message heard live, within MDK's contract: every message of its chat stored before it is
+    // heard with it, so none of them is still to be heard.
+    let contract = name.family.within_contract();
+    let heard_live = |chat: u8, unheard: &mut [Vec<usize>]| {
+        if contract {
+            unheard[usize::from(chat)].clear();
+        }
+    };
     while steps.len() < length {
         if let Some(n) = restart_in {
             if n == 0 {
@@ -507,6 +520,7 @@ pub fn generate(name: &RunName) -> Schedule {
                 if mix.late_hear > 0 && rng.below(10) < u64::from(mix.late_hear) {
                     unheard[usize::from(chat)].push(msg);
                 } else {
+                    heard_live(chat, &mut unheard);
                     steps.push(hear(msg, &messages));
                 }
             }
@@ -574,7 +588,8 @@ pub fn generate(name: &RunName) -> Schedule {
                 ms: rng.pick(&[200, 2_000, 8_000]),
             }),
             15 => {
-                // A harness that hangs holds the core until it is killed: a prompt reaches it.
+                // A harness that hangs holds the core until it is killed: a prompt reaches it
+                // (the `Hang` goes ahead of any move still queued).
                 steps.push(Action::Hang);
                 let chat = rng.below(u64::from(chats)) as u8;
                 let msg = messages.len();
@@ -583,6 +598,7 @@ pub fn generate(name: &RunName) -> Schedule {
                     what: What::Prompt { approval: false },
                 });
                 steps.push(Action::Store { msg });
+                heard_live(chat, &mut unheard);
                 steps.push(Action::Hear { msg });
                 for _ in 0..rng.below(3) {
                     steps.push(Action::Emit {

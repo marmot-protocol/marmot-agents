@@ -4,7 +4,7 @@
 //! schedule passes.
 
 use marmot_agent_sim::{
-    Action, BugSet, Family, Faults, Posted, Report, RunName, Schedule, What, run,
+    Action, BugSet, Family, Faults, Outcome, Posted, Report, RunName, Schedule, What, run,
 };
 
 /// One chat, one prompt that reaches the harness, and then `then`.
@@ -81,4 +81,57 @@ fn harness_work_left_at_the_bound_fails() {
     assert!(failed.failure.detail.contains("harness"), "{failed:?}");
     // The last stop still ran.
     assert!(report.trace.iter().rev().any(|t| t.what == "Stop"));
+}
+
+// Review round 2. The old `Hang` queued behind the moves already armed: after a `Refuse`, the
+// schedule's prompt met the refusal, the crash that follows a `Hang` killed a core that held
+// nothing, and the restart threw the hang away unused.
+#[test]
+fn a_hang_after_a_queued_refusal_still_hangs_the_next_request() {
+    let schedule = one_prompt_after(
+        &[Action::Refuse, Action::Hang],
+        &[Action::Crash { after: 0 }],
+    );
+    let report = run(&schedule);
+    assert_eq!(property(&report), None, "{:?}", report.failure);
+    let hung = (report.trace.iter()).any(|t| t.what == "Deliver(prompt m0), hangs");
+    assert!(hung, "{:#?}", report.trace);
+}
+
+// Review round 2. The old fair part ended once everything was settled, with a send still to land:
+// a send armed to land 90 s late went out again after the core looked for it, the turn ended, and
+// the run passed before the first copy landed as the duplicate the `late` family looks for.
+#[test]
+fn the_fair_part_waits_for_a_late_send_to_land() {
+    let schedule = Schedule {
+        name: RunName::new(Family::Late, 0, 0),
+        ..one_prompt_after(
+            &[Action::Send {
+                outcome: Outcome::Late { ms: 90_000 },
+            }],
+            &[Action::Emit {
+                pick: 0,
+                force: false,
+            }],
+        )
+    };
+    let report = run(&schedule);
+    let landed = (report.trace.iter()).any(|t| t.what.starts_with("Send(landed late"));
+    assert!(landed, "{:#?}", report.trace);
+    assert_eq!(
+        report.failure.map(|f| f.failure.property),
+        Some("S3".into())
+    );
+}
+
+/// One chat, `before`, then one prompt stored and heard, then `then`.
+fn one_prompt_after(before: &[Action], then: &[Action]) -> Schedule {
+    let mut steps = vec![Action::Invite { chat: 0 }];
+    steps.extend_from_slice(before);
+    steps.extend([Action::Store { msg: 0 }, Action::Hear { msg: 0 }]);
+    steps.extend_from_slice(then);
+    Schedule {
+        steps,
+        ..one_prompt(&[], Faults::default())
+    }
 }

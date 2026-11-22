@@ -254,6 +254,8 @@ impl<'a> Sim<'a> {
             self.notify.notify_one();
         }
         tokio::time::sleep(Duration::from_millis(1)).await;
+        // A send that lands late lands at its time, whether or not the core looks.
+        lock(&self.world).land();
         let crashed = std::mem::take(&mut lock(&self.world).crashed);
         if crashed {
             self.kill("crashed").await;
@@ -338,7 +340,9 @@ impl<'a> Sim<'a> {
             Action::Emit { pick, force } => lock(&self.world).emit(pick, force),
             Action::Refuse => lock(&self.world).harness.moves.push_back(Move::Refuse),
             Action::Slow { ms } => lock(&self.world).harness.moves.push_back(Move::Slow(ms)),
-            Action::Hang => lock(&self.world).harness.moves.push_back(Move::Hang),
+            // The very next request hangs, ahead of any move still queued: the crash that follows
+            // it in a schedule then always meets a harness that hangs.
+            Action::Hang => lock(&self.world).harness.moves.push_front(Move::Hang),
             Action::Ignore => lock(&self.world).harness.moves.push_back(Move::Ignore),
             Action::DriverStops => lock(&self.world).driver_stops(),
             Action::Send { outcome } => lock(&self.world).outcomes.push_back(outcome),
@@ -393,7 +397,7 @@ impl<'a> Sim<'a> {
             self.start();
             self.settle().await;
         }
-        let mut waited = Duration::ZERO;
+        let began = tokio::time::Instant::now();
         // What is still waiting when the bound passes. The last stop runs anyway.
         let mut left_at_bound = None;
         let posted = self.schedule.messages.len();
@@ -431,13 +435,26 @@ impl<'a> Sim<'a> {
                 return Some(failure);
             }
             let left = oracle::liveness(&lock(&self.world));
-            let work = lock(&self.world).has_work();
-            if left.is_empty() && !work {
+            let (work, landing) = {
+                let world = lock(&self.world);
+                (world.has_work(), !world.landings.is_empty())
+            };
+            let waited = began.elapsed();
+            // Done only within the bound, on the virtual clock, and with nothing still to land
+            // (a late send is the duplicate the `late` family looks for).
+            if left.is_empty() && !work && !landing && waited <= LIVENESS_BOUND {
                 break;
             }
             if waited >= LIVENESS_BOUND {
-                let first = (left.into_iter().next())
-                    .unwrap_or_else(|| fail("L2", "the harness still has work"));
+                let first = (left.into_iter().next()).unwrap_or_else(|| {
+                    if work {
+                        fail("L2", "the harness still has work")
+                    } else if landing {
+                        fail("L2", "a send is still to land")
+                    } else {
+                        fail("L2", "the run did not settle")
+                    }
+                });
                 left_at_bound = Some(Failure {
                     property: first.property,
                     detail: format!("{} within {} s", first.detail, LIVENESS_BOUND.as_secs()),
@@ -445,7 +462,6 @@ impl<'a> Sim<'a> {
                 break;
             }
             tokio::time::sleep(Duration::from_secs(5)).await;
-            waited += Duration::from_secs(5);
         }
         // The last stop: the core ends cleanly, and everything is closed and sent.
         if self.core.is_none() {
