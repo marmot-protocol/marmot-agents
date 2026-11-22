@@ -368,6 +368,25 @@ impl BugSet {
     }
 }
 
+/// Faults beyond what a run assumes, made by hand and never generated: they show that the
+/// runner's own checks fail a run, as the bug switches show the properties do.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Faults {
+    /// The core's task panics as it ends after a clean stop, once everything is closed and sent.
+    #[serde(default)]
+    pub panic_when_stopped: bool,
+    /// The harness emits nothing more once the fair part begins, so its work never ends.
+    #[serde(default)]
+    pub harness_stalls: bool,
+}
+
+impl Faults {
+    /// Whether none is made.
+    pub fn none(&self) -> bool {
+        *self == Faults::default()
+    }
+}
+
 /// A whole run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Schedule {
@@ -378,6 +397,9 @@ pub struct Schedule {
     /// Bugs put back.
     #[serde(default)]
     pub bugs: BugSet,
+    /// Faults made by hand.
+    #[serde(default, skip_serializing_if = "Faults::none")]
+    pub faults: Faults,
     /// The messages people post, by number.
     pub messages: Vec<Posted>,
     /// The steps, in order.
@@ -589,6 +611,7 @@ pub fn generate(name: &RunName) -> Schedule {
         name: name.clone(),
         chats,
         bugs: BugSet::default(),
+        faults: Faults::default(),
         messages,
         steps,
     }

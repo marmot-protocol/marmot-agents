@@ -3,7 +3,7 @@
 //! and the faults the schedule has armed. The core reaches it through [`crate::side::SimSide`]
 //! and [`crate::driver::SimDriver`]; the oracles read it and nothing of the core.
 
-use crate::schedule::{Outcome, Posted, What};
+use crate::schedule::{Faults, Outcome, Posted, What};
 use marmot_agent::carrier::{self, Asked, ITEM_KIND, REQUEST_KIND};
 use marmot_agent::marmot::{Live, Message};
 use marmot_agent::{EventKey, GroupKey, PubKey};
@@ -305,6 +305,12 @@ pub struct World {
     pub trace: Vec<Trace>,
     /// The schedule's step being run.
     pub step: Option<usize>,
+    /// The faults made by hand.
+    pub faults: Faults,
+    /// A clean stop was asked of the running core.
+    pub stopping: bool,
+    /// A save failed in this life, so the core stops with an error.
+    pub unsaved: bool,
 }
 
 /// A 64-character hex id.
@@ -345,6 +351,9 @@ impl World {
             harness: Harness::default(),
             trace: Vec::new(),
             step: None,
+            faults: Faults::default(),
+            stopping: false,
+            unsaved: false,
         }
     }
 
@@ -948,7 +957,7 @@ impl World {
     /// The harness emits the next event of one of its turns or effects (`Emit`). With `force`, an
     /// approval no one answered is given up on.
     pub fn emit(&mut self, pick: u32, force: bool) {
-        if self.harness.out.is_none() {
+        if self.harness.out.is_none() || (self.faults.harness_stalls && self.step.is_none()) {
             return;
         }
         let turns: Vec<usize> = (0..self.harness.scripts.len())

@@ -72,3 +72,17 @@ impl Driver for SimDriver {
         self.events.recv().await
     }
 }
+
+impl Drop for SimDriver {
+    /// A core dropped as its task ends after a clean stop panics there, when the schedule makes
+    /// that fault by hand ([`crate::schedule::Faults::panic_when_stopped`]).
+    fn drop(&mut self) {
+        let panics = {
+            let world = lock(&self.world);
+            world.faults.panic_when_stopped && world.stopping && world.harness.life == self.life
+        };
+        if panics && !std::thread::panicking() {
+            panic!("a fault made by hand: the core panics as it stops");
+        }
+    }
+}

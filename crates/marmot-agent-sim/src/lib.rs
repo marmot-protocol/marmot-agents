@@ -26,7 +26,9 @@ pub mod sim;
 pub mod world;
 
 pub use capsule::{Capsule, shrink, write_schedule};
-pub use schedule::{Action, BugSet, Family, Outcome, RunName, Schedule, generate};
+pub use schedule::{
+    Action, BugSet, Family, Faults, Outcome, Posted, RunName, Schedule, What, generate,
+};
 pub use sim::{Report, run};
 
 use std::collections::BTreeMap;

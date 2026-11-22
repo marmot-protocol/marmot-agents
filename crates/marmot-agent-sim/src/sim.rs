@@ -5,6 +5,13 @@
 
 use crate::driver::SimDriver;
 use crate::oracle::{self, Failure};
+
+fn fail(property: &str, detail: &str) -> Failure {
+    Failure {
+        property: property.into(),
+        detail: detail.into(),
+    }
+}
 use crate::schedule::{Action, Schedule};
 use crate::side::{Shared, SimEvents, SimSide, lock};
 use crate::world::{Move, Trace, World};
@@ -72,6 +79,8 @@ struct Sim<'a> {
     config: Config,
     core: Option<Running>,
     stats: Stats,
+    /// How the core's task ended when it should not have: a panic, or an end no fault explains.
+    broken: Option<Failure>,
 }
 
 /// Runs a schedule from the start, on a fresh runtime with a paused clock.
@@ -112,6 +121,8 @@ impl<'a> Sim<'a> {
             "home = \"/unused\"\nrelays = [\"wss://relay.invalid\"]\nowner = \"{}\"\n[connector]\n",
             world.owner.as_str()
         );
+        let mut world = world;
+        world.faults = schedule.faults;
         Self {
             schedule,
             world: Arc::new(Mutex::new(world)),
@@ -120,6 +131,7 @@ impl<'a> Sim<'a> {
             config: Config::parse(&settings).expect("the simulator's settings"),
             core: None,
             stats: Stats::default(),
+            broken: None,
         }
     }
 
@@ -131,8 +143,7 @@ impl<'a> Sim<'a> {
             self.apply(*action).await;
             self.settle().await;
             self.stats.steps = at + 1;
-            let found = oracle::safety(&lock(&self.world));
-            if let Some(failure) = found {
+            if let Some(failure) = self.check() {
                 return self.report(Some(Failed {
                     failure,
                     step: Some(at),
@@ -166,6 +177,8 @@ impl<'a> Sim<'a> {
             let mut world = lock(&self.world);
             world.live.clear();
             world.listening = true;
+            world.stopping = false;
+            world.unsaved = false;
             let (life, events) = world.new_life();
             world.note(format!("Restart(life {life})"));
             (life, events)
@@ -187,6 +200,7 @@ impl<'a> Sim<'a> {
             let mut world = lock(&saves);
             if world.save_fails {
                 world.save_fails = false;
+                world.unsaved = true;
                 world.note("SaveFails");
                 return true;
             }
@@ -222,9 +236,19 @@ impl<'a> Sim<'a> {
         self.notify.notify_one();
     }
 
+    /// What has gone wrong so far: the core's task ended as it should not have, or a safety
+    /// property fails.
+    fn check(&mut self) -> Option<Failure> {
+        self.broken
+            .take()
+            .or_else(|| oracle::safety(&lock(&self.world)))
+    }
+
     /// Lets the core take what is ready, until it waits for something new: the clock moves on
     /// by a millisecond only once nothing in the runtime can go on. A core that reached a crash
-    /// is killed, and one that ended is noted down.
+    /// is killed, and one that ended is noted down. An end is expected only after a clean stop
+    /// or the driver's end (`Ok`), or a failed save (an error); any other, and every panic, is
+    /// kept as the run's failure.
     async fn settle(&mut self) {
         if !lock(&self.world).live.is_empty() {
             self.notify.notify_one();
@@ -237,13 +261,41 @@ impl<'a> Sim<'a> {
         }
         if self.core.as_ref().is_some_and(|c| c.task.is_finished()) {
             let running = self.core.take().expect("running");
+            let stopped = running.stop.is_none();
             let ended = running.task.await;
-            let how = match ended {
-                Ok(Ok(())) => "Down(stopped)",
-                Ok(Err(_)) => "Down(could not save)",
-                Err(_) => "Down(panicked)",
+            let (driver_ended, unsaved) = {
+                let world = lock(&self.world);
+                (world.harness.out.is_none(), world.unsaved)
+            };
+            let (how, broken) = match ended {
+                Ok(Ok(())) => (
+                    "Down(stopped)",
+                    (!stopped && !driver_ended).then(|| {
+                        fail(
+                            "exit",
+                            "the core ended with no stop asked and its driver running",
+                        )
+                    }),
+                ),
+                Ok(Err(_)) => (
+                    "Down(could not save)",
+                    (!unsaved).then(|| fail("exit", "the core ended unsaved with no save failing")),
+                ),
+                Err(error) => {
+                    let detail = match error.try_into_panic() {
+                        Ok(payload) => (payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                            .or_else(|| payload.downcast_ref::<String>().cloned())
+                            .unwrap_or_default(),
+                        Err(_) => "cancelled".into(),
+                    };
+                    let detail = format!("the core's task panicked: {detail}");
+                    ("Down(panicked)", Some(fail("panic", &detail)))
+                }
             };
             self.down(how);
+            if self.broken.is_none() {
+                self.broken = broken;
+            }
         }
     }
 
@@ -263,6 +315,17 @@ impl<'a> Sim<'a> {
         world.live.clear();
         world.harness.out = None;
         world.note(how);
+    }
+
+    /// Asks the running core to stop cleanly (`Stop`).
+    fn stop(&mut self) {
+        if let Some(stop) = self.core.as_mut().and_then(|c| c.stop.take()) {
+            let mut world = lock(&self.world);
+            world.stopping = true;
+            world.note("Stop");
+            drop(world);
+            let _ = stop.send(());
+        }
     }
 
     async fn apply(&mut self, action: Action) {
@@ -298,10 +361,7 @@ impl<'a> Sim<'a> {
                 }
             }
             Action::Stop => {
-                if let Some(stop) = self.core.as_mut().and_then(|c| c.stop.take()) {
-                    lock(&self.world).note("Stop");
-                    let _ = stop.send(());
-                }
+                self.stop();
             }
         }
     }
@@ -326,11 +386,16 @@ impl<'a> Sim<'a> {
             lock(&self.world).note("Crash(the harness hangs)");
             self.kill("crashed").await;
         }
+        if let Some(failure) = self.broken.take() {
+            return Some(failure);
+        }
         if self.core.is_none() {
             self.start();
             self.settle().await;
         }
         let mut waited = Duration::ZERO;
+        // What is still waiting when the bound passes. The last stop runs anyway.
+        let mut left_at_bound = None;
         let posted = self.schedule.messages.len();
         loop {
             {
@@ -355,39 +420,52 @@ impl<'a> Sim<'a> {
                 lock(&self.world).emit(0, true);
                 self.settle().await;
             }
+            if let Some(failure) = self.check() {
+                return Some(failure);
+            }
             if self.core.is_none() {
                 self.start();
             }
             self.settle().await;
-            if let Some(failure) = oracle::safety(&lock(&self.world)) {
+            if let Some(failure) = self.check() {
                 return Some(failure);
             }
             let left = oracle::liveness(&lock(&self.world));
-            if left.is_empty() && !lock(&self.world).has_work() {
+            let work = lock(&self.world).has_work();
+            if left.is_empty() && !work {
                 break;
             }
             if waited >= LIVENESS_BOUND {
-                let first = left.into_iter().next()?;
-                return Some(Failure {
+                let first = (left.into_iter().next())
+                    .unwrap_or_else(|| fail("L2", "the harness still has work"));
+                left_at_bound = Some(Failure {
                     property: first.property,
                     detail: format!("{} within {} s", first.detail, LIVENESS_BOUND.as_secs()),
                 });
+                break;
             }
             tokio::time::sleep(Duration::from_secs(5)).await;
             waited += Duration::from_secs(5);
         }
-        // The last stop: everything is closed and sent.
-        if let Some(stop) = self.core.as_mut().and_then(|c| c.stop.take()) {
-            lock(&self.world).note("Stop");
-            let _ = stop.send(());
+        // The last stop: the core ends cleanly, and everything is closed and sent.
+        if self.core.is_none() {
+            self.start();
+            self.settle().await;
         }
+        self.stop();
         for _ in 0..10 {
             self.settle().await;
             if self.core.is_none() {
                 break;
             }
         }
+        if self.core.is_some() && self.broken.is_none() {
+            self.broken = Some(fail("exit", "the core did not end after the last stop"));
+        }
+        let failure = self.check();
         let world = lock(&self.world);
-        oracle::safety(&world).or_else(|| oracle::after_stop(&world))
+        left_at_bound
+            .or(failure)
+            .or_else(|| oracle::after_stop(&world))
     }
 }
