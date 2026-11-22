@@ -5,8 +5,11 @@
 mod common;
 
 use common::{Echo, World, eventually};
+use marmot_agent::GroupKey;
+use marmot_agent::run::Store;
 use marmot_agent_events::State;
 use marmot_agent_events::body::Body;
+use marmot_app::MarmotAppEvent;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -79,7 +82,7 @@ async fn a_person_writes_to_the_agent_and_reads_its_answer() {
 }
 
 // In a named group of two the agent answers only when addressed, as in any group (D-075); and a
-// restart reads nothing again that the core had read before it stopped (D-037).
+// restart reads what MDK stored while the core was stopped, once (D-037, MDK #3551).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_named_group_of_two_is_a_group_and_a_restart_repeats_nothing() {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
@@ -124,6 +127,43 @@ async fn a_named_group_of_two_is_a_group_and_a_restart_repeats_nothing() {
     );
 
     core.stop().await;
+    let group = GroupKey::from(direct_hex.as_str());
+    let mark = Store::new(world.state.path()).load().unwrap().read[&group];
+    let mut arrivals = world.runtime.subscribe();
+    world
+        .runtime
+        .send_message(&world.person, &direct, b"while away".to_vec())
+        .await
+        .unwrap();
+    // MDK can store the row before it broadcasts the notification. Observe both while the
+    // core is stopped so its next subscription can only recover the message from storage.
+    let gap_id = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            if let MarmotAppEvent::MessageReceived(received) = arrivals.recv().await.unwrap()
+                && received.account_id_hex == world.agent
+                && received.message.plaintext == "while away"
+            {
+                break received.message.message_id_hex;
+            }
+        }
+    })
+    .await
+    .expect("MDK broadcast the gap message to the recipient");
+    drop(arrivals);
+    assert!(
+        world
+            .marmot
+            .stored(&group, mark)
+            .unwrap()
+            .iter()
+            .any(|m| m.event.as_str() == gap_id),
+        "the recipient stored the gap message after the saved mark"
+    );
+
+    let core = world.start(Echo::new(prompts.clone()));
+    world.words(&direct_hex, "echo: while away").await;
+    core.stop().await;
+
     let core = world.start(Echo::new(prompts.clone()));
     world
         .runtime
@@ -131,9 +171,8 @@ async fn a_named_group_of_two_is_a_group_and_a_restart_repeats_nothing() {
         .await
         .unwrap();
     world.words(&direct_hex, "echo: second").await;
-    assert_eq!(prompts.load(Ordering::SeqCst), 2, "nothing read twice");
-
     core.stop().await;
+    assert_eq!(prompts.load(Ordering::SeqCst), 3, "each prompt heard once");
     world.runtime.shutdown().await;
 }
 
