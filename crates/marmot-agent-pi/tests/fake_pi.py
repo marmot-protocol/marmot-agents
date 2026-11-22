@@ -31,7 +31,8 @@ and exits if it has no file; `--session-id <id>` resumes it, or starts an empty 
 id; an id that starts with "other" comes up as a session of another id. `--ask-at-start` makes an
 extension ask a question as Pi starts, before it reads anything, as Pi 1.6.0 does when an extension
 asks in its start-up handler; it then waits for good. Each fake writes its process id to
-`.fake-pid`, so a test can see that it was stopped.
+`.fake-pid`, so a test can see that it was stopped, and adds each prompt's text it hears, as one
+JSON string per line, to `.fake-prompts`, so a test can see every prompt that reached a Pi.
 """
 
 import json
@@ -237,6 +238,8 @@ def main():
             respond(cmd, data={"commands": [{"name": "fake", "description": "A fake command", "source": "extension"}]})
         elif t == "prompt":
             text = cmd.get("message", "")
+            with open(".fake-prompts", "a") as heard:
+                heard.write(json.dumps(text) + "\n")
             if text == "/ask":
                 threading.Thread(target=ask_command, args=(cmd,), daemon=True).start()
             elif text.startswith("/"):

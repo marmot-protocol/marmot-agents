@@ -4,53 +4,23 @@
 //! runs on the home in place: the same identity, in the same chat, without being invited again.
 
 mod common;
+mod old_connector;
 
-use agent_control::{AgentControlEnvelope, AgentControlRequest, AgentControlResponse};
 use common::{Echo, eventually, within};
 use marmot_account::AccountHome;
 use marmot_agent::PubKey;
 use marmot_agent::config::Config;
-use marmot_agent::import::services::{Loaded, Service, Services};
-use marmot_agent::import::{self, Connector, Options, Places};
+use marmot_agent::import::{self, Connector, Options};
 use marmot_agent::marmot::{self, Marmot};
 use marmot_agent::rights::Who;
 use marmot_agent::run::{Core, Store};
-use marmot_app::{
-    AccountSetupRequest, AppMessageQuery, AppMessageRecord, MarmotApp, MarmotAppConfig,
-    MarmotAppRuntime,
-};
+use old_connector::{Invited, Noted, chat_messages, invited, places};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::oneshot;
-
-/// The service managers, as the tests see them: each service stopped and disabled is noted.
-/// There is no systemd to ask, so the units' files are read.
-#[derive(Default)]
-struct Noted(Vec<String>);
-
-impl Services for Noted {
-    fn stop_and_disable(&mut self, service: &Service) -> Result<(), String> {
-        self.0.push(service.name.clone());
-        Ok(())
-    }
-
-    fn systemd_unit(&mut self, _: &str) -> Option<Result<Loaded, String>> {
-        None
-    }
-}
-
-fn places(root: &Path) -> Places {
-    Places {
-        user_home: root.to_path_buf(),
-        systemd_units: root.join(".config/systemd/user"),
-        launch_agents: root.join("Library/LaunchAgents"),
-        hermes_home: root.join(".hermes"),
-        openclaw_config: root.join(".openclaw/openclaw.json"),
-    }
-}
 
 /// What the Codex installer writes around the home besides what `wn-agent` keeps in it: the
 /// harness's settings, and the two systemd user units.
@@ -91,111 +61,11 @@ fn installed_codex(root: &Path, home: &Path, agent: &str, person: &str, relay: &
     .unwrap();
 }
 
-/// An app on a home, as `wn-agent` and the test client open one, with only the test relay.
-fn local_app(home: &Path, relay: &str) -> MarmotApp {
-    MarmotApp::try_with_relays_and_account_home_and_config(
-        home,
-        vec![relay.to_string()],
-        AccountHome::open(home),
-        MarmotAppConfig::default().with_allow_loopback_relay_endpoints(true),
-    )
-    .unwrap()
-}
-
-fn setup(relay: &str) -> AccountSetupRequest {
-    let endpoint = cgka_traits::TransportEndpoint(relay.to_string());
-    AccountSetupRequest {
-        default_relays: vec![endpoint.clone()],
-        bootstrap_relays: vec![endpoint],
-        publish_initial_key_package: true,
-        ..AccountSetupRequest::default()
-    }
-}
-
-fn chat_messages(runtime: &MarmotAppRuntime, account: &str, group: &str) -> Vec<AppMessageRecord> {
-    let query = AppMessageQuery {
-        group_id_hex: Some(group.to_string()),
-        kinds: Some(vec![9]),
-        limit: None,
-    };
-    runtime
-        .messages_with_query(account, query)
-        .unwrap_or_default()
-}
-
-/// Today's connector, `wn-agent`, as its own program: MDK's `agent-connector` at the revision
-/// the core uses, serving its socket on the home as `wn-agent --home <home> --relay <relay>
-/// --allow-loopback-relays` does. The test runs itself again with this test alone and the home
-/// and relay in its environment, and stops it as systemd stops a service. It does nothing when
-/// run on its own.
+/// Today's connector, as its own program: run by `old_connector::invited`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "run by the import test, as the old connector"]
 async fn old_connector() {
-    let (Some(home), Some(relay)) = (
-        std::env::var_os("OLD_CONNECTOR_HOME"),
-        std::env::var("OLD_CONNECTOR_RELAY").ok(),
-    ) else {
-        return;
-    };
-    storage_sqlite::relax_storage_for_test_process();
-    let mut config = agent_connector::AgentConnectorConfig::new(&home);
-    config.relays = vec![relay];
-    config.allow_loopback_relays = true;
-    agent_connector::serve_socket(config).await.unwrap();
-}
-
-/// Why a request to the old connector has no answer.
-#[derive(Debug)]
-enum Unanswered {
-    /// Nothing listens on the socket yet: the request was never sent.
-    NotListening,
-    /// It was sent, and no answer came in time: what it asked may or may not have been done.
-    NoAnswer,
-}
-
-/// One request to the old connector's socket, as its clients make them, and its answer, waited
-/// for up to 30 seconds.
-async fn ask(
-    socket: &Path,
-    request: AgentControlRequest,
-) -> Result<AgentControlResponse, Unanswered> {
-    let stream = tokio::net::UnixStream::connect(socket)
-        .await
-        .map_err(|_| Unanswered::NotListening)?;
-    let (read, mut write) = stream.into_split();
-    let envelope = AgentControlEnvelope::request(Some("1".into()), request);
-    let exchange = async {
-        agent_control::write_frame(&mut write, &envelope)
-            .await
-            .ok()?;
-        let mut read = tokio::io::BufReader::new(read);
-        let answer: AgentControlEnvelope<AgentControlResponse> =
-            agent_control::read_envelope(&mut read).await.ok()??;
-        Some(answer.payload)
-    };
-    tokio::time::timeout(Duration::from_secs(30), exchange)
-        .await
-        .ok()
-        .flatten()
-        .ok_or(Unanswered::NoAnswer)
-}
-
-/// The texts of the chat as the old connector has stored them, once it is in the chat.
-async fn timeline(socket: &Path, agent: &str, group: &str) -> Option<Vec<String>> {
-    let request = AgentControlRequest::TimelineList {
-        account_id_hex: agent.to_string(),
-        group_id_hex: group.to_string(),
-        before: None,
-        after: None,
-        before_inclusive: false,
-        limit: Some(50),
-    };
-    match ask(socket, request).await.ok()? {
-        AgentControlResponse::TimelinePage { messages, .. } => {
-            Some(messages.into_iter().filter_map(|m| m.text).collect())
-        }
-        _ => None,
-    }
+    old_connector::serve().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -215,113 +85,17 @@ async fn an_imported_codex_install_answers_in_its_chat() {
 /// Imports a Codex install of the old connector and runs the core on its home. With `answers`,
 /// the person writes in the chat after the move, and the agent answers.
 async fn imported(answers: bool) {
-    storage_sqlite::relax_storage_for_test_process();
-    let relay = nostr_relay_builder::MockRelay::run().await.unwrap();
-    let url = relay.url().await.to_string();
-    let root = tempfile::tempdir().unwrap();
-    let old = root.path().join(".marmot-agents/codex");
-    std::fs::create_dir_all(&old).unwrap();
-    std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o700)).unwrap();
-
-    // The person, in a home of their own.
-    let person_runtime = MarmotAppRuntime::new(local_app(&root.path().join("person"), &url));
-    let person = person_runtime
-        .create_identity(setup(&url))
-        .await
-        .unwrap()
-        .account
-        .account_id_hex;
-    person_runtime.start().await.unwrap();
-
-    // Today's connector runs on the home. As the installer's bootstrap does over its socket, it
-    // makes the identity, publishes a key package and lets the person invite it.
-    let mut connector = tokio::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "old_connector", "--ignored", "--nocapture"])
-        .env("OLD_CONNECTOR_HOME", &old)
-        .env("OLD_CONNECTOR_RELAY", &url)
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let socket = old.join("dev/wn-agent.sock");
-    let create = || AgentControlRequest::AccountCreate {
-        label: Some("codex-harness-agent".into()),
-        publish_key_package: true,
-    };
-    let mut agent = None;
-    for _ in 0..600 {
-        match ask(&socket, create()).await {
-            Ok(AgentControlResponse::AccountCreated { account }) => {
-                agent = Some(account.account_id_hex);
-                break;
-            }
-            // Not listening yet, or refused outright: nothing was made, so it may be asked again.
-            Ok(_) | Err(Unanswered::NotListening) => {}
-            // Sent and not answered: an identity may have been made, and a second would make the
-            // home one the core refuses. Never asked again.
-            Err(Unanswered::NoAnswer) => panic!("the old connector did not answer AccountCreate"),
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    let agent = agent.expect("the old connector made its identity");
-    let allow = AgentControlRequest::AllowlistAdd {
-        account_id_hex: agent.clone(),
-        welcomer_account_id_hex: person.clone(),
-    };
-    assert!(matches!(
-        ask(&socket, allow).await,
-        Ok(AgentControlResponse::Allowlist { .. })
-    ));
-
-    // The person starts a chat with it; it accepts, as the person is on its allow-list, and
-    // stores what the person writes there.
-    let group = person_runtime
-        .start_direct_conversation(&person, &agent)
-        .await
-        .unwrap();
-    let group_hex = hex::encode(group.as_slice());
-    let mut joined = false;
-    for _ in 0..120 {
-        if timeline(&socket, &agent, &group_hex).await.is_some() {
-            joined = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-    assert!(joined, "the old connector joined the chat");
-    let mut stored = false;
-    for _ in 0..20 {
-        person_runtime
-            .send_message(&person, &group, b"before the move".to_vec())
-            .await
-            .unwrap();
-        for _ in 0..6 {
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            let texts = timeline(&socket, &agent, &group_hex)
-                .await
-                .unwrap_or_default();
-            stored = texts.iter().any(|t| t == "before the move");
-            if stored {
-                break;
-            }
-        }
-        if stored {
-            break;
-        }
-    }
-    assert!(stored, "the old connector stored the person's message");
-    // A wn-agent stopped in the moment after a message arrives leaves the home deaf to that chat
-    // for the next program: without this pause the core never hears the person (every run, with
-    // MDK at the revision the core uses). One that has run for a while, as an installed one has,
-    // does not.
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    // Stopped as systemd stops it.
-    let pid = connector.id().unwrap().to_string();
-    let killed = std::process::Command::new("kill")
-        .args(["-TERM", &pid])
-        .status()
-        .unwrap();
-    assert!(killed.success());
-    within(30, || connector.try_wait().ok().flatten().map(|_| ())).await;
+    let Invited {
+        root,
+        home: old,
+        url,
+        person_runtime,
+        person,
+        agent,
+        group,
+        group_hex,
+        relay: _relay,
+    } = invited(".marmot-agents/codex", "codex-harness-agent").await;
     installed_codex(root.path(), &old, &agent, &person, &url);
 
     // The plan reads the install and changes nothing.

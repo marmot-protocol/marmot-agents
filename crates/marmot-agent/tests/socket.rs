@@ -4,6 +4,7 @@
 
 mod common;
 
+use common::connector::{self, Heard, Script, send};
 use common::{World, eventually};
 use marmot_agent::marmot::now;
 use marmot_agent::run::serve;
@@ -12,18 +13,9 @@ use marmot_agent_events::State;
 use marmot_agent_events::body::Body;
 use serde_json::{Value, json};
 use std::path::Path;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::oneshot;
-
-/// What the scripted connector does with a prompt.
-#[derive(Clone, Copy)]
-enum Script {
-    /// Answers "echo: " and the prompt's text, in one turn.
-    Echo,
-    /// Starts a turn and then goes, as a connector that crashes does.
-    Vanish,
-}
 
 /// The hello a connector sends.
 fn hello(token: &str) -> Value {
@@ -39,80 +31,9 @@ fn hello(token: &str) -> Value {
     }})
 }
 
-async fn send(stream: &mut tokio::net::unix::OwnedWriteHalf, message: Value) {
-    let line = format!("{message}\n");
-    stream.write_all(line.as_bytes()).await.unwrap();
-}
-
 /// Connects, gives the hello, and gives back the core's answer to it.
 async fn connect(socket: &Path, token: &str) -> (Value, UnixStream) {
-    let stream = UnixStream::connect(socket).await.unwrap();
-    let (read, mut write) = stream.into_split();
-    send(&mut write, hello(token)).await;
-    let mut lines = BufReader::new(read).lines();
-    let answer: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
-    let stream = lines.into_inner().into_inner().reunite(write).unwrap();
-    (answer, stream)
-}
-
-/// Runs the scripted connector on a connection until the core or the script ends it. Its item ids
-/// start with `name`, so two connections never reuse one: a reused id would edit the earlier item.
-async fn run_connector(stream: UnixStream, script: Script, name: &str) {
-    let (read, mut write) = stream.into_split();
-    let mut lines = BufReader::new(read).lines();
-    let mut turns = 0;
-    while let Ok(Some(line)) = lines.next_line().await {
-        let request: Value = serde_json::from_str(&line).unwrap();
-        send(
-            &mut write,
-            json!({"jsonrpc": "2.0", "id": request["id"], "result": {}}),
-        )
-        .await;
-        if request["method"] != "prompt" {
-            continue;
-        }
-        turns += 1;
-        let params = &request["params"];
-        let event = |item: String, kind: &str, state: &str, text: String, body: Value| {
-            json!({"jsonrpc": "2.0", "method": "event", "params": {
-                "item": item, "type": kind, "state": state, "title": kind, "text": text,
-                "body": body, "session": "s1", "turn": format!("{name}-t{turns}"),
-                "chat": params["chat"]["id"], "prompts": [params["message"]],
-            }})
-        };
-        let turn = json!({"started_by": "user"});
-        let running = event(
-            format!("{name}-turn{turns}"),
-            "turn",
-            "running",
-            "Working".into(),
-            turn.clone(),
-        );
-        send(&mut write, running).await;
-        if let Script::Vanish = script {
-            return;
-        }
-        let words = format!("echo: {}", params["text"].as_str().unwrap());
-        send(
-            &mut write,
-            event(
-                format!("{name}-msg{turns}"),
-                "message",
-                "done",
-                words,
-                json!({}),
-            ),
-        )
-        .await;
-        let done = event(
-            format!("{name}-turn{turns}"),
-            "turn",
-            "done",
-            "Done".into(),
-            turn,
-        );
-        send(&mut write, done).await;
-    }
+    connector::connect(socket, hello(token)).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -139,7 +60,12 @@ async fn a_connector_on_the_socket_drives_the_agent() {
 
     let (welcome, stream) = connect(&endpoint.socket, &token).await;
     assert_eq!(welcome["result"]["agent"]["name"], "Script");
-    let first = tokio::spawn(run_connector(stream, Script::Vanish, "first"));
+    let first = tokio::spawn(connector::run(
+        stream,
+        Script::Vanish,
+        "first",
+        Heard::default(),
+    ));
     let group = world
         .runtime
         .start_direct_conversation(&world.person, &world.agent)
@@ -164,7 +90,12 @@ async fn a_connector_on_the_socket_drives_the_agent() {
 
     // The next connector carries on.
     let (_, stream) = connect(&endpoint.socket, &token).await;
-    let second = tokio::spawn(run_connector(stream, Script::Echo, "second"));
+    let second = tokio::spawn(connector::run(
+        stream,
+        Script::Echo,
+        "second",
+        Heard::default(),
+    ));
     world
         .runtime
         .send_message(&world.person, &group, b"second".to_vec())

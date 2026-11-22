@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+pub mod connector;
+
 use cgka_traits::GroupId;
 use marmot_agent::carrier::{self, Asked, ITEM_KIND, Read};
 use marmot_agent::config::Config;
