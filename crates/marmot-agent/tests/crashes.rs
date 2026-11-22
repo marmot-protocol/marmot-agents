@@ -1027,7 +1027,8 @@ fn dropped_next(world: &World, give_up: bool) {
 
 /// An item whose closing version MDK refuses, or that the core gives up, is closed in the chat
 /// all the same, by a later version of the core's own; the chat is told in a `failed` notice
-/// (S2, L2). Found by the TLA+ model (`give-up-leaves-item-open`, `refuse-leaves-item-open`).
+/// (S2, L2). Found by the TLA+ model, whose cases `give-up-closes-item` and `refuse-closes-item`
+/// now check the fix.
 async fn closing_version_dropped(give_up: bool) {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     world.runtime.start().await.unwrap();
@@ -1084,8 +1085,8 @@ async fn an_item_whose_closing_version_is_given_up_is_closed_after_all() {
 }
 
 /// A notice that settles a request, which MDK refuses or the core gives up, is followed by a
-/// `failed` notice that settles the request in its place (L1). Found by the TLA+ model
-/// (`give-up-drops-settles`, `refuse-drops-settles`).
+/// `failed` notice that settles the request in its place (L1). Found by the TLA+ model, whose
+/// cases `give-up-settles` and `refuse-settles` now check the fix.
 async fn settling_notice_dropped(give_up: bool) {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     world.runtime.start().await.unwrap();

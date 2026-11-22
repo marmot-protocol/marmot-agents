@@ -5,7 +5,7 @@
   "breaks": "S3",
   "what": "The known limit until MDK has crash-safe tagged sends: a send MDK posted, a failed save, a restart, and a lookup that misses it; the send goes again and the chat has two first events for one item (S3).",
   "generated_by": "python3 tools/tla/check.py --counterexamples",
-  "constants": {"Prompts": ["p1"], "Requests": ["r1"], "NewSession": ["r1"], "Items": ["s1"], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 0, "MaxRefusals": 0, "UnknownTries": 2, "GoneChats": [], "ExactLookup": false, "TokenDedupe": false, "LagCatchUp": false, "LiveInOrder": true, "LiveAfterStore": true, "FairMdk": true, "FairDriver": true, "FairTime": true, "Bug": "none"},
+  "constants": {"Prompts": ["p1"], "Requests": ["r1"], "NewSession": ["r1"], "Items": ["s1"], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 0, "MaxRefusals": 0, "UnknownTries": 2, "GoneChats": [], "ExactLookup": false, "TokenDedupe": false, "LagCatchUp": false, "LiveInOrder": true, "LiveAfterStore": true, "LastResortTaken": true, "FairMdk": true, "FairDriver": true, "FairTime": true, "Bug": "none"},
   "messages": [{"id": "p1", "chat": "c1", "kind": "prompt"}, {"id": "r1", "chat": "c1", "kind": "control", "new_session": true}],
   "steps": [
     {"action": "CatchUpDone"},

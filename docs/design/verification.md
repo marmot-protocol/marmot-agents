@@ -116,7 +116,11 @@ fixed on 2026-11-21, each with a test that failed first.
   with nothing in its place, so those requests were settled nowhere. Now the core closes such an item with a
   small version of its own, and settles such requests with a `failed` notice in place of the dropped one. What
   stands in for a dropped send is the last: if it is dropped too, as in a group that is gone, nothing takes its
-  place, so nothing loops.
+  place, so nothing loops. The model checks the fix: with one send given up, or one or two refused in a live
+  group, every item closes and every request is settled. **The accepted limit:** if MDK refuses what stands in
+  for a dropped send too, in a group that stays live, the item stays open in the chat; the model assumes MDK
+  does not (`LastResortTaken`), since it is as small as the core makes anything, and shows what happens when it
+  does ([`last-resort-refused`](../../formal/tla/counterexamples/last-resort-refused.json)).
 - **Messages missing after an abrupt stop**, seen while building the importer: the next program on the same home
   sometimes never got later messages. This looks like MDK's, and goes to MDK as an issue. A related case was seen
   in the tests: right after a person makes a second group with the agent, messages between them sometimes do not
@@ -199,7 +203,7 @@ simulator scenario. A test checks that the model's actions and the code's still 
 
 | Model | What it covers | Owns | Status |
 | --- | --- | --- | --- |
-| `CoreLifecycle` | The conversation, the run loop, saving and crashing: requests pending and settled, items and versions, read marks, sessions | S1 to S4, S10, S12, L1 to L3 | Built, in [`formal/tla`](../../formal/tla/README.md): checked on small bounds on every pull request, with its counterexamples, defects and reachability probes. It found two gaps when a send is given up or refused in a live group (S2, L1, L2); see its README |
+| `CoreLifecycle` | The conversation, the run loop, saving and crashing: requests pending and settled, items and versions, read marks, sessions | S1 to S4, S10, S12, L1 to L3 | Built, in [`formal/tla`](../../formal/tla/README.md): checked on small bounds on every pull request, with its counterexamples, defects and reachability probes. It found two gaps when a send is given up or refused in a live group (S2, L1, L2), since fixed and checked; see its README |
 | `DriverTransport` | One driver's side, for any harness: requests in flight, effects awaiting settlement, a dropped wait, a restart of the harness, two chats | S1, S5, S11, S13, L1, L2 | Planned |
 | `SocketProtocol` | The hello, a request answered while events arrive, a connector going and another coming, one at a time | S11, L4 | Planned |
 | `Gateways` | Small models of OpenClaw's approval vouching and Hermes's held turn end | S5, S6, S1 | Planned |

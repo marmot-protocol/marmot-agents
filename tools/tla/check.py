@@ -5,9 +5,8 @@
 
 The cases (formal/tla/README.md lists them):
 
-- the fair configuration passes every property;
-- the unfair one, and the configurations that drop an assumption or let a send be refused or
-  given up, fail as stated;
+- the fair configuration, and those that let a send be refused or given up, pass every property;
+- the unfair one, and the configurations that drop an assumption, fail as stated;
 - each deliberate defect (`Bug`) fails the property it is named for: each check is shown to
   catch its bug;
 - each reachability probe fails: the states the properties speak of are reached, so no pass is
@@ -53,8 +52,6 @@ FAIR = "CoreLifecycle.fair.cfg"
 GIVEUP = "CoreLifecycle.giveup.cfg"
 REFUSE = "CoreLifecycle.refuse.cfg"
 SAFETY = {"PROPERTIES": None}  # drops the liveness properties: safety only
-# The safety properties but S2, which the give-up and refusal configurations break by design.
-BUT_S2 = "TypeOK S1 S3 S4 S10 S12"
 
 
 class Case:
@@ -71,13 +68,13 @@ class Case:
         self.what = what
 
 
-def mutant(bug, prop, cfg=FAIR, **more):
-    return Case(f"bug-{bug}", cfg, invariant(prop),
+def mutant(bug, prop, cfg=FAIR, name=None, **more):
+    return Case(name or f"bug-{bug}", cfg, invariant(prop),
                 {"Bug": f'"{bug}"', "INVARIANTS": prop, **SAFETY, **more})
 
 
-def temporal_mutant(bug, prop, cfg, **more):
-    return Case(f"bug-{bug}", cfg, TEMPORAL,
+def temporal_mutant(bug, prop, cfg, name=None, **more):
+    return Case(name or f"bug-{bug}", cfg, TEMPORAL,
                 {"Bug": f'"{bug}"', "INVARIANTS": None, "PROPERTIES": prop, **more})
 
 
@@ -88,6 +85,8 @@ def probe(name, cfg=FAIR, label=None, **more):
 
 # The cases about telling the chat of a dropped version have no prompt: it plays no part there.
 NO_PROMPT = {"Prompts": "{}"}
+# MDK refuses two sends to the live group: the last resort is reached again, as it is not with one.
+TWICE = {"MaxRefusals": "2", **NO_PROMPT}
 
 
 CASES = [
@@ -112,32 +111,28 @@ CASES = [
          what="Without LiveAfterStore: MDK hands a message over before storing it; order_of "
               "gives nothing, so run.rs handle drops it, and MDK does not hand it over again "
               "once stored. Nothing reads it until the core starts again (L3)."),
-    Case("give-up-leaves-item-open", GIVEUP, invariant("S2"),
-         counterexample="give-up-leaves-item-open",
-         what="A finding in the code: an item's closing version is given up after its tries "
-              "(the code: ten) and a lookup that does not find it; conversation.rs refused "
-              "drops it, the item is closed in the core, and nothing closes it in the chat, not "
-              "even a restart (S2; L2 too)."),
-    Case("give-up-drops-settles", "CoreLifecycle.giveup-notice.cfg", TEMPORAL,
-         counterexample="give-up-drops-settles",
-         what="A finding in the code: a notice that settles r1 is given up; refused drops a "
-              "notice with nothing in its place, and r1 is no longer pending, so it is settled "
-              "nowhere (L1)."),
-    # The chat is told of each version given up or refused.
-    Case("give-up-told", GIVEUP, PASS,
-         {"INVARIANTS": BUT_S2, "PROPERTIES": "S3Told", **NO_PROMPT}),
-    Case("refuse-leaves-item-open", REFUSE, invariant("S2"),
-         counterexample="refuse-leaves-item-open",
-         what="A finding in the code, the same as the give-up one: MDK refuses an item's "
-              "closing version in a live group (run.rs failed: EventTooLarge, "
-              "InvalidAppMessagePayload), and nothing closes the item in the chat (S2; L2 "
-              "too)."),
-    Case("refuse-drops-settles", "CoreLifecycle.refuse-notice.cfg", TEMPORAL,
-         counterexample="refuse-drops-settles",
-         what="A finding in the code, the same as the give-up one: MDK refuses the notice that "
-              "settles r1 in a live group, and r1 is settled nowhere (L1)."),
-    Case("refuse-told", REFUSE, PASS,
-         {"INVARIANTS": BUT_S2, "PROPERTIES": "S3Told", **NO_PROMPT}),
+    # A dropped send has something in its place (conversation.rs refused): the item is closed,
+    # the requests settled, and the chat told of the gap.
+    Case("give-up-closes-item", GIVEUP, PASS),
+    Case("give-up-settles", "CoreLifecycle.giveup-notice.cfg", PASS),
+    Case("refuse-closes-item", REFUSE, PASS),
+    Case("refuse-settles", "CoreLifecycle.refuse-notice.cfg", PASS),
+    # Two refusals, so a failed notice in place of a version is refused too, and what stands in
+    # for it settles; MDK never refuses a last resort (LastResortTaken).
+    Case("refuse-twice", REFUSE, PASS, {"PROPERTIES": "L1 L2 L3", **TWICE}),
+    Case("refuse-twice-untold", REFUSE, TEMPORAL, {"PROPERTIES": "S3Told", **TWICE},
+         counterexample="refuse-twice-untold",
+         what="Not a bug, as the code means it: MDK refuses an item's version, then the failed "
+              "notice that tells of it, which settles nothing. A notice that settles nothing only "
+              "tells the chat something, so nothing stands in for it, and the gap is never told "
+              "of (S3Told). The item is closed and every request settled."),
+    Case("last-resort-refused", REFUSE, invariant("S2"),
+         {"LastResortTaken": "FALSE", **SAFETY, **TWICE},
+         counterexample="last-resort-refused",
+         what="The accepted limit: MDK refuses an item's closing version in a live group, then "
+              "the core's close that stands in for it, though it is as small as the core makes "
+              "anything. Nothing stands in for a last resort, so nothing loops, and the item "
+              "stays open in the chat (S2; L2 too)."),
     Case("gone-group", "CoreLifecycle.gone.cfg", PASS),
     mutant("SaveAfterSend", "S1"),
     mutant("SettleUnpending", "S1"),
@@ -145,6 +140,9 @@ CASES = [
     mutant("NoAttemptedFlag", "S3"),
     mutant("BlindResend", "S3"),
     temporal_mutant("NoFailedNotice", "S3Told", REFUSE, **NO_PROMPT),
+    mutant("NoReplacement", "S2", GIVEUP),
+    temporal_mutant("NoReplacement", "L1", "CoreLifecycle.refuse-notice.cfg",
+                    name="bug-NoReplacement-L1"),
     mutant("DeliverBeforeSave", "S4"),
     mutant("MarkNotLoaded", "S10"),
     mutant("CatchUpAnyOrder", "S10"),
@@ -163,6 +161,10 @@ CASES = [
     probe("NeverDropped", "CoreLifecycle.gone.cfg"),
     probe("NeverTold", REFUSE, "NeverTold-refused", **NO_PROMPT),
     probe("NeverTold", GIVEUP, "NeverTold-given-up", **NO_PROMPT),
+    probe("NeverClosedUndelivered", REFUSE, "NeverClosedUndelivered-refused", **NO_PROMPT),
+    probe("NeverClosedUndelivered", GIVEUP, "NeverClosedUndelivered-given-up", **NO_PROMPT),
+    probe("NeverResettled", "CoreLifecycle.refuse-notice.cfg", "NeverResettled-refused"),
+    probe("NeverResettled", "CoreLifecycle.giveup-notice.cfg", "NeverResettled-given-up"),
     probe("NeverDroppedEarly", "CoreLifecycle.livestore.cfg"),
 ]
 NAMES = [case.name for case in CASES]

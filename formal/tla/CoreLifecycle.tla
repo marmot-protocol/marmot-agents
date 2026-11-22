@@ -4,7 +4,9 @@
 (* settled, items and their versions, read marks, the outbox, saves and    *)
 (* crashes. It models crates/marmot-agent/src/run.rs (the loop, the state  *)
 (* file, the outbox and its sends), conversation.rs (what each message and *)
-(* event becomes) and marmot.rs (sends and lookups), as of master 74b56d6. *)
+(* event becomes) and marmot.rs (sends and lookups), as of master 74b56d6, *)
+(* with conversation.rs `refused` as fixed on 2026-11-22: what stands in   *)
+(* for a dropped send, and `last_resort`.                                  *)
 (*                                                                         *)
 (* Action names are the ones the simulator uses, so a trace from here can  *)
 (* drive it (docs/design/verification.md, step 5): Hear, Store, CatchUp,   *)
@@ -39,6 +41,8 @@ CONSTANTS
                     \* of a token it posted gives back the earlier event
     LiveInOrder,    \* assumption: MDK hands live messages over in storage order
     LiveAfterStore, \* assumption: MDK hands a live message over only once it has stored it
+    LastResortTaken,\* assumption: MDK never refuses a last-resort send to a live group: it is as
+                    \* small as the core makes anything (the accepted limit when off)
     LagCatchUp,     \* whether the event stream may lag while the core runs, so it catches up then
     FairMdk,        \* MDK eventually accepts sends and answers lookups
     FairDriver,     \* the driver eventually answers each request and closes each open item
@@ -66,7 +70,8 @@ Bugs == {"none",
          "ResumeAlways",       \* S12: every prompt names the chat's saved session
          "KeepEndedSession",   \* S12: a session that ended stays the chat's
          "NewSessionUntaken",  \* S12: a new-session control the driver took leaves the chat untaken
-         "NoFailedNotice"}     \* S3Told: a version MDK refuses is dropped with no failed notice
+         "NoFailedNotice",     \* S3Told: a version MDK refuses is dropped with no failed notice
+         "NoReplacement"}      \* S2, L1: a dropped close or settling notice has nothing in its place
 
 ASSUME Bug \in Bugs
 ASSUME Prompts \subseteq {"p1", "p2", "p3"} /\ Requests \subseteq {"r1", "r2"}
@@ -87,7 +92,9 @@ NoSession == "none"
 (* An outbox entry: its token (an item's id and version, or what a notice *)
 (* is for), group, item ("notice" for a notice the core makes up), version,*)
 (* the requests it settles, whether it closes the item, who made it        *)
-(* ("drv" or "core"), and whether it was handed to MDK (`attempted`).     *)
+(* ("drv" or "core"), whether it was handed to MDK (`attempted`), and      *)
+(* whether it stands in for a dropped send (`last_resort`), so that        *)
+(* nothing stands in for it in turn.                                       *)
 (***************************************************************************)
 Empty == [mark    |-> [c \in Chats |-> 0],
           h       |-> [m \in Msgs |-> 0],
@@ -122,7 +129,8 @@ VARIABLES
     \* Monitors: what people and the harness saw. A crash takes none of it back.
     delivered,  \* how many times each prompt reached the driver
     shown,      \* how many events posted to a chat settle each request
-    iposts,     \* for each item, the versions posted, in order: [v, f (first event named), fin, by, s]
+    iposts,     \* for each item, the versions posted, in order: [v, f (first event named), fin, by,
+                \* s, lr]
     dropped,    \* for each item, the versions MDK refused or the core gave up
     told,       \* the versions <<item, version>> a posted failed notice tells the chat of
     found,      \* whether a lookup after the core went down found a send that went out
@@ -180,10 +188,11 @@ Last(s) == s[Len(s)]
 Queue(s, e) == [s EXCEPT !.outbox = Append(@, e)]
 Notice(tok, c, settles) ==
     [tok |-> tok, c |-> c, i |-> "notice", v |-> 1, s |-> settles,
-     fin |-> TRUE, by |-> "core", att |-> FALSE]
+     fin |-> TRUE, by |-> "core", att |-> FALSE, lr |-> FALSE]
 Version(i, v, settles, fin, by) ==
     [tok |-> <<i, v>>, c |-> ChatOf(i), i |-> i, v |-> v, s |-> settles,
-     fin |-> fin, by |-> by, att |-> FALSE]
+     fin |-> fin, by |-> by, att |-> FALSE, lr |-> FALSE]
+LastResort(e) == [e EXCEPT !.lr = TRUE]
 
 \* conversation.rs `settle_pending`: a notice that settles a pending request.
 SettleNotice(s, r) ==
@@ -443,8 +452,10 @@ Post(s, e) ==
          /\ iposts' = IF e.i = "notice" THEN iposts
                       ELSE [iposts EXCEPT ![e.i] = Append(@,
                              [v |-> e.v, f |-> s.items[e.i].first, fin |-> e.fin, by |-> e.by,
-                              s |-> e.s])]
-         /\ told' = IF e.i = "notice" /\ e.tok[1] = "failed" THEN told \cup {e.tok[2]} ELSE told
+                              s |-> e.s, lr |-> e.lr])]
+         \* A failed notice tells of a version; one in place of a dropped notice, of nothing.
+         /\ told' = IF e.i = "notice" /\ e.tok[1] = "failed" /\ e.tok[2][1] \in Items
+                    THEN told \cup {e.tok[2]} ELSE told
     ELSE UNCHANGED <<mdkTok, shown, iposts, told>>
 
 \* conversation.rs `sent`: the entry goes, and the item's first event is kept.
@@ -454,13 +465,29 @@ Sent(s, k, id) ==
     IN IF e.i # "notice" /\ s.items[e.i].first = 0
        THEN [s1 EXCEPT !.items[e.i].first = id] ELSE s1
 
-\* conversation.rs `refused`: the send is dropped, and the chat told in a failed notice that
-\* settles what it settled. A notice that is refused is dropped with nothing in its place.
+\* conversation.rs `close_undelivered`: an item the core holds closed, with nothing later of it
+\* queued, gets its next version, closing it, from the core, settling nothing, as a last resort.
+CloseUndelivered(s, i) ==
+    IF s.items[i].open \/ \E j \in DOMAIN s.outbox : s.outbox[j].i = i THEN s
+    ELSE LET v == s.items[i].ver + 1 IN
+         [Queue(s, LastResort(Version(i, v, {}, TRUE, "core"))) EXCEPT !.items[i].ver = v]
+
+\* conversation.rs `refused` (MDK refused the send in a live group, or the core gave it up): the
+\* send is dropped, and something stands in for it (`stand_in_for`), unless it is itself a last
+\* resort, so nothing loops. In place of an item's version: the item's close, when that version
+\* closed it and nothing later is queued, then a failed notice that settles what the version
+\* settled. In place of a notice that settled requests: a failed notice that settles them, as a
+\* last resort. A notice that settled nothing is not replaced.
 Refused(s, k) ==
     LET e == s.outbox[k]
         s1 == [s EXCEPT !.outbox = RemoveAt(@, k)]
-    IN IF e.i = "notice" \/ Bug = "NoFailedNotice" THEN s1
-       ELSE Queue(s1, Notice(<<"failed", e.tok>>, e.c, e.s))
+        failed == Notice(<<"failed", e.tok>>, e.c, e.s)
+    IN CASE e.lr -> s1
+         \* The code before the fix: a version gets its failed notice only; a notice, nothing.
+         [] Bug = "NoReplacement" -> IF e.i = "notice" THEN s1 ELSE Queue(s1, failed)
+         [] e.i = "notice" -> IF e.s = {} THEN s1 ELSE Queue(s1, LastResort(failed))
+         [] Bug = "NoFailedNotice" -> CloseUndelivered(s1, e.i)
+         [] OTHER -> Queue(CloseUndelivered(s1, e.i), failed)
 DropGhost(e) ==
     dropped' = IF e.i = "notice" THEN dropped ELSE [dropped EXCEPT ![e.i] = @ \cup {e.v}]
 
@@ -472,6 +499,7 @@ ForGood(c, e) == c \in GoneChats \/ e.tok \in mdkRefused
 \* did not, and the core cannot tell), or Refused: every send to a gone group, and up to
 \* MaxRefusals sends to a live one, each refused again whenever it is sent (run.rs `failed`:
 \* EventTooLarge, InvalidAppMessagePayload). The group stays live; the core drops the send.
+\* With LastResortTaken, MDK refuses no last-resort send to a live group.
 MdkSend(c, k, outcome) ==
     LET e == cv.outbox[k]
         marked == [cv EXCEPT !.outbox[k].att = TRUE]
@@ -481,7 +509,8 @@ MdkSend(c, k, outcome) ==
     /\ sv' = IF Dirty \/ Bug = "NoAttemptedFlag" THEN sv ELSE marked
     /\ IF ForGood(c, e) \/ outcome = "refused"
        THEN /\ outcome = "refused"
-            /\ ForGood(c, e) \/ Cardinality(mdkRefused) < MaxRefusals
+            /\ \/ ForGood(c, e)
+               \/ Cardinality(mdkRefused) < MaxRefusals /\ ~(LastResortTaken /\ e.lr)
             /\ mdkRefused' = IF c \in GoneChats THEN mdkRefused ELSE mdkRefused \cup {e.tok}
             /\ cv' = Refused(marked, k) /\ DropGhost(e)
             /\ unk' = Drop(unk, e.tok)
@@ -757,6 +786,10 @@ NeverDeliveredInCatchUp == ~(downs >= 1 /\ phase = "start" /\ inflight # NoAct)
 NeverDropped == \A i \in Items : dropped[i] = {}
 \* A failed notice that tells of a dropped version is posted.
 NeverTold == told = {}
+\* The core's close of an item whose closing version was dropped is posted.
+NeverClosedUndelivered == \A i \in Items : \A k \in DOMAIN iposts[i] : ~iposts[i][k].lr
+\* A failed notice in place of a dropped notice that settled requests is posted.
+NeverResettled == ~\E t \in mdkTok : t[1] = "failed" /\ t[2][1] \notin Items
 \* A message MDK handed over before storing it is dropped, and stored after.
 NeverDroppedEarly == \A m \in early : order[m] = 0
 \* A prompt reaches the driver after it took a new-session control for the chat.
