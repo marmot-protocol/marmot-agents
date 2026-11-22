@@ -140,7 +140,25 @@ fixed on 2026-11-21, each with a test that failed first.
   on an imported account, ignored what arrived while MDK could not say where its history ends, then started
   after it; and two groups read again at the same moment were read in no fixed order, so a capsule could not
   replay. Now a failed list is tried again before any live message moves a mark, a new group starts at the first
-  message heard live, and waiting groups are read again in order.
+  message heard live (since replaced: see the next entry), and waiting groups are read again in order.
+- **A new group can start at its history** (L3). **Fixed** on 2026-11-22. The test for the new group above failed
+  now and then (about 1 run in 6): a message stored while the core was down reached the driver as a prompt. MDK
+  stores a message some time after it arrived, and announces a sync's messages live only once it has stored them
+  all, so neither where MDK says a group ends nor which message the core hears first tells history from what is new.
+  Now that is told by MDK's own time of arrival, in whole seconds. For a group with no read mark, every message that
+  arrived by the second the core subscribed to MDK is history, marked read and never a prompt; every one that
+  arrived after is read, once, in storage order, whatever order MDK stored or announced them in. The core reads such
+  a group from its start, and starts it just before the first new message. The second is taken where the program
+  subscribes, before MDK starts and before the harness starts or a connector comes, so a prompt that arrives while a
+  slow harness starts is read. A message that arrived in that very second is taken as history
+  ([D-111](../decisions.md#d-111-a-group-the-core-has-never-read-starts-after-what-arrived-before-the-core-did)). Review found three ways the first fix still let one through, each with a test that failed first:
+  history stored after a new prompt reached the driver; the second was taken only once the harness was up, so a
+  prompt that came while it started was dropped; and a read that succeeded after failing jumped the mark past a
+  prompt it had found, whose announcement then came too late. The simulator does not reach this: its groups always
+  start from an invitation, with a mark. The import test's check that the agent answers after the move now waits for
+  MDK: on an imported home, MDK at the revision the core uses delivers nothing sent once the core has started, even
+  after the pause meant to avoid [MDK #3602](https://github.com/marmot-protocol/mdk/issues/3602), and the check
+  passed before only because its message arrived in the second the core started, which is now history.
 - **Settles carried by a message are dropped** (S1). **Fixed.** The core read `settles` only from items that are
   not messages. A pending answer whose approval ends without naming it stayed pending until the driver stopped.
   A driver's event could settle another chat's request.

@@ -27,11 +27,13 @@ use crate::config::Config;
 use crate::conversation::{Act, Conversation, Saved, Sending};
 use crate::files::Folders;
 use crate::keys::GroupKey;
-use crate::marmot::{FileFailed, Incoming, Live, Marmot, Message, NotNow, SendFailed, Side};
+use crate::marmot::{
+    FileFailed, Incoming, Live, Marmot, Message, NotNow, SendFailed, Side, Subscribed,
+};
 use crate::socket::SocketDriver;
 use marmot_agent_driver::{Driver, Output, Reason, Refusal, SendFile};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::future::Future;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -235,6 +237,13 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// The core's clock, which never jumps, for how long a control has waited (D-087). Tokio's,
     /// which is the system's except in a simulation, whose clock is virtual.
     started: Instant,
+    /// When this core subscribed to MDK's live events ([`Subscribed`]), by the machine's clock,
+    /// in whole seconds as MDK gives the time a message arrived; zero until it runs.
+    since: u64,
+    /// The groups the core had no read mark for when it first read them in this run, as on an
+    /// imported account's first run or after a lost state file: what arrived in them by
+    /// [`Core::since`] is their history, marked read and never handed on (L3).
+    fresh: BTreeSet<GroupKey>,
     /// For each group whose last send failed: when to try again, and how long it waited last.
     retry: HashMap<GroupKey, (Instant, Duration)>,
     /// The groups whose next send MDK has queued, not yet taken into its engine.
@@ -244,9 +253,6 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// read never goes ahead of it. In order, so groups due at the same moment are read again in
     /// the same order every time.
     unread: BTreeMap<GroupKey, Again>,
-    /// For a group the core has never seen, the first message heard live whose place MDK could
-    /// not give: the group starts there, not after its latest message.
-    starts: BTreeMap<GroupKey, Message>,
     /// When to list the groups again, for a catch-up that MDK could not list them for. Until then
     /// no live message moves a mark, which could pass messages whose notices were lost.
     listing: Option<Again>,
@@ -321,10 +327,11 @@ impl<D: Driver, M: Side> Core<D, M> {
             folders,
             config: config.clone(),
             started: Instant::now(),
+            since: 0,
+            fresh: BTreeSet::new(),
             retry: HashMap::new(),
             queued: HashSet::new(),
             unread: BTreeMap::new(),
-            starts: BTreeMap::new(),
             listing: None,
             rejected_tries: REJECTED_TRIES,
             drained: HashMap::new(),
@@ -351,14 +358,17 @@ impl<D: Driver, M: Side> Core<D, M> {
     }
 
     /// Runs until the driver ends or `stop` resolves. MDK's runtime must already have been
-    /// subscribed to (`events`) and started, so nothing that arrives during start-up is missed.
-    /// An error when the state file could not be written: the core stopped where it was.
+    /// subscribed to (`live`, as [`crate::marmot::subscribe`] does) and started, so nothing that
+    /// arrives during start-up is missed; and subscribed to before the harness started, since
+    /// what a group with no read mark received by then is its history. An error when the state
+    /// file could not be written: the core stopped where it was.
     pub async fn run(
         mut self,
-        events: M::Events,
+        live: Subscribed<M::Events>,
         stop: impl Future<Output = ()>,
     ) -> Result<(), String> {
-        self.run_until(events, stop).await.map_err(|Unsaved| {
+        self.since = live.since;
+        self.run_until(live.events, stop).await.map_err(|Unsaved| {
             eprintln!("marmot-agent: {UNSAVED}");
             UNSAVED.to_string()
         })
@@ -450,7 +460,7 @@ impl<D: Driver, M: Side> Core<D, M> {
                 // While the groups are to be listed again, the catch-up reads what came.
                 Woke::Marmot(Live::Message(message))
                     if self.listing.is_some() && self.read.contains_key(&message.group) => {}
-                Woke::Marmot(Live::Message(message)) => self.handle(message).await?,
+                Woke::Marmot(Live::Message(message)) => self.live(message).await?,
                 Woke::Marmot(Live::Groups) => self.consider_invitations().await?,
                 Woke::Marmot(Live::Other) => {}
                 Woke::Marmot(Live::Lagged) => self.catch_up().await?,
@@ -547,7 +557,7 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// the agent has just joined is read from its start: the agent cannot read anything sent
     /// before it joined, so everything stored is for it. The mark that says so is saved before
     /// the agent accepts, so a crash in between never leaves a group accepted with no mark, which
-    /// would start it at its latest message and skip what arrived meanwhile.
+    /// would take what arrived meanwhile as history.
     async fn consider_invitations(&mut self) -> Result<(), Unsaved> {
         let invitations: Vec<(GroupKey, bool)> = (self.marmot.invitations().into_iter())
             .map(|(group, welcomer)| {
@@ -562,6 +572,7 @@ impl<D: Driver, M: Side> Core<D, M> {
         if !accepting.is_empty() {
             for group in accepting {
                 self.read.insert(group.clone(), 0);
+                self.fresh.remove(group);
             }
             self.save()?;
         }
@@ -577,7 +588,7 @@ impl<D: Driver, M: Side> Core<D, M> {
     }
 
     /// Reads what was stored for each group after its mark: what arrived while the core was down,
-    /// or while it fell behind. A group the core has never seen starts at its latest message. A
+    /// or while it fell behind. A group with no mark is read from its start ([`Core::catch_up_group`]). A
     /// group waiting to be read again is left to its time. When MDK cannot list the groups, the
     /// whole catch-up is tried again later: a failed list is not an account with no groups.
     async fn catch_up(&mut self) -> Result<(), Unsaved> {
@@ -631,38 +642,30 @@ impl<D: Driver, M: Side> Core<D, M> {
 
     /// Reads what was stored for one group after its mark. When MDK cannot be read, or a message
     /// in it cannot, the group waits to be read again; when all of it was read, it waits no more.
-    /// A group the core has never seen starts at the first message heard live that MDK could not
-    /// place, or else after its latest message, so its history is not read as prompts (L3).
+    /// A group with no mark is read from its start, as MDK stored it: what arrived by the time the
+    /// core subscribed is its history, marked read, and the group starts just before the first
+    /// message that arrived after, so neither is its history read as prompts nor is anything new
+    /// skipped (L3). MDK gives that time in whole seconds, so a message that arrived in the second
+    /// the core subscribed is history too. Which messages are history is never told by where
+    /// MDK says the group ends, nor by which message is heard first: MDK stores a message some
+    /// time after it arrived, and announces a sync's messages only once it has stored them all.
     async fn catch_up_group(&mut self, group: GroupKey) -> Result<(), Unsaved> {
-        let after = match self.read.get(&group) {
-            Some(&after) => after,
-            None => {
-                let first = match self.starts.get(&group) {
-                    Some(first) => self.marmot.order_of(first).map(|o| o.map(|o| o - 1)),
-                    None => Ok(None),
-                };
-                let start = match first {
-                    Ok(Some(start)) => Ok(start),
-                    Ok(None) => self.marmot.latest(&group),
-                    Err(NotNow) => Err(NotNow),
-                };
-                let Ok(start) = start else {
-                    self.read_later(&group);
-                    return Ok(());
-                };
-                self.read.insert(group.clone(), start);
-                self.save()?;
-                if self.starts.remove(&group).is_none() {
-                    self.read_through(&group);
-                    return Ok(());
-                }
-                start
-            }
-        };
-        let Ok(stored) = self.marmot.stored(&group, after) else {
+        let mark = self.read.get(&group).copied();
+        let Ok(stored) = self.marmot.stored(&group, mark.unwrap_or(i64::MIN)) else {
             self.read_later(&group);
             return Ok(());
         };
+        if mark.is_none() {
+            let since = self.since;
+            let start = match stored.iter().find(|m| m.received_at > since) {
+                Some(first) => first.order.map(|order| order - 1),
+                None => stored.last().and_then(|m| m.order),
+            };
+            self.fresh.insert(group.clone());
+            // Where it starts is kept, so its first new message is read there after a crash.
+            self.read.insert(group.clone(), start.unwrap_or(0));
+            self.save()?;
+        }
         for message in stored {
             self.handle(message).await?;
         }
@@ -677,38 +680,54 @@ impl<D: Driver, M: Side> Core<D, M> {
         }
     }
 
-    /// Hands one message to the conversation, once. What the conversation makes of it, such as a
-    /// request pending for the driver or a refusal queued, is saved in one write with the mark
-    /// that says it was read, before anything reaches the driver: a crash before that write leaves
-    /// the message to be read again, and one after it leaves the request to be settled (D-037,
-    /// D-070). A mark that cannot be saved stops the core before the message reaches the driver.
-    /// A message MDK cannot read for a moment is not marked read, and neither is anything after it
-    /// in its group: the group is read again from its mark later (S10, L3). A group the core has
-    /// never seen starts at the first message heard live, even while MDK cannot say where its
-    /// history ends: what was stored before it is history.
+    /// A message heard live. A group with no mark is read from storage instead, where its
+    /// history is told apart from what is new whatever order MDK announces messages in
+    /// ([`Core::catch_up_group`]): a message that arrived by the time the core subscribed starts
+    /// no read, and one that arrived after has the group read now, unless it waits to be read
+    /// again anyway.
+    async fn live(&mut self, message: Message) -> Result<(), Unsaved> {
+        if self.read.contains_key(&message.group) {
+            return self.handle(message).await;
+        }
+        if message.received_at <= self.since || self.waits(&message.group) {
+            return Ok(());
+        }
+        self.catch_up_group(message.group).await
+    }
+
+    /// Hands one message of a group with a mark to the conversation, once. What the conversation
+    /// makes of it, such as a request pending for the driver or a refusal queued, is saved in one
+    /// write with the mark that says it was read, before anything reaches the driver: a crash
+    /// before that write leaves the message to be read again, and one after it leaves the request
+    /// to be settled (D-037, D-070). A mark that cannot be saved stops the core before the message
+    /// reaches the driver. A message MDK cannot read for a moment is not marked read, and neither
+    /// is anything after it in its group: the group is read again from its mark later (S10, L3).
+    /// In a group the core had no mark for, a message that arrived by the time the core
+    /// subscribed is history, even one stored after a message that arrived later: it is marked
+    /// read and never handed on (L3).
     async fn handle(&mut self, message: Message) -> Result<(), Unsaved> {
         let group = message.group.clone();
-        let new = !self.read.contains_key(&group);
-        if self.waits(&group) && (!new || self.starts.contains_key(&group)) {
+        // A group with no mark is read from its start instead ([`Core::live`]).
+        let Some(&read) = self.read.get(&group) else {
+            return Ok(());
+        };
+        if self.waits(&group) {
             return Ok(());
         }
         let order = match self.marmot.order_of(&message) {
             Ok(Some(order)) => order,
             Ok(None) => return Ok(()),
             Err(NotNow) => {
-                if new {
-                    self.starts.entry(group.clone()).or_insert(message);
-                }
                 self.read_later(&group);
                 return Ok(());
             }
         };
-        if new {
-            self.read.insert(group.clone(), order - 1);
-            self.unread.remove(&group);
-        }
-        if self.read.get(&group).is_some_and(|&read| order <= read) {
+        if order <= read {
             return Ok(());
+        }
+        if self.fresh.contains(&group) && message.received_at <= self.since {
+            self.read.insert(group, order);
+            return self.save();
         }
         let acts = match self.marmot.incoming(message).await {
             Ok(Some(Incoming::Heard(heard))) => self.conversation.heard(heard),
@@ -716,8 +735,7 @@ impl<D: Driver, M: Side> Core<D, M> {
             Ok(None) => Vec::new(),
             Err(NotNow) => {
                 self.read_later(&group);
-                // Where a new group starts is kept, so the message is read there after a crash.
-                return if new { self.save() } else { Ok(()) };
+                return Ok(());
             }
         };
         self.read.insert(group, order);
@@ -983,13 +1001,15 @@ async fn upload(
 /// Serves connectors on the socket, one at a time, until `stop` resolves. Each connector that
 /// gives a good hello drives the agent until it goes; then the core closes what it left open, as
 /// for any driver that ends (D-058), and waits for the next. What arrives in between is stored by
-/// MDK, and read when the next connector has come.
+/// MDK, and read when the next connector has come. `since` is when the program subscribed to MDK
+/// ([`Subscribed`]), before any connector came: what arrives while one starts is not history.
 pub async fn serve(
     marmot: Marmot,
     config: &Config,
     store: &Path,
     listener: tokio::net::UnixListener,
     token: String,
+    since: u64,
     stop: impl std::future::Future<Output = ()>,
 ) -> Result<(), String> {
     let (stopping, stopped) = tokio::sync::watch::channel(false);
@@ -1014,10 +1034,14 @@ pub async fn serve(
                 continue;
             }
         };
-        let events = marmot.runtime.subscribe();
+        // Each core reads what it did not hear live from storage, from the program's start.
+        let live = Subscribed {
+            events: marmot.runtime.subscribe(),
+            since,
+        };
         let core = Core::new(marmot.clone(), driver, config, Store::new(store))?;
         let mut until = stopped.clone();
-        let running = core.run(events, async move {
+        let running = core.run(live, async move {
             let _ = until.wait_for(|stopping| *stopping).await;
         });
         tokio::pin!(running);

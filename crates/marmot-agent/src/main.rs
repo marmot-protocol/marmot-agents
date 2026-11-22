@@ -117,8 +117,9 @@ async fn run(config: &Config) -> Result<(), String> {
     let mut stop = Box::pin(stopped());
     let (home, app, runtime) = marmot::open(config)?;
     let account = marmot::identity(&home)?;
-    // Subscribe before starting, so what MDK delivers while it starts is not missed.
-    let events = runtime.subscribe();
+    // Subscribe before starting, so what MDK delivers while it starts is not missed, and before
+    // the harness starts, so what arrives while it starts is not taken as history.
+    let live = marmot::subscribe(&runtime);
     let Some(started) = unless_stopped(&mut stop, runtime.start()).await else {
         runtime.shutdown().await;
         return Ok(());
@@ -139,7 +140,7 @@ async fn run(config: &Config) -> Result<(), String> {
                 Some(driver) => {
                     let driver = driver.map_err(|_| "Codex could not be started")?;
                     let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
-                    core.run(events, stop).await
+                    core.run(live, stop).await
                 }
                 None => Ok(()),
             }
@@ -150,7 +151,7 @@ async fn run(config: &Config) -> Result<(), String> {
                 Some(driver) => {
                     let driver = driver.map_err(|_| "the ACP agent could not be started")?;
                     let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
-                    core.run(events, stop).await
+                    core.run(live, stop).await
                 }
                 None => Ok(()),
             }
@@ -159,17 +160,18 @@ async fn run(config: &Config) -> Result<(), String> {
             Some(driver) => {
                 let driver = driver.map_err(|_| "Pi could not be started")?;
                 let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
-                core.run(events, stop).await
+                core.run(live, stop).await
             }
             None => Ok(()),
         },
         (None, None, None) => {
-            drop(events);
+            let since = live.since;
+            drop(live);
             let endpoint = Endpoint::in_home(&config.home);
             let (listener, token) = endpoint
                 .listen()
                 .map_err(|_| "the socket could not be opened")?;
-            serve(marmot, config, &config.home, listener, token, stop).await
+            serve(marmot, config, &config.home, listener, token, since, stop).await
         }
     };
     runtime.shutdown().await;

@@ -1843,3 +1843,19 @@ token-based local sends):
 event that D-096 used to accept no longer happens. The notice for a forgotten send says what is known, not more.
 
 Decided 2026-11-22. The project owner decided.
+
+## D-111 A group the core has never read starts after what arrived before the core did
+
+**Decision.** For a group the core has no read mark for, as on an imported account's first run or after a lost state
+file, the core goes by when each stored message reached this device (MDK's `received_at`), compared with the second
+the core subscribed to MDK. A message that arrived at or before that second is history: it is marked read and is
+never a prompt. One that arrived later is new and is read once, in storage order. A message that arrived in that
+very second counts as history.
+
+**Why.** MDK announces a sync's messages only after storing them all, so a core that has just subscribed can hear
+messages that were stored before it started, and it must not act on old messages as prompts. MDK gives arrival times
+in whole seconds, so a message in the start second cannot be told from one just before it. Missing one new message
+in a rare case (no mark, at start) is better than acting on history. The project owner accepted the
+recommendation.
+
+Decided 2026-11-22. The project owner decided.

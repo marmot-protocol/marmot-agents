@@ -6,7 +6,7 @@
 use cgka_traits::GroupId;
 use marmot_agent::carrier::{self, Asked, ITEM_KIND, Read};
 use marmot_agent::config::Config;
-use marmot_agent::marmot::Marmot;
+use marmot_agent::marmot::{self, Marmot, Subscribed};
 use marmot_agent::run::{Core, Store};
 use marmot_agent::{EventKey, PubKey};
 use marmot_agent_driver::{
@@ -25,6 +25,9 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+
+/// MDK's live events, subscribed to, as the core runs on them.
+pub type Live = Subscribed<tokio::sync::broadcast::Receiver<marmot_app::MarmotAppEvent>>;
 
 /// Waits, up to `seconds`, for `found` to give something.
 pub async fn within<T>(seconds: u64, mut found: impl FnMut() -> Option<T>) -> T {
@@ -241,10 +244,20 @@ impl World {
 
     /// Runs `core`, as [`World::start`] does.
     pub fn run<D: Driver + 'static>(&self, core: Core<D>) -> Running {
-        let events = self.runtime.subscribe();
+        self.run_on(core, marmot::subscribe(&self.runtime))
+    }
+
+    /// As [`World::start`], on events subscribed to earlier, as when the harness takes a while to
+    /// start: what MDK emitted since reaches the core live, as an event emitted after the core
+    /// started does, even for a message MDK stored before.
+    pub fn start_on(&self, driver: impl Driver + 'static, live: Live) -> Running {
+        self.run_on(self.core(driver, Store::new(self.state.path())), live)
+    }
+
+    fn run_on<D: Driver + 'static>(&self, core: Core<D>, live: Live) -> Running {
         let (stop, stopped) = oneshot::channel::<()>();
         let task = tokio::spawn(async move {
-            core.run(events, async {
+            core.run(live, async {
                 let _ = stopped.await;
             })
             .await

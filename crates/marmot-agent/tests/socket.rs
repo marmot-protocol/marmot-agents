@@ -5,6 +5,7 @@
 mod common;
 
 use common::{World, eventually};
+use marmot_agent::marmot::now;
 use marmot_agent::run::serve;
 use marmot_agent::socket::{Endpoint, PROTOCOL};
 use marmot_agent_events::State;
@@ -129,7 +130,7 @@ async fn a_connector_on_the_socket_drives_the_agent() {
         let stop = async {
             let _ = stopped.await;
         };
-        serve(marmot, &config, &store, listener, served_token, stop).await
+        serve(marmot, &config, &store, listener, served_token, now(), stop).await
     });
 
     // A wrong token is refused, and the core keeps listening.

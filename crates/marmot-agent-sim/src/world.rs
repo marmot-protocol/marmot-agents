@@ -444,7 +444,12 @@ impl World {
 
     /// Seconds on the virtual clock, as a sender's clock gives them.
     pub fn secs(&self) -> u64 {
-        1_000_000 + self.ms() / 1000
+        Self::secs_at(self.ms())
+    }
+
+    /// The seconds on the virtual clock at `ms` milliseconds into the run.
+    pub fn secs_at(ms: u64) -> u64 {
+        1_000_000 + ms / 1000
     }
 
     /// Notes what happened.
@@ -668,6 +673,11 @@ impl World {
     }
 
     fn deliver_live(&mut self, msg: usize) {
+        // When it arrived: when it was stored, or now for one heard before it is stored.
+        let event = self.msgs[msg].as_ref().expect("posted").event.clone();
+        let arrived = (self.rows.iter())
+            .find(|r| r.event == event)
+            .map_or(self.ms(), |r| r.ms);
         let m = self.msgs[msg].as_mut().expect("posted");
         m.heard = true;
         let name = if m.posted.is_request() { "Ask" } else { "Hear" };
@@ -684,6 +694,7 @@ impl World {
             content: m.content.clone(),
             tags: m.tags.clone(),
             recorded_at: m.recorded_at,
+            received_at: Self::secs_at(arrived),
             order: None,
         };
         if self.listening {

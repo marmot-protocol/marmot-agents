@@ -45,7 +45,7 @@ tempfile = "3"
 agent-connector = { git = "https://github.com/marmot-protocol/mdk.git", rev = "3fce95465cdea1edc8456dbd1c6691d1c8dc1f2e" }
 agent-control = { git = "https://github.com/marmot-protocol/mdk.git", rev = "3fce95465cdea1edc8456dbd1c6691d1c8dc1f2e" }
 # The Claude Code scenario runs the driver as a program.
-tokio = { version = "1", features = ["process"] }
+tokio = { version = "1", features = ["process", "test-util"] }
 
 [features]
 # Bugs fixed before, put back on purpose for the simulator (`crates/marmot-agent-sim`), which

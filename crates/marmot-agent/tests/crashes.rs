@@ -6,7 +6,7 @@ mod common;
 
 use common::{Chat, World, first, within};
 use marmot_agent::carrier::Asked;
-use marmot_agent::marmot::Fault;
+use marmot_agent::marmot::{self, Fault, Subscribed, now};
 use marmot_agent::run::{Core, Kept, Store};
 use marmot_agent::{Conversation, EventKey, GroupKey, Heard, PubKey, Sending, Where};
 use marmot_agent_driver::{
@@ -460,9 +460,12 @@ async fn a_message_that_cannot_be_read_for_a_moment_is_read_after() {
     world.runtime.shutdown().await;
 }
 
-// A group the core has never seen, as on an imported account's first run, starts after what is
-// stored in it. When MDK cannot say where that is for a while, a message that arrives meanwhile is
-// still read, once, and what was there before is not (L3).
+// A group the core has never seen, as on an imported account's first run, starts after what
+// arrived before the core subscribed. When MDK cannot give what it stored for a while, a message
+// that arrives meanwhile is still read, once, and what was there before is not (L3), even when
+// MDK announces a message that arrived before the core subscribed only after: it stores a sync's
+// messages and announces them at the end of the sync, so a core that subscribes in between hears
+// one live.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_message_that_arrives_while_a_new_group_cannot_be_read_is_read() {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
@@ -471,24 +474,70 @@ async fn a_message_that_arrives_while_a_new_group_cannot_be_read_is_read() {
     let core = world.start(driver);
     let (chat, _) = a_chat(&world, &seen).await;
     core.stop().await;
+    // Listening before MDK announces the message, so the core hears it live when it starts,
+    // though it arrived before the core subscribed.
+    let events = world.runtime.subscribe();
     chat.say("while away").await;
     let group = GroupKey(chat.hex.clone());
     let stored = || world.marmot.stored(&group, 0).ok().filter(|m| m.len() == 2);
     within(30, || stored().map(|_| ())).await;
-    // The core has never seen the group, and MDK cannot say where it ends for about six seconds.
+    let live = Subscribed {
+        events,
+        since: now(),
+    };
+    // The core has never seen the group, and MDK cannot give what it stored for about six seconds.
     let store = Store::new(world.state.path());
     let mut kept = store.load().unwrap();
     kept.read.remove(&group);
     store.save(&kept).unwrap();
     for _ in 0..6 {
-        world.marmot.faults.push(Fault::LatestFails);
+        world.marmot.faults.push(Fault::StoredFails);
     }
     let (driver, _events, seen) = stub(false);
-    let core = world.start(driver);
+    let since = live.since;
+    let core = world.start_on(driver, live);
+    // MDK gives the time a message arrived in whole seconds, so only one that arrived in a later
+    // second than the core subscribed is known to have come after it.
+    within(5, || (now() >= since + 2).then_some(())).await;
     chat.say("new").await;
     within(30, || seen.lock().unwrap().prompts.first().cloned()).await;
     // A message read twice, or history read as a prompt, would come by now.
     tokio::time::sleep(Duration::from_secs(8)).await;
+    assert_eq!(seen.lock().unwrap().prompts, ["new"]);
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
+// A prompt that arrives in a group the core has no mark for, while the harness is still starting,
+// is read: the core starts when it subscribes to MDK, before it starts the harness, not once the
+// harness is up (L3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_that_arrives_while_the_harness_starts_is_read() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, _events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, _) = a_chat(&world, &seen).await;
+    core.stop().await;
+    let group = GroupKey(chat.hex.clone());
+    let store = Store::new(world.state.path());
+    let mut kept = store.load().unwrap();
+    kept.read.remove(&group);
+    store.save(&kept).unwrap();
+    let live = marmot::subscribe(&world.runtime);
+    let subscribed = live.since;
+    // The harness is slow to start. MDK gives the time a message arrived in whole seconds, so
+    // the prompt comes in a later second than the core subscribed.
+    within(5, || (now() >= subscribed + 2).then_some(())).await;
+    chat.say("new").await;
+    let stored = || world.marmot.stored(&group, 0).ok().filter(|m| m.len() == 2);
+    within(30, || stored().map(|_| ())).await;
+    within(5, || (now() >= subscribed + 4).then_some(())).await;
+    let (driver, _events, seen) = stub(false);
+    let core = world.start_on(driver, live);
+    within(30, || seen.lock().unwrap().prompts.first().cloned()).await;
+    // A message read twice, or history read as a prompt, would come by now.
+    tokio::time::sleep(Duration::from_secs(3)).await;
     assert_eq!(seen.lock().unwrap().prompts, ["new"]);
     core.stop().await;
     world.runtime.shutdown().await;

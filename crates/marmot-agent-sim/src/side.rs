@@ -59,6 +59,7 @@ impl SimSide {
                 content: r.content.clone(),
                 tags: r.tags.clone(),
                 recorded_at: r.recorded_at,
+                received_at: World::secs_at(r.ms),
                 order: Some(r.order),
             })
             .collect()
@@ -190,19 +191,6 @@ impl Side for SimSide {
             .filter(|c| c.accepted)
             .map(|c| c.group.clone())
             .collect())
-    }
-
-    fn latest(&self, group: &GroupKey) -> Result<i64, NotNow> {
-        let mut world = lock(&self.world);
-        world.land();
-        let Some(chat) = world.chat_of(group) else {
-            return Ok(0);
-        };
-        Ok((world.rows.iter())
-            .filter(|r| r.chat == chat && (r.kind == CHAT || r.kind == REQUEST_KIND))
-            .map(|r| r.order)
-            .max()
-            .unwrap_or(0))
     }
 
     fn stored(&self, group: &GroupKey, after: i64) -> Result<Vec<Message>, NotNow> {

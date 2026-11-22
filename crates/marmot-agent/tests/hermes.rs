@@ -20,6 +20,7 @@ mod common;
 
 use common::{Chat, TestModel, World, files_sent, lines, within};
 use marmot_agent::carrier::{self, Asked};
+use marmot_agent::marmot::now;
 use marmot_agent::run::serve;
 use marmot_agent::socket::Endpoint;
 use marmot_agent_events::State;
@@ -191,7 +192,7 @@ async fn hermes_end_to_end() {
         let stop = async {
             let _ = stopped.await;
         };
-        serve(marmot, &config, &store, listener, token, stop).await
+        serve(marmot, &config, &store, listener, token, now(), stop).await
     });
     let lap = |what: &str| println!("{what} after {}s", started.elapsed().as_secs());
     let mut hermes = Hermes::new(home.path(), work.path(), model);

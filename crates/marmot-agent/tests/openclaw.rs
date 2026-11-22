@@ -19,6 +19,7 @@ mod common;
 
 use common::{Chat, TURN, TestModel, World, files_sent, lines, within};
 use marmot_agent::carrier::Asked;
+use marmot_agent::marmot::now;
 use marmot_agent::run::serve;
 use marmot_agent::socket::Endpoint;
 use marmot_agent_events::State;
@@ -205,7 +206,7 @@ async fn openclaw_end_to_end() {
         let stop = async {
             let _ = stopped.await;
         };
-        serve(marmot, &config, &store, listener, token, stop).await
+        serve(marmot, &config, &store, listener, token, now(), stop).await
     });
     let mut openclaw = OpenClaw::start(&folders, 1).await;
 
