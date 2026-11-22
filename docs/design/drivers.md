@@ -14,10 +14,13 @@ driver asks for it, in [sending a file](#sending-a-file), is a proposal: built, 
 owner accepts it. That the installers run the harness the person already has, and add our plugin to their own
 Hermes and OpenClaw, is decided
 ([D-102](../decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)); which of their
-gateway's settings the installers change is a proposal, provisional until the owner accepts it.
+gateway's settings the installers change is decided too
+([D-105](../decisions.md#d-105-which-gateway-settings-the-installers-change)).
 That a chat can move a coding harness to another folder is decided
 ([D-101](../decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder)); how, in
-[a chat's folder](#a-chats-folder), is built and provisional until the owner accepts it.
+[a chat's folder](#a-chats-folder), is built; the `folders` list, the account home and what a move does are
+decided ([D-104](../decisions.md#d-104-how-a-chats-folder-works-as-built)), and the setting's name and refusals
+are provisional.
 
 ## What a driver does
 
@@ -192,7 +195,7 @@ OpenClaw keep the workspace they manage. Built 2026-11-22; what other programs a
   `~`, the home; a relative one is taken from the chat's current folder. The core resolves it one name at a
   time, links followed and `..` taken away, and takes it only if it is a folder inside one of those the
   settings list in `folders` (by default the install folder; listing `~` allows any folder in the home). The
-  agent's account home, and any folder inside it, is never allowed (provisional). Nothing outside those
+  agent's account home, and any folder inside it, is never allowed ([D-104](../decisions.md#d-104-how-a-chats-folder-works-as-built)). Nothing outside those
   folders is read on disk: a path that leads outside, as written or through a link, is refused with the core's
   refused notice, reason `not_allowed`, whether what it leads to is there or not; one inside that is not
   there, or is not a folder, with `invalid`. Neither names the path, and nothing about it is logged
