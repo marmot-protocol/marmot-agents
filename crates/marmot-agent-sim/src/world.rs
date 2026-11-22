@@ -119,7 +119,22 @@ pub struct RefusedSend {
     pub notice: Option<String>,
 }
 
-/// A send that goes out later than the core looked for it.
+/// What a send carries, as MDK compares it with what it keeps under the send's token: its kind,
+/// content, tags, and for an edit the message it edits.
+pub type Request = (u64, String, Vec<Vec<String>>, Option<EventKey>);
+
+/// A send MDK keeps under its token.
+#[derive(Clone, Debug)]
+pub struct Kept {
+    /// What it carries.
+    pub request: Request,
+    /// The event it is, once it goes out.
+    pub event: EventKey,
+    /// Whether MDK dropped it before it went out: then it never goes, and MDK refuses the token.
+    pub rejected: bool,
+}
+
+/// A send that goes out long after it was handed over, while the core tries it again.
 #[derive(Clone, Debug)]
 pub struct Landing {
     /// When it lands.
@@ -333,8 +348,6 @@ pub struct World {
     pub listening: bool,
     /// What the next sends meet.
     pub outcomes: VecDeque<Outcome>,
-    /// How many lookups are still to fail.
-    pub lookup_errors: u32,
     /// The reads of what arrived still to fail, each the next of its kind.
     pub read_errors: VecDeque<ReadStep>,
     /// Whether the next save fails.
@@ -347,11 +360,10 @@ pub struct World {
     pub landings: Vec<Landing>,
     /// Sends MDK refused, and sends the core gave up after its tries.
     pub refused: Vec<RefusedSend>,
-    /// For each chat, the send last tried there whose outcome was not known and that stored
-    /// nothing, by its token: the core may give it up. Sends to a chat go one at a time, oldest
-    /// first, so when the core tries another there instead, it gave this one up, and dropped it
-    /// as MDK's refusal is dropped: it goes to `refused`.
-    pub unknown: BTreeMap<usize, (String, RefusedSend)>,
+    /// What MDK keeps under each token, by chat and token, across the core's crashes.
+    pub tokens: BTreeMap<(usize, String), Kept>,
+    /// For each send, by chat and the core's name for it, how many of its tries MDK dropped.
+    pub drops: BTreeMap<(usize, String), u32>,
     /// The scripted harness.
     pub harness: Harness,
     /// What happened.
@@ -397,14 +409,14 @@ impl World {
             live: VecDeque::new(),
             listening: false,
             outcomes: VecDeque::new(),
-            lookup_errors: 0,
             read_errors: VecDeque::new(),
             save_fails: false,
             crash_after: None,
             crashed: false,
             landings: Vec::new(),
             refused: Vec::new(),
-            unknown: BTreeMap::new(),
+            tokens: BTreeMap::new(),
+            drops: BTreeMap::new(),
             harness: Harness::default(),
             trace: Vec::new(),
             step: None,
@@ -412,16 +424,6 @@ impl World {
             stopping: false,
             unsaved: false,
             reading: None,
-        }
-    }
-
-    /// The core tries the send named `token` in `chat`. One left unknown there that it tries
-    /// no more was given up: it is recorded among the sends dropped.
-    pub fn trying(&mut self, chat: usize, token: &str) {
-        if self.unknown.get(&chat).is_some_and(|(t, _)| t != token) {
-            let (_, dropped) = self.unknown.remove(&chat).expect("found");
-            self.note(format!("Send(c{chat}): the one before was given up"));
-            self.refused.push(dropped);
         }
     }
 

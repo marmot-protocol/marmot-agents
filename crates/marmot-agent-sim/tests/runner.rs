@@ -100,7 +100,9 @@ fn a_hang_after_a_queued_refusal_still_hangs_the_next_request() {
 
 // Review round 2. The old fair part ended once everything was settled, with a send still to land:
 // a send armed to land 90 s late went out again after the core looked for it, the turn ended, and
-// the run passed before the first copy landed as the duplicate the `late` family looks for.
+// the run passed before the first copy landed as a duplicate. Now the fair part waits for it to
+// land, and the core, trying it again under its token meanwhile, gets the same event once it has:
+// nothing goes out twice.
 #[test]
 fn the_fair_part_waits_for_a_late_send_to_land() {
     let schedule = Schedule {
@@ -118,10 +120,9 @@ fn the_fair_part_waits_for_a_late_send_to_land() {
     let report = run(&schedule);
     let landed = (report.trace.iter()).any(|t| t.what.starts_with("Send(landed late"));
     assert!(landed, "{:#?}", report.trace);
-    assert_eq!(
-        report.failure.map(|f| f.failure.property),
-        Some("S3".into())
-    );
+    let same = (report.trace.iter()).any(|t| t.what.ends_with("Sent before, same token"));
+    assert!(same, "{:#?}", report.trace);
+    assert_eq!(report.failure.map(|f| f.failure.property), None);
 }
 
 /// One chat, `before`, then one prompt stored and heard, then `then`.
@@ -137,12 +138,12 @@ fn one_prompt_after(before: &[Action], then: &[Action]) -> Schedule {
 }
 
 // Review round 1 of `dropped-sends`. The old S3 forgave a skipped version only when MDK refused
-// it: a core that gave a send up after its ten tries, each with an outcome not known and none
-// stored, as designed, failed the run, since nothing recorded the give-up.
+// it: a core that gave a send up after its ten tries, as designed, failed the run, since nothing
+// recorded the give-up. A send is given up now after MDK dropped ten of its tries.
 #[test]
 fn a_send_given_up_after_its_tries_is_a_gap_the_oracles_allow() {
     let tries = [Action::Send {
-        outcome: Outcome::Ambiguous,
+        outcome: Outcome::Rejected,
     }; 10];
     let then = [
         Action::Emit {

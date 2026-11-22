@@ -211,12 +211,13 @@ async fn a_long_chat_is_not_throttled_by_the_test_relay() {
     world.runtime.shutdown().await;
 }
 
-// The agent's words that went out are found in what MDK stored by all they carry, so a send whose
-// outcome was not known is not sent twice; words that differ only in what they settle, or in
-// their phase, are not taken for them (S3).
+// A send tried again under the token MDK keeps it under gives back the event it made and sends
+// nothing, however long after: the agent's words go out once, with every tag the core gives them.
+// A token MDK holds for one send is refused for another, never taken for it (S3).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn the_agents_words_are_found_by_all_they_carry() {
-    use marmot_agent::{EventKey, GroupKey, Sending};
+async fn a_send_tried_again_under_its_token_goes_out_once() {
+    use marmot_agent::marmot::SendFailed;
+    use marmot_agent::{EventKey, GroupKey, Sending, Token};
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     world.runtime.start().await.unwrap();
     let core = world.start(Echo::new(Arc::new(AtomicUsize::new(0))));
@@ -227,19 +228,48 @@ async fn the_agents_words_are_found_by_all_they_carry() {
         .unwrap();
     let group = GroupKey(world.joined(&group).await);
     core.stop().await;
-    let words = |remark: bool, settles: &[&str]| Sending::Words {
+    let words = |text: &str| Sending::Words {
         key: "w".into(),
-        text: "the words".into(),
+        text: text.into(),
         turn: Some("t1".into()),
-        remark,
+        remark: true,
         edit: None,
-        settles: settles.iter().map(|s| EventKey::from(*s)).collect(),
+        settles: vec![EventKey::from("e-r1")],
     };
-    let sent = words(true, &["e-r1", "e-r2"]);
-    let went = world.marmot.send(&group, &sent, "w@1").await.unwrap();
-    let found = |what: &Sending| world.marmot.find_sent(&group, what, |_| false).unwrap();
-    assert_eq!(found(&sent), Some(went));
-    assert_eq!(found(&words(true, &["e-r1"])), None);
-    assert_eq!(found(&words(false, &["e-r1", "e-r2"])), None);
+    let token = Token {
+        send: "w@1".into(),
+        mdk: "a token".into(),
+        edits: None,
+    };
+    let went = world.marmot.send(&group, &words("the words"), &token).await;
+    let went = went.unwrap();
+    // A second send of the same event in the same second would be the same event, so a later one.
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    let again = world.marmot.send(&group, &words("the words"), &token).await;
+    assert_eq!(again, Ok(went.clone()), "the same event");
+    let other = world
+        .marmot
+        .send(&group, &words("other words"), &token)
+        .await;
+    assert_eq!(other, Err(SendFailed::Refused { gone: false }));
+    let query = marmot_app::AppMessageQuery {
+        group_id_hex: Some(group.as_str().to_string()),
+        kinds: Some(vec![9]),
+        limit: None,
+    };
+    let sent = (world.marmot.runtime)
+        .messages_with_query(&world.marmot.label, query)
+        .unwrap();
+    let sent: Vec<_> = sent.into_iter().filter(|m| m.direction == "sent").collect();
+    assert_eq!(sent.len(), 1, "sent once");
+    assert_eq!(sent[0].message_id_hex, went.as_str());
+    let tag = |name: &str| {
+        (sent[0].tags.iter())
+            .find(|t| t[0] == name)
+            .map(|t| t[1].clone())
+    };
+    assert_eq!(tag("turn").as_deref(), Some("t1"));
+    assert_eq!(tag("phase").as_deref(), Some("commentary"));
+    assert_eq!(tag("settles").as_deref(), Some("e-r1"));
     world.runtime.shutdown().await;
 }

@@ -69,21 +69,19 @@ fn a_name_always_makes_the_same_schedule() {
     );
 }
 
-// The accepted limit (`verification.md`, "What a restart still cannot recover"): a send whose
-// outcome is not known and that lands only after the core looked for it goes out twice. With the
-// assumption that a send settles within the core's wait switched off (the `late` family), the
-// simulator finds the duplicate; the capsule replays it exactly and shrinks.
+// A failure leaves a capsule that replays it exactly and shrinks. Found with MDK's contract
+// switched off (the `disorder` family: a message heard before it is stored, or out of order),
+// which loses messages.
 #[test]
-fn the_accepted_limit_is_found_when_its_assumption_is_off() {
+fn a_failure_is_found_shrunk_and_replayed() {
     let dir = tempfile::tempdir().unwrap();
     let found = (0..60).find_map(|index| {
-        let schedule = generate(&RunName::new(Family::Late, 0, index));
+        let schedule = generate(&RunName::new(Family::Disorder, 0, index));
         let report = run(&schedule);
         report.failure.is_some().then_some((schedule, report))
     });
-    let (schedule, report) = found.expect("a late landing makes a duplicate within 60 runs");
+    let (schedule, report) = found.expect("disorder loses a message within 60 runs");
     let property = report.failure.as_ref().unwrap().failure.property.clone();
-    assert!(["S1", "S3"].contains(&property.as_str()), "{property}");
     let (small, small_report) = shrink(&schedule, &report, 300);
     assert!(small.steps.len() < schedule.steps.len());
     assert!(

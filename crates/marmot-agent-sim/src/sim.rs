@@ -216,7 +216,7 @@ impl<'a> Sim<'a> {
             let bugs = self.schedule.bugs;
             core.with_bugs(marmot_agent::run::Bugs {
                 save_after_send: bugs.save_after_send,
-                retry_ambiguous_blindly: bugs.retry_ambiguous_blindly,
+                retry_ambiguous_with_new_token: bugs.retry_ambiguous_with_new_token,
                 settles_only_from_items: bugs.settles_only_from_items,
             })
         };
@@ -346,7 +346,6 @@ impl<'a> Sim<'a> {
             Action::Ignore => lock(&self.world).harness.moves.push_back(Move::Ignore),
             Action::DriverStops => lock(&self.world).driver_stops(),
             Action::Send { outcome } => lock(&self.world).outcomes.push_back(outcome),
-            Action::Lookup => lock(&self.world).lookup_errors += 1,
             Action::ReadFails { at } => lock(&self.world).read_errors.push_back(at),
             Action::SaveFails => lock(&self.world).save_fails = true,
             Action::Crash { after: 0 } => {
@@ -379,7 +378,6 @@ impl<'a> Sim<'a> {
             let mut world = lock(&self.world);
             world.note("Fair");
             world.outcomes.clear();
-            world.lookup_errors = 0;
             world.read_errors.clear();
             world.save_fails = false;
             world.crash_after = None;
@@ -443,7 +441,7 @@ impl<'a> Sim<'a> {
             };
             let waited = began.elapsed();
             // Done only within the bound, on the virtual clock, and with nothing still to land
-            // (a late send is the duplicate the `late` family looks for).
+            // (a late send would be a duplicate if the core sent it again under a new token).
             if left.is_empty() && !work && !landing && waited <= LIVENESS_BOUND {
                 break;
             }

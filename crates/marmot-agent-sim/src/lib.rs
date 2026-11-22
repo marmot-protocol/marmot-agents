@@ -53,7 +53,7 @@ pub struct Campaign {
 }
 
 /// The kinds of event a campaign counts, each with what marks it in a trace entry.
-pub const MARKS: [(&str, &str); 25] = [
+pub const MARKS: [(&str, &str); 26] = [
     ("harness takes", "), Take"),
     ("crash before a save", "Crash(before Save)"),
     ("crash before a send", "Crash(before Send)"),
@@ -66,9 +66,10 @@ pub const MARKS: [(&str, &str); 25] = [
     ("send refused", ": Refused"),
     ("send ambiguous, not gone", "Ambiguous, not sent"),
     ("send ambiguous, gone", "Ambiguous, sent"),
-    ("lookup found", "Lookup: Found"),
-    ("lookup absent", "Lookup: Absent"),
-    ("lookup error", "Lookup: Error"),
+    ("send dropped", ": Rejected"),
+    ("send given up", ": given up"),
+    ("send again, same event", "Sent before, same token"),
+    ("send again, still to land", "still to land, same token"),
     ("place error", "Place: Error"),
     ("order error", "Order: Error"),
     ("stored error", "Stored: Error"),

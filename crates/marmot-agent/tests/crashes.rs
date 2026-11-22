@@ -523,10 +523,11 @@ async fn a_send_whose_reply_was_lost_is_not_sent_twice() {
     world.runtime.shutdown().await;
 }
 
-// A send that went out just before a crash, before the core marked it sent, is found in what MDK
-// stored when the core starts again, and is not sent a second time (S3). With `lookup_fails`, MDK
-// cannot be asked the first time the core looks: that is not knowing, never "not there".
-async fn went_out_before_a_crash(lookup_fails: bool) {
+// A send that went out just before a crash, before the core marked it sent, is tried again when
+// the core starts, under the token it went under: MDK gives back the event it made, sends nothing,
+// and the send is not made a second time (S3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_that_went_out_before_a_crash_is_not_sent_again() {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     world.runtime.start().await.unwrap();
     let (driver, _events, seen) = stub(false);
@@ -553,7 +554,7 @@ async fn went_out_before_a_crash(lookup_fails: bool) {
     });
     let group = GroupKey(chat.hex.clone());
     let (token, what) = talk.next_send(&group).unwrap();
-    talk.attempting(&token);
+    talk.attempting(&token.send);
     let went = world.marmot.send(&group, &what, &token).await.unwrap();
     // A second send of the same event in the same second would be the same event, so a later one.
     tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -565,9 +566,6 @@ async fn went_out_before_a_crash(lookup_fails: bool) {
         .unwrap();
 
     // Starting again closes the open turn: its second version names the first that went out.
-    if lookup_fails {
-        world.marmot.faults.push(Fault::LookupFails);
-    }
     let (driver, _events, _) = stub(false);
     let core = world.start(driver);
     within(20, || {
@@ -582,37 +580,22 @@ async fn went_out_before_a_crash(lookup_fails: bool) {
     assert_eq!(firsts, vec![&went], "the first version went out once");
     let second = versions.iter().find(|v| v.1 == 2).unwrap();
     assert_eq!(second.2.as_ref(), Some(&went));
+    let failed = (chat.items().into_iter()).filter(|(_, r)| refused(&r.item.event).is_some());
+    assert_eq!(failed.count(), 0, "nothing said to have failed");
     core.stop().await;
     world.runtime.shutdown().await;
 }
 
+// A send MDK took and dropped before it went out sent nothing: it is tried again under a new
+// token, goes out once, and the chat is not told it failed (S1, S3).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_send_that_went_out_before_a_crash_is_not_sent_again() {
-    went_out_before_a_crash(false).await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_send_is_not_sent_again_when_mdk_cannot_be_asked() {
-    went_out_before_a_crash(true).await;
-}
-
-// A send whose outcome is never known is given up in the end, but only after the core has looked
-// for its last try in what MDK stored: one that went out is taken as sent, and the chat is not
-// also told it failed (S1, S3).
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_send_is_looked_for_before_it_is_given_up() {
+async fn a_send_mdk_drops_is_tried_again_under_a_new_token() {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     world.runtime.start().await.unwrap();
     let (driver, events, seen) = stub(false);
-    let store = Store::new(world.state.path());
-    let core = world.core(driver, store);
-    let core = world.run(core.unknown_sends(2, Duration::from_millis(300)));
+    let core = world.start(driver);
     let (chat, id) = a_chat(&world, &seen).await;
-    // The first try fails before MDK has it, without saying so; the last goes out, and MDK's
-    // reply is lost.
-    let timed_out = marmot_app::AppError::AccountWorkerResponseTimedOut;
-    world.marmot.faults.push(Fault::Refuse(timed_out));
-    world.marmot.faults.push(Fault::LoseReply);
+    world.marmot.faults.push(Fault::Reject);
     let emit = |state| Emitted {
         event: event("t", state, turn()),
         chat: Some(id.clone()),
@@ -859,15 +842,24 @@ fn said_before(text: &str) -> Sending {
     }
 }
 
+/// The token the words [`said_before`] went under: another send's.
+fn earlier_token() -> marmot_agent::Token {
+    marmot_agent::Token {
+        send: "earlier".into(),
+        mdk: "earlier".into(),
+        edits: None,
+    }
+}
+
 /// How many times the core sent the agent's words `text` to a chat.
 fn times_said(chat: &Chat<'_>, text: &str) -> usize {
     words_in(chat).iter().filter(|w| *w == text).count()
 }
 
-// A send the core had not tried when it stopped cannot have gone out: it is sent when the core
-// starts again, not looked for, so an older message just like it is never taken for it (S1, S3).
+// A send the core had not tried when it stopped is sent when the core starts again, under its own
+// token, so an older message just like it is never taken for it (S1, S3).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_send_never_tried_is_sent_and_not_looked_for() {
+async fn a_send_never_tried_is_sent_and_not_taken_for_an_older_one() {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     world.runtime.start().await.unwrap();
     let (driver, _events, seen) = stub(false);
@@ -879,7 +871,7 @@ async fn a_send_never_tried_is_sent_and_not_looked_for() {
     let text = "the same words";
     world
         .marmot
-        .send(&group, &said_before(text), "x")
+        .send(&group, &said_before(text), &earlier_token())
         .await
         .unwrap();
     // A second send of the same event in the same second would be the same event.
@@ -897,8 +889,8 @@ async fn a_send_never_tried_is_sent_and_not_looked_for() {
     world.runtime.shutdown().await;
 }
 
-// A send the core tried, and that may have gone out, is looked for by all it carries: an older
-// message with the same words and turn that settles nothing is not taken for words that settle a
+// A send the core tried, and that may have gone out, is tried again under its own token: an older
+// message with the same words and turn, under another, is not taken for words that settle a
 // request, which are sent, and settle it (S1, S3).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_send_tried_is_not_taken_for_an_older_one_like_it() {
@@ -937,7 +929,7 @@ async fn a_send_tried_is_not_taken_for_an_older_one_like_it() {
     let text = "the same words";
     world
         .marmot
-        .send(&group, &said_before(text), "x")
+        .send(&group, &said_before(text), &earlier_token())
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -947,7 +939,7 @@ async fn a_send_tried_is_not_taken_for_an_older_one_like_it() {
     let (token, what) = talk.next_send(&group).unwrap();
     assert!(matches!(what, Sending::Words { .. }));
     // Tried just before the crash, and it did not go out.
-    talk.attempting(&token);
+    talk.attempting(&token.send);
     let read = kept.read;
     let conversation = talk.saved().clone();
     store.save(&Kept { conversation, read }).unwrap();
@@ -959,6 +951,50 @@ async fn a_send_tried_is_not_taken_for_an_older_one_like_it() {
         (m.tags.iter()).any(|t| t.len() >= 2 && t[0] == "settles" && t[1] == request.as_str())
     });
     assert_eq!(settling.count(), 1, "the words that settle went out once");
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
+// An edit of the agent's words that went out just before a crash, before the core saved that it
+// went, is not sent again when the core starts: MDK keeps the token the send was tried under, and
+// a send tried again under it gives back the event it made and sends nothing (S3).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_edit_that_went_out_before_a_crash_is_not_sent_again() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, id) = a_chat(&world, &seen).await;
+    events
+        .send(words_done("first words", &id, Vec::new()))
+        .unwrap();
+    within(20, || (times_said(&chat, "first words") == 1).then_some(())).await;
+    core.stop().await;
+
+    // As the core left it, had it crashed after MDK sent the edit and before it saved that it
+    // went.
+    let group = GroupKey(chat.hex.clone());
+    let (store, kept, mut talk) = taken_up(&world);
+    talk.emitted(words_done("second words", &id, Vec::new()));
+    let (token, what) = talk.next_send(&group).unwrap();
+    assert!(matches!(what, Sending::Words { edit: Some(_), .. }));
+    talk.attempting(&token.send);
+    world.marmot.send(&group, &what, &token).await.unwrap();
+    // The same edit made again in the same second would be the same event, so a later one.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let read = kept.read;
+    let conversation = talk.saved().clone();
+    store.save(&Kept { conversation, read }).unwrap();
+
+    let (driver, _events, _) = stub(false);
+    let core = world.start(driver);
+    let sent = |kept: Kept| (json(&kept)["conversation"]["outbox"].as_array()).map(Vec::len);
+    within(20, || {
+        (sent(store.load().unwrap()) == Some(0)).then_some(())
+    })
+    .await;
+    let edits = sent_by_core(&chat, 1009);
+    assert_eq!(edits.len(), 1, "the edit went out once");
     core.stop().await;
     world.runtime.shutdown().await;
 }
@@ -1072,15 +1108,17 @@ impl Stub {
 }
 
 /// What makes the next send fail for good: MDK refuses it in a group that stays live, or, with
-/// `give_up`, its outcome is not known and a lookup does not find it, so the core gives it up
-/// after its one try. The core is started with one try for an unknown send.
+/// `give_up`, MDK takes it and drops it before it goes out, so the core gives it up after its one
+/// try. The core is started with one try for a send MDK drops.
 fn dropped_next(world: &World, give_up: bool) {
-    let error = if give_up {
-        marmot_app::AppError::AccountWorkerResponseTimedOut
+    let fault = if give_up {
+        Fault::Reject
     } else {
-        marmot_app::AppError::InvalidAppMessagePayload("refused".into())
+        Fault::Refuse(marmot_app::AppError::InvalidAppMessagePayload(
+            "refused".into(),
+        ))
     };
-    world.marmot.faults.push(Fault::Refuse(error));
+    world.marmot.faults.push(fault);
 }
 
 /// An item whose closing version MDK refuses, or that the core gives up, is closed in the chat
@@ -1092,7 +1130,7 @@ async fn closing_version_dropped(give_up: bool) {
     world.runtime.start().await.unwrap();
     let (driver, events, seen) = stub(false);
     let core = world.core(driver, Store::new(world.state.path()));
-    let core = world.run(core.unknown_sends(1, Duration::from_millis(300)));
+    let core = world.run(core.rejected_sends(1));
     let (chat, id) = a_chat(&world, &seen).await;
     let emit = |state| Emitted {
         event: event("t", state, turn()),
@@ -1150,7 +1188,7 @@ async fn settling_notice_dropped(give_up: bool) {
     world.runtime.start().await.unwrap();
     let (driver, _events, seen) = stub(false);
     let core = world.core(driver, Store::new(world.state.path()));
-    let core = world.run(core.unknown_sends(1, Duration::from_millis(300)));
+    let core = world.run(core.rejected_sends(1));
     let (chat, _) = a_chat(&world, &seen).await;
     // A message of the person's, which is no item: an interrupt that names it is refused as for
     // an unknown item, in a notice that settles it.
