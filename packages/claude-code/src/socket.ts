@@ -78,6 +78,8 @@ export interface Hello {
   harness: { name: string; version?: string };
   token: string;
   capabilities: Capabilities;
+  /** The folder the harness works in when a chat chose none, for a harness a chat may move (D-101). */
+  folder?: string;
 }
 
 /** What the core answered to the hello. */
