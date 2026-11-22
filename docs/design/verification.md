@@ -179,7 +179,7 @@ serve two chats at once, and replay a recording.
 Codex, ACP (OpenCode-, Goose- and Cursor-shaped) and Pi run 15 scenarios on fakes of their harnesses (Goose and
 Cursor the ones where they differ), a death at each frame an approval's turn writes, and seven recordings replayed
 through the transport, which play on only after the recorded answer. The checker names each failure by its
-property: S1, S2, S5, S11, S12, S13, and S4 and `seq` for drivers besides. Twelve deliberate faults, put in by a
+property: S1, S2, S5, S11, S12, S13, and S4 and `seq` for drivers besides. Seventeen deliberate faults, put in by a
 wrapper driver, are each caught as the property they break, by the check meant for them. It found four driver
 bugs, each fixed after its scenario failed: the ACP driver took, and showed as given, an answer the agent could no
 longer read; the Codex driver waited for ever on a Codex that never answered; and both waited for ever on a harness

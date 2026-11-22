@@ -5,7 +5,7 @@ One set of scenarios, written once against the `Driver` trait, that every driver
 of its harness. A checker looks at every step and names the property a failure breaks, by the ids the plan gives.
 
 Status: phase one is built (2026-11-22): the suite, fakes for Codex, ACP and Pi, the three built-in drivers run against
-it, and deliberate faults that show each check catches its bug. A first review's findings are fixed (2026-11-22).
+it, and deliberate faults that show each check catches its bug. Two reviews' findings are fixed (2026-11-22).
 Phase two, the socket connectors, is a design, below. Everything here is internal: it ships in no program.
 
 ## How it fits
@@ -20,6 +20,7 @@ Phase two, the socket connectors, is a design, below. Everything here is interna
 | Fakes | `src/fake/codex.rs`, `acp.rs`, `pi.rs` | Each harness's own protocol, grown from the stand-ins the drivers' tests had |
 | Replay | `src/fake/replay.rs` | Plays a recording's native messages back to the driver |
 | Faults | `src/faults.rs` | A wrapper driver that breaks one property on purpose |
+| Fake tests | `tests/fake.rs` | What the checks rely on the fakes to report: refused prompt copies, deaths matched to their harness, a kill that ends a blocked harness |
 
 The checker knows nothing of any harness. A prompt's text carries its chat's mark (`<<c-1>>`) and its message id, and
 a fake echoes the prompt in what it says, so what reaches a chat can be traced to the chat it came from. A fake reads
@@ -34,10 +35,10 @@ Checked here for drivers; each id is the plan's, so a search finds the property,
 | --- | --- | --- |
 | S1 | every step, and at the end | Each answer and control is settled at most once: by a refusal, or by one event of its own chat that is not a message. An event the driver made up, with no native message (D-059, point 3), such as an item it closes when the harness stops, settles nothing, unless it is an error settling it as failed. At the end every request the driver took is settled, unless the driver ended (the core then settles it). A request from before a restart is never settled after it |
 | S2 | after a stop | Every item of the chats whose harness stopped is closed, but the session's own item: a session outlives its harness (Pi's driver takes it up in a new Pi), and when a driver ends the core closes what is left (D-034) |
-| S4 | at each checkpoint | No prompt reaches the harness twice |
-| S5 | every step | Every event names its chat; a session, a turn and an item stay with the chat they were first seen in; a chat's mark appears only in its own chat, and a turn names only its own chat's prompts; a request is settled only in its own chat; an answer reaches the harness in its own chat's session, with what was chosen |
-| S11 | every request, and at each checkpoint | A request returns within the suite's patience, and when it has returned the harness has it, with the driver not polled again: an answer taken was heard, or the harness died reading what was written after it; no line the harness reads is half a message; with waits dropped at every point, nothing is lost; an answer the harness can no longer read is not taken; a request refused never reaches the harness later |
-| S12 | at each checkpoint | The harness takes up a session again only when a prompt named it, or when it was the chat's current session as its last prompt was made (Pi restarting a chat's Pi), not the session the resume itself made current; a named session is taken up; a prompt naming none stays in the chat's session |
+| S4 | at each checkpoint | No prompt reaches the harness twice; a copy the harness refused, as when the session is busy, reached it all the same and counts |
+| S5 | every step | Every event names its chat; a session, a turn and an item id stay with the chat they were first seen in; every chat mark in an event's text is its own chat's, and a turn names only its own chat's prompts; a request is settled only in its own chat; an answer reaches the harness in its own chat's session, with what was chosen (allowed or not, or the option's words) |
+| S11 | every request, and at each checkpoint | A request returns within the suite's patience, and when it has returned the harness has it, with the driver not polled again: a prompt or an answer taken was heard, or the chat's own harness read something after it was given and then died (a death before, or of another chat's harness, shows nothing); no line the harness reads is half a message; with waits dropped at every point, nothing is lost; an answer the harness can no longer read is not taken; a request refused never reaches the harness later |
+| S12 | before each prompt, and at each checkpoint | The harness takes up a session again only when the chat's last prompt named it, or when it was the chat's current session as that prompt was made (Pi restarting a chat's Pi), not a session an earlier prompt named, nor the session the resume itself made current; a named session is taken up; a prompt naming none stays in the chat's session |
 | S13 | every step | An item id, once closed, is not used again in its chat, and an id from before a restart is not used after it (a session's own item returns with its session); an item keeps its session |
 | SEQ | every step | `seq` rises within a session (D-059, point 4). Not in the plan's table |
 
@@ -55,7 +56,7 @@ Every driver runs these, but where the table under "What was run" says otherwise
 | `answered_once` | Two chats, one approval allowed and one question answered the other way, then the same item answered again, which must be refused |
 | `answer_after_death` | The harness dies while its approval waits; the driver, not yet told, is given the answer, and must refuse it; the approval must close unanswered |
 | `dies_mid_turn` | The harness dies in the middle of a command; Pi's driver must start a new Pi for the next prompt |
-| `dies_with_requests_pending` | The harness dies as it reads an interrupt, before acting on it, after another chat's answer was settled |
+| `dies_with_requests_pending` | The harness dies as it reads an interrupt, before acting on it, after another chat's answer was settled; it must die, so a driver that never writes the interrupt checks nothing and fails |
 | `dropped_waits` | `two_chats` with every wait for an event dropped at the first point it would wait, and the harness writing in pieces |
 | `slow_and_out_of_order` | `two_chats` with replies late, after what follows from them, and overtaking each other; for Pi, which answers a prompt before its run reports anything, everything slow instead |
 | `partial_frames` | `two_chats` with every frame from the harness in three pieces |
@@ -63,10 +64,10 @@ Every driver runs these, but where the table under "What was run" says otherwise
 | `stops_reading` | The harness stops reading its input and keeps it open while a prompt longer than any pipe is written; the prompt must return, and if refused must never reach the harness once it reads again |
 | `late_replies` | Every reply comes half a second late (for Pi, everything slow): a prompt in a new chat, which waits more than once, is still taken |
 | `restart` | A turn, a restart, a prompt naming the chat's session, a prompt naming none; then a restart in the middle of a turn |
-| `new_session` | A new session, settled by the new session; the next prompt goes to it; another chat naming the old one is refused |
+| `new_session` | A prompt naming the chat's session; a new session, settled by the new session; the next prompt goes to it, and not to the session named before; another chat naming the old one is refused |
 | `settings` | A setting changed, settled once |
 | `dies_at_every_step` | The harness dies on its n-th frame after start, in a turn that asks for approval, for every n the turn reaches: a run with nothing failing counts them first, and each run must see the harness die before what it left is checked |
-| `replay` | A recording played back through the driver, every approval allowed (the one-time choice, as recorded); every recorded message must be played, and the driver's answer to the harness's own request must be the recorded one, to the same request with the same decision, or nothing more is played. Answered the other way, a recording stops (`a_replay_stops_on_another_answer`) |
+| `replay` | A recording played back through the driver, every approval allowed (the one-time choice, as recorded); every recorded message must be played, and the driver's answer to the harness's own request must be the recorded one, to the same request with the same decision, or nothing more is played. Answered the other way, a recording stops (`a_replay_stops_on_another_answer`, through `replay_refused`): the prompt must be taken and the approval asked, the answer taken and turned away by the replay, and nothing more played, so a run that failed earlier does not pass |
 
 The pipe between driver and harness holds 256 bytes each way, so a dropped wait can fall in the middle of a write.
 
@@ -82,7 +83,9 @@ The faults, set as `Knobs` and changeable between steps: frames written in piece
 notifications that follow from them and every other reply held back so a later one overtakes it; everything slow;
 requests of a kind held unanswered, and answered once taken off the list; a harness that stops reading its input,
 keeping it open, until told to read again; death on the n-th frame, or when killed, in the middle of a frame when writing in
-pieces. A harness's sessions outlive its processes, so a restart can take them up. A death is counted once both ends of
+pieces. A killed harness blocked writing to a driver that stopped reading is cut off after a moment, as a killed process
+is; one that dies by its own script writes what it said first. Each line read and each death is logged with the process
+that did it, so a death is matched to the chat whose harness it was. A harness's sessions outlive its processes, so a restart can take them up. A death is counted once both ends of
 the pipe are closed, so a driver that writes after it is seen writing to a harness that has gone. What a driver leaves
 unfinished when it closes the harness's input is not a line, and is not read as one.
 
@@ -95,11 +98,11 @@ nothing.
 
 | Driver | Scenarios | Recordings | Deliberate faults caught |
 | --- | --- | --- | --- |
-| Codex | all, `dies_at_every_step` (6) | `simple`, `approval_allowed`, `command` | all 12 |
-| ACP, OpenCode-shaped | all, `dies_at_every_step` (3) | `simple`, `approval_allowed` | |
+| Codex | all, `dies_at_every_step` (6) | `simple`, `approval_allowed`, `command` | all 16 that one harness for every chat can show |
+| ACP, OpenCode-shaped | all, `dies_at_every_step` (3) | `simple`, `approval_allowed` | `PromptTwice` |
 | ACP, Goose-shaped | `two_chats`, `answered_once`, `answer_after_death`, `dies_mid_turn`, `restart`, `new_session`, `dies_at_every_step` (3) | `simple`, `approval_allowed` | |
 | ACP, Cursor-shaped | `two_chats`, `answered_once`, `answer_after_death`, `restart`, `dies_at_every_step` (4) | `simple`, `approval_allowed` | |
-| Pi | all but `stops_reading`, which fails, `dies_at_every_step` (6) | `gate_allowed`, `command` | 7: those that turn on a harness for each chat, and `TakeUnhanded` |
+| Pi | all but `stops_reading`, which fails, `dies_at_every_step` (6) | `gate_allowed`, `command` | 8: those that turn on a harness for each chat, `TakeUnhanded` and `SwallowPrompt` |
 
 The faults (`src/faults.rs`), each caught as the property it breaks, by the scenario named. Where more than one check
 names the property, the test also requires the words of the check meant for the fault (`Fault::detail`):
@@ -112,12 +115,17 @@ names the property, the test also requires the words of the check meant for the 
 | `LeaveOpen`: what is closed for a stop is not handed over | S2 | `dies_mid_turn` |
 | `PromptTwice`: each prompt handed over twice | S4 | `two_chats` |
 | `WrongChat`: chat 2's events handed over as chat 1's | S5 | `two_chats` |
-| `ResumeUnasked`: a prompt naming no session sent naming the chat's first one | S12 | `new_session` |
+| `MixWords`: an event carrying its own chat's words carries another chat's after them | S5 | `two_chats` |
+| `ShareItem`: chat 2's turns take chat 1's first turn's item id | S5 | `two_chats` |
+| `SwapChoice`: a question answered with another option than the one chosen | S5 | `answered_once` |
+| `ResumeUnasked`: a prompt naming no session sent naming the chat's first one, which a prompt before it named | S12 | `new_session` |
 | `ReuseItem`: later turns take the first turn's item id | S13 | `new_session` |
 | `SeqBack`: every third `seq` back to 1 | SEQ | `one_turn` |
 | `HalfFrame`: a dropped wait leaves half a message on the harness's input | S11 | `dropped_waits` |
 | `LoseOnDrop`: a dropped wait loses the event in hand | S11 | `dropped_waits` |
 | `TakeUnhanded`: an answer the driver could not hand over is taken anyway, and never settled | S11 | `answer_after_death` |
+| `SwallowPrompt`: a chat's later prompts taken and never handed over (Pi only: a later prompt follows a death only there) | S11 | `dies_mid_turn` |
+| `MadeUpStop`: an interrupt refused without reaching the harness, the turn shown stopped all the same | L2: nothing was checked | `dies_with_requests_pending` |
 
 Four driver bugs were found, each fixed after its scenario failed:
 
