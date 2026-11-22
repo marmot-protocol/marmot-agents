@@ -4,7 +4,8 @@ Status: built and checked with TLC on small bounds, as
 [D-093](../../docs/decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top) and
 [the verification page](../../docs/design/verification.md) plan. The model, its bounds and its switches are
 internal and change as the work goes. Read on 2026-11-22 against master `74b56d6`, and again for the fix of
-`conversation.rs` `refused` on branch `dropped-sends` the same day, and for its review round 1.
+`conversation.rs` `refused` on branch `dropped-sends` the same day, and for its review round 1, and again for
+the sends under MDK 0.19.0's tokens on branch `crash-safe-sends` the same day, which took the lookup's place.
 
 `CoreLifecycle.tla` models the core between MDK and one driver: requests pending and settled, items and their
 versions, read marks, sessions, the outbox, saves and crashes. It owns S1, S2, S3, S4, S10, S12 and L1 to L3 for
@@ -26,15 +27,14 @@ drive it.
 | `Take`, `Refuse` | the driver's answer to the request it was handed (`prompted`, `requested`). A new-session control the driver takes marks the chat taken, as a prompt does, so a prompt after it names no session (D-065) |
 | `Emit(i, S, fin)` | `emitted`: the driver's event for item `i`, settling `S`, closing it when `fin`; the core counts the version and queues it |
 | `Tick(r)` | `overdue`: a taken control with no effect by its deadline is settled with `no_effect` |
-| `Send(c, outcome)` | `flush` for the oldest send of a group: saved as attempted first, then MDK says `sent`, `busy`, `ambiguous-posted`, `ambiguous-lost` or `refused`: every send to a gone group, and up to `MaxRefusals` sends to a live one (`run.rs` `failed`: `EventTooLarge`, `InvalidAppMessagePayload`), each refused again whenever it is sent; the group stays live. A refused send goes to `refused`, below |
-| (in `Send` and `Lookup`) | `conversation.rs` `refused`, for a send MDK refused or the core gave up: it is dropped, and, unless it is itself a last resort (`last_resort`), something stands in for it (`stand_in_for`): for an item's version, the item's close when that version closed it and nothing later is queued (`close_undelivered`, a last resort), then a `failed` notice settling what the version settled; for a notice that settled requests, or a `failed` notice (`tells`), a `failed` notice settling what it settled, a last resort. A `failed` notice tells the chat of the version it stands in for, or of what the notice it replaces told of (`ToldBy`) |
-| `Lookup(c, outcome, …)` | `find_sent` for a send whose outcome is unknown: `found`, or `absent` and then given up after its tries or sent again at once |
+| `Send(c, outcome)` | `flush` for the oldest send of a group, under its token (`marmot.rs` `send`), with what it carries saved first: MDK says `sent`, `busy`, `ambiguous-posted`, `ambiguous-lost`, `rejected` (it took the send and dropped it before it went out: up to `MaxRejected` tries; the next is under a new token, and after `RejectedTries` of them the send is given up), or `refused`: every send to a gone group, and up to `MaxRefusals` sends to a live one (`run.rs` `failed`: `EventTooLarge`, `InvalidAppMessagePayload`), each refused again whenever it is sent; the group stays live. With `TokenDedupe`, MDK answers a token it posted with the event it posted, and a token it dropped with its drop. A refused or given-up send goes to `refused`, below |
+| (in `Send`) | `conversation.rs` `refused`, for a send MDK refused or the core gave up: it is dropped, and, unless it is itself a last resort (`last_resort`), something stands in for it (`stand_in_for`): for an item's version, the item's close when that version closed it and nothing later is queued (`close_undelivered`, a last resort), then a `failed` notice settling what the version settled; for a notice that settled requests, or a `failed` notice (`tells`), a `failed` notice settling what it settled, a last resort. A `failed` notice tells the chat of the version it stands in for, or of what the notice it replaces told of (`ToldBy`) |
 | `Crash` | the process dies: memory, the event stream and the driver are lost |
 | `DriverStops`, `Stop` | the loop ends: `ended` closes every open item and settles every pending request, all queued and saved before any is sent |
-| `Restart` | `Core::new` and `recover`: sends handed to MDK are looked for, open items closed, pending requests settled as failed, then catch-up |
+| `Restart` | `Core::new` and `recover`: open items closed, pending requests settled as failed, then catch-up; sends left queued go again under the tokens they were saved with |
 
-`Queue` is not a step: the steps that put something in the outbox call it. A lookup MDK cannot answer changes
-nothing, so it is a stuttering step and is left out.
+`Queue` is not a step: the steps that put something in the outbox call it. How long the core waits before it
+tries a send again is not modelled: a send may be tried again at once.
 
 ## What is not
 
@@ -54,15 +54,14 @@ nothing, so it is a stuttering step and is left out.
   out (`closed_in_chat`). The model does not reach that case: a driver's item ends with the driver, and the
   versions that spread settles are not modelled (inferred from the model; the simulator reaches it, and its
   oracle allows it).
-- **Time.** No clock: `Tick` may fire for any taken control, and a lookup may come at once.
+- **Time.** No clock: `Tick` may fire for any taken control, and a send may be tried again at once.
 - **Files the agent sends** (D-090).
 
 ## Trusted assumptions
 
 | Switch | When on | Shown when off |
 | --- | --- | --- |
-| `ExactLookup` | A lookup always finds a send MDK posted | the duplicate first event (`CoreLifecycle.duplicate.cfg`) |
-| `TokenDedupe` | MDK keeps a send's token, posts it once, and answers a lookup by it | (off in the fair configuration; on, S3 holds without `ExactLookup`) |
+| `TokenDedupe` | MDK keeps each send under its token (MDK 0.19.0's `submit_*` and `local_send_status`): a send tried again under a token MDK posted gives back that event and posts nothing; one under a token MDK dropped is dropped again | the duplicate first event (`CoreLifecycle.duplicate.cfg`) |
 | `LiveInOrder` | MDK hands live messages over in storage order | a message skipped (`CoreLifecycle.liveorder.cfg`) |
 | `LiveAfterStore` | MDK hands a live message over only once it has stored it | a message dropped until the core starts again (`CoreLifecycle.livestore.cfg`) |
 | `LastResortTaken` | MDK never refuses a last-resort send to a live group: the core's close of an item, or a `failed` notice in place of a dropped one, is as small as the core makes anything | an item left open in the chat, the accepted limit (`last-resort-refused`, below) |
@@ -70,10 +69,14 @@ nothing, so it is a stuttering step and is left out.
 Besides the switches: a save is atomic (`Store::save` writes a new file and renames it); the driver goes when the
 core goes (a built-in driver is its child, and a socket connector starts again with a new core); MDK keeps what
 it stored across a crash; a refusal from MDK is for good (the group is gone, or MDK refuses those bytes again);
-a send that went out is in MDK's storage when the core looks (with `ExactLookup`).
+MDK keeps a send's token before it answers, so a token MDK posted under is one it knows when the core tries again
+(with `TokenDedupe`).
 
-`LiveInOrder` and `LiveAfterStore` are inferred from MDK's code (`publish_app_runtime_summary` emits a sync's
-stored messages, in order) and not checked against MDK's tests. The core drops a live message that is not stored
+`TokenDedupe` is read from MDK's code at 0.19.0 (`admit_local_message_with_draft_policy_at`: a token kept with
+the same request gives back its message id, before anything else is checked; one rejected is refused), and the
+core's tests against MDK show it (`crates/marmot-agent/tests/marmot.rs` and `crashes.rs`); MDK's own tests of it
+were not read. `LiveInOrder` and `LiveAfterStore` are inferred from MDK's code (`publish_app_runtime_summary`
+emits a sync's stored messages, in order) and not checked against MDK's tests. The core drops a live message that is not stored
 yet (`order_of` gives nothing), and skips one whose place is at or before the mark, so it relies on both.
 
 ## Properties
@@ -93,8 +96,9 @@ yet (`order_of` gives nothing), and skips one whose place is at or before the ma
 
 The liveness properties hold under fairness, one strong-fairness condition per party over all its progress
 steps: the core always; the driver (`FairDriver`) answers and closes open items; MDK (`FairMdk`) eventually
-accepts a send and answers a lookup; the clock (`FairTime`) reaches deadlines. Faults (crashes, failed saves,
-stops, unknown outcomes) are bounded, so they end. A condition over a party's steps together is weaker than one
+accepts a send, refuses one for good, or drops again one under a token it dropped; the clock (`FairTime`)
+reaches deadlines. Faults (crashes, failed saves, stops, unknown outcomes, dropped tries) are bounded, so they
+end. A condition over a party's steps together is weaker than one
 per step, so a pass under it holds under the stronger assumption too.
 
 ## Configurations and results
@@ -104,69 +108,71 @@ must pass on 4 workers, those that must fail on one, so their traces and counts 
 moves, since TLC checks liveness on a timer during the search; its trace does not). The small bounds, every pull
 request: **one chat `c1`, one prompt `p1`, one control `r1` (a new-session control), the session item `s1` (2
 events from the driver, so 3 versions with the core's close), 1 down (a crash, a failed save, a driver stop or a
-stop), 1 send with an unknown outcome, 2 tries, no refusal in a live group, MDK taking every last-resort send
-(`LastResortTaken`), and, in the fair configuration, a
-live stream that may lag at any idle moment.** Each configuration says how it differs. A second chat multiplies
+stop), 1 send with an unknown outcome, no try dropped by MDK (in the fair configuration, one, and two dropped
+tries give a send up), no refusal in a live group, MDK keeping each send under its token (`TokenDedupe`) and
+taking every last-resort send (`LastResortTaken`), and, in the fair configuration, a live stream that may lag at
+any idle moment.** Each configuration says how it differs. A second chat multiplies
 the states by about 60, since its activity interleaves freely with the first's, so it is left to the larger
 bounds below.
 
 | Case | Configuration | Expected | Distinct states | Counterexample |
 | --- | --- | --- | ---: | --- |
-| fair | `CoreLifecycle.fair.cfg` | every property holds, S3Told too | 125,644 | |
-| unfair | `CoreLifecycle.unfair.cfg` (no `FairMdk`) | L1 fails | 15,000 to 25,000 | [`unfair-mdk-never-answers`](counterexamples/unfair-mdk-never-answers.json) |
-| no crash-safe sends | `CoreLifecycle.duplicate.cfg` (no `ExactLookup`, no unknown outcome) | S3 fails | 548 | [`duplicate-first-event`](counterexamples/duplicate-first-event.json) |
-| token dedupe | `CoreLifecycle.dedupe.cfg` (no `ExactLookup`, `TokenDedupe`, no lag) | every property holds | 102,702 | |
+| fair | `CoreLifecycle.fair.cfg` | every property holds, S3Told too | 237,675 | |
+| unfair | `CoreLifecycle.unfair.cfg` (no `FairMdk`) | L1 fails | 27,059 and 27,232 in two runs | [`unfair-mdk-never-answers`](counterexamples/unfair-mdk-never-answers.json) |
+| no token dedupe | `CoreLifecycle.duplicate.cfg` (no `TokenDedupe`, no unknown outcome) | S3 fails | 470 | [`duplicate-first-event`](counterexamples/duplicate-first-event.json) |
 | live out of order | `CoreLifecycle.liveorder.cfg` (no `LiveInOrder`) | S10 fails | 56 | [`live-out-of-order`](counterexamples/live-out-of-order.json) |
-| live before store | `CoreLifecycle.livestore.cfg` (no `LiveAfterStore`; only `p1`) | L3 fails | 115 | [`live-before-store`](counterexamples/live-before-store.json) |
-| give up, item | `CoreLifecycle.giveup.cfg` (1 try) | every property holds | 218,202 | |
-| give up, notice | `CoreLifecycle.giveup-notice.cfg` (1 try, no item) | every property holds | 4,113 | |
-| refused, item | `CoreLifecycle.refuse.cfg` (1 refusal in the live group) | every property holds | 157,485 | |
-| refused, notice | `CoreLifecycle.refuse-notice.cfg` (1 refusal, no item) | every property holds | 2,880 | |
-| refused twice | `CoreLifecycle.refuse.cfg`, 2 refusals, no prompt, `LastResortTaken` | every property holds, S3Told too | 23,594 | |
-| last resort refused | the same, without `LastResortTaken`, safety only | S2 fails | 2,077 | [`last-resort-refused`](counterexamples/last-resort-refused.json) |
-| last resort given up | `CoreLifecycle.refuse.cfg`, 1 refusal, 1 unknown outcome, 1 try, no prompt, safety only | S2 fails | 5,988 | [`last-resort-given-up`](counterexamples/last-resort-given-up.json) |
-| gone group | `CoreLifecycle.gone.cfg` (MDK refuses every send) | every property holds | 100,588 | |
+| live before store | `CoreLifecycle.livestore.cfg` (no `LiveAfterStore`; only `p1`) | L3 fails | 102 | [`live-before-store`](counterexamples/live-before-store.json) |
+| give up, item | `CoreLifecycle.giveup.cfg` (1 dropped try gives a send up) | every property holds | 257,469 | |
+| give up, notice | `CoreLifecycle.giveup-notice.cfg` (the same, no item) | every property holds | 4,924 | |
+| refused, item | `CoreLifecycle.refuse.cfg` (1 refusal in the live group) | every property holds | 101,882 | |
+| refused, notice | `CoreLifecycle.refuse-notice.cfg` (1 refusal, no item) | every property holds | 2,255 | |
+| refused twice | `CoreLifecycle.refuse.cfg`, 2 refusals, no prompt, `LastResortTaken` | every property holds, S3Told too | 16,018 | |
+| last resort refused | the same, without `LastResortTaken`, safety only | S2 fails | 1,581 | [`last-resort-refused`](counterexamples/last-resort-refused.json) |
+| last resort given up | `CoreLifecycle.refuse.cfg`, 1 refusal, 1 dropped try that gives a send up, no prompt, safety only | S2 fails | 2,314 | [`last-resort-given-up`](counterexamples/last-resort-given-up.json) |
+| gone group | `CoreLifecycle.gone.cfg` (MDK refuses every send) | every property holds | 91,142 | |
 
 The counterexamples are schedules in the shared action names, made from TLC's traces by a program;
 [their README](counterexamples/README.md) says how, and what step 5 must add to drive the simulator with them.
-The token-dedupe case runs without the lag, to keep the run short.
+Until the sends took MDK's tokens, the fair configuration assumed instead that a lookup always found a send MDK
+posted (`ExactLookup`), and the duplicate first event was the case without it.
 
 **Each check catches its bug.** Each defect is a value of the constant `Bug`; with it, TLC must report the
 property named, on the fair configuration with only that property, unless the table says otherwise:
 
 | `Bug` | What it breaks | Property | Distinct states to the violation |
 | --- | --- | --- | ---: |
-| `SaveAfterSend` | a send goes out before what queued it is saved | S1 | 2,969 |
-| `SettleUnpending` | an event settles a request no longer pending | S1 | 12,385 |
+| `SaveAfterSend` | a send goes out before what queued it is saved | S1 | 14,081 |
+| `SettleUnpending` | an event settles a request no longer pending | S1 | 14,561 |
 | `RecoverKeepsOpen` | a restart leaves open items open | S2 | 187 |
-| `NoAttemptedFlag` | a send handed to MDK is not saved as such; a restart sends it blindly | S3 | 778 |
-| `BlindResend` | a send whose outcome is unknown is sent again without a lookup | S3 | 181 |
-| `NoFailedNotice` | a version MDK refuses is dropped with no failed notice (on the refused configuration, no prompt, S3Told only) | S3Told | 6,704 |
-| `NoRetell` | a dropped failed notice that settled nothing is not replaced: the code before review round 1 (on the refused configuration, 2 refusals, no prompt, S3Told only) | S3Told | 7,146 |
-| `NoReplacement` | nothing stands in for a dropped send: the code before the fix (on the give-up configuration) | S2 | 4,115 |
-| `NoReplacement` | the same (on the refused-notice configuration, L1 only) | L1 | 2,239 |
-| `DeliverBeforeSave` | a prompt reaches the driver before its read mark is saved | S4 | 580 |
-| `MarkNotLoaded` | a restart reads every group from its start | S10 | 485 |
+| `FreshTokenOnRestart` | a restart tries each queued send under a new token, as if the tokens were not kept | S3 | 1,558 |
+| `NewTokenResend` | a send whose outcome is unknown is tried again under a new token | S3 | 368 |
+| `NoFailedNotice` | a version MDK refuses is dropped with no failed notice (on the refused configuration, no prompt, S3Told only) | S3Told | 5,594 |
+| `NoRetell` | a dropped failed notice that settled nothing is not replaced: the code before review round 1 (on the refused configuration, 2 refusals, no prompt, S3Told only) | S3Told | 8,378 |
+| `NoReplacement` | nothing stands in for a dropped send: the code before the fix (on the give-up configuration) | S2 | 2,461 |
+| `NoReplacement` | the same (on the refused-notice configuration, L1 only) | L1 | 1,837 |
+| `DeliverBeforeSave` | a prompt reaches the driver before its read mark is saved | S4 | 589 |
+| `MarkNotLoaded` | a restart reads every group from its start | S10 | 494 |
 | `CatchUpAnyOrder` | catch-up takes any stored message after the mark | S10 | 19 |
-| `ResumeAlways` | every prompt names the saved session (with a second prompt, `p2`) | S12 | 22,616 |
-| `KeepEndedSession` | a session that ended stays the chat's | S12 | 2,007 |
-| `NewSessionUntaken` | a new-session control the driver took leaves the chat untaken, so a prompt before the new session names the old one | S12 | 7,897 |
+| `ResumeAlways` | every prompt names the saved session (with a second prompt, `p2`) | S12 | 24,777 |
+| `KeepEndedSession` | a session that ended stays the chat's | S12 | 2,186 |
+| `NewSessionUntaken` | a new-session control the driver took leaves the chat untaken, so a prompt before the new session names the old one | S12 | 9,041 |
 
 **No empty passes.** Each probe says an interesting state is never reached, and TLC must find it false. On the
 fair configuration: `NeverSettled` (a request is settled), `NeverSettledByEvent` (by the driver's own event),
 `NeverResumed` (a prompt names the session after the core went down and started again), `NeverClosedByCore` (a
-stop or restart closes an item in the chat), `NeverLookedUpAfterCrash` (after the core went down, a lookup takes
-its found branch), `NeverDeliveredInCatchUp` (a request reaches the driver during the catch-up after a restart),
+stop or restart closes an item in the chat), `NeverDedupedAfterCrash` (after the core went down, a send tried
+again under its token gets back the event MDK posted), `NeverSentAfterDrop` (a send goes out under a new token
+after MDK dropped a try of it), `NeverDeliveredInCatchUp` (a request reaches the driver during the catch-up after a restart),
 `NeverPromptAfterNewSession` (a prompt reaches the driver while the driver has taken a new-session control and not
 yet named it). On the gone configuration, `NeverDropped` (a version is refused). On the refused and give-up
 configurations, with no prompt, `NeverTold` (a failed notice for a dropped version is posted) and
 `NeverClosedUndelivered` (the core's close of an item whose closing version was dropped is posted). On the
 refused-notice and give-up-notice configurations, `NeverResettled` (a failed notice in place of a dropped notice
 that settled requests is posted). On the live-before-store configuration, `NeverDroppedEarly` (a message handed
-over before it was stored is dropped, then stored). All fifteen are reached within 3,000 distinct states.
+over before it was stored is dropped, then stored). All seventeen are reached within 3,100 distinct states.
 
 **Larger bounds**, safety only, on the same day with 8 workers and a 6 GB heap, the other constants as in the fair
-configuration. Liveness at these sizes did not finish in 15 minutes with a 2 GB heap, so it is for a nightly run
+configuration, before the sends took MDK's tokens (not run again since). Liveness at these sizes did not finish in 15 minutes with a 2 GB heap, so it is for a nightly run
 with more memory, which is not set up yet:
 
 | Bounds | Distinct states | Time |

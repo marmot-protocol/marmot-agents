@@ -5,7 +5,7 @@
   "breaks": "S2",
   "what": "The accepted limit: MDK refuses an item's closing version in a live group, then the core's close that stands in for it, though it is as small as the core makes anything. Nothing stands in for a last resort, so nothing loops, and the item stays open in the chat (S2; L2 too).",
   "generated_by": "python3 tools/tla/check.py --counterexamples",
-  "constants": {"Prompts": [], "Requests": ["r1"], "NewSession": ["r1"], "Items": ["s1"], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 0, "MaxRefusals": 2, "UnknownTries": 2, "GoneChats": [], "ExactLookup": true, "TokenDedupe": false, "LagCatchUp": false, "LiveInOrder": true, "LiveAfterStore": true, "LastResortTaken": false, "FairMdk": true, "FairDriver": true, "FairTime": true, "Bug": "none"},
+  "constants": {"Prompts": [], "Requests": ["r1"], "NewSession": ["r1"], "Items": ["s1"], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 0, "MaxRefusals": 2, "MaxRejected": 0, "RejectedTries": 2, "GoneChats": [], "TokenDedupe": true, "LagCatchUp": false, "LiveInOrder": true, "LiveAfterStore": true, "LastResortTaken": false, "FairMdk": true, "FairDriver": true, "FairTime": true, "Bug": "none"},
   "messages": [{"id": "r1", "chat": "c1", "kind": "control", "new_session": true}],
   "steps": [
     {"action": "CatchUpDone"},

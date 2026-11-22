@@ -4,17 +4,18 @@
 (* settled, items and their versions, read marks, the outbox, saves and    *)
 (* crashes. It models crates/marmot-agent/src/run.rs (the loop, the state  *)
 (* file, the outbox and its sends), conversation.rs (what each message and *)
-(* event becomes) and marmot.rs (sends and lookups), as of master 74b56d6, *)
-(* with conversation.rs `refused` as fixed on 2026-11-22: what stands in   *)
-(* for a dropped send, `last_resort` and `tells`.                          *)
+(* event becomes) and marmot.rs (sends), as of master 74b56d6, with       *)
+(* conversation.rs `refused` as fixed on 2026-11-22: what stands in for a  *)
+(* dropped send, `last_resort` and `tells`; and with the sends MDK 0.19.0  *)
+(* keeps under a token (branch crash-safe-sends, 2026-11-22), which took   *)
+(* the place of the lookup of a send whose outcome was not known.          *)
 (*                                                                         *)
 (* Action names are the ones the simulator uses, so a trace from here can  *)
 (* drive it (docs/design/verification.md, step 5): Hear, Store, CatchUp,   *)
-(* Ask, Deliver, Take, Refuse, Emit, Send, Lookup, Save, SaveFails, Tick,  *)
-(* Crash, Restart, DriverStops, Stop. Queue is not a step of its own: the  *)
-(* steps that put something in the outbox call it. CatchUpDone is the end  *)
-(* of a CatchUp at start. A Lookup that MDK cannot answer changes nothing, *)
-(* so it is a stuttering step and is left out. TLC prints a trace without  *)
+(* Ask, Deliver, Take, Refuse, Emit, Send, Save, SaveFails, Tick, Crash,   *)
+(* Restart, DriverStops, Stop. Queue is not a step of its own: the steps   *)
+(* that put something in the outbox call it. CatchUpDone is the end of a   *)
+(* CatchUp at start. TLC prints a trace without                            *)
 (* the actions' arguments; tools/tla/schedule.py reads them from the       *)
 (* states, and writes each counterexample as a schedule in these names.    *)
 (*                                                                         *)
@@ -34,11 +35,12 @@ CONSTANTS
     MaxAmbiguous,   \* how many sends MDK answers with an unknown outcome
     MaxRefusals,    \* how many sends to a live group MDK refuses, each for good (too large, or
                     \* a payload it will not take)
-    UnknownTries,   \* how often a send whose outcome is unknown is tried before it is given up
+    MaxRejected,    \* how many tries MDK takes and drops before they go out
+    RejectedTries,  \* how many tries of one send MDK may drop before the core gives it up
     GoneChats,      \* groups MDK refuses every send to, as a removed group
-    ExactLookup,    \* assumption: a lookup always finds a send MDK posted
-    TokenDedupe,    \* assumption: MDK keeps each send's token and never posts one twice: a send
-                    \* of a token it posted gives back the earlier event
+    TokenDedupe,    \* assumption: MDK keeps each send under its token (MDK 0.19.0's `submit_*`):
+                    \* a send tried again under a token it posted gives back the earlier event and
+                    \* posts nothing, and one under a token it dropped is dropped again
     LiveInOrder,    \* assumption: MDK hands live messages over in storage order
     LiveAfterStore, \* assumption: MDK hands a live message over only once it has stored it
     LastResortTaken,\* assumption: MDK never refuses a last-resort send to a live group: it is as
@@ -62,8 +64,8 @@ Bugs == {"none",
          "SaveAfterSend",      \* S1, S3: a send goes out before what queued it is saved
          "SettleUnpending",    \* S1: an event settles a request that is no longer pending
          "RecoverKeepsOpen",   \* S2: a restart leaves open items open
-         "NoAttemptedFlag",    \* S3: a send handed to MDK is not marked so; a restart sends it blindly
-         "BlindResend",        \* S3: a send whose outcome is unknown is sent again without a lookup
+         "FreshTokenOnRestart",\* S3: a restart tries each queued send under a new token
+         "NewTokenResend",     \* S3: a send whose outcome is unknown goes again under a new token
          "DeliverBeforeSave",  \* S4: a prompt reaches the driver before its read mark is saved
          "MarkNotLoaded",      \* S10: a restart reads every group from its start
          "CatchUpAnyOrder",    \* S10: catch-up takes any stored message after the mark
@@ -77,7 +79,7 @@ Bugs == {"none",
 ASSUME Bug \in Bugs
 ASSUME Prompts \subseteq {"p1", "p2", "p3"} /\ Requests \subseteq {"r1", "r2"}
 ASSUME NewSession \subseteq Requests
-ASSUME Items \subseteq {"t1", "s1", "t2"} /\ MaxEmits >= 1 /\ UnknownTries >= 1
+ASSUME Items \subseteq {"t1", "s1", "t2"} /\ MaxEmits >= 1 /\ RejectedTries >= 1
 
 NoAct == [k |-> "none", x |-> "none", sess |-> "none"]
 NoSession == "none"
@@ -93,9 +95,10 @@ NoSession == "none"
 (* An outbox entry: its token (an item's id and version, or what a notice *)
 (* is for), group, item ("notice" for a notice the core makes up), version,*)
 (* the requests it settles, whether it closes the item, who made it        *)
-(* ("drv" or "core"), whether it was handed to MDK (`attempted`), and      *)
-(* whether it stands in for a dropped send (`last_resort`), so that        *)
-(* nothing stands in for it in turn.                                       *)
+(* ("drv" or "core"), how many of its tries MDK dropped (`rejected`: the   *)
+(* token MDK keeps it under is the pair of the two, as the code makes it   *)
+(* from both), and whether it stands in for a dropped send                 *)
+(* (`last_resort`), so that nothing stands in for it in turn.              *)
 (***************************************************************************)
 Empty == [mark    |-> [c \in Chats |-> 0],
           h       |-> [m \in Msgs |-> 0],
@@ -111,15 +114,15 @@ VARIABLES
     nextOrder,  \* the next place
     live,       \* messages MDK has handed to the core's event stream, not yet taken
     early,      \* messages MDK handed over before storing them (only without LiveAfterStore)
-    mdkTok,     \* the tokens of the sends MDK posted
-    mdkRefused, \* the tokens of the sends MDK refused in a live group: it refuses them again
+    mdkTok,     \* the tokens <<send, rejected>> MDK posted under
+    mdkRefused, \* the sends MDK refused in a live group: it refuses them again
+    mdkDropped, \* the tokens MDK took and dropped before they went out
     \* The core
     phase,      \* "start" (recovering and catching up), "run", "stopping" or "down"
     cv,         \* the core's state in memory
     sv,         \* the state file
     taken,      \* chats the driver took a prompt for since it started (conversation.rs `taken`)
     deadline,   \* requests the driver took, whose no_effect deadline runs (volatile)
-    unk,        \* sends whose outcome is unknown, to how often they were tried (run.rs `unknown`)
     acts,       \* acts still to carry out for the step in hand
     inflight,   \* the request the core is waiting on the driver for
     \* The driver
@@ -135,14 +138,16 @@ VARIABLES
     dropped,    \* for each item, the versions MDK refused or the core gave up
     told,       \* the versions <<item, version>> a posted failed notice tells the chat of, itself
                 \* or by replacing a failed notice that did (ToldBy)
-    found,      \* whether a lookup after the core went down found a send that went out
+    deduped,    \* whether a send tried again after the core went down got back the event its
+                \* token was posted as
     downs,      \* how many times the core went down
-    ambig       \* how many sends had an unknown outcome
+    ambig,      \* how many sends had an unknown outcome
+    rejects     \* how many tries MDK dropped
 
-mdk == <<order, nextOrder, live, early, mdkTok, mdkRefused>>
-core == <<phase, cv, sv, taken, deadline, unk, acts, inflight>>
+mdk == <<order, nextOrder, live, early, mdkTok, mdkRefused, mdkDropped>>
+core == <<phase, cv, sv, taken, deadline, acts, inflight>>
 drv == <<drvItems, drvEmits, drvReqs, drvChats>>
-ghost == <<delivered, shown, iposts, dropped, told, found, downs, ambig>>
+ghost == <<delivered, shown, iposts, dropped, told, deduped, downs, ambig, rejects>>
 vars == <<mdk, core, drv, ghost>>
 
 Init ==
@@ -152,12 +157,12 @@ Init ==
     /\ early = {}
     /\ mdkTok = {}
     /\ mdkRefused = {}
+    /\ mdkDropped = {}
     /\ phase = "start"
     /\ cv = Empty
     /\ sv = Empty
     /\ taken = {}
     /\ deadline = {}
-    /\ unk = [t \in {} |-> 0]
     /\ acts = <<>>
     /\ inflight = NoAct
     /\ drvItems = [i \in Items |-> "new"]
@@ -169,9 +174,10 @@ Init ==
     /\ iposts = [i \in Items |-> <<>>]
     /\ dropped = [i \in Items |-> {}]
     /\ told = {}
-    /\ found = FALSE
+    /\ deduped = FALSE
     /\ downs = 0
     /\ ambig = 0
+    /\ rejects = 0
 
 -----------------------------------------------------------------------------
 (* Helpers *)
@@ -190,10 +196,10 @@ Last(s) == s[Len(s)]
 Queue(s, e) == [s EXCEPT !.outbox = Append(@, e)]
 Notice(tok, c, settles) ==
     [tok |-> tok, c |-> c, i |-> "notice", v |-> 1, s |-> settles,
-     fin |-> TRUE, by |-> "core", att |-> FALSE, lr |-> FALSE]
+     fin |-> TRUE, by |-> "core", rej |-> 0, lr |-> FALSE]
 Version(i, v, settles, fin, by) ==
     [tok |-> <<i, v>>, c |-> ChatOf(i), i |-> i, v |-> v, s |-> settles,
-     fin |-> fin, by |-> by, att |-> FALSE, lr |-> FALSE]
+     fin |-> fin, by |-> by, rej |-> 0, lr |-> FALSE]
 LastResort(e) == [e EXCEPT !.lr = TRUE]
 
 \* conversation.rs `settle_pending`: a notice that settles a pending request.
@@ -237,7 +243,7 @@ DriverGone ==
 GoDown ==
     /\ phase' = "down"
     /\ cv' = sv
-    /\ taken' = {} /\ deadline' = {} /\ unk' = [t \in {} |-> 0]
+    /\ taken' = {} /\ deadline' = {}
     /\ acts' = <<>> /\ inflight' = NoAct
     /\ live' = <<>>
     /\ DriverGone
@@ -253,7 +259,7 @@ Store(m) ==
     /\ order' = [order EXCEPT ![m] = nextOrder]
     /\ nextOrder' = nextOrder + 1
     /\ live' = IF phase \in {"start", "run"} /\ m \notin early THEN Append(live, m) ELSE live
-    /\ UNCHANGED <<early, mdkTok, mdkRefused, core, drv, ghost>>
+    /\ UNCHANGED <<early, mdkTok, mdkRefused, mdkDropped, core, drv, ghost>>
 
 -----------------------------------------------------------------------------
 (* The core takes a message: run.rs `handle`, then conversation.rs `heard` *)
@@ -290,8 +296,8 @@ LiveTake(m) ==
           /\ early' = early \cup {m}
           /\ UNCHANGED live
     /\ Handle(m)
-    /\ UNCHANGED <<order, nextOrder, mdkTok, mdkRefused, phase, sv, taken, deadline, unk, inflight,
-                   drv, ghost>>
+    /\ UNCHANGED <<order, nextOrder, mdkTok, mdkRefused, mdkDropped, phase, sv, taken, deadline,
+                   inflight, drv, ghost>>
 
 \* A chat message arrives live.
 Hear(m) ==
@@ -314,14 +320,14 @@ CatchUp(c) ==
        /\ \E m \in after :
             /\ (Bug # "CatchUpAnyOrder" => \A n \in after : order[m] <= order[n])
             /\ Handle(m)
-    /\ UNCHANGED <<mdk, phase, sv, taken, deadline, unk, inflight, drv, ghost>>
+    /\ UNCHANGED <<mdk, phase, sv, taken, deadline, inflight, drv, ghost>>
 
 \* Nothing is left to catch up: the loop starts.
 CatchUpDone ==
     /\ phase = "start" /\ Idle
     /\ \A m \in Msgs : order[m] <= cv.mark[ChatOf(m)]
     /\ phase' = "run"
-    /\ UNCHANGED <<mdk, cv, sv, taken, deadline, unk, acts, inflight, drv, ghost>>
+    /\ UNCHANGED <<mdk, cv, sv, taken, deadline, acts, inflight, drv, ghost>>
 
 -----------------------------------------------------------------------------
 (* Carrying out acts: run.rs `carry_out`. The conversation is saved before *)
@@ -330,14 +336,15 @@ CatchUpDone ==
 Save ==
     /\ Up /\ Dirty
     /\ sv' = cv
-    /\ UNCHANGED <<mdk, phase, cv, taken, deadline, unk, acts, inflight, drv, ghost>>
+    /\ UNCHANGED <<mdk, phase, cv, taken, deadline, acts, inflight, drv, ghost>>
 
 \* The state file cannot be written: the core stops where it is, as a crash would.
 SaveFails ==
     /\ Up /\ Dirty /\ downs < MaxDowns
     /\ GoDown
-    /\ UNCHANGED <<order, nextOrder, early, mdkTok, mdkRefused, sv, drvEmits, delivered, shown,
-                   iposts, dropped, told, found, ambig>>
+    /\ UNCHANGED <<order, nextOrder, early, mdkTok, mdkRefused, mdkDropped, sv, drvEmits, delivered,
+                   shown,
+                   iposts, dropped, told, deduped, ambig, rejects>>
 
 \* The core hands a prompt or a request to the driver, once what led to it is saved.
 Deliver ==
@@ -347,8 +354,8 @@ Deliver ==
     /\ acts' = Tail(acts)
     /\ delivered' = IF Head(acts).k = "prompt"
                     THEN [delivered EXCEPT ![Head(acts).x] = @ + 1] ELSE delivered
-    /\ UNCHANGED <<mdk, phase, cv, sv, taken, deadline, unk, drv, shown, iposts, dropped, told,
-                   found, downs, ambig>>
+    /\ UNCHANGED <<mdk, phase, cv, sv, taken, deadline, drv, shown, iposts, dropped, told,
+                   deduped, downs, ambig, rejects>>
 
 \* The driver takes what it was handed (D-058, D-066): conversation.rs `prompted` or `requested`.
 \* A new-session control it takes ends the chat's session in the driver, before the driver
@@ -368,7 +375,7 @@ Take ==
                         THEN taken \cup {c} ELSE taken
             /\ drvChats' = IF a.x \in NewSession THEN drvChats \cup {c} ELSE drvChats
     /\ inflight' = NoAct
-    /\ UNCHANGED <<mdk, phase, cv, sv, unk, acts, drvItems, drvEmits, ghost>>
+    /\ UNCHANGED <<mdk, phase, cv, sv, acts, drvItems, drvEmits, ghost>>
 
 \* The driver refuses it: a refused prompt is not sent again and the person is told (D-037); a
 \* refused request is settled by a notice that says why (D-028).
@@ -379,7 +386,7 @@ Refuse ==
              THEN Queue(cv, Notice(<<"refused", a.x>>, ChatOf(a.x), {}))
              ELSE IF a.x \in cv.pending THEN SettleNotice(cv, a.x) ELSE cv
     /\ inflight' = NoAct
-    /\ UNCHANGED <<mdk, phase, sv, taken, deadline, unk, acts, drv, ghost>>
+    /\ UNCHANGED <<mdk, phase, sv, taken, deadline, acts, drv, ghost>>
 
 \* The driver emits an event for item i, closing it when fin, naming the requests S it settles
 \* (D-028). The core counts the version and queues it with what it settles: conversation.rs
@@ -409,8 +416,8 @@ Emit(i, S, fin) ==
     /\ drvItems' = [drvItems EXCEPT ![i] = IF fin THEN "done" ELSE "open"]
     /\ drvEmits' = [drvEmits EXCEPT ![i] = @ + 1]
     /\ drvReqs' = drvReqs \ S
-    /\ UNCHANGED <<mdk, phase, sv, taken, unk, acts, inflight, drvChats, delivered, shown,
-                   iposts, dropped, told, found, downs, ambig>>
+    /\ UNCHANGED <<mdk, phase, sv, taken, acts, inflight, drvChats, delivered, shown,
+                   iposts, dropped, told, deduped, downs, ambig, rejects>>
 
 \* The clock reaches a taken control's deadline with no effect shown: conversation.rs `overdue`
 \* settles it with no_effect (D-087).
@@ -419,12 +426,13 @@ Tick(r) ==
     /\ r \in deadline /\ r \in cv.pending
     /\ cv' = SettleNotice(cv, r)
     /\ deadline' = deadline \ {r}
-    /\ UNCHANGED <<mdk, phase, sv, taken, unk, acts, inflight, drv, ghost>>
+    /\ UNCHANGED <<mdk, phase, sv, taken, acts, inflight, drv, ghost>>
 
 -----------------------------------------------------------------------------
-(* Sends: run.rs `flush`. Each group's sends go oldest first. A send is    *)
-(* marked as handed to MDK, and saved, before MDK has it; a send whose     *)
-(* outcome is unknown is looked for before it is sent again (S1, S3).      *)
+(* Sends: run.rs `flush`. Each group's sends go oldest first, each under   *)
+(* the token it was saved with, which MDK keeps (marmot.rs `send`): a send *)
+(* whose outcome is unknown, or that a crash left queued, is tried again   *)
+(* under the same token, and a try MDK dropped under a new one (S1, S3).   *)
 
 \* The oldest entry for chat c, by its place in the outbox.
 HeadFor(s, c) == CHOOSE k \in DOMAIN s.outbox :
@@ -432,18 +440,16 @@ HeadFor(s, c) == CHOOSE k \in DOMAIN s.outbox :
                     /\ \A j \in DOMAIN s.outbox : s.outbox[j].c = c => k <= j
 HasFor(s, c) == \E k \in DOMAIN s.outbox : s.outbox[k].c = c
 
+\* The token MDK keeps a send under: its name, and how many of its tries MDK dropped
+\* (conversation.rs `mdk_token`, from the state file's salt, the name and that count).
+MdkToken(e) == <<e.tok, e.rej>>
 \* The chat sees a send. With token dedupe, MDK posts a token once.
-Posts(e) == ~(TokenDedupe /\ e.tok \in mdkTok)
+Posts(e) == ~(TokenDedupe /\ MdkToken(e) \in mdkTok)
 \* The id of the event a send became: for an item, its place among the item's posts.
 PostId(e) ==
     IF e.i = "notice" THEN 0
     ELSE IF Posts(e) THEN Len(iposts[e.i]) + 1
     ELSE CHOOSE k \in DOMAIN iposts[e.i] : iposts[e.i][k].v = e.v
-FoundId(e) ==
-    IF e.i = "notice" THEN 0
-    ELSE CHOOSE k \in DOMAIN iposts[e.i] :
-            /\ iposts[e.i][k].v = e.v
-            /\ \A j \in DOMAIN iposts[e.i] : iposts[e.i][j].v = e.v => j <= k
 
 \* The versions a notice with token t tells the chat of: a failed notice tells of the version it
 \* stands in for, or of what the failed notice it replaces told of; any other notice, of nothing.
@@ -456,7 +462,7 @@ ToldBy(t) == IF t[1] # "failed" THEN {}
 \* item's first event.
 Post(s, e) ==
     IF Posts(e)
-    THEN /\ mdkTok' = mdkTok \cup {e.tok}
+    THEN /\ mdkTok' = mdkTok \cup {MdkToken(e)}
          /\ shown' = [r \in Requests |-> IF r \in e.s THEN shown[r] + 1 ELSE shown[r]]
          /\ iposts' = IF e.i = "notice" THEN iposts
                       ELSE [iposts EXCEPT ![e.i] = Append(@,
@@ -505,88 +511,72 @@ DropGhost(e) ==
 \* (too large, or a payload it will not take: the same bytes are refused again).
 ForGood(c, e) == c \in GoneChats \/ e.tok \in mdkRefused
 
-\* MDK's answer to a send of the entry at k for chat c: Sent, Busy, Ambiguous (it went out or it
-\* did not, and the core cannot tell), or Refused: every send to a gone group, and up to
+\* The entry at k with one more of its tries dropped by MDK: its next try is under a new token.
+Bumped(s, k) == [s EXCEPT !.outbox[k].rej = @ + 1]
+
+\* MDK's answer to a send of the entry at k for chat c, under its token: Sent, Busy, Ambiguous
+\* (it went out or it did not, and the core cannot tell), Rejected (MDK took it and dropped it
+\* before it went out: nothing went), or Refused: every send to a gone group, and up to
 \* MaxRefusals sends to a live one, each refused again whenever it is sent (run.rs `failed`:
-\* EventTooLarge, InvalidAppMessagePayload). The group stays live; the core drops the send.
-\* With LastResortTaken, MDK refuses no last-resort send to a live group.
+\* EventTooLarge, InvalidAppMessagePayload). The group stays live; the core drops the send. With
+\* LastResortTaken, MDK refuses no last-resort send to a live group. With TokenDedupe, MDK
+\* answers a token it posted with the event it posted, posting nothing, and a token it dropped
+\* with its drop. A send MDK dropped RejectedTries tries of is given up, as refused.
 MdkSend(c, k, outcome) ==
     LET e == cv.outbox[k]
-        marked == [cv EXCEPT !.outbox[k].att = TRUE]
-        tries == IF e.tok \in DOMAIN unk THEN unk[e.tok] ELSE 0
+        kept == TokenDedupe /\ MdkToken(e) \in mdkTok
+        lost == TokenDedupe /\ MdkToken(e) \in mdkDropped
     IN
-    \* Saved as attempted before MDK has it (conversation.rs `attempting`).
-    /\ sv' = IF Dirty \/ Bug = "NoAttemptedFlag" THEN sv ELSE marked
-    /\ IF ForGood(c, e) \/ outcome = "refused"
-       THEN /\ outcome = "refused"
-            /\ \/ ForGood(c, e)
-               \/ Cardinality(mdkRefused) < MaxRefusals /\ ~(LastResortTaken /\ e.lr)
-            /\ mdkRefused' = IF c \in GoneChats THEN mdkRefused ELSE mdkRefused \cup {e.tok}
-            /\ cv' = Refused(marked, k) /\ DropGhost(e)
-            /\ unk' = Drop(unk, e.tok)
-            /\ UNCHANGED <<mdkTok, shown, iposts, told, ambig>>
-       ELSE /\ UNCHANGED mdkRefused
-            /\ CASE outcome = "sent" ->
-                   /\ Post(marked, e)
-                   /\ cv' = Sent(marked, k, PostId(e))
-                   /\ unk' = Drop(unk, e.tok)
-                   /\ UNCHANGED <<dropped, ambig>>
-              [] outcome = "busy" ->
-                   /\ cv' = marked
-                   /\ UNCHANGED <<mdkTok, shown, iposts, told, dropped, unk, ambig>>
-              [] outcome \in {"ambiguous-posted", "ambiguous-lost"} ->
-                   /\ ambig < MaxAmbiguous
-                   /\ ambig' = ambig + 1
-                   /\ IF outcome = "ambiguous-posted" THEN Post(marked, e)
-                      ELSE UNCHANGED <<mdkTok, shown, iposts, told>>
-                   /\ cv' = marked
-                   /\ unk' = IF Bug = "BlindResend" THEN unk ELSE Put(unk, e.tok, tries + 1)
-                   /\ UNCHANGED dropped
-              [] OTHER -> FALSE
+    IF ForGood(c, e) \/ outcome = "refused"
+    THEN /\ outcome = "refused"
+         /\ ~kept /\ ~lost
+         /\ \/ ForGood(c, e)
+            \/ Cardinality(mdkRefused) < MaxRefusals /\ ~(LastResortTaken /\ e.lr)
+         /\ mdkRefused' = IF c \in GoneChats THEN mdkRefused ELSE mdkRefused \cup {e.tok}
+         /\ cv' = Refused(cv, k) /\ DropGhost(e)
+         /\ UNCHANGED <<mdkTok, mdkDropped, shown, iposts, told, deduped, ambig, rejects>>
+    ELSE /\ UNCHANGED mdkRefused
+         /\ CASE outcome = "sent" ->
+                /\ ~lost
+                /\ Post(cv, e)
+                /\ cv' = Sent(cv, k, PostId(e))
+                /\ deduped' = (deduped \/ (kept /\ downs >= 1))
+                /\ UNCHANGED <<mdkDropped, dropped, ambig, rejects>>
+           [] outcome = "busy" ->
+                /\ UNCHANGED <<cv, mdkTok, mdkDropped, shown, iposts, told, dropped, deduped,
+                               ambig, rejects>>
+           [] outcome \in {"ambiguous-posted", "ambiguous-lost"} ->
+                /\ ~lost
+                /\ ambig < MaxAmbiguous
+                /\ ambig' = ambig + 1
+                /\ IF outcome = "ambiguous-posted" THEN Post(cv, e)
+                   ELSE UNCHANGED <<mdkTok, shown, iposts, told>>
+                /\ cv' = IF Bug = "NewTokenResend" THEN Bumped(cv, k) ELSE cv
+                /\ UNCHANGED <<mdkDropped, dropped, deduped, rejects>>
+           [] outcome = "rejected" ->
+                /\ ~kept
+                /\ \/ lost /\ UNCHANGED <<mdkDropped, rejects>>
+                   \/ ~lost /\ rejects < MaxRejected
+                     /\ rejects' = rejects + 1
+                     /\ mdkDropped' = mdkDropped \cup {MdkToken(e)}
+                /\ IF e.rej + 1 >= RejectedTries
+                   THEN cv' = Refused(Bumped(cv, k), k) /\ DropGhost(e)
+                   ELSE cv' = Bumped(cv, k) /\ UNCHANGED dropped
+                /\ UNCHANGED <<mdkTok, shown, iposts, told, deduped, ambig>>
+           [] OTHER -> FALSE
 
-SendOutcomes == {"sent", "busy", "ambiguous-posted", "ambiguous-lost", "refused"}
+SendOutcomes == {"sent", "busy", "ambiguous-posted", "ambiguous-lost", "refused", "rejected"}
 
 \* The core hands the oldest send for chat c to MDK. It sends between steps: right after the
 \* step that queued it (each step queues after its driver call returns), on its retry timer, at
-\* start and while stopping; never in the middle of a driver call.
+\* start and while stopping; never in the middle of a driver call. What it sends is saved
+\* first, with its token.
 Send(c, outcome) ==
     /\ Up /\ acts = <<>> /\ inflight = NoAct
     /\ ~Dirty \/ Bug = "SaveAfterSend"
     /\ HasFor(cv, c)
-    /\ LET k == HeadFor(cv, c) IN
-       /\ cv.outbox[k].tok \notin DOMAIN unk
-       /\ MdkSend(c, k, outcome)
-    /\ UNCHANGED <<order, nextOrder, live, early, phase, taken, deadline, acts, inflight, drv,
-                   delivered, found, downs>>
-
-\* The core looks for a send whose outcome is unknown in what MDK stored (marmot.rs
-\* `find_sent`). Found: it went. Absent: given up as refused after its tries, or else sent
-\* again at once, as `flush` does once MDK has settled it.
-Lookup(c, outcome, sendOutcome) ==
-    /\ Up /\ Idle
-    /\ HasFor(cv, c)
-    /\ LET k == HeadFor(cv, c)
-           e == cv.outbox[k]
-       IN
-       /\ e.tok \in DOMAIN unk
-       /\ CASE outcome = "found" ->
-                 /\ sendOutcome = "sent"
-                 /\ e.tok \in mdkTok
-                 /\ cv' = Sent(cv, k, FoundId(e))
-                 /\ unk' = Drop(unk, e.tok)
-                 /\ found' = (found \/ downs >= 1)
-                 /\ UNCHANGED <<sv, mdkTok, mdkRefused, shown, iposts, dropped, told, ambig>>
-            [] outcome = "absent" ->
-                 /\ e.tok \notin mdkTok \/ ~ExactLookup
-                 /\ UNCHANGED found
-                 /\ IF unk[e.tok] >= UnknownTries
-                    THEN /\ sendOutcome = "sent"
-                         /\ cv' = Refused(cv, k) /\ DropGhost(e)
-                         /\ unk' = Drop(unk, e.tok)
-                         /\ UNCHANGED <<sv, mdkTok, mdkRefused, shown, iposts, told, ambig>>
-                    ELSE MdkSend(c, k, sendOutcome)
-            [] OTHER -> FALSE
-    /\ UNCHANGED <<order, nextOrder, live, early, phase, taken, deadline, acts, inflight, drv,
+    /\ MdkSend(c, HeadFor(cv, c), outcome)
+    /\ UNCHANGED <<order, nextOrder, live, early, phase, sv, taken, deadline, acts, inflight, drv,
                    delivered, downs>>
 
 -----------------------------------------------------------------------------
@@ -596,8 +586,9 @@ Lookup(c, outcome, sendOutcome) ==
 Crash ==
     /\ Up /\ downs < MaxDowns
     /\ GoDown
-    /\ UNCHANGED <<order, nextOrder, early, mdkTok, mdkRefused, sv, drvEmits, delivered, shown,
-                   iposts, dropped, told, found, ambig>>
+    /\ UNCHANGED <<order, nextOrder, early, mdkTok, mdkRefused, mdkDropped, sv, drvEmits, delivered,
+                   shown,
+                   iposts, dropped, told, deduped, ambig, rejects>>
 
 \* The driver ends, or the core is told to stop: everything open is closed and every pending
 \* request settled as failed, all queued and saved before any of it is sent (run.rs, after the
@@ -608,8 +599,8 @@ StopWith ==
     /\ taken' = {} /\ deadline' = {} /\ live' = <<>>
     /\ DriverGone
     /\ downs' = downs + 1
-    /\ UNCHANGED <<order, nextOrder, early, mdkTok, mdkRefused, sv, unk, acts, inflight,
-                   delivered, shown, iposts, dropped, told, found, ambig>>
+    /\ UNCHANGED <<order, nextOrder, early, mdkTok, mdkRefused, mdkDropped, sv, acts, inflight,
+                   delivered, shown, iposts, dropped, told, deduped, ambig, rejects>>
 \* The driver ends.
 DriverStops ==
     /\ phase = "run" /\ Idle /\ downs < MaxDowns
@@ -619,19 +610,21 @@ Stop ==
     /\ phase = "run" /\ Idle /\ downs < MaxDowns
     /\ StopWith
 
-\* The core starts again from the state file: what was handed to MDK may have gone out and is
-\* looked for; what was left open is closed and what was pending settled (D-070); then catch-up.
+\* The core starts again from the state file: what was handed to MDK may have gone out, and is
+\* tried again under the token it was saved with; what was left open is closed and what was
+\* pending settled (D-070); then catch-up.
 Restart ==
     /\ \/ phase = "down"
        \/ phase = "stopping" /\ ~Dirty
-    /\ cv' = Recover(sv)
-    /\ unk' = IF Bug = "NoAttemptedFlag" THEN [t \in {} |-> 0]
-              ELSE [t \in {sv.outbox[k].tok : k \in {j \in DOMAIN sv.outbox : sv.outbox[j].att}}
-                    |-> 0]
+    /\ cv' = IF Bug = "FreshTokenOnRestart"
+             THEN LET r == Recover(sv) IN
+                  [r EXCEPT !.outbox =
+                      [k \in DOMAIN r.outbox |-> [r.outbox[k] EXCEPT !.rej = @ + 1]]]
+             ELSE Recover(sv)
     /\ phase' = "start"
     /\ taken' = {} /\ deadline' = {} /\ acts' = <<>> /\ inflight' = NoAct /\ live' = <<>>
     /\ DriverGone
-    /\ UNCHANGED <<order, nextOrder, early, mdkTok, mdkRefused, sv, ghost>>
+    /\ UNCHANGED <<order, nextOrder, early, mdkTok, mdkRefused, mdkDropped, sv, ghost>>
 
 -----------------------------------------------------------------------------
 
@@ -645,18 +638,19 @@ Next ==
     \/ \E i \in Items, S \in SUBSET Requests, fin \in BOOLEAN : Emit(i, S, fin)
     \/ \E r \in Requests : Tick(r)
     \/ \E c \in Chats, o \in SendOutcomes : Send(c, o)
-    \/ \E c \in Chats, o \in {"found", "absent"}, so \in SendOutcomes : Lookup(c, o, so)
     \/ Crash \/ DriverStops \/ Stop \/ Restart
 
 (***************************************************************************)
 (* Fairness: one condition for each party, each over all its progress     *)
-(* steps. Bounded faults (crashes, failed saves, stops, unknown outcomes)  *)
+(* steps. Bounded faults (crashes, failed saves, stops, unknown outcomes,  *)
+(* dropped tries)                                                          *)
 (* end, since each has a bound.                                            *)
 (*   The core always: it saves, hands over, restarts, catches up at start  *)
 (*               and takes live messages.                                  *)
 (*   FairDriver: the driver answers each request and closes each open item.*)
 (*   FairMdk:    a send MDK keeps being offered is eventually accepted,    *)
-(*               and a lookup it keeps being asked is eventually answered. *)
+(*               or, for good, refused, or, under a token it dropped,      *)
+(*               dropped again.                                            *)
 (*   FairTime:   the clock reaches each deadline.                          *)
 (* Strong fairness, since most steps wait for the core to be idle, which  *)
 (* comes and goes. A condition over a party's steps together is weaker    *)
@@ -670,12 +664,16 @@ CoreSteps ==
 DriverSteps ==
     \/ Take \/ Refuse
     \/ \E i \in Items, S \in SUBSET Requests : drvItems[i] = "open" /\ Emit(i, S, TRUE)
-\* A send MDK refuses for good is answered with its refusal; that is MDK answering too.
+\* A send MDK refuses for good is answered with its refusal, and one under a token MDK dropped
+\* with its drop; that is MDK answering too.
 HeadForGood(c) == HasFor(cv, c) /\ ForGood(c, cv.outbox[HeadFor(cv, c)])
+HeadLost(c) ==
+    HasFor(cv, c) /\ TokenDedupe /\ MdkToken(cv.outbox[HeadFor(cv, c)]) \in mdkDropped
 MdkSteps ==
     \E c \in Chats :
-        \/ Send(c, "sent") \/ Lookup(c, "found", "sent") \/ Lookup(c, "absent", "sent")
-        \/ HeadForGood(c) /\ (Send(c, "refused") \/ Lookup(c, "absent", "refused"))
+        \/ Send(c, "sent")
+        \/ HeadForGood(c) /\ Send(c, "refused")
+        \/ HeadLost(c) /\ Send(c, "rejected")
 TimeSteps == \E r \in Requests : Tick(r)
 
 Fairness ==
@@ -693,7 +691,7 @@ TypeOK ==
     /\ phase \in {"start", "run", "stopping", "down"}
     /\ order \in [Msgs -> 0..Cardinality(Msgs)]
     /\ inflight.k \in {"none", "prompt", "request"}
-    /\ downs <= MaxDowns /\ ambig <= MaxAmbiguous
+    /\ downs <= MaxDowns /\ ambig <= MaxAmbiguous /\ rejects <= MaxRejected
     /\ \A k \in DOMAIN cv.outbox : cv.outbox[k].c \in Chats
 
 \* S1: every answer and control is settled at most once in the chat; L1 says at least once.
@@ -713,9 +711,9 @@ S2 ==
                 sv.outbox[k].i = i /\ sv.outbox[k].v > Last(iposts[i]).v
 
 \* S3: an item's versions rise by one, and every later version names its first event (D-025,
-\* D-069). A version MDK refused, or that the core gave up after its tries, is a gap; nothing
-\* else is (S3Told below checks that the chat is told of each gap). The first event is the
-\* first one posted.
+\* D-069). A version MDK refused, or that the core gave up after MDK dropped its tries, is a
+\* gap; nothing else is (S3Told below checks that the chat is told of each gap). The first event
+\* is the first one posted.
 S3 ==
     \A i \in Items :
         LET P == iposts[i] IN
@@ -787,9 +785,11 @@ NeverSettledByEvent == \A i \in Items : \A k \in DOMAIN iposts[i] : iposts[i][k]
 NeverResumed == ~(downs >= 1 /\ inflight.k = "prompt" /\ inflight.sess # NoSession)
 \* A restart or a stop closes an item the chat showed open.
 NeverClosedByCore == \A i \in Items : \A k \in DOMAIN iposts[i] : iposts[i][k].by # "core"
-\* After the core went down, a send that went out is looked for and found: a Lookup takes the
-\* found branch.
-NeverLookedUpAfterCrash == ~found
+\* After the core went down, a send that went out is tried again under its token, and MDK gives
+\* back the event it posted.
+NeverDedupedAfterCrash == ~deduped
+\* A send MDK dropped a try of goes out, under a new token.
+NeverSentAfterDrop == \A t \in mdkTok : t[2] = 0
 \* A message is handed to the driver during a catch-up after a restart.
 NeverDeliveredInCatchUp == ~(downs >= 1 /\ phase = "start" /\ inflight # NoAct)
 \* A version is refused or given up.
@@ -799,7 +799,7 @@ NeverTold == told = {}
 \* The core's close of an item whose closing version was dropped is posted.
 NeverClosedUndelivered == \A i \in Items : \A k \in DOMAIN iposts[i] : ~iposts[i][k].lr
 \* A failed notice in place of a dropped notice that settled requests is posted.
-NeverResettled == ~\E t \in mdkTok : t[1] = "failed" /\ t[2][1] \notin Items
+NeverResettled == ~\E t \in mdkTok : t[1][1] = "failed" /\ t[1][2][1] \notin Items
 \* A message MDK handed over before storing it is dropped, and stored after.
 NeverDroppedEarly == \A m \in early : order[m] = 0
 \* A prompt reaches the driver after it took a new-session control for the chat.
