@@ -11,8 +11,7 @@
 //! its `_meta`, which OpenCode and Goose add and Cursor does not. The driver decides; this module
 //! only carries the call there and the answer back.
 //!
-//! The driver starts the server only when the settings switch file sending on: whether it may
-//! listen on the loopback address waits on the project owner (Q-31).
+//! The driver starts the server unless the settings switch file sending off (D-110).
 
 use marmot_agent_driver::{ChatId, Reason, Refusal};
 use rmcp::model::{

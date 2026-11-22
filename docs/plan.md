@@ -105,8 +105,8 @@ Built so far, provisional until the owner accepts what others can see:
 
 - **An agent sending a file.** A driver asks the core to send a file, and the core sends it from an allowed
   folder as an encrypted attachment tagged with its turn. Codex, Claude Code, Pi and the ACP agents (OpenCode,
-  Goose and Cursor, through an MCP server the ACP driver serves, off unless the settings say `send_files = true`
-  until [Q-31](open-questions.md#q-31-how-does-an-acp-agent-reach-the-drivers-file-tool) is decided)
+  Goose and Cursor, through an MCP server the ACP driver serves on the loopback address,
+  [D-110](decisions.md#d-110-an-acp-agent-gets-the-file-tool-from-a-loopback-mcp-server-on-by-default))
   each get a `send_file` tool (Pi's from an extension the driver ships); connectors on the socket send a
   `send_file` request. See [sending a file](design/drivers.md#sending-a-file) and
   [the socket's `send_file`](design/socket-protocol.md#the-messages-as-built). The Hermes and OpenClaw plugins

@@ -119,10 +119,14 @@ pub struct AcpConfig {
     /// The working folder.
     pub cwd: String,
     /// Whether the agent gets the driver's `send_file` tool (D-090), from an MCP server the driver
-    /// serves on the loopback address. Off unless set: whether the driver may listen there waits
-    /// on the project owner (Q-31), so this is provisional.
-    #[serde(default)]
+    /// serves on the loopback address (D-110). On unless set to `false`.
+    #[serde(default = "on")]
     pub send_files: bool,
+}
+
+/// What `send_files` is when the settings leave it out.
+fn on() -> bool {
+    true
 }
 
 /// How Pi runs. Each chat gets a Pi of its own, started as `program args... --mode rpc` in `cwd`.

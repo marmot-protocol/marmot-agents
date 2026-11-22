@@ -1844,6 +1844,33 @@ event that D-096 used to accept no longer happens. The notice for a forgotten se
 
 Decided 2026-11-22. The project owner decided.
 
+## D-110 An ACP agent gets the file tool from a loopback MCP server, on by default
+
+**Decision.** This settles what was Q-31. OpenCode, Goose and Cursor take MCP servers from their client only by an
+HTTP address, so the ACP driver serves its own MCP server, with one tool, `send_file`, on `127.0.0.1`, and hands
+it to every session it opens or takes up.
+
+- **On by default.** `send_files = false` in `[acp]` switches it off.
+- **Tokens.** Each chat gets a random 128-bit token, new each time the core starts, sent in a header and never in
+  the address or an event. A token reaches only its own chat. For OpenCode, which keeps one server for every
+  session in a folder, it reaches the chats working in that folder.
+- **Refusals.** A call with no session or a malformed one is refused from agents that always name their session
+  (OpenCode, Goose), and so is a call from a session no chat has, such as an OpenCode subagent, until
+  [Q-30](open-questions.md#q-30-how-does-a-chat-show-an-agents-subagents) is settled.
+- **Approvals.** An agent's own approval of the tool, as Cursor asks for every MCP tool, goes to the chat like any
+  approval. The driver answers none itself.
+- **Goose's test container** cannot reach the host's loopback address, so Goose there has no tool. Goose on the
+  host, the default, has it.
+
+**Why.** The project owner accepted the recommendations. It is the only way these agents can have the tool, which
+[D-107](#d-107-every-harness-that-lets-an-agent-send-a-file-gets-file-sending-before-the-swap) requires. A
+listener on the loopback address can be reached by any program on the machine, but a call does nothing without a
+chat's token, and even then only what the core allows that chat. A driver that answered an approval would decide
+who may approve, which only the core does
+([D-010](#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)).
+
+Decided 2026-11-22. The project owner decided.
+
 ## D-111 A group the core has never read starts after what arrived before the core did
 
 **Decision.** For a group the core has no read mark for, as on an imported account's first run or after a lost state

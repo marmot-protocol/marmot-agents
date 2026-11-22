@@ -11,8 +11,8 @@
 //! The agent can be any command: `opencode acp`, `cursor-agent acp`, or Goose through
 //! `tools/goose/goose-acp.sh`, which runs it in a throwaway container.
 //!
-//! When the settings switch file sending on ([`Acp::serve_files`]; off until the owner decides
-//! Q-31), an agent that takes MCP servers over HTTP is given the driver's own on every session it
+//! When file sending is on ([`Acp::serve_files`]; on unless the settings switch it off, D-110), an
+//! agent that takes MCP servers over HTTP is given the driver's own on every session it
 //! opens, with one tool, `send_file` (D-090, [`crate::mcp`]). A call goes to the chat whose session
 //! it names, only when the token it carries was given to that chat, or, for OpenCode, to a chat in
 //! the same folder; a call that names no session (Cursor) goes to the chat of its token. It becomes
@@ -321,8 +321,8 @@ impl Acp {
 
     /// Gives the agent the driver's `send_file` tool from now on, when it takes MCP servers over
     /// HTTP: starts the driver's MCP server on the loopback address. True when the agent has the
-    /// tool. Off unless called, which the core does only when the settings say
-    /// `send_files = true` (provisional: whether the driver may listen waits on Q-31).
+    /// tool. Off unless called, which the core does unless the settings say `send_files = false`
+    /// (D-110).
     pub async fn serve_files(&mut self) -> io::Result<bool> {
         if self.takes_http && self.mcp.is_none() {
             self.mcp = Some(Server::start(self.tokens.clone()).await?);

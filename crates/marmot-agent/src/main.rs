@@ -148,7 +148,7 @@ async fn run(config: &Config) -> Result<(), String> {
         (None, Some(acp), _) => {
             let starting = async {
                 let mut driver = Acp::start(&acp.command, &acp.cwd, &acp.name).await?;
-                // Only when the settings ask: the server listens on the loopback address (Q-31).
+                // Unless the settings switch it off: the server listens on the loopback address (D-110).
                 if acp.send_files {
                     driver.serve_files().await?;
                 }

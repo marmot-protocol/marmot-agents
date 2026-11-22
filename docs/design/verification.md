@@ -258,9 +258,8 @@ Cursor the ones where they differ), a death at each frame an approval's turn wri
 through the transport, which play on only after the recorded answer. The checker names each failure by its
 property: S1, S2, S5, S11, S12, S13, and S4 and `seq` for drivers besides. Twenty-two deliberate faults, put in by a
 wrapper driver, are each caught as the property they break, by the check meant for them. One scenario, `send_file`,
-covers the file tool of every built-in driver (Codex, Pi and the three ACP shapes; the ACP driver's listener, off
-until [Q-31](../open-questions.md#q-31-how-does-an-acp-agent-reach-the-drivers-file-tool) is decided, switched on for
-the test), with five faults of its own. It found five driver
+covers the file tool of every built-in driver (Codex, Pi and the three ACP shapes, with the ACP driver's listener on, as it is by default,
+[D-110](../decisions.md#d-110-an-acp-agent-gets-the-file-tool-from-a-loopback-mcp-server-on-by-default)), with five faults of its own. It found five driver
 bugs, each fixed after its scenario failed: the ACP driver took, and showed as given, an
 answer the agent could no longer read; the Codex driver waited for ever on a Codex that never answered; and the ACP,
 Codex and Pi drivers waited for ever on a harness that stopped reading its input. Each of the last four held up

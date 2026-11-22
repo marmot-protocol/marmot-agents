@@ -305,44 +305,6 @@ must be answered by someone, or the subagent waits. The project owner wants them
 parent's chat; how is [Q-30](#q-30-how-does-a-chat-show-an-agents-subagents). Whether any other thread can
 arrive unasked is not known.
 
-### Q-31 How does an ACP agent reach the driver's file tool?
-
-Built 2026-11-22, provisional; the security points wait on the project owner. The ACP driver can serve an MCP
-server of its own, with one tool, `send_file`, and hand it to every session it opens or takes up
-([the ACP driver](design/drivers.md#the-acp-driver)). **It is off until this is decided:** the driver starts
-the server only when the `[acp]` settings say `send_files = true`, a setting that is itself provisional, so
-nothing listens for anyone who has not asked. Only the tests and the scenarios against real agents switch it
-on. OpenCode, Goose and Cursor all take it, and the scenario
-against the real agents sends a file with OpenCode and Cursor
-([what each does](reference/harness-interfaces.md#mcp-servers-from-the-client-over-acp)). To decide, each with
-the recommendation:
-
-- **A listener on the loopback address (security).** The server is TCP on `127.0.0.1`, reachable by any
-  program on the machine, which must then show a chat's token: 128 random bits, new each time the core starts,
-  sent by the agent in a header. A `Host` that is not the loopback is refused, so a web page cannot reach it
-  by a name of its own. Goose keeps the header, with the session, in its store on disk. The token's power is
-  the agent's own: to send a file from the folders the settings allow, to its own chat, or, for OpenCode,
-  which keeps one server for every session in a folder, to a chat working in the same folder, and only for
-  the session the call names. Recommended: accept it, and switch it on by default. ACP's HTTP servers can only be named by an address, so a Unix socket, which file permissions would
-  guard, cannot be used; a stdio helper the agent starts would need a program of ours beside every agent, and
-  still could not reach Goose's container.
-- **The agent's own approval of the tool.** Cursor asks before it calls any MCP tool, and Goose in `approve`
-  mode before every tool. The ask goes to the chat like any approval, and the driver answers none itself.
-  Recommended: keep it so. The Claude Code connector allows its tool in its permission callback, but a driver
-  that answers an approval decides who may ([D-004](decisions.md#d-004-four-layers-with-drivers-behind-one-trait),
-  [D-010](decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)), and telling the driver's own
-  tool apart in Cursor's request means trusting a title.
-- **Goose in its container.** The container has a network of its own and cannot reach the host's loopback
-  address, so Goose there has no tool; its session works without it. On the host's network
-  (`docker run --network host`) it sends files, which was run once; but the container would then reach every
-  service on the host's loopback address. Recommended: leave the container as it is. Goose on the host, the
-  default ([D-102](decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)), has the
-  tool.
-- **A call from a session no chat has**, such as one of OpenCode's subagents, is refused. Recommended: keep
-  refusing until [Q-30](#q-30-how-does-a-chat-show-an-agents-subagents) is settled.
-- **The setting.** `send_files` in `[acp]`, off unless set. Recommended: once the listener is accepted, on
-  by default, the setting left to switch it off.
-
 ## The repository and the move from MDK
 
 ### Q-28 How does someone know a release is genuine?

@@ -274,8 +274,8 @@ async fn each_session_is_given_the_drivers_server_with_its_chats_own_token() {
     }
 }
 
-// Q-31 waits on the owner: until the settings switch file sending on, the driver listens on
-// nothing and hands the agent no server, even one that takes it.
+// Until the core asks the driver to serve files (which it does unless the settings switch it off,
+// D-110), the driver listens on nothing and hands the agent no server, even one that takes it.
 #[tokio::test]
 async fn no_server_is_given_until_the_settings_switch_file_sending_on() {
     let off = Agent {

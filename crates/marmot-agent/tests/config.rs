@@ -112,8 +112,8 @@ fn the_folders_a_chat_may_use_are_whole_paths() {
     );
 }
 
-// An ACP agent is given the driver's file tool, which listens on the loopback address, only when
-// its settings ask for it: off until the owner settles Q-31 (provisional).
+// An ACP agent is given the driver's file tool, which listens on the loopback address, unless its
+// settings switch it off (D-110).
 #[test]
 fn an_acp_agent_sends_files_only_when_its_settings_say_so() {
     let text = |extra: &str| {
@@ -123,7 +123,7 @@ fn an_acp_agent_sends_files_only_when_its_settings_say_so() {
         )
     };
     let acp = |extra: &str| Config::parse(&text(extra)).unwrap().acp.unwrap();
-    assert!(!acp("").send_files, "off by default");
+    assert!(acp("").send_files, "on by default");
     assert!(acp("send_files = true\n").send_files);
     assert!(!acp("send_files = false\n").send_files);
     assert!(matches!(

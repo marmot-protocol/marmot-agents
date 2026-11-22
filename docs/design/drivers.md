@@ -132,9 +132,8 @@ sequenceDiagram
   server from the Agent SDK with the same tool, which Claude Code calls `mcp__marmot__send_file`. Pi gets it
   from a small extension of the driver's own, loaded into each chat's Pi ([the Pi driver](#the-pi-driver)). An
   ACP agent (OpenCode, Goose, Cursor) gets an MCP server the ACP driver serves itself, over HTTP on the loopback
-  address, on every session it opens or takes up, but only when its settings say `send_files = true`: it is
-  off until the owner decides [Q-31](../open-questions.md#q-31-how-does-an-acp-agent-reach-the-drivers-file-tool)
-  ([the ACP driver](#the-acp-driver)). All take one
+  address, on every session it opens or takes up, unless its settings say `send_files = false`
+  ([D-110](../decisions.md#d-110-an-acp-agent-gets-the-file-tool-from-a-loopback-mcp-server-on-by-default), [the ACP driver](#the-acp-driver)). All take one
   argument, `path`. The model is never asked to write a path into its answer, and nothing in its words is read
   as a request to send by the driver. A gateway's plugin takes the gateway's own way instead
   ([below](#a-gateways-files)).
@@ -181,7 +180,7 @@ sequenceDiagram
   its permission callback, Codex does not ask for a dynamic tool, and Pi asks nobody before any tool. The
   folders are the limit, as the owner set them. An ACP agent that asks its client before an MCP tool (Cursor
   always; Goose in `approve` mode) asks in the chat, like any approval: the ACP driver answers no approval
-  itself (provisional, [Q-31](../open-questions.md#q-31-how-does-an-acp-agent-reach-the-drivers-file-tool)).
+  itself ([D-110](../decisions.md#d-110-an-acp-agent-gets-the-file-tool-from-a-loopback-mcp-server-on-by-default)).
 
 ### A gateway's files
 
@@ -374,7 +373,7 @@ The core is started with an `[acp]` section in place of `[codex]`:
 name = "opencode"                 # what events call the agent until it names itself; Cursor never does
 command = ["opencode", "acp"]     # or ["cursor-agent", "acp"], ["goose", "acp"], or Goose's container, below
 cwd = "/home/me/work"
-send_files = true                 # provisional, off unless set until Q-31 is decided: the send_file tool
+# send_files = false              # the send_file tool is on unless this says false (D-110)
 ```
 
 - **Goose, OpenCode and Cursor run on the host**, as the person's own programs, with their own settings and
@@ -427,10 +426,10 @@ send_files = true                 # provisional, off unless set until Q-31 is de
   has that tool call.
 - **Requests nobody is asked about** are answered at once: Cursor's `cursor/update_todos` is taken, anything
   else unknown is refused, so the agent never waits for ever.
-- **Sending a file** ([sending a file](#sending-a-file)). Built 2026-11-22; provisional, and its security
-  points wait on the owner ([Q-31](../open-questions.md#q-31-how-does-an-acp-agent-reach-the-drivers-file-tool)).
-  **Off until Q-31 is decided:** the driver listens on nothing and hands the agent no server unless the
-  `[acp]` settings say `send_files = true` (provisional too). Once switched on, an agent that takes MCP servers
+- **Sending a file** ([sending a file](#sending-a-file)). Decided
+  ([D-110](../decisions.md#d-110-an-acp-agent-gets-the-file-tool-from-a-loopback-mcp-server-on-by-default)). On unless the `[acp]` settings say
+  `send_files = false`, which leaves the driver listening on nothing and handing the agent no server. When on,
+  an agent that takes MCP servers
   over HTTP (`mcpCapabilities.http`, which OpenCode, Goose and Cursor all state) is given the driver's own on
   `session/new`, `session/load` and `session/resume`, named `marmot`, with one tool, `send_file`. The driver
   serves it with the official MCP library (`rmcp`), on `127.0.0.1` and a port the system picks, stateless,
