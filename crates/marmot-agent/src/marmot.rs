@@ -148,7 +148,8 @@ pub struct Marmot {
     pub faults: Faults,
 }
 
-/// Faults the next sends, and the next lookups of a send, meet, one each, oldest first.
+/// Faults the next sends, the next lookups of a send, and the next readings of where a group is
+/// meet, one each, oldest first.
 #[derive(Clone, Default)]
 pub struct Faults(Arc<Mutex<VecDeque<Fault>>>);
 
@@ -160,6 +161,9 @@ pub enum Fault {
     Refuse(AppError),
     /// MDK cannot be asked what it stored, the next time the core looks for a send.
     LookupFails,
+    /// MDK cannot say where a group is, the next time a message is read: a passing failure, as
+    /// when the group's state cannot be read for a moment.
+    PlaceFails,
 }
 
 impl Faults {
@@ -168,10 +172,15 @@ impl Faults {
         self.0.lock().expect("never poisoned").push_back(fault);
     }
 
-    /// The oldest fault for a send, or for a lookup.
-    fn next(&self, lookup: bool) -> Option<Fault> {
+    /// The oldest fault for a send, one that is neither of the others.
+    fn next_send(&self) -> Option<Fault> {
+        self.next(|f| !matches!(f, Fault::LookupFails | Fault::PlaceFails))
+    }
+
+    /// The oldest fault `which` picks.
+    fn next(&self, which: impl Fn(&Fault) -> bool) -> Option<Fault> {
         let mut faults = self.0.lock().expect("never poisoned");
-        let at = (faults.iter()).position(|f| matches!(f, Fault::LookupFails) == lookup)?;
+        let at = faults.iter().position(which)?;
         faults.remove(at)
     }
 }
@@ -231,6 +240,13 @@ impl Marmot {
         if record.pending_confirmation || record.archived {
             return None;
         }
+        if self
+            .faults
+            .next(|f| matches!(f, Fault::PlaceFails))
+            .is_some()
+        {
+            return None;
+        }
         let state = self.runtime.group_mls_state(&self.label, &id).await.ok()?;
         Some(Where {
             group: group.clone(),
@@ -280,7 +296,7 @@ impl Marmot {
     ) -> Result<EventKey, AppError> {
         let _ = token;
         let id = group_id(group).ok_or_else(|| AppError::UnknownGroup(String::new()))?;
-        let fault = self.faults.next(false);
+        let fault = self.faults.next_send();
         if let Some(Fault::Refuse(error)) = fault {
             return Err(error);
         }
@@ -348,7 +364,7 @@ impl Marmot {
             kinds: Some(vec![wanted.kind()]),
             limit: None,
         };
-        let rows = match self.faults.next(true) {
+        let rows = match self.faults.next(|f| matches!(f, Fault::LookupFails)) {
             Some(_) => Err(AppError::RuntimeBusy),
             None => self.runtime.messages_with_query(&self.label, query),
         };

@@ -3,7 +3,7 @@
 //! and the faults the schedule has armed. The core reaches it through [`crate::side::SimSide`]
 //! and [`crate::driver::SimDriver`]; the oracles read it and nothing of the core.
 
-use crate::schedule::{Faults, Outcome, Posted, What};
+use crate::schedule::{Faults, Outcome, Posted, ReadStep, What};
 use marmot_agent::carrier::{self, Asked, ITEM_KIND, REQUEST_KIND};
 use marmot_agent::marmot::{Live, Message};
 use marmot_agent::{EventKey, GroupKey, PubKey};
@@ -335,6 +335,8 @@ pub struct World {
     pub outcomes: VecDeque<Outcome>,
     /// How many lookups are still to fail.
     pub lookup_errors: u32,
+    /// The reads of what arrived still to fail, each the next of its kind.
+    pub read_errors: VecDeque<ReadStep>,
     /// Whether the next save fails.
     pub save_fails: bool,
     /// The effect a crash comes before, counting down.
@@ -396,6 +398,7 @@ impl World {
             listening: false,
             outcomes: VecDeque::new(),
             lookup_errors: 0,
+            read_errors: VecDeque::new(),
             save_fails: false,
             crash_after: None,
             crashed: false,
@@ -420,6 +423,16 @@ impl World {
             self.note(format!("Send(c{chat}): the one before was given up"));
             self.refused.push(dropped);
         }
+    }
+
+    /// Whether the next read of kind `at` fails, which it then does, noted.
+    pub fn read_fails(&mut self, at: ReadStep) -> bool {
+        let Some(i) = self.read_errors.iter().position(|r| *r == at) else {
+            return false;
+        };
+        self.read_errors.remove(i);
+        self.note(format!("{at:?}: Error"));
+        true
     }
 
     /// Milliseconds on the virtual clock.

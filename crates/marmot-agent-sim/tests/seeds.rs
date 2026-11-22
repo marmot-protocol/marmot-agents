@@ -99,7 +99,16 @@ fn sends() {
 
 #[test]
 fn live() {
-    gate(Family::Live, &["lag", "catch-up that reads something"]);
+    gate(
+        Family::Live,
+        &[
+            "lag",
+            "catch-up that reads something",
+            "place error",
+            "order error",
+            "stored error",
+        ],
+    );
 }
 
 #[test]

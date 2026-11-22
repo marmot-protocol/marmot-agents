@@ -3,7 +3,7 @@
 //!
 //! [`Marmot`]: marmot_agent::marmot::Marmot
 
-use crate::schedule::Outcome;
+use crate::schedule::{Outcome, ReadStep};
 use crate::world::{CHAT, EDIT, Landing, RefusedSend, World, describe};
 use marmot_agent::carrier::{self, REQUEST_KIND};
 use marmot_agent::files::Outgoing;
@@ -93,6 +93,9 @@ impl Side for SimSide {
         if !world.chats[chat].accepted {
             return None;
         }
+        if world.read_fails(ReadStep::Place) {
+            return None;
+        }
         // When the core last read it, for the oracle that knows a late request is dropped.
         let now = world.ms();
         if let Some(m) = (world.msgs.iter_mut().flatten()).find(|m| m.event == message.event) {
@@ -140,6 +143,9 @@ impl Side for SimSide {
         }
         let mut world = lock(&self.world);
         world.land();
+        if world.read_fails(ReadStep::Order) {
+            return None;
+        }
         (world.rows.iter())
             .find(|r| r.event == message.event)
             .map(|r| r.order)
@@ -199,6 +205,9 @@ impl Side for SimSide {
         let Some(chat) = world.chat_of(group) else {
             return Vec::new();
         };
+        if world.read_fails(ReadStep::Stored) {
+            return Vec::new();
+        }
         let messages = Self::row_messages(&world, chat, after);
         let now = world.ms();
         for message in &messages {
