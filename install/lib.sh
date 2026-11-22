@@ -543,6 +543,7 @@ write_settings() {
         else
             say "keeping the settings in $MA_SETTINGS (edit them there, or remove the agent's folder to start again)"
         fi
+        add_files_from
         return 0
     fi
     local relay first=1 relays=""
@@ -1122,11 +1123,13 @@ check_cwd() {
 
 # The folder a gateway's agent works in, from which the core may send the files it names (D-090), for
 # a harness whose plugin states no folder: FILES_FROM, or none and FILES_WHY saying why. Never the home
-# itself (D-099), nor a folder that holds or lies in the agents' data, which would stop the core.
-# Provisional, for the owner's review.
+# itself (D-099), nor a folder that holds or lies in the agents' data, which would stop the core. Nor one
+# that holds or lies in a folder of GATEWAY_CACHE, where the gateway keeps the files people sent it on
+# any platform, or that holds one of GATEWAY_STATE, its own folder, which holds that cache. Provisional,
+# for the owner's review.
 choose_files_from() {
-    local folder=$1
-    FILES_FROM="" FILES_WHY=""
+    local folder=$1 kept
+    FILES_FROM="" FILES_WHY="" FILES_CHOSEN=1
     case $folder in
         "") FILES_WHY="its work folder is not known"; return 0 ;;
         \~ | \~/*) folder=$HOME${folder#\~} ;;
@@ -1137,11 +1140,36 @@ choose_files_from() {
     folder=$(canonical "$folder") || { FILES_WHY="its work folder names a loop of links"; return 0; }
     if [ "$folder" = "$(canonical "$HOME")" ] || [ "$folder" = / ]; then
         FILES_WHY="it works in your whole home folder, which holds the agent's keys and more"
+        return 0
     elif inside "$folder" "$MA_DATA" || inside "$MA_DATA" "$folder"; then
         FILES_WHY="its work folder holds or lies in $MA_DATA, which holds the agents' keys"
-    else
-        FILES_FROM=$folder
+        return 0
     fi
+    for kept in ${GATEWAY_CACHE[@]+"${GATEWAY_CACHE[@]}"}; do
+        kept=$(gateway_folder "$kept") || continue
+        if inside "$folder" "$kept" || inside "$kept" "$folder"; then
+            FILES_WHY="its work folder holds or lies in $kept, where $HARNESS_TITLE keeps the files people send it"
+            return 0
+        fi
+    done
+    for kept in ${GATEWAY_STATE[@]+"${GATEWAY_STATE[@]}"}; do
+        kept=$(gateway_folder "$kept") || continue
+        if inside "$kept" "$folder"; then
+            FILES_WHY="its work folder holds $kept, where $HARNESS_TITLE keeps its own files and the files people send it"
+            return 0
+        fi
+    done
+    FILES_FROM=$folder
+}
+
+# A folder the gateway named for itself, whole and canonical; fails for one that is not.
+gateway_folder() {
+    case $1 in
+        *[[:cntrl:]]* | "") return 1 ;;
+        \~ | \~/*) canonical "$HOME${1#\~}" ;;
+        /*) canonical "$1" ;;
+        *) return 1 ;;
+    esac
 }
 
 # The settings' line for choose_files_from: the folder, or a comment saying how to name one.
@@ -1155,9 +1183,41 @@ files_from_settings() {
     fi
 }
 
+# Settings kept from an earlier run that list no folder, as those from before the installer chose one
+# do, get the folder chosen now, as files_from_settings writes it, before their first table, where a
+# top-level setting must be; nothing else in them changes. A files_from line there is the person's,
+# and is left as it is (FILES_KEPT). With no folder to list, the summary says how to name one.
+add_files_from() {
+    [ "$FILES_CHOSEN" -eq 1 ] || return 0
+    if grep -Eq '^[[:space:]]*files_from[[:space:]]*=' "$MA_SETTINGS"; then
+        FILES_KEPT=1
+        return 0
+    fi
+    [ -n "$FILES_FROM" ] || return 0
+    say "adding files_from to the settings in $MA_SETTINGS"
+    FILES_LINES=$(files_from_settings) awk '
+        !done && /^[[:space:]]*\[/ { print ENVIRON["FILES_LINES"]; print ""; done = 1 }
+        { print }
+        END { if (!done) { print ""; print ENVIRON["FILES_LINES"] } }' "$MA_SETTINGS" | put "$MA_SETTINGS" 600
+}
+
+# The core opens the folders files_from lists when it starts, and one not there then allows nothing
+# until it starts again: the folder listed is made first.
+make_files_from() {
+    if [ -z "$FILES_FROM" ] || [ "$FILES_KEPT" -eq 1 ] || [ -d "$FILES_FROM" ]; then return 0; fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+        say "would make folder $FILES_FROM"
+        return 0
+    fi
+    mkdir -p "$FILES_FROM" ||
+        warn "could not make $FILES_FROM: the agent sends no files from it until it is there and the agent starts again"
+}
+
 # What the summary says about the files the agent may send.
 files_from_summary() {
-    if [ -n "$FILES_FROM" ]; then
+    if [ "$FILES_KEPT" -eq 1 ]; then
+        say "files_from in its settings lists the folders the agent may send files from, as it did before."
+    elif [ -n "$FILES_FROM" ]; then
         say "The agent may send the files in $FILES_FROM to a chat; change that with files_from in its settings."
     else
         say "The agent sends no files until you list a folder with files_from in its settings ($FILES_WHY)."
@@ -1184,6 +1244,10 @@ main() {
     fi
 
     settle_values
+    # What choose_files_from finds, for a harness whose plugin states no folder for the agent's files.
+    FILES_CHOSEN=0 FILES_KEPT=0 FILES_FROM="" FILES_WHY=""
+    GATEWAY_STATE=()
+    GATEWAY_CACHE=()
     harness_check
     if [ "$NO_SERVICE" -eq 0 ]; then
         if [ "$OS" = Linux ]; then
@@ -1217,6 +1281,7 @@ main() {
     init_agent
     write_launchers
     if [ "$HARNESS_KIND" = plugin ]; then harness_connect; fi
+    make_files_from
     if [ "$NO_SERVICE" -eq 0 ]; then
         if [ "$OS" = Linux ]; then systemd_units; else launchd_agents; fi
         start_services

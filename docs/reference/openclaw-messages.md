@@ -375,7 +375,16 @@ plugin does with it is in [a gateway's files](../design/drivers.md#a-gateways-fi
 - **Where its files are.** The workspace is `agents.entries.<id>.workspace`, then `agents.defaults.workspace`,
   then `~/.openclaw/workspace` (`~/.openclaw-<profile>/workspace` with `OPENCLAW_PROFILE`).
   `resolveAgentWorkspaceDir(cfg, agentId)` from `openclaw/plugin-sdk/agent-runtime` gives it. Generated media
-  and staged inbound attachments are in OpenClaw's media store, under its state folder.
+  and staged inbound attachments are in OpenClaw's media store, `<state folder>/media` (`getMediaDir` in its
+  bundled code).
+- **Which agent a channel's chats go to.** Its bindings decide (`docs/concepts/multi-agent.md`): a binding
+  with no `accountId` names the `default` account, `*` every account, and one with a `peer` or another field
+  only some chats. With no binding, the one agent takes them, or else the system agent
+  (`agents.defaults.systemAgent.agentId`); with neither, a message is not dispatched. Tried in the release's
+  container on 2026-11-22: `openclaw agents bindings --json` prints the bindings as configured, and
+  `openclaw agents list --json` each agent's `id`, its resolved `workspace`, its `agentDir`
+  (`<state folder>/agents/<id>/agent`) and `isDefault`, both without a gateway running. A roster of two
+  agents needs `agents.ownership: "explicit"` or the commands refuse the configuration.
 
 ## Compared with Hermes
 

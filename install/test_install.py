@@ -89,7 +89,9 @@ import json, os, shutil, sys
 from pathlib import Path
 
 args = sys.argv[1:]
-state = Path(os.environ.get("OPENCLAW_HOME") or os.environ["HOME"]) / ".openclaw"
+profile = os.environ.get("OPENCLAW_PROFILE", "default")
+state = Path(os.environ.get("OPENCLAW_STATE_DIR") or Path(os.environ.get("OPENCLAW_HOME") or os.environ["HOME"]) / (
+    ".openclaw" if profile == "default" else f".openclaw-{profile}"))
 config = state / "openclaw.json"
 plugin = state / "extensions" / "marmot"
 
@@ -144,6 +146,26 @@ elif args[:2] == ["config", "unset"]:
         sys.exit(1)
     del parent[last]
     save(c)
+elif args[:2] == ["agents", "list"] and "--json" in args:
+    # Each agent with its workspace, resolved as OpenClaw resolves it, and whether it takes what no
+    # binding routes: the one agent, or the system agent.
+    agents = load().get("agents", {})
+    defaults = agents.get("defaults", {})
+    entries = agents.get("entries") or {"main": {}}
+    system = (defaults.get("systemAgent") or {}).get("agentId")
+    first = system or ("main" if "main" in entries else next(iter(entries)))
+    out = []
+    for agent, entry in entries.items():
+        workspace = (entry or {}).get("workspace")
+        if not workspace and agent == first:
+            workspace = defaults.get("workspace") or str(state / "workspace")
+        elif not workspace:
+            workspace = f"{defaults['workspace']}/{agent}" if defaults.get("workspace") else str(state / f"workspace-{agent}")
+        out.append({"id": agent, "workspace": os.path.expanduser(workspace), "agentDir": str(state / "agents" / agent / "agent"),
+                    "isDefault": len(entries) == 1 or agent == system})
+    print(json.dumps(out, indent=2))
+elif args[:2] == ["agents", "bindings"] and "--json" in args:
+    print(json.dumps(load().get("bindings", []), indent=2))
 elif args[:2] == ["plugins", "install"]:
     # Installing enables the plugin, unless --no-enable.
     note()
@@ -1128,24 +1150,43 @@ class FilesFrom(unittest.TestCase):
     """A gateway's agent may send the files in the folder its gateway works in (D-090): the installer
     reads that folder from the gateway's own settings and lists it in `files_from` (provisional). It never
     lists the home itself (D-099), nor a folder that holds or lies in the agents' data, which would stop
-    the core; then it lists none, and says how to."""
+    the core, nor one that holds or lies in the gateway's media cache, which holds the files people sent
+    it on any platform, nor one that holds the gateway's own folder; then it lists none, and says how to.
+    The folder it lists is there when the core starts, which opens it then or never."""
 
-    def settings(self, m: Machine, harness: str) -> tuple:
-        out = m.run(harness, *m.args(harness, "--binary", str(m.core), "--no-service")).stdout
+    def install(self, m: Machine, harness: str, env=None) -> str:
+        return m.run(harness, *m.args(harness, "--binary", str(m.core), "--no-service"), env=env).stdout
+
+    def settings(self, m: Machine, harness: str, env=None) -> tuple:
+        out = self.install(m, harness, env)
         text = (m.data / f"agents/{harness}/settings.toml").read_text()
         return tomllib.loads(text).get("files_from"), text, out
 
-    def hermes(self, m: Machine, terminal: dict) -> None:
-        (m.home / ".hermes").mkdir()
-        (m.home / ".hermes/config.yaml").write_text(json.dumps({"terminal": terminal}))
+    def hermes(self, m: Machine, terminal: dict, home=None) -> None:
+        home = home or m.home / ".hermes"
+        home.mkdir(parents=True)
+        (home / "config.yaml").write_text(json.dumps({"terminal": terminal}))
+
+    def openclaw(self, m: Machine, config: dict, state=None) -> None:
+        state = state or m.home / ".openclaw"
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "openclaw.json").write_text(json.dumps(config))
+
+    def assertNone(self, files, text: str, out: str) -> None:
+        self.assertIsNone(files, text)
+        self.assertIn("# files_from = [", text)
+        self.assertIn("The agent sends no files until you list a folder with files_from", out)
 
     def test_hermes_lists_the_folder_its_commands_run_in(self):
-        for cwd, listed in (("/srv/projects", "/srv/projects"), ("~/projects", "projects")):
+        for cwd, listed in (("{dir}/projects", "{dir}/projects"), ("~/projects", "{home}/projects")):
             with self.subTest(cwd=cwd):
                 m = Machine(self)
-                self.hermes(m, {"cwd": cwd, "backend": "local"})
-                files, _, _ = self.settings(m, "hermes")
-                self.assertEqual(files, [listed if listed.startswith("/") else str(m.home / listed)])
+                where = {"dir": m.dir, "home": m.home}
+                self.hermes(m, {"cwd": cwd.format(**where), "backend": "local"})
+                files, _, out = self.settings(m, "hermes")
+                self.assertEqual(files, [listed.format(**where)])
+                self.assertTrue(Path(files[0]).is_dir(), "the core opens the folder when it starts")
+                self.assertIn(f"The agent may send the files in {files[0]} to a chat", out)
 
     def test_hermes_in_the_home_or_a_sandbox_lists_none(self):
         for terminal in ({"cwd": "."}, {}, {"cwd": "~"}, {"cwd": "/srv/projects", "backend": "docker"},
@@ -1153,26 +1194,98 @@ class FilesFrom(unittest.TestCase):
             with self.subTest(terminal=terminal):
                 m = Machine(self)
                 self.hermes(m, terminal)
-                files, text, out = self.settings(m, "hermes")
-                self.assertIsNone(files)
-                self.assertIn("# files_from = [", text)
-                self.assertIn("files_from", out)
+                self.assertNone(*self.settings(m, "hermes"))
+
+    def test_hermes_in_a_folder_that_holds_or_lies_in_its_own_lists_none(self):
+        """Hermes keeps its media cache, the files people sent it and the ones it made, in its home."""
+        for cwd, hermes_home in (("~/.hermes/cache/documents", None), ("~/.hermes", None),
+                                 ("{dir}/gateway", "{dir}/gateway/hermes"), ("{dir}/gateway/work", "{dir}/gateway")):
+            with self.subTest(cwd=cwd, hermes_home=hermes_home):
+                m = Machine(self)
+                home = Path(hermes_home.format(dir=m.dir)) if hermes_home else None
+                self.hermes(m, {"cwd": cwd.format(dir=m.dir)}, home)
+                env = {"HERMES_HOME": str(home)} if home else None
+                self.assertNone(*self.settings(m, "hermes", env))
 
     @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
-    def test_openclaw_lists_its_agents_workspace(self):
-        for config, env, listed in (({"agents": {"defaults": {"workspace": "/theirs"}}}, {}, "/theirs"),
-                                    ({"agents": {"defaults": {"workspace": "/theirs"}, "entries": {"main": {
-                                        "workspace": "~/main"}}}}, {}, "main"),
-                                    ({}, {}, ".openclaw/workspace"),
-                                    ({}, {"OPENCLAW_PROFILE": "work"}, ".openclaw-work/workspace")):
+    def test_openclaw_lists_the_workspace_of_the_agent_its_channel_goes_to(self):
+        two = {"ownership": "explicit", "entries": {"main": {"workspace": "~/main"}, "coding": {"workspace": "~/coding"}}}
+        for config, env, listed in (({"agents": {"defaults": {"workspace": "{dir}/theirs"}}}, {}, "{dir}/theirs"),
+                                    ({"agents": {"defaults": {"workspace": "{dir}/theirs"}, "entries": {"main": {
+                                        "workspace": "~/main"}}}}, {}, "{home}/main"),
+                                    ({}, {}, "{home}/.openclaw/workspace"),
+                                    ({}, {"OPENCLAW_PROFILE": "work"}, "{home}/.openclaw-work/workspace"),
+                                    ({"agents": two, "bindings": [{"agentId": "coding", "match": {"channel": "marmot"}}]},
+                                     {}, "{home}/coding"),
+                                    # A binding for another account of the channel, which the plugin has not.
+                                    ({"agents": {**two, "defaults": {"systemAgent": {"agentId": "main"}}}, "bindings": [
+                                        {"agentId": "coding", "match": {"channel": "marmot", "accountId": "other"}}]},
+                                     {}, "{home}/main")):
             with self.subTest(config=config, env=env):
                 m = Machine(self)
-                (m.home / ".openclaw").mkdir()
-                (m.home / ".openclaw/openclaw.json").write_text(json.dumps(config))
-                out = m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--no-service"), env=env).stdout
-                text = (m.data / "agents/openclaw/settings.toml").read_text()
-                self.assertEqual(tomllib.loads(text).get("files_from"),
-                                 [listed if listed.startswith("/") else str(m.home / listed)], out)
+                where = {"dir": m.dir, "home": m.home}
+                config = json.loads(json.dumps(config).replace("{dir}", str(m.dir)))
+                profile = env.get("OPENCLAW_PROFILE")
+                self.openclaw(m, config, m.home / f".openclaw-{profile}" if profile else None)
+                files, _, out = self.settings(m, "openclaw", env)
+                self.assertEqual(files, [listed.format(**where)], out)
+                self.assertTrue(Path(files[0]).is_dir(), "the core opens the folder when it starts")
+
+    @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
+    def test_openclaw_whose_chats_may_go_to_more_than_one_agent_lists_none(self):
+        two = {"ownership": "explicit", "entries": {"main": {"workspace": "~/main"}, "coding": {"workspace": "~/coding"}}}
+        for config in ({"agents": two},
+                       {"agents": two, "bindings": [{"agentId": "main", "match": {"channel": "marmot"}},
+                                                    {"agentId": "coding", "match": {"channel": "marmot", "peer": {
+                                                        "kind": "group", "id": "c-1"}}}]},
+                       {"agents": two, "bindings": [{"agentId": "coding", "match": {"channel": "marmot", "peer": {
+                           "kind": "group", "id": "c-1"}}}]}):
+            with self.subTest(config=config):
+                m = Machine(self)
+                self.openclaw(m, config)
+                files, text, out = self.settings(m, "openclaw")
+                self.assertNone(files, text, out)
+                self.assertIn("list the workspace of the agent that takes them", text)
+
+    @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
+    def test_openclaw_in_a_folder_that_holds_its_state_or_its_media_lists_none(self):
+        for workspace, state in (("~/.openclaw/media/outbound", None), ("~/.openclaw/media", None),
+                                 ("{dir}/gateway", "{dir}/gateway/state")):
+            with self.subTest(workspace=workspace, state=state):
+                m = Machine(self)
+                state = Path(state.format(dir=m.dir)) if state else None
+                self.openclaw(m, {"agents": {"defaults": {"workspace": workspace.format(dir=m.dir)}}}, state)
+                env = {"OPENCLAW_STATE_DIR": str(state)} if state else None
+                self.assertNone(*self.settings(m, "openclaw", env))
+
+    def test_a_run_again_adds_files_from_to_kept_settings_without_one_and_keeps_one_that_is_there(self):
+        m = Machine(self)
+        self.hermes(m, {"cwd": str(m.dir / "projects")})
+        files, text, _ = self.settings(m, "hermes")
+        self.assertEqual(files, [str(m.dir / "projects")])
+        settings = m.data / "agents/hermes/settings.toml"
+        # Settings from before the installer listed a folder.
+        older = "\n".join(line for line in text.splitlines() if "files_from" not in line and "D-090" not in line)
+        settings.write_text(older + "\n")
+        files, again, out = self.settings(m, "hermes")
+        self.assertEqual(files, [str(m.dir / "projects")])
+        self.assertEqual(tomllib.loads(again)["connector"], tomllib.loads(text)["connector"])
+        self.assertIn(f"The agent may send the files in {m.dir / 'projects'} to a chat", out)
+        # One the person changed is theirs, even when Hermes now works elsewhere.
+        settings.write_text(again.replace(str(m.dir / "projects"), str(m.dir / "mine")))
+        (m.home / ".hermes/config.yaml").write_text(json.dumps({"terminal": {"cwd": str(m.dir / "elsewhere")}}))
+        files, kept, out = self.settings(m, "hermes")
+        self.assertEqual(files, [str(m.dir / "mine")])
+        self.assertEqual(kept.count("files_from"), again.count("files_from"))
+        self.assertFalse((m.dir / "elsewhere").exists())
+        self.assertIn("files_from in its settings lists the folders", out)
+        self.assertNotIn(str(m.dir / "elsewhere"), out)
+        # None to list, and a run again adds no second comment.
+        m = Machine(self)
+        self.hermes(m, {})
+        _, first, _ = self.settings(m, "hermes")
+        _, second, _ = self.settings(m, "hermes")
+        self.assertEqual(first, second)
 
 
 class Wrappers(unittest.TestCase):

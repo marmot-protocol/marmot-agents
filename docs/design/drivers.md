@@ -201,11 +201,15 @@ each file, as today's connectors turn it into `send_media`.
   caption, its first, as today's Hermes connector does. In OpenClaw the caption is the reply's own text, or the
   outbound send's.
 - **The folder is the gateway's.** A plugin states no folder in its hello, so the installer lists the folder
-  the gateway's agent works in as `files_from`: Hermes's `terminal.cwd`, or OpenClaw's agent workspace
-  (`~/.openclaw/workspace` by default). It lists none when that folder is the whole home, as Hermes's default
-  is, or holds or lies in the agents' data, or when Hermes runs its commands in a sandbox; the settings and the
-  summary then say how to name one. Hermes's and OpenClaw's media caches are not listed: they also hold the
-  files people sent the gateway in any of its chats, on any platform.
+  the gateway's agent works in as `files_from`, and makes it if it is not there, since the core opens it when
+  it starts: Hermes's `terminal.cwd`, or the workspace of the OpenClaw agent that takes the Marmot chats, as
+  `openclaw agents list` and `openclaw agents bindings` say (`~/.openclaw/workspace` by default). It lists
+  none when that folder is the whole home, as Hermes's default is, or holds or lies in the agents' data, or
+  holds or lies in the gateway's media cache (Hermes's home; OpenClaw's media store), or holds OpenClaw's
+  state folder, or when Hermes runs its commands in a sandbox, or OpenClaw's Marmot chats may go to more than
+  one agent; the settings and the summary then say how to name one. The media caches are never listed: they
+  also hold the files people sent the gateway in any of its chats, on any platform. Settings kept from an
+  earlier install that list no folder get the one found now; a `files_from` already there is left as it is.
 
 ## A chat's folder
 
