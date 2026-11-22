@@ -594,9 +594,10 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// and the group waits, longer each time, before it is tried again; the other groups go on
     /// meanwhile. A send whose outcome is not known may have gone out, so it is not sent again
     /// blindly: once MDK has had time to settle it, the core looks for it in what MDK stored, and
-    /// sends it again only if it is not there (S3). A send MDK refuses is handed to the
-    /// conversation, which drops it with a notice, or sends an edit whose message is gone as a new
-    /// message. A send is otherwise never given up while the core runs, so a later version never
+    /// sends it again only if it is not there (S3). A send MDK refuses, or one given up after its
+    /// tries, is handed to the conversation, which drops it with a notice, closing an item whose
+    /// closing version it was and settling in its place what a notice settled, or sends an edit
+    /// whose message is gone as a new message. A send is otherwise never given up while the core runs, so a later version never
     /// goes out as if it were new, and one still queued when the core stops goes out when it
     /// starts again (S1, S3).
     async fn flush(&mut self, group: &GroupKey) -> Result<(), Unsaved> {
@@ -684,8 +685,9 @@ impl<D: Driver, M: Side> Core<D, M> {
         Ok(())
     }
 
-    /// The send named `token` will not go out: the conversation drops it with a notice, or sends
-    /// an edit whose message is `gone` as a new message.
+    /// The send named `token` will not go out: the conversation drops it with a notice and what
+    /// stands in for it (`Conversation::refused`), or sends an edit whose message is `gone` as a
+    /// new message.
     fn give_up(&mut self, token: &str, gone: bool) -> Result<(), Unsaved> {
         // MDK's own words can name a group, so they are not printed (D-071).
         eprintln!("marmot-agent: a send was refused; the chat is told");

@@ -248,6 +248,11 @@ struct Queued {
     /// Whether it was handed to MDK at least once: only then may it have gone out.
     #[serde(default)]
     attempted: bool,
+    /// Whether it stands in for a send that was dropped: an item's close, or a notice that
+    /// settles what a dropped notice settled. Nothing stands in for it in turn, so a group MDK
+    /// refuses everything for, as one that is gone, ends the chain there.
+    #[serde(default)]
+    last_resort: bool,
 }
 
 impl Sending {
@@ -296,6 +301,12 @@ pub const EFFECT_LIMIT_SECS: u64 = 120;
 
 /// What a send MDK refused is settled with.
 const NOT_DELIVERED: &str = "Something the agent sent could not be delivered to the chat.";
+
+/// The title of the core's close of an item whose closing version was not delivered.
+const CLOSED_TITLE: &str = "Not delivered";
+
+/// Its text.
+const CLOSED_TEXT: &str = "This could not be delivered to the chat.";
 
 /// What a request the driver took and that had no effect is settled with (D-087).
 const NO_EFFECT: &str = "The agent took this, but nothing has come of it.";
@@ -911,12 +922,16 @@ impl Conversation {
         acts
     }
 
-    /// MDK refused the send named `token`, and will refuse it again. When it was an edit of words
-    /// whose message is gone (`gone`), the words go as a new message instead. Anything else is
-    /// dropped, and the chat is told in a `failed` notice that settles, as failed, what it
-    /// settled, and what a turn's version queued to settle for it would have (S1). A notice MDK
-    /// refuses is dropped and not answered by another, so nothing loops. The notices are queued
-    /// for the same group.
+    /// MDK refused the send named `token`, and will refuse it again, or the core gave it up. When
+    /// it was an edit of words whose message is gone (`gone`), the words go as a new message
+    /// instead. Anything else is dropped, and the chat is told in a `failed` notice that settles,
+    /// as failed, what it settled, and what a turn's version queued to settle for it would have
+    /// (S1). When it was an item's closing version, with nothing later queued for the item, the
+    /// item is closed in the chat all the same, by a version of the core's own (S2). When it was
+    /// a notice that settled requests, a `failed` notice settles them in its place (L1). What
+    /// stands in for a dropped send is as small as the core can make it, so MDK has no size to
+    /// refuse again, and is the last: when it is dropped too, as in a group that is gone, nothing
+    /// takes its place, so nothing loops. Everything is queued for the same group.
     pub fn refused(&mut self, token: &str, gone: bool) {
         let Some(at) = self.saved.outbox.iter().position(|q| q.token == token) else {
             return;
@@ -932,10 +947,17 @@ impl Conversation {
             return;
         }
         let queued = self.saved.outbox.remove(at).expect("found");
-        self.forget_old();
-        if key.starts_with("notice/") {
-            return;
+        if !queued.last_resort {
+            self.stand_in_for(token, queued);
         }
+        self.forget_old();
+    }
+
+    /// What goes in place of a dropped send that was not itself a last resort.
+    fn stand_in_for(&mut self, token: &str, queued: Queued) {
+        let key = queued.what.key().to_string();
+        let notice = key.starts_with("notice/");
+        let item = matches!(queued.what, Sending::Item { .. });
         let mut settles = match queued.what {
             Sending::Item { item, .. } => item.settles,
             Sending::Words { settles, .. } => settles,
@@ -947,6 +969,13 @@ impl Conversation {
             {
                 settles.append(&mut item.settles);
             }
+        }
+        if item && !notice {
+            self.close_undelivered(&key, &queued.group);
+        }
+        // A notice that settled nothing only told the chat something: it is not told again.
+        if notice && settles.is_empty() {
+            return;
         }
         let chat = (self.saved.items.get(&key).map(|r| r.chat.clone()))
             .or_else(|| self.saved.chats.get(&queued.group).cloned())
@@ -962,9 +991,48 @@ impl Conversation {
             chunks.push(Vec::new());
         }
         for settles in chunks {
-            let notice = self.notice(&queued.group, &chat, "failed", NOT_DELIVERED.into());
-            self.send_notice(&queued.group, notice, None, settles);
+            let event = self.notice(&queued.group, &chat, "failed", NOT_DELIVERED.into());
+            let what = notice_item(event, None, settles);
+            // In place of a notice, the last resort; in place of anything else, a notice like any.
+            self.queue_as(&queued.group, what, None, notice);
         }
+    }
+
+    /// Closes in the chat the item named `key`, whose closing version was dropped: when the core
+    /// holds it closed and nothing later of it is queued, its next version is queued, in its
+    /// final state, as small as it can be: its ids, state and version, a `warning` notice in
+    /// place of its body, with no native message and settling nothing.
+    fn close_undelivered(&mut self, key: &str, group: &GroupKey) {
+        let Some(record) = self.saved.items.get(key) else {
+            return;
+        };
+        if record.open() || (self.saved.outbox.iter()).any(|q| q.what.key() == key) {
+            return;
+        }
+        let header = Header {
+            title: CLOSED_TITLE.into(),
+            text: CLOSED_TEXT.into(),
+            ..record.last.header().clone()
+        };
+        let body = Body::Notice(Notice {
+            kind: NoticeKind::Warning,
+            duration_ms: None,
+            reason: Some("not_delivered".into()),
+        });
+        let event = AgentEvent::new(header, body, None).expect("a notice repeats no secret");
+        let record = self.saved.items.get_mut(key).expect("found");
+        record.version += 1;
+        let what = Sending::Item {
+            key: key.to_string(),
+            item: Box::new(Item {
+                event,
+                version: record.version,
+                first: record.first.clone(),
+                started_by: record.started_by.clone(),
+                settles: Vec::new(),
+            }),
+        };
+        self.queue_as(group, what, None, true);
     }
 
     /// The send named `token` is about to be handed to MDK. Whether that is new, and so to be
@@ -1055,6 +1123,18 @@ impl Conversation {
     /// Queues something to send, and says so. `shown_by` names the send that shows the effect of
     /// what it settles, when that is another.
     fn queue(&mut self, group: &GroupKey, what: Sending, shown_by: Option<String>) -> Act {
+        self.queue_as(group, what, shown_by, false)
+    }
+
+    /// Queues something to send, as [`Conversation::queue`], and as a last resort when
+    /// `last_resort`: nothing stands in for it if it is dropped.
+    fn queue_as(
+        &mut self,
+        group: &GroupKey,
+        what: Sending,
+        shown_by: Option<String>,
+        last_resort: bool,
+    ) -> Act {
         let token = match &what {
             Sending::Item { key, item } => format!("{key}@{}", item.version),
             Sending::Words { key, .. } => format!("{key}@{}", self.make_id("w")),
@@ -1065,6 +1145,7 @@ impl Conversation {
             what,
             shown_by,
             attempted: false,
+            last_resort,
         });
         Act::Send {
             group: group.clone(),
@@ -1317,17 +1398,22 @@ impl Conversation {
         about: Option<EventKey>,
         settles: Vec<EventKey>,
     ) -> Act {
-        let what = Sending::Item {
-            key: format!("notice/{}", event.header().item.as_str()),
-            item: Box::new(Item {
-                event,
-                version: 1,
-                first: None,
-                started_by: about,
-                settles,
-            }),
-        };
+        let what = notice_item(event, about, settles);
         self.queue(group, what, None)
+    }
+}
+
+/// A notice of the core's own, to send: the first and only version of an item of its own.
+fn notice_item(event: AgentEvent, about: Option<EventKey>, settles: Vec<EventKey>) -> Sending {
+    Sending::Item {
+        key: format!("notice/{}", event.header().item.as_str()),
+        item: Box::new(Item {
+            event,
+            version: 1,
+            first: None,
+            started_by: about,
+            settles,
+        }),
     }
 }
 
