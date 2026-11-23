@@ -21,8 +21,9 @@
 //! for a thread no chat knows yet is held until the item that names its thread arrives, since a
 //! subagent can speak first. Interrupting a turn does not stop Codex's subagents, so Stop
 //! interrupts every turn under the one it names, each parent before the subagents it started, and
-//! is settled once, by the end of the last. A subagent's open items close when Codex stops or the
-//! chat's session ends.
+//! any whose start is read while it waits; it is settled once, by the end of the last, or as failed
+//! by Codex's refusal to stop one that runs on. A subagent's open items close when Codex stops or
+//! the chat's session ends.
 
 use crate::{
     Direction, SEND_FILE, Setup, Translator, collaboration_mode_list, initialize, initialized,
@@ -90,11 +91,27 @@ struct Written {
     settles: Vec<RequestId>,
 }
 
+/// A Stop under way in a chat (D-117). Codex does not stop a turn's subagents with it, and a
+/// subagent's turn can start after the Stop was sent, from a start Codex sent before it: each is
+/// stopped as its start is read, while the Stop waits.
+#[derive(Clone)]
+struct Stopping {
+    /// The turn the Stop names: a subagent's turn under it is stopped too.
+    root: String,
+    /// The threads being stopped: a subagent one of them started is stopped too.
+    threads: Vec<String>,
+    /// The turns it waits for, still running.
+    waits: Vec<Part>,
+    /// The turns Codex refused to stop, with the event that showed the refusal. One still running
+    /// when the rest have ended means the Stop failed, and that event settles it.
+    refused: Vec<(Part, Option<AgentEvent>)>,
+}
+
 /// What shows that a control has had its effect.
 #[derive(Clone)]
 enum Effect {
-    /// Every turn it interrupted has ended: these are those still running.
-    Ended(Vec<Part>),
+    /// Every turn a Stop interrupted has ended.
+    Ended(Stopping),
     /// The session item shows this setting with this value.
     Setting(String, String),
     /// A turn started by the driver's request with this id has started.
@@ -502,6 +519,7 @@ impl Codex {
         };
         let refused = message.get("error").is_some();
         let mut settles = Vec::new();
+        let mut refused_stop = None;
         match purpose {
             Purpose::Plain => {}
             Purpose::Prompt(_, None) if refused => {
@@ -523,14 +541,28 @@ impl Codex {
                 }
             }
             // Codex refused to stop one turn: the Stop no longer waits for it, and, if it waited
-            // for no other, the refusal settles it.
-            Purpose::Interrupt(request, part) => {
-                if refused && self.no_longer_waits(&chat, &request, &part) {
+            // for no other, the refusal settles it. Otherwise the refusal is kept, to settle it if
+            // that turn runs on once the rest have ended.
+            Purpose::Interrupt(request, part) if refused => {
+                if self.no_longer_waits(&chat, &request, &part) {
                     settles.push(request);
+                } else {
+                    refused_stop = Some((request, part));
                 }
             }
+            Purpose::Interrupt(..) => {}
         }
+        let before = self.ready.len();
         self.feed(&chat, who.as_deref(), Direction::In, line, settles);
+        if let Some((request, part)) = refused_stop {
+            let shown = (self.ready.iter().skip(before)).find_map(|output| match output {
+                Output::Event(e) if matches!(e.event.body(), Body::Error(_)) => {
+                    Some(e.event.clone())
+                }
+                _ => None,
+            });
+            self.refusal_shown(&chat, &request, &part, shown);
+        }
         self.release();
     }
 
@@ -661,7 +693,8 @@ impl Codex {
     }
 
     /// A Stop no longer waits for `part`, which Codex refused to stop. True when it waited for no
-    /// other: it is taken off the list, and the refusal settles it.
+    /// other: it is taken off the list, and the refusal settles it. Otherwise the refusal is
+    /// remembered.
     fn no_longer_waits(&mut self, chat: &ChatId, request: &RequestId, part: &Part) -> bool {
         let Some(c) = self.chats.get_mut(chat) else {
             return false;
@@ -669,14 +702,83 @@ impl Codex {
         let Some(at) = c.effects.iter().position(|(r, _)| r == request) else {
             return false;
         };
-        if let Effect::Ended(parts) = &mut c.effects[at].1 {
-            parts.retain(|p| p != part);
-            if parts.is_empty() {
+        if let Effect::Ended(stopping) = &mut c.effects[at].1 {
+            stopping.waits.retain(|p| p != part);
+            if stopping.waits.is_empty() {
                 c.effects.remove(at);
                 return true;
             }
+            stopping.refused.push((part.clone(), None));
         }
         false
+    }
+
+    /// The event that showed Codex refusing to stop `part`, for a Stop still waiting for others.
+    fn refusal_shown(
+        &mut self,
+        chat: &ChatId,
+        request: &RequestId,
+        part: &Part,
+        shown: Option<AgentEvent>,
+    ) {
+        let Some(c) = self.chats.get_mut(chat) else {
+            return;
+        };
+        for (r, effect) in &mut c.effects {
+            if let (true, Effect::Ended(stopping)) = (r == request, effect) {
+                for (p, event) in &mut stopping.refused {
+                    if p == part {
+                        *event = shown.clone();
+                    }
+                }
+            }
+        }
+    }
+
+    /// A subagent's turn started in a chat while a Stop there is under way, under the turn it
+    /// stops or started by a thread it stops: it is stopped too, and the Stop waits for it
+    /// (D-117).
+    fn stop_late(&mut self, chat: &ChatId, thread: &str, turn: &str) {
+        let Some(c) = self.chats.get_mut(chat) else {
+            return;
+        };
+        let root = (c.subagents.get(thread)).and_then(|t| t.root_turn().map(String::from));
+        let parent = c.parents.get(thread).cloned();
+        let part: Part = (Some(thread.to_string()), turn.to_string());
+        let mut request = None;
+        for (r, effect) in &mut c.effects {
+            let Effect::Ended(stopping) = effect else {
+                continue;
+            };
+            let under = root.as_deref() == Some(stopping.root.as_str())
+                || parent
+                    .as_ref()
+                    .is_some_and(|p| stopping.threads.contains(p));
+            if under && !stopping.waits.contains(&part) {
+                stopping.waits.push(part.clone());
+                stopping.threads.push(thread.to_string());
+                request = Some(r.clone());
+                break;
+            }
+        }
+        let Some(request) = request else {
+            return;
+        };
+        let id = self.id();
+        let action = Action::Interrupt { turn: turn.into() };
+        let c = &self.chats[chat];
+        let built = (c.translator(Some(thread))).map(|t| t.control(id, &action, &self.setup));
+        let Some(Ok(text)) = built else {
+            return; // it can always be built for a turn running; the Stop waits for its end
+        };
+        let then = Written {
+            chat: chat.clone(),
+            who: Some(thread.to_string()),
+            text: text.clone(),
+            request: Some((id, Purpose::Interrupt(request, part))),
+            settles: Vec::new(),
+        };
+        self.queue(&text, Some(then));
     }
 
     /// Takes a control off the list of those waiting for their effect; false if it was not there.
@@ -707,6 +809,9 @@ impl Codex {
         let turn = translator.turn().map(String::from);
         let events = translator.feed(direction, text);
         let after = translator.session().map(String::from);
+        let started = (translator.turn())
+            .filter(|t| turn.as_deref() != Some(*t))
+            .map(String::from);
         let ended = turn.filter(|t| translator.turn() != Some(t.as_str()));
         let replies = translator.take_replies();
         if before != after && who.is_none() {
@@ -735,6 +840,9 @@ impl Codex {
                 None
             };
             self.ready_event(chat, event, std::mem::take(&mut settles), true, shows);
+        }
+        if let (Some(thread), Some(turn)) = (who, started) {
+            self.stop_late(chat, thread, &turn);
         }
         for reply in replies {
             let then = Written {
@@ -786,20 +894,41 @@ impl Codex {
         let ended = !matches!(header.state, State::Running | State::Waiting);
         let session = header.session.as_ref().map(|s| s.as_str().to_string());
         let mut moved = None;
+        let mut failed = Vec::new();
+        let (translator, subagents) = (&c.translator, &c.subagents);
+        let running = |(who, turn): &Part| {
+            let t = match who {
+                None => Some(translator),
+                Some(thread) => subagents.get(thread),
+            };
+            t.and_then(Translator::turn) == Some(turn.as_str())
+        };
         c.effects.retain_mut(|(request, effect)| {
             let shown = seen
                 && match (effect, event.body()) {
-                    (Effect::Ended(parts), _) => match ended_turn {
-                        Some(part) if parts.contains(part) => {
-                            parts.retain(|p| p != part);
-                            parts.is_empty()
+                    (Effect::Ended(stopping), _) => match ended_turn {
+                        Some(part) if stopping.waits.contains(part) => {
+                            stopping.waits.retain(|p| p != part);
+                            if !stopping.waits.is_empty() {
+                                return true;
+                            }
+                            // A turn Codex refused to stop runs on: the Stop failed, and the
+                            // refusal settles it, once.
+                            let failure = (stopping.refused.iter())
+                                .filter(|(p, _)| running(p))
+                                .find_map(|(_, refusal)| refusal.clone());
+                            if let Some(refusal) = failure {
+                                failed.push((request.clone(), refusal));
+                                return false;
+                            }
+                            true
                         }
                         _ => false,
                     },
                     (Effect::Setting(id, value), Body::Session(s)) => (s.settings.iter())
                         .any(|setting| setting.id == *id && setting.value.as_ref() == Some(value)),
                     (Effect::TurnStartedBy(r), Body::Turn(_)) => {
-                        let started = turn.as_deref().and_then(|t| c.translator.turn_request(t));
+                        let started = turn.as_deref().and_then(|t| translator.turn_request(t));
                         started == Some(*r)
                     }
                     (Effect::NewSession(old, folder), Body::Session(_)) => {
@@ -843,6 +972,9 @@ impl Codex {
             prompts,
             settles,
         }));
+        for (request, refusal) in failed {
+            self.ready_event(chat, refusal, vec![request], false, None);
+        }
     }
 
     /// An event numbered in its chat's session: the chat's own translator and its subagents' make
@@ -1103,7 +1235,7 @@ impl Codex {
     /// and every subagent's running turn under it, by the turn the person started or by the links
     /// from a thread being stopped to the subagents it started; each parent before the subagents
     /// it started, so none is told to go on by a subagent that ended first.
-    fn under(&self, turn: &str) -> Option<(ChatId, Vec<Part>)> {
+    fn under(&self, turn: &str) -> Option<(ChatId, Stopping)> {
         for (chat, c) in &self.chats {
             let mut parts = Vec::new();
             let mut stopping: Vec<String> = Vec::new();
@@ -1125,22 +1257,28 @@ impl Codex {
                 }
             }
             if !parts.is_empty() {
-                return Some((chat.clone(), parts));
+                let stopping = Stopping {
+                    root: turn.to_string(),
+                    threads: stopping,
+                    waits: parts,
+                    refused: Vec::new(),
+                };
+                return Some((chat.clone(), stopping));
             }
         }
         None
     }
 
-    /// Stops every turn in `parts`, of `chat`, settled once all have ended (D-028, D-117).
+    /// Stops every turn the Stop waits for, of `chat`, settled once all have ended (D-028, D-117).
     async fn stop(
         &mut self,
         request: &RequestId,
         chat: &ChatId,
-        parts: Vec<Part>,
+        stopping: Stopping,
     ) -> Result<(), Refusal> {
+        let parts = stopping.waits.clone();
         let c = self.chats.get_mut(chat).expect("a chat");
-        c.effects
-            .push((request.clone(), Effect::Ended(parts.clone())));
+        c.effects.push((request.clone(), Effect::Ended(stopping)));
         for part in parts {
             let (who, turn) = part.clone();
             let action = Action::Interrupt {
@@ -1245,9 +1383,9 @@ impl Driver for Codex {
         let (chat, effect) = match &control.action {
             // The turn and every subagent under it, which Codex does not stop with it (D-117).
             Action::Interrupt { turn } => {
-                let (chat, parts) =
+                let (chat, stopping) =
                     (self.under(turn.as_str())).ok_or_else(|| Refusal::new(Reason::NothingToDo))?;
-                return self.stop(&request, &chat, parts).await;
+                return self.stop(&request, &chat, stopping).await;
             }
             Action::NewSession { chat, session } => {
                 let folder = chat.folder.clone();

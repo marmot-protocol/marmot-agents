@@ -1043,53 +1043,132 @@ async fn a_thread_started_under_a_chats_thread_is_its_subagent() {
     assert_eq!(codex.unrouted(), 0);
 }
 
-// Stop interrupts the turn and its subagent's turn. Codex refusing the subagent's leaves the Stop
-// waiting only for the turn, whose end settles it.
-#[tokio::test]
-async fn a_stop_codex_refuses_for_a_subagent_waits_for_the_rest() {
-    let (mut codex, mut fake) = running().await;
-    let started = json!({"type": "subAgentActivity", "id": "a1", "kind": "started",
-        "agentThreadId": "sub1", "agentPath": "/root/a"});
-    fake.say(
-        json!({"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1",
-        "item": started}}),
-    )
-    .await;
-    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
-        .await;
-    until(&mut codex, is_task(State::Running)).await;
-    let stop = Control {
-        request: "r1".into(),
-        by: alice(),
-        action: Action::Interrupt { turn: "t1".into() },
-    };
-    let driver = tokio::spawn(async move {
-        codex.control(stop).await.unwrap();
-        codex
-    });
-    let first = fake.hear().await;
-    let second = fake.hear().await;
-    assert_eq!(first["params"]["threadId"], "th1", "the parent first");
-    assert_eq!(second["params"]["threadId"], "sub1");
-    let mut codex = driver.await.unwrap();
-    fake.say(json!({"id": second["id"], "error": {"code": -32600, "message": "no"}}))
-        .await;
-    fake.say(json!({"id": first["id"], "result": {}})).await;
-    fake.say(turn("turn/completed", "interrupted")).await;
-    let events = until(&mut codex, is_turn(State::Cancelled)).await;
-    let settling: Vec<&Emitted> = (events.iter())
-        .filter(|e| e.settles.contains(&"r1".into()))
-        .collect();
-    assert_eq!(settling.len(), 1, "settled once");
-    assert!(matches!(settling[0].event.body(), Body::Turn(_)));
-}
-
 /// The parent's item that starts a subagent in `thread`, on Codex's newer runtime.
 fn started_by(item: &str, thread: &str) -> Value {
     let started = json!({"type": "subAgentActivity", "id": item, "kind": "started",
         "agentThreadId": thread, "agentPath": "/root/a"});
     json!({"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1",
         "item": started}})
+}
+
+fn stop_t1() -> Control {
+    Control {
+        request: "r1".into(),
+        by: alice(),
+        action: Action::Interrupt { turn: "t1".into() },
+    }
+}
+
+fn settles_r1(e: &Emitted) -> bool {
+    e.settles.contains(&"r1".into())
+}
+
+/// The next message the driver writes, or a failure if it writes none in a few seconds.
+async fn next_heard(fake: &mut Fake) -> Value {
+    let heard = tokio::time::timeout(std::time::Duration::from_secs(5), fake.hear()).await;
+    heard.expect("the driver wrote")
+}
+
+/// A turn running with a subagent `sub1` running turn `st1` under it, and a Stop of the turn sent
+/// and taken: the interrupts it sent, in order, unanswered.
+async fn stopping_with_a_subagent() -> (Codex, Fake, Value, Value) {
+    let (mut codex, mut fake) = running().await;
+    fake.say(started_by("a1", "sub1")).await;
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    until(&mut codex, is_task(State::Running)).await;
+    let driver = tokio::spawn(async move {
+        codex.control(stop_t1()).await.unwrap();
+        codex
+    });
+    let first = fake.hear().await;
+    let second = fake.hear().await;
+    assert_eq!(first["params"]["threadId"], "th1", "the parent first");
+    assert_eq!(second["params"]["threadId"], "sub1");
+    (driver.await.unwrap(), fake, first, second)
+}
+
+// Codex refusing to stop a subagent that then runs on: once the rest have ended the Stop is
+// settled once, and as failed, by the refusal, not by the turn's end, which would look like it
+// worked.
+#[tokio::test]
+async fn a_stop_codex_refuses_for_a_running_subagent_fails() {
+    let (mut codex, mut fake, first, second) = stopping_with_a_subagent().await;
+    fake.say(json!({"id": second["id"], "error": {"code": -32600, "message": "no"}}))
+        .await;
+    fake.say(json!({"id": first["id"], "result": {}})).await;
+    fake.say(turn("turn/completed", "interrupted")).await;
+    let events = until(&mut codex, settles_r1).await;
+    let settler = events.last().unwrap();
+    assert!(
+        matches!(settler.event.body(), Body::Error(_)),
+        "settled by the refusal: {settler:?}"
+    );
+    assert_eq!(settler.event.header().state, State::Failed);
+    assert!(
+        events.iter().any(is_turn(State::Cancelled)),
+        "the turn ended first"
+    );
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "completed"))
+        .await;
+    let rest = until(&mut codex, is_task(State::Done)).await;
+    assert!(!rest.iter().any(settles_r1), "settled once");
+}
+
+// Codex refusing to stop a subagent that ends anyway before the rest: the Stop is settled once,
+// by the end of the last turn it waited for.
+#[tokio::test]
+async fn a_stop_codex_refuses_for_a_subagent_that_ends_waits_for_the_rest() {
+    let (mut codex, mut fake, first, second) = stopping_with_a_subagent().await;
+    fake.say(json!({"id": second["id"], "error": {"code": -32600, "message": "no"}}))
+        .await;
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "completed"))
+        .await;
+    fake.say(json!({"id": first["id"], "result": {}})).await;
+    fake.say(turn("turn/completed", "interrupted")).await;
+    let events = until(&mut codex, is_turn(State::Cancelled)).await;
+    let settling: Vec<&Emitted> = events.iter().filter(|e| settles_r1(e)).collect();
+    assert_eq!(settling.len(), 1, "settled once");
+    assert!(matches!(settling[0].event.body(), Body::Turn(_)));
+}
+
+// A subagent whose turn has started, but whose start the driver has not read when the Stop
+// comes, is stopped too once its start is read, and the Stop waits for it.
+#[tokio::test]
+async fn a_stop_also_stops_a_subagent_whose_start_was_still_unread() {
+    let (mut codex, mut fake) = running().await;
+    fake.say(started_by("a1", "sub1")).await;
+    until(&mut codex, |e| matches!(e.event.body(), Body::Tool(_))).await;
+    // Codex has started the subagent's turn; the driver has not read it yet.
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    let driver = tokio::spawn(async move {
+        codex.control(stop_t1()).await.unwrap();
+        codex
+    });
+    let first = fake.hear().await;
+    assert_eq!(first["params"]["threadId"], "th1");
+    let mut codex = driver.await.unwrap();
+    fake.say(json!({"id": first["id"], "result": {}})).await;
+    let reading = tokio::spawn(async move {
+        let events = until(&mut codex, is_task(State::Cancelled)).await;
+        (codex, events)
+    });
+    let second = next_heard(&mut fake).await;
+    assert_eq!(second["method"], "turn/interrupt");
+    assert_eq!(second["params"]["threadId"], "sub1");
+    assert_eq!(second["params"]["turnId"], "st1");
+    fake.say(json!({"id": second["id"], "result": {}})).await;
+    fake.say(turn("turn/completed", "interrupted")).await;
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "interrupted"))
+        .await;
+    let (_, events) = reading.await.unwrap();
+    let settling: Vec<&Emitted> = events.iter().filter(|e| settles_r1(e)).collect();
+    assert_eq!(settling.len(), 1, "settled once");
+    assert!(
+        matches!(settling[0].event.body(), Body::Task(_)),
+        "settled by the last to end"
+    );
 }
 
 // Each translator in a chat numbers the items it makes up from 0; two subagents' warnings and
