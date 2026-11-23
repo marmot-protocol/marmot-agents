@@ -1778,9 +1778,12 @@ class FilesFrom(unittest.TestCase):
     def test_a_moved_gateway_in_its_home_or_a_sandbox_lists_only_the_old_folders(self):
         """The same exclusions as a fresh install: then the old connector's folders are all there is. The
         agent's home stays where the old connector had it, out of the agents' data, and a folder that holds
-        or lies in it is not listed either, or the core would not start."""
+        or lies in it is not listed either, or the core would not start; nor one that holds or lies in the
+        backup of it the import took, which the import leaves out of files_from too."""
+        backup = "~/.marmot-agents/hermes.backup-20261122T000000Z"  # as Boundaries.imported names it
         for terminal in ({"cwd": "."}, {"cwd": "/srv/projects", "backend": "docker"}, {"cwd": "~/.hermes/cache"},
-                         {"cwd": "~/.marmot-agents/hermes/work"}, {"cwd": "~/.marmot-agents"}):
+                         {"cwd": "~/.marmot-agents/hermes/work"}, {"cwd": "~/.marmot-agents"},
+                         {"cwd": backup}, {"cwd": f"{backup}/work"}):
             with self.subTest(terminal=terminal):
                 m = Machine(self)
                 self.hermes(m, terminal)

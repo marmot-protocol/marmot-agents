@@ -1293,7 +1293,7 @@ check_cwd() {
 # The folder a gateway's agent works in, from which the core may send the files it names (D-090), for
 # a harness whose plugin states no folder: FILES_FROM, or none and FILES_WHY saying why. Never the home
 # itself (D-099), nor a folder that holds or lies in the agents' data or the agent's home, which would
-# stop the core. Nor one that holds or lies in a folder of GATEWAY_CACHE, where the gateway keeps the
+# stop the core, or in the backup of an imported agent's home, which the import leaves out too. Nor one that holds or lies in a folder of GATEWAY_CACHE, where the gateway keeps the
 # files people sent it on any platform, or that holds one of GATEWAY_STATE, its own folder, which holds
 # that cache. Provisional, for the owner's review.
 choose_files_from() {
@@ -1320,6 +1320,11 @@ choose_files_from() {
         FILES_WHY="its work folder holds or lies in $kept, the agent's home, which holds its keys"
         return 0
     fi
+    if kept=$(settings_backup) && kept=$(canonical "$kept") &&
+        { inside "$folder" "$kept" || inside "$kept" "$folder"; }; then
+        FILES_WHY="its work folder holds or lies in $kept, the backup of the agent's home, which holds its keys"
+        return 0
+    fi
     for kept in ${GATEWAY_CACHE[@]+"${GATEWAY_CACHE[@]}"}; do
         kept=$(gateway_folder "$kept") || continue
         if inside "$folder" "$kept" || inside "$kept" "$folder"; then
@@ -1335,6 +1340,22 @@ choose_files_from() {
         fi
     done
     FILES_FROM=$folder
+}
+
+# The backup of the account home `marmot-agent import` took, as the settings it wrote name it in the
+# comment at their top; fails for settings that name none, or not as a whole path.
+settings_backup() {
+    local value
+    [ -f "$MA_SETTINGS" ] || return 1
+    value=$(PREFIX="# The home before the import is backed up in " awk '
+        /^[[:space:]]*\[/ { exit }
+        index($0, ENVIRON["PREFIX"]) == 1 { print substr($0, length(ENVIRON["PREFIX"]) + 1); exit }' "$MA_SETTINGS")
+    value=${value%.}
+    case $value in
+        *[[:cntrl:]]*) return 1 ;;
+        /*) printf '%s' "$value" ;;
+        *) return 1 ;;
+    esac
 }
 
 # A folder the gateway named for itself, whole and canonical; fails for one that is not.
