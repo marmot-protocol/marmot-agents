@@ -16,6 +16,7 @@ use std::fmt;
 // event is made once per step of an agent's work, so the size does not matter.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", content = "body", rename_all = "snake_case")]
 pub enum Body {
     /// A turn started or ended.
@@ -46,6 +47,7 @@ pub enum Body {
 
 /// A turn: who or what started it, and once it has ended, how long it took and what it used.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Turn {
     /// What started the turn.
     pub started_by: StartedBy,
@@ -59,6 +61,7 @@ pub struct Turn {
 
 /// What started a turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum StartedBy {
     /// A person's message.
@@ -71,6 +74,7 @@ pub enum StartedBy {
 
 /// The tokens a turn used.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Usage {
     /// Tokens read by the model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,6 +88,7 @@ pub struct Usage {
 
 /// Text the agent says. The text itself is the event's `text`.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Message {
     /// Whether this is a remark made while working or the final answer, when the harness says.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -95,6 +100,7 @@ pub struct Message {
 
 /// Where in a turn a message falls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
     /// A remark made while the agent is still working.
@@ -107,6 +113,7 @@ pub enum Phase {
 
 /// The agent's thinking. It carries nothing beyond the event's `text`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Reasoning {}
 
 // ---------------------------------------------------------------------------------------- tool
@@ -116,6 +123,7 @@ pub struct Reasoning {}
 /// The fields a tool has depend on its kind, but not strictly: a command that only reads files
 /// has the kind `read` and still has a `command`. So they are all optional.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Tool {
     /// Which sort of tool it is.
     pub kind: ToolKind,
@@ -155,6 +163,7 @@ pub struct Tool {
 
 /// The sort of tool. A harness that gives only a tool name leaves the driver to decide.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ToolKind {
     /// A shell command.
@@ -177,6 +186,7 @@ pub enum ToolKind {
 
 /// One file changed by an edit.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Change {
     /// The file.
     pub path: String,
@@ -189,6 +199,7 @@ pub struct Change {
 
 /// What an edit did to a file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeKind {
     /// The file is new.
@@ -203,6 +214,7 @@ pub enum ChangeKind {
 
 /// The agent wants permission for one action.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Approval {
     /// The item that is waiting for permission, such as the command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,6 +231,7 @@ pub struct Approval {
 /// The id is the driver's own. It is never the harness's value for the choice, which can be an
 /// object. The driver keeps the harness's value and looks it up by this id when an answer comes.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Choice {
     /// The id an answer names.
     pub id: String,
@@ -231,6 +244,7 @@ pub struct Choice {
 /// What a choice does. Nothing finer is in the model: "once" and "for this session" are the
 /// harness's ideas, and the label carries them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Effect {
     /// The action may happen.
@@ -241,6 +255,7 @@ pub enum Effect {
 
 /// How an approval was answered.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ApprovalAnswer {
     /// The id of the choice. Absent when the harness reports a decision the item did not offer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -258,6 +273,7 @@ pub struct ApprovalAnswer {
 /// The native message of the event is the other place a secret answer could be repeated.
 /// [`AgentEvent::new`](crate::AgentEvent::new) covers that (D-056).
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(try_from = "UncheckedQuestion")]
 pub struct Question {
     answer_via: AnswerVia,
@@ -369,6 +385,7 @@ impl std::error::Error for BadQuestion {}
 
 /// A question as it is read from JSON, before its answers are checked.
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 struct UncheckedQuestion {
     answer_via: AnswerVia,
     #[serde(default)]
@@ -392,6 +409,7 @@ impl TryFrom<UncheckedQuestion> for Question {
 
 /// How a question is answered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum AnswerVia {
     /// By an answer that points at this item.
@@ -402,6 +420,7 @@ pub enum AnswerVia {
 
 /// One question in a question item.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Asked {
     /// The id an answer names.
     pub id: String,
@@ -427,6 +446,7 @@ pub struct Asked {
 
 /// One answer a question offers.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Offered {
     /// The id an answer names.
     pub id: String,
@@ -442,6 +462,7 @@ pub struct Offered {
 /// It names options by the ids the item offered. For a secret question it names the question and
 /// nothing else: the answer itself is never repeated.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Answered {
     /// The id of the question.
     pub question: String,
@@ -457,6 +478,7 @@ pub struct Answered {
 
 /// The agent's plan, as text or as a list of steps.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Plan {
     /// The plan as text.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -468,6 +490,7 @@ pub struct Plan {
 
 /// One step of a plan.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PlanEntry {
     /// The step.
     pub text: String,
@@ -477,6 +500,7 @@ pub struct PlanEntry {
 
 /// How far a step of a plan has got.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum PlanEntryState {
     /// Not started.
@@ -491,6 +515,7 @@ pub enum PlanEntryState {
 
 /// Work that runs beside a turn or outlives it: a subagent, a background job.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Task {
     /// The sort of task, in the harness's own word.
     pub kind: String,
@@ -506,6 +531,7 @@ pub struct Task {
 
 /// Something a person should know that is not the agent's own words.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Notice {
     /// What the notice is about.
     pub kind: NoticeKind,
@@ -520,6 +546,7 @@ pub struct Notice {
 
 /// What a notice is about.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum NoticeKind {
     /// The conversation was compacted.
@@ -543,6 +570,7 @@ pub enum NoticeKind {
 
 /// Something failed outside any one item.
 #[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Error {
     /// What was being attempted, such as the request the harness refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -559,6 +587,7 @@ pub struct Error {
 
 /// A session with the harness: what an app can set and do in it (D-029, D-030).
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Session {
     /// The version of the harness (D-030). A driver that is not told it supplies it (D-044).
     pub harness_version: String,
@@ -575,6 +604,7 @@ pub struct Session {
 
 /// One setting of a session.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Setting {
     /// The id a `set` control names.
     pub id: String,
@@ -594,6 +624,7 @@ pub struct Setting {
 
 /// An action of the harness's own.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Action {
     /// The id a control names.
     pub id: String,
@@ -607,6 +638,7 @@ pub struct Action {
 /// One slash command. Its name and its hint are always present. A description is the first thing
 /// left out when the item would be too large (D-045).
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Command {
     /// The command, without its slash.
     pub name: String,

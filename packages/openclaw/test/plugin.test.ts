@@ -9,6 +9,7 @@ import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { eventMessageProblems, problems } from "./protocol.ts";
 
 registerHooks({
   resolve(specifier, context, next) {
@@ -31,9 +32,14 @@ function object(value: unknown): Json {
 /** How the fake core answers a `send_file`: done, refused, or by closing the socket. */
 type Answer = "sent" | "refused" | "close";
 
-/** A fake core: it welcomes the plugin, keeps every line it is sent, and answers each `send_file`. */
+/**
+ * A fake core: it welcomes the plugin, keeps every line it is sent, and answers each `send_file`. Every
+ * line either way is checked against the core's own schema (`fixtures/socket`); what is not as the core's
+ * types say is kept in `invalid`.
+ */
 async function fakeCore(dir: string) {
   const lines: Json[] = [];
+  const invalid: string[] = [];
   const state = { answer: "sent" as Answer, welcomed: false };
   const sockets: Socket[] = [];
   const server = createServer((socket) => {
@@ -46,14 +52,20 @@ async function fakeCore(dir: string) {
         const m = JSON.parse(buffered.slice(0, at)) as Json;
         buffered = buffered.slice(at + 1);
         lines.push(m);
-        const reply = (body: Json) => socket.write(JSON.stringify({ jsonrpc: "2.0", id: m["id"], ...body }) + "\n");
+        const found = m["method"] === "event" ? eventMessageProblems(m) : problems("FromConnector", m);
+        for (const p of found) invalid.push(`from the plugin: ${p}`);
+        const reply = (body: Json) => {
+          const answer = { jsonrpc: "2.0", id: m["id"], ...body };
+          for (const p of problems("FromCore", answer)) invalid.push(`from the core: ${p}`);
+          socket.write(JSON.stringify(answer) + "\n");
+        };
         if (m["method"] === "hello") {
           reply({ result: { core: { version: "0" }, agent: { name: "a" } } });
           state.welcomed = true;
         } else if (m["method"] === "send_file") {
           if (state.answer === "sent") reply({ result: {} });
           else if (state.answer === "refused") {
-            reply({ error: { code: -32000, message: "refused", data: { reason: "not_allowed", detail: "The file is outside the folders the agent may send files from." } } });
+            reply({ error: { code: -32000, message: "not_allowed", data: { reason: "not_allowed", detail: "The file is outside the folders the agent may send files from." } } });
           } else socket.destroy();
         }
       }
@@ -62,7 +74,7 @@ async function fakeCore(dir: string) {
   mkdirSync(join(dir, "socket"));
   writeFileSync(join(dir, "connector.token"), "a-token\n");
   await new Promise<void>((r) => server.listen(join(dir, "socket", "marmot-agent.sock"), r));
-  return { lines, state, close: () => (sockets.forEach((s) => s.destroy()), server.close()) };
+  return { lines, invalid, state, close: () => (sockets.forEach((s) => s.destroy()), server.close()) };
 }
 
 async function until(done: () => boolean): Promise<void> {
@@ -108,6 +120,7 @@ test("media OpenClaw sends through the channel goes as its caption, then its fil
     await assert.rejects(media({ to: "marmot:c-1", mediaUrl: "/work/late.png" }));
     abort.abort();
     await running;
+    assert.deepEqual(core.invalid, [], "every line either way is as the core's types say");
   } finally {
     abort.abort();
     core.close();

@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-23, at `master` commit `93b589d`, through [D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it). A change that adds or replaces
+Brought up to date on 2026-11-23, at `master` commit `e923d4e`, through [D-115](decisions.md#d-115-the-sockets-schema-is-made-from-the-cores-own-types-and-checks-this-repositorys-connectors). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -113,6 +113,9 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   ([D-081](decisions.md#d-081-the-socket-messages-as-built-are-accepted)).
 - A connector speaks only in agent events. The core does the shared work, gives it ids of its own, and gives
   each connector its own token ([D-034](decisions.md#d-034-the-core-does-the-shared-work-and-a-connector-speaks-only-in-agent-events), [D-036](decisions.md#d-036-the-ids-a-connector-sees-are-the-cores-own), [D-038](decisions.md#d-038-each-connector-has-its-own-token)).
+- A JSON Schema and examples made from the core's own types (`fixtures/socket`) check that the three connectors
+  here send and read only what the core does; the core itself stays lenient, and OpenClaw stops sending the
+  fields the core passes over ([D-115](decisions.md#d-115-the-sockets-schema-is-made-from-the-cores-own-types-and-checks-this-repositorys-connectors)).
 
 ## Files
 

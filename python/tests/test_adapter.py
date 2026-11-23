@@ -64,6 +64,18 @@ stand_in_for_gateway()
 from gateway.platforms.base import MessageEvent, MessageType  # noqa: E402
 from marmot_hermes.adapter import MarmotAdapter  # noqa: E402
 from marmot_hermes.core import CoreConnection  # noqa: E402
+from protocol import event_problems, problems  # noqa: E402
+
+
+def checked_send(test):
+    """Keeps each event the adapter sends in `test.sent`, and what is not as the core's types say
+    (`fixtures/socket`) in `test.invalid`."""
+    test.sent, test.invalid = [], []
+
+    def send(event):
+        test.invalid += [f"an event: {p}" for p in event_problems(json.loads(json.dumps(event)))]
+        test.sent.append(event)
+    return send
 
 
 @dataclasses.dataclass
@@ -83,8 +95,7 @@ class ModelReads(unittest.IsolatedAsyncioTestCase):
         with mock.patch.dict("os.environ", {"HERMES_HOME": self.folder.name}):
             self.adapter = MarmotAdapter({})
         self.adapter.loop = asyncio.get_running_loop()
-        self.sent = []
-        self.adapter.connector.send_event = self.sent.append
+        self.adapter.connector.send_event = checked_send(self)
         self.gates = {"u-1": threading.Event(), "u-2": threading.Event()}
         self.failing = False
         self.adapter.get_session_model_settings = self.settings
@@ -94,6 +105,7 @@ class ModelReads(unittest.IsolatedAsyncioTestCase):
             gate.set()
         await asyncio.gather(*self.adapter.reading)
         self.folder.cleanup()
+        self.assertEqual(self.invalid, [], "every event is as the core's types say")
 
     def settings(self, source):
         """Hermes's answer, in a worker thread, once the test lets it through."""
@@ -156,6 +168,7 @@ class FakeCore:
     def __init__(self, answer):
         self.answer = answer
         self.asked = []
+        self.invalid = []
 
     async def serve(self, reader, writer):
         hello = json.loads(await reader.readline())
@@ -165,6 +178,7 @@ class FakeCore:
             if m.get("method") != "send_file":
                 continue
             self.asked.append(m["params"])
+            self.invalid += [f"from the plugin: {p}" for p in problems("FromConnector", m)]
             no = self.answer(m["params"]["path"])
             reply = {"jsonrpc": "2.0", "id": m["id"], "result": {}} if no is None else {
                 "jsonrpc": "2.0", "id": m["id"], "error": {"code": -32000, "message": no[0], "data": {
@@ -185,8 +199,7 @@ class Files(unittest.IsolatedAsyncioTestCase):
         with mock.patch.dict("os.environ", {"HERMES_HOME": self.folder.name}):
             self.adapter = MarmotAdapter({})
         self.adapter.loop = asyncio.get_running_loop()
-        self.sent = []
-        self.adapter.connector.send_event = self.sent.append
+        self.adapter.connector.send_event = checked_send(self)
         self.fake = FakeCore(lambda path: self.NOT_WHOLE if not path.startswith("/") else
                              self.OUTSIDE if path.startswith("/etc/") else None)
         socket = str(Path(self.folder.name) / "core.sock")
@@ -200,6 +213,8 @@ class Files(unittest.IsolatedAsyncioTestCase):
         self.server.close()
         await self.server.wait_closed()
         self.folder.cleanup()
+        self.assertEqual(self.invalid, [], "every event is as the core's types say")
+        self.assertEqual(self.fake.invalid, [], "every send_file is as the core's types say")
 
     def words(self):
         return [e["text"] for e in self.sent if e["type"] == "message"]
@@ -290,6 +305,32 @@ class Home(unittest.TestCase):
     def test_the_environment_comes_first(self):
         config = types.SimpleNamespace(extra={"home": "/agents/a/home"})
         self.assertEqual(self.adapter(config, "/run/marmot-agent").home, Path("/run/marmot-agent"))
+
+
+class Hello(unittest.IsolatedAsyncioTestCase):
+    async def test_the_hello_is_what_the_core_reads(self):
+        """The hello the adapter gives, against the core's own schema (`fixtures/socket`)."""
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            (home / "socket").mkdir()
+            (home / "connector.token").write_text("a-token\n", encoding="utf-8")
+            heard = asyncio.get_running_loop().create_future()
+
+            async def core(reader, writer):
+                heard.set_result(json.loads(await reader.readline()))
+                writer.close()
+
+            server = await asyncio.start_unix_server(core, str(home / "socket" / "marmot-agent.sock"))
+            with mock.patch.dict("os.environ", {"HERMES_HOME": folder, "MARMOT_AGENT_HOME": folder}):
+                adapter = MarmotAdapter({})
+            running = asyncio.ensure_future(adapter.run_core())
+            try:
+                hello = await asyncio.wait_for(heard, 5)
+            finally:
+                running.cancel()
+                server.close()
+            self.assertEqual(hello["params"]["token"], "a-token")
+            self.assertEqual(problems("FromConnector", hello), [])
 
 
 if __name__ == "__main__":

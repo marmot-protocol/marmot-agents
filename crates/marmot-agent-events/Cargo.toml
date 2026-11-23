@@ -11,3 +11,9 @@ publish.workspace = true
 serde = { version = "1", features = ["derive"] }
 # `raw_value` keeps a harness's own message as the exact text it arrived as.
 serde_json = { version = "1", features = ["raw_value"] }
+# A JSON Schema of the events, for the socket's schema (`fixtures/socket/schema.json`). Only the
+# core's tests switch it on.
+schemars = { version = "1", features = ["raw_value"], optional = true }
+
+[features]
+schema = ["dep:schemars"]

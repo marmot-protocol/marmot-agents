@@ -12,6 +12,7 @@ macro_rules! id {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
         #[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
         #[serde(transparent)]
         pub struct $name(pub String);
 
@@ -66,6 +67,7 @@ id!(
 /// question item that has a secret question carries a native message only while it is waiting
 /// for an answer (D-056). An event that breaks the rule cannot be built, and cannot be read from JSON.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(try_from = "Unchecked")]
 pub struct AgentEvent {
     #[serde(flatten)]
@@ -121,6 +123,7 @@ impl AgentEvent {
 
 /// The parts every item shares, whatever its type.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Header {
     /// Which harness produced the event.
     pub harness: String,
@@ -158,6 +161,7 @@ impl std::error::Error for RepeatsSecret {}
 
 /// An event as it is read from JSON, before the rule above is checked.
 #[derive(Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 struct Unchecked {
     #[serde(flatten)]
     header: Header,
@@ -185,6 +189,7 @@ impl TryFrom<Unchecked> for AgentEvent {
 /// none (D-056), which [`AgentEvent::new`] holds. And the core leaves it out of an item over 64 KB
 /// (D-026, D-057). A driver never leaves it out to fit that limit.
 #[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Native {
     /// What the harness calls this message, such as `item/completed`.
     pub kind: String,

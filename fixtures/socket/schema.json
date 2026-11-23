@@ -1,0 +1,2315 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "marmot.agent-control.v3",
+  "description": "Every message on the core's local socket, made from the types in crates/marmot-agent/src/socket/wire.rs. A message from the core is a FromCore; one from a connector is a FromConnector. The core passes over fields it does not know; this schema admits none, so a connector is checked against exactly what the core reads. Written by the test in crates/marmot-agent/src/socket/corpus.rs; do not edit it by hand.",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/FromCore"
+    },
+    {
+      "$ref": "#/$defs/FromConnector"
+    }
+  ],
+  "$defs": {
+    "FromCore": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CoreRequestMessage",
+          "description": "A request: `prompt`, `answer` or `control`."
+        },
+        {
+          "$ref": "#/$defs/WelcomeMessage",
+          "description": "The answer to a hello the core took."
+        },
+        {
+          "$ref": "#/$defs/TakenMessage",
+          "description": "A file sent."
+        },
+        {
+          "$ref": "#/$defs/ErrorMessage",
+          "description": "A hello or a file refused."
+        }
+      ],
+      "description": "Every message the core sends a connector. Only its schema is made, so its size does not matter."
+    },
+    "CoreRequestMessage": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpc",
+          "description": "Always `2.0`."
+        },
+        "id": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The core's id for the request, from 1 on each connection."
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id"
+      ],
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "prompt"
+            },
+            "params": {
+              "$ref": "#/$defs/PromptParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "description": "A message for the agent."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "answer"
+            },
+            "params": {
+              "$ref": "#/$defs/AnswerParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "description": "A person's answer to an approval or a question."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "control"
+            },
+            "params": {
+              "$ref": "#/$defs/ControlParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "description": "Something a person does unprompted."
+        }
+      ],
+      "description": "A request from the core (D-058).",
+      "unevaluatedProperties": false
+    },
+    "JsonRpc": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "2.0",
+          "description": "JSON-RPC 2.0."
+        }
+      ],
+      "description": "The version of JSON-RPC every message names (D-033)."
+    },
+    "PromptParams": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "The core's id for the message."
+        },
+        "text": {
+          "type": "string",
+          "description": "The message's text."
+        },
+        "chat": {
+          "$ref": "#/$defs/Chat",
+          "description": "The chat it was sent in."
+        },
+        "sender": {
+          "$ref": "#/$defs/Person",
+          "description": "Who sent it."
+        },
+        "attachments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Attachment"
+          },
+          "description": "Files sent with it, each written to disk by the core."
+        },
+        "reply_to": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Quoted"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The message it replies to, when it is a reply."
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The session to resume, only when the core resumes one (D-065)."
+        }
+      },
+      "required": [
+        "message",
+        "text",
+        "chat",
+        "sender",
+        "attachments"
+      ],
+      "description": "A message for the agent. A slash command is one too: it is passed exactly as typed (D-031).",
+      "unevaluatedProperties": false
+    },
+    "Chat": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The core's id for the chat."
+        },
+        "group": {
+          "type": "boolean",
+          "description": "Whether the chat has more than one person in it."
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The chat's name; `null` when it has none."
+        },
+        "folder": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The folder the chat chose for its sessions, as a whole path with links resolved, only when\nit chose one (D-101)."
+        }
+      },
+      "required": [
+        "id",
+        "group"
+      ],
+      "description": "A chat (D-036).",
+      "unevaluatedProperties": false
+    },
+    "Person": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The core's id for the person."
+        },
+        "name": {
+          "type": "string",
+          "description": "The person's name."
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "description": "A person (D-036).",
+      "unevaluatedProperties": false
+    },
+    "Attachment": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Where the core wrote the file."
+        },
+        "name": {
+          "type": "string",
+          "description": "The file's name."
+        },
+        "media_type": {
+          "type": "string",
+          "description": "The file's media type, such as `image/png`."
+        }
+      },
+      "required": [
+        "path",
+        "name",
+        "media_type"
+      ],
+      "description": "A file sent with a prompt.",
+      "unevaluatedProperties": false
+    },
+    "Quoted": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "description": "The core's id for the message replied to."
+        },
+        "text": {
+          "type": "string",
+          "description": "Its text."
+        },
+        "author": {
+          "$ref": "#/$defs/Person",
+          "description": "Who wrote it."
+        }
+      },
+      "required": [
+        "message",
+        "text",
+        "author"
+      ],
+      "description": "The message a prompt replies to.",
+      "unevaluatedProperties": false
+    },
+    "AnswerParams": {
+      "type": "object",
+      "properties": {
+        "request": {
+          "type": "string",
+          "description": "The core's id for this answer, which the event that shows its effect names in `settles`."
+        },
+        "item": {
+          "type": "string",
+          "description": "The item being answered."
+        },
+        "by": {
+          "$ref": "#/$defs/Person",
+          "description": "Who answered."
+        },
+        "given": {
+          "$ref": "#/$defs/Given",
+          "description": "What they answered."
+        }
+      },
+      "required": [
+        "request",
+        "item",
+        "by",
+        "given"
+      ],
+      "description": "A person's answer to an approval or a question. It goes to the harness's own answer call\n(D-028).",
+      "unevaluatedProperties": false
+    },
+    "Given": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "choice": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "choice"
+          ],
+          "additionalProperties": false,
+          "description": "To an approval: the id of one choice."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "questions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Reply"
+              }
+            }
+          },
+          "required": [
+            "questions"
+          ],
+          "additionalProperties": false,
+          "description": "To a question item: one entry for each question answered."
+        }
+      ],
+      "description": "What an answer holds, by the ids the item offered."
+    },
+    "Reply": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "description": "The id of the question."
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The ids of the options chosen."
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What the person typed; `null` when they typed nothing."
+        }
+      },
+      "required": [
+        "question",
+        "options"
+      ],
+      "description": "The answer to one question, as it is delivered to the harness. For a secret question it holds\nthe secret (D-041).",
+      "unevaluatedProperties": false
+    },
+    "ControlParams": {
+      "type": "object",
+      "properties": {
+        "request": {
+          "type": "string",
+          "description": "The core's id for this control, which the event that shows its effect names in `settles`."
+        },
+        "by": {
+          "$ref": "#/$defs/Person",
+          "description": "Who sent it."
+        },
+        "action": {
+          "$ref": "#/$defs/ControlAction",
+          "description": "What to do, and what to do it to."
+        }
+      },
+      "required": [
+        "request",
+        "by",
+        "action"
+      ],
+      "description": "Something a person does unprompted (D-029).",
+      "unevaluatedProperties": false
+    },
+    "ControlAction": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "interrupt"
+            },
+            "turn": {
+              "type": "string",
+              "description": "The turn to stop."
+            }
+          },
+          "required": [
+            "type",
+            "turn"
+          ],
+          "description": "Stop the running turn.",
+          "unevaluatedProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "new_session"
+            },
+            "chat": {
+              "$ref": "#/$defs/Chat",
+              "description": "The chat the new session is for."
+            },
+            "session": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The session to end; `null` for a chat that has had none."
+            }
+          },
+          "required": [
+            "type",
+            "chat"
+          ],
+          "description": "End a chat's session, if it has one, and start a fresh one. A chat that moved folder gets one\nwhose `chat` names the new folder (D-101).",
+          "unevaluatedProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "set"
+            },
+            "session": {
+              "type": "string",
+              "description": "The session."
+            },
+            "setting": {
+              "type": "string",
+              "description": "The id of the setting, from the session item."
+            },
+            "value": {
+              "type": "string",
+              "description": "The new value."
+            }
+          },
+          "required": [
+            "type",
+            "session",
+            "setting",
+            "value"
+          ],
+          "description": "Change one setting of a session.",
+          "unevaluatedProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "own"
+            },
+            "session": {
+              "type": "string",
+              "description": "The session."
+            },
+            "id": {
+              "type": "string",
+              "description": "The id of the action, from the session item."
+            }
+          },
+          "required": [
+            "type",
+            "session",
+            "id"
+          ],
+          "description": "One of the harness's own actions, such as compacting.",
+          "unevaluatedProperties": false
+        }
+      ],
+      "description": "What a control does."
+    },
+    "WelcomeMessage": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpc",
+          "description": "Always `2.0`."
+        },
+        "id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The hello's id."
+        },
+        "result": {
+          "$ref": "#/$defs/Welcome",
+          "description": "The core and the agent."
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "result"
+      ],
+      "description": "The core's answer to a hello it took.",
+      "unevaluatedProperties": false
+    },
+    "Id": {
+      "anyOf": [
+        {
+          "type": "number",
+          "description": "A number."
+        },
+        {
+          "type": "string",
+          "description": "Text."
+        }
+      ],
+      "description": "The id of a connector's request: a number or text, as JSON-RPC allows. The core's own requests\nare numbered."
+    },
+    "Welcome": {
+      "type": "object",
+      "properties": {
+        "core": {
+          "$ref": "#/$defs/CoreVersion",
+          "description": "The core."
+        },
+        "agent": {
+          "$ref": "#/$defs/AgentName",
+          "description": "The agent the connection drives (D-035)."
+        }
+      },
+      "required": [
+        "core",
+        "agent"
+      ],
+      "description": "What the core says of itself and the agent, in answer to a hello.",
+      "unevaluatedProperties": false
+    },
+    "CoreVersion": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "Its version."
+        }
+      },
+      "required": [
+        "version"
+      ],
+      "description": "The core's release.",
+      "unevaluatedProperties": false
+    },
+    "AgentName": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The name."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "description": "The agent's display name.",
+      "unevaluatedProperties": false
+    },
+    "TakenMessage": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpc",
+          "description": "Always `2.0`."
+        },
+        "id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The request's id."
+        },
+        "result": {
+          "$ref": "#/$defs/Taken",
+          "description": "Nothing more."
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "result"
+      ],
+      "description": "A request taken: the connector's answer to a request of the core's, and the core's answer to a\nfile sent.",
+      "unevaluatedProperties": false
+    },
+    "Taken": {
+      "type": "object",
+      "description": "The empty result of a request taken.",
+      "unevaluatedProperties": false
+    },
+    "ErrorMessage": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpc",
+          "description": "Always `2.0`."
+        },
+        "id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The request's id; `null` when the request had none."
+        },
+        "error": {
+          "$ref": "#/$defs/RpcError",
+          "description": "Why."
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "error"
+      ],
+      "description": "A request refused.",
+      "unevaluatedProperties": false
+    },
+    "RpcError": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The code."
+        },
+        "message": {
+          "type": "string",
+          "description": "The reason's word, or for a hello, what is wrong with it."
+        },
+        "data": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Refused"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A refusal's reason and words."
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "description": "A JSON-RPC error.\n\nA refusal has the code `-32000`, the reason as its message, and `data`. A hello the core refuses\nhas no `data`: `-32001` for another protocol version, `-32002` for a token that is not this\nagent's, `-32600` or `-32602` for a hello it cannot read.",
+      "unevaluatedProperties": false
+    },
+    "Refused": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/Reason",
+          "description": "Why."
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "More than the reason says. Every member of the chat reads it (D-009, D-041); the core's\nwords on a file name no path."
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "description": "Why a request was refused, and in words for the chat or the agent.",
+      "unevaluatedProperties": false
+    },
+    "Reason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "not_supported",
+          "description": "The harness cannot do this."
+        },
+        {
+          "type": "string",
+          "const": "busy",
+          "description": "The harness cannot do this now."
+        },
+        {
+          "type": "string",
+          "const": "unknown_item",
+          "description": "The driver does not know the item."
+        },
+        {
+          "type": "string",
+          "const": "not_waiting",
+          "description": "The item is not waiting for an answer."
+        },
+        {
+          "type": "string",
+          "const": "already_answered",
+          "description": "The item has been answered."
+        },
+        {
+          "type": "string",
+          "const": "nothing_to_do",
+          "description": "There is nothing to act on."
+        },
+        {
+          "type": "string",
+          "const": "invalid",
+          "description": "The request does not make sense."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "The harness was asked and it failed."
+        },
+        {
+          "type": "string",
+          "const": "not_allowed",
+          "description": "The core does not allow it: a file outside the folders the settings allow."
+        }
+      ],
+      "description": "The reasons a request may be refused. Only the core refuses with `not_allowed` (D-090)."
+    },
+    "FromConnector": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ConnectorRequestMessage",
+          "description": "A request: `hello` or `send_file`."
+        },
+        {
+          "$ref": "#/$defs/ConnectorNotificationMessage",
+          "description": "An `event`."
+        },
+        {
+          "$ref": "#/$defs/TakenMessage",
+          "description": "A request of the core's taken."
+        },
+        {
+          "$ref": "#/$defs/ErrorMessage",
+          "description": "A request of the core's refused."
+        }
+      ],
+      "description": "Every message a connector sends the core."
+    },
+    "ConnectorRequestMessage": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpc",
+          "description": "Always `2.0`."
+        },
+        "id": {
+          "$ref": "#/$defs/Id",
+          "description": "The connector's own id for the request. The hello's is its first."
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id"
+      ],
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "hello"
+            },
+            "params": {
+              "$ref": "#/$defs/HelloParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "description": "The connection's first message."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "send_file"
+            },
+            "params": {
+              "$ref": "#/$defs/SendFileParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "description": "The agent sends a file to the chat (D-090; a proposal)."
+        }
+      ],
+      "description": "A request from a connector.",
+      "unevaluatedProperties": false
+    },
+    "HelloParams": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "string",
+          "description": "`marmot.agent-control.v3` (D-020).",
+          "const": "marmot.agent-control.v3"
+        },
+        "connector": {
+          "$ref": "#/$defs/Connector",
+          "description": "The connector: its name and release version."
+        },
+        "harness": {
+          "$ref": "#/$defs/Harness",
+          "description": "The harness: its name and, when it has said, its version."
+        },
+        "token": {
+          "type": "string",
+          "description": "The connector's token (D-038)."
+        },
+        "capabilities": {
+          "$ref": "#/$defs/Capabilities",
+          "description": "What the harness can do: the seven flags, every one (D-058)."
+        },
+        "folder": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The folder the harness works in when a chat chose none, as a whole path, for a harness a\nchat may move to another folder (D-101; provisional). A gateway's plugin leaves it out."
+        }
+      },
+      "required": [
+        "protocol",
+        "connector",
+        "harness",
+        "token",
+        "capabilities"
+      ],
+      "description": "A connector's hello. One connection is one agent, and the token says which (D-035, D-038).",
+      "unevaluatedProperties": false
+    },
+    "Connector": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The name."
+        },
+        "version": {
+          "type": "string",
+          "description": "The release version."
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ],
+      "description": "A connector's name and release version.",
+      "unevaluatedProperties": false
+    },
+    "Harness": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The name, such as `claude-code`. Nothing above a driver acts on it."
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The version, when the harness has said."
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "description": "A harness's name and version.",
+      "unevaluatedProperties": false
+    },
+    "Capabilities": {
+      "type": "object",
+      "properties": {
+        "interrupt": {
+          "type": "boolean",
+          "description": "Whether a running turn can be stopped."
+        },
+        "mid_turn": {
+          "$ref": "#/$defs/MidTurn",
+          "description": "What the harness does with a prompt that arrives during a turn (D-040)."
+        },
+        "sessions": {
+          "$ref": "#/$defs/Sessions",
+          "description": "Who picks the session a prompt goes to."
+        },
+        "resume": {
+          "type": "boolean",
+          "description": "Whether a session survives a restart of the harness."
+        },
+        "approvals": {
+          "type": "boolean",
+          "description": "Whether the harness asks for approval through the chat."
+        },
+        "files_in": {
+          "$ref": "#/$defs/FilesIn",
+          "description": "Which attachments a prompt may carry."
+        },
+        "approval_commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ApprovalCommand"
+          },
+          "description": "Typed commands that need the right to approve, even when there are none (D-032, D-047)."
+        }
+      },
+      "required": [
+        "interrupt",
+        "mid_turn",
+        "sessions",
+        "resume",
+        "approvals",
+        "files_in",
+        "approval_commands"
+      ],
+      "description": "What a harness can do (D-058).",
+      "unevaluatedProperties": false
+    },
+    "MidTurn": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "fold",
+          "description": "Folds it into the running turn."
+        },
+        {
+          "type": "string",
+          "const": "restart",
+          "description": "Ends the turn and starts another."
+        },
+        {
+          "type": "string",
+          "const": "queue",
+          "description": "Holds it until the turn ends."
+        }
+      ],
+      "description": "What a harness does with a prompt that arrives while a turn is running."
+    },
+    "Sessions": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "core",
+          "description": "The core keeps each chat's session (D-065)."
+        },
+        {
+          "type": "string",
+          "const": "own",
+          "description": "The harness routes prompts by its own rules, as a gateway does."
+        }
+      ],
+      "description": "Who picks the session a prompt goes to."
+    },
+    "FilesIn": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "none",
+          "description": "None."
+        },
+        {
+          "type": "string",
+          "const": "images",
+          "description": "Images only."
+        },
+        {
+          "type": "string",
+          "const": "any",
+          "description": "Any file."
+        }
+      ],
+      "description": "Which attachments a prompt may carry."
+    },
+    "ApprovalCommand": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "description": "The command as typed, such as `/approve`."
+        },
+        "counts": {
+          "$ref": "#/$defs/Position",
+          "description": "Where in a message it counts."
+        }
+      },
+      "required": [
+        "command",
+        "counts"
+      ],
+      "description": "A typed command that needs the right to approve.",
+      "unevaluatedProperties": false
+    },
+    "Position": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "start",
+          "description": "Only at the start of the message."
+        },
+        {
+          "type": "string",
+          "const": "anywhere",
+          "description": "Anywhere in the message."
+        }
+      ],
+      "description": "Where in a message a typed command counts."
+    },
+    "SendFileParams": {
+      "type": "object",
+      "properties": {
+        "chat": {
+          "type": "string",
+          "description": "The core's id for the chat."
+        },
+        "path": {
+          "type": "string",
+          "description": "The file, as an absolute path."
+        }
+      },
+      "required": [
+        "chat",
+        "path"
+      ],
+      "description": "A file the agent asks the core to send to a chat (D-090; a proposal).",
+      "unevaluatedProperties": false
+    },
+    "ConnectorNotificationMessage": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "$ref": "#/$defs/JsonRpc",
+          "description": "Always `2.0`."
+        }
+      },
+      "required": [
+        "jsonrpc"
+      ],
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "event"
+            },
+            "params": {
+              "$ref": "#/$defs/EventParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "description": "An agent event."
+        }
+      ],
+      "description": "A notification from a connector. It gets no response.",
+      "unevaluatedProperties": false
+    },
+    "EventParams": {
+      "type": "object",
+      "properties": {
+        "native": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Native"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "session": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The harness's session. A harness can produce an event before it has named one."
+        },
+        "turn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The turn the event belongs to. A session item and some notices belong to none."
+        },
+        "item": {
+          "$ref": "#/$defs/ItemId",
+          "description": "The item this event creates or replaces."
+        },
+        "text": {
+          "type": "string",
+          "description": "The plain rendering, readable on its own by a client that does not know the item type."
+        },
+        "state": {
+          "$ref": "#/$defs/State",
+          "description": "Where the item stands."
+        },
+        "title": {
+          "type": "string",
+          "description": "A few words: \"Running a command\", \"Allow this command?\"."
+        },
+        "chat": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The core's id for the chat the event belongs to, whenever the connector knows it."
+        },
+        "prompts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "On a turn: the ids of the messages it responds to."
+        },
+        "settles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The ids of the answers and controls whose effect the event shows (D-028)."
+        }
+      },
+      "required": [
+        "item",
+        "state",
+        "title",
+        "text"
+      ],
+      "description": "An agent event as `marmot-agent-events` writes it, without `harness` and `seq`, which the core\nfills in, and with what the event follows from: its chat, the prompts a turn responds to, and the\nrequests it settles.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "turn"
+            },
+            "body": {
+              "$ref": "#/$defs/Turn"
+            }
+          },
+          "required": [
+            "type",
+            "body"
+          ],
+          "description": "A turn started or ended."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "message"
+            },
+            "body": {
+              "$ref": "#/$defs/Message"
+            }
+          },
+          "required": [
+            "type",
+            "body"
+          ],
+          "description": "Text the agent says to the people in the chat."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "reasoning"
+            },
+            "body": {
+              "$ref": "#/$defs/Reasoning"
+            }
+          },
+          "required": [
+            "type",
+            "body"
+          ],
+          "description": "The agent's thinking."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool"
+            },
+            "body": {
+              "$ref": "#/$defs/Tool"
+            }
+          },
+          "required": [
+            "type",
+            "body"
+          ],
+          "description": "A tool the agent used."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "approval"
+            },
+            "body": {
+              "$ref": "#/$defs/Approval"
+            }
+          },
+          "required": [
+            "type",
+            "body"
+          ],
+          "description": "The agent wants permission for one action."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "question"
+            },
+            "body": {
+              "$ref": "#/$defs/Question"
+            }
+          },
+          "required": [
+            "type",
+            "body"
+          ],
+          "description": "The agent asks the person something."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "plan"
+            },
+            "body": {
+              "$ref": "#/$defs/Plan"
+            }
+          },
+          "required": [
+            "type",
+            "body"
+          ],
+          "description": "The agent's plan or to-do list."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "task"
+            },
+            "body": {
+              "$ref": "#/$defs/Task"
+            }
+          },
+          "required": [
+            "type",
+            "body"
+          ],
+          "description": "Work that runs beside a turn or outlives it."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "notice"
+            },
+            "body": {
+              "$ref": "#/$defs/Notice"
+            }
+          },
+          "required": [
+            "type",
+            "body"
+          ],
+          "description": "Something a person should know that is not the agent's own words."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "error"
+            },
+            "body": {
+              "$ref": "#/$defs/Error"
+            }
+          },
+          "required": [
+            "type",
+            "body"
+          ],
+          "description": "Something failed outside any one item."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "session"
+            },
+            "body": {
+              "$ref": "#/$defs/Session"
+            }
+          },
+          "required": [
+            "type",
+            "body"
+          ],
+          "description": "A session with the harness."
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "SessionId": {
+      "type": "string",
+      "description": "The harness's own id for a session."
+    },
+    "TurnId": {
+      "type": "string",
+      "description": "The id of a turn."
+    },
+    "ItemId": {
+      "type": "string",
+      "description": "The id of an item. It stays the same for the life of the item: an event with an id that\nwas sent before replaces the earlier one."
+    },
+    "State": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "running",
+          "description": "The work is in progress."
+        },
+        {
+          "type": "string",
+          "const": "waiting",
+          "description": "A person is needed: an approval or a question that nobody has answered."
+        },
+        {
+          "type": "string",
+          "const": "done",
+          "description": "It finished."
+        },
+        {
+          "type": "string",
+          "const": "failed",
+          "description": "It finished with an error."
+        },
+        {
+          "type": "string",
+          "const": "declined",
+          "description": "A person refused it."
+        },
+        {
+          "type": "string",
+          "const": "cancelled",
+          "description": "It was stopped before it finished."
+        }
+      ],
+      "description": "Where an item stands. An item changes by being sent again with a new state."
+    },
+    "Turn": {
+      "type": "object",
+      "properties": {
+        "started_by": {
+          "$ref": "#/$defs/StartedBy",
+          "description": "What started the turn."
+        },
+        "duration_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "How long the turn took, once it has ended."
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the turn used, once it has ended and the harness says."
+        }
+      },
+      "required": [
+        "started_by"
+      ],
+      "description": "A turn: who or what started it, and once it has ended, how long it took and what it used.",
+      "unevaluatedProperties": false
+    },
+    "StartedBy": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "user",
+          "description": "A person's message."
+        },
+        {
+          "type": "string",
+          "const": "agent",
+          "description": "The agent itself, after background work."
+        },
+        {
+          "type": "string",
+          "const": "control",
+          "description": "A control, such as compacting the conversation."
+        }
+      ],
+      "description": "What started a turn."
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Tokens read by the model."
+        },
+        "output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "Tokens written by the model."
+        }
+      },
+      "description": "The tokens a turn used.",
+      "unevaluatedProperties": false
+    },
+    "Message": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Phase"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether this is a remark made while working or the final answer, when the harness says."
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For a subagent's message: the item it belongs to."
+        }
+      },
+      "description": "Text the agent says. The text itself is the event's `text`.",
+      "unevaluatedProperties": false
+    },
+    "Phase": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "commentary",
+          "description": "A remark made while the agent is still working."
+        },
+        {
+          "type": "string",
+          "const": "final",
+          "description": "The agent's answer."
+        }
+      ],
+      "description": "Where in a turn a message falls."
+    },
+    "Reasoning": {
+      "type": "object",
+      "description": "The agent's thinking. It carries nothing beyond the event's `text`.",
+      "unevaluatedProperties": false
+    },
+    "Tool": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ToolKind",
+          "description": "Which sort of tool it is."
+        },
+        "name": {
+          "type": "string",
+          "description": "The tool's own name, such as `shell`."
+        },
+        "command": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A command: what was run."
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A command: the folder it ran in."
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "A command: its exit code, once it has finished."
+        },
+        "duration_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "How long the tool took, once it has finished."
+        },
+        "output": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What the tool printed or returned, once it has finished."
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Change"
+          },
+          "description": "An edit: the files it changed."
+        },
+        "query": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A search: what was searched for."
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A file the tool read, such as an image."
+        },
+        "input": {
+          "description": "Any other tool: what it was called with, as the harness gave it."
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Why the tool failed, when the harness says."
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "description": "A tool the agent used.\n\nThe fields a tool has depend on its kind, but not strictly: a command that only reads files\nhas the kind `read` and still has a `command`. So they are all optional.",
+      "unevaluatedProperties": false
+    },
+    "ToolKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "command",
+          "description": "A shell command."
+        },
+        {
+          "type": "string",
+          "const": "edit",
+          "description": "A change to files."
+        },
+        {
+          "type": "string",
+          "const": "read",
+          "description": "Reading a file."
+        },
+        {
+          "type": "string",
+          "const": "search",
+          "description": "A search, of files or of the web."
+        },
+        {
+          "type": "string",
+          "const": "fetch",
+          "description": "Fetching a web address."
+        },
+        {
+          "type": "string",
+          "const": "mcp",
+          "description": "A tool on an MCP server."
+        },
+        {
+          "type": "string",
+          "const": "subagent",
+          "description": "Work handed to a subagent."
+        },
+        {
+          "type": "string",
+          "const": "other",
+          "description": "Anything else."
+        }
+      ],
+      "description": "The sort of tool. A harness that gives only a tool name leaves the driver to decide."
+    },
+    "Change": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "The file."
+        },
+        "diff": {
+          "type": "string",
+          "description": "The change, as a diff."
+        },
+        "change": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChangeKind"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether the file was added, changed or deleted, when the harness says."
+        }
+      },
+      "required": [
+        "path",
+        "diff"
+      ],
+      "description": "One file changed by an edit.",
+      "unevaluatedProperties": false
+    },
+    "ChangeKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "add",
+          "description": "The file is new."
+        },
+        {
+          "type": "string",
+          "const": "update",
+          "description": "The file existed and was changed."
+        },
+        {
+          "type": "string",
+          "const": "delete",
+          "description": "The file was removed."
+        }
+      ],
+      "description": "What an edit did to a file."
+    },
+    "Approval": {
+      "type": "object",
+      "properties": {
+        "subject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The item that is waiting for permission, such as the command."
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Choice"
+          },
+          "description": "What a person may answer."
+        },
+        "answer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovalAnswer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The answer, once there is one."
+        }
+      },
+      "required": [
+        "choices"
+      ],
+      "description": "The agent wants permission for one action.",
+      "unevaluatedProperties": false
+    },
+    "Choice": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The id an answer names."
+        },
+        "label": {
+          "type": "string",
+          "description": "What a button shows: \"Allow once\"."
+        },
+        "effect": {
+          "$ref": "#/$defs/Effect",
+          "description": "Whether choosing it lets the action happen."
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "effect"
+      ],
+      "description": "One thing a person may answer to an approval.\n\nThe id is the driver's own. It is never the harness's value for the choice, which can be an\nobject. The driver keeps the harness's value and looks it up by this id when an answer comes.",
+      "unevaluatedProperties": false
+    },
+    "Effect": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "allow",
+          "description": "The action may happen."
+        },
+        {
+          "type": "string",
+          "const": "deny",
+          "description": "The action may not happen."
+        }
+      ],
+      "description": "What a choice does. Nothing finer is in the model: \"once\" and \"for this session\" are the\nharness's ideas, and the label carries them."
+    },
+    "ApprovalAnswer": {
+      "type": "object",
+      "properties": {
+        "choice": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The id of the choice. Absent when the harness reports a decision the item did not offer."
+        }
+      },
+      "description": "How an approval was answered.",
+      "unevaluatedProperties": false
+    },
+    "Question": {
+      "type": "object",
+      "properties": {
+        "answer_via": {
+          "$ref": "#/$defs/AnswerVia"
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Asked"
+          }
+        },
+        "answer": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/Answered"
+          },
+          "default": null
+        }
+      },
+      "required": [
+        "answer_via",
+        "questions"
+      ],
+      "description": "The agent asks the person something. One item can hold several questions.\n\nA question cannot be changed once it is built. Its questions have ids that differ, and its\nanswers are checked against them: an answer to a question marked `secret` names the question\nand nothing else (D-041). That holds for a question built here and for one read from JSON.\n\nThe native message of the event is the other place a secret answer could be repeated.\n[`AgentEvent::new`](crate::AgentEvent::new) covers that (D-056).",
+      "unevaluatedProperties": false
+    },
+    "AnswerVia": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "request",
+          "description": "By an answer that points at this item."
+        },
+        {
+          "type": "string",
+          "const": "message",
+          "description": "By the person's next chat message. The harness simply waits for it."
+        }
+      ],
+      "description": "How a question is answered."
+    },
+    "Asked": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The id an answer names."
+        },
+        "header": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "A short heading, when the harness gives one."
+        },
+        "text": {
+          "type": "string",
+          "description": "The question."
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Offered"
+          },
+          "description": "The answers offered. Empty when the question takes only free text.",
+          "default": []
+        },
+        "multiple": {
+          "type": "boolean",
+          "description": "Whether several options may be chosen.",
+          "default": false
+        },
+        "allow_text": {
+          "type": "boolean",
+          "description": "Whether the person may type an answer of their own.",
+          "default": false
+        },
+        "secret": {
+          "type": "boolean",
+          "description": "Whether the answer is a secret, such as a password. A secret answer is never shown to the\nchat, and is accepted only in a two-person chat (D-041)."
+        }
+      },
+      "required": [
+        "id",
+        "text"
+      ],
+      "description": "One question in a question item.",
+      "unevaluatedProperties": false
+    },
+    "Offered": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The id an answer names."
+        },
+        "label": {
+          "type": "string",
+          "description": "What a button shows."
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What choosing it means, when the harness says."
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "description": "One answer a question offers.",
+      "unevaluatedProperties": false
+    },
+    "Answered": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "description": "The id of the question."
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The ids of the options chosen."
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What the person typed, when the question allows it."
+        }
+      },
+      "required": [
+        "question"
+      ],
+      "description": "The answer to one question.\n\nIt names options by the ids the item offered. For a secret question it names the question and\nnothing else: the answer itself is never repeated.",
+      "unevaluatedProperties": false
+    },
+    "Plan": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The plan as text."
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PlanEntry"
+          },
+          "description": "The plan as steps."
+        }
+      },
+      "description": "The agent's plan, as text or as a list of steps.",
+      "unevaluatedProperties": false
+    },
+    "PlanEntry": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The step."
+        },
+        "state": {
+          "$ref": "#/$defs/PlanEntryState",
+          "description": "How far it has got."
+        }
+      },
+      "required": [
+        "text",
+        "state"
+      ],
+      "description": "One step of a plan.",
+      "unevaluatedProperties": false
+    },
+    "PlanEntryState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "pending",
+          "description": "Not started."
+        },
+        {
+          "type": "string",
+          "const": "running",
+          "description": "Being worked on."
+        },
+        {
+          "type": "string",
+          "const": "done",
+          "description": "Finished."
+        }
+      ],
+      "description": "How far a step of a plan has got."
+    },
+    "Task": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "The sort of task, in the harness's own word."
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What the task is doing."
+        },
+        "subject": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The item that started the task."
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "description": "Work that runs beside a turn or outlives it: a subagent, a background job.",
+      "unevaluatedProperties": false
+    },
+    "Notice": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/NoticeKind",
+          "description": "What the notice is about."
+        },
+        "duration_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "description": "For `waiting`: how long the agent will wait."
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "For `model_changed`: why, when the harness says. For `refused`: why, in a word such as\n`not_allowed` or `busy`."
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "description": "Something a person should know that is not the agent's own words.",
+      "unevaluatedProperties": false
+    },
+    "NoticeKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "compaction",
+          "description": "The conversation was compacted."
+        },
+        {
+          "type": "string",
+          "const": "waiting",
+          "description": "The agent is waiting."
+        },
+        {
+          "type": "string",
+          "const": "retry",
+          "description": "The harness is trying again."
+        },
+        {
+          "type": "string",
+          "const": "warning",
+          "description": "A warning from the harness."
+        },
+        {
+          "type": "string",
+          "const": "model_changed",
+          "description": "The harness moved to another model."
+        },
+        {
+          "type": "string",
+          "const": "command_output",
+          "description": "The output of a command the harness ran itself."
+        },
+        {
+          "type": "string",
+          "const": "refused",
+          "description": "A message, an answer or a control was not acted on, and why, in `reason` (D-010, D-028).\nThe core sends it; a driver does not."
+        }
+      ],
+      "description": "What a notice is about."
+    },
+    "Error": {
+      "type": "object",
+      "properties": {
+        "request": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What was being attempted, such as the request the harness refused."
+        },
+        "code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64",
+          "description": "The harness's error code."
+        },
+        "will_retry": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Whether the harness will try again by itself, when it says."
+        }
+      },
+      "description": "Something failed outside any one item.",
+      "unevaluatedProperties": false
+    },
+    "Session": {
+      "type": "object",
+      "properties": {
+        "harness_version": {
+          "type": "string",
+          "description": "The version of the harness (D-030). A driver that is not told it supplies it (D-044)."
+        },
+        "settings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Setting"
+          },
+          "description": "What can be set: the model, the mode, the permission mode and so on.",
+          "default": []
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Action"
+          },
+          "description": "The harness's own actions, such as compacting.",
+          "default": []
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Command"
+          },
+          "description": "The harness's slash commands.",
+          "default": []
+        }
+      },
+      "required": [
+        "harness_version"
+      ],
+      "description": "A session with the harness: what an app can set and do in it (D-029, D-030).",
+      "unevaluatedProperties": false
+    },
+    "Setting": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The id a `set` control names."
+        },
+        "label": {
+          "type": "string",
+          "description": "What an app shows: \"Model\"."
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The current value, when the harness has said."
+        },
+        "options": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "The values it accepts. Absent when nobody has said what they are."
+        },
+        "approve": {
+          "type": "boolean",
+          "description": "Whether changing it needs the right to approve (D-043). A setting that decides what the\nagent may do without asking does."
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "description": "One setting of a session.",
+      "unevaluatedProperties": false
+    },
+    "Action": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The id a control names."
+        },
+        "label": {
+          "type": "string",
+          "description": "What an app shows."
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What it does."
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "description": "An action of the harness's own.",
+      "unevaluatedProperties": false
+    },
+    "Command": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The command, without its slash."
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "What it does."
+        },
+        "hint": {
+          "type": "string",
+          "description": "What to type after it. Empty when the command takes nothing."
+        }
+      },
+      "required": [
+        "name",
+        "hint"
+      ],
+      "description": "One slash command. Its name and its hint are always present. A description is the first thing\nleft out when the item would be too large (D-045).",
+      "unevaluatedProperties": false
+    },
+    "Native": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "What the harness calls this message, such as `item/completed`."
+        },
+        "payload": {
+          "description": "The message itself."
+        }
+      },
+      "required": [
+        "kind",
+        "payload"
+      ],
+      "description": "A harness's own message, kept exactly as it arrived.\n\nA driver must never drop or change it (D-007). The payload is therefore the text of the JSON\nthe harness sent, not a value read from it: spacing, the order of fields and the way a number\nwas written all survive.\n\nTwo things leave it out of an event. A secret question that is no longer waiting carries\nnone (D-056), which [`AgentEvent::new`] holds. And the core leaves it out of an item over 64 KB\n(D-026, D-057). A driver never leaves it out to fit that limit.",
+      "unevaluatedProperties": false
+    }
+  }
+}

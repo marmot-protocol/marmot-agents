@@ -268,6 +268,13 @@ From cheapest to most thorough. Each lists what it owns.
 The replay tests, hand-written cases and stand-in harnesses stay. Each regression from review keeps its test. New
 rule: every unit test of a state machine checks the properties above on every step, not only the end state.
 
+**The socket's messages are checked in every language** (built 2026-11-23). The core writes and reads them through
+types, and the JSON Schema made from those types is committed with an example of each message,
+[`fixtures/socket`](../../fixtures/socket/schema.json); the core's tests fail when either falls behind. The Claude
+Code and OpenClaw packages and the Hermes plugin check, in their own tests, that every message they send and every
+event their translators make is one the core reads, that their fake cores send only what the core sends, and that
+they read only fields the core sends. So a field changed on one side only fails a test.
+
 ### 2. A conformance suite for every driver
 
 One suite, written once against the driver trait, that every driver must pass: Codex, ACP (OpenCode, Goose,

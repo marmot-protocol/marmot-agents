@@ -1,0 +1,1021 @@
+{
+  "description": "Examples of every message on the core's socket: those from the core as it writes them, those from a connector as the core reads them. Written by the test in crates/marmot-agent/src/socket/corpus.rs, which checks them; do not edit them by hand.",
+  "examples": [
+    {
+      "name": "the welcome, in answer to a hello",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "core": {
+            "version": "0.1.0"
+          },
+          "agent": {
+            "name": "Agent"
+          }
+        }
+      }
+    },
+    {
+      "name": "a hello refused: another protocol",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32001,
+          "message": "the core speaks marmot.agent-control.v3"
+        }
+      }
+    },
+    {
+      "name": "a hello refused: not this agent's token",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32002,
+          "message": "not this agent's token"
+        }
+      }
+    },
+    {
+      "name": "a hello refused: not a hello",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32600,
+          "message": "open with a hello"
+        }
+      }
+    },
+    {
+      "name": "a hello refused: capabilities missing",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32602,
+          "message": "capabilities missing or invalid"
+        }
+      }
+    },
+    {
+      "name": "a hello refused: a folder that is not a whole path",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "error": {
+          "code": -32602,
+          "message": "folder is not a whole path"
+        }
+      }
+    },
+    {
+      "name": "prompt: in a two-person chat",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "prompt",
+        "params": {
+          "message": "m-1",
+          "text": "run the tests",
+          "chat": {
+            "id": "c-1",
+            "group": false,
+            "name": null
+          },
+          "sender": {
+            "id": "u-1",
+            "name": "Alice"
+          },
+          "attachments": []
+        }
+      }
+    },
+    {
+      "name": "prompt: a reply in a group that chose a folder, with an attachment, resuming a session",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "prompt",
+        "params": {
+          "message": "m-2",
+          "text": "and this one?",
+          "chat": {
+            "id": "c-2",
+            "group": true,
+            "name": "Family",
+            "folder": "/work/other"
+          },
+          "sender": {
+            "id": "u-2",
+            "name": "Bob"
+          },
+          "attachments": [
+            {
+              "path": "/work/inbox/a1/photo.png",
+              "name": "photo.png",
+              "media_type": "image/png"
+            }
+          ],
+          "reply_to": {
+            "message": "m-1",
+            "text": "run the tests",
+            "author": {
+              "id": "u-1",
+              "name": "Alice"
+            }
+          },
+          "session": "s-1"
+        }
+      }
+    },
+    {
+      "name": "answer: an approval",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "answer",
+        "params": {
+          "request": "r-0",
+          "item": "ap-2",
+          "by": {
+            "id": "u-1",
+            "name": "Alice"
+          },
+          "given": {
+            "choice": "once"
+          }
+        }
+      }
+    },
+    {
+      "name": "answer: a question item, with options chosen and text typed",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "answer",
+        "params": {
+          "request": "r-1",
+          "item": "ap-2",
+          "by": {
+            "id": "u-1",
+            "name": "Alice"
+          },
+          "given": {
+            "questions": [
+              {
+                "question": "q0",
+                "options": [
+                  "o1"
+                ],
+                "text": null
+              },
+              {
+                "question": "q1",
+                "options": [],
+                "text": "blue"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "control: interrupt",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "control",
+        "params": {
+          "request": "r-c0",
+          "by": {
+            "id": "u-1",
+            "name": "Alice"
+          },
+          "action": {
+            "type": "interrupt",
+            "turn": "t-4"
+          }
+        }
+      }
+    },
+    {
+      "name": "control: a new session, ending one, in the folder the chat chose",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "control",
+        "params": {
+          "request": "r-c1",
+          "by": {
+            "id": "u-1",
+            "name": "Alice"
+          },
+          "action": {
+            "type": "new_session",
+            "chat": {
+              "id": "c-2",
+              "group": true,
+              "name": "Family",
+              "folder": "/work/other"
+            },
+            "session": "s-1"
+          }
+        }
+      }
+    },
+    {
+      "name": "control: a new session, for a chat that has had none",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "control",
+        "params": {
+          "request": "r-c2",
+          "by": {
+            "id": "u-1",
+            "name": "Alice"
+          },
+          "action": {
+            "type": "new_session",
+            "chat": {
+              "id": "c-1",
+              "group": false,
+              "name": null
+            },
+            "session": null
+          }
+        }
+      }
+    },
+    {
+      "name": "control: set a setting",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 8,
+        "method": "control",
+        "params": {
+          "request": "r-c3",
+          "by": {
+            "id": "u-1",
+            "name": "Alice"
+          },
+          "action": {
+            "type": "set",
+            "session": "s-1",
+            "setting": "model",
+            "value": "model-b"
+          }
+        }
+      }
+    },
+    {
+      "name": "control: one of the harness's own actions",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 9,
+        "method": "control",
+        "params": {
+          "request": "r-c4",
+          "by": {
+            "id": "u-1",
+            "name": "Alice"
+          },
+          "action": {
+            "type": "own",
+            "session": "s-1",
+            "id": "compact"
+          }
+        }
+      }
+    },
+    {
+      "name": "a file sent",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {}
+      }
+    },
+    {
+      "name": "a file refused",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "f-3",
+        "error": {
+          "code": -32000,
+          "message": "not_allowed",
+          "data": {
+            "reason": "not_allowed",
+            "detail": "The file is outside the folders the agent may send files from."
+          }
+        }
+      }
+    },
+    {
+      "name": "hello: a coding harness, with its folder",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "hello",
+        "params": {
+          "connector": {
+            "name": "marmot-agent-example",
+            "version": "0.1.0"
+          },
+          "harness": {
+            "name": "example",
+            "version": "1.2.3"
+          },
+          "capabilities": {
+            "interrupt": true,
+            "mid_turn": "restart",
+            "sessions": "core",
+            "resume": true,
+            "approvals": true,
+            "files_in": "images",
+            "approval_commands": []
+          },
+          "folder": "/work/demo",
+          "protocol": "marmot.agent-control.v3",
+          "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+      }
+    },
+    {
+      "name": "hello: a gateway, with typed commands and no folder",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "hello",
+        "params": {
+          "connector": {
+            "name": "marmot-agent-gateway",
+            "version": "0.1.0"
+          },
+          "harness": {
+            "name": "gateway"
+          },
+          "capabilities": {
+            "interrupt": true,
+            "mid_turn": "queue",
+            "sessions": "own",
+            "resume": true,
+            "approvals": true,
+            "files_in": "none",
+            "approval_commands": [
+              {
+                "command": "/approve",
+                "counts": "start"
+              },
+              {
+                "command": "/exec",
+                "counts": "anywhere"
+              }
+            ]
+          },
+          "protocol": "marmot.agent-control.v3",
+          "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+      }
+    },
+    {
+      "name": "event: a turn starts, responding to a prompt",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "t-4",
+          "type": "turn",
+          "state": "running",
+          "title": "Working",
+          "text": "",
+          "body": {
+            "started_by": "user"
+          },
+          "session": "s-1",
+          "turn": "t-4",
+          "chat": "c-1",
+          "prompts": [
+            "m-1"
+          ],
+          "native": {
+            "kind": "turn/started",
+            "payload": {
+              "id": "t-4"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "event: a turn ends, with what it used, settling an interrupt",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "t-4",
+          "type": "turn",
+          "state": "cancelled",
+          "title": "Stopped",
+          "text": "",
+          "body": {
+            "started_by": "user",
+            "duration_ms": 1200,
+            "usage": {
+              "input_tokens": 10,
+              "output_tokens": 2
+            }
+          },
+          "session": "s-1",
+          "turn": "t-4",
+          "chat": "c-1",
+          "settles": [
+            "r-c0"
+          ]
+        }
+      }
+    },
+    {
+      "name": "event: the agent's words",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "msg-5",
+          "type": "message",
+          "state": "done",
+          "title": "",
+          "text": "All 42 tests pass.",
+          "body": {
+            "phase": "final"
+          },
+          "session": "s-1",
+          "turn": "t-4",
+          "chat": "c-1"
+        }
+      }
+    },
+    {
+      "name": "event: a subagent's words",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "msg-6",
+          "type": "message",
+          "state": "done",
+          "title": "",
+          "text": "Found it.",
+          "body": {
+            "phase": "commentary",
+            "parent": "task-1"
+          },
+          "session": "s-1",
+          "turn": "t-4",
+          "chat": "c-1"
+        }
+      }
+    },
+    {
+      "name": "event: reasoning",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "r-1",
+          "type": "reasoning",
+          "state": "done",
+          "title": "Thinking",
+          "text": "Look at the tests first.",
+          "body": {},
+          "session": "s-1",
+          "turn": "t-4",
+          "chat": "c-1"
+        }
+      }
+    },
+    {
+      "name": "event: a command that ran",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "cmd-9",
+          "type": "tool",
+          "state": "done",
+          "title": "Ran a command",
+          "text": "cargo test",
+          "body": {
+            "kind": "command",
+            "name": "shell",
+            "command": "cargo test",
+            "cwd": "/work/demo",
+            "exit_code": 0,
+            "duration_ms": 900,
+            "output": "ok"
+          },
+          "session": "s-1",
+          "turn": "t-4",
+          "chat": "c-1"
+        }
+      }
+    },
+    {
+      "name": "event: an edit, and a tool that failed",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "ed-1",
+          "type": "tool",
+          "state": "failed",
+          "title": "Edited a file",
+          "text": "notes.txt",
+          "body": {
+            "kind": "edit",
+            "name": "apply_patch",
+            "changes": [
+              {
+                "path": "/work/demo/notes.txt",
+                "diff": "+hello",
+                "change": "add"
+              }
+            ],
+            "error": "disk full"
+          },
+          "session": "s-1",
+          "turn": "t-4",
+          "chat": "c-1"
+        }
+      }
+    },
+    {
+      "name": "event: any other tool, with what it was called with",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "mcp-1",
+          "type": "tool",
+          "state": "running",
+          "title": "Using a tool",
+          "text": "lookup",
+          "body": {
+            "kind": "mcp",
+            "name": "lookup",
+            "query": "weather",
+            "path": "/work/demo/a.png",
+            "input": {
+              "city": "Oslo",
+              "days": [
+                1,
+                2
+              ]
+            }
+          },
+          "session": "s-1",
+          "turn": "t-4",
+          "chat": "c-1"
+        }
+      }
+    },
+    {
+      "name": "event: an approval waits",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "ap-2",
+          "type": "approval",
+          "state": "waiting",
+          "title": "Allow this command?",
+          "text": "cargo test",
+          "body": {
+            "subject": "cmd-9",
+            "choices": [
+              {
+                "id": "once",
+                "label": "Allow once",
+                "effect": "allow"
+              },
+              {
+                "id": "deny",
+                "label": "Deny",
+                "effect": "deny"
+              }
+            ]
+          },
+          "session": "s-1",
+          "turn": "t-4",
+          "chat": "c-1"
+        }
+      }
+    },
+    {
+      "name": "event: an approval answered, settling the answer",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "ap-2",
+          "type": "approval",
+          "state": "done",
+          "title": "Allow this command?",
+          "text": "Answered: Allow once",
+          "body": {
+            "subject": "cmd-9",
+            "choices": [
+              {
+                "id": "once",
+                "label": "Allow once",
+                "effect": "allow"
+              },
+              {
+                "id": "deny",
+                "label": "Deny",
+                "effect": "deny"
+              }
+            ],
+            "answer": {
+              "choice": "once"
+            }
+          },
+          "session": "s-1",
+          "turn": "t-4",
+          "chat": "c-1",
+          "settles": [
+            "r-0"
+          ]
+        }
+      }
+    },
+    {
+      "name": "event: questions wait, one of them secret",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "q-1",
+          "type": "question",
+          "state": "waiting",
+          "title": "A question",
+          "text": "Which colour? And the password?",
+          "body": {
+            "answer_via": "request",
+            "questions": [
+              {
+                "id": "q0",
+                "header": "Colour",
+                "text": "Which colour?",
+                "options": [
+                  {
+                    "id": "o0",
+                    "label": "Red",
+                    "description": "Warm"
+                  },
+                  {
+                    "id": "o1",
+                    "label": "Blue"
+                  }
+                ],
+                "multiple": false,
+                "allow_text": true
+              },
+              {
+                "id": "q1",
+                "text": "The password?",
+                "options": [],
+                "multiple": false,
+                "allow_text": true,
+                "secret": true
+              }
+            ]
+          },
+          "session": "s-1",
+          "turn": "t-4",
+          "chat": "c-1",
+          "native": {
+            "kind": "request",
+            "payload": {
+              "questions": 2
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "event: questions answered, the secret one by name only",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "q-1",
+          "type": "question",
+          "state": "done",
+          "title": "A question",
+          "text": "Answered",
+          "body": {
+            "answer_via": "request",
+            "subject": "cmd-9",
+            "questions": [
+              {
+                "id": "q0",
+                "text": "Which colour?",
+                "options": [
+                  {
+                    "id": "o1",
+                    "label": "Blue"
+                  }
+                ],
+                "multiple": true,
+                "allow_text": false
+              },
+              {
+                "id": "q1",
+                "text": "The password?",
+                "options": [],
+                "multiple": false,
+                "allow_text": true,
+                "secret": true
+              }
+            ],
+            "answer": [
+              {
+                "question": "q0",
+                "options": [
+                  "o1"
+                ]
+              },
+              {
+                "question": "q1"
+              }
+            ]
+          },
+          "session": "s-1",
+          "turn": "t-4",
+          "chat": "c-1",
+          "settles": [
+            "r-1"
+          ]
+        }
+      }
+    },
+    {
+      "name": "event: a plan as steps",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "plan-1",
+          "type": "plan",
+          "state": "running",
+          "title": "Plan",
+          "text": "1. Read\n2. Fix",
+          "body": {
+            "text": "Read, then fix",
+            "entries": [
+              {
+                "text": "Read",
+                "state": "done"
+              },
+              {
+                "text": "Fix",
+                "state": "running"
+              },
+              {
+                "text": "Test",
+                "state": "pending"
+              }
+            ]
+          },
+          "session": "s-1",
+          "turn": "t-4",
+          "chat": "c-1"
+        }
+      }
+    },
+    {
+      "name": "event: a task beside the turn",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "task-1",
+          "type": "task",
+          "state": "running",
+          "title": "A subagent",
+          "text": "Searching",
+          "body": {
+            "kind": "subagent",
+            "description": "Searching",
+            "subject": "cmd-9"
+          },
+          "session": "s-1",
+          "turn": "t-4",
+          "chat": "c-1"
+        }
+      }
+    },
+    {
+      "name": "event: a notice outside any turn",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "n-1",
+          "type": "notice",
+          "state": "done",
+          "title": "Waiting",
+          "text": "Waiting 5 s",
+          "body": {
+            "kind": "waiting",
+            "duration_ms": 5000,
+            "reason": "rate limited"
+          },
+          "chat": "c-1"
+        }
+      }
+    },
+    {
+      "name": "event: an error, with no chat named",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "e-1",
+          "type": "error",
+          "state": "failed",
+          "title": "Failed",
+          "text": "The model refused.",
+          "body": {
+            "request": "turn/start",
+            "code": 429,
+            "will_retry": true
+          },
+          "session": "s-1"
+        }
+      }
+    },
+    {
+      "name": "event: a session, with its settings, actions and commands, settling a set",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {
+          "item": "s-1",
+          "type": "session",
+          "state": "running",
+          "title": "Session",
+          "text": "",
+          "body": {
+            "harness_version": "1.2.3",
+            "settings": [
+              {
+                "id": "model",
+                "label": "Model",
+                "value": "model-b",
+                "options": [
+                  "model-a",
+                  "model-b"
+                ]
+              },
+              {
+                "id": "permission_mode",
+                "label": "Permission mode",
+                "approve": true
+              }
+            ],
+            "actions": [
+              {
+                "id": "compact",
+                "label": "Compact",
+                "description": "Shorten"
+              }
+            ],
+            "commands": [
+              {
+                "name": "review",
+                "description": "Review a change",
+                "hint": "[file]"
+              },
+              {
+                "name": "clear",
+                "hint": ""
+              }
+            ]
+          },
+          "session": "s-1",
+          "chat": "c-1",
+          "settles": [
+            "r-c3"
+          ]
+        }
+      }
+    },
+    {
+      "name": "send_file: a numbered request",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "send_file",
+        "params": {
+          "chat": "c-1",
+          "path": "/work/demo/report.pdf"
+        }
+      }
+    },
+    {
+      "name": "send_file: a request with an id that is text",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": "f-3",
+        "method": "send_file",
+        "params": {
+          "chat": "c-1",
+          "path": "/work/demo/b.txt"
+        }
+      }
+    },
+    {
+      "name": "a request taken",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {}
+      }
+    },
+    {
+      "name": "a request refused, with words for the chat",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+          "code": -32000,
+          "message": "busy",
+          "data": {
+            "reason": "busy",
+            "detail": "A turn is running."
+          }
+        }
+      }
+    },
+    {
+      "name": "a request refused",
+      "from": "connector",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "error": {
+          "code": -32000,
+          "message": "unknown_item",
+          "data": {
+            "reason": "unknown_item"
+          }
+        }
+      }
+    }
+  ]
+}

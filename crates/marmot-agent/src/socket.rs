@@ -10,16 +10,22 @@
 //! The socket is in a folder only the owner can open, and the token is in a file only the owner
 //! can read (D-038). One connection is one agent (D-035). No line over 4 MB is read or written
 //! (D-033), and a harness's own message reaches the chat exactly as the connector sent it (D-007).
+//!
+//! Every message is written and read through the types in [`wire`], and the JSON Schema made from
+//! them is `fixtures/socket/schema.json`, with examples of each message beside it.
+
+#[cfg(test)]
+mod corpus;
+pub mod wire;
 
 use marmot_agent_driver::{
-    Action, Answer, ApprovalCommand, Capabilities, Control, Driver, Emitted, FilesIn, Given,
-    Harness, MessageId, MidTurn, Output, Position, Prompt, Reason, Refusal, RequestId, SendFile,
-    Sessions,
+    Answer, Capabilities, Control, Driver, Emitted, Harness, MessageId, Output, Prompt, Reason,
+    Refusal, RequestId, SendFile,
 };
 use marmot_agent_events::AgentEvent;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use serde_json::value::RawValue;
-use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -231,8 +237,18 @@ impl SocketDriver {
             .flatten()
             .ok_or(HelloError::Gone)?;
         let hello: Value = serde_json::from_slice(&line).map_err(|_| HelloError::NotHello)?;
-        let id = hello.get("id").cloned().unwrap_or(Value::Null);
-        let refuse = |code: i64, message: &str| json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}});
+        let id = hello
+            .get("id")
+            .and_then(|id| wire::Id::deserialize(id).ok());
+        let refuse = |code: i64, message: &str| wire::ErrorMessage {
+            jsonrpc: wire::JsonRpc::V2,
+            id: id.clone(),
+            error: wire::RpcError {
+                code,
+                message: message.into(),
+                data: None,
+            },
+        };
         if hello["method"] != "hello" {
             let _ = write_line(&mut writer, &refuse(-32600, "open with a hello")).await;
             return Err(HelloError::NotHello);
@@ -248,11 +264,14 @@ impl SocketDriver {
             let _ = write_line(&mut writer, &refuse(-32002, "not this agent's token")).await;
             return Err(HelloError::Token);
         }
-        let Some(capabilities) = capabilities(&params["capabilities"]) else {
+        // Read field by field, as before the schema: the schema checks what this repository's
+        // connectors send, and the core stays as lenient as it was with what it can do without.
+        let Ok(capabilities) = wire::Capabilities::deserialize(&params["capabilities"]) else {
             let refusal = refuse(-32602, "capabilities missing or invalid");
             let _ = write_line(&mut writer, &refusal).await;
             return Err(HelloError::NotHello);
         };
+        let capabilities = Capabilities::from(capabilities);
         // Optional: a connector whose harness keeps a workspace of its own states none (D-101).
         let folder = match params.get("folder") {
             None | Some(Value::Null) => None,
@@ -272,11 +291,16 @@ impl SocketDriver {
                 .to_string(),
             version: params["harness"]["version"].as_str().map(String::from),
         };
-        let welcome = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {"core": {"version": env!("CARGO_PKG_VERSION")}, "agent": {"name": agent}},
-        });
+        let welcome = wire::WelcomeMessage {
+            jsonrpc: wire::JsonRpc::V2,
+            id,
+            result: wire::Welcome {
+                core: wire::CoreVersion {
+                    version: env!("CARGO_PKG_VERSION").into(),
+                },
+                agent: wire::AgentName { name: agent.into() },
+            },
+        };
         write_line(&mut writer, &welcome)
             .await
             .map_err(|_| HelloError::Gone)?;
@@ -305,14 +329,18 @@ impl SocketDriver {
     /// Sends a request and waits for its response, holding back the events read meanwhile
     /// (D-058). A connection that drops, or a connector that has not answered in time, refuses it
     /// as failed and is given up: a prompt is then not delivered, and never sent again (D-037).
-    async fn request(&mut self, method: &str, params: Value) -> Result<(), Refusal> {
+    async fn request(&mut self, request: wire::CoreRequest) -> Result<(), Refusal> {
         if self.gone {
             return Err(Refusal::new(Reason::Failed));
         }
         self.answer_duplicates().await;
         self.next_id += 1;
         let id = self.next_id;
-        let message = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+        let message = wire::CoreRequestMessage {
+            jsonrpc: wire::JsonRpc::V2,
+            id,
+            request,
+        };
         if write_line(&mut self.writer, &message).await.is_err() {
             self.gone = true;
             return Err(Refusal::new(Reason::Failed));
@@ -348,9 +376,13 @@ impl SocketDriver {
             if self.gone {
                 return;
             }
-            let message = json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000,
-                "message": "invalid", "data": {"reason": "invalid",
-                "detail": "Another file with this request's id is still being sent."}}});
+            let message = refused(
+                wire::Id::deserialize(&id).ok(),
+                Refusal {
+                    reason: Reason::Invalid,
+                    detail: Some("Another file with this request's id is still being sent.".into()),
+                },
+            );
             if write_line(&mut self.writer, &message).await.is_err() {
                 self.gone = true;
             }
@@ -373,6 +405,8 @@ impl SocketDriver {
             return None;
         }
         let id = envelope.id.clone().filter(|id| !id.is_null())?;
+        // Each field on its own, so a chat that can be read still gets the refusal's notice when
+        // the path cannot.
         let params: Value = envelope
             .params
             .as_ref()
@@ -418,6 +452,8 @@ impl SocketDriver {
         }
         let mut fields: BTreeMap<String, Box<RawValue>> =
             serde_json::from_str(envelope.params.as_ref()?.get()).ok()?;
+        // What the event follows from, each field on its own and as lenient as before the schema:
+        // one the core cannot read is left out, and the event is still read.
         let text = |raw: Option<Box<RawValue>>| -> Option<String> {
             serde_json::from_str(raw?.get()).ok()
         };
@@ -428,6 +464,9 @@ impl SocketDriver {
         let chat = text(fields.remove("chat"));
         let prompts = ids(fields.remove("prompts"));
         let settles = ids(fields.remove("settles"));
+        for filled in wire::CORE_FILLS {
+            fields.remove(filled);
+        }
         let session = fields
             .get("session")
             .and_then(|raw| serde_json::from_str::<String>(raw.get()).ok())
@@ -466,68 +505,18 @@ impl Driver for SocketDriver {
     }
 
     async fn prompt(&mut self, prompt: Prompt) -> Result<(), Refusal> {
-        let person = |p: &marmot_agent_driver::Person| json!({"id": p.id.0, "name": p.name});
-        let mut params = json!({
-            "message": prompt.message.0,
-            "text": prompt.text,
-            "chat": chat(&prompt.chat),
-            "sender": person(&prompt.sender),
-            "attachments": prompt.attachments.iter().map(|a| json!({
-                "path": a.path.to_string_lossy(), "name": a.name, "media_type": a.media_type,
-            })).collect::<Vec<_>>(),
-        });
-        if let Some(quoted) = &prompt.reply_to {
-            params["reply_to"] = json!({
-                "message": quoted.message.0, "text": quoted.text, "author": person(&quoted.author),
-            });
-        }
-        if let Some(session) = &prompt.session {
-            params["session"] = session.as_str().into();
-        }
-        self.request("prompt", params).await
+        let params = wire::PromptParams::from(&prompt);
+        self.request(wire::CoreRequest::Prompt(params)).await
     }
 
     async fn answer(&mut self, answer: Answer) -> Result<(), Refusal> {
-        let given = match &answer.given {
-            Given::Choice(choice) => json!({"choice": choice}),
-            Given::Questions(replies) => json!({"questions": replies.iter().map(|r| json!({
-                "question": r.question, "options": r.options, "text": r.text,
-            })).collect::<Vec<_>>()}),
-        };
-        let params = json!({
-            "request": answer.request.0,
-            "item": answer.item.as_str(),
-            "by": {"id": answer.by.id.0, "name": answer.by.name},
-            "given": given,
-        });
-        self.request("answer", params).await
+        let params = wire::AnswerParams::from(&answer);
+        self.request(wire::CoreRequest::Answer(params)).await
     }
 
     async fn control(&mut self, control: Control) -> Result<(), Refusal> {
-        let action = match &control.action {
-            Action::Interrupt { turn } => json!({"type": "interrupt", "turn": turn.as_str()}),
-            Action::NewSession { chat, session } => json!({
-                "type": "new_session",
-                "chat": self::chat(chat),
-                "session": session.as_ref().map(|s| s.as_str()),
-            }),
-            Action::Set {
-                session,
-                setting,
-                value,
-            } => json!({
-                "type": "set", "session": session.as_str(), "setting": setting, "value": value,
-            }),
-            Action::Own { session, id } => {
-                json!({"type": "own", "session": session.as_str(), "id": id})
-            }
-        };
-        let params = json!({
-            "request": control.request.0,
-            "by": {"id": control.by.id.0, "name": control.by.name},
-            "action": action,
-        });
-        self.request("control", params).await
+        let params = wire::ControlParams::from(&control);
+        self.request(wire::CoreRequest::Control(params)).await
     }
 
     async fn next_event(&mut self) -> Option<Output> {
@@ -552,27 +541,29 @@ impl Driver for SocketDriver {
         if self.gone {
             return;
         }
-        let message = match result {
-            Ok(()) => json!({"jsonrpc": "2.0", "id": connector_id, "result": {}}),
-            Err(refusal) => {
-                let word = reason_word(refusal.reason);
-                let mut data = json!({"reason": word});
-                if let Some(detail) = refusal.detail {
-                    data["detail"] = detail.into();
-                }
-                json!({"jsonrpc": "2.0", "id": connector_id,
-                    "error": {"code": -32000, "message": word, "data": data}})
+        let id = wire::Id::deserialize(&connector_id).ok();
+        let written = match result {
+            Ok(()) => {
+                write_line(
+                    &mut self.writer,
+                    &wire::TakenMessage {
+                        jsonrpc: wire::JsonRpc::V2,
+                        id,
+                        result: wire::Taken {},
+                    },
+                )
+                .await
             }
+            Err(refusal) => write_line(&mut self.writer, &refused(id, refusal)).await,
         };
-        if write_line(&mut self.writer, &message).await.is_err() {
+        if written.is_err() {
             self.gone = true;
         }
     }
 }
-
 /// Writes one message as a line. One over the limit is not written (D-033).
-async fn write_line(writer: &mut OwnedWriteHalf, message: &Value) -> io::Result<()> {
-    let mut line = message.to_string();
+async fn write_line(writer: &mut OwnedWriteHalf, message: &impl Serialize) -> io::Result<()> {
+    let mut line = serde_json::to_string(message).map_err(io::Error::other)?;
     if line.len() > MAX_MESSAGE {
         return Err(io::Error::other("a message over the limit"));
     }
@@ -591,103 +582,42 @@ fn same(given: &str, token: &str) -> bool {
             == 0
 }
 
-/// A connector's refusal: its reason word, and its words for the chat.
+/// A connector's refusal: its reason, and its words for the chat. An error the core cannot read as
+/// a refusal is one that failed.
 fn refusal(error: &Value) -> Refusal {
     let data = &error["data"];
-    let word = data["reason"]
-        .as_str()
-        .or(error["message"].as_str())
-        .unwrap_or("failed");
-    let reason = match word {
-        "not_supported" => Reason::NotSupported,
-        "busy" => Reason::Busy,
-        "unknown_item" => Reason::UnknownItem,
-        "not_waiting" => Reason::NotWaiting,
-        "already_answered" => Reason::AlreadyAnswered,
-        "nothing_to_do" => Reason::NothingToDo,
-        "invalid" => Reason::Invalid,
-        "not_allowed" => Reason::NotAllowed,
-        _ => Reason::Failed,
-    };
+    // A connector that gives its reason only as the error's message is still understood.
+    let reason = wire::Reason::deserialize(&data["reason"])
+        .or_else(|_| wire::Reason::deserialize(&error["message"]))
+        .map_or(Reason::Failed, Reason::from);
     Refusal {
         reason,
         detail: data["detail"].as_str().map(String::from),
     }
 }
 
-/// The word for a reason, as the socket writes it.
-fn reason_word(reason: Reason) -> &'static str {
-    match reason {
-        Reason::NotSupported => "not_supported",
-        Reason::Busy => "busy",
-        Reason::UnknownItem => "unknown_item",
-        Reason::NotWaiting => "not_waiting",
-        Reason::AlreadyAnswered => "already_answered",
-        Reason::NothingToDo => "nothing_to_do",
-        Reason::Invalid => "invalid",
-        Reason::Failed => "failed",
-        Reason::NotAllowed => "not_allowed",
+/// The core's refusal of a connector's request: the reason, as the error's message too, and its
+/// words for the agent.
+fn refused(id: Option<wire::Id>, refusal: Refusal) -> wire::ErrorMessage {
+    let reason = wire::Reason::from(refusal.reason);
+    wire::ErrorMessage {
+        jsonrpc: wire::JsonRpc::V2,
+        id,
+        error: wire::RpcError {
+            code: -32000,
+            message: reason.word().into(),
+            data: Some(wire::Refused {
+                reason,
+                detail: refusal.detail,
+            }),
+        },
     }
-}
-
-/// A chat as the connector reads it: its id, whether it is a group, its name, and the folder it
-/// chose, only when it chose one (D-101).
-fn chat(chat: &marmot_agent_driver::Chat) -> Value {
-    let mut value = json!({"id": chat.id.0, "group": chat.group, "name": chat.name});
-    if let Some(folder) = &chat.folder {
-        value["folder"] = folder.to_string_lossy().into();
-    }
-    value
-}
-
-/// The seven capability flags, every one, every time (D-058).
-fn capabilities(value: &Value) -> Option<Capabilities> {
-    let flag = |name: &str| value[name].as_bool();
-    let mid_turn = match value["mid_turn"].as_str()? {
-        "fold" => MidTurn::Fold,
-        "restart" => MidTurn::Restart,
-        "queue" => MidTurn::Queue,
-        _ => return None,
-    };
-    let sessions = match value["sessions"].as_str()? {
-        "core" => Sessions::Core,
-        "own" => Sessions::Own,
-        _ => return None,
-    };
-    let files_in = match value["files_in"].as_str()? {
-        "none" => FilesIn::None,
-        "images" => FilesIn::Images,
-        "any" => FilesIn::Any,
-        _ => return None,
-    };
-    let approval_commands = value["approval_commands"]
-        .as_array()?
-        .iter()
-        .map(|c| {
-            Some(ApprovalCommand {
-                command: c["command"].as_str()?.to_string(),
-                counts: match c["counts"].as_str()? {
-                    "start" => Position::Start,
-                    "anywhere" => Position::Anywhere,
-                    _ => return None,
-                },
-            })
-        })
-        .collect::<Option<Vec<_>>>()?;
-    Some(Capabilities {
-        interrupt: flag("interrupt")?,
-        mid_turn,
-        sessions,
-        resume: flag("resume")?,
-        approvals: flag("approvals")?,
-        files_in,
-        approval_commands,
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tokio::io::AsyncReadExt;
 
     const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -695,10 +625,32 @@ mod tests {
     fn hello(token: Value) -> String {
         let hello = json!({"jsonrpc": "2.0", "id": 1, "method": "hello", "params": {
             "protocol": PROTOCOL, "token": token, "harness": {"name": "script"},
+            "connector": {"name": "script", "version": "0"},
             "capabilities": {"interrupt": false, "mid_turn": "queue", "sessions": "core",
                 "resume": false, "approvals": false, "files_in": "none", "approval_commands": []},
         }});
         format!("{hello}\n")
+    }
+
+    fn a_prompt() -> wire::CoreRequest {
+        let person = wire::Person {
+            id: "u-1".into(),
+            name: "A".into(),
+        };
+        wire::CoreRequest::Prompt(wire::PromptParams {
+            message: "m-1".into(),
+            text: "hi".into(),
+            chat: wire::Chat {
+                id: "c-1".into(),
+                group: false,
+                name: None,
+                folder: None,
+            },
+            sender: person,
+            attachments: Vec::new(),
+            reply_to: None,
+            session: None,
+        })
     }
 
     async fn greeted(core: UnixStream) -> SocketDriver {
@@ -750,7 +702,7 @@ mod tests {
         let mut driver = greeted(core)
             .await
             .answer_within(Duration::from_millis(100));
-        let result = driver.request("prompt", json!({})).await;
+        let result = driver.request(a_prompt()).await;
         assert_eq!(result.unwrap_err().reason, Reason::Failed);
         assert!(driver.next_event().await.is_none(), "given up");
         let mut seen = vec![0u8; 1024];
@@ -777,7 +729,7 @@ mod tests {
                 .unwrap();
             drop(write);
         });
-        let result = driver.request("prompt", json!({})).await;
+        let result = driver.request(a_prompt()).await;
         assert_eq!(result.unwrap_err().reason, Reason::Failed);
         answering.await.unwrap();
     }

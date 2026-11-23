@@ -7,11 +7,12 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import { homedir } from "node:os";
 import { CAPABILITIES, Connector, type ConnectorOptions, type CoreEvent, type Port, type RunInput } from "../src/connector.ts";
 import { fitEvent } from "../src/fit.ts";
 import { CoreConnection, MAX_MESSAGE, notificationSize, Refusal } from "../src/socket.ts";
+import { coreRequests, eventMessageProblems, eventProblems, problems, tracked, unknownReads } from "./protocol.ts";
 
 type Json = Record<string, unknown>;
 type Callback = (...args: unknown[]) => unknown;
@@ -123,6 +124,27 @@ class FakeOpenClaw implements Port {
   }
 }
 
+/**
+ * What was not as the core's types say (`fixtures/socket`): a request the tests served as the core's, an
+ * event the plugin sent, or a line on a fake core's socket. Every test ends by finding it empty.
+ */
+const invalid: string[] = [];
+afterEach(() => {
+  assert.deepEqual(invalid.splice(0), [], "every message either way is as the core's types say");
+});
+
+function check(def: "FromCore" | "FromConnector", m: unknown, what: string): void {
+  const event = def === "FromConnector" && (m as Json)["method"] === "event";
+  const found = event ? eventMessageProblems(m as Json) : problems(def, m);
+  for (const p of found) invalid.push(`${what}: ${p}`);
+}
+
+/** A line a fake core writes, checked as the core's. */
+function line(m: Json): string {
+  check("FromCore", m, "from the core");
+  return JSON.stringify(m) + "\n";
+}
+
 function setUp(generations: [string, number][] = [], more: Partial<ConnectorOptions> = {}) {
   const openclaw = new FakeOpenClaw();
   const events: CoreEvent[] = [];
@@ -135,9 +157,18 @@ function setUp(generations: [string, number][] = [], more: Partial<ConnectorOpti
     boot: "b0",
     generations,
     saveGenerations: (g) => saved.push(g),
-    send: (e) => events.push(e),
+    send: (e) => {
+      for (const p of eventProblems(e)) invalid.push(`an event: ${p}`);
+      events.push(e);
+    },
     ...more,
   });
+  // What the tests serve as the core's requests is checked as the core's.
+  const serve = connector.serve.bind(connector);
+  connector.serve = (method, params) => {
+    check("FromCore", { jsonrpc: "2.0", id: 1, method, params }, `a ${method} as the core's`);
+    return serve(method, params);
+  };
   openclaw.connector = connector;
   return { openclaw, events, connector, saved };
 }
@@ -469,10 +500,11 @@ test("the hello states every capability, and the core's requests are served over
       while ((at = buffered.indexOf("\n")) !== -1) {
         const m = JSON.parse(buffered.slice(0, at)) as Json;
         buffered = buffered.slice(at + 1);
+        check("FromConnector", m, "from the plugin");
         lines.push(m);
         if (m["method"] === "hello") {
-          socket.write(JSON.stringify({ jsonrpc: "2.0", id: m["id"], result: { core: { version: "0" }, agent: { name: "a" } } }) + "\n");
-          socket.write(JSON.stringify({ jsonrpc: "2.0", id: 7, method: "prompt", params: prompt("m-1", "hello") }) + "\n");
+          socket.write(line({ jsonrpc: "2.0", id: m["id"], result: { core: { version: "0" }, agent: { name: "a" } } }));
+          socket.write(line({ jsonrpc: "2.0", id: 7, method: "prompt", params: prompt("m-1", "hello") }));
         }
       }
     });
@@ -519,9 +551,10 @@ test("when the core restarts mid-turn, the connection's runs are cancelled and o
       while ((at = buffered.indexOf("\n")) !== -1) {
         const m = JSON.parse(buffered.slice(0, at)) as Json;
         buffered = buffered.slice(at + 1);
+        check("FromConnector", m, "from the plugin");
         if (m["method"] === "hello") {
-          socket.write(JSON.stringify({ jsonrpc: "2.0", id: m["id"], result: { core: { version: "0" }, agent: { name: "a" } } }) + "\n");
-          socket.write(JSON.stringify({ jsonrpc: "2.0", id: 7, method: "prompt", params: prompt("m-1", "sleep") }) + "\n");
+          socket.write(line({ jsonrpc: "2.0", id: m["id"], result: { core: { version: "0" }, agent: { name: "a" } } }));
+          socket.write(line({ jsonrpc: "2.0", id: 7, method: "prompt", params: prompt("m-1", "sleep") }));
         }
       }
     });
@@ -578,9 +611,10 @@ test("a message on its way when the core goes never runs, and the plugin waits f
       while ((at = buffered.indexOf("\n")) !== -1) {
         const m = JSON.parse(buffered.slice(0, at)) as Json;
         buffered = buffered.slice(at + 1);
+        check("FromConnector", m, "from the plugin");
         if (m["method"] === "hello") {
-          socket.write(JSON.stringify({ jsonrpc: "2.0", id: m["id"], result: { core: { version: "0" }, agent: { name: "a" } } }) + "\n");
-          socket.write(JSON.stringify({ jsonrpc: "2.0", id: 7, method: "prompt", params: prompt("m-1", "hello") }) + "\n");
+          socket.write(line({ jsonrpc: "2.0", id: m["id"], result: { core: { version: "0" }, agent: { name: "a" } } }));
+          socket.write(line({ jsonrpc: "2.0", id: 7, method: "prompt", params: prompt("m-1", "hello") }));
         }
       }
     });
@@ -821,4 +855,42 @@ test("media OpenClaw sends to a chat outside a run goes to the core too, after i
   assert.equal(sent, receipt);
   assert.deepEqual(asked, [["c-9", "/work/generated.png"]]);
   assert.deepEqual(events.map((e) => [e.chat, e.type, e.text]), [["c-9", "message", "Generated"]]);
+});
+
+test("the plugin reads nothing from the core's requests that the core does not send", async () => {
+  // Every request of the core's in `fixtures/socket/examples.json`, served with every field read recorded.
+  const { openclaw, events, connector } = setUp();
+  const requests = coreRequests();
+  const order = ["prompt", "answer", "control"];
+  requests.sort((a, b) => order.indexOf(a.method) - order.indexOf(b.method));
+  for (const { name, method, params } of requests) {
+    const given = method === "answer" ? (params["given"] as Json) : undefined;
+    if (given !== undefined) {
+      // OpenClaw asks, and the example answers what it asked: the item is the plugin's own id.
+      const run = openclaw.last();
+      run.start("r-1");
+      if ("questions" in given) {
+        run.on("onItemEvent", { toolCallId: "t-2", phase: "start", name: "ask_user", status: "running" });
+        run.on("onToolStart", { toolCallId: "t-2", name: "ask_user", phase: "start", args: { questions: [{ id: "q0", question: "Which?", options: [{ label: "A", value: "A" }, { label: "B", value: "B" }] }] } });
+        run.deliver({ text: "Which?", channelData: { askUser: { questionId: "q-1", optionValues: ["A", "B"] } } }, { kind: "tool" });
+        params["item"] = events.filter((e) => e.type === "question").at(-1)!.item;
+      } else {
+        run.on("onItemEvent", { toolCallId: "t-1", phase: "start", name: "exec", status: "running", commandBearing: true });
+        run.on("onToolStart", { toolCallId: "t-1", name: "exec", phase: "start", args: { command: "touch x" } });
+        const request = { id: "ap-1", request: { command: "touch x", toolCallId: "t-1", allowedDecisions: ["allow-once", "deny"] } };
+        connector.adapterCall("approvalCapability.render.exec.buildPendingPayload", { request, target: { channel: "marmot", to: "c-1" } }, null);
+        params["item"] = events.filter((e) => e.type === "approval").at(-1)!.item;
+      }
+    }
+    const reads = new Set<string>();
+    try {
+      // The plugin's own serve: the one `setUp` wraps checks the params, and would read them all.
+      await Connector.prototype.serve.call(connector, method, tracked(params, reads));
+    } catch (e) {
+      if (!(e instanceof Refusal)) throw e;
+    }
+    const def = `${method[0]!.toUpperCase()}${method.slice(1)}Params`;
+    assert.ok(reads.size > 0, `${name}: nothing was read`);
+    assert.deepEqual(unknownReads(def, reads), [], `${name}: read, and never sent by the core`);
+  }
 });
