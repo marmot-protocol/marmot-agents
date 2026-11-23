@@ -1063,6 +1063,11 @@ impl Driver for Pi {
                 if c.process.is_some() && c.translator.running() {
                     return Err(Refusal::new(Reason::Busy));
                 }
+                // Two waiting at once would both be settled by the first switch, which is a
+                // session other than the old one for each: one at a time.
+                if (c.effects.iter()).any(|(_, e)| matches!(e, Effect::NewSession(_))) {
+                    return Err(Refusal::new(Reason::Busy));
+                }
                 // Only a session other than the one the chat is in shows the effect. The core
                 // names the session it saved, and none before it has seen one, so the driver's own
                 // comes first: an edit of the chat's session must not settle the request.

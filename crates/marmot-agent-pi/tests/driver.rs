@@ -238,6 +238,38 @@ async fn settings_and_a_new_session_are_settled_by_the_session_item() {
     assert_eq!(started.settles, vec!["r-3".into()]);
 }
 
+// Two new sessions asked for before Pi has switched once: both would wait for a session other
+// than the old one, and the first switch would settle both. The second is refused as busy, as a
+// second compaction is; once the first is settled, another may be asked for.
+#[tokio::test]
+async fn one_new_session_at_a_time_settled_by_its_own_session() {
+    let (mut pi, _work) = start().await;
+    pi.prompt(prompt("c-1", "m-1", "hello")).await.unwrap();
+    let first = until(&mut pi, |e| is_turn(e, State::Done)).await;
+    let old = session_of(&first);
+    let fresh = |request: &str, session: &SessionId| Control {
+        request: request.into(),
+        by: person(),
+        action: Action::NewSession {
+            chat: prompt("c-1", "m-0", "").chat,
+            session: Some(session.clone()),
+        },
+    };
+    pi.control(fresh("r-1", &old)).await.unwrap();
+    let again = pi.control(fresh("r-2", &old)).await;
+    assert_eq!(again.map_err(|r| r.reason), Err(Reason::Busy));
+    let started = until(&mut pi, |e| !e.settles.is_empty()).await;
+    assert!(matches!(started.event.body(), Body::Session(_)));
+    assert_ne!(session_of(&started), old);
+    assert_eq!(started.settles, vec!["r-1".into()]);
+    let new = session_of(&started);
+    pi.control(fresh("r-3", &new)).await.unwrap();
+    let next = until(&mut pi, |e| !e.settles.is_empty()).await;
+    assert!(matches!(next.event.body(), Body::Session(_)));
+    assert_ne!(session_of(&next), new);
+    assert_eq!(next.settles, vec!["r-3".into()]);
+}
+
 #[tokio::test]
 async fn a_pi_that_stops_closes_its_turn_and_the_next_prompt_resumes_the_session() {
     let (mut pi, _work) = start().await;
