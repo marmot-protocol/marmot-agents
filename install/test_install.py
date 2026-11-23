@@ -20,6 +20,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 import tomllib
 import unittest
 from concurrent.futures import ThreadPoolExecutor
@@ -62,10 +63,15 @@ case $1 in
     run) echo "with MODEL_BASE_URL=${{MODEL_BASE_URL:-}}" >> "$FAKE_LOG" ;;
 esac
 """
-# A stand-in fails a command that starts as FAKE_FAIL says, such as "systemctl --user restart".
+# A stand-in fails a command that starts as FAKE_FAIL says, such as "systemctl --user restart". One that
+# starts as FAKE_PAUSE says makes the file FAKE_PAUSE_AT.reached, then waits until FAKE_PAUSE_AT is there.
 FAKE_LOGGER = """#!/bin/sh
 echo "$(basename "$0") $*" >> "$FAKE_LOG"
 if [ -n "${FAKE_FAIL:-}" ]; then case "$(basename "$0") $*" in "$FAKE_FAIL"*) echo "failing, as asked" >&2; exit 1 ;; esac; fi
+if [ -n "${FAKE_PAUSE:-}" ]; then case "$(basename "$0") $*" in "$FAKE_PAUSE"*)
+    : >"$FAKE_PAUSE_AT.reached"
+    n=0; while [ ! -e "$FAKE_PAUSE_AT" ] && [ "$n" -lt 1200 ]; do sleep 0.05; n=$((n + 1)); done ;;
+esac; fi
 """
 # npm ci makes the packages it installs, and npm pack the archive, as the real one does.
 FAKE_NPM = """#!/bin/sh
@@ -435,6 +441,21 @@ class Machine:
             raise AssertionError(f"{harness}.sh failed ({result.returncode}):\n{result.stdout}\n{result.stderr}")
         return result
 
+    def start(self, harness: str, *args: str, env=None) -> subprocess.Popen:
+        """Starts an install script and leaves it running, its output going to files beside the log."""
+        environment = {"HOME": str(self.home), "PATH": f"{self.bin}:{SYSTEM_PATH}", "FAKE_LOG": str(self.log),
+                       "LANG": "C", **(env or {})}
+        out = tempfile.NamedTemporaryFile("w+", dir=self.dir, delete=False)
+        process = subprocess.Popen(["bash", str(HERE / f"{harness}.sh"), *args], env=environment,
+                                   stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, text=True)
+        out.close()
+        process.output_path = Path(out.name)
+        return process
+
+    @staticmethod
+    def output(process: subprocess.Popen) -> str:
+        return process.output_path.read_text()
+
     def args(self, harness: str, *more: str, container=False) -> list:
         args = ["--yes", "--owner", OWNER]
         if harness not in PLUGIN:
@@ -619,7 +640,8 @@ class Install(unittest.TestCase):
         self.assertEqual(mode(m.home / ".local/bin/marmot-agent"), 0o755)
         self.assertTrue((m.data / "lib/install/codex.sh").is_file())
         self.assertFalse((m.data / "lib/tools").exists(), "Codex needs no container files")
-        self.assertEqual(sorted(p.name for p in m.data.iterdir()), ["agents", "lib"], "nothing staged is left")
+        self.assertEqual(sorted(p.name for p in m.data.iterdir()), ["agents", "install.lock", "lib"],
+                         "nothing staged is left")
         unit = m.units / "marmot-agent-codex.service"
         self.assertEqual(mode(unit), 0o644)
         self.assertIn(f'ExecStart="{agent}/start"', unit.read_text())
@@ -1645,7 +1667,7 @@ class Upgrade(unittest.TestCase):
         return f"mixed: {changed}"
 
     def leftovers(self, m: Machine) -> list:
-        return sorted(p.name for p in m.data.iterdir() if p.name not in ("agents", "lib"))
+        return sorted(p.name for p in m.data.iterdir() if p.name not in ("agents", "lib", "install.lock"))
 
     def failed(self, fail: str) -> None:
         m = Machine(self)
@@ -1672,7 +1694,8 @@ class Upgrade(unittest.TestCase):
 
     def test_another_harness_puts_back_an_upgrade_it_cannot_finish(self):
         """A run of another harness, which has none of Claude Code's files to put in, finds an upgrade a
-        killed run left under way: it puts back what that run found, then installs as if none had run."""
+        killed run left under way, at any step, even before Claude Code's own files were touched: it puts
+        back what that run found, then installs as if none had run."""
         reference = Machine(self)
         self.older(reference)
         reference.run("codex", *reference.args("codex", "--binary", str(reference.core)))
@@ -1680,18 +1703,91 @@ class Upgrade(unittest.TestCase):
         steps = Machine(self)
         self.older(steps)
         steps.run(self.HARNESS, *self.args(steps), stop=("KILL", 0))
-        tried = 0
+        tried = untouched = 0
         for step in range(1, int(steps.steps.read_text()) + 1):
             m = Machine(self)
             self.older(m)
             m.run(self.HARNESS, *self.args(m), stop=("KILL", step), check=False)
-            if not (m.data / "upgrade").exists() or not (m.data / "upgrade/lib/packages").exists():
+            if not (m.data / "upgrade").exists():
                 continue
             tried += 1
-            m.run("codex", *m.args("codex", "--binary", str(m.core)))
+            untouched += not (m.data / "upgrade/lib/packages").exists()
+            out = m.run("codex", *m.args("codex", "--binary", str(m.core))).stdout
+            self.assertIn("a run of another installer before this one stopped part way", out, f"killed at step {step}")
             self.assertEqual(self.snapshot(m), expected, f"killed at step {step}")
             self.assertEqual(self.leftovers(m), [])
-        self.assertGreater(tried, 0)
+        self.assertGreater(untouched, 0, "some step leaves the upgrade under way before Claude Code's own files")
+        self.assertGreater(tried, untouched)
+
+    def test_a_second_install_waits_for_one_under_way(self):
+        """Two installs in one home at once: the second waits until the first is done, and so never takes
+        over, finishes or puts back an upgrade the first is still making. The lock is taken with flock,
+        or, without it, as on macOS, with perl."""
+        self.one_at_a_time(None)
+        without = Path(tempfile.mkdtemp(prefix="marmot-install-"))
+        self.addCleanup(shutil.rmtree, without, True)
+        for folder in SYSTEM_PATH.split(":"):
+            for program in Path(folder).iterdir():
+                if program.name != "flock" and not os.path.lexists(without / program.name):
+                    (without / program.name).symlink_to(program)
+        self.one_at_a_time(str(without))
+
+    def one_at_a_time(self, system_path):
+        m = Machine(self)
+        self.older(m)
+        path = {"PATH": f"{m.bin}:{system_path}"} if system_path else {}
+        pause = m.dir / "pause"
+        first = m.start(self.HARNESS, *self.args(m),
+                        env={"FAKE_PAUSE": "systemctl --user restart", "FAKE_PAUSE_AT": str(pause), **path})
+        self.addCleanup(first.kill)
+        reached = pause.with_name("pause.reached")
+        for _ in range(1200):
+            if reached.exists() or first.poll() is not None:
+                break
+            time.sleep(0.05)
+        self.assertTrue(reached.exists(), m.output(first))
+        # Another agent of the same harness, whose install fails once it has prepared its files.
+        second = m.start(self.HARNESS, *m.args(self.HARNESS, "--binary", str(m.core), "--name", "third"),
+                         env={"FAKE_FAIL": "npm ci", **path})
+        self.addCleanup(second.kill)
+        for _ in range(1200):
+            if "waiting for it" in m.output(second) or second.poll() is not None:
+                break
+            time.sleep(0.05)
+        pause.touch()
+        self.assertEqual(first.wait(timeout=120), 0, m.output(first))
+        self.assertNotEqual(second.wait(timeout=120), 0, m.output(second))
+        self.assertIn("waiting for it", m.output(second))
+        self.assertEqual(self.state(m), "new", m.output(second))
+        self.assertEqual(self.leftovers(m), [])
+
+    def test_a_stop_while_the_record_is_removed_puts_back_nothing(self):
+        """The upgrade is done once its record leaves its place, whole: a TERM as the record is being
+        removed, some of it gone, leaves the new core and files, never the old core with new files."""
+        m = Machine(self)
+        self.older(m)
+        rm = shutil.which("rm", path=SYSTEM_PATH)
+        # An rm that, given the record, removes the copies of the old files and is then stopped with the
+        # installer, as a TERM to both would.
+        m.write(m.bin / "rm", f"""#!/bin/sh
+for a; do
+    if [ -f "$a/list" ] && [ ! -e "$FAKE_LOG.removing" ]; then
+        : >"$FAKE_LOG.removing"
+        {rm} -rf "$a/lib"
+        kill -s TERM "$PPID"
+        exit 143
+    fi
+done
+exec {rm} "$@"
+""")
+        result = m.run(self.HARNESS, *self.args(m), check=False)
+        self.assertTrue((m.dir / "calls.log.removing").exists(), "the record was removed")
+        self.assertEqual(result.returncode, 143, result.stderr)
+        self.assertEqual(self.state(m), "new", result.stderr)
+        (m.bin / "rm").unlink()
+        m.run(self.HARNESS, *self.args(m))
+        self.assertEqual(self.state(m), "new")
+        self.assertEqual(self.leftovers(m), [])
 
     def test_every_step(self):
         m = Machine(self)

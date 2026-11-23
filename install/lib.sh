@@ -10,6 +10,7 @@
 #   ~/.local/share/marmot-agent/lib/                   the connectors, the plugins and the container
 #                                                      files; an install replaces only the parts its
 #                                                      harness uses
+#   ~/.local/share/marmot-agent/install.lock           locked by the install that runs, so one runs at a time
 #   ~/.local/share/marmot-agent/agents/NAME/           this agent: settings.toml, its account home in home/,
 #                                                      what its harness keeps, start (which runs the core
 #                                                      with service.env), and the service's files
@@ -57,12 +58,13 @@ say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-# Runs a command, or, in a dry run, says it would.
+# Runs a command, or, in a dry run, says it would. The command does not get the lock on installs
+# (lock_installs), so that nothing it leaves running, such as a gateway it restarts, holds it.
 act() {
     if [ "$DRY_RUN" -eq 1 ]; then
         say "would run: $*"
     else
-        "$@"
+        "$@" 9>&-
     fi
 }
 
@@ -479,6 +481,37 @@ finish() {
 }
 
 # ---------------------------------------------------------------------------------------------------
+# One install at a time
+#
+# The core, the support files and the record of an upgrade are shared by every agent in a home, and a
+# gateway's plugin by the agents of one gateway, so the installs in a home run one at a time: each holds
+# a lock on $MA_DATA/install.lock from before it looks at what a run before it left until it ends, having
+# finished or put back what it changed. The lock is on the file open as descriptor 9, and the system lets
+# it go when the run ends, however it ends. It is taken with flock, which Linux has (util-linux), or,
+# where there is none, as on macOS, with perl, which macOS ships, on the same descriptor. The commands a
+# run starts do not get the descriptor (act).
+lock_installs() {
+    [ "$DRY_RUN" -eq 0 ] || return 0
+    mkdir -p "$MA_DATA"
+    exec 9>>"$MA_DATA/install.lock"
+    if lock_fd -n; then return 0; fi
+    say "another install of marmot-agent in this home is under way; waiting for it to end"
+    lock_fd || die "waiting for the other install of marmot-agent in this home failed"
+}
+
+# Locks descriptor 9; given -n, fails at once if another run holds it.
+lock_fd() {
+    if program_path flock >/dev/null; then
+        flock "$@" 9
+    elif program_path perl >/dev/null; then
+        perl -MFcntl=:flock -e 'open(my $f, ">&=", 9) or exit 2; flock($f, LOCK_EX | ($ARGV[0] ? LOCK_NB : 0)) or exit 1' \
+            -- "${1:-}"
+    else
+        die "installing runs one install at a time, which needs flock or perl: install either, then run this again"
+    fi
+}
+
+# ---------------------------------------------------------------------------------------------------
 # Paths
 
 # Prints the absolute path a path names, with links, `.` and `..` resolved as the system resolves them,
@@ -599,14 +632,18 @@ publish_support() {
 # replaced one and then failed would leave every agent, not only its own, to start on the new core with
 # the old files, or the other way round. So both are prepared first, in this run's own folder, and put in
 # place together (publish_support); before that, upgrade_begin keeps a copy of the core in $MA_UPGRADE,
-# a folder whose being there records that an upgrade is under way, and each part of $MA_LIB is moved
-# there as it is replaced, after a line in its list names it. While the folder is there, a run that
-# fails, or is stopped by HUP, INT or TERM, puts all of it back (finish). A run after one killed outright
-# finds it, keeps nothing more of what is installed, which is by then partly that run's, finishes the
-# upgrade, and, should it fail, puts back what the killed run found. The upgrade is done once the agent
-# is set up and started, as a plugin change is (main): upgrade_end then removes the folder.
+# a folder whose being there records that an upgrade is under way, with a list of every part of $MA_LIB
+# the run replaces; the folder is made whole under another name and renamed into place. Each part is
+# moved there as it is replaced. While the folder is there, a run that fails, or is stopped by HUP, INT
+# or TERM, puts all of it back (finish). A run after one killed outright finds it, keeps nothing more of
+# what is installed, which is by then partly that run's, finishes the upgrade, and, should it fail, puts
+# back what the killed run found. The upgrade is done once the agent is set up and started, as a plugin
+# change is (main): upgrade_end then renames the folder away, which ends it in one step, and removes it.
+#
+# Only one install runs in a home at a time (lock_installs), from before it looks for an upgrade left
+# under way until it ends, so no run takes over, finishes or puts back an upgrade another is making.
 
-# Starts an upgrade, or takes over one a run before this one left under way. One that replaced a part
+# Starts an upgrade, or takes over one a run before this one left under way. One that replaces a part
 # this run does not, as another harness's install does, this run cannot finish: it puts it back first.
 upgrade_begin() {
     local making kind part others=""
@@ -619,6 +656,7 @@ upgrade_begin() {
         if [ -z "$others" ]; then
             MA_UPGRADING=1
             say "a run before this one stopped part way through installing marmot-agent; this one finishes that, and puts back the core and support files that run found if it fails"
+            upgrade_list "$MA_UPGRADE"
             return 0
         fi
         upgrade_put_back other || die "fix what stops it, then run this again"
@@ -634,24 +672,37 @@ upgrade_begin() {
     else
         printf 'core\tabsent\n' >"$making/list"
     fi
+    upgrade_list "$making"
     mv "$making" "$MA_UPGRADE"
 }
 
-# Whether a part of $MA_LIB was there before the upgrade, as its list says: present, absent, or nothing
-# when the list does not name it yet.
-upgrade_found() {
-    awk -F '\t' -v part="$1" '$1 == "part" && $2 == part { print $3; exit }' "$MA_UPGRADE/list"
+# Names in the list of the upgrade in a folder each part of $MA_LIB this run replaces that it does not
+# name yet, as present or absent. Written beside the list and renamed over it, so the list names all
+# of them before any is replaced, or none.
+upgrade_list() {
+    local folder=$1 part found more=""
+    for part in $(lib_parts); do
+        [ -z "$(upgrade_found "$part" "$folder")" ] || continue
+        if [ -e "$MA_LIB/$part" ]; then found=present; else found=absent; fi
+        more="${more}part	$part	$found
+"
+    done
+    [ -n "$more" ] || return 0
+    { cat "$folder/list" && printf '%s' "$more"; } >"$folder/list.new"
+    mv -f "$folder/list.new" "$folder/list"
 }
 
-# Clears the way for a new copy of a part of $MA_LIB: the one there before the upgrade is moved into
-# $MA_UPGRADE, once its list names it; what a run before this one put there is removed.
+# Whether a part of $MA_LIB was there before the upgrade, as its list says (that of the upgrade in the
+# folder given second, or $MA_UPGRADE): present, absent, or nothing when the list does not name it.
+upgrade_found() {
+    awk -F '\t' -v part="$1" '$1 == "part" && $2 == part { print $3; exit }' "${2:-$MA_UPGRADE}/list"
+}
+
+# Clears the way for a new copy of a part of $MA_LIB, which the upgrade's list names: the one there
+# before the upgrade is moved into $MA_UPGRADE; what a run before this one put there is removed.
 upgrade_keep() {
     local part=$1 kept="$MA_UPGRADE/lib/$1" found
     found=$(upgrade_found "$part")
-    if [ -z "$found" ]; then
-        if [ -e "$MA_LIB/$part" ]; then found=present; else found=absent; fi
-        printf 'part\t%s\t%s\n' "$part" "$found" >>"$MA_UPGRADE/list"
-    fi
     if [ -e "$kept" ] || [ "$found" = absent ]; then
         rm -rf "${MA_LIB:?}/${part:?}"
     elif [ -e "$MA_LIB/$part" ]; then
@@ -669,8 +720,15 @@ empty_above() {
 
 # Ends an upgrade: what it replaced is no longer needed.
 upgrade_end() {
-    [ "$DRY_RUN" -eq 1 ] || rm -rf "$MA_UPGRADE"
+    [ "$DRY_RUN" -eq 1 ] || upgrade_retire
     MA_UPGRADING=0
+    [ "$DRY_RUN" -eq 1 ] || rm -rf "$MA_DATA/.upgrade.done.$$"
+}
+
+# Takes the record of an upgrade out of its place in one step, under a name a later run removes
+# (install_core) should this one be stopped before it has: a record half removed is never read.
+upgrade_retire() {
+    rm -rf "$MA_DATA/.upgrade.done.$$" && mv "$MA_UPGRADE" "$MA_DATA/.upgrade.done.$$"
 }
 
 # After an upgrade that did not end: the core and the parts of $MA_LIB there before it put back, a part
@@ -678,6 +736,8 @@ upgrade_end() {
 # this one left, which this one puts back before it starts, and the status says whether it could.
 upgrade_put_back() {
     local why=${1:-} kind part found ok=0
+    # Gone already: upgrade_end took it away, and the upgrade is done.
+    [ -f "$MA_UPGRADE/list" ] || return 0
     while IFS='	' read -r kind part found; do
         case $kind in
             core)
@@ -699,8 +759,8 @@ upgrade_put_back() {
         esac
     done <"$MA_UPGRADE/list"
     if [ "$why" = other ]; then
-        if [ "$ok" -eq 0 ]; then
-            rm -rf "$MA_UPGRADE"
+        if [ "$ok" -eq 0 ] && upgrade_retire; then
+            rm -rf "$MA_DATA/.upgrade.done.$$"
             say "a run of another installer before this one stopped part way through installing marmot-agent; this put back the core and support files that run found"
             return 0
         fi
@@ -708,8 +768,8 @@ upgrade_put_back() {
 marmot-agent, and putting back the core and support files that run found failed (above); they are in $MA_UPGRADE" >&2
         return 1
     fi
-    if [ "$ok" -eq 0 ]; then
-        rm -rf "$MA_UPGRADE"
+    if [ "$ok" -eq 0 ] && upgrade_retire; then
+        rm -rf "$MA_DATA/.upgrade.done.$$"
         printf 'error: %s\n' "the install did not finish, so this put back the marmot-agent core and support files \
 that were installed before it, which every agent on this account starts with" >&2
     else
@@ -808,12 +868,16 @@ install_core() {
         MA_STAGE=$MA_LIB
         return 0
     fi
+    # Nothing is written before the checks above, and nothing is read that another install changes
+    # before the lock is held.
+    lock_installs
     # An upgrade a run before this one left under way is finished by this one, or put back should this
     # one fail before it is.
     if [ -d "$MA_UPGRADE" ]; then upgrade_begin; fi
     mkdir -p "$MA_DATA"
-    # What a run killed outright staged is removed: a folder named after a process that is gone.
-    for stage in "$MA_DATA"/lib.new.*; do
+    # What a run killed outright staged, or left of an upgrade's record it was removing, is removed: a
+    # folder named after a process that is gone.
+    for stage in "$MA_DATA"/lib.new.* "$MA_DATA"/.upgrade.done.*; do
         [ -d "$stage" ] || continue
         kill -0 "${stage##*.}" 2>/dev/null || rm -rf "$stage"
     done
@@ -1666,6 +1730,7 @@ main() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
     if [ "$UNINSTALL" -eq 1 ]; then
+        if [ -d "$MA_DATA" ]; then lock_installs; fi
         uninstall
         return 0
     fi
