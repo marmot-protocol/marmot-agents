@@ -610,3 +610,130 @@ async fn a_request_with_an_escaped_id_is_answered_once() {
     assert_eq!(answered.settles, vec![RequestId::from("r-1")]);
     agent.await.unwrap();
 }
+
+/// A request from a session no chat has taken is answered all the same, so the agent does not
+/// wait for ever. One that comes while a session is being picked is held, since the session being
+/// picked can speak before the reply that picks it; when the reply names another session, the
+/// request is refused as the official ACP library refuses a request for a session it does not
+/// have: -32002, resource not found, with the session in `data`. So is one that comes when no
+/// session is being picked. One from the session the reply names, held with it, is the chat's,
+/// and takes the person's answer.
+#[tokio::test]
+async fn a_request_from_a_session_no_chat_has_is_refused_as_not_found() {
+    let (mut acp, mut stand) = connected().await;
+    let agent = tokio::spawn(async move {
+        let wait = Duration::from_secs(5);
+        let new = stand.next().await;
+        assert_eq!(new["method"], "session/new");
+        stand.ask_permission(30, "s-gone", "t1").await;
+        stand.ask_permission(29, "s1", "t0").await;
+        stand.reply(&new, json!({"sessionId": "s1"})).await;
+        let mut heard = Vec::new();
+        while heard.len() < 3 {
+            let next = tokio::time::timeout(wait, stand.next()).await;
+            heard.push(next.expect("the driver answers both requests held while picking"));
+        }
+        let answered = heard.iter().find(|m| m["id"] == 29);
+        let answered = answered.expect("the chat's request is answered");
+        assert_eq!(
+            answered["result"],
+            json!({"outcome": {"outcome": "selected", "optionId": "once"}}),
+            "the chat's request takes the person's answer"
+        );
+        let prompted = heard.iter().find(|m| m["method"] == "session/prompt");
+        let prompted = prompted.expect("the prompt").clone();
+        let refused = heard.iter().find(|m| m["id"] == 30);
+        let refused = refused.expect("the held request is answered");
+        let not_found = json!({"code": -32002, "message": "Resource not found",
+                               "data": {"sessionId": "s-gone"}});
+        assert_eq!(refused["error"], not_found, "held while picking");
+        stand.ask_permission(31, "s-gone", "t2").await;
+        let refused = tokio::time::timeout(wait, stand.next()).await;
+        let refused = refused.expect("the driver answers a request for no chat's session");
+        assert_eq!(refused["id"], 31);
+        let not_found = json!({"code": -32002, "message": "Resource not found",
+                               "data": {"sessionId": "s-gone"}});
+        assert_eq!(refused["error"], not_found, "with no session being picked");
+        stand
+            .reply(&prompted, json!({"stopReason": "end_turn"}))
+            .await;
+        stand
+    });
+    acp.prompt(prompt("hello")).await.unwrap();
+    let mut asked = 0;
+    loop {
+        let e = event(&mut acp).await;
+        if let Body::Approval(a) = e.event.body()
+            && e.event.header().state == State::Waiting
+        {
+            asked += 1;
+            let answer = Answer {
+                request: RequestId::from("r-1"),
+                item: e.event.header().item.clone(),
+                by: person(),
+                given: Given::Choice(a.choices[0].id.clone()),
+            };
+            acp.answer(answer).await.unwrap();
+        }
+        if matches!(e.event.body(), Body::Turn(_)) && e.event.header().state == State::Done {
+            break;
+        }
+    }
+    agent.await.unwrap();
+    assert_eq!(asked, 1, "only the chat's request reaches it");
+}
+
+/// What a session being picked says before the reply that picks it goes to its chat once the reply
+/// comes, whether it names its session or only a tool call of it. Here Cursor's to-do list, which
+/// names only its tool call, comes after that call and before the reply to `session/new`: it is
+/// the chat's plan, and taken.
+#[tokio::test]
+async fn a_message_naming_only_its_tool_call_before_the_session_is_picked_reaches_the_chat() {
+    let (mut acp, mut stand) = connected().await;
+    let agent = tokio::spawn(async move {
+        let wait = Duration::from_secs(5);
+        let new = stand.next().await;
+        assert_eq!(new["method"], "session/new");
+        stand
+            .update(
+                json!({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Plan",
+                            "kind": "other", "status": "completed"}),
+            )
+            .await;
+        stand
+            .send(
+                json!({"jsonrpc": "2.0", "id": 40, "method": "cursor/update_todos", "params": {
+                "toolCallId": "t1", "merge": false,
+                "todos": [{"id": "1", "content": "Read", "status": "in_progress"}]}}),
+            )
+            .await;
+        stand.reply(&new, json!({"sessionId": "s1"})).await;
+        let mut heard = Vec::new();
+        while heard.len() < 2 {
+            let next = tokio::time::timeout(wait, stand.next()).await;
+            heard.push(next.expect("the driver takes the list and prompts"));
+        }
+        let taken = heard
+            .iter()
+            .find(|m| m["id"] == 40)
+            .expect("the list is answered");
+        assert_eq!(taken["result"], json!({}));
+        let prompted = heard.iter().find(|m| m["method"] == "session/prompt");
+        let prompted = prompted.expect("the prompt").clone();
+        stand
+            .reply(&prompted, json!({"stopReason": "end_turn"}))
+            .await;
+        stand
+    });
+    acp.prompt(prompt("hello")).await.unwrap();
+    let mut planned = false;
+    loop {
+        let e = event(&mut acp).await;
+        planned |= matches!(e.event.body(), Body::Plan(_));
+        if matches!(e.event.body(), Body::Turn(_)) && e.event.header().state == State::Done {
+            break;
+        }
+    }
+    agent.await.unwrap();
+    assert!(planned, "the to-do list reaches the chat as its plan");
+}

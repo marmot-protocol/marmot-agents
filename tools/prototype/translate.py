@@ -1381,15 +1381,7 @@ class Acp(Translator):
                 choices.append({"id": f"c{n}", "label": o.get("name"), "effect": effect})
                 native_choices[f"c{n}"] = o.get("optionId")
             subject = f"{p.get('sessionId')}:{subject}" if subject else None  # the tool item
-            item = f"approval:{subject}" if subject else f"approval:{self.turn}:{rid}"
-            # A second request for one tool call, while the first waits or after, is an approval of
-            # its own, named after the request as well and starting `approval+`, which no first,
-            # always `approval:`, can. No item id already used is taken again.
-            taken = {e["item"] for e in self.events}
-            if item in taken:
-                key = json.dumps(rid, ensure_ascii=False, separators=(",", ":"))
-                names = (f"approval+{key}{f'+{n}' if n else ''}:{subject}" for n in itertools.count())
-                item = next(name for name in names if name not in taken)
+            item = self.fresh("approval", subject or f"{self.turn}:{rid}", rid)
             raw = call.get("rawInput") if isinstance(call.get("rawInput"), dict) else {}
             self.pending[("s", rid)] = {"item": item, "native_choices": native_choices}
             what = {"execute": "command", "edit": "edit", "delete": "edit", "move": "edit"}.get(call.get("kind"), "action")
@@ -1416,13 +1408,29 @@ class Acp(Translator):
                            "options": [{"id": f"o{k}", "label": o.get("title") or o.get("const"),
                                         "description": o.get("description")} for k, o in enumerate(offered)]})
             subject = f"{p.get('sessionId')}:{p['toolCallId']}" if p.get("toolCallId") else None  # the tool item
-            item = f"question:{subject}" if subject else f"question:{self.turn}:{rid}"
+            item = self.fresh("question", subject or f"{self.turn}:{rid}", rid)
             self.pending[("s", rid)] = {"item": item, "values": values, "custom": custom}
             return self.emit(item, "question", "waiting", "Question", qs[0]["text"] if qs else p.get("message") or "",
                              {"answer_via": "request", "subject": subject, "questions": qs}, f"{method} (request)", p)
         if method == "cursor/update_todos":
             return self.update_todos(method, p)
         self.unknown(f"{method} (request)")
+
+    def fresh(self, kind, named, rid):
+        """The item id for a request of `kind`, an approval or a question, named after `named`, its
+        tool call. The agent may ask again for the same call, while the first waits or after: each
+        request is an item of its own. The first is `{kind}:{named}`. A later one is named after the
+        request alone, `{kind}+{key}`, with any `%` and `:` in the key written `%25` and `%3A`: it
+        holds no `:`, so it is no first, and no tool call's item, always `{session}:{tool call}`. No
+        item id already used is taken again. As `Translator::fresh` in the ACP crate."""
+        taken = {e["item"] for e in self.events}
+        first = f"{kind}:{named}"
+        if first not in taken:
+            return first
+        key = json.dumps(rid, ensure_ascii=False, separators=(",", ":"))
+        key = key.replace("%", "%25").replace(":", "%3A")
+        names = (f"{kind}+{key}{f'+{n}' if n else ''}" for n in itertools.count())
+        return next(name for name in names if name not in taken)
 
     def update_todos(self, method, p):
         """Cursor's to-do list, which it sends instead of ACP's plan. `merge` updates the entries it names

@@ -84,6 +84,11 @@ fn turns(events: &[AgentEvent]) -> Vec<(String, State)> {
 
 /// A translator with a session and a turn started by the prompt with id 2.
 fn started() -> (Translator, Vec<AgentEvent>) {
+    started_in("s1")
+}
+
+/// A translator with session `session` and a turn started by the prompt with id 2.
+fn started_in(session: &str) -> (Translator, Vec<AgentEvent>) {
     let mut acp = Translator::new();
     let mut events = Vec::new();
     for (direction, message) in [
@@ -100,7 +105,11 @@ fn started() -> (Translator, Vec<AgentEvent>) {
             r#"{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"s1","prompt":[]}}"#,
         ),
     ] {
-        events.extend(acp.feed(direction, message));
+        let message = message.replace(
+            r#""sessionId":"s1""#,
+            &format!(r#""sessionId":"{session}""#),
+        );
+        events.extend(acp.feed(direction, &message));
     }
     (acp, events)
 }
@@ -155,31 +164,122 @@ fn permission(id: &str, call: &str) -> String {
     )
 }
 
-// A second request for one tool call is an approval of its own, and its name must not be one a
-// first request could have: here a tool call whose id holds the delimiter and the second request's
-// id. Each approval takes an answer that reaches its own request, and only it.
+/// A form of the agent's, with its JSON-RPC id, for a tool call of session `s1`: one question
+/// that takes typed text.
+fn form(id: &str, call: &str) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"method":"elicitation/create","params":{{"mode":"form","sessionId":"s1","toolCallId":"{call}","message":"Questions","requestedSchema":{{"type":"object","properties":{{"q0":{{"type":"string","title":"Pick"}}}}}}}}}}"#
+    )
+}
+
+// A second request for one tool call is an item of its own, an approval or a question, and its
+// name must not be one a first request could have: here a tool call whose id holds the delimiter
+// and the second request's id. Each item takes an answer that reaches its own request, and only it.
 #[test]
-fn a_repeated_approval_takes_no_name_a_first_could_have() {
-    use marmot_agent_driver::{Answer, Given, Person};
+fn a_repeated_request_takes_no_name_a_first_could_have() {
+    use marmot_agent_driver::{Answer, Given, Person, Reply};
+    let chosen = Given::Choice("c0".into());
+    let typed = Given::Questions(vec![Reply {
+        question: "q0".into(),
+        options: Vec::new(),
+        text: Some("Yes".into()),
+    }]);
+    type Request = fn(&str, &str) -> String;
+    let kinds: [(&str, Request, Given); 2] =
+        [("approval", permission, chosen), ("question", form, typed)];
     let first = [("9", "t:7"), ("5", "t"), ("7", "t")];
     let repeat_first = [("5", "t"), ("7", "t"), ("9", "t:7")];
-    for asked in [first, repeat_first] {
-        let (mut acp, _) = started();
-        let mut items = Vec::new();
-        for (id, call) in asked {
-            for e in acp.feed(Direction::In, &permission(id, call)) {
-                if matches!(e.body(), Body::Approval(_)) {
-                    items.push((id, e.header().item.clone()));
+    for (kind, request, given) in kinds {
+        for asked in [first, repeat_first] {
+            let (mut acp, _) = started();
+            let mut items = Vec::new();
+            for (id, call) in asked {
+                for e in acp.feed(Direction::In, &request(id, call)) {
+                    if matches!(e.body(), Body::Approval(_) | Body::Question(_)) {
+                        items.push((id, e.header().item.clone()));
+                    }
+                }
+            }
+            let names: std::collections::HashSet<_> =
+                items.iter().map(|(_, i)| i.clone()).collect();
+            assert_eq!(
+                names.len(),
+                3,
+                "{kind}: each request is an item of its own: {asked:?}"
+            );
+            for (id, item) in &items {
+                let answer = Answer {
+                    request: "r".into(),
+                    item: item.clone(),
+                    by: Person {
+                        id: "u-1".into(),
+                        name: "Alice".into(),
+                    },
+                    given: given.clone(),
+                };
+                let reply = acp.reply(&answer).expect("the item waits");
+                let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+                assert_eq!(
+                    reply["id"].to_string(),
+                    *id,
+                    "{kind}, {asked:?}: each reaches its own request"
+                );
+            }
+        }
+    }
+}
+
+// A repeated request's name must not be one a tool call could have either: a tool item is named
+// `{session}:{tool call}`, and both are the agent's. Here the session is named like a repeat, so a
+// repeat named `{kind}+{request}:{session}:{tool call}` is the name of the tool call
+// `{session}:{tool call}` of that session; when that tool call is reported after the request, the
+// core would take the tool event for the request's. The request keeps its own item, and its answer
+// still reaches it.
+#[test]
+fn a_repeated_request_takes_no_name_a_tool_call_could_have() {
+    use marmot_agent_driver::{Answer, Given, Person, Reply};
+    let chosen = Given::Choice("c0".into());
+    let typed = Given::Questions(vec![Reply {
+        question: "q0".into(),
+        options: Vec::new(),
+        text: Some("Yes".into()),
+    }]);
+    type Request = fn(&str, &str) -> String;
+    let kinds: [(&str, Request, Given); 2] =
+        [("approval", permission, chosen), ("question", form, typed)];
+    for (kind, request, given) in kinds {
+        let session = format!("{kind}+7");
+        let in_session = |m: String| {
+            m.replace(
+                r#""sessionId":"s1""#,
+                &format!(r#""sessionId":"{session}""#),
+            )
+        };
+        let (mut acp, _) = started_in(&session);
+        let mut asked = Vec::new();
+        for id in ["5", "7"] {
+            for e in acp.feed(Direction::In, &in_session(request(id, "t"))) {
+                if matches!(e.body(), Body::Approval(_) | Body::Question(_)) {
+                    asked.push((id, e.header().item.clone()));
                 }
             }
         }
-        let names: std::collections::HashSet<_> = items.iter().map(|(_, i)| i.clone()).collect();
-        assert_eq!(
-            names.len(),
-            3,
-            "each request is an approval of its own: {asked:?}"
+        let tool = format!(
+            r#"{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"{session}","update":{{"sessionUpdate":"tool_call","toolCallId":"{session}:t","title":"Run","kind":"execute","status":"pending"}}}}}}"#
         );
-        for (id, item) in &items {
+        let tools: Vec<_> = acp
+            .feed(Direction::In, &tool)
+            .iter()
+            .filter(|e| matches!(e.body(), Body::Tool(_)))
+            .map(|e| e.header().item.clone())
+            .collect();
+        assert_eq!(tools.len(), 1, "{kind}: the tool call is reported");
+        for (id, item) in &asked {
+            assert!(
+                !tools.contains(item),
+                "{kind}: request {id}'s item {item} is the tool call's",
+                item = item.as_str()
+            );
             let answer = Answer {
                 request: "r".into(),
                 item: item.clone(),
@@ -187,14 +287,14 @@ fn a_repeated_approval_takes_no_name_a_first_could_have() {
                     id: "u-1".into(),
                     name: "Alice".into(),
                 },
-                given: Given::Choice("c0".into()),
+                given: given.clone(),
             };
-            let reply: serde_json::Value =
-                serde_json::from_str(&acp.reply(&answer).expect("the approval waits")).unwrap();
+            let reply = acp.reply(&answer).expect("the item waits");
+            let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
             assert_eq!(
                 reply["id"].to_string(),
                 *id,
-                "{asked:?}: each reaches its own request"
+                "{kind}: the answer reaches its request"
             );
         }
     }

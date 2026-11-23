@@ -984,23 +984,8 @@ impl Translator {
                     });
                     options.push((format!("c{n}"), o.option_id.0.to_string()));
                 }
-                // An approval is named after its tool call. The agent may ask again for the same
-                // call, while the first waits or after: each request is an approval of its own, so
-                // each takes its own answer, named after the request as well and starting
-                // `approval+`, which no first, always `approval:`, can. No name already used is
-                // taken again, whatever the ids hold.
-                let first = format!("approval:{subject}");
-                let item = if self.items.contains(&first) {
-                    (0..)
-                        .map(|n| match n {
-                            0 => format!("approval+{key}:{subject}"),
-                            n => format!("approval+{key}+{n}:{subject}"),
-                        })
-                        .find(|name| !self.items.contains(name))
-                        .unwrap_or_default()
-                } else {
-                    first
-                };
+                // An approval is named after its tool call; one asked again is named by `fresh`.
+                let item = self.fresh("approval", &subject, &key);
                 let f = &p.tool_call.fields;
                 let command = f
                     .raw_input
@@ -1155,10 +1140,13 @@ impl Translator {
                         secret: false,
                     });
                 }
-                let item = match &subject {
-                    Some(s) => format!("question:{s}"),
-                    None => format!("question:{}:{}", show(self.turn.as_deref()), id_text(id)),
+                // A question is named after its tool call, or else its turn and request; one asked
+                // again is named by `fresh`.
+                let named = match &subject {
+                    Some(s) => s.clone(),
+                    None => format!("{}:{}", show(self.turn.as_deref()), id_text(id)),
                 };
+                let item = self.fresh("question", &named, &key);
                 let text = questions
                     .first()
                     .map_or_else(|| p.message.clone(), |q| q.text.clone());
@@ -1675,6 +1663,28 @@ impl Translator {
     /// The turn running, if one is.
     pub fn turn(&self) -> Option<&str> {
         self.turn.as_deref()
+    }
+
+    /// The item id for a request of the agent's of `kind`, an approval or a question, named after
+    /// `named`, its tool call. The agent may ask again for the same call, while the first waits or
+    /// after: each request is an item of its own, so each takes its own answer. The first is
+    /// `{kind}:{named}`. A later one is named after the request's key alone, `{kind}+{key}`, with
+    /// any `%` and `:` in the key written `%25` and `%3A`: it holds no `:`, so it is no first, and
+    /// no tool call's item, always `{session}:{tool call}`, whatever the agent names its sessions
+    /// and tool calls. No name already used is taken again.
+    fn fresh(&self, kind: &str, named: &str, key: &str) -> String {
+        let first = format!("{kind}:{named}");
+        if !self.items.contains(&first) {
+            return first;
+        }
+        let key = key.replace('%', "%25").replace(':', "%3A");
+        (0..)
+            .map(|n| match n {
+                0 => format!("{kind}+{key}"),
+                n => format!("{kind}+{key}+{n}"),
+            })
+            .find(|name| !self.items.contains(name))
+            .unwrap_or_default()
     }
 
     /// The id of the `session/prompt` that started the turn running, by its key (`key`).

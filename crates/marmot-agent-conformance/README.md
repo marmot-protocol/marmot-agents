@@ -182,11 +182,18 @@ Ten driver bugs were found, each fixed after its scenario failed:
 - **The ACP driver gave two permission requests for one tool call one item** (`two_requests_for_one_tool_call_take_one_answer_each`
   in `tests/acp.rs`, 2026-11-23). The second edited the first's approval, and an answer went to whichever request
   the driver found first. Now each request is an approval of its own; the first for a tool call keeps its name.
+  A form (a question) asked again for one tool call was named the same way and is now an item of its own too
+  (`a_repeated_request_takes_no_name_a_first_could_have` in the driver's own `tests/cases.rs`, 2026-11-23).
 - **The ACP driver never answered a permission or form it could not show** (`a_request_the_driver_cannot_show_is_answered`
   in `tests/acp.rs`, 2026-11-23): one it could not read, or a form at a web address, which it never offers. The
   agent waited for ever. Now it is refused with -32602, invalid params, as the official ACP library refuses a
-  request it cannot read. Not yet covered: a request naming a session no chat took, said while a session was being
-  picked, is still dropped unanswered.
+  request it cannot read.
+- **The ACP driver never answered a request naming a session no chat took, said while a session was being picked**
+  (`a_request_from_a_session_no_chat_has_is_refused_as_not_found` in the driver's own `tests/driver.rs`,
+  2026-11-23). It was held, since the session being picked can speak before the reply that picks it, and dropped
+  when the reply named another. Now it is refused with -32002, resource not found, naming the session, as the
+  official ACP library refuses a request for a session it does not have (`Error::session_not_found`); so is one
+  that comes when no session is being picked, which was refused as an unknown method.
 
 Not covered yet, and why:
 
