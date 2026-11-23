@@ -672,7 +672,7 @@ export class Translator {
     this.skip(`result of ${method}`);
   }
 
-  /** What the plugin returned to OpenClaw. For a posted message that is the plugin's id for it. */
+  /** What the plugin returned to OpenClaw. */
   private result(method: unknown, m: Json): void {
     this.skip(`result of ${word(method)}`);
   }
