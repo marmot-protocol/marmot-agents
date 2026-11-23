@@ -2487,6 +2487,29 @@ mod tests {
         );
     }
 
+    /// systemd refuses a whole environment file that holds a NUL, so the service ran without
+    /// it, or did not start: how it ran is doubtful, and the plan stops rather than read the
+    /// wider list in that file over the narrower one in the unit.
+    #[test]
+    fn an_environment_file_systemd_refuses_makes_the_service_doubtful() {
+        let root = tempfile::tempdir().unwrap();
+        let (home, ids) = home_with(root.path(), "codex", &["codex-harness-agent"]);
+        let p = people(root.path(), 2);
+        welcomers(&home, &ids[0], "allowlist", &p[..1]);
+        let mut named = options(root.path(), &home);
+        named.owner = Some(p[0].clone());
+        let text = format!(
+            "WN_CODEX_ALLOWED_SENDERS_HEX={},{}\nOTHER=a\0b\n",
+            p[0], p[1]
+        );
+        codex_unit_with_file(root.path(), &home, &p[0], &text);
+        let why = plan_err(&named);
+        assert!(
+            why.contains("wn-codex.service") && why.contains("NUL"),
+            "{why}"
+        );
+    }
+
     #[test]
     fn files_come_only_from_the_old_media_folders_away_from_the_home() {
         let root = tempfile::tempdir().unwrap();

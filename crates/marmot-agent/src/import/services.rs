@@ -16,8 +16,8 @@
 //! user manager, as in the tests) are the unit's files read here, as systemd merges them; what
 //! that reading cannot settle, such as a specifier other than `%h`, makes the service doubtful.
 //! Either way, a command line with `$` references, which systemd fills in only as it starts the
-//! service, an environment file named by a pattern, and one that cannot be read, make it doubtful
-//! too. A doubtful service on the home stops the import: it never guesses how a service ran.
+//! service, an environment file named by a pattern, one that cannot be read, and one systemd
+//! refuses whole for a NUL byte in it, make it doubtful too. A doubtful service on the home stops the import: it never guesses how a service ran.
 //!
 //! An environment file is read as systemd reads it, not as a shell would ([`environment_file`]).
 //! A name it sets in a way systemd has read otherwise by version is unsure: a sender list, which
@@ -814,6 +814,12 @@ fn built(name: &str, file: &Path, loaded: &Loaded, mut doubts: Vec<String>) -> O
             continue;
         }
         match fs::read_to_string(path) {
+            // systemd refuses a whole file holding a NUL (`read_full_stream_full` in its
+            // `fileio.c`): the service then did not start, or with `-` ran without the file.
+            Ok(text) if text.contains('\0') => doubts.push(format!(
+                "its environment file {path} holds a NUL byte, for which systemd refuses the \
+                 whole file"
+            )),
             Ok(text) => {
                 let read = environment_file(&text);
                 for (k, v) in read.vars {
