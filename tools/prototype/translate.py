@@ -1381,6 +1381,12 @@ class Acp(Translator):
                 native_choices[f"c{n}"] = o.get("optionId")
             subject = f"{p.get('sessionId')}:{subject}" if subject else None  # the tool item
             item = f"approval:{subject}" if subject else f"approval:{self.turn}:{rid}"
+            # A second request for one tool call, while the first waits or after, is an approval of
+            # its own, named after the request as well.
+            made = self.__dict__.setdefault("approvals", set())
+            if item in made:
+                item = f"approval:{subject}:{json.dumps(rid)}"
+            made.add(item)
             raw = call.get("rawInput") if isinstance(call.get("rawInput"), dict) else {}
             self.pending[("s", rid)] = {"item": item, "native_choices": native_choices}
             what = {"execute": "command", "edit": "edit", "delete": "edit", "move": "edit"}.get(call.get("kind"), "action")

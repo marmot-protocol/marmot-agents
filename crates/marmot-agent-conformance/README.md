@@ -84,7 +84,7 @@ The pipe between driver and harness holds 256 bytes each way, so a dropped wait 
 | Fake | From | Shapes | What differs |
 | --- | --- | --- | --- |
 | Codex | the stand-in in `crates/marmot-agent-codex/tests/driver.rs` | threads, turns, `commandExecution`, approvals, `requestUserInput`, the driver's `send_file` dynamic tool (`item/tool/call`, only on a thread started with it), steer, interrupt, settings, resume | one process for every chat |
-| ACP | the agent in `crates/marmot-agent-acp/tests/driver.rs` | sessions, prompts, tool calls, `request_permission`, `elicitation/create`, cancel, config options, MCP servers over HTTP (`src/fake/mcp.rs` is the client: `initialize`, `tools/list`, `tools/call`) | **OpenCode**: `session/resume`; one tool server of a name for every session in a folder, the last handed over, the calling session named in `_meta["ai.opencode/sessionID"]`. **Goose**: `session/load` with a replay, sessions numbered by day, `activeRunId`, and after a crash a run of its own until cancelled; servers kept per session, the caller named in `_meta["agent-session-id"]`. **Cursor**: `session/load`, no name, `cursor/update_todos` naming only its tool call; servers kept per session, the caller not named. Each holds a cancelled turn open while its tool call is out. The driver is run with file sending switched on (`serve_files`, as `send_files = true` does) |
+| ACP | the agent in `crates/marmot-agent-acp/tests/driver.rs` | sessions, prompts, tool calls, `request_permission` (with `#twice`, two at once for one tool call), `elicitation/create`, cancel, config options, MCP servers over HTTP (`src/fake/mcp.rs` is the client: `initialize`, `tools/list`, `tools/call`) | **OpenCode**: `session/resume`; one tool server of a name for every session in a folder, the last handed over, the calling session named in `_meta["ai.opencode/sessionID"]`. **Goose**: `session/load` with a replay, sessions numbered by day, `activeRunId`, and after a crash a run of its own until cancelled; servers kept per session, the caller named in `_meta["agent-session-id"]`. **Cursor**: `session/load`, no name, `cursor/update_todos` naming only its tool call; servers kept per session, the caller not named. Each holds a cancelled turn open while its tool call is out. The driver is run with file sending switched on (`serve_files`, as `send_files = true` does) |
 | Pi | `crates/marmot-agent-pi/tests/fake_pi.py` | Pi's records, extension dialogs, the driver's `send_file` tool (only with the driver's extension loaded, asking in its dialog), steering, abort, a manual `compact` (`compaction_start`, then `compaction_end`, failed or not, then the response, as Pi 1.6.0 does; a session with nothing in it fails), a session's file written once it holds a message | one process per chat: the driver runs `src/fake/relay.py`, which connects its standard input and output to a socket the test serves, so each Pi is scripted in Rust |
 
 The faults, set as `Knobs` and changeable between steps: frames written in pieces; replies late; replies after the
@@ -146,7 +146,7 @@ names the property, the test also requires the words of the check meant for the 
 alone (S5, OpenCode-shaped, where the token is the last chat's), by the session it names alone (L2, Cursor-shaped, which
 names none: the file never comes), and a relative path made whole from the driver's folder instead of the chat's (D-101).
 
-Eight driver bugs were found, each fixed after its scenario failed:
+Nine driver bugs were found, each fixed after its scenario failed:
 
 - **The ACP driver took an answer the agent could no longer read** (`answer_after_death`). A request's message went to
   the writer task's queue and the request returned at once, then fed the translator, so an answer to an agent that had
@@ -175,6 +175,9 @@ Eight driver bugs were found, each fixed after its scenario failed:
   A new session was settled by any running session item whose id differed from the one the core named; when the
   core named none, an edit of the chat's current session, such as a setting's, settled it before the new session
   came. Now the session the driver knows the chat is in comes first, as Codex's driver already checked.
+- **The ACP driver gave two permission requests for one tool call one item** (`two_requests_for_one_tool_call_take_one_answer_each`
+  in `tests/acp.rs`, 2026-11-23). The second edited the first's approval, and an answer went to whichever request
+  the driver found first. Now each request is an approval of its own; the first for a tool call keeps its name.
 
 Not covered yet, and why:
 

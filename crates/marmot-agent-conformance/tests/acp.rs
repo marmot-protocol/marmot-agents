@@ -251,3 +251,59 @@ async fn the_file_faults_are_caught() {
         }
     }
 }
+
+// An agent asks twice for one tool call, both requests waiting at once (`#ask #twice`): nothing in
+// ACP stops it. Each request is its own approval, and takes its own answer, once: answered the
+// other way round, the first allowed and the second refused, each reaches its own request (S5),
+// and the first answered again is refused (S1).
+#[tokio::test]
+async fn two_requests_for_one_tool_call_take_one_answer_each() {
+    use marmot_agent_conformance::Run;
+    use marmot_agent_conformance::fake::Heard;
+    use marmot_agent_conformance::run::{turn_ended, waiting};
+
+    for flavor in [Flavor::OpenCode, Flavor::Goose, Flavor::Cursor] {
+        let mut run = Run::start(subject(flavor)).await;
+        let m = (run.prompt("c-1", "#ask #twice").await.unwrap()).expect("the prompt is taken");
+        let first = (run.wait("L2", "the first approval", waiting).await)
+            .unwrap_or_else(|v| panic!("{flavor:?}: {v}"));
+        let item = first.event.header().item.clone();
+        let second = run
+            .wait("L2", "the second approval", |e| {
+                waiting(e) && e.event.header().item != item
+            })
+            .await
+            .unwrap_or_else(|v| panic!("{flavor:?}: {v}"));
+        let (_, refused) = run.answer(&second, false).await.unwrap();
+        refused.unwrap_or_else(|r| panic!("{flavor:?}: the second answer was refused: {r:?}"));
+        let (_, allowed) = run.answer(&first, true).await.unwrap();
+        allowed.unwrap_or_else(|r| panic!("{flavor:?}: the first answer was refused: {r:?}"));
+        (run.wait("L2", "the turn's end", |e| {
+            turn_ended(e) && e.prompts.contains(&m)
+        }))
+        .await
+        .unwrap_or_else(|v| panic!("{flavor:?}: {v}"));
+        let (_, again) = run.answer(&first, true).await.unwrap();
+        assert!(
+            again.is_err(),
+            "{flavor:?}: the first approval took two answers"
+        );
+        run.end()
+            .await
+            .unwrap_or_else(|v| panic!("{flavor:?}: {v}"));
+        let answers: Vec<(Option<bool>, Option<String>)> = (run.subject.fake().heard().iter())
+            .filter_map(|h| match h {
+                Heard::Answer { allow, text, .. } => Some((*allow, text.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            answers,
+            vec![
+                (Some(false), Some("request 2".into())),
+                (Some(true), Some("request 1".into())),
+            ],
+            "{flavor:?}: each answer reaches its own request"
+        );
+    }
+}

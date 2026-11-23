@@ -52,8 +52,14 @@ struct Turn {
 }
 
 enum Asked {
-    Permission { session: String },
-    Form { session: String },
+    /// A permission request; with `#twice`, which of the two for one tool call it is.
+    Permission {
+        session: String,
+        of_two: Option<u8>,
+    },
+    Form {
+        session: String,
+    },
     Todos,
 }
 
@@ -224,7 +230,7 @@ impl Acp {
                 .push(turn.text.clone());
         }
         self.asked.retain(|_, a| match a {
-            Asked::Permission { session: s } | Asked::Form { session: s } => s != session,
+            Asked::Permission { session: s, .. } | Asked::Form { session: s } => s != session,
             Asked::Todos => true,
         });
         self.run(session, false, out);
@@ -288,15 +294,21 @@ impl Acp {
                         "todos": [{"id": "1", "content": "echo", "status": "in_progress"}]});
                     self.ask("cursor/update_todos", params, Asked::Todos, out);
                 }
-                let params = json!({"sessionId": session,
-                    "toolCall": {"toolCallId": call, "title": format!("echo {text}"), "kind": "execute",
-                        "rawInput": {"command": format!("echo {text}")}},
-                    "options": [{"optionId": "once", "name": "Allow once", "kind": "allow_once"},
-                                {"optionId": "reject", "name": "Reject", "kind": "reject_once"}]});
-                let asked = Asked::Permission {
-                    session: session.to_string(),
-                };
-                self.ask("session/request_permission", params, asked, out);
+                // With `#twice`, the agent asks twice for one tool call, both waiting at once:
+                // nothing in ACP stops it, and each request takes its own answer.
+                let twice = text.contains("#twice");
+                for n in 1..=(1 + u8::from(twice)) {
+                    let params = json!({"sessionId": session,
+                        "toolCall": {"toolCallId": call, "title": format!("echo {text}"), "kind": "execute",
+                            "rawInput": {"command": format!("echo {text}")}},
+                        "options": [{"optionId": "once", "name": "Allow once", "kind": "allow_once"},
+                                    {"optionId": "reject", "name": "Reject", "kind": "reject_once"}]});
+                    let asked = Asked::Permission {
+                        session: session.to_string(),
+                        of_two: twice.then_some(n),
+                    };
+                    self.ask("session/request_permission", params, asked, out);
+                }
             }
             Script::Quiz => {
                 let params = json!({"mode": "form", "sessionId": session, "message": "Questions",
@@ -329,7 +341,7 @@ impl Protocol for Acp {
             let result = &frame["result"];
             match asked {
                 Asked::Todos => {}
-                Asked::Permission { session } => {
+                Asked::Permission { session, of_two } => {
                     if result["outcome"]["outcome"] != "selected" {
                         return; // cancelled: the turn is ending
                     }
@@ -337,8 +349,15 @@ impl Protocol for Acp {
                     heard.push(Heard::Answer {
                         session: session.clone(),
                         allow: Some(allow),
-                        text: None,
+                        text: of_two.map(|n| format!("request {n}")),
                     });
+                    // The tool runs once every request for it is answered.
+                    let more = (self.asked.values()).any(
+                        |a| matches!(a, Asked::Permission { session: s, .. } if *s == session),
+                    );
+                    if more {
+                        return;
+                    }
                     let words = if allow { "allowed" } else { "denied" };
                     self.finish(&session, Some(words), "end_turn", out);
                 }

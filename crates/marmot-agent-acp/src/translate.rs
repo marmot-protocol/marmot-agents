@@ -155,6 +155,9 @@ pub struct Translator {
     sent: HashMap<String, Sent>,
     /// The agent's requests not yet answered, by the id's JSON text.
     asked: HashMap<String, Asked_>,
+    /// Every approval item made, so that a second request for one tool call is an item of its
+    /// own.
+    approvals: HashSet<String>,
     /// The session being replayed by `session/load`, until the reply.
     loading: Option<String>,
     /// The id of the message or thinking being streamed.
@@ -206,6 +209,7 @@ impl Translator {
             sessions: HashMap::new(),
             sent: HashMap::new(),
             asked: HashMap::new(),
+            approvals: HashSet::new(),
             loading: None,
             buffer: None,
             streamed: HashMap::new(),
@@ -981,7 +985,14 @@ impl Translator {
                     });
                     options.push((format!("c{n}"), o.option_id.0.to_string()));
                 }
-                let item = format!("approval:{subject}");
+                // An approval is named after its tool call. The agent may ask again for the same
+                // call, while the first waits or after: each request is an approval of its own,
+                // named after the request as well, so each takes its own answer.
+                let mut item = format!("approval:{subject}");
+                if !self.approvals.insert(item.clone()) {
+                    item = format!("approval:{subject}:{key}");
+                    self.approvals.insert(item.clone());
+                }
                 let f = &p.tool_call.fields;
                 let command = f
                     .raw_input
