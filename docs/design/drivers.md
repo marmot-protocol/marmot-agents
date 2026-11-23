@@ -861,7 +861,8 @@ does, and feeds it to the chat's translator:
   the end of the interrupted turn, the end of the old session once Hermes has replaced it (or the new session,
   when the old one was not shown since the plugin started), or the session item that shows the new model.
   When Hermes refuses `/new` or `/model`, its reply, which the chat sees as command output, settles the
-  request. An answer Hermes did not take can be given again.
+  request (provisional; before, the request was refused with Hermes's words). An answer Hermes did not take can
+  be given again.
 - The plugin keeps one connector while Hermes runs, across connections to the core. When a connection goes,
   that core closes the items open in the chat and settles the requests it handed over
   ([D-070](../decisions.md#d-070-a-restart-closes-the-turn-as-interrupted)); the plugin then sends nothing
