@@ -461,9 +461,9 @@ def main():
         # counterexample moves from run to run, and so does the order its search takes, which
         # TLC's fingerprint function and seed, picked at random, decide. DriverTransport's
         # committed ones are checked once, at the end, with both fixed, so their traces repeat;
-        # CoreLifecycle's repeat as they are.
+        # CoreLifecycle's and SocketProtocol's repeat as they are.
         options = []
-        if case.model == "DriverTransport" and case.expected == TEMPORAL and case.counterexample:
+        if case.model == DT and case.expected == TEMPORAL and case.counterexample:
             options = ["-lncheck", "final", "-fp", "1", "-seed", "1"]
         ran = subprocess.run([str(RUN), str(folder), f"{case.model}.tla", f"{case.model}.cfg",
                               *options], capture_output=True, text=True, env=env)
