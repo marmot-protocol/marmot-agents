@@ -238,7 +238,7 @@ If you change a command here, change it there. CI runs in three tiers
 | --- | --- | --- |
 | Pull request | Each push to a pull request; aim under 10 minutes | Every command below that CI runs, with the simulator at its normal count. The TLA+ models run only when `formal/`, `tools/tla/`, `crates/marmot-agent/src/` or `ci.yml` changed |
 | Merge queue | Each pull request queued to merge, and each push to `master`; aim under 30 minutes | All of the pull-request tier whatever changed, the simulator at `MARMOT_AGENT_SIM_RUNS=200`, and the move-over tests that need Docker, below |
-| Nightly | Once a night on `master` (`.github/workflows/nightly.yml`), and by hand | The simulator on a new seed with many runs, TLC on larger bounds, and a coverage report; a failed job opens an issue |
+| Nightly | Once a night on `master` (`.github/workflows/nightly.yml`), and by hand | The simulator on a new seed with many runs, TLC on larger bounds, a coverage report, a 64th of the core's mutants, and `check_cassettes.py --strict` on the model double's cassettes; a failed job opens an issue |
 
 The job `CI passed` needs every other job of the first two tiers and is the one check `master` requires. Either
 tier can be run on a branch by hand: `gh workflow run ci.yml --ref <branch> -f tier=pull-request` (or

@@ -67,12 +67,11 @@ request body: only each request's key and the model's reply.
 
 `check_cassettes.py` reports every cassette older than 14 days and every harness with a release newer than the
 one a cassette was recorded with. It needs no key. A pull request runs it offline, and its findings are
-warnings that do not fail it. The nightly run is to add `--strict`, which exits 1 on any finding, and open an
-issue with the output
-([D-127](../../docs/decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key)); that
-workflow is not built yet. A folder that is not there is an error, exit 2, in either.
+warnings that do not fail it. The nightly run (`.github/workflows/nightly.yml`) adds `--strict`, which exits 1
+on any finding, and opens an issue with the output
+([D-127](../../docs/decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key)). A folder that is not there is an error, exit 2, in either.
 
 ```sh
 python3 tools/model_double/check_cassettes.py fixtures/cassettes --offline   # as a pull request runs it
-python3 tools/model_double/check_cassettes.py fixtures/cassettes --strict    # as the nightly run will
+python3 tools/model_double/check_cassettes.py fixtures/cassettes --strict    # as the nightly run does
 ```
