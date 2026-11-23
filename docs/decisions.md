@@ -2071,6 +2071,10 @@ This stands beside [D-060](#d-060-a-codex-translator-follows-one-thread-and-the-
 still follows one thread. It answers Q-29, since settled as [D-125](#d-125-the-codex-transport-follows-subagents-threads),
 for a subagent's thread.
 
+Replaced in part by [D-131](#d-131-the-codex-driver-refuses-a-request-of-codexs-that-no-chat-takes): a request
+of Codex's for a thread not known yet is held only while a session is being picked or a subagent started, and
+refused after.
+
 **Why.** Codex's subagents were switched off only because nothing showed them, and an approval from one would
 have had nowhere to go. Shown flat, they need nothing new from the apps, the event model or MDK, and the
 transport this needs is the one threads will build on. Codex does not stop a subagent when its parent is
@@ -2398,6 +2402,9 @@ This extends [D-060](#d-060-a-codex-translator-follows-one-thread-and-the-transp
 stand for each chat's own thread, and settles what was Q-29 for the threads Codex starts for subagents. No other
 thread is known to arrive unasked; one that does is a new question.
 
+Point 2 is replaced in part by [D-131](#d-131-the-codex-driver-refuses-a-request-of-codexs-that-no-chat-takes):
+a request of Codex's is held only while a session is being picked or a subagent started, and refused after.
+
 **Why.** D-060 puts routing between threads in the transport, and a subagent's thread is one more thread to
 route. Given to the parent's translator, its messages would be dropped, and an approval from a subagent must
 reach someone or the subagent waits.
@@ -2479,6 +2486,32 @@ refused, is still told it was not passed to the agent. Either way it is never se
 **Why.** The connector may have handed the prompt to the harness before the connection went, and the harness
 may run it (the `prompt-in-flight` counterexample of `formal/tla/SocketProtocol.md`). The core cannot tell the
 two apart, so "not delivered" would be wrong when the agent then answers.
+
+Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
+
+## D-131 The Codex driver refuses a request of Codex's that no chat takes
+
+**Decision.** Codex waits for a reply to each of its requests, so the Codex driver answers with an error every
+request that nobody in a chat is asked about and that it does not answer itself. It uses the codes Codex's own
+server uses, and Codex takes the error as a refusal: an approval denied, a question with no answers.
+
+- A request the driver cannot show, such as a question with two questions of one id or params it cannot read,
+  is refused at once with -32602, Invalid params; one of a kind it has no rule for with -32601, Method not found.
+- A request for a thread a chat has left, or for no thread, is refused at once with -32602, naming the thread.
+- A request for a thread never seen is held while a chat's session is being picked or a subagent is being
+  started (an open `spawnAgent` item), since it may be a subagent's whose thread is not named yet. Once neither
+  is under way it is refused with -32602, naming the thread. One that Codex says is resolved while it is held
+  gets no reply.
+
+This replaces in part [D-117](#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)
+and point 2 of [D-125](#d-125-the-codex-transport-follows-subagents-threads), which hold a message for a thread
+not known yet until the item that names it arrives: a request is held only as long as something may still name
+its thread. A notification is still held so.
+
+**Why.** Left unanswered, such a request keeps Codex, and the turn it belongs to, waiting until someone
+interrupts it. The `DriverTransport` model found both cases (`driver-codex-stray`, `driver-codex-unshown`). An
+error is how Codex's own server refuses what it cannot take, and Codex reads it as a refusal. Holding while a
+pick or a spawn is under way keeps an early request from a subagent able to reach its chat.
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
 

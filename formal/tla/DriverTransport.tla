@@ -5,7 +5,7 @@
 (* (approvals and questions) and who answers them, a dropped wait, a       *)
 (* harness that dies and starts again, and two chats on one harness.       *)
 (*                                                                         *)
-(* It follows the built-in drivers as of master 60811d2 (#124), with     *)
+(* It follows the built-in drivers as of master 0a7ba23 (#119), with     *)
 (* Codex's refusals of 2026-11-23:                                         *)
 (* crates/marmot-agent-codex, crates/marmot-agent-acp and                  *)
 (* crates/marmot-agent-pi, behind the trait in crates/marmot-agent-driver. *)
@@ -61,6 +61,13 @@ Bugs == {"none",
                                \* Pi's driver did before #118
          "OneItemPerCall",     \* S13: two approvals for one tool call share an item, as ACP's
                                \* driver did before #118
+         "RepeatLikeFirst",    \* S13: a repeat approval for a tool call is named as the first
+                               \* approval for another call could be (`approval:{session}:
+                               \* {call}:{request}`), as ACP's driver did before #118
+         "EscapedId",          \* S11: a request whose id the harness spells with escapes is
+                               \* not found under the id the driver writes, so the driver refuses
+                               \* a request whose item waits, and an answer replies again, as
+                               \* ACP's driver did before #118
          "UnshownUnanswered",  \* L2: a request the driver cannot show is never answered, as
                                \* ACP's driver did before #118, and Codex's until 2026-11-23
          "HeldDropped",        \* L2: a request from a session no chat has, held while a session
@@ -68,6 +75,9 @@ Bugs == {"none",
                                \* did before #122
          "StrayUnanswered",    \* L2: a request from a session no chat has is never answered, at
                                \* once or once held, as Codex's driver did until 2026-11-23
+         "ResolvedHeldRefused", \* S11: a request held while a session is picked is refused once
+                               \* none is, though the harness said it stopped waiting for it, as
+                               \* Codex's driver did until 2026-11-23
          "CallOnly",           \* S5: an approval's item is named after its tool call alone, so
                                \* two chats' approvals can share a name
          "TakeUnwritten",      \* S11: an answer is taken, and shown as given, when the harness
@@ -123,7 +133,8 @@ VARIABLES
     seenTurns,  \* every turn each chat has shown
     issued,     \* <<chat, item name, request>> for every item made for a harness request
     stopRead,   \* the driver has read that the harness stopped waiting for the request
-    late,       \* an answer was written after the driver read that the harness stopped waiting
+    late,       \* a reply (an answer, or one the driver wrote by itself) was written after the
+                \* driver read that the harness stopped waiting
     misrouted,  \* an answer reached a request of another chat
     unwrittenTake, \* an answer was taken when its harness could not read it
     droppedEarly   \* requests held while a session was picked and then dropped
@@ -146,13 +157,30 @@ ChatOf(p, s) ==
 
 ProcOfAsk(a) == IF hAsk[a].s = 0 THEN "h" ELSE hProc[hAsk[a].s]
 
-\* The name the translator gives the item of request a, in chat c.
+\* The name the translator gives the item of request a, in chat c. A first approval for a tool
+\* call is named after its session and call; a repeat, after its request as well, in a form no
+\* first can take (`approval+`, the tag here). With RepeatLikeFirst, a repeat is named as the
+\* first for a call whose id is the call's and the request's joined, and a configuration with
+\* such a call can show the two collide.
 NameOf(a, c) ==
     LET s == hAsk[a].s
-        first == [s |-> IF Bug = "CallOnly" THEN 0 ELSE s, k |-> hAsk[a].k, tag |-> "first"]
+        k == hAsk[a].k
+        first == [s |-> IF Bug = "CallOnly" THEN 0 ELSE s, k |-> k, tag |-> "first"]
+        askedBefore == \E n \in names[c] : n.s = first.s /\ n.k = k
     IN IF ~CallNamed THEN [s |-> s, k |-> "own", tag |-> a]
+       ELSE IF Bug = "RepeatLikeFirst"
+            THEN IF askedBefore THEN [first EXCEPT !.k = k \o ":" \o a] ELSE first
        ELSE IF first \notin names[c] \/ Bug = "OneItemPerCall" THEN first
        ELSE [first EXCEPT !.tag = a]
+
+\* Whether the harness spells request a's id with escapes. The drivers keep every id under the
+\* text serde_json writes for it (#118), so the spelling changes nothing in the code, and the model
+\* spells one only for the defect EscapedId, which keeps an id as it arrived: then a1's.
+Escaped(a) == Bug = "EscapedId" /\ a = "a1"
+
+\* An automatic reply of the driver's to requests S (a refusal, a cancellation) is late if the
+\* driver has read that the harness stopped waiting for one of them.
+LateIn(S) == late \/ \E a \in S : stopRead[a]
 
 \* Settling the requests in S, each the way Way(r) says. A wrong settle stays wrong.
 Counted(S) == [r \in Reqs |-> IF r \in S THEN nSettle[r] + 1 ELSE nSettle[r]]
@@ -261,11 +289,13 @@ Interrupt(r, c, t) ==
             /\ effects' = effects \cup {[r |-> r, kind |-> "turn", c |-> c, s |-> t[1],
                                          n |-> t[2], old |-> 0]}
             /\ rq' = [rq EXCEPT ![r] = "taken"]
+            /\ late' = LateIn(waiting)
             /\ UNCHANGED <<nSettle, how>>
        ELSE /\ Refuse(r)
-            /\ UNCHANGED <<toH, dAsk, cancelling, effects>>
+            /\ UNCHANGED <<toH, dAsk, cancelling, effects, late>>
     /\ UNCHANGED <<harnessVars, fromH, up, dSess, dTurn, picking, names, early, cSess,
-                   hadSess, seenItems, seenTurns, histVars>>
+                   hadSess, seenItems, seenTurns, issued, stopRead, misrouted, unwrittenTake,
+                   droppedEarly>>
 
 \* `control` with `Action::NewSession`: taken while the chat is idle and no session is being
 \* picked for it (Codex's `ask` and ACP's `picked` wait for the pick; Pi's refuses as busy). Only
@@ -344,8 +374,9 @@ RouteOpened(p, msg) ==
     /\ early' = early \ released
     /\ toH' = [toH EXCEPT ![p] = AppendAll(toH[p], refused, LAMBDA a : Reply(a, "refuse"))]
     /\ droppedEarly' = droppedEarly \cup (released \ refused)
+    /\ late' = LateIn(refused)
     /\ UNCHANGED <<harnessVars, up, dTurn, dAsk, names, cancelling, rq, seenItems,
-                   seenTurns, issued, stopRead, late, misrouted, unwrittenTake>>
+                   seenTurns, issued, stopRead, misrouted, unwrittenTake>>
 
 RouteStarted(p, msg) ==
     LET c == ChatOf(p, msg.s)
@@ -361,7 +392,7 @@ RouteStarted(p, msg) ==
 \* cancels the turn, it is answered as cancelled at once); in a chat and not shown, it is
 \* answered at once (ACP's -32602, Codex's declined form or -32602). From a session no chat has,
 \* it is held while a session is picked, and otherwise answered at once (ACP's -32002, #122;
-\* Codex's -32602).
+\* Codex's -32602). An answer at once is never late: the request was only now read.
 RouteAsk(p, msg) ==
     LET a == msg.a
         c == ChatOf(p, hAsk[a].s)
@@ -370,7 +401,8 @@ RouteAsk(p, msg) ==
         pickingAny == \E d \in Chats : picking[d] # "none"
         shown == ~stray /\ hAsk[a].shown
         answerNow == IF stray THEN ~pickingAny /\ Bug # "StrayUnanswered"
-                     ELSE ~hAsk[a].shown /\ Bug # "UnshownUnanswered"
+                     ELSE \/ ~hAsk[a].shown /\ Bug # "UnshownUnanswered"
+                          \/ Escaped(a) \* EscapedId: not found under the id the driver writes
         cancelNow == shown /\ CancelOnInterrupt /\ cancelling[c]
     IN
     /\ toH' = IF answerNow THEN [toH EXCEPT ![p] = Append(@, Reply(a, "refuse"))]
@@ -390,13 +422,15 @@ RouteAsk(p, msg) ==
                    droppedEarly>>
 
 \* Codex's `serverRequest/resolved`: Codex waits no longer, so no answer may reach it. The item
-\* is left to close as it would (#118).
+\* is left to close as it would (#118). A request held while a session is picked needs no reply
+\* now, so it is held no longer (2026-11-23).
 RouteResolved(p, msg) ==
     LET a == msg.a
     IN
     /\ stopRead' = [stopRead EXCEPT ![a] = TRUE]
     /\ dAsk' = IF Bug = "ResolvedIgnored" THEN dAsk ELSE [dAsk EXCEPT ![a].asked = FALSE]
-    /\ UNCHANGED <<harnessVars, toH, up, dSess, dTurn, picking, names, effects, early,
+    /\ early' = IF Bug = "ResolvedHeldRefused" THEN early ELSE early \ {a}
+    /\ UNCHANGED <<harnessVars, toH, up, dSess, dTurn, picking, names, effects,
                    cancelling, coreVars, issued, late, misrouted, unwrittenTake, droppedEarly>>
 
 \* A turn's end: the chat's items that wait in it close, and take no answer (Pi's fix in #118);
@@ -675,8 +709,8 @@ S1 == \A r \in Reqs : nSettle[r] <= 1 /\ how[r] # "wrong"
 S5 == ~misrouted
 
 \* S11: a request the driver takes was written whole to a harness that can read it, before the
-\* driver returns; and an answer reaches the harness at most once, and only while, as far as the
-\* driver has read, the harness still waits for it.
+\* driver returns; and a reply, an answer or one the driver writes by itself, reaches the harness
+\* at most once, and only while, as far as the driver has read, the harness still waits for it.
 S11 ==
     /\ ~unwrittenTake
     /\ ~late

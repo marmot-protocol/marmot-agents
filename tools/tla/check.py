@@ -294,10 +294,16 @@ CASES += [
                 "It rests on what an agent does after a restart, which no recording shows."),
     driver_mutant("AnswerAfterTurnEnd", "S11", PI),
     driver_mutant("ResolvedIgnored", "S11", CODEX),
+    driver_mutant("ResolvedHeldRefused", "S11", CODEX, StrayAsks="TRUE", **ONE_ASK),
     driver_mutant("SettleOnAnySession", "S1", ACP),
     # Two new-session controls in one chat, and sessions for both.
     driver_mutant("TwoNewSessions", "S1", PI, NewSessions='{"r3", "r4"}', MaxSessions="6"),
     driver_mutant("OneItemPerCall", "S13", ACP),
+    # A repeat approval named as a first could be: it collides only with a call whose id is the
+    # first call's and the repeat's request joined, asked about first.
+    driver_mutant("RepeatLikeFirst", "S13", ACP, Asks='{"a1", "a2", "a3"}',
+                  Calls='{"k1", "k1:a2"}', MaxDeaths="0"),
+    driver_mutant("EscapedId", "S11", ACP),
     driver_mutant("UnshownUnanswered", "L2", ACP),
     driver_mutant("CallOnly", "S5", CHATS),
     driver_mutant("TakeUnwritten", "S11", CODEX),
