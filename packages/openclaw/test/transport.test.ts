@@ -483,7 +483,7 @@ test("a set OpenClaw drops with no answer is settled by a notice the plugin make
   assert.deepEqual([notice.title, notice.text, notice.body, notice.native ?? null], [
     "Command output",
     "OpenClaw did not answer /model.",
-    { kind: "command_output", command: "/model" },
+    { kind: "command_output" },
     null,
   ]);
 });
@@ -745,8 +745,8 @@ test("overlapping commands are each answered and settled by their own run, whate
   await settle();
   assert.deepEqual(settled(events), [["r-7", "session"], ["r-8", "notice"]]);
   assert.deepEqual(
-    events.filter((e) => e.type === "notice").map((e) => [e.body["command"], e.text]),
-    [["/new", "New session started."], ["/think", "Unrecognized thinking level."]],
+    events.filter((e) => e.type === "notice").map((e) => [e.title, e.text]),
+    [["New session", "New session started."], ["Command output", "Unrecognized thinking level."]],
   );
   assert.ok(events.some((e) => e.type === "session" && e.session === KEY && e.state === "done"), "the session was replaced");
 });

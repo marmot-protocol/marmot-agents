@@ -357,11 +357,13 @@ export class Translator {
   private readonly commands: string[] = [];
   /** Approval id -> the decision the client sent. */
   private readonly decisions = new Map<unknown, unknown>();
-  private lastPress: unknown = null;
-  /** The plugin's id for a posted message -> the event it became. */
-  private readonly sent = new Map<unknown, Kept>();
-  /** The call whose result will name the posted message, and the event it became. */
-  private posting: [string, Kept] | null = null;
+  /**
+   * Approval or question item -> OpenClaw's value for each choice or option, by its id: what an answer
+   * presses, and what a resolution names. It stays with the plugin; the item shows only the ids.
+   */
+  private readonly natives = new Map<string, Map<string, unknown>>();
+  /** Notice item -> the slash command it answers, which stays with the plugin too. */
+  private readonly answering = new Map<string, string>();
   /** Tool calls whose approval was denied. */
   private readonly denied = new Set<unknown>();
   /** The session key of the last route OpenClaw gave. */
@@ -598,10 +600,7 @@ export class Translator {
   }
 
   private press(m: Json): void {
-    if ("approvalId" in m) {
-      this.lastPress = m["approvalId"];
-      return this.skip("client: button press on an approval");
-    }
+    if ("approvalId" in m) return this.skip("client: button press on an approval");
     this.skip("client: button press on a question");
   }
 
@@ -658,7 +657,7 @@ export class Translator {
           "failed",
           "OpenClaw refused an answer",
           or(err["message"], ""),
-          { request: method, subject: `approval:${word(this.lastPress)}` },
+          { request: method },
           `error result of ${method}`,
           or(m["error"], {}),
         );
@@ -675,12 +674,6 @@ export class Translator {
 
   /** What the plugin returned to OpenClaw. For a posted message that is the plugin's id for it. */
   private result(method: unknown, m: Json): void {
-    const res = m["result"];
-    if (this.posting !== null && this.posting[0] === method && isObject(res)) {
-      const mid = or(res["messageId"], object(res["details"])["messageId"], object(res["receipt"])["primaryPlatformMessageId"]);
-      if (truthy(mid)) this.sent.set(mid, this.posting[1]);
-      this.posting = null;
-    }
     this.skip(`result of ${word(method)}`);
   }
 
@@ -843,7 +836,6 @@ export class Translator {
     this.turn = truthy(turn) ? String(turn) : `${word(this.session)}:${this.ids}${this.turnN}`;
     this.failedTurn = null;
     this.turnBody = { started_by: "user" };
-    if (truthy(this.model)) this.turnBody["model"] = this.model;
   }
 
   private runStart(method: string, p: Json): void {
@@ -963,16 +955,13 @@ export class Translator {
     }
     let name: unknown = or(t.name, p["name"] ?? null);
     let args = object(or(p["args"], {}));
-    let wrapper: string | null = null;
     if (p["name"] === "dispatch_action") {
       // A wrapper: the real tool and its arguments are inside.
       name = or(args["id"], name);
       args = object(or(args["args"], {}));
-      wrapper = "dispatch_action";
     }
     const kind = t.command ? "command" : (TOOL_KINDS.get(name) ?? "other");
     const body: Json = { kind, name };
-    if (wrapper !== null) body["called_through"] = wrapper;
     if (kind === "command") {
       body["command"] = args["command"] ?? null;
     } else {
@@ -1070,21 +1059,14 @@ export class Translator {
     const t = tid === undefined ? undefined : this.tools.get(tid);
     if (t === undefined || !("body" in t)) return this.noRule("actions.handleAction with no tool call");
     if (action === "send" && t.mode === "send") {
-      const body: Json = { sent_with: "message tool" };
+      const body: Json = {};
       const args = object(t["args"]);
       if (args["final"] !== null && args["final"] !== undefined) body["phase"] = truthy(args["final"]) ? "final" : "commentary";
-      const ev = this.emit(`message:${word(tid)}`, "message", "done", "Message", params["message"], body, `${method} [send]`, p);
-      t["message"] = ev;
-      this.posting = [method, ev];
+      t["message"] = this.emit(`message:${word(tid)}`, "message", "done", "Message", params["message"], body, `${method} [send]`, p);
       return;
     }
     // react and delete. No item type says "the agent acted on the chat", so the call stays a tool
-    // item. What it acted on is only here: the tool arguments name no message for a react.
-    const target = or(params["messageId"], object(p["toolContext"])["currentMessageId"]) ?? null;
-    const body: Json = { ...object(t["body"]), action, target: { chat: params["to"] ?? null, message: target } };
-    const sent = this.sent.get(target);
-    if (sent !== undefined) body["subject"] = sent.item;
-    t["body"] = body;
+    // item, which shows the call's arguments.
     this.skip("actions.handleAction: the plugin carries out an action that the tool item shows");
   }
 
@@ -1110,7 +1092,6 @@ export class Translator {
     const info = object(or(pair[1] ?? null, {}));
     const kind = info["kind"];
     const text = payload["text"];
-    this.posting = null;
     if (kind === "tool") {
       if (truthy(object(payload["channelData"])["askUser"])) return this.questionAsked(payload, p);
       if (this.ending !== null) return this.finishTool(text ?? null, p);
@@ -1127,26 +1108,15 @@ export class Translator {
       // OpenClaw's own line about a directive it took out of a message, sent before the run that the
       // rest of the message starts. "/exec security=full ask=off <task>" is answered this way.
       const ran = this.ran();
-      const command = ran !== null && ran.startsWith("/") ? words(ran)[0] : null;
       if (ran !== null) this.removeCommand(ran);
-      const ev = this.emit(
-        this.next("notice"),
-        "notice",
-        "done",
-        "Directive taken",
-        text,
-        { kind: "command_output", command: command ?? null },
-        `${method} [${word(kind)}, isStatusNotice]`,
-        p,
-      );
-      this.posting = [method, ev];
+      const ev = this.emit(this.next("notice"), "notice", "done", "Directive taken", text, { kind: "command_output" }, `${method} [${word(kind)}, isStatusNotice]`, p);
+      if (ran !== null && ran.startsWith("/")) this.answering.set(ev.item, words(ran)[0]!);
       return;
     }
     if ("assistantMessageIndex" in info) {
       // Only the agent's own words carry a message index.
       this.ensureTurn();
-      const ev = this.emit(this.next("message"), "message", "done", "Message", text, kind === "final" ? { phase: "final" } : {}, `${method} [${word(kind)}]`, p);
-      this.posting = [method, ev];
+      this.emit(this.next("message"), "message", "done", "Message", text, kind === "final" ? { phase: "final" } : {}, `${method} [${word(kind)}]`, p);
       return;
     }
     if (kind === "final") return this.ownReply(method, text, p);
@@ -1163,7 +1133,7 @@ export class Translator {
     const own = this.lineRun !== null ? this.commands.indexOf(this.inboundText.get(this.lineRun) ?? "") : -1;
     const command = words(own !== -1 ? this.commands.splice(own, 1)[0]! : this.commands.shift()!)[0] ?? "";
     if (command !== "/stop") {
-      const body: Json = { kind: "command_output", command };
+      const body: Json = { kind: "command_output" };
       let title = "Command output";
       if ((command === "/new" || command === "/reset") && truthy(object(list(p)[0])["isStatusNotice"])) {
         // The session was started afresh. Without the plugin hook this reply is the only sign.
@@ -1172,11 +1142,11 @@ export class Translator {
         this.resetByHook = false;
       }
       const ev = this.emit(this.next("notice"), "notice", "done", title, text, body, `${method} [final, reply to ${command}]`, p);
-      this.posting = [method, ev];
+      this.answering.set(ev.item, command);
       return;
     }
-    const ev = this.emit(this.next("notice"), "notice", "done", "Stopped", text, { kind: "command_output", command }, `${method} [final, reply to ${command}]`, p);
-    this.posting = [method, ev];
+    const ev = this.emit(this.next("notice"), "notice", "done", "Stopped", text, { kind: "command_output" }, `${method} [final, reply to ${command}]`, p);
+    this.answering.set(ev.item, command);
     if (this.turn !== null) {
       // A stopped run reports no outcome.
       this.closeTurn("cancelled", BY_DRIVER, { reason: "the run was stopped and reports no outcome" });
@@ -1196,9 +1166,12 @@ export class Translator {
     }
     const allowText = buttons.some((b) => object(b["action"])["intent"] === "custom-input");
     const qs: Json[] = [];
+    // OpenClaw's value for each option of the first question, which a press answers.
+    let values: unknown[] = [];
     list(object(t["args"])["questions"]).forEach((asked, n) => {
       const q = object(asked);
       const options = list(q["options"]).map((o) => (isObject(o) ? o : { label: o }));
+      if (n === 0) values = options.map((o) => ("value" in o ? o["value"] : (o["label"] ?? null)));
       qs.push({
         id: or(q["id"], `q${n}`),
         header: q["header"] ?? null,
@@ -1209,7 +1182,6 @@ export class Translator {
           id: `o${k}`,
           label: o["label"] ?? null,
           description: o["description"] ?? null,
-          native: "value" in o ? o["value"] : (o["label"] ?? null),
         })),
       });
     });
@@ -1219,11 +1191,13 @@ export class Translator {
         text: payload["text"] ?? null,
         multiple: false,
         allow_text: allowText,
-        options: list(ask["optionValues"]).map((v, k) => ({ id: `o${k}`, label: v, native: v })),
+        options: list(ask["optionValues"]).map((v, k) => ({ id: `o${k}`, label: v })),
       });
+      values = list(ask["optionValues"]);
     }
     const item = `question:${word(ask["questionId"])}`;
     t["question"] = item;
+    this.natives.set(item, new Map(values.map((v, k) => [`o${k}`, v])));
     this.emit(item, "question", "waiting", "Question", qs[0]!["text"], { answer_via: "request", subject: this.asking, questions: qs }, "deliver [tool, channelData.askUser]", p);
   }
 
@@ -1234,43 +1208,30 @@ export class Translator {
     // The press names the question as OpenClaw does, which is not the id of one of its questions: a
     // press answers the first, as a button does.
     const q = object(list(prev.body["questions"])[0]);
+    const values = this.natives.get(prev.item);
     const chosen = list(q["options"])
-      .filter((o) => object(o)["native"] === result["optionValue"])
-      .map((o) => object(o)["id"]);
+      .map((o) => object(o)["id"])
+      .filter((id) => values?.has(word(id)) === true && values.get(word(id)) === result["optionValue"]);
     const answer = [{ question: q["id"], options: chosen, text: chosen.length > 0 ? null : (result["optionValue"] ?? null) }];
     this.emit(prev.item, "question", "done", prev.title, "Answered", { ...prev.body, answer }, `result of ${method}`, result);
   }
 
   // -- approvals
 
-  private choices(allowed: unknown): Json[] {
-    return list(allowed).map((d, n) => ({
-      id: `c${n}`,
-      label: DECISIONS.get(d) ?? d,
-      effect: d === "deny" ? "deny" : "allow",
-      native: d,
-    }));
+  /** An approval's choices, one for each decision OpenClaw allows; the decisions are kept for its item. */
+  private choices(item: string, allowed: unknown): Json[] {
+    const decisions = list(allowed);
+    this.natives.set(item, new Map(decisions.map((d, n) => [`c${n}`, d])));
+    return decisions.map((d, n) => ({ id: `c${n}`, label: DECISIONS.get(d) ?? d, effect: d === "deny" ? "deny" : "allow" }));
   }
 
   /** The plugin claims the approval capability, so the request arrives with its fields. */
   private approvalCard(method: string, p: Json): void {
     const req = object(p["request"]);
     const inner = object(req["request"]);
-    this.emit(
-      `approval:${word(req["id"])}`,
-      "approval",
-      "waiting",
-      "Allow this command?",
-      inner["command"],
-      {
-        answer_via: "request",
-        subject: inner["toolCallId"] ?? null,
-        choices: this.choices(inner["allowedDecisions"]),
-        expires_at_ms: req["expiresAtMs"] ?? null,
-      },
-      method,
-      p,
-    );
+    const item = `approval:${word(req["id"])}`;
+    const body = { subject: inner["toolCallId"] ?? null, choices: this.choices(item, inner["allowedDecisions"]) };
+    this.emit(item, "approval", "waiting", "Allow this command?", inner["command"], body, method, p);
   }
 
   private approvalCardResolved(method: string, p: Json): void {
@@ -1282,8 +1243,7 @@ export class Translator {
   /** Media OpenClaw sends outside a reply: its caption is the agent's words. Its file goes to the core apart. */
   private sendMedia(method: string, p: Json): void {
     if (plain(or(p["text"], "")).trim() === "") return this.skip("message.send.media with no caption: its file goes to the core");
-    const ev = this.emit(this.next("message"), "message", "done", "Message", p["text"], {}, `${method} [caption]`, p);
-    this.posting = [method, ev];
+    this.emit(this.next("message"), "message", "done", "Message", p["text"], {}, `${method} [caption]`, p);
   }
 
   private sendPayload(method: string, p: Json): void {
@@ -1298,14 +1258,9 @@ export class Translator {
     // Without the approval capability the prompt names no tool call. If exactly one command is running,
     // the approval is taken to be about it.
     const running = [...this.open].filter(([, e]) => e.type === "tool" && e.body["kind"] === "command").map(([i]) => i);
-    const body: Json = {
-      answer_via: "message",
-      subject: running.length === 1 ? running[0] : null,
-      choices: this.choices(approval["allowedDecisions"]),
-    };
-    if (truthy(body["subject"])) body["subject_inferred"] = true;
-    const ev = this.emit(`approval:${word(aid)}`, "approval", "waiting", "Allow this command?", payload["text"], body, `${method} [execApproval pending]`, p);
-    this.posting = [method, ev];
+    const item = `approval:${word(aid)}`;
+    const body = { subject: running.length === 1 ? running[0] : null, choices: this.choices(item, approval["allowedDecisions"]) };
+    this.emit(item, "approval", "waiting", "Allow this command?", payload["text"], body, `${method} [execApproval pending]`, p);
   }
 
   /** An approval can report its outcome three times. The first closes the item. */
@@ -1314,7 +1269,8 @@ export class Translator {
     if (prev === undefined) return this.skip(`${nativeKind.split(" [")[0]}: an approval outcome that is already known`);
     // The resolved message does not say which way. The decision is the one the client sent.
     const chosenDecision = or(decision, this.decisions.get(aid) ?? null);
-    const chosen = list(prev.body["choices"]).map(object).find((c) => c["native"] === chosenDecision);
+    const decisions = this.natives.get(prev.item);
+    const chosen = list(prev.body["choices"]).map(object).find((c) => decisions?.has(word(c["id"])) === true && decisions.get(word(c["id"])) === chosenDecision);
     if (chosen === undefined) return this.noRule("an approval resolved, and which way is only in the wording");
     const allow = chosen["effect"] === "allow";
     this.emit(
@@ -1328,5 +1284,18 @@ export class Translator {
       native,
     );
     if (!allow && truthy(prev.body["subject"])) this.denied.add(prev.body["subject"]);
+  }
+
+  /**
+   * OpenClaw's value for each choice of an approval, or each option of a question's first question, by
+   * its id: what pressing it sends. Empty for an item that is neither.
+   */
+  valuesOf(item: string): Map<string, unknown> {
+    return this.natives.get(item) ?? new Map();
+  }
+
+  /** The slash command a notice answers, such as `/new`, if it answers one. */
+  commandAnswered(item: string): string | null {
+    return this.answering.get(item) ?? null;
   }
 }

@@ -2125,9 +2125,9 @@ class OpenClaw(Translator):
         self.inbound_text: dict[str, str] = {}  # message id -> what the person sent
         self.commands: list[str] = []  # slash commands handed to OpenClaw and not yet answered
         self.decisions: dict[str, str] = {}  # approval id -> the decision the client sent
-        self.last_press = None
-        self.sent: dict[str, dict] = {}  # the plugin's id for a posted message -> the event it became
-        self.posting = None  # (method, event) of the call whose result will name the posted message
+        # approval or question item -> OpenClaw's value for each choice or option, by its id: what an
+        # answer presses and a resolution names. It stays with the plugin; the item shows the ids only.
+        self.natives: dict[str, dict] = {}
         self.denied: set[str] = set()  # tool calls whose approval was denied
         self.route_key = None  # the session key of the last route OpenClaw gave
         self.generation: dict[str, int] = {}  # session key -> how many sessions it has named
@@ -2227,7 +2227,6 @@ class OpenClaw(Translator):
 
     def press(self, m):
         if "approvalId" in m:
-            self.last_press = m.get("approvalId")
             return self.skip("client: button press on an approval")
         self.skip("client: button press on a question")
 
@@ -2270,7 +2269,7 @@ class OpenClaw(Translator):
             if "error" in m:
                 err = m["error"] or {}
                 return self.emit(f"error:{self.seq + 1}", "error", "failed", "OpenClaw refused an answer", err.get("message", ""),
-                                 {"request": method, "subject": f"approval:{self.last_press}"}, f"error result of {method}", err)
+                                 {"request": method}, f"error result of {method}", err)
             approval = result.get("approval") or {}
             if not result.get("applied"):
                 return self.unknown(f"{method} result that was not applied")
@@ -2280,14 +2279,7 @@ class OpenClaw(Translator):
         self.skip(f"result of {method}")
 
     def result(self, method, m):
-        """What the plugin returned to OpenClaw. For a posted message that is the plugin's id for it."""
-        res = m.get("result")
-        if self.posting and self.posting[0] == method and isinstance(res, dict):
-            mid = (res.get("messageId") or (res.get("details") or {}).get("messageId")
-                   or (res.get("receipt") or {}).get("primaryPlatformMessageId"))
-            if mid:
-                self.sent[mid] = self.posting[1]
-            self.posting = None
+        """What the plugin returned to OpenClaw."""
         self.skip(f"result of {method}")
 
     # -- sessions
@@ -2400,8 +2392,6 @@ class OpenClaw(Translator):
         self.turn = turn or f"{self.session}:{self.turn_n}"
         self.failed_turn = None
         self.turn_body = {"started_by": "user"}
-        if self.model:
-            self.turn_body["model"] = self.model
 
     def run_start(self, method, p):
         if self.turn is not None:
@@ -2515,13 +2505,11 @@ class OpenClaw(Translator):
         if phase != "start":
             return self.unknown(f"onToolStart [{phase}]")
         t = self.tools.setdefault(tid, {"name": p.get("name"), "title": None, "command": False, "mode": "tool"})
-        name, args, wrapper = t["name"] or p.get("name"), p.get("args") or {}, None
+        name, args = t["name"] or p.get("name"), p.get("args") or {}
         if p.get("name") == "dispatch_action":  # a wrapper: the real tool and its arguments are inside
-            name, args, wrapper = args.get("id") or name, args.get("args") or {}, "dispatch_action"
+            name, args = args.get("id") or name, args.get("args") or {}
         kind = "command" if t["command"] else self.TOOL_KINDS.get(name, "other")
         body = {"kind": kind, "name": name}
-        if wrapper:
-            body["called_through"] = wrapper
         if kind == "command":
             body["command"] = args.get("command")
         else:
@@ -2594,18 +2582,13 @@ class OpenClaw(Translator):
         if t is None or "body" not in t:
             return self.unknown("actions.handleAction with no tool call")
         if action == "send" and t["mode"] == "send":
-            body = {"sent_with": "message tool"}
+            body = {}
             if t["args"].get("final") is not None:
                 body["phase"] = "final" if t["args"]["final"] else "commentary"
             t["message"] = self.emit(f"message:{tid}", "message", "done", "Message", params.get("message"), body, f"{method} [send]", p)
-            self.posting = (method, t["message"])
             return
         # react and delete. No item type says "the agent acted on the chat", so the call stays a
-        # tool item. What it acted on is only here: the tool arguments name no message for a react.
-        target = params.get("messageId") or (p.get("toolContext") or {}).get("currentMessageId")
-        t["body"] = {**t["body"], "action": action, "target": {"chat": params.get("to"), "message": target}}
-        if target in self.sent:
-            t["body"]["subject"] = self.sent[target]["item"]
+        # tool item, which shows the call's arguments.
         self.skip("actions.handleAction: the plugin carries out an action that the tool item shows")
 
     # -- thinking
@@ -2626,7 +2609,6 @@ class OpenClaw(Translator):
     def deliver(self, method, p):
         payload, info = p[0] or {}, p[1] or {}
         kind, text = info.get("kind"), payload.get("text")
-        self.posting = None
         if kind == "tool":
             if (payload.get("channelData") or {}).get("askUser"):
                 return self.question_asked(payload, p)
@@ -2644,18 +2626,15 @@ class OpenClaw(Translator):
         if payload.get("isStatusNotice") and kind != "final" and "assistantMessageIndex" not in info:
             # OpenClaw's own line about a directive it took out of a message, sent before the run that
             # the rest of the message starts. "/exec security=full ask=off <task>" is answered this way.
-            command = self.last_run.split()[0] if self.last_run and self.last_run.startswith("/") else None
             if self.last_run in self.commands:
                 self.commands.remove(self.last_run)
-            ev = self.emit(f"notice:{self.seq + 1}", "notice", "done", "Directive taken", text,
-                           {"kind": "command_output", "command": command}, f"{method} [{kind}, isStatusNotice]", p)
-            self.posting = (method, ev)
+            self.emit(f"notice:{self.seq + 1}", "notice", "done", "Directive taken", text,
+                      {"kind": "command_output"}, f"{method} [{kind}, isStatusNotice]", p)
             return
         if "assistantMessageIndex" in info:  # only the agent's own words carry a message index
             self.ensure_turn()
-            ev = self.emit(f"message:{self.seq + 1}", "message", "done", "Message", text,
-                           {"phase": "final"} if kind == "final" else {}, f"{method} [{kind}]", p)
-            self.posting = (method, ev)
+            self.emit(f"message:{self.seq + 1}", "message", "done", "Message", text,
+                      {"phase": "final"} if kind == "final" else {}, f"{method} [{kind}]", p)
             return
         if kind == "final":
             return self.own_reply(method, text, p)
@@ -2668,20 +2647,18 @@ class OpenClaw(Translator):
             return self.unknown("deliver [final] that is not the agent's, with no command waiting")
         command = self.commands.pop(0).split()[0]
         if command != "/stop":
-            body, title = {"kind": "command_output", "command": command}, "Command output"
+            body, title = {"kind": "command_output"}, "Command output"
             if command in ("/new", "/reset") and (p[0] or {}).get("isStatusNotice"):
                 # The session was started afresh. Without the plugin hook this reply is the only sign.
                 title = "New session"
                 if not self.reset_by_hook:
                     self.session_replaced(self.route_key, f"{method} [final, isStatusNotice, reply to {command}]", p)
                 self.reset_by_hook = False
-            ev = self.emit(f"notice:{self.seq + 1}", "notice", "done", title, text,
-                           body, f"{method} [final, reply to {command}]", p)
-            self.posting = (method, ev)
+            self.emit(f"notice:{self.seq + 1}", "notice", "done", title, text,
+                      body, f"{method} [final, reply to {command}]", p)
             return
-        ev = self.emit(f"notice:{self.seq + 1}", "notice", "done", "Stopped", text, {"kind": "command_output", "command": command},
-                       f"{method} [final, reply to {command}]", p)
-        self.posting = (method, ev)
+        self.emit(f"notice:{self.seq + 1}", "notice", "done", "Stopped", text, {"kind": "command_output"},
+                  f"{method} [final, reply to {command}]", p)
         if self.turn is not None:  # a stopped run reports no outcome
             self.close_turn("cancelled", self.BY_DRIVER, {"reason": "the run was stopped and reports no outcome"})
 
@@ -2695,18 +2672,22 @@ class OpenClaw(Translator):
         buttons = [b for blk in (payload.get("presentation") or {}).get("blocks") or [] if blk.get("type") == "buttons"
                    for b in blk.get("buttons") or []]
         allow_text = any((b.get("action") or {}).get("intent") == "custom-input" for b in buttons)
-        qs = []
+        qs, values = [], []  # values: OpenClaw's for each option of the first question, which a press answers
         for n, q in enumerate((t.get("args") or {}).get("questions") or []):
             options = [o if isinstance(o, dict) else {"label": o} for o in q.get("options") or []]
+            if n == 0:
+                values = [o.get("value", o.get("label")) for o in options]
             qs.append({"id": q.get("id") or f"q{n}", "header": q.get("header"), "text": q.get("question"), "multiple": bool(q.get("multiSelect")),
                        "allow_text": allow_text,
-                       "options": [{"id": f"o{k}", "label": o.get("label"), "description": o.get("description"),
-                                    "native": o.get("value", o.get("label"))} for k, o in enumerate(options)]})
+                       "options": [{"id": f"o{k}", "label": o.get("label"), "description": o.get("description")}
+                                   for k, o in enumerate(options)]})
         if not qs:
+            values = ask.get("optionValues") or []
             qs = [{"id": "q0", "text": payload.get("text"), "multiple": False, "allow_text": allow_text,
-                   "options": [{"id": f"o{k}", "label": v, "native": v} for k, v in enumerate(ask.get("optionValues") or [])]}]
+                   "options": [{"id": f"o{k}", "label": v} for k, v in enumerate(values)]}]
         item = f"question:{ask.get('questionId')}"
         t["question"] = item
+        self.natives[item] = {f"o{k}": v for k, v in enumerate(values)}
         self.emit(item, "question", "waiting", "Question", qs[0]["text"],
                   {"answer_via": "request", "subject": self.asking, "questions": qs}, "deliver [tool, channelData.askUser]", p)
 
@@ -2718,23 +2699,26 @@ class OpenClaw(Translator):
         # The press names the question as OpenClaw does, which is not the id of one of its questions:
         # a press answers the first, as a button does.
         q = prev["body"]["questions"][0]
-        chosen = [o["id"] for o in q["options"] if o["native"] == result.get("optionValue")]
+        values = self.natives.get(item) or {}
+        chosen = [o["id"] for o in q["options"] if o["id"] in values and values[o["id"]] == result.get("optionValue")]
         answer = [{"question": q["id"], "options": chosen, "text": None if chosen else result.get("optionValue")}]
         self.emit(item, "question", "done", prev["title"], "Answered", {**prev["body"], "answer": answer}, f"result of {method}", result)
 
     # -- approvals
 
-    def choices(self, allowed):
-        return [{"id": f"c{n}", "label": self.DECISIONS.get(d, d), "effect": "deny" if d == "deny" else "allow", "native": d}
+    def choices(self, item, allowed):
+        """An approval's choices, one for each decision OpenClaw allows; the decisions are kept for its item."""
+        self.natives[item] = {f"c{n}": d for n, d in enumerate(allowed or [])}
+        return [{"id": f"c{n}", "label": self.DECISIONS.get(d, d), "effect": "deny" if d == "deny" else "allow"}
                 for n, d in enumerate(allowed or [])]
 
     def approval_card(self, method, p):
         """The plugin claims the approval capability, so the request arrives with its fields."""
         req = p.get("request") or {}
         inner = req.get("request") or {}
-        self.emit(f"approval:{req.get('id')}", "approval", "waiting", "Allow this command?", inner.get("command"),
-                  {"answer_via": "request", "subject": inner.get("toolCallId"), "choices": self.choices(inner.get("allowedDecisions")),
-                   "expires_at_ms": req.get("expiresAtMs")}, method, p)
+        item = f"approval:{req.get('id')}"
+        self.emit(item, "approval", "waiting", "Allow this command?", inner.get("command"),
+                  {"subject": inner.get("toolCallId"), "choices": self.choices(item, inner.get("allowedDecisions"))}, method, p)
 
     def approval_card_resolved(self, method, p):
         resolved = p.get("resolved") or {}
@@ -2745,8 +2729,7 @@ class OpenClaw(Translator):
         core apart (D-090)."""
         if not str(p.get("text") or "").strip():
             return self.skip("message.send.media with no caption: its file goes to the core")
-        ev = self.emit(f"message:{self.seq + 1}", "message", "done", "Message", p.get("text"), {}, f"{method} [caption]", p)
-        self.posting = (method, ev)
+        self.emit(f"message:{self.seq + 1}", "message", "done", "Message", p.get("text"), {}, f"{method} [caption]", p)
 
     def send_payload(self, method, p):
         """A message OpenClaw sends outside a reply. In the recordings every one is an approval."""
@@ -2764,13 +2747,10 @@ class OpenClaw(Translator):
         # Without the approval capability the prompt names no tool call. If exactly one command is
         # running, the approval is taken to be about it.
         running = [i for i, e in self.open.items() if e["type"] == "tool" and e["body"].get("kind") == "command"]
-        body = {"answer_via": "message", "subject": running[0] if len(running) == 1 else None,
-                "choices": self.choices(approval.get("allowedDecisions"))}
-        if body["subject"]:
-            body["subject_inferred"] = True
-        ev = self.emit(f"approval:{aid}", "approval", "waiting", "Allow this command?", payload.get("text"), body,
-                       f"{method} [execApproval pending]", p)
-        self.posting = (method, ev)
+        item = f"approval:{aid}"
+        body = {"subject": running[0] if len(running) == 1 else None, "choices": self.choices(item, approval.get("allowedDecisions"))}
+        self.emit(item, "approval", "waiting", "Allow this command?", payload.get("text"), body,
+                  f"{method} [execApproval pending]", p)
 
     def approval_resolved(self, aid, native_kind, native, decision=None):
         """An approval can report its outcome three times. The first closes the item."""
@@ -2779,7 +2759,8 @@ class OpenClaw(Translator):
             return self.skip(f"{native_kind.split(' [')[0]}: an approval outcome that is already known")
         # The resolved message does not say which way. The decision is the one the client sent.
         decision = decision or self.decisions.get(aid)
-        chosen = next((c for c in prev["body"]["choices"] if c["native"] == decision), None)
+        decisions = self.natives.get(prev["item"]) or {}
+        chosen = next((c for c in prev["body"]["choices"] if c["id"] in decisions and decisions[c["id"]] == decision), None)
         if chosen is None:
             return self.unknown("an approval resolved, and which way is only in the wording")
         allow = chosen["effect"] == "allow"
