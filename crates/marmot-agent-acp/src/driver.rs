@@ -20,6 +20,7 @@
 
 use crate::mcp::{self, Call, Named, Owner, Server, Tokens};
 use crate::{Direction, Translator};
+use agent_client_protocol_schema::v1 as acp;
 use marmot_agent_driver::{
     Action, Answer, Capabilities, ChatId, Control, Driver, Emitted, FilesIn, Harness, MessageId,
     MidTurn, Output, Prompt, Reason, Refusal, RequestId, SendFile, Sessions,
@@ -616,18 +617,10 @@ impl Acp {
                     .and_then(|c| self.translator(c))
                     .is_some_and(|t| t.waits_on(&id.to_string()));
                 let reply = match method {
+                    _ if chat.is_none() => unclaimed(&message),
                     "session/request_permission" | "elicitation/create" if shown => None,
-                    "session/request_permission" | "elicitation/create"
-                        if chat_known(&message, &self.sessions) =>
-                    {
-                        Some(unreadable(id))
-                    }
-                    "cursor/update_todos" => {
-                        Some(json!({"jsonrpc": "2.0", "id": id, "result": {}}))
-                    }
-                    _ => Some(
-                        json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "Method not found"}}),
-                    ),
+                    "session/request_permission" | "elicitation/create" => Some(unreadable(id)),
+                    _ => unclaimed(&message),
                 };
                 if let Some(reply) = reply
                     && self.write(&reply.to_string()).await.is_err()
@@ -696,9 +689,19 @@ impl Acp {
         for line in known {
             Box::pin(self.route(&line)).await;
         }
+        // Once no session is being picked, what is still held names a session no chat has: it
+        // is passed over, and a request among it answered, so the agent does not wait for ever.
         if !self.picking() {
             self.unrouted += self.early.len() as u64;
-            self.early.clear();
+            for line in std::mem::take(&mut self.early) {
+                let message: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
+                if let Some(reply) = unclaimed(&message)
+                    && self.write(&reply.to_string()).await.is_err()
+                {
+                    self.stopped();
+                    break;
+                }
+            }
         }
     }
 
@@ -838,11 +841,30 @@ fn unreadable(id: &Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32602, "message": "Invalid params"}})
 }
 
-/// Whether the session a message from the agent names belongs to a chat.
-fn chat_known(message: &Value, sessions: &HashMap<String, ChatId>) -> bool {
-    message["params"]["sessionId"]
-        .as_str()
-        .is_some_and(|s| sessions.contains_key(s))
+/// The answer to a request of the agent's that no person is asked about, or that no chat takes;
+/// none for a message that is not a request. Cursor's to-do list is taken. A permission or a form
+/// for a session no chat has is refused as the official library refuses a request for a session
+/// it does not have: resource not found, naming the session; one naming no session, as one it
+/// cannot read. Anything else the driver does not offer.
+fn unclaimed(message: &Value) -> Option<Value> {
+    let id = message.get("id")?;
+    let method = message.get("method")?.as_str()?;
+    let reply = match method {
+        "cursor/update_todos" => json!({"jsonrpc": "2.0", "id": id, "result": {}}),
+        "session/request_permission" | "elicitation/create" => {
+            match message["params"]["sessionId"].as_str() {
+                Some(session) => {
+                    let error = acp::Error::session_not_found(session.to_string());
+                    json!({"jsonrpc": "2.0", "id": id, "error": error})
+                }
+                None => unreadable(id),
+            }
+        }
+        _ => {
+            json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "Method not found"}})
+        }
+    };
+    Some(reply)
 }
 
 /// The session a message from the agent names, if it names one.

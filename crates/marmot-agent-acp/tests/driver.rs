@@ -610,3 +610,52 @@ async fn a_request_with_an_escaped_id_is_answered_once() {
     assert_eq!(answered.settles, vec![RequestId::from("r-1")]);
     agent.await.unwrap();
 }
+
+/// A request from a session no chat has taken is answered all the same, so the agent does not
+/// wait for ever. One that comes while a session is being picked is held, since the session being
+/// picked can speak before the reply that picks it; when the reply names another session, the
+/// request is refused as the official ACP library refuses a request for a session it does not
+/// have: -32002, resource not found, with the session in `data`. So is one that comes when no
+/// session is being picked.
+#[tokio::test]
+async fn a_request_from_a_session_no_chat_has_is_refused_as_not_found() {
+    let (mut acp, mut stand) = connected().await;
+    let agent = tokio::spawn(async move {
+        let wait = Duration::from_secs(5);
+        let new = stand.next().await;
+        assert_eq!(new["method"], "session/new");
+        stand.ask_permission(30, "s-gone", "t1").await;
+        stand.reply(&new, json!({"sessionId": "s1"})).await;
+        let mut heard = Vec::new();
+        while heard.len() < 2 {
+            let next = tokio::time::timeout(wait, stand.next()).await;
+            heard.push(next.expect("the driver answers the request held while picking"));
+        }
+        let prompted = heard.iter().find(|m| m["method"] == "session/prompt");
+        let prompted = prompted.expect("the prompt").clone();
+        let refused = heard.iter().find(|m| m["id"] == 30);
+        let refused = refused.expect("the held request is answered");
+        let not_found = json!({"code": -32002, "message": "Resource not found",
+                               "data": {"sessionId": "s-gone"}});
+        assert_eq!(refused["error"], not_found, "held while picking");
+        stand.ask_permission(31, "s-gone", "t2").await;
+        let refused = tokio::time::timeout(wait, stand.next()).await;
+        let refused = refused.expect("the driver answers a request for no chat's session");
+        assert_eq!(refused["id"], 31);
+        let not_found = json!({"code": -32002, "message": "Resource not found",
+                               "data": {"sessionId": "s-gone"}});
+        assert_eq!(refused["error"], not_found, "with no session being picked");
+        stand
+            .reply(&prompted, json!({"stopReason": "end_turn"}))
+            .await;
+        stand
+    });
+    acp.prompt(prompt("hello")).await.unwrap();
+    loop {
+        let e = event(&mut acp).await;
+        if matches!(e.event.body(), Body::Turn(_)) && e.event.header().state == State::Done {
+            break;
+        }
+    }
+    agent.await.unwrap();
+}

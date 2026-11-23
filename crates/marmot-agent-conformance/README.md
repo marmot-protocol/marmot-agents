@@ -185,8 +185,13 @@ Ten driver bugs were found, each fixed after its scenario failed:
 - **The ACP driver never answered a permission or form it could not show** (`a_request_the_driver_cannot_show_is_answered`
   in `tests/acp.rs`, 2026-11-23): one it could not read, or a form at a web address, which it never offers. The
   agent waited for ever. Now it is refused with -32602, invalid params, as the official ACP library refuses a
-  request it cannot read. Not yet covered: a request naming a session no chat took, said while a session was being
-  picked, is still dropped unanswered.
+  request it cannot read.
+- **The ACP driver never answered a request naming a session no chat took, said while a session was being picked**
+  (`a_request_from_a_session_no_chat_has_is_refused_as_not_found` in the driver's own `tests/driver.rs`,
+  2026-11-23). It was held, since the session being picked can speak before the reply that picks it, and dropped
+  when the reply named another. Now it is refused with -32002, resource not found, naming the session, as the
+  official ACP library refuses a request for a session it does not have (`Error::session_not_found`); so is one
+  that comes when no session is being picked, which was refused as an unknown method.
 
 Not covered yet, and why:
 
