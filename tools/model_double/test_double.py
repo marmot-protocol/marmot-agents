@@ -8,6 +8,7 @@ import contextlib
 import datetime
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -46,6 +47,17 @@ class Keys(unittest.TestCase):
         )
         self.assertEqual(double.key_of("anthropic", body),
                          {"kind": "main", "prompt": "Run `ls`", "after": 1, "last": "results:Bash"})
+
+    def test_anthropic_keeps_words_sent_beside_tool_results(self):
+        # A person's words after a tool's results, in the same message, are the new prompt.
+        body = anthropic(
+            {"role": "user", "content": "Run `ls`"},
+            {"role": "assistant", "content": [{"type": "tool_use", "id": "a", "name": "Bash", "input": {}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "a", "content": "x"},
+                                         {"type": "text", "text": REMINDER + "Summarize only"}]},
+        )
+        self.assertEqual(double.key_of("anthropic", body),
+                         {"kind": "main", "prompt": "Summarize only", "after": 0, "last": "prompt"})
 
     def test_context_beside_the_prompt_is_part_of_it(self):
         body = {"tools": [{"type": "function"}], "messages": [
@@ -111,6 +123,48 @@ class Modes(unittest.TestCase):
                                 {"key": self.key, "reply": [{"text": "b"}]}])
         self.assertEqual(replay.answer("anthropic", self.key, {}), [{"text": "b"}])
         self.assertEqual(replay.answer("anthropic", {**self.key, "last": "results:Read"}, {}), [{"text": "a"}])
+
+    def test_replay_refuses_a_cassette_with_two_replies_for_one_key(self):
+        # Only the first would ever be served, and the second would pass as used.
+        with self.assertRaisesRegex(ValueError, "exchanges 1 and 3"):
+            double.Replay([{"key": self.key, "reply": [{"text": "a"}]},
+                           {"key": {**self.key, "after": 0}, "reply": [{"text": "a"}]},
+                           {"key": self.key, "reply": [{"text": "b"}]}])
+        same = {"key": self.key, "reply": [{"text": "a"}]}
+        double.Replay([same, same])
+
+
+class Cassettes(unittest.TestCase):
+    key = Modes.key
+
+    def test_a_second_reply_for_one_key_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cassette = double.Cassette(Path(folder) / "c.jsonl", {"cassette": 1})
+            cassette.keep(self.key, [{"text": "a"}])
+            cassette.keep(self.key, [{"text": "a"}])
+            with self.assertRaises(double.Conflict):
+                cassette.keep(self.key, [{"text": "b"}])
+            _, exchanges = double.load_cassette(Path(folder) / "c.jsonl")
+        self.assertEqual(exchanges, [{"key": self.key, "reply": [{"text": "a"}]}])
+
+    def test_an_exchange_that_failed_to_be_written_is_written_on_a_retry(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "later" / "c.jsonl"
+            cassette = double.Cassette(path, {"cassette": 1})
+            with self.assertRaises(OSError):
+                cassette.keep(self.key, [{"text": "a"}])
+            path.parent.mkdir()
+            cassette.keep(self.key, [{"text": "a"}])
+            header, exchanges = double.load_cassette(path)
+        self.assertEqual((header, exchanges), ({"cassette": 1}, [{"key": self.key, "reply": [{"text": "a"}]}]))
+
+    def test_a_line_separator_in_a_reply_is_not_a_record_boundary(self):
+        reply = [{"text": "one\u2028two\u2029three\x85four"}]
+        with tempfile.TemporaryDirectory() as folder:
+            cassette = double.Cassette(Path(folder) / "c.jsonl", {"cassette": 1})
+            cassette.keep(self.key, reply)
+            _, exchanges = double.load_cassette(Path(folder) / "c.jsonl")
+        self.assertEqual(exchanges, [{"key": self.key, "reply": reply}])
 
 
 def events(text):
@@ -264,7 +318,8 @@ class Served(unittest.TestCase):
         self.assertEqual([e["format"] for e in log], ["count_tokens", "other"])
         self.assertIn("one", log[0]["body"])
         self.assertIn("two", log[1]["body"])
-        self.assertTrue(all("unmatched" not in e for e in log))
+        # A POST to a path it does not serve was not answered, so a test that checks for that fails.
+        self.assertEqual([e.get("unmatched") for e in log], [None, "not a path the double serves"])
 
     def test_record_keeps_what_the_model_said(self):
         upstream = double.Scripted({"prompts": [{"when": "`ls`", "replies": [[{"text": "hi"}]]}]})
@@ -301,6 +356,25 @@ class Scrubbing(unittest.TestCase):
         self.assertEqual(header_out, header)
         self.assertEqual(exchanges[0]["key"]["prompt"], "Run it in /work/demo")
 
+    def test_the_header_keeps_its_harness_and_a_reply_its_line_separators(self):
+        # A user named like the harness: its name in a reply is scrubbed, the header's harness is not.
+        scrub = Path(__file__).parent.parent / "record" / "scrub.py"
+        with tempfile.TemporaryDirectory() as folder:
+            raw, clean = Path(folder) / "scrub", Path(folder) / "clean"
+            (raw / "cassettes" / "claude").mkdir(parents=True)
+            header = {"cassette": 1, "harness": "claude-code", "version": "0", "recorded": "2026-11-23",
+                      "format": "anthropic"}
+            exchange = {"key": {"kind": "main", "prompt": "hello", "after": 0, "last": "prompt"},
+                        "reply": [{"text": "hi claude\u2028bye"}]}
+            (raw / "cassettes" / "claude" / "a.jsonl").write_text(
+                json.dumps(header) + "\n" + json.dumps(exchange, ensure_ascii=False) + "\n", encoding="utf-8")
+            env = {**os.environ, "USER": "claude", "LOGNAME": "claude"}
+            run = subprocess.run([sys.executable, scrub, raw, clean], capture_output=True, text=True, env=env)
+            self.assertEqual(run.returncode, 0, run.stderr)
+            header_out, exchanges = double.load_cassette(clean / "cassettes" / "claude" / "a.jsonl")
+        self.assertEqual(header_out, header)
+        self.assertEqual(exchanges[0]["reply"], [{"text": "hi user\u2028bye"}])
+
 
 class Staleness(unittest.TestCase):
     def test_old_cassettes_and_newer_releases_are_reported(self):
@@ -333,12 +407,34 @@ class Staleness(unittest.TestCase):
         self.assertEqual((strict.returncode, strict.stdout), (1, report.stdout))
         self.assertEqual((fresh.returncode, fresh.stdout), (0, ""))
 
+    def test_a_folder_that_is_not_there_fails(self):
+        # A mistyped folder is an error, even without --strict; an empty one finds nothing.
+        script = Path(__file__).parent / "check_cassettes.py"
+        with tempfile.TemporaryDirectory() as folder:
+            missing = subprocess.run([sys.executable, script, f"{folder}/nothing", "--offline"],
+                                     capture_output=True, text=True)
+            empty = subprocess.run([sys.executable, script, folder, "--offline", "--strict"],
+                                   capture_output=True, text=True)
+        self.assertEqual(missing.returncode, 2)
+        self.assertIn("not a folder", missing.stderr)
+        self.assertEqual((empty.returncode, empty.stdout), (0, ""))
+
     def test_versions(self):
         self.assertTrue(check_cassettes.newer("2.1.330", "2.1.326"))
         self.assertTrue(check_cassettes.newer("0.172.0", "0.171.0"))
         self.assertFalse(check_cassettes.newer("0.171.0", "0.171.0"))
         self.assertTrue(check_cassettes.newer("1.0.0", "1.0.0-alpha.1"))
         self.assertFalse(check_cassettes.newer("0.9.10", "0.10.0"))
+        # Build metadata has no part in precedence; pre-releases of one version compare by their identifiers.
+        self.assertFalse(check_cassettes.newer("1.2.3", "1.2.3+build.7"))
+        self.assertFalse(check_cassettes.newer("1.2.3+build.8", "1.2.3+build.7"))
+        self.assertTrue(check_cassettes.newer("1.2.4", "1.2.3+build.7"))
+        self.assertTrue(check_cassettes.newer("1.0.0-beta.2", "1.0.0-beta.1"))
+        self.assertTrue(check_cassettes.newer("1.0.0-beta.11", "1.0.0-beta.2"))
+        self.assertTrue(check_cassettes.newer("1.0.0-beta", "1.0.0-alpha.1"))
+        self.assertTrue(check_cassettes.newer("1.0.0-alpha.1", "1.0.0-alpha"))
+        self.assertTrue(check_cassettes.newer("1.0.0-alpha.beta", "1.0.0-alpha.1"))
+        self.assertFalse(check_cassettes.newer("1.0.0-rc.1", "1.0.0"))
 
 
 if __name__ == "__main__":

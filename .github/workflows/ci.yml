@@ -169,10 +169,12 @@ jobs:
       - name: The model double reads and writes each wire format
         run: python3 -m unittest discover -s tools/model_double -p 'test_*.py'
 
-      # A report, not a check (D-127): a cassette older than 14 days is a warning here, and fails only
-      # the nightly run, which runs the same script with --strict.
+      # A report, not a check (D-127): a cassette older than 14 days is a warning here. It is to fail
+      # only the nightly run, which will run the same script with --strict once that workflow exists.
+      # A folder that is not there fails this step (exit 2), hence pipefail.
       - name: Report the model double's cassettes that are due to be recorded again
         run: |
+          set -o pipefail
           python3 tools/model_double/check_cassettes.py fixtures/cassettes --offline |
             while IFS= read -r line; do echo "::warning title=Cassette due::$line"; done
 

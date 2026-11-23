@@ -16,7 +16,7 @@ as the first line of its output. It answers:
 - `GET …/models`, a list with one model, `scripted`;
 - `GET /_double/log`, what it was asked, as keys (below), and whether each was answered (with each request's
   whole body too, given `--keep-bodies`). Every POST is in it: a token count as `count_tokens`, and one to a
-  path it does not serve as `other`, answered 404.
+  path it does not serve as `other`, answered 404 and marked unmatched.
 
 What it prints, on its error output, is never anything a request holds: no prompt, path, host name or key.
 An unanswered request is printed by its format, `kind`, `after` and `last`, and why it was not answered;
@@ -51,6 +51,8 @@ Modes:
 
 A cassette is JSON lines: a first line `{"cassette": 1, "harness", "version", "recorded", "format"}`, then
 one `{"key": {…}, "reply": [part, …]}` per exchange. It holds no header, no key and no request body.
+It holds one reply for each key: recording refuses a second, different one (502, logged as an error), and
+replay refuses to start on a cassette that has one.
 
 It uses the standard library only.
 """
@@ -129,10 +131,13 @@ def read_anthropic(body: Json) -> tuple[list[Msg], bool]:
             continue  # Claude Code puts its environment in a message with the role "system"
         blocks = content if isinstance(content, list) else [{"type": "text", "text": content or ""}]
         results = [calls.get(b.get("tool_use_id", ""), "?") for b in blocks if b.get("type") == "tool_result"]
+        text = _texts(blocks)
         if results:
             _push(messages, "tool", "", results)
-        else:
-            _push(messages, "user", _texts(blocks))
+            # Words a person sent beside the results are a prompt of their own; a reminder alone is not.
+            if not prompt_text(text):
+                continue
+        _push(messages, "user", text)
     return messages, bool(body.get("tools"))
 
 
@@ -487,28 +492,40 @@ class Unmatched(Exception):
     pass
 
 
+class Conflict(Exception):
+    """A second, different reply for a key a cassette already holds: a replay could serve only the first."""
+
+
+def _key_text(key: Json) -> str:
+    return json.dumps(key, sort_keys=True)
+
+
 class Cassette:
     def __init__(self, path: Path, header: Json) -> None:
         self.path = path
         self.header = header
         self.lock = threading.Lock()
-        self.seen: set[str] = set()
+        self.replies: dict[str, list[Json]] = {}  # what is written, by key
 
     def keep(self, key: Json, parts: list[Json]) -> None:
         line = json.dumps({"key": key, "reply": parts}, ensure_ascii=False)
         with self.lock:
-            if line in self.seen:
+            kept = self.replies.get(_key_text(key))
+            if kept == parts:
                 return
-            fresh = not self.seen
-            self.seen.add(line)
-            with self.path.open("w" if fresh else "a") as f:
-                if fresh:
-                    f.write(json.dumps(self.header) + "\n")
-                f.write(line + "\n")
+            if kept is not None:
+                raise Conflict("the cassette already holds another reply for this request")
+            # The whole file again when nothing is written yet, so a failed first write leaves no half of one.
+            fresh = not self.replies
+            with self.path.open("w" if fresh else "a", encoding="utf-8") as f:
+                f.write((json.dumps(self.header) + "\n" if fresh else "") + line + "\n")
+            self.replies[_key_text(key)] = parts
 
 
 def load_cassette(path: Path) -> tuple[Json, list[Json]]:
-    lines = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    # Split on newlines alone: a reply may hold U+2028 and the like, which `splitlines` would split on.
+    text = path.read_text(encoding="utf-8")
+    lines = [json.loads(line) for line in text.split("\n") if line.strip()]
     return lines[0], lines[1:]
 
 
@@ -533,6 +550,12 @@ class Scripted:
 
 class Replay:
     def __init__(self, exchanges: list[Json]) -> None:
+        # Two replies for one key: only the first could be served, and the second would pass as used.
+        first: dict[str, int] = {}
+        for i, e in enumerate(exchanges):
+            j = first.setdefault(_key_text(e["key"]), i)
+            if exchanges[j]["reply"] != e["reply"]:
+                raise ValueError(f"the cassette's exchanges {j + 1} and {i + 1} answer one request differently")
         self.exchanges = exchanges
 
     def answer(self, fmt: str, key: Json, body: Json) -> list[Json]:
@@ -632,8 +655,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(200, "application/json", json.dumps({"input_tokens": USAGE_IN}))
         fmt = fmt_of(path)
         if fmt is None:
-            # Kept, so a test that reads the bodies sees what a harness sent any other way.
-            self.keep({"format": "other"}, raw)
+            # Kept, so a test that reads the bodies sees what a harness sent any other way, and unanswered.
+            self.keep({"format": "other", "unmatched": "not a path the double serves"}, raw)
+            print("model double: unmatched request to a path it does not serve", file=sys.stderr, flush=True)
             return self.send(404, "application/json", json.dumps({"error": {"message": "not served"}}))
         body = json.loads(raw or b"{}")
         key = key_of(fmt, body)
@@ -642,6 +666,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         shape = f"{fmt} {key['kind']} request, after {key['after']}, answering {key['last']}"
         try:
             parts = self.server.mode.answer(fmt, key, body)
+            if self.server.save is not None:
+                self.server.save.keep(key, parts)
         except Unmatched as e:
             entry["unmatched"] = str(e)
             self.keep(entry, raw)
@@ -649,7 +675,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # A 4xx: a harness retries a 5xx, Claude Code ten times.
             return self.send(400, "application/json",
                              json.dumps({"type": "error", "error": {"type": "double_unmatched", "message": str(e)}}))
-        except Exception as e:  # an upstream failure while recording
+        except Conflict as e:
+            entry["error"] = str(e)
+            self.keep(entry, raw)
+            print(f"model double: not recorded, {shape}: {e}", file=sys.stderr, flush=True)
+            return self.send(502, "application/json", json.dumps({"error": {"message": "not recorded"}}))
+        except Exception as e:  # an upstream failure, or a failed write, while recording
             entry["error"] = type(e).__name__
             self.keep(entry, raw)
             # The kind and the status only: an upstream's message can name its address.
@@ -660,8 +691,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.keep(entry, raw)
         if self.server.verbose:
             print(f"model double: answered {shape}", file=sys.stderr, flush=True)
-        if self.server.save is not None:
-            self.server.save.keep(key, parts)
         kind, text = WRITERS[fmt](parts, body)
         self.send(200, kind, text)
 
@@ -689,7 +718,10 @@ def main() -> None:
         mode: Any = Scripted(json.loads(args.file.read_text()))
     elif args.mode == "replay":
         _, exchanges = load_cassette(args.file)
-        mode = Replay(exchanges)
+        try:
+            mode = Replay(exchanges)
+        except ValueError as e:
+            parser.error(str(e))
     else:
         if not (args.upstream and args.key_file and args.model):
             parser.error("record needs --upstream, --key-file and --model")

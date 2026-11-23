@@ -12,7 +12,8 @@ It reads the first line of every `*.jsonl` under `<folder>` (`{"cassette": 1, "h
   (unless `--offline`). A harness it has no lookup for is reported once, so the list stays complete.
 
 It prints one line per finding. It exits 0 whatever it finds, so a pull request is told and not held up,
-and with `--strict` exits 1 when it finds any, so a nightly job fails and can open an issue with the output.
+and with `--strict` exits 1 when it finds any, so a nightly job can fail and open an issue with the output.
+A `<folder>` that is not there is an error, exit 2, with or without `--strict`.
 It needs no key: the lookups are public. It uses the standard library only.
 """
 
@@ -41,10 +42,14 @@ def npm_latest(package: str) -> str:
 
 
 def newer(a: str, b: str) -> bool:
-    """Whether version `a` is newer than `b`, comparing the numbers of each, and a release above a pre-release."""
+    """Whether version `a` is newer than `b`, by semantic versioning's precedence: the numbers of each, a release
+    above its pre-releases, pre-releases by their identifiers, and build metadata (`+…`) ignored."""
     def parts(v: str) -> tuple:
-        main, _, pre = v.partition("-")
-        return tuple(int(x) if x.isdigit() else 0 for x in main.split(".")), pre == ""
+        main, _, pre = v.split("+", 1)[0].partition("-")
+        numbers = tuple(int(x) if x.isdigit() else 0 for x in main.split("."))
+        # A numeric identifier is below any other, and a shorter list below a longer one it begins.
+        ids = tuple((0, int(x), "") if x.isdigit() else (1, 0, x) for x in pre.split(".")) if pre else ()
+        return numbers, pre == "", ids
 
     return parts(a) > parts(b)
 
@@ -53,7 +58,7 @@ def check(folder: Path, today: datetime.date, max_age: int, latest=None) -> list
     found = []
     versions: dict[str, set[str]] = {}
     for path in sorted(folder.rglob("*.jsonl")):
-        header = json.loads(path.read_text().splitlines()[0])
+        header = json.loads(path.read_text(encoding="utf-8").split("\n", 1)[0])
         name = path.relative_to(folder)
         recorded = datetime.date.fromisoformat(header["recorded"])
         age = (today - recorded).days
@@ -85,6 +90,8 @@ def main() -> int:
     ap.add_argument("--strict", action="store_true", help="exit 1 when anything is found")
     ap.add_argument("--today", type=datetime.date.fromisoformat, default=datetime.date.today())
     args = ap.parse_args()
+    if not args.folder.is_dir():
+        ap.error(f"{args.folder} is not a folder")
     found = check(args.folder, args.today, args.max_age, None if args.offline else npm_latest)
     for line in found:
         print(line)

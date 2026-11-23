@@ -44,6 +44,8 @@ NEUTRALISE_CODEX = {
 }
 NEUTRALISE_CLAUDE_TYPES = {"rate_limit_event"}
 BLOB_KEYS = {"signature", "encrypted_content", "encryptedContent"}
+# The fields of a model double cassette's first line (`tools/model_double/double.py`), kept as written.
+CASSETTE_HEADER = ("cassette", "harness", "version", "recorded", "format")
 
 
 def neutralise(v):
@@ -214,16 +216,22 @@ def main() -> int:
             rel = src.relative_to(args.raw / harness)
             (args.out / harness / rel.parent).mkdir(parents=True, exist_ok=True)
             lines = []
-            for line in filter(str.strip, src.read_text(encoding="utf-8").splitlines()):
+            # Split on newlines alone: a message may hold U+2028 and the like, which `splitlines` splits on.
+            for line in filter(str.strip, src.read_text(encoding="utf-8").split("\n")):
                 rec = json.loads(line)
+                kept_as_is = {}
                 if harness == "cassettes":
-                    # A cassette's line is not a message: the whole line is scrubbed and checked.
-                    rec = {"msg": s.walk(rec)}
+                    # A cassette's line is not a message: the whole line is scrubbed and checked, except the
+                    # header's own fields, which the recorder writes and later checks read: a user named
+                    # like the harness must not rename it.
+                    if "cassette" in rec:
+                        kept_as_is = {k: rec[k] for k in CASSETTE_HEADER if k in rec}
+                    rec = {"msg": s.walk({k: v for k, v in rec.items() if k not in kept_as_is})}
                 elif harness == "acp":
                     rec["msg"] = s.acp(rec["msg"], rel.parts[0])
                 else:
                     rec["msg"] = getattr(s, harness)(rec["msg"])
-                kept = rec["msg"] if harness == "cassettes" else rec
+                kept = {**kept_as_is, **rec["msg"]} if harness == "cassettes" else rec
                 lines.append(json.dumps(kept, ensure_ascii=False, sort_keys=False))
                 for text in strings(rec["msg"]):
                     for word, _ in s.words:
