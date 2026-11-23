@@ -85,7 +85,7 @@ The pipe between driver and harness holds 256 bytes each way, so a dropped wait 
 | --- | --- | --- | --- |
 | Codex | the stand-in in `crates/marmot-agent-codex/tests/driver.rs` | threads, turns, `commandExecution`, approvals, `requestUserInput`, the driver's `send_file` dynamic tool (`item/tool/call`, only on a thread started with it), steer, interrupt, settings, resume | one process for every chat |
 | ACP | the agent in `crates/marmot-agent-acp/tests/driver.rs` | sessions, prompts, tool calls, `request_permission`, `elicitation/create`, cancel, config options, MCP servers over HTTP (`src/fake/mcp.rs` is the client: `initialize`, `tools/list`, `tools/call`) | **OpenCode**: `session/resume`; one tool server of a name for every session in a folder, the last handed over, the calling session named in `_meta["ai.opencode/sessionID"]`. **Goose**: `session/load` with a replay, sessions numbered by day, `activeRunId`, and after a crash a run of its own until cancelled; servers kept per session, the caller named in `_meta["agent-session-id"]`. **Cursor**: `session/load`, no name, `cursor/update_todos` naming only its tool call; servers kept per session, the caller not named. Each holds a cancelled turn open while its tool call is out. The driver is run with file sending switched on (`serve_files`, as `send_files = true` does) |
-| Pi | `crates/marmot-agent-pi/tests/fake_pi.py` | Pi's records, extension dialogs, the driver's `send_file` tool (only with the driver's extension loaded, asking in its dialog), steering, abort, a session's file written once it holds a message | one process per chat: the driver runs `src/fake/relay.py`, which connects its standard input and output to a socket the test serves, so each Pi is scripted in Rust |
+| Pi | `crates/marmot-agent-pi/tests/fake_pi.py` | Pi's records, extension dialogs, the driver's `send_file` tool (only with the driver's extension loaded, asking in its dialog), steering, abort, a manual `compact` (`compaction_start`, then `compaction_end`, failed or not, then the response, as Pi 1.6.0 does; a session with nothing in it fails), a session's file written once it holds a message | one process per chat: the driver runs `src/fake/relay.py`, which connects its standard input and output to a socket the test serves, so each Pi is scripted in Rust |
 
 The faults, set as `Knobs` and changeable between steps: frames written in pieces; replies late; replies after the
 notifications that follow from them and every other reply held back so a later one overtakes it; everything slow;
@@ -181,7 +181,8 @@ Not covered yet, and why:
 - **Codex's greeting** (`Codex::connect`) still waits for `initialize` with no limit. It runs before the core's loop, at
   start. Not changed here.
 - **Pi's start** waits up to `STARTUP_LIMIT` (60 s, fixed), so a Pi that never answers `get_state` is not run: too slow.
-- **The harness's own actions** (compacting), **group chats** and **attachments**.
+- **The harness's own actions** (compacting) for Codex, **group chats** and **attachments**. Pi's compaction is
+  covered by `every_compaction_ends_and_the_next_is_taken` (`tests/pi.rs`), 2026-11-23.
 - **Goose and Cursor** run only the scenarios where they differ from OpenCode.
 
 ## Running it

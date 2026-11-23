@@ -351,6 +351,39 @@ impl Protocol for Pi {
                 });
                 respond(command, Some(json!({"cancelled": false})), out);
             }
+            "compact" => {
+                // As Pi 1.6.0 compacts (`AgentSession.compact`): it says the compaction started
+                // and how it ended, failed or not, and only then responds. A session with too
+                // little in it fails, as in `fixtures/recordings/pi/compact.jsonl`.
+                heard.push(Heard::Control {
+                    session: Some(self.session.clone()),
+                    what: "compact".into(),
+                });
+                if self.run.is_some() {
+                    self.finish("stopped", true, out); // Pi aborts what runs first
+                }
+                out.say(json!({"type": "compaction_start", "reason": "manual"}));
+                let held = self.store.lock().unwrap().files.contains(&self.session);
+                if held {
+                    let result =
+                        json!({"summary": "s", "firstKeptEntryId": "e1", "tokensBefore": 100});
+                    out.say(
+                        json!({"type": "compaction_end", "reason": "manual", "result": result,
+                        "aborted": false, "willRetry": false}),
+                    );
+                    respond(command, Some(result), out);
+                } else {
+                    let error = "Nothing to compact (session too small)";
+                    out.say(
+                        json!({"type": "compaction_end", "reason": "manual", "aborted": false,
+                        "willRetry": false, "errorMessage": format!("Compaction failed: {error}")}),
+                    );
+                    out.reply(
+                        json!({"id": command["id"], "type": "response", "command": "compact",
+                        "success": false, "error": error}),
+                    );
+                }
+            }
             "set_model" => {
                 heard.push(Heard::Control {
                     session: Some(self.session.clone()),
