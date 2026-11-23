@@ -342,7 +342,8 @@ impl<D: Driver, M: Side> Core<D, M> {
             config.rights(),
             driver.capabilities(),
             kept.conversation,
-        );
+        )
+        .with_activity(config.full_activity.clone());
         // A driver that works in a folder of its own lets each chat move it (D-101).
         let folder = driver.folder();
         if let Some(folder) = &folder {

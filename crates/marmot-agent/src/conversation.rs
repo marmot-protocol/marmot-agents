@@ -19,8 +19,12 @@
 //! - a stopped driver, or a core that stopped, leaves no item open and no request unsettled
 //!   (D-058, D-070);
 //! - a chat of a coding harness has a folder, set by someone who may approve, that applies from
-//!   its next session (D-101).
+//!   its next session (D-101);
+//! - the agent's full activity goes to the owner's two-person chat with it, and to the chats the
+//!   owner lists; every other chat is sent its words and what people there need to answer it
+//!   (D-136).
 
+use crate::activity::{self, FullActivity};
 use crate::carrier::{self, Asked, Item, SETTLES_MAX};
 use crate::chat_folder::{FOLDER, FolderRule, LABEL};
 use crate::keys::{EventKey, GroupKey, PubKey};
@@ -32,7 +36,7 @@ use marmot_agent_driver::{
 use marmot_agent_events::body::{Body, Notice, NoticeKind, Setting};
 use marmot_agent_events::{AgentEvent, Header, ItemId, SessionId, State, TurnId};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
 /// A request older than this that points at nothing, such as "new session", is dropped (D-028).
@@ -232,6 +236,10 @@ pub struct Saved {
     /// chat that chose none works in the driver's own folder.
     #[serde(default)]
     folders: BTreeMap<String, PathBuf>,
+    /// The chats that were the owner's two-person chat with the agent when last heard from, by
+    /// the core's chat id: they are sent its full activity (D-136).
+    #[serde(default)]
+    owners_chats: BTreeSet<String>,
     /// Every item sent and not yet forgotten, by the core's name for it.
     items: BTreeMap<String, Record>,
     /// The order finished items were finished in, oldest first, so the oldest are forgotten.
@@ -366,6 +374,11 @@ struct Record {
     /// that is dropped leaves the chat showing it closed, and the core does not close it again.
     #[serde(default)]
     closed_in_chat: bool,
+    /// Whether the chat is not sent it, since it is the agent's full activity and the chat is
+    /// not sent that (D-136). It is kept all the same, so a Stop finds a subagent's turn by it
+    /// (D-117), and what it would have settled is settled by another item.
+    #[serde(default)]
+    hidden: bool,
 }
 
 /// Something queued to be sent to a group.
@@ -485,6 +498,8 @@ pub struct Conversation {
     harness: String,
     rights: Rights,
     capabilities: Capabilities,
+    /// Which chats, besides the owner's two-person chat, are sent the full activity (D-136).
+    activity: FullActivity,
     /// The rule for a chat's folder, when the driver works in one a chat may move (D-101).
     folders: Option<FolderRule>,
     saved: Saved,
@@ -524,6 +539,7 @@ impl Conversation {
             harness: harness.into(),
             rights,
             capabilities,
+            activity: FullActivity::default(),
             folders: None,
             saved,
             taken: HashSet::new(),
@@ -534,6 +550,13 @@ impl Conversation {
             #[cfg(feature = "sim-bugs")]
             bug_settles_only_from_items: false,
         }
+    }
+
+    /// Sends the agent's full activity to the chats `activity` names too, besides the owner's
+    /// two-person chat with it (D-136).
+    pub fn with_activity(mut self, activity: FullActivity) -> Self {
+        self.activity = activity;
+        self
     }
 
     /// Offers each chat a folder setting, by `rule`: for a driver that works in a folder of its own,
@@ -610,6 +633,7 @@ impl Conversation {
         if heard.author == self.agent || !self.first_time(&heard.event) {
             return Vec::new();
         }
+        self.note_place(&heard.chat, &heard.author);
         let addressed = heard.chat.direct
             || heard.mentions_agent
             || heard
@@ -686,6 +710,7 @@ impl Conversation {
         if heard.author == self.agent || !self.first_time(&heard.event) {
             return Vec::new();
         }
+        self.note_place(&heard.chat, &heard.author);
         let chat = self.chat(&heard.chat);
         if heard.target.is_none() && heard.age_secs > LATE_SECS {
             return Vec::new();
@@ -987,6 +1012,8 @@ impl Conversation {
                 }
                 _ => (None, None, 0),
             };
+        let hidden =
+            !self.sent_everything(&chat, &group) && !activity::for_every_chat(&emitted.event);
         let record = self
             .saved
             .items
@@ -1002,6 +1029,7 @@ impl Conversation {
                 started_by: None,
                 held: Vec::new(),
                 closed_in_chat: false,
+                hidden,
             });
         let was_waiting = record.last.header().state == State::Waiting;
         record.last = emitted.event.clone();
@@ -1009,6 +1037,12 @@ impl Conversation {
             record.started_by = started_by;
         }
         let open = record.open();
+        if record.hidden {
+            let requests: Vec<String> = emitted.settles.iter().map(|r| r.0.clone()).collect();
+            let acts = self.settle_for_hidden(&chat, &group, header.turn.as_ref(), &requests);
+            self.keep_track(key, open);
+            return acts;
+        }
         // What the turn's next version settles: what words sent as an edit name, since an edit
         // cannot carry tags; what words that do not change name; and what is over the most one
         // event carries.
@@ -1092,6 +1126,12 @@ impl Conversation {
                 acts.extend(self.settle_pending(&request, "no_effect", NO_EFFECT.into()));
             }
         }
+        self.keep_track(key, open);
+        acts
+    }
+
+    /// Notes whether an item is finished, and may be forgotten, or open again.
+    fn keep_track(&mut self, key: String, open: bool) {
         if open {
             // Open again: it is not finished, and is not forgotten while it is open.
             if let Some(at) = self.saved.finished.iter().position(|k| *k == key) {
@@ -1100,7 +1140,67 @@ impl Conversation {
         } else {
             self.finished(key);
         }
-        acts
+    }
+
+    /// Notes, from a message or a request heard in `place`, whether it is the owner's two-person
+    /// chat with the agent: the one person in a direct chat writes in it (D-136). MDK no longer
+    /// marks a chat direct once a third person is in it.
+    fn note_place(&mut self, place: &Where, author: &PubKey) {
+        if place.direct && *author == self.rights.owner {
+            let chat = self.chat(place);
+            self.saved.owners_chats.insert(chat.id.0);
+        } else if let Some(chat) = self.saved.chats.get(&place.group) {
+            self.saved.owners_chats.remove(chat);
+        }
+    }
+
+    /// Whether the chat is sent the agent's full activity: the owner's two-person chat with it,
+    /// and the chats the owner listed (D-136).
+    fn sent_everything(&self, chat: &str, group: &GroupKey) -> bool {
+        self.saved.owners_chats.contains(chat) || self.activity.includes(group)
+    }
+
+    /// Settles `requests` that an item the chat is not sent names (D-136): by the next version of
+    /// the turn it belongs to, or else of the chat's session, the same as the last, so the person
+    /// who asked sees them settled by what came of them. With neither in the chat, they are left
+    /// to the net that settles every request (D-058, D-087).
+    fn settle_for_hidden(
+        &mut self,
+        chat: &str,
+        group: &GroupKey,
+        turn: Option<&TurnId>,
+        requests: &[String],
+    ) -> Vec<Act> {
+        if !(requests.iter()).any(|r| self.saved.pending.get(r).is_some_and(|p| p.group == *group))
+        {
+            return Vec::new();
+        }
+        let shown = |record: &Record| record.chat == chat && !record.hidden;
+        let the_turn = turn.and_then(|turn| {
+            (self.saved.items.iter())
+                .find(|(_, r)| {
+                    shown(r)
+                        && matches!(r.last.body(), Body::Turn(_))
+                        && r.last.header().turn.as_ref() == Some(turn)
+                })
+                .map(|(key, _)| key.clone())
+        });
+        let the_session = || {
+            let session = self.saved.sessions.get(chat)?;
+            (self.saved.items.iter())
+                .find(|(_, r)| {
+                    shown(r)
+                        && matches!(r.last.body(), Body::Session(_))
+                        && r.last.header().session.as_ref() == Some(session)
+                })
+                .map(|(key, _)| key.clone())
+        };
+        let Some(key) = the_turn.or_else(the_session) else {
+            return Vec::new();
+        };
+        let settles = take_pending(&mut self.saved.pending, group, requests);
+        let last = self.saved.items[&key].last.clone();
+        self.queue_versions(&key, group, last, settles, None)
     }
 
     /// Where a file the agent asks to send goes (D-090): the chat's group, and the chat's running

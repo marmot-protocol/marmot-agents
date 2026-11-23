@@ -3438,3 +3438,207 @@ fn a_stop_after_the_turn_stops_what_still_works() {
         "{acts:?}"
     );
 }
+
+// ------------------------------------------------------------------------- what a chat is sent
+
+/// Each item type, with whether a chat without full activity is sent it (D-136): the agent's
+/// words, the turn's start and end, what it asks and the errors go to every chat; its reasoning,
+/// tools, plans, tasks, notices and a subagent's words go only where the owner sees everything.
+fn every_type() -> Vec<(AgentEvent, bool)> {
+    let tool = Body::Tool(body::Tool {
+        kind: body::ToolKind::Command,
+        name: "shell".into(),
+        command: Some("cat notes".into()),
+        cwd: None,
+        exit_code: None,
+        duration_ms: None,
+        output: None,
+        changes: Vec::new(),
+        query: None,
+        path: None,
+        input: None,
+        error: None,
+    });
+    let asked = body::Asked {
+        id: "q1".into(),
+        header: None,
+        text: "Which one?".into(),
+        options: Vec::new(),
+        multiple: false,
+        allow_text: true,
+        secret: false,
+    };
+    let question = body::Question::new(body::AnswerVia::Request, None, vec![asked]).unwrap();
+    let notice = Body::Notice(body::Notice {
+        kind: NoticeKind::Warning,
+        duration_ms: None,
+        reason: None,
+    });
+    let subagent_words = Body::Message(Message {
+        phase: None,
+        parent: Some("a1".into()),
+    });
+    vec![
+        (event("t1", State::Running, turn()), true),
+        (
+            event("w1", State::Done, Body::Message(Message::default())),
+            true,
+        ),
+        (event("ap", State::Waiting, approval()), true),
+        (event("q", State::Waiting, Body::Question(question)), true),
+        (
+            event("err", State::Done, Body::Error(body::Error::default())),
+            true,
+        ),
+        (
+            event("s", State::Running, Body::Session(session_item(false))),
+            true,
+        ),
+        (
+            event("r", State::Done, Body::Reasoning(body::Reasoning {})),
+            false,
+        ),
+        (event("cmd", State::Running, tool), false),
+        (
+            event("p", State::Running, Body::Plan(body::Plan::default())),
+            false,
+        ),
+        (event("task:st1", State::Running, subagent_task()), false),
+        (event("n", State::Done, notice), false),
+        (event("sw", State::Done, subagent_words), false),
+    ]
+}
+
+/// A conversation the owner has prompted in the group, and the group chat's id.
+fn prompted_in_group(mut talk: Conversation) -> (Conversation, String) {
+    let mut mention = heard(group(), "e-g1", OWNER, "look into it");
+    mention.mentions_agent = true;
+    let prompt = the_prompt(talk.heard(mention));
+    (talk, prompt.chat.id.0)
+}
+
+/// Whether the event, emitted for `chat`, queued something to send.
+fn goes_out(talk: &mut Conversation, chat: &str, event: AgentEvent) -> bool {
+    let acts = talk.emitted(emitted(chat, event));
+    !sends(talk, acts).is_empty()
+}
+
+// A group is sent the agent's words and what people there need to answer it, and none of its
+// activity, unless the owner lists the group (D-136). A subagent's approvals and questions are
+// the agent's own, so they reach the group; its tasks and its words do not.
+#[test]
+fn a_group_is_sent_the_agents_words_and_requests_not_its_activity() {
+    let (mut talk, chat) = prompted_in_group(conversation(Saved::default()));
+    for (event, shown) in every_type() {
+        let name = event.header().item.as_str().to_string();
+        assert_eq!(goes_out(&mut talk, &chat, event), shown, "{name}");
+    }
+}
+
+// A group the owner lists is sent everything; another is not (D-136).
+#[test]
+fn a_group_the_owner_lists_is_sent_everything() {
+    let listed = marmot_agent::FullActivity::Groups(vec![GroupKey::from("g-group")]);
+    let (mut talk, chat) =
+        prompted_in_group(conversation(Saved::default()).with_activity(listed.clone()));
+    for (event, _) in every_type() {
+        let name = event.header().item.as_str().to_string();
+        assert!(goes_out(&mut talk, &chat, event), "{name}");
+    }
+
+    let other = marmot_agent::FullActivity::Groups(vec![GroupKey::from("g-other")]);
+    let (mut talk, chat) = prompted_in_group(conversation(Saved::default()).with_activity(other));
+    let tool = every_type()
+        .into_iter()
+        .find(|(e, _)| e.header().item.as_str() == "cmd");
+    assert!(!goes_out(&mut talk, &chat, tool.unwrap().0));
+
+    let (mut talk, chat) = prompted_in_group(
+        conversation(Saved::default()).with_activity(marmot_agent::FullActivity::All),
+    );
+    for (event, _) in every_type() {
+        let name = event.header().item.as_str().to_string();
+        assert!(goes_out(&mut talk, &chat, event), "all: {name}");
+    }
+}
+
+// The owner's two-person chat with the agent is sent everything. Someone else's two-person chat
+// with it is not, nor the owner's once a third person is in it (D-136).
+#[test]
+fn only_the_owners_two_person_chat_is_sent_everything_by_default() {
+    let (mut talk, prompt) = started();
+    for (event, _) in every_type() {
+        let name = event.header().item.as_str().to_string();
+        assert!(goes_out(&mut talk, &prompt.chat.id.0, event), "{name}");
+    }
+
+    let mut talk = conversation(Saved::default());
+    let friends = Where {
+        group: GroupKey::from("g-friend"),
+        ..direct()
+    };
+    let prompt = the_prompt(talk.heard(heard(friends, "e1", FRIEND, "hello")));
+    for (event, shown) in every_type() {
+        let name = event.header().item.as_str().to_string();
+        assert_eq!(
+            goes_out(&mut talk, &prompt.chat.id.0, event),
+            shown,
+            "{name}"
+        );
+    }
+
+    let (mut talk, prompt) = started();
+    let three = Where {
+        direct: false,
+        members: 3,
+        ..direct()
+    };
+    let mut mention = heard(three, "e2", OWNER, "and now?");
+    mention.mentions_agent = true;
+    the_prompt(talk.heard(mention));
+    let reasoning = event("r2", State::Done, Body::Reasoning(body::Reasoning {}));
+    assert!(!goes_out(&mut talk, &prompt.chat.id.0, reasoning));
+}
+
+// What an item a group is not sent would have settled is settled by the turn's next version, so
+// the person who asked is not told that nothing came of it (D-028, D-136).
+#[test]
+fn what_an_item_not_sent_settles_is_settled_by_its_turn() {
+    let (mut talk, chat) = prompted_in_group(conversation(Saved::default()));
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    let interrupt = request(group(), "r1", OWNER, Some("e-t1"), Asked::Interrupt);
+    let Some(Act::Control(control)) = talk.asked(interrupt).into_iter().next() else {
+        panic!("no control")
+    };
+    assert!(talk.requested(&control.request, Ok(()), 0).is_empty());
+    let (tool, _) = every_type().swap_remove(7);
+    let mut hidden = emitted(&chat, tool);
+    hidden.settles = vec![control.request.clone()];
+    let acts = talk.emitted(hidden);
+    let items = items_of(&talk, acts);
+    assert_eq!(items.len(), 1, "one version of the turn");
+    assert!(matches!(items[0].event.body(), Body::Turn(_)));
+    assert_eq!(items[0].first, Some(EventKey::from("e-t1")));
+    assert_eq!(items[0].settles, vec![EventKey::from("r1")]);
+}
+
+// A Stop in a group stops a subagent the group is not shown, as in any chat (D-117, D-136).
+#[test]
+fn a_stop_in_a_group_stops_a_subagent_it_is_not_shown() {
+    let (mut talk, chat) = prompted_in_group(conversation(Saved::default()));
+    sent(&mut talk, &chat, event("t1", State::Done, turn()), "e-t1");
+    let task = event("task:st1", State::Running, subagent_task());
+    assert!(!goes_out(&mut talk, &chat, task));
+    let stop = request(group(), "r1", OWNER, None, Asked::Interrupt);
+    let acts = talk.asked(stop);
+    assert!(
+        matches!(acts.as_slice(), [Act::Control(c)]
+            if matches!(&c.action, Action::Interrupt { turn } if turn.as_str() == "t1")),
+        "{acts:?}"
+    );
+}
