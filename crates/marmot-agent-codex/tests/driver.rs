@@ -1759,6 +1759,26 @@ async fn a_new_session_during_a_stop_of_a_subagent_settles_it_by_its_end() {
     assert_eq!(settling[0].event.header().state, State::Cancelled);
 }
 
+// The end of an older turn of that subagent, read late, does not settle the Stop: only the end of
+// the turn it stops does (#143).
+#[tokio::test]
+async fn a_late_end_of_a_subagents_older_turn_does_not_settle_a_stop() {
+    let (mut codex, mut fake, interrupt) = new_session_during_a_stop().await;
+    fake.say(json!({"id": interrupt["id"], "result": {}})).await;
+    fake.say(sub_turn("turn/completed", "sub1", "st0", "completed"))
+        .await;
+    assert!(
+        within(&mut codex, settles_r1).await.is_none(),
+        "settled by the end of another turn"
+    );
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "interrupted"))
+        .await;
+    let events = within(&mut codex, settles_r1).await;
+    let events = events.expect("the Stop is settled by its turn's end");
+    let settling = events.last().unwrap();
+    assert_eq!(settling.event.header().state, State::Cancelled);
+}
+
 // And when Codex refuses to stop it, the Stop failed, though the driver let the subagent go.
 #[tokio::test]
 async fn a_new_session_during_a_stop_codex_refuses_leaves_it_failed() {

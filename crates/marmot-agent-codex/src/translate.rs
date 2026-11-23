@@ -650,12 +650,20 @@ impl Translator {
             return;
         };
         let turn = note.turn.unwrap_or_default();
+        // The end of a turn other than the current one, read late, ends only that turn: what is
+        // open, and the current turn, are the current turn's (#143).
+        let current = match (&turn.id, &self.turn) {
+            (Some(ended), Some(current)) => ended == current,
+            _ => true,
+        };
         // A question answered by the person's next message still waits after a turn that
         // completed. Anything else open will never report again.
         let completed = turn.status.as_deref() == Some("completed");
-        self.close_open_items(out, completed);
+        if current {
+            self.close_open_items(out, completed);
+        }
         if self.subagent.is_some() {
-            return self.subagent_ended(turn, method, params, out);
+            return self.subagent_ended(turn, current, method, params, out);
         }
         let (state, title) = match turn.status.as_deref() {
             Some("interrupted") => (State::Cancelled, "Interrupted"),
@@ -678,7 +686,9 @@ impl Translator {
         if let Some(id) = &turn.id {
             self.turn_requests.remove(id); // nothing more comes for this turn
         }
-        self.turn = None; // nothing that follows belongs to this turn
+        if current {
+            self.turn = None; // nothing that follows belongs to this turn
+        }
     }
 
     // -- items
@@ -1060,10 +1070,12 @@ impl Translator {
         );
     }
 
-    /// A subagent's turn ends, and its task with it.
+    /// A subagent's turn ends, and its task with it. `current` when it is the turn the subagent
+    /// is in.
     fn subagent_ended(
         &mut self,
         turn: messages::TurnInfo,
+        current: bool,
         method: &str,
         params: &str,
         out: &mut Vec<AgentEvent>,
@@ -1093,7 +1105,9 @@ impl Translator {
         }
         let native = native(method, params);
         self.emit(out, &item, body, state, title, &text, native);
-        self.turn = None; // nothing that follows belongs to this turn
+        if current {
+            self.turn = None; // nothing that follows belongs to this turn
+        }
     }
 
     // -- approvals and questions
