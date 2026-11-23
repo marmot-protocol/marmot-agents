@@ -12,7 +12,9 @@ first end-to-end test (M1 of the [plan](../plan.md)) sent and read back, under t
 that writes and reads them is `crates/marmot-agent/src/carrier.rs`. What was
 [accepted with the move to MDK](#accepted-with-the-move-to-mdk) is decided
 ([D-120](../decisions.md#d-120-the-choices-made-in-moving-to-kinds-1201-and-1202-as-built)). The section
-[provisional additions](#provisional-additions) is a proposal, built and waiting for the owner.
+[provisional additions](#provisional-additions) is a proposal, built and waiting for the owner. The tags of
+[an item in a subagent's thread](#an-item-in-a-subagents-thread) were decided on 2026-11-23
+([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)) and are not built.
 
 ## What M1 showed
 
@@ -54,6 +56,8 @@ nothing about agents shows.
 | `native` | The harness's own message: its kind, then the message itself | Unless left out |
 | `left_out` | `native` and the size left out, when the item was over 64 KB ([D-057](../decisions.md#d-057-the-core-applies-the-64-kb-limit)) | When it happened |
 | `cut` | `output` and its full length, or `diffs` and how many were cut | When it happened |
+| `E`, `K`, `P` | NIP-22's root: the top-level subagent's `task` item, `1201`, and the agent. Decided, not built ([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)) | In a subagent's thread |
+| `e`, `k`, `p` | NIP-22's parent: the `task` item of the subagent the item belongs to, `1201`, and the agent. Decided, not built (D-121) | In a subagent's thread, on the first event |
 
 A notice the core makes itself, to say why an answer, a control or a message was not acted on, is an item of
 type `notice` with the kind `refused`, a `reason` such as `not_allowed` or `busy`, and a `settles` tag for the
@@ -89,6 +93,26 @@ Built on 2026-11-22 with the move to MDK's kinds, and accepted by the owner on 2
   the state file kept of forgotten items is dropped. A state file that holds an item or a notice already handed
   to MDK in the old shape is refused, and the core does not start: MDK keeps that try's token bound to the old
   event and would refuse it in the new shape, though it may have gone out. No core that sent the temporary kind was released.
+
+## An item in a subagent's thread
+
+Decided on 2026-11-23 ([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)); not built in the core, and MDK does not take it yet. Each subagent
+is a thread in the agent's group, rooted at its `task` item, and every item in it carries NIP-22's tags as NIP-22
+defines them, the same way a comment does:
+
+- `["E", <id>, "", <agent>]`, `["K", "1201"]`, `["P", <agent>]`: the **top-level** subagent's `task` item, the
+  same at any depth;
+- `["e", <id>, "", <agent>]`, `["k", "1201"]`, `["p", <agent>]`: the **immediate parent**, the `task` item of the
+  subagent the item belongs to. For a top-level subagent's own items it is the same item as the root.
+
+A top-level `task` item is in the main chat and carries none of them. A subagent's words are kind 1111 comments
+with the same tags ([D-122](../decisions.md#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar)). The
+whole shape is in [subagents as threads](subagents.md#how-it-travels).
+
+Left for MDK to settle: an edit already uses `e` for its target, so it cannot also carry the parent `e`. The
+recommendation is that an edit carries no thread tags and takes its thread from its target, since an item never
+moves. MDK also has to take a parent `e` on an item's first event, which it refuses today, and to say whether a
+`p` naming the event's own author is a mention ([what MDK has to do](subagents.md#what-mdk-has-to-do)).
 
 ## Provisional additions
 
@@ -137,7 +161,8 @@ Built on 2026-11-21 while fixing the known gaps of [testing and verification](ve
 
 A later version is an edit (kind 1009), as decided
 ([D-025](../decisions.md#d-025-an-agent-item-is-updated-with-an-edit)). It names the item's first event with its
-one `e` tag, and carries the whole item again: content and every tag above, with a higher `v`. A client keeps the
+one `e` tag, and carries the whole item again: content and every tag above, with a higher `v`. What it carries
+of a subagent's thread tags is open ([above](#an-item-in-a-subagents-thread)). A client keeps the
 version with the highest `v`, and holds an edit whose first event it has not received yet. Only the sender of the
 first event may edit it.
 
@@ -208,3 +233,4 @@ MDK issue 3612; none of it holds up the core.
    ([D-078](../decisions.md#d-078-the-agents-remarks-during-a-turn-do-not-alert)).
 4. What was [accepted with the move to MDK](#accepted-with-the-move-to-mdk)
    ([D-120](../decisions.md#d-120-the-choices-made-in-moving-to-kinds-1201-and-1202-as-built)).
+5. The tags of an item in a subagent's thread, not built ([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)).

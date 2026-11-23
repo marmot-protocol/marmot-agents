@@ -116,7 +116,8 @@ They are in a folder of their own, with no `expected/` events, because the proto
 does not translate them. The Codex driver shows them flat in the chat that started them
 ([D-117](../../docs/decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)),
 and the driver conformance suite plays four of them back through it (`replays_subagent_recordings` in
-`crates/marmot-agent-conformance/tests/codex.rs`). What they show is in
+`crates/marmot-agent-conformance/tests/codex.rs`). Threads for subagents are decided
+([D-121](../../docs/decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them) to D-126) and not built. What they show is in
 [harness messages](../../docs/reference/harness-messages.md#subagents).
 
 ## Hermes

@@ -166,7 +166,7 @@ These are the project owner's to arrange. This repository does not change MDK.
 ## Not before the swap
 
 Each of these is wanted, and none is needed to replace what runs today: subagents as threads
-([Q-30](open-questions.md#q-30-how-does-a-chat-show-an-agents-subagents)), how much detail a chat gets
+(decided as [D-121](decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them) to D-126, not built), how much detail a chat gets
 ([Q-11, Q-12](open-questions.md#q-11-what-keeps-sensitive-output-from-spreading)), going back to an older
 session, changing permissions from the chat
 ([Q-10](open-questions.md#q-10-how-are-permissions-changed-from-the-chat)), several identities in one program

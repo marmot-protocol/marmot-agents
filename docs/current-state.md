@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-23, at `master` commit `c5c41be`, through [D-128](decisions.md#d-128-a-folder-move-whose-session-shows-late-still-moves-the-chat) (D-121 to D-127 are in open pull requests). A change that adds or replaces
+Brought up to date on 2026-11-23, at `master` commit `60811d2`, through [D-128](decisions.md#d-128-a-folder-move-whose-session-shows-late-still-moves-the-chat) (D-127 is in an open pull request). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -102,6 +102,26 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
 - Claude Code: a TypeScript program on the Agent SDK, over the socket, loading none of the owner's Claude Code
   settings files ([D-005](decisions.md#d-005-which-driver-each-harness-gets), [D-082](decisions.md#d-082-the-claude-code-driver-loads-no-claude-code-settings-files)).
 - A prompt names a session only to resume one ([D-065](decisions.md#d-065-a-prompt-names-a-session-only-to-resume-one)).
+
+## Subagents
+
+Decided, and not built: the core, the drivers, MDK and the apps each have their part to do.
+
+- Where a harness tells subagents apart, each subagent is a thread in the agent's own group. Its row is its
+  `task` item; its items carry NIP-22's tags, uppercase for the top-level subagent's `task` item and lowercase
+  for the immediate parent's; its words are kind 1111 comments. What an edit carries of the thread tags is left
+  for MDK to settle ([D-121](decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them), [D-122](decisions.md#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar)).
+- The agent's comments in its own threads do not alert. The app shows a running bar of open `task` items, lifts
+  waiting approvals into it, and folds finished threads ([D-122](decisions.md#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar)).
+- Stop in the main chat stops every subagent the agent started, even after its turn; Stop in a thread stops that
+  subagent and those it started. A comment in a thread is a prompt only where the driver allows it and the
+  writer may prompt, and never goes to the parent ([D-123](decisions.md#d-123-stop-and-writing-in-a-subagents-thread)).
+- A driver closes open `task` items when it can no longer follow them; the app keeps counting a quiet row and
+  says when it was last heard from. A harness that does not tell subagents apart keeps them as `tool` items. An
+  app shows a held edit of an item sent before the member joined as the item ([D-124](decisions.md#d-124-what-keeps-subagents-reliable-closes-harnesses-that-do-not-tell-them-apart-and-late-joiners)).
+- The Codex transport gives each subagent's thread a translator in its parent's chat, and interrupts subagents
+  itself ([D-125](decisions.md#d-125-the-codex-transport-follows-subagents-threads)). It is built, and shows them flat until threads are ([D-117](decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)).
+- No separate MLS group for subagents ([D-126](decisions.md#d-126-no-mls-group-for-subagents)).
 
 ## Channel plugins
 
