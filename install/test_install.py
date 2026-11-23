@@ -73,6 +73,36 @@ if [ -n "${FAKE_PAUSE:-}" ]; then case "$(basename "$0") $*" in "$FAKE_PAUSE"*)
     n=0; while [ ! -e "$FAKE_PAUSE_AT" ] && [ "$n" -lt 1200 ]; do sleep 0.05; n=$((n + 1)); done ;;
 esac; fi
 """
+# A stand-in for docker that keeps its images' tags, in docker-tags beside FAKE_LOG: each build makes a new
+# image. It says nothing of the containers it does not run.
+FAKE_DOCKER = r'''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+
+args = sys.argv[1:]
+with open(os.environ["FAKE_LOG"], "a") as log:
+    log.write("docker " + " ".join(args) + "\n")
+store = Path(os.environ["FAKE_LOG"]).parent / "docker-tags"
+tags = json.loads(store.read_text()) if store.exists() else {}
+
+
+def name(tag):
+    return tag if ":" in tag.rsplit("/", 1)[-1] else tag + ":latest"
+
+
+if args[:1] == ["build"]:
+    built = 1 + max([int(i.split(":")[1]) for i in tags.values()] + [0])
+    tags[name(args[args.index("-t") + 1])] = f"image:{built}"
+elif args[:1] == ["tag"]:
+    source = tags.get(name(args[1])) or (args[1] if args[1] in tags.values() else None)
+    tags[name(args[2])] = source or sys.exit(f"Error: No such image: {args[1]}")
+elif args[:2] == ["image", "inspect"]:
+    print(tags.get(name(args[-1])) or sys.exit(f"Error: No such image: {args[-1]}"))
+elif args[:1] == ["rmi"]:
+    for tag in args[1:]:
+        tags.pop(name(tag), None) or sys.exit(f"Error: No such image: {tag}")
+store.write_text(json.dumps(tags))
+'''
 # npm ci makes the packages it installs, and npm pack the archive, as the real one does.
 FAKE_NPM = """#!/bin/sh
 echo "npm $*" >> "$FAKE_LOG"
@@ -1788,6 +1818,26 @@ exec {rm} "$@"
         m.run(self.HARNESS, *self.args(m))
         self.assertEqual(self.state(m), "new")
         self.assertEqual(self.leftovers(m), [])
+
+    def test_a_failed_upgrade_keeps_the_image_its_scripts_were_made_for(self):
+        """Pi and Goose in a container: an upgrade that fails after building its image leaves the image
+        tagged for the scripts it puts back, and the next one tags its own."""
+        for harness in ("pi", "goose"):
+            with self.subTest(harness=harness):
+                m = Machine(self)
+                m.write(m.bin / "docker", FAKE_DOCKER)
+                args = m.args(harness, "--binary", str(m.core), container=True)
+                m.run(harness, *args)
+                tags = m.dir / "docker-tags"
+                before = json.loads(tags.read_text())
+                self.assertEqual(list(before), [f"marmot-agents-{harness}:latest"])
+                failed = m.run(harness, *args, env={"FAKE_FAIL": "systemctl --user restart"}, check=False)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertEqual(json.loads(tags.read_text()), before, failed.stderr)
+                m.run(harness, *args)
+                after = json.loads(tags.read_text())
+                self.assertEqual(list(after), [f"marmot-agents-{harness}:latest"])
+                self.assertNotEqual(after, before)
 
     def test_every_step(self):
         m = Machine(self)

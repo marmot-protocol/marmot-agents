@@ -476,6 +476,9 @@ finish() {
         MA_UPGRADING=0
         upgrade_put_back
     fi
+    if [ "$status" -ne 0 ] && [ "${MA_PREPARED:-0}" -eq 1 ] && declare -F harness_put_back >/dev/null; then
+        harness_put_back
+    fi
     if [ -n "$MA_WORK" ]; then rm -rf "$MA_WORK"; fi
     if [ "$MA_STAGED" -eq 1 ]; then rm -rf "$MA_STAGE"; fi
 }
@@ -509,6 +512,36 @@ lock_fd() {
     else
         die "installing runs one install at a time, which needs flock or perl: install either, then run this again"
     fi
+}
+
+# ---------------------------------------------------------------------------------------------------
+# Container images
+#
+# Pi's and Goose's scripts in $MA_LIB run the image tagged NAME. An install builds the new image as
+# NAME:staging and tags it NAME only once the upgrade is done (main), so one that fails leaves NAME on the
+# image the scripts it puts back were made for, and takes NAME:staging away.
+
+# Tags NAME:staging as NAME, noting the image NAME was, for image_put_back.
+image_commit() {
+    local image=$1
+    if [ "$DRY_RUN" -eq 0 ]; then
+        IMAGE_BEFORE=$(docker image inspect -f '{{.Id}}' "$image" 2>/dev/null 9>&-) || IMAGE_BEFORE=""
+    fi
+    act docker tag "$image:staging" "$image"
+    IMAGE_TAGGED=1
+    act docker rmi "$image:staging" >/dev/null || warn "docker could not take the tag $image:staging away"
+}
+
+# After a run that did not end: NAME back on the image it was, should image_commit have moved it, and
+# NAME:staging taken away.
+image_put_back() {
+    local image=$1
+    if [ "${IMAGE_TAGGED:-0}" -eq 1 ] && [ -n "${IMAGE_BEFORE:-}" ]; then
+        docker tag "$IMAGE_BEFORE" "$image" 9>&- || warn "docker could not tag $IMAGE_BEFORE as $image again: run this again"
+    elif [ "${IMAGE_TAGGED:-0}" -eq 1 ]; then
+        docker rmi "$image" >/dev/null 9>&- || true
+    fi
+    docker rmi "$image:staging" >/dev/null 2>&1 9>&- || true
 }
 
 # ---------------------------------------------------------------------------------------------------
@@ -1724,7 +1757,7 @@ main() {
     set_paths
     check_harness
     # MA_STAGED says whether this run made the folder in MA_STAGE: a dry run names the installed one.
-    MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0 MA_UPGRADING=0
+    MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0 MA_UPGRADING=0 MA_PREPARED=0 IMAGE_TAGGED=0 IMAGE_BEFORE=""
     trap 'finish $?' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT
@@ -1761,6 +1794,7 @@ main() {
     fi
 
     install_core
+    MA_PREPARED=1
     harness_prepare
     publish_support
     private_dir "$MA_DATA"
@@ -1784,8 +1818,9 @@ main() {
         if [ "$OS" = Linux ]; then systemd_units; else launchd_agents; fi
         start_services
     fi
-    # An upgrade, and a change to the gateway's plugin, are done once the core is set up to start, and
-    # started unless --no-start or --no-service said not to.
+    # An upgrade, with a container image of its harness's, and a change to the gateway's plugin, are
+    # done once the core is set up to start, and started unless --no-start or --no-service said not to.
+    if declare -F harness_commit >/dev/null; then harness_commit; fi
     if [ "$MA_UPGRADING" -eq 1 ]; then upgrade_end; fi
     if [ "$MA_CHANGING" -eq 1 ]; then change_end; fi
     summary
