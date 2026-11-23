@@ -450,13 +450,14 @@ replace_dir() {
     act rm -rf "$new" "$old" || return 1
     act mkdir -p "$(dirname "$to")" || return 1
     if [ -n "$from" ]; then act cp -R "$from" "$new" || return 1; fi
-    act swap_dir "$new" "$to" "$old" || return 1
-    act rm -rf "$old"
-}
-
-swap_dir() {
-    if [ -e "$2" ]; then mv "$2" "$3" || return 1; fi
-    if [ -e "$1" ]; then mv "$1" "$2"; fi
+    if [ -n "$from" ] && [ -e "$to" ] && act mv -T --exchange "$new" "$to" 2>/dev/null; then
+        # The old folder is where the new one was.
+        act rm -rf "$new"
+    else
+        if [ -e "$to" ]; then act mv "$to" "$old" || return 1; fi
+        if [ -n "$from" ]; then act mv "$new" "$to" || return 1; fi
+        act rm -rf "$old"
+    fi
 }
 
 # What every run does as it ends, with its status: puts back a plugin change that did not end, and
@@ -969,6 +970,12 @@ uninstall() {
         done
     fi
     if declare -F harness_uninstall >/dev/null; then harness_uninstall; fi
+    # A change a run killed outright left unfinished is given up, so that no later run puts back what
+    # that run found over what the gateway has by then.
+    if [ -f "$MA_AGENT_DIR/plugin-change" ]; then
+        say "giving up the change to your $HARNESS_TITLE's plugin that a run before this one left unfinished, noted in $MA_AGENT_DIR/plugin-change"
+        act rm -f "$MA_AGENT_DIR/plugin-change"
+    fi
     say "kept the agent's folder, with its settings and identity: $MA_AGENT_DIR"
     say "kept $MA_CORE and $MA_LIB, which other agents may use"
 }
