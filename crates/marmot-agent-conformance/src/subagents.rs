@@ -209,13 +209,17 @@ pub async fn subagent_speaks_first<S: Subject>(subject: S) -> Result<(), Violati
 }
 
 /// A subagent that starts one of its own: both are shown in the chat, the inner one named by the
-/// item of the outer one that started it.
+/// item of the outer one that started it, not by the item that started the outer one.
 pub async fn nested_subagents<S: Subject>(subject: S) -> Result<(), Violation> {
     let mut run = Run::start(subject).await;
     let m = taken(run.prompt("c-1", "#nest").await?, "the prompt")?;
     run.wait("L2", "the turn's end", ended_turn_of(&m)).await?;
     run.checkpoint().await?;
     flat(&run, "c-1", 2, State::Done)?;
+    let s = shown(&run.seen, "c-1");
+    if s.tasks.first().map(|t| &t.0) == s.tasks.get(1).map(|t| &t.0) {
+        return Err(broke(FLAT, "both subagents name the same item"));
+    }
     run.end().await
 }
 
