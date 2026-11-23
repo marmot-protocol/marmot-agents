@@ -93,7 +93,8 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   folder and a narrow sandbox by default; sessions kept so they resume ([D-055](decisions.md#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own), [D-060](decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes), [D-061](decisions.md#d-061-a-codex-session-starts-in-a-working-folder-with-a-safe-sandbox-unless-configured), [D-062](decisions.md#d-062-what-codex-reads-for-a-chat-message),
   [D-063](decisions.md#d-063-codex-keeps-a-session-so-it-can-be-resumed), [D-064](decisions.md#d-064-the-codex-driver-declines-an-mcp-servers-form-until-forms-are-designed)).
 - Codex's subagents are on, and shown flat in the chat that started them: a `subagent` tool item, a `subagent`
-  task for each of its turns, its words naming that tool item as `parent`. Stop stops the agent and every
+  task for each of its turns, its words naming that tool item as `parent` in the event the driver gives the
+  core; the chat message the core sends for them carries no such link yet. Stop stops the agent and every
   subagent under its turn, settled once when the last has ended, or as failed if one Codex refused to stop runs
   on; a Stop naming no item, after the turn, stops what still works beside it; a new session stops the old one's
   subagents ([D-117](decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)).
