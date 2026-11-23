@@ -47,7 +47,7 @@ from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageTyp
 
 from .connector import Connector
 from .core import CoreConnection, HelloRefused, Refused, line_of
-from .translate import VERSION
+from .translate import VERSION, usable_settings
 
 PLATFORM = "marmot"
 PLUGIN_VERSION = "0.1.0"
@@ -474,6 +474,9 @@ class MarmotAdapter(BasePlatformAdapter):
             # The model's address is the owner's configuration, and the chat has no need of it.
             result.pop("base_url", None)
         self.note({"dir": "in", "via": "call", "msg": {"method": method, "id": read, "result": result}}, chat)
+        if session and not usable_settings(result):
+            # An answer with no model shows nothing: the next turn asks again, as after a failure.
+            self.connector.model_not_read(session)
 
 
 for _name in dir(BasePlatformAdapter):

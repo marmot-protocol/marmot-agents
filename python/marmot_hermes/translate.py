@@ -84,6 +84,12 @@ def reply_to_question(question, text):
     return {"question": question["id"], "options": [], "text": text}
 
 
+def usable_settings(result) -> bool:
+    """Whether Hermes's answer to a read of a session's model has one: its getter can name the session
+    and give a blank model, when none is configured (`gateway/platforms/session_model.py`)."""
+    return isinstance(result, dict) and isinstance(result.get("model"), str) and bool(result["model"].strip())
+
+
 def key_of(source):
     """A Hermes session's chat and sender, as Hermes keeps one session for each."""
     return f"{source.get('chat_type')}:{source.get('chat_id')}:{source.get('user_id')}"
@@ -365,9 +371,10 @@ class Translator:
 
     def asked(self, method, m):
         result = m.get("result")
-        if method == "get_session_model_settings" and "id" in m and ("error" in m or not isinstance(result, dict)):
-            # Hermes's answer ends the read it names, even when it is of no use. A read the plugin did not
-            # name, as in a recording, is kept by its chat and sender, and the next read of theirs replaces it.
+        if method == "get_session_model_settings" and "id" in m and ("error" in m or not usable_settings(result)):
+            # Hermes's answer ends the read it names, even when it is of no use, as one with no model is: it
+            # shows nothing and settles nothing. A read the plugin did not name, as in a recording, is kept
+            # by its chat and sender, and the next read of theirs replaces it.
             self.reads.pop(str(m["id"]), None)
         if "error" in m:
             return
@@ -378,7 +385,7 @@ class Translator:
             for key in list(self.generation):
                 if f"session:{self.name(key)}" in self.sessions:
                     self.session_changed(key)
-        elif method == "get_session_model_settings" and isinstance(result, dict):
+        elif method == "get_session_model_settings" and usable_settings(result):
             # The session Hermes names (`agent:main:<platform>:<chat type>:<chat>:<sender>`), as it was
             # when asked: a read that a new session, or a switch of model, overtook says nothing of now.
             named = str(result.get("session_key"))

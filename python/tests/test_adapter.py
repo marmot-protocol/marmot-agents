@@ -113,6 +113,10 @@ class ModelReads(unittest.IsolatedAsyncioTestCase):
         self.gates[source.user_id].wait(5)
         if self.failing == "unusable":
             return None
+        if self.failing == "blank":
+            # Hermes's getter with no model configured: the session named, its model blank.
+            return {"session_key": f"agent:main:marmot:group:c-2:{source.user_id}", "model": "",
+                    "provider": "custom", "base_url": ""}
         if self.failing:
             raise RuntimeError("Hermes failed")
         return {"session_key": f"agent:main:marmot:group:c-2:{source.user_id}", "model": f"model-{source.user_id}",
@@ -185,6 +189,21 @@ class ModelReads(unittest.IsolatedAsyncioTestCase):
         await self.answered("u-1")
         self.assertEqual(self.shown("group:c-2:u-1#2"), "")
         self.assertEqual(connector.chats["c-2"].translator.reads, {})
+
+    async def test_a_first_read_with_no_model_is_asked_again(self):
+        """A session's first read that names it but gives a blank model shows nothing, and the next turn
+        asks again, as after a read that failed."""
+        connector = self.adapter.connector
+        self.failing = "blank"
+        await self.start("m-a", "u-1")
+        await self.answered("u-1")
+        self.assertEqual(self.shown("group:c-2:u-1"), "")
+        self.assertEqual(connector.chats["c-2"].translator.reads, {})
+        self.gates["u-1"].clear()
+        self.failing = False
+        await self.start("m-b", "u-1")
+        await self.answered("u-1")
+        self.assertEqual(self.shown("group:c-2:u-1"), "Model: model-u-1, Provider: custom")
 
 
 class FakeCore:
