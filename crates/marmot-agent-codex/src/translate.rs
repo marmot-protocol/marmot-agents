@@ -137,8 +137,8 @@ struct Subagent {
     /// The turn the person started that its last turn ran under: what it says between turns
     /// belongs to.
     root: Option<String>,
-    /// Work given while a turn that already has its own runs: the item and what it is for, for
-    /// the next turn.
+    /// The work its next turn is for: the item that gave it, and what it is for. The newest
+    /// given, while a turn runs or between turns, and taken when the next turn starts.
     next: Option<(String, Option<String>)>,
 }
 
@@ -216,11 +216,13 @@ impl Translator {
         }
     }
 
-    /// The item that gave a subagent its work, and what that work is, as its next turn shows them.
-    /// A task already running with no subject, because its turn started before the item that
-    /// names it came, takes them now: the events returned show it. A task running with a subject
-    /// keeps it, and its words theirs: the work is for the next turn. Nothing for a translator
-    /// that follows the chat's session.
+    /// The item that gave a subagent its work, and what that work is, as its next turn shows them:
+    /// the newest given waits for that turn (`next`). A task already running with no subject,
+    /// because its turn started before the item that names it came, takes them now: the events
+    /// returned show it. A task running with a subject keeps it, and its words theirs. Codex
+    /// names one item more than once (its start, its end): a repeat of the item the running or
+    /// last task names gives no new work. Nothing for a translator that follows the chat's
+    /// session.
     pub fn given_work(&mut self, subject: &str, description: Option<&str>) -> Vec<AgentEvent> {
         let mut out = Vec::new();
         let item = self.turn_item(self.turn.as_deref());
@@ -229,18 +231,22 @@ impl Translator {
             return out;
         };
         let description = description.filter(|d| !d.is_empty()).map(String::from);
+        let has_subject = match running.as_ref().map(AgentEvent::body) {
+            Some(Body::Task(task)) => task.subject.is_some(),
+            _ => true,
+        };
+        if has_subject {
+            if sub.subject.as_deref() != Some(subject) {
+                sub.next = Some((subject.to_string(), description));
+            }
+            return out;
+        }
         let Some(prev) = running else {
-            sub.subject = Some(subject.to_string());
-            sub.description = description.or(sub.description.take());
             return out;
         };
         let Body::Task(task) = prev.body() else {
             return out;
         };
-        if task.subject.is_some() {
-            sub.next = Some((subject.to_string(), description));
-            return out;
-        }
         sub.subject = Some(subject.to_string());
         sub.description = description.or(sub.description.take());
         let sub = sub.clone();

@@ -1836,6 +1836,34 @@ async fn work_given_during_a_subagents_turn_is_for_its_next() {
     assert_eq!(subject("task:st2"), Some(Some("a2".into())));
 }
 
+// Work given after a subagent's turn has ended replaces work given while it ran: the next turn
+// works for the newest.
+#[tokio::test]
+async fn the_newest_work_given_is_the_next_turns() {
+    let (mut codex, mut fake) = running().await;
+    fake.say(started_by("a1", "sub1")).await;
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    let more = |id: &str| {
+        let item = json!({"type": "subAgentActivity", "id": id, "kind": "interacted",
+            "agentThreadId": "sub1", "agentPath": "/root/a"});
+        json!({"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1",
+            "item": item}})
+    };
+    fake.say(more("a2")).await; // while st1 runs
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "completed"))
+        .await;
+    fake.say(more("a3")).await; // after it ended
+    fake.say(started_by("a1", "sub1")).await; // the first item again
+    fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
+        .await;
+    let events = until(&mut codex, |e| e.event.header().item.as_str() == "task:st2").await;
+    let Body::Task(task) = events.last().unwrap().event.body() else {
+        panic!("a task");
+    };
+    assert_eq!(task.subject, Some("a3".into()));
+}
+
 // A tool for subagents that failed, or was stopped, is not titled as having worked.
 #[tokio::test]
 async fn a_failed_spawn_is_not_shown_as_started() {
