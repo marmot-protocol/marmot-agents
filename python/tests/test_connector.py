@@ -683,9 +683,10 @@ class Connected(unittest.IsolatedAsyncioTestCase):
             "type": "set", "session": session, "setting": "model", "value": "n"}})
         self.feed(said("Model switched to `n`\nProvider: Custom endpoint", self.hermes.typed[-1][2], notify=True))
         await asyncio.sleep(0)
+        before = self.of("session")
         self.feed(earlier_in)
         self.assertEqual([e for e in self.sent if "settles" in e], [])
-        self.assertNotIn("Model: m", [e["text"] for e in self.of("session")])
+        self.assertEqual(self.of("session"), before)
         self.feed(later_in)
         shown = self.of("session")[-1]
         self.assertEqual((shown["text"], shown.get("settles")), ("Model: n, Provider: custom", ["r-1"]))
