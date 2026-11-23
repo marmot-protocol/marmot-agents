@@ -63,7 +63,7 @@ the uppercase ones name the root of the whole tree, the lowercase ones the immed
 | What | Sent as |
 | --- | --- |
 | The subagent's row | A `task` item, kind 1201, sent in the turn that started it and edited as the subagent works ([D-025](../decisions.md#d-025-an-agent-item-is-updated-with-an-edit)). A top-level subagent's is in the main chat, carries no thread tags, and is the root of its tree |
-| Everything the subagent does except its words | Kind 1201 items as in the main chat, each also carrying the thread tags. What an edit carries of them is [open](#an-edit) |
+| Everything the subagent does except its words | Kind 1201 items as in the main chat, each also carrying the thread tags; an edit repeats the root tags ([an edit](#an-edit)) |
 | The subagent's words | Kind 1111 comments with the thread tags |
 | A person writing in the thread | A kind 1111 comment, as any thread message MDK sends today. Its parent is the message it answers, or the subagent's `task` item |
 | A subagent's subagent | A `task` item in its parent's thread. Its own events name it as their parent |
@@ -105,9 +105,9 @@ The core finds the subagent a person's comment is for by the same walk: the firs
 
 An edit, kind 1009, already uses `e` for its target
 ([D-112](../decisions.md#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by)), so it
-cannot also carry NIP-22's parent `e`. This is left for MDK to settle. The recommendation is that an edit carries
-no thread tags and takes its thread from its target, since an item never moves. That would be an exception to
-D-112's "an edit of an item carries every tag of the item", for the thread tags alone.
+cannot also carry NIP-22's parent `e`. It repeats the thread's root tags, `E`, `K` and `P`, with the same values
+as the item's first event, and carries no lowercase parent tags, so a member who joined after the first event can
+still place it in its thread ([D-133](../decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags)).
 
 ### What MDK has to do
 
@@ -334,7 +334,6 @@ neither was tested.
 
 ## Still open
 
-- **What an edit carries of the thread tags**, for MDK to settle ([above](#an-edit)).
 - **What a parent `p` means**, for MDK to settle ([above](#what-mdk-has-to-do)).
 - **A thread's detail at a lower detail setting** (case 5), with
   [the Q-11 and Q-12 proposal](../open-questions.md#a-proposal-for-q-11-and-q-12-not-decided).
