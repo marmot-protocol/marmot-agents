@@ -319,13 +319,8 @@ impl Client {
             let asked = first_question(item, place, agent.as_str())?;
             (target.clone(), asked.id.clone(), asked.secret)
         };
-        if secret {
-            let (group, _) = self.chat.as_ref().ok_or("no chat yet")?;
-            if !self.place(group).await.two() {
-                return Err(
-                    "a secret is answered only in a two-person chat; use the terminal".into(),
-                );
-            }
+        if secret && !place.two() {
+            return Err("a secret is answered only in a two-person chat; use the terminal".into());
         }
         let reply = AskedReply {
             question,
