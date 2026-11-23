@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-23, at `master` commit `c02ca81`, through [D-136](decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group). A change that adds or replaces
+Brought up to date on 2026-11-23, at `master` commit `c02ca81`, through [D-137](decisions.md#d-137-a-secret-answers-membership-check-is-not-bound-to-the-epoch-it-is-sent-under). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -87,7 +87,8 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
 - In a group the agent answers when mentioned or replied to; in a two-person chat, always ([D-075](decisions.md#d-075-in-a-group-the-agent-answers-when-mentioned-or-replied-to-in-a-direct-chat-always)).
 - A message sent during a turn goes straight to the harness, which folds it in, restarts or queues it
   ([D-040](decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness)).
-- A secret answer is accepted only in a two-person chat ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)).
+- A secret answer is accepted only in a two-person chat. The membership check is not bound to the MLS epoch the
+  answer is sent under, an accepted risk ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat), [D-137](decisions.md#d-137-a-secret-answers-membership-check-is-not-bound-to-the-epoch-it-is-sent-under)).
 - An agent may act only in its own chat, and may not change a group or the account; the chat section that
   would carry this is not built ([D-042](decisions.md#d-042-an-agent-may-act-in-its-own-chat-and-may-not-change-a-group-or-the-account)).
 

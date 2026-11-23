@@ -2741,3 +2741,16 @@ a third person the owner adds to it is sent what the owner is (inferred from how
 tested against MDK).
 
 Decided 2026-11-23. The project owner decided.
+
+## D-137 A secret answer's membership check is not bound to the epoch it is sent under
+
+**Decision.** Secret answers stay as they are
+([D-041](#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat)): the chat client offers one only in a
+two-person chat, and the core accepts one only from a chat with two members. The check of who is in the chat is
+not bound to the MLS epoch the answer is encrypted under, so a person added between the check and the send could
+read the answer. This is an accepted risk. Issue 149 proposed binding the two, and sending people to the
+harness's terminal until then; neither is done.
+
+**Why.** People are added to a chat to see what happens there.
+
+Decided 2026-11-23. The project owner decided.
