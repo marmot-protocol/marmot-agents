@@ -59,6 +59,7 @@ Every driver runs these, but where the table under "What was run" says otherwise
 | `two_chats` | Chat 1 runs until interrupted while chat 2's harness asks for approval, which is given; then chat 1 is interrupted |
 | `answered_once` | Two chats, one approval allowed and one question answered the other way, then the same item answered again, which must be refused |
 | `answer_after_death` | The harness dies while its approval waits; the driver, not yet told, is given the answer, and must refuse it; the approval must close unanswered |
+| `answer_after_interrupt` | A turn is interrupted while its approval waits: the approval closes with the turn, and an answer given after that must be refused and never reach the harness. The Codex and Pi fakes hear a reply to what they no longer ask, as the real ones read it and drop it |
 | `dies_mid_turn` | The harness dies in the middle of a command; Pi's driver must start a new Pi for the next prompt |
 | `dies_with_requests_pending` | The harness dies as it reads an interrupt, before acting on it, after another chat's answer was settled; it must die, so a driver that never writes the interrupt checks nothing and fails |
 | `dropped_waits` | `two_chats` with every wait for an event dropped at the first point it would wait, and the harness writing in pieces |
@@ -108,8 +109,8 @@ nothing.
 | --- | --- | --- | --- |
 | Codex | all, `dies_at_every_step` (6) | `simple`, `approval_allowed`, `command` | all 21 that one harness for every chat can show |
 | ACP, OpenCode-shaped | all, `dies_at_every_step` (3) | `simple`, `approval_allowed` | `PromptTwice` and the five for files |
-| ACP, Goose-shaped | `two_chats`, `answered_once`, `answer_after_death`, `dies_mid_turn`, `restart`, `new_session`, `folder`, `send_file`, `dies_at_every_step` (3) | `simple`, `approval_allowed` | the five for files |
-| ACP, Cursor-shaped | `two_chats`, `answered_once`, `answer_after_death`, `restart`, `send_file`, `dies_at_every_step` (4) | `simple`, `approval_allowed` | the five for files |
+| ACP, Goose-shaped | `two_chats`, `answered_once`, `answer_after_death`, `answer_after_interrupt`, `dies_mid_turn`, `restart`, `new_session`, `folder`, `send_file`, `dies_at_every_step` (3) | `simple`, `approval_allowed` | the five for files |
+| ACP, Cursor-shaped | `two_chats`, `answered_once`, `answer_after_death`, `answer_after_interrupt`, `restart`, `send_file`, `dies_at_every_step` (4) | `simple`, `approval_allowed` | the five for files |
 | Pi | all, `dies_at_every_step` (6) | `gate_allowed`, `command` | 13: those that turn on a harness for each chat, `TakeUnhanded`, `SwallowPrompt` and the five for files |
 
 The faults (`src/faults.rs`), each caught as the property it breaks, by the scenario named. Where more than one check
@@ -144,7 +145,7 @@ names the property, the test also requires the words of the check meant for the 
 alone (S5, OpenCode-shaped, where the token is the last chat's), by the session it names alone (L2, Cursor-shaped, which
 names none: the file never comes), and a relative path made whole from the driver's folder instead of the chat's (D-101).
 
-Five driver bugs were found, each fixed after its scenario failed:
+Six driver bugs were found, each fixed after its scenario failed:
 
 - **The ACP driver took an answer the agent could no longer read** (`answer_after_death`). A request's message went to
   the writer task's queue and the request returned at once, then fed the translator, so an answer to an agent that had
@@ -164,6 +165,11 @@ Five driver bugs were found, each fixed after its scenario failed:
   refused as failed. Other chats' Pis run on, and the chat's next prompt takes its session up in a new Pi. Lines from
   the stopped Pi are dropped, as from any Pi the chat has let go. Shown to catch, besides the old driver: a driver that
   stops every chat's Pi, and one that refuses the request without stopping the Pi.
+
+- **Pi's driver took an answer to a question it had closed** (`answer_after_interrupt`, 2026-11-23). At a turn's end
+  the driver closes a waiting question, but it kept the dialog, so a later answer was written to Pi, which had
+  resolved the dialog itself on the abort (Pi 1.6.0's `createDialogPromise`) and drops a late reply; the answer was
+  never settled. Now a question closed with its turn takes no answer.
 
 Not covered yet, and why:
 

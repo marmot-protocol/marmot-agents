@@ -923,6 +923,11 @@ impl Translator {
             ) {
                 continue; // sessions outlive the turn; the turn closes itself
             }
+            // Pi resolves a dialog itself when its run ends (an abort, or the dialog's timeout)
+            // and drops a reply that comes later, so a question closed here takes no answer.
+            if let Some(id) = item.strip_prefix("question:") {
+                self.dialogs.remove(id);
+            }
             let header = prev.header();
             let (title, text) = (header.title.clone(), header.text.clone());
             let owner = (

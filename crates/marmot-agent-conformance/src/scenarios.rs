@@ -29,6 +29,7 @@ macro_rules! with_scenarios {
             two_chats,
             answered_once,
             answer_after_death,
+            answer_after_interrupt,
             dies_mid_turn,
             dies_with_requests_pending,
             dropped_waits,
@@ -208,6 +209,40 @@ pub async fn answer_after_death<S: Subject>(subject: S) -> Result<(), Violation>
         ));
     }
     Ok(())
+}
+
+/// A turn is interrupted while its approval waits: the harness drops what it asked, and the
+/// approval closes with the turn. An answer given after that must be refused, and must never
+/// reach the harness (S11): an answer reaches the harness only while its item waits.
+pub async fn answer_after_interrupt<S: Subject>(subject: S) -> Result<(), Violation> {
+    let mut run = Run::start(subject).await;
+    let m = taken(run.prompt("c-1", "#ask").await?, "the prompt")?;
+    let asked = run
+        .wait("L2", "the approval", of_chat("c-1", waiting))
+        .await?;
+    let turn = run.wait("L2", "the turn", turn_of(&m)).await?;
+    let turn = turn.event.header().turn.clone().expect("a turn has an id");
+    taken(run.interrupt("c-1", &turn).await?.1, "the interrupt")?;
+    run.wait("L2", "the turn's end", ended_turn_of(&m)).await?;
+    let item = asked.event.header().item.clone();
+    let last = (run.seen.iter().rev())
+        .find(|e| e.event.header().item == item)
+        .expect("the approval was seen");
+    if waiting(last) {
+        return Err(broke(
+            "S2",
+            "the approval still waits after its turn was interrupted",
+        ));
+    }
+    let (_, late) = run.answer(&asked, true).await?;
+    if late.is_ok() {
+        return Err(broke(
+            "S11",
+            "an answer to an approval closed with its interrupted turn was taken",
+        ));
+    }
+    run.drain(Duration::from_millis(200)).await;
+    run.end().await
 }
 
 /// The harness dies in the middle of a turn: every item closes (S2), and nothing the driver

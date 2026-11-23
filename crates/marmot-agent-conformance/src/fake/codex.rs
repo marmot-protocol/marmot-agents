@@ -43,6 +43,8 @@ pub struct Codex {
     store: Shared,
     threads: HashMap<String, Option<Turn>>,
     asked: HashMap<i64, Asked>,
+    /// Requests Codex resolved itself, as at a turn's end, with the thread that asked.
+    resolved: HashMap<i64, String>,
     next_request: i64,
 }
 
@@ -53,6 +55,7 @@ impl Codex {
             store,
             threads: HashMap::new(),
             asked: HashMap::new(),
+            resolved: HashMap::new(),
             next_request: 0,
         }
     }
@@ -105,6 +108,7 @@ impl Codex {
             .collect();
         for id in ids {
             self.asked.remove(&id);
+            self.resolved.insert(id, thread.to_string());
             out.say(json!({"method": "serverRequest/resolved", "params": {"threadId": thread, "requestId": id}}));
         }
         out.say(
@@ -195,6 +199,15 @@ impl Protocol for Codex {
         let Some(method) = frame["method"].as_str() else {
             // A reply to something the harness asked.
             let Some(asked) = id.as_i64().and_then(|id| self.asked.remove(&id)) else {
+                // A reply to a request Codex resolved itself reached it all the same: no one's
+                // answer may come this late.
+                if let Some(thread) = id.as_i64().and_then(|id| self.resolved.remove(&id)) {
+                    heard.push(Heard::Answer {
+                        session: thread,
+                        allow: None,
+                        text: None,
+                    });
+                }
                 return;
             };
             let result = &frame["result"];
