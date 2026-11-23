@@ -17,6 +17,9 @@
 //!                                      # folder inside them; by default the harness's working
 //!                                      # folder. `~` is the home: listing it allows any folder
 //!                                      # in the home (D-101)
+//! full_activity = ["<group id>"]       # the groups also sent the agent's reasoning, tools,
+//!                                      # plans, tasks and notices, or "all"; by default only
+//!                                      # the owner's two-person chat with it (D-136)
 //!
 //! [codex]                              # Codex, built in; or, for a connector on the socket,
 //! cwd = "/home/me/work"                # an empty [connector] section in its place
@@ -42,6 +45,7 @@
 //! args = []                            # arguments for that script, before Pi's own
 //! ```
 
+use crate::activity::FullActivity;
 use crate::keys::{PubKey, public_key_hex};
 use crate::rights::{Rights, Who};
 use marmot_agent_codex::{ApprovalPolicy, Sandbox, Setup};
@@ -94,6 +98,10 @@ pub struct Config {
     /// home is never a chat's folder, whatever is listed.
     #[serde(default)]
     pub folders: Option<Vec<PathBuf>>,
+    /// Which groups are sent the agent's full activity besides the owner's two-person chat with
+    /// it: those listed, or every chat with `"all"`. None by default (D-136).
+    #[serde(default)]
+    pub full_activity: FullActivity,
     /// Codex, when the agent is Codex, built in.
     #[serde(default)]
     pub codex: Option<CodexConfig>,

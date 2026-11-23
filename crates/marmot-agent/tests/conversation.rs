@@ -3438,3 +3438,376 @@ fn a_stop_after_the_turn_stops_what_still_works() {
         "{acts:?}"
     );
 }
+
+// ------------------------------------------------------------------------- what a chat is sent
+
+/// Each item type, with whether a chat without full activity is sent it (D-136): the agent's
+/// words, the turn's start and end, what it asks and the errors go to every chat; its reasoning,
+/// tools, plans, tasks, notices and a subagent's words go only where the owner sees everything.
+fn every_type() -> Vec<(AgentEvent, bool)> {
+    let tool = Body::Tool(body::Tool {
+        kind: body::ToolKind::Command,
+        name: "shell".into(),
+        command: Some("cat notes".into()),
+        cwd: None,
+        exit_code: None,
+        duration_ms: None,
+        output: None,
+        changes: Vec::new(),
+        query: None,
+        path: None,
+        input: None,
+        error: None,
+    });
+    let asked = body::Asked {
+        id: "q1".into(),
+        header: None,
+        text: "Which one?".into(),
+        options: Vec::new(),
+        multiple: false,
+        allow_text: true,
+        secret: false,
+    };
+    let question = body::Question::new(body::AnswerVia::Request, None, vec![asked]).unwrap();
+    let notice = Body::Notice(body::Notice {
+        kind: NoticeKind::Warning,
+        duration_ms: None,
+        reason: None,
+    });
+    let subagent_words = Body::Message(Message {
+        phase: None,
+        parent: Some("a1".into()),
+    });
+    vec![
+        (event("t1", State::Running, turn()), true),
+        (
+            event("w1", State::Done, Body::Message(Message::default())),
+            true,
+        ),
+        (event("ap", State::Waiting, approval()), true),
+        (event("q", State::Waiting, Body::Question(question)), true),
+        (
+            event("err", State::Done, Body::Error(body::Error::default())),
+            true,
+        ),
+        (
+            event("s", State::Running, Body::Session(session_item(false))),
+            true,
+        ),
+        (
+            event("r", State::Done, Body::Reasoning(body::Reasoning {})),
+            false,
+        ),
+        (event("cmd", State::Running, tool), false),
+        (
+            event("p", State::Running, Body::Plan(body::Plan::default())),
+            false,
+        ),
+        (event("task:st1", State::Running, subagent_task()), false),
+        (event("n", State::Done, notice), false),
+        (event("sw", State::Done, subagent_words), false),
+    ]
+}
+
+/// A conversation the owner has prompted in the group, and the group chat's id.
+fn prompted_in_group(mut talk: Conversation) -> (Conversation, String) {
+    let mut mention = heard(group(), "e-g1", OWNER, "look into it");
+    mention.mentions_agent = true;
+    let prompt = the_prompt(talk.heard(mention));
+    (talk, prompt.chat.id.0)
+}
+
+/// Whether the event, emitted for `chat`, queued something to send.
+fn goes_out(talk: &mut Conversation, chat: &str, event: AgentEvent) -> bool {
+    let acts = talk.emitted(emitted(chat, event));
+    !sends(talk, acts).is_empty()
+}
+
+// A group is sent the agent's words and what people there need to answer it, and none of its
+// activity, unless the owner lists the group (D-136). A subagent's approvals and questions are
+// the agent's own, so they reach the group; its tasks and its words do not.
+#[test]
+fn a_group_is_sent_the_agents_words_and_requests_not_its_activity() {
+    let (mut talk, chat) = prompted_in_group(conversation(Saved::default()));
+    for (event, shown) in every_type() {
+        let name = event.header().item.as_str().to_string();
+        assert_eq!(goes_out(&mut talk, &chat, event), shown, "{name}");
+    }
+}
+
+// A group the owner lists is sent everything; another is not (D-136).
+#[test]
+fn a_group_the_owner_lists_is_sent_everything() {
+    let listed = marmot_agent::FullActivity::Groups(vec![GroupKey::from("g-group")]);
+    let (mut talk, chat) =
+        prompted_in_group(conversation(Saved::default()).with_activity(listed.clone()));
+    for (event, _) in every_type() {
+        let name = event.header().item.as_str().to_string();
+        assert!(goes_out(&mut talk, &chat, event), "{name}");
+    }
+
+    let other = marmot_agent::FullActivity::Groups(vec![GroupKey::from("g-other")]);
+    let (mut talk, chat) = prompted_in_group(conversation(Saved::default()).with_activity(other));
+    let tool = every_type()
+        .into_iter()
+        .find(|(e, _)| e.header().item.as_str() == "cmd");
+    assert!(!goes_out(&mut talk, &chat, tool.unwrap().0));
+
+    let (mut talk, chat) = prompted_in_group(
+        conversation(Saved::default()).with_activity(marmot_agent::FullActivity::All),
+    );
+    for (event, _) in every_type() {
+        let name = event.header().item.as_str().to_string();
+        assert!(goes_out(&mut talk, &chat, event), "all: {name}");
+    }
+}
+
+// The owner's two-person chat with the agent is sent everything. Someone else's two-person chat
+// with it is not, nor the owner's once a third person is in it (D-136).
+#[test]
+fn only_the_owners_two_person_chat_is_sent_everything_by_default() {
+    let (mut talk, prompt) = started();
+    for (event, _) in every_type() {
+        let name = event.header().item.as_str().to_string();
+        assert!(goes_out(&mut talk, &prompt.chat.id.0, event), "{name}");
+    }
+
+    let mut talk = conversation(Saved::default());
+    let friends = Where {
+        group: GroupKey::from("g-friend"),
+        ..direct()
+    };
+    let prompt = the_prompt(talk.heard(heard(friends, "e1", FRIEND, "hello")));
+    for (event, shown) in every_type() {
+        let name = event.header().item.as_str().to_string();
+        assert_eq!(
+            goes_out(&mut talk, &prompt.chat.id.0, event),
+            shown,
+            "{name}"
+        );
+    }
+
+    let (mut talk, prompt) = started();
+    let three = Where {
+        direct: false,
+        members: 3,
+        ..direct()
+    };
+    let mut mention = heard(three, "e2", OWNER, "and now?");
+    mention.mentions_agent = true;
+    the_prompt(talk.heard(mention));
+    let reasoning = event("r2", State::Done, Body::Reasoning(body::Reasoning {}));
+    assert!(!goes_out(&mut talk, &prompt.chat.id.0, reasoning));
+}
+
+// What an item a group is not sent would have settled is settled by the turn's next version, so
+// the person who asked is not told that nothing came of it (D-028, D-136).
+#[test]
+fn what_an_item_not_sent_settles_is_settled_by_its_turn() {
+    let (mut talk, chat) = prompted_in_group(conversation(Saved::default()));
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    let interrupt = request(group(), "r1", OWNER, Some("e-t1"), Asked::Interrupt);
+    let Some(Act::Control(control)) = talk.asked(interrupt).into_iter().next() else {
+        panic!("no control")
+    };
+    assert!(talk.requested(&control.request, Ok(()), 0).is_empty());
+    let (tool, _) = every_type().swap_remove(7);
+    let mut hidden = emitted(&chat, tool);
+    hidden.settles = vec![control.request.clone()];
+    let acts = talk.emitted(hidden);
+    let items = items_of(&talk, acts);
+    assert_eq!(items.len(), 1, "one version of the turn");
+    assert!(matches!(items[0].event.body(), Body::Turn(_)));
+    assert_eq!(items[0].first, Some(EventKey::from("e-t1")));
+    assert_eq!(items[0].settles, vec![EventKey::from("r1")]);
+}
+
+// A Stop in a group stops a subagent the group is not shown, as in any chat (D-117, D-136).
+#[test]
+fn a_stop_in_a_group_stops_a_subagent_it_is_not_shown() {
+    let (mut talk, chat) = prompted_in_group(conversation(Saved::default()));
+    sent(&mut talk, &chat, event("t1", State::Done, turn()), "e-t1");
+    let task = event("task:st1", State::Running, subagent_task());
+    assert!(!goes_out(&mut talk, &chat, task));
+    let stop = request(group(), "r1", OWNER, None, Asked::Interrupt);
+    let acts = talk.asked(stop);
+    assert!(
+        matches!(acts.as_slice(), [Act::Control(c)]
+            if matches!(&c.action, Action::Interrupt { turn } if turn.as_str() == "t1")),
+        "{acts:?}"
+    );
+}
+
+/// The keys of the items queued for `group`, in order.
+fn queued_keys(talk: &Conversation, group: &GroupKey) -> Vec<String> {
+    (talk.queued(group).into_iter())
+        .filter_map(|(_, what)| match what {
+            Sending::Item { key, .. } => Some(key),
+            Sending::Words { .. } => None,
+        })
+        .collect()
+}
+
+/// An interrupt of the turn whose first event is `e-t1`, from the owner in `chat` as `event`,
+/// that the driver took.
+fn interrupt_taken_in(
+    talk: &mut Conversation,
+    chat: Where,
+    event: &str,
+) -> marmot_agent_driver::RequestId {
+    let interrupt = request(chat, event, OWNER, Some("e-t1"), Asked::Interrupt);
+    let Some(Act::Control(control)) = talk.asked(interrupt).into_iter().next() else {
+        panic!("no control")
+    };
+    assert!(talk.requested(&control.request, Ok(()), 0).is_empty());
+    control.request
+}
+
+// Whether a chat is the owner's two-person chat is read from MDK's members at each send, not
+// from the last message: a third person added during a turn, with no message since, gets none
+// of the agent's activity, not even what was queued before they came, and what that settled is
+// settled by the turn. The same after a restart, and in someone else's two-person chat (D-136).
+#[test]
+fn the_owners_chat_is_read_from_its_members_at_each_send() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let g = direct().group;
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    let request = interrupt_taken(&mut talk, "r1");
+    let (tool, _) = every_type().swap_remove(7);
+    let mut queued_tool = emitted(&chat, tool.clone());
+    queued_tool.settles = vec![request];
+    let acts = talk.emitted(queued_tool);
+    assert!(!sends(&talk, acts).is_empty());
+    let both = [PubKey::from(AGENT), PubKey::from(OWNER)];
+    talk.members_now(&g, Some(&both));
+    assert_eq!(queued_keys(&talk, &g), vec![format!("{chat}/cmd")]);
+
+    // A third person is added: MDK no longer marks it a two-person chat.
+    talk.members_now(&g, None);
+    let keys = queued_keys(&talk, &g);
+    assert_eq!(keys, vec![format!("{chat}/t1")], "the tool is held back");
+    let Some((_, Sending::Item { item, .. })) = talk.next_send(&g) else {
+        panic!("no turn")
+    };
+    assert_eq!(
+        item.settles,
+        vec![EventKey::from("r1")],
+        "settled by the turn"
+    );
+    let reasoning = event("r2", State::Done, Body::Reasoning(body::Reasoning {}));
+    assert!(!goes_out(&mut talk, &chat, reasoning));
+    let done = event(
+        "cmd",
+        State::Done,
+        every_type().swap_remove(7).0.body().clone(),
+    );
+    assert!(!goes_out(&mut talk, &chat, done), "a later version too");
+
+    // The owner alone with the agent again: its activity goes again.
+    talk.members_now(&g, Some(&both));
+    let reasoning = event("r3", State::Done, Body::Reasoning(body::Reasoning {}));
+    assert!(goes_out(&mut talk, &chat, reasoning));
+
+    // Queued before a restart, checked when it goes after: here, someone else's chat now.
+    let saved = talk.saved().clone();
+    let mut again = conversation(saved);
+    assert!(queued_keys(&again, &g).contains(&format!("{chat}/r3")));
+    let theirs = [PubKey::from(AGENT), PubKey::from(FRIEND)];
+    again.members_now(&g, Some(&theirs));
+    assert!(!queued_keys(&again, &g).contains(&format!("{chat}/r3")));
+}
+
+/// A turn's end as Claude Code reports a denied approval, with the tool's input in its native
+/// message.
+fn denied_turn_end() -> AgentEvent {
+    let native = marmot_agent_events::Native {
+        kind: "result".into(),
+        payload: serde_json::value::RawValue::from_string(
+            r#"{"permission_denials":[{"tool_input":{"command":"cat notes"}}]}"#.into(),
+        )
+        .unwrap(),
+    };
+    let header = event("t1", State::Done, turn()).header().clone();
+    AgentEvent::new(header, turn(), Some(native)).unwrap()
+}
+
+/// What the last item queued for `group` carries, as it goes out.
+fn last_sent_native(talk: &Conversation, group: &GroupKey) -> bool {
+    let Some((_, Sending::Item { item, .. })) = talk.queued(group).pop() else {
+        panic!("no item")
+    };
+    let out = carrier::item(&item).unwrap();
+    assert!(
+        out.tags.iter().all(|t| t[0] != "left_out"),
+        "{:?}",
+        out.tags
+    );
+    let read = carrier::read_item(out.kind, &out.content, &out.tags).unwrap();
+    let native = out.tags.iter().any(|t| t[0] == "native");
+    assert_eq!(read.item.event.native().is_some(), native);
+    native
+}
+
+// A chat without full activity is sent an item's shown fields and not its native message, which
+// can hold what the chat is not sent, such as a denied tool's input; the owner's chat and a
+// group the owner lists are sent it whole, and the core keeps it whole (D-007, D-136).
+#[test]
+fn a_chat_without_full_activity_is_sent_no_native_message() {
+    let (mut talk, chat) = prompted_in_group(conversation(Saved::default()));
+    assert!(goes_out(&mut talk, &chat, denied_turn_end()));
+    assert!(!last_sent_native(&talk, &group().group));
+
+    let (mut talk, prompt) = started();
+    assert!(goes_out(&mut talk, &prompt.chat.id.0, denied_turn_end()));
+    assert!(last_sent_native(&talk, &direct().group));
+
+    let listed = marmot_agent::FullActivity::Groups(vec![group().group]);
+    let (mut talk, chat) = prompted_in_group(conversation(Saved::default()).with_activity(listed));
+    assert!(goes_out(&mut talk, &chat, denied_turn_end()));
+    assert!(last_sent_native(&talk, &group().group));
+}
+
+// A notice that settles a control is how the harness says what came of it, such as a refused
+// new session or a failed compaction, so a group is sent it; a notice that settles nothing is
+// not (D-028, D-136).
+#[test]
+fn a_notice_that_settles_a_control_reaches_a_group() {
+    let (mut talk, chat) = prompted_in_group(conversation(Saved::default()));
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    let request = interrupt_taken_in(&mut talk, group(), "r1");
+    let refusal = Body::Notice(body::Notice {
+        kind: NoticeKind::Warning,
+        duration_ms: None,
+        reason: None,
+    });
+    let mut notice = emitted(&chat, event("n1", State::Done, refusal.clone()));
+    notice.settles = vec![request];
+    let acts = talk.emitted(notice);
+    let items = items_of(&talk, acts);
+    assert_eq!(items.len(), 1);
+    assert!(matches!(items[0].event.body(), Body::Notice(_)));
+    assert_eq!(items[0].settles, vec![EventKey::from("r1")]);
+
+    // Queued so, it still goes when the members are read at its send.
+    talk.members_now(&group().group, None);
+    assert!(queued_keys(&talk, &group().group).contains(&format!("{chat}/n1")));
+
+    let alone = emitted(&chat, event("n2", State::Done, refusal));
+    assert!(!goes_out(&mut talk, &chat, alone.event));
+}

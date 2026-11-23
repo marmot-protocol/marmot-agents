@@ -347,6 +347,18 @@ impl Marmot {
         }))
     }
 
+    /// The two accounts in `group` now, as MDK keeps them for a direct chat: no name and two
+    /// accounts, however many devices each has in it. `None` for a named group, one of more or
+    /// fewer accounts, or one MDK does not have; [`NotNow`] when MDK could not be read.
+    pub fn two_people(&self, group: &GroupKey) -> Result<Option<Vec<PubKey>>, NotNow> {
+        let record = (self.app)
+            .group(&self.label, group.as_str())
+            .map_err(|_| NotNow)?;
+        Ok(record
+            .and_then(|r| r.direct_member_ids_hex)
+            .map(|ids| ids.into_iter().map(PubKey).collect()))
+    }
+
     fn name(&self, person: &PubKey, given: Option<String>) -> String {
         given
             .or_else(|| self.runtime.display_name_for_account_id(person.as_str()))
@@ -733,6 +745,10 @@ pub trait Side: Clone + Send + Sync + 'static {
     /// The groups the agent has accepted; [`NotNow`] when they could not be listed.
     fn groups(&self) -> Result<Vec<GroupKey>, NotNow>;
 
+    /// The two accounts in `group` now, when MDK marks it a two-person chat: no name and two
+    /// accounts. `None` for any other group; [`NotNow`] when MDK could not say.
+    fn two_people(&self, group: &GroupKey) -> Result<Option<Vec<PubKey>>, NotNow>;
+
     /// A page of what was stored for a group after `after`, in storage order: at most `limit`
     /// rows, of which the page holds what others sent.
     fn stored(&self, group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow>;
@@ -975,6 +991,10 @@ impl Side for Marmot {
 
     fn groups(&self) -> Result<Vec<GroupKey>, NotNow> {
         Marmot::groups(self)
+    }
+
+    fn two_people(&self, group: &GroupKey) -> Result<Option<Vec<PubKey>>, NotNow> {
+        Marmot::two_people(self, group)
     }
 
     fn stored(&self, group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {

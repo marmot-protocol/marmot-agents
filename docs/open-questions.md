@@ -241,14 +241,25 @@ alone, which makes it part of administration ([Q-05](#q-05-how-is-the-agent-admi
 
 ### Q-11 What keeps sensitive output from spreading?
 
-Everything the agent does is visible to every member and stays in their history (D-009). Tool output can contain
-secrets from the owner's machine. Whether the owner gets a per-chat detail setting, and what the default is, is
-open.
+Settled for the pilot by
+[D-136](decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group):
+the agent's full activity goes only to the owner's two-person chat with it, and to the groups the owner lists in
+the settings; every other chat is sent its words, its turns, what it asks, its errors and its session.
+
+Still open, for after the pilot: whether a chat gets more levels than these two
+([issue 5](https://github.com/marmot-protocol/marmot-agents/issues/5)), whether the owner can change a chat's
+level from the chat ([Q-10](#q-10-how-are-permissions-changed-from-the-chat)), and whether what a chat was not
+sent can be seen later.
 
 ### Q-12 How many events is too many?
 
 A busy turn can produce hundreds of tool events. Each durable one is an encrypted group message. Whether some
 activity should be combined, summarised, or sent as short-lived events is open.
+
+Narrowed by
+[D-136](decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group):
+for the pilot a group is sent the full activity only when the owner lists it, so the question is now about the
+owner's two-person chat and the groups listed.
 
 One real number: in four days of one developer's use of Claude Code, a turn averaged about 12 tool calls,
 7 reasoning blocks and 3.5 pieces of text, which is roughly 35 events if each tool call is sent twice. Those
@@ -261,14 +272,16 @@ One filter could answer both: a setting the owner controls, per chat, for how mu
 
 | Level | What is sent |
 | --- | --- |
-| Full | Everything. The default, as [D-008](decisions.md#d-008-pass-everything-through) says |
+| Full | Everything. For the pilot, the owner's two-person chat and the groups the owner lists ([D-136](decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)) |
 | Summary | Messages, approvals, questions, errors and turn results, plus one summary line per turn that is updated in place as the agent works |
 | Final | Messages, approvals, questions and errors only |
 
 The summary line is the strongest part. One item that keeps replacing itself ("ran 12 commands, edited 3 files")
 would cut the volume a great deal, and it fits how items already replace their earlier state.
 
-This needs more product thinking before anything is decided, and it does not change D-008. Points to work out:
+For the pilot, D-136 settled on two of these: every other chat is sent close to "Final", with the turn's start
+and end and the session besides. The rest needs more product thinking before anything is decided. Points to work
+out:
 
 - **Can the detail be seen, or recovered later?** That matters to people. If a lower level means the detail is
   never sent, nobody can open it up afterwards, the owner included. The alternatives are to send it where only

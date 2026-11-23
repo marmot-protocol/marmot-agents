@@ -1,7 +1,7 @@
 //! The settings file: what it takes, and what it refuses.
 
 use marmot_agent::config::{Config, ConfigError};
-use marmot_agent::{PubKey, Who};
+use marmot_agent::{FullActivity, GroupKey, PubKey, Who};
 
 // NIP-19's own example.
 const NPUB: &str = "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg";
@@ -130,4 +130,34 @@ fn an_acp_agent_sends_files_only_when_its_settings_say_so() {
         Config::parse(&text("send_files = \"yes\"\n")),
         Err(ConfigError::Invalid)
     ));
+}
+
+// Which groups are sent the agent's full activity: none by default, those listed, or every chat
+// (D-136). A group id is read in either case, as MDK gives it in lowercase hex.
+#[test]
+fn the_groups_sent_full_activity_are_listed_or_all() {
+    let base = settings(HEX, "\"owner\"", "");
+    let config = Config::parse(&base).unwrap();
+    assert_eq!(config.full_activity, FullActivity::Groups(Vec::new()));
+
+    let listed = base.replace("invite = []", "invite = []\nfull_activity = [\"ABCDEF01\"]");
+    let config = Config::parse(&listed).unwrap();
+    assert_eq!(
+        config.full_activity,
+        FullActivity::Groups(vec![GroupKey::from("abcdef01")])
+    );
+
+    let all = base.replace("invite = []", "invite = []\nfull_activity = \"all\"");
+    assert_eq!(
+        Config::parse(&all).unwrap().full_activity,
+        FullActivity::All
+    );
+
+    for wrong in ["\"some\"", "[\"not hex\"]", "true"] {
+        let text = base.replace(
+            "invite = []",
+            &format!("invite = []\nfull_activity = {wrong}"),
+        );
+        assert!(Config::parse(&text).is_err(), "{wrong}");
+    }
 }
