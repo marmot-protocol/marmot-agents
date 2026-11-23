@@ -171,8 +171,9 @@ Still open:
   so the plugin has to arrange one per chat. Whether the core should accept Hermes's split is still open; who
   may speak and approve in a gateway is settled
   ([D-084](decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)).
-- **Threads.** Whether a thread inside a chat gets its own session. For a subagent's thread, the proposal in
-  [subagents as threads](design/subagents.md) says it does.
+- **Threads.** Whether a thread people start inside a chat gets its own session. A subagent's thread does: its
+  session names its `task` item
+  ([D-121](decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)).
 
 Raised in [issue 8](https://github.com/marmot-protocol/marmot-agents/issues/8).
 
@@ -278,37 +279,6 @@ This needs more product thinking before anything is decided, and it does not cha
 - **Gateways already have their own setting.** Hermes and OpenClaw each decide how much tool activity they send.
   A filter in the core would sit on top of theirs, and the two should not fight.
 - **It depends on how events are carried**, which is not designed yet.
-
-## Drivers
-
-### Q-30 How does a chat show an agent's subagents?
-
-Codex and Claude Code can start subagents: agents of their own that work in parallel, can start subagents in
-turn, and can ask for approval. The project owner wants a chat to show each one, and to let a person open it
-and see everything it does, like a thread inside the conversation.
-
-The current thinking, agreed in direction with the project owner on 2026-11-20, is a thread in the same group
-for each subagent: [subagents as threads](design/subagents.md), with the points to decide. What Codex sends for
-subagents is in [harness messages](reference/harness-messages.md#subagents).
-
-Until then, Codex's subagents are on and shown flat in the chat that started them, as Claude Code's are
-([D-117](decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)). The
-Codex transport that threads need, point 8 of the proposal, is built with it.
-
-### Q-29 What does the Codex driver do with a thread no chat asked for?
-
-A Codex translator follows the thread its chat picked, and the transport routes each thread's messages to its
-translator ([D-060](decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes)). Codex
-starts a thread by itself for each subagent. The recordings of 2026-11-20 show it: the subagent's messages name
-its own thread and no `thread/started` announces it. An item in the parent's turn names the thread, and each of
-its turns names the top-level turn in `rootTurnId`
-([harness messages](reference/harness-messages.md#subagents)). A subagent's thread is now settled: it gets a translator of its own in the
-chat of the thread that started it, and is shown there flat
-([D-117](decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)). What
-is left open is any other thread no chat asked for. Whether one can arrive is not known; Codex's schema names
-threads it starts for a review, a compaction and memory consolidation. Today the transport holds a message for a
-thread it has never seen, in case something names that thread next, and lets the oldest go, counted, once more
-than 512 are held.
 
 ## The repository and the move from MDK
 

@@ -47,7 +47,7 @@ being replaced by what is designed here, not extended.
 | Understand how the parts fit | `docs/design/architecture.md` |
 | Work on what agents send to the chat | `docs/design/event-model.md`, then `docs/design/event-carrier.md` |
 | Work on what people send back to an agent | `docs/design/answers-and-controls.md` |
-| Work on how a chat shows subagents | `docs/design/subagents.md`, then `fixtures/recordings/codex/subagents` |
+| Work on how a chat shows subagents | `docs/design/subagents.md`, then `docs/reference/subagents-prior-art.md` and `fixtures/recordings/codex/subagents` |
 | Work on the boundary to TypeScript and Python programs | `docs/design/socket-protocol.md` |
 | Change a socket message, or see every one exactly | `crates/marmot-agent/src/socket/wire.rs`, then `fixtures/socket` |
 | Add or change a harness driver | `docs/design/drivers.md`, then `docs/reference/harness-interfaces.md` |

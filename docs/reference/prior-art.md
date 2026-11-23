@@ -16,7 +16,8 @@ so that the lessons can be reused and the research does not have to be repeated.
 | [Buzz](https://github.com/block/buzz) | A Nostr-based workspace for people and agents | The envelope idea and some runner design. Its event vocabulary did not fit |
 | [Agent Client Protocol](https://github.com/agentclientprotocol/agent-client-protocol) | An open standard between editors and agents | The default driver, and its list of what harnesses have in common |
 
-ACP is covered in [`harness-interfaces.md`](harness-interfaces.md).
+ACP is covered in [`harness-interfaces.md`](harness-interfaces.md). How these and other products show subagents,
+and how chat threads work, is in [`subagents-prior-art.md`](subagents-prior-art.md) (read 2026-11-23).
 
 ## T3 Code
 

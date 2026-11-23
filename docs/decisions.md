@@ -267,6 +267,9 @@ is an agent item ([D-023](#d-023-one-kind-carries-every-agent-item)).
 replies, reactions, search and alerts work with no extra work. Putting the words in a new kind would hide them
 from any client that does not know it. See [`design/event-carrier.md`](design/event-carrier.md).
 
+An exception, by [D-122](#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar): a subagent's words are kind
+1111 comments in its thread. The agent's own words stay kind 9.
+
 Decided 2026-11-17.
 
 ## D-023 One kind carries every agent item
@@ -299,6 +302,10 @@ works. A waiting approval matters most, because Codex and Claude Code wait for a
 A failed turn arrives as an edit of the turn item ([D-025](#d-025-an-agent-item-is-updated-with-an-edit)). That
 edit alerts. No other edit does.
 
+Extended by [D-122](#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar): the agent's comments in its own
+subagents' threads do not alert, and an app lifts a subagent's waiting approval or question into its running bar. A
+subagent's approvals and questions alert as any do.
+
 Decided 2026-11-17. Whether the agent's remarks during a turn alert was left open, and is settled by
 [D-078](#d-078-the-agents-remarks-during-a-turn-do-not-alert).
 
@@ -322,6 +329,10 @@ start and finish within one second.
 The cost: an edit means nothing without the event it points at, so someone added to a group in the middle of a
 turn sees nothing of the items that began before they joined. See
 [`design/event-carrier.md`](design/event-carrier.md#an-item-is-updated-with-an-edit).
+
+Extended by
+[D-124](#d-124-what-keeps-subagents-reliable-closes-harnesses-that-do-not-tell-them-apart-and-late-joiners): an app
+shows a held edit of an item sent before the member joined as the item itself.
 
 Decided 2026-11-17.
 
@@ -399,6 +410,9 @@ may answer and drops its lifecycle guarantees.
 
 Five minutes is a first value with no evidence behind it. It can change.
 
+Extended by [D-123](#d-123-stop-and-writing-in-a-subagents-thread): a Stop that reaches several subagents is settled
+once, when the last of them has ended, by the edit of whichever ended last.
+
 Decided 2026-11-18.
 
 ## D-029 Three shared controls, and the rest comes from the harness
@@ -419,6 +433,10 @@ An app draws its controls from that list. Nothing in an app or in the core check
 be wrong for all of them. This follows from staying true to each harness
 ([D-008](#d-008-pass-everything-through)) and from full control from the phone
 ([D-011](#d-011-full-control-from-the-phone)).
+
+Extended by [D-123](#d-123-stop-and-writing-in-a-subagents-thread): `interrupt` in the main chat also stops every
+subagent the agent started, including ones still running after its turn has ended, and in a subagent's thread it
+stops that subagent and the ones it started.
 
 Decided 2026-11-18.
 
@@ -1009,6 +1027,11 @@ happened. The trait needs no async runtime, so each driver picks its own.
 What a debug print shows is not part of this decision. See Q-13, since settled as
 [D-071](#d-071-what-may-be-logged).
 
+Extended by [D-123](#d-123-stop-and-writing-in-a-subagents-thread) and
+[D-124](#d-124-what-keeps-subagents-reliable-closes-harnesses-that-do-not-tell-them-apart-and-late-joiners): a
+driver states two more flags, whether a person can write to a running subagent and whether its harness tells
+subagents apart. Both are named when built.
+
 Decided 2026-11-19. The project owner accepted the trait, and then the seven flags.
 
 ## D-059 Eight points about what an agent event carries
@@ -1055,8 +1078,8 @@ gives each translator only its own thread's messages. It:
 4. replaces a chat's session only when its thread is idle: no turn running, or an interrupt that Codex has
    confirmed.
 
-What the transport does with a thread that no chat asked for is open
-([Q-29](open-questions.md#q-29-what-does-the-codex-driver-do-with-a-thread-no-chat-asked-for)).
+What the transport does with a thread that no chat asked for is open (Q-29, since settled for subagents'
+threads as [D-125](#d-125-the-codex-transport-follows-subagents-threads)).
 
 **Why.** Review of the translator went five rounds. From the third on, every finding was one case of a single
 translator receiving several threads' messages: a late message from a replaced thread landing in the new one's
@@ -1065,6 +1088,10 @@ them is in any of the 28 recordings. Handling them inside the translator meant r
 and the transport has to route anyway, to serve several chats on one connection. Routing is now in one place,
 and the translator stays a translation of one session. The four rules above are what make the reviewed cases
 impossible.
+
+Extended by [D-125](#d-125-the-codex-transport-follows-subagents-threads): the transport also gives each subagent's
+thread a translator in the chat of the thread that started it, holds messages for a thread it does not know yet, and
+interrupts subagents itself.
 
 Decided 2026-11-20. The project owner chose this over keeping each thread's state inside the translator.
 
@@ -1249,6 +1276,10 @@ restart must not break: the saved session, no prompt run twice, no turn left run
 turn ([issue 9](https://github.com/marmot-protocol/marmot-agents/issues/9)) would put words in the agent's mouth,
 and can be added later.
 
+Extended by
+[D-124](#d-124-what-keeps-subagents-reliable-closes-harnesses-that-do-not-tell-them-apart-and-late-joiners): when a
+harness stops, its session ends or the core restarts, every open `task` item is edited to `cancelled`.
+
 Decided 2026-11-21.
 
 ## D-071 What may be logged
@@ -1338,6 +1369,12 @@ hands to MDK and the Marmot specification. MDK may rename a tag to fit its conve
 ([D-069](#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind)), and nothing it needed
 was missing. One JSON tag for a type's own fields keeps the specification to one set of tags for eleven types.
 
+Extended by [D-121](#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them):
+an item in a subagent's thread also carries NIP-22's thread tags, `E`, `K` and `P` for the top-level subagent's
+`task` item and `e`, `k` and `p` for the immediate parent's; what an edit carries of them is left open there.
+Extended by [D-123](#d-123-stop-and-writing-in-a-subagents-thread): a `task` item says whether a person can write to
+its subagent.
+
 Decided 2026-11-21. The project owner accepted the proposal from M1.
 
 ## D-077 A refused notice says why something was not acted on
@@ -1366,6 +1403,9 @@ message that has it. The final answer alerts, as
 long task would buzz many times. A phone should buzz when a person is needed or the work is finished. The
 remarks stay chat messages ([D-022](#d-022-the-agents-words-are-ordinary-chat-messages)), so every app still
 shows them.
+
+A rule beside this one, by [D-122](#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar): the agent's
+comments in its own subagents' threads do not alert.
 
 Decided 2026-11-21. The project owner accepted the recommendation. This settles what D-024 left open.
 
@@ -1865,7 +1905,8 @@ it to every session it opens or takes up.
   session in a folder, it reaches the chats working in that folder.
 - **Refusals.** A call with no session or a malformed one is refused from agents that always name their session
   (OpenCode, Goose), and so is a call from a session no chat has, such as an OpenCode subagent, until
-  [Q-30](open-questions.md#q-30-how-does-a-chat-show-an-agents-subagents) is settled.
+  Q-30 is settled (since settled as
+  [D-121](#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them) to D-126).
 - **Approvals.** An agent's own approval of the tool, as Cursor asks for every MCP tool, goes to the chat like any
   approval. The driver answers none itself.
 - **Goose's test container** cannot reach the host's loopback address, so Goose there has no tool. Goose on the
@@ -1995,7 +2036,7 @@ Decided 2026-11-23. The project owner decided.
 ## D-117 Codex's subagents are switched on, and shown flat in the chat that started them
 
 **Decision.** The Codex driver no longer switches Codex's subagents off. Until a subagent has a thread of its own
-([Q-30](open-questions.md#q-30-how-does-a-chat-show-an-agents-subagents)), its work is shown flat in the chat of
+(Q-30, since settled as [D-121](#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)), its work is shown flat in the chat of
 the turn that started it, as Claude Code's subagents already are. Nothing is added to the event vocabulary:
 
 - The item that starts a subagent, or gives it more work, is a `tool` item of kind `subagent`. Each turn of the
@@ -2014,13 +2055,13 @@ the turn that started it, as Claude Code's subagents already are. Nothing is add
   with it. Every open subagent item closes as cancelled when Codex stops, when the chat's session ends, and when
   the core restarts ([D-070](#d-070-a-restart-closes-the-turn-as-interrupted)).
 
-How the transport does it is internal, and is point 8 of [subagents as threads](design/subagents.md#to-decide):
+How the transport does it is internal, and is point 8 of [subagents as threads](design/subagents.md):
 each subagent's thread has a translator of its own, in the chat of the thread that started it; a message for a
 thread not known yet is held until the item that names that thread arrives, since a subagent can speak first;
 and the transport interrupts the subagents itself, since Codex does not, following `rootTurnId` and the links
 Codex gives between threads (`agentThreadId`, `receiverThreadIds`, and `parentThreadId` from Codex 0.171.0).
 This stands beside [D-060](#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes): a translator
-still follows one thread. It answers [Q-29](open-questions.md#q-29-what-does-the-codex-driver-do-with-a-thread-no-chat-asked-for)
+still follows one thread. It answers Q-29, since settled as [D-125](#d-125-the-codex-transport-follows-subagents-threads),
 for a subagent's thread.
 
 **Why.** Codex's subagents were switched off only because nothing showed them, and an approval from one would
@@ -2164,6 +2205,212 @@ The other additions on that page, built on 2026-11-21 and 2026-11-22, stay propo
 one it has forgotten, and it caps a chat message's tags. A disappearing chat is working as meant, so a gone first
 event is no failure to report, while a deleted one is someone's choice, which the core does not undo. A notice
 about a message uses the name MDK gave that tag.
+
+Decided 2026-11-23. The project owner decided.
+
+## D-121 A subagent is a thread in the agent's own group, with NIP-22's tags as NIP-22 defines them
+
+**Decision.** This settles what was Q-30, with
+[D-122](#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar) to
+[D-126](#d-126-no-mls-group-for-subagents). Where a harness tells its subagents apart
+([D-124](#d-124-what-keeps-subagents-reliable-closes-harnesses-that-do-not-tell-them-apart-and-late-joiners)),
+each subagent is a thread in the agent's own group, as a thread is in Slack or Discord. The design is
+[subagents as threads](design/subagents.md).
+
+- **A subagent's row is its `task` item**, kind 1201, sent in the turn that started the subagent and edited as
+  it works ([D-025](#d-025-an-agent-item-is-updated-with-an-edit)). What the agent does that names the subagent
+  updates the row; what does not stays the agent's own activity. A subagent's session names its `task` item.
+- **Everything the subagent does is in its thread**: its items, as kind 1201 events as in the main chat, its
+  words ([D-122](#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar)), and what people write there. A
+  subagent that starts a subagent has a `task` item in its thread, and that item opens the nested subagent's
+  view.
+- **The thread tags are NIP-22's, as NIP-22 defines them**, not a Marmot tag of our own. On every event in a
+  top-level subagent's tree, the uppercase `E`, `K` and `P` name the **top-level** subagent's `task` item: its
+  first event, kind `1201`, and the agent. The lowercase `e`, `k` and `p` name the **immediate parent**: the
+  `task` item of the subagent the event belongs to. For a top-level subagent's own events, root and parent are
+  the same item, as for a first comment. A nested subagent's `task` item names, as its
+  parent, the `task` item of the subagent that started it. A top-level `task` item carries no thread tags: it is in the main chat.
+- **Nesting is rebuilt from the lowercase parent.** An app opens a nested subagent's view by filtering on its
+  `task` item as the parent. A reply to a message in a view names that message as its parent, and belongs to
+  the view of the first `task` item up its chain of parents (inferred from NIP-22; not checked in an app).
+- **MDK places kind 1201 events in threads** as it does a poll's, and takes a thread message's root from its
+  parent's thread, as it already does (`crates/marmot-app/src/client/thread_placement.rs` at MDK `6f6b427`).
+
+For a nested subagent, started by a top-level one, each event in its view carries:
+
+```
+["E", <top-level task item>, "", <agent>], ["K", "1201"], ["P", <agent>],
+["e", <its own task item>, "", <agent>], ["k", "1201"], ["p", <agent>]
+```
+
+Its own `task` item, in the top-level subagent's thread, carries the same `E`, `K` and `P`, and the top-level
+`task` item as `e`, `k` and `p`.
+
+This extends the tags of kind 1201 ([D-076](#d-076-the-tags-of-kinds-1201-and-1202)) for an item in a
+subagent's thread.
+
+**Left open, for MDK to settle.** An edit, kind 1009, already uses `e` for its target
+([D-112](#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by)), so it cannot also
+carry NIP-22's parent `e`. Recommended: an edit carries no thread tags and takes its thread from its target, since
+an item never moves. That would be an exception to D-112's "an edit of an item carries every tag of the item",
+for the thread tags alone.
+
+**What MDK has to do**, as read at `6f6b427`:
+
+- Place a kind 1201 event in a thread. Today only a comment, a chat message and a poll can be in one
+  (`own_thread`, `crates/storage-sqlite/src/app/timeline/threads.rs`).
+- Take the parent `e` on an item's first event. Today MDK refuses any `e` on a kind 1201 event a program sends
+  (`validate_agent_item_tags`, `crates/traits/src/agent_events.rs`), because an edit's target is MDK's to place.
+- Settle what a parent `p` means here. MDK leaves NIP-22's parent `p` off the comments it sends, because on
+  Marmot a `p` is a mention. On these events the parent's author is always the agent that sends them, so the
+  `p` names the sender. Recommended: MDK takes a `p` that names the event's own author as no mention.
+
+**Why.** Marmot already has threads, as NIP-22 comments, so a subagent needs no new kind and no new group, and an
+app that shows threads already knows the shape. Using NIP-22's tags as NIP-22 defines them means MDK's own
+placement and any NIP-22 reader see the same tree. The proposal had each thread flat, with `E` naming the
+nearest `task` item; that would have given the standard tag a meaning of its own, and MDK's placement passes a
+parent's root on, which this matches.
+
+None of it is built in the core, the drivers, MDK or the apps yet. Until the Codex part is built
+([D-125](#d-125-the-codex-transport-follows-subagents-threads)), Codex's subagents are shown flat, which another
+pull request records as D-117.
+
+Decided 2026-11-23. The project owner decided.
+
+## D-122 A subagent's words, what alerts, and the app's running bar
+
+**Decision.**
+
+- **A subagent's words are kind 1111 comments**, with the thread tags of
+  [D-121](#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them). This
+  is an exception to [D-022](#d-022-the-agents-words-are-ordinary-chat-messages) for subagents; the agent's own
+  words stay kind 9.
+- **The agent's comments in its own threads do not alert.** MDK keeps silent a comment whose root is a kind 1201
+  item by the comment's own author. A subagent's approvals and questions alert as any do
+  ([D-024](#d-024-who-an-agent-event-alerts)). This is a rule beside D-024 and
+  [D-078](#d-078-the-agents-remarks-during-a-turn-do-not-alert), and MDK has to follow it.
+- **The app shows a running bar above the composer** while any subagent runs, drawn from the `task` items still
+  `running` or `waiting`, at any depth. Its list shows each one's path ("Update the tests › Find the fixtures"),
+  and groups by agent when several agents in the group have subagents. Tapping one opens its thread.
+- **The app lifts every waiting approval and question into the bar**, with the subagent's name and the choices,
+  so it can be answered there without opening the thread. The answer is the same kind 1202 event as anywhere,
+  and the item's edit shows who answered.
+- **The app folds a finished thread into its row.** The row keeps its replies count and a one-line result where
+  the harness gives one, such as Claude Code's `summary`, never the whole report. The thread stays readable for
+  as long as the chat keeps history; it has no shorter life of its own.
+
+Nothing new is sent for the bar or the folding. These are rules for apps, beside D-024.
+
+**Why.** A thread view draws comments as words, people reply to them the same way, and an app without threads
+still shows them, inline. The subagent's result reaches the parent, whose answer alerts, so the subagent's words
+need not. Every tool that shows subagents keeps a list of the running ones near the composer and shows a
+subagent's approval where the person already is; without that, threads are hard to use while they run. A shorter
+life for thread events would be a new kind of expiry in Marmot, and would take away what an owner may later need
+to check.
+
+MDK does not keep any comment silent today: a thread message alerts like chat.
+
+Decided 2026-11-23. The project owner decided.
+
+## D-123 Stop, and writing in a subagent's thread
+
+**Decision.**
+
+- **Stop in the main chat stops every subagent the agent started**, with the agent's turn, including subagents
+  still running after its turn has ended. It names the agent's last turn.
+- **Stop in a thread stops that subagent and the ones it started.** It names the subagent's `task` item.
+- **Either is taken while any of them works, and settled once**, when the last of them has ended, by the edit of
+  whichever ended last. This extends
+  [D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it) and the `interrupt`
+  control of [D-029](#d-029-three-shared-controls-and-the-rest-comes-from-the-harness). If the parent is still
+  working when a subagent is stopped, the harness tells it, and it may start another: that is the parent's
+  choice, shown as a new row.
+- **A comment in a thread is a prompt for that subagent only where its driver says a person can write to a
+  running subagent, and the writer has the right to prompt**
+  ([D-032](#d-032-every-action-needs-one-of-two-rights)). The subagent is the first `task` item up the
+  comment's chain of parents. The `task` item says whether it takes messages, so the app knows before anything is
+  sent; where it does not, the composer says so ("Codex's subagents don't take messages; write in the main
+  chat"), and people can still talk to each other there. Such a comment is for people, and the agent never sees
+  it. **It is never passed to the parent.** The agent's own comments are never prompts, and each agent's core
+  reads only comments in threads whose root it sent. Where a comment does go through, the subagent's next turn
+  shows it, as any prompt's turn does.
+- **A driver states one more capability flag**: whether a person can write to a running subagent. This extends
+  [D-058](#d-058-the-driver-trait-and-the-capability-flags), and adds a field to the `task` item
+  ([D-076](#d-076-the-tags-of-kinds-1201-and-1202)); both are named when built. Neither the Claude Code driver
+  nor the Codex driver says yes until it has been recorded, since neither was tested.
+
+**Why.** Stop in the main chat is what a person uses when they want it all to end. Subagents can outlive the turn
+in Codex, Claude Code, Hermes and OpenClaw, and interrupting a Codex turn leaves its subagents running, so
+stopping only what is under the turn would leave work going that the person meant to stop. T3 Code, OpenClaw's
+`/stop` and Hermes's `/stop` stop the whole tree. Few harnesses let a person write to a subagent, and a reply
+rerouted to the parent would be answered in the main chat, to a message that was not sent there.
+
+Decided 2026-11-23. The project owner decided.
+
+## D-124 What keeps subagents reliable: closes, harnesses that do not tell them apart, and late joiners
+
+**Decision.**
+
+- **A driver closes what it can no longer follow.** When its harness stops, its session ends or the core
+  restarts, every open `task` item is edited to `cancelled`, as an open turn already is. This extends
+  [D-070](#d-070-a-restart-closes-the-turn-as-interrupted).
+- **The app keeps counting a `running` row that has had no edit for 30 minutes**, and shows it as not heard from
+  since then ("no news since 14:02"). Nothing is assumed: the agent's machine may simply be off. 30 minutes is a
+  first value with no evidence behind it.
+- **A driver says whether its harness tells subagents apart.** Where it does not, a subagent stays a `tool` item
+  of kind `subagent` in the agent's own activity, with no thread, and anything it asks shows as the agent's own
+  approval. This is one more capability flag, extending
+  [D-058](#d-058-the-driver-trait-and-the-capability-flags), so nothing above the driver checks the harness's
+  name. As read on 2026-11-23, Goose, Hermes, Pi and Cursor over ACP do not tell them apart, and Codex, Claude
+  Code and OpenCode do ([subagents, threads and what others do](reference/subagents-prior-art.md#harnesses)).
+- **An app shows a held edit of an item sent before the member joined as the item itself**, since an edit
+  carries the whole item. This holds for every item, not only a subagent's, and extends
+  [D-025](#d-025-an-agent-item-is-updated-with-an-edit). A thread then shows what arrived after the member
+  joined, under a row that says it started earlier.
+
+**Why.** A subagent can fail to report its end: Codex reports one only from the parent's thread, and a harness
+that is killed reports nothing. A driver that closes what it can no longer follow keeps the bar from staying
+full of rows that will never end. A row the driver has not closed may still be working, so the app keeps it and
+says when it was last heard from, rather than guessing. Making up a thread from a harness's text would be a
+guess too. A member added in the middle of a subagent's work otherwise sees no row for anything running when
+they arrived.
+
+Decided 2026-11-23. The project owner decided.
+
+## D-125 The Codex transport follows subagents' threads
+
+**Decision.** Codex starts a thread of its own for each subagent. The Codex driver's transport:
+
+1. gives each subagent's thread a translator of its own, in the chat of the thread that started it;
+2. holds a message for a thread it does not know yet until the item that names that thread arrives, since a
+   subagent can speak first ([recorded](reference/harness-messages.md#subagents));
+3. interrupts subagents itself, since interrupting the parent does not stop them, following `agentThreadId`,
+   and `parentThreadId` from Codex 0.171.0 or `receiverThreadIds` on the older runtime.
+
+This extends [D-060](#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes), whose four rules
+stand for each chat's own thread, and settles what was Q-29 for the threads Codex starts for subagents. No other
+thread is known to arrive unasked; one that does is a new question.
+
+**Why.** D-060 puts routing between threads in the transport, and a subagent's thread is one more thread to
+route. Given to the parent's translator, its messages would be dropped, and an approval from a subagent must
+reach someone or the subagent waits.
+
+Until this is built, the Codex driver shows subagents flat, which another pull request records as D-117.
+
+Decided 2026-11-23. The project owner decided.
+
+## D-126 No MLS group for subagents
+
+**Decision.** A subagent's thread is in the agent's own group. No separate MLS group is made for a subagent, by
+RFC 9420 branching or otherwise. Nothing changes; this is recorded so the question is not raised again for this
+purpose. A branch for output only the owner sees
+([Q-11](open-questions.md#q-11-what-keeps-sensitive-output-from-spreading)) is a different question, and is not
+settled here.
+
+**Why.** A group per subagent would have the same members, so it hides nothing and saves nothing: an MLS message
+is encrypted once for the whole group, and every device downloads it either way. It would cost a KeyPackage and
+a Welcome per member per subagent, and scatter one chat across groups. MDK does not do it. The detail is in
+[MLS subgroup branching](reference/subagents-prior-art.md#mls-subgroup-branching).
 
 Decided 2026-11-23. The project owner decided.
 
