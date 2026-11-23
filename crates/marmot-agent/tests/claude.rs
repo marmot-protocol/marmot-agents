@@ -121,11 +121,41 @@ fn cassette() -> std::path::PathBuf {
 /// makes must still match the ones the recording was made from (`tools/model_double`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn claude_code_replays_a_recorded_turn() {
+    let recorded = model_double::cassette_header(&cassette())["version"].clone();
+    if recorded.as_str() != Some(claude_code_version().as_str()) {
+        // Reported, not failed (D-127): a request the cassette has no exchange for fails below.
+        println!(
+            "the cassette was recorded with Claude Code {recorded}; this is {}",
+            claude_code_version()
+        );
+    }
     let double = Double::replay(&cassette()).await;
     let work = demo();
-    one_turn(&Model::double(&double), work.path()).await;
+    let said = one_turn(&Model::double(&double), work.path()).await;
     let asked = double.all_answered().await;
+    double.all_used(&cassette()).await;
+    // The chat shows what the recorded model said last.
+    let exchanges = model_double::cassette_exchanges(&cassette());
+    let last: Vec<&str> = exchanges.last().unwrap()["reply"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|p| p["text"].as_str())
+        .collect();
+    assert_eq!(last, ["done"], "the cassette's final reply");
+    assert!(
+        said.iter().any(|s| s == "done"),
+        "the chat got the recorded final reply: {said:?}"
+    );
     println!("the cassette answered {asked} requests");
+}
+
+/// The version of Claude Code the driver's Agent SDK runs.
+fn claude_code_version() -> String {
+    let sdk = model_double::repository()
+        .join("packages/claude-code/node_modules/@anthropic-ai/claude-agent-sdk/package.json");
+    let sdk: Value = serde_json::from_str(&std::fs::read_to_string(sdk).unwrap()).unwrap();
+    sdk["claudeCodeVersion"].as_str().unwrap().to_string()
 }
 
 /// Records `one_turn` from a real model into a cassette, through the model double in a container
@@ -137,11 +167,8 @@ async fn record_claude_code_turn() {
     let key = std::path::PathBuf::from(setting("MODEL_DOUBLE_KEY_FILE"));
     let out = std::path::PathBuf::from(setting("MODEL_DOUBLE_OUT"));
     let work = std::path::PathBuf::from(setting("MODEL_DOUBLE_DEMO"));
-    let sdk = model_double::repository()
-        .join("packages/claude-code/node_modules/@anthropic-ai/claude-agent-sdk/package.json");
-    let sdk: Value = serde_json::from_str(&std::fs::read_to_string(sdk).unwrap()).unwrap();
-    let version = sdk["claudeCodeVersion"].as_str().unwrap();
-    let harness = ("claude-code", version, "anthropic");
+    let version = claude_code_version();
+    let harness = ("claude-code", version.as_str(), "anthropic");
     let upstream = setting("MODEL_DOUBLE_UPSTREAM");
     let double = Double::record(
         &key,
@@ -201,8 +228,9 @@ fn demo() -> tempfile::TempDir {
     work
 }
 
-/// One turn in `work`: a command asked for, approved once and run, and the turn done.
-async fn one_turn(model: &Model, work: &Path) {
+/// One turn in `work`: a command asked for, approved once and run, and the turn done. Gives back
+/// the agent's words in the chat.
+async fn one_turn(model: &Model, work: &Path) -> Vec<String> {
     let home = tempfile::tempdir().unwrap();
     let world = World::new("name = \"Claude\"\n[connector]\n").await;
     world.runtime.start().await.unwrap();
@@ -236,10 +264,17 @@ async fn one_turn(model: &Model, work: &Path) {
     let turn = chat.turn_for(&asked).await;
     chat.turn_at(&turn, State::Done).await;
     println!("approved, run and done");
+    // The agent's words go to the chat as chat messages (kind 9), not as items.
+    let said = world
+        .sent_by_agent(&chat.hex, 9)
+        .into_iter()
+        .map(|m| m.plaintext)
+        .collect();
     let _ = stop.send(());
     serving.await.unwrap().unwrap();
     let _ = claude.kill().await;
     world.runtime.shutdown().await;
+    said
 }
 
 async fn end_to_end(model: &Model) {

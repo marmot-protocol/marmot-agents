@@ -139,8 +139,8 @@ impl Double {
     }
 
     async fn start(mut command: Command, files: tempfile::TempDir) -> Self {
-        // With MODEL_DOUBLE_VERBOSE set, it prints each request's key as it answers, to see what a
-        // harness asked when a scenario fails.
+        // With MODEL_DOUBLE_VERBOSE set, it prints each request's shape (format, kind, after and
+        // last, never its prompt) as it answers, to see what a harness asked when a scenario fails.
         if std::env::var_os("MODEL_DOUBLE_VERBOSE").is_some() {
             command.arg("--verbose");
         }
@@ -181,18 +181,49 @@ impl Double {
         serde_json::from_str(body).unwrap()
     }
 
-    /// Checks that every request the harness made was answered, and gives back how many.
+    /// Checks that every request the harness made was answered, and gives back how many. A
+    /// request it was not is named by its shape alone, never its prompt or body (D-071).
     pub async fn all_answered(&self) -> usize {
         let log = self.log().await;
-        let unanswered: Vec<&Value> = log
+        let unanswered: Vec<String> = log
             .iter()
-            .filter(|e| e.get("unmatched").is_some() || e.get("error").is_some())
+            .filter_map(|e| {
+                let why = e.get("unmatched").or_else(|| e.get("error"))?;
+                Some(format!("{}: {why}", shape(e)))
+            })
             .collect();
         assert!(
             unanswered.is_empty(),
             "the model double had no answer for {unanswered:#?}"
         );
         log.len()
+    }
+
+    /// Checks that a replaying double answered every exchange of its cassette at `cassette`,
+    /// so a turn that ends early, or asks less than the recording did, does not pass.
+    pub async fn all_used(&self, cassette: &Path) {
+        let log = self.log().await;
+        let answered: Vec<&Value> = log
+            .iter()
+            .filter(|e| e.get("unmatched").is_none() && e.get("error").is_none())
+            .collect();
+        let unused: Vec<String> = cassette_exchanges(cassette)
+            .iter()
+            .enumerate()
+            .filter(|(_, x)| {
+                let key = &x["key"];
+                !answered.iter().any(|e| {
+                    ["kind", "prompt", "after", "last"]
+                        .iter()
+                        .all(|k| e[*k] == key[*k])
+                })
+            })
+            .map(|(i, x)| format!("exchange {}: {}", i + 1, shape(&x["key"])))
+            .collect();
+        assert!(
+            unused.is_empty(),
+            "the cassette has exchanges the harness never asked for: {unused:#?}"
+        );
     }
 }
 
@@ -208,6 +239,34 @@ impl Drop for Container {
             .stderr(Stdio::null())
             .status();
     }
+}
+
+/// A request or a key by its shape, which holds nothing a request said: its kind, `after` and
+/// `last`.
+fn shape(e: &Value) -> String {
+    format!(
+        "{} request, after {}, answering {}",
+        e["kind"].as_str().unwrap_or("?"),
+        e["after"],
+        e["last"].as_str().unwrap_or("?")
+    )
+}
+
+/// The exchanges of a cassette, after its header line.
+pub fn cassette_exchanges(cassette: &Path) -> Vec<Value> {
+    std::fs::read_to_string(cassette)
+        .unwrap()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .skip(1)
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+/// A cassette's header: `cassette`, `harness`, `version`, `recorded`, `format`.
+pub fn cassette_header(cassette: &Path) -> Value {
+    let text = std::fs::read_to_string(cassette).unwrap();
+    serde_json::from_str(text.lines().next().unwrap()).unwrap()
 }
 
 fn uid() -> String {
