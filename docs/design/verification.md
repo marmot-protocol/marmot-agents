@@ -12,7 +12,9 @@ conformance suite's first phase, for the built-in drivers, is built (2026-11-22)
 connectors, is designed. The core's sends went over to MDK 0.19.0's token-based sends on 2026-11-22, which ends
 the duplicate a restart could make; how often a send is tried is decided
 ([D-109](../decisions.md#d-109-how-the-cores-sends-survive-a-crash-as-built)). The same day the core moved to MDK
-master after 0.19.0 (`7f7dcc6ca`) and reads each chat from its mark in MDK's insertion order.
+master after 0.19.0 (`7f7dcc6ca`) and reads each chat from its mark in MDK's insertion order. The
+[model double](#11-a-model-double) is decided ([D-127](../decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key), 2026-11-23): real harnesses run in CI on it,
+with no model key in CI.
 
 ## Why
 
@@ -396,7 +398,9 @@ then check that no log, debug output, file or recording contains one.
 
 ### 10. Real harnesses
 
-The scenarios against real harnesses stay, and run nightly instead of only by hand. Most tests use recorded
+The scenarios against real harnesses stay. Claude Code's and Codex's run in CI on the
+[model double](#11-a-model-double); the gateway move tests use it too, and run by hand, since they need Docker;
+the rest run by hand. Most tests use recorded
 sessions instead of live models. The scenarios that need a model (OpenCode, Goose, Pi, OpenClaw and Hermes), and the
 recorders in `tools/record`, read it from these names, with no default anywhere in the code
 ([D-100](../decisions.md#d-100-the-installers-defaults)):
@@ -410,9 +414,82 @@ recorders in `tools/record`, read it from these names, with no default anywhere 
 
 Each comes from the environment, or else from `tests.env` at the top of the repository, which git ignores and
 which may give each name once;
-[`tests.env.example`](../../tests.env.example) shows it. The nightly workflow, once it lands, sets
-`MODEL_BASE_URL`, `MODEL_NAME` and `OPENCODE_MODEL` from CI secrets of the same names, and writes the secret `MODEL_KEY`, the key
-itself, to a file only the job can read, which it names in `MODEL_KEY_FILE`.
+[`tests.env.example`](../../tests.env.example) shows it. No model key is in CI ([D-127](../decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key)): in CI, a
+scenario runs on the [model double](#11-a-model-double), and one that needs a real model runs by hand, with
+these names.
+
+### 11. A model double
+
+Status: decided ([D-127](../decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key), 2026-11-23): real harnesses run in CI on the double, with no model key in CI;
+cassettes are recorded through numes on a non-vendor model; replay reports a newer harness version and does not
+fail on it; a cassette older than 14 days is a warning on a pull request and fails the nightly run; the gateways
+stay scripted. Claude Code and Codex run on it; the nightly run that fails on age is not built yet; the matching
+rule and the formats' details are internal.
+
+The scenarios against real harnesses need a signed-in harness or a model key, so they never run on a pull request,
+and Codex and Claude Code have no free model. The model double runs the **real harness program** against a
+small local server of ours that speaks the providers' wire formats, so only the model is fake. OpenAI tests
+Codex the same way, with a mock server streaming scripted Responses events.
+[`tools/model_double`](../../tools/model_double/README.md) has the server, its tests and how to use it.
+
+```text
+ scenario ──► core ──► driver ──► real harness ──HTTP──► model double ──(record only)──► real model
+                                  (Claude Code,          scripted | replay | record
+                                   Codex, Hermes …)
+```
+
+**What the spike showed** (each on 2026-11-23):
+
+| Unknown | Result |
+| --- | --- |
+| Claude Code, as our driver runs it (Agent SDK 0.3.326, Claude Code 2.1.326) | Works. `ANTHROPIC_BASE_URL` and a dummy `ANTHROPIC_API_KEY`, a cleared environment, a new `HOME` and `CLAUDE_CONFIG_DIR`: no sign-in is read. The whole M2 scenario passes through the core: thinking, text, a `Bash` call needing approval, an interrupt while it waits, a new session, a crash mid-command, `send_file`, a move to another folder. About 17 s. |
+| Codex (`codex app-server` 0.171.0, as `marmot-agent-codex` runs it) | Works. A new `CODEX_HOME` whose `config.toml` names a `[model_providers.double]` with `wire_api = "responses"` and an `env_key` holding a dummy: no ChatGPT sign-in. The whole M1 scenario passes through the core, including approvals of `exec_command`. About 9 s. |
+| Gateways on Chat Completions | Works. The gateway move tests (`tests/import_gateways.rs`) now run on the double, scripted, in place of the stub model they had; Hermes's and OpenClaw's pass, with the old plugin and ours (about 4 min each, most of it Docker). OpenClaw's first run failed: it puts its runtime context in a user message of its own after the person's words, so the key's `prompt` now takes every user message since the model last spoke, as the stub did. OpenCode, Goose and Pi take the same OpenAI-compatible address. |
+| Cursor | Not possible. `--endpoint` points at Cursor's own backend (its first call is `POST /auth/exchange_user_api_key`), and the agent's loop runs on Cursor's servers. Left out. |
+| Recording through numes | numes serves Chat Completions only (`/api/v1/chat/completions`; `/responses` and `/messages` are 404). The double translates an Anthropic Messages or Responses request to Chat Completions and writes the reply back in the harness's format. A Claude Code turn was recorded this way on a free model and is replayed on every run. A Codex turn recorded the same way, by hand; it is not committed. |
+
+**Modes.** *Scripted*: the test states the model's replies, by words of the prompt and step. *Replay*: from a
+committed cassette, refusing (with a 400, which no harness retries) any request it has no exchange for.
+*Record*: forwards to a real model and writes the cassette; it runs in a container that has the key file mounted
+read-only and nothing else of it. A cassette holds a header (harness, version, date, format) and, per exchange,
+only the request's key and the reply: no header, key, system prompt or request body, so it holds little to scrub.
+
+**The matching rule.** A request's key is `kind` (`main` if it offers tools, `side` if not), `prompt` (the last
+user message that is a person's words, with every tagged block such as `<system-reminder>` or
+`<environment_context>` removed and spaces collapsed), `after` (how many model replies follow that prompt) and
+`last` (`prompt`, or the names of the tools whose results came). Replay matches on all four, and when only
+`last` differs it says so: the harness renamed a tool, or answers in a different order. A replay test also fails
+when an exchange of the cassette was never asked for, and checks the chat got the recorded reply. The system prompt, the
+tool list, ids, model names and headers are left out. Evidence: the cassette recorded with Claude Code 2.1.326
+replays against 2.1.330 with every request matched, and against 2.1.300 with both main requests matched, though
+the three versions' system prompts and tool lists all differ (2.1.300 offers 20 tools, the others 12). 2.1.300
+also sent two side requests (an auto-mode safety classifier, in `-p` mode) the cassette does not hold, which
+strict replay reported. That is the rule working: a new kind of request is a change to look at.
+Until that changes, the gateways stay scripted ({D127}): they put a timestamp, a session id and the host in the prompt itself (OpenClaw writes `[Mon
+2026-11-23 08:21 UTC] Conversation info: …`), so a gateway cassette would never match as it is. Before
+recording one, the rule needs to drop those, or match the recorded prompt by the scenario's own words, as
+scripted mode does.
+
+**Dependencies.** None. The double is Python's standard library (about 700 lines with the translation), as the
+Pi fakes already are; the Rust side starts it with `python3`. A mocking crate would not help: the work is the
+three wire formats, and no crate has those. Recording uses the `python` image the repository already pins. The stub model the gateway tests had, about 130 lines of Rust, is gone.
+
+**What CI needs.** For scripted and replay: `python3`, Node 24 with `npm ci` in `packages/claude-code`, and a
+pinned `codex` binary, which the Rust job now installs with its checksum. Codex runs commands in bubblewrap, so the
+job lifts Ubuntu 24.04's limit on unprivileged user namespaces. No Docker, key or network to a model. Recording needs Docker and a key, on the owner's
+machine.
+
+**Maintenance.** The formats drift. Each harness release can need a new event or field: Claude Code 2.1.326 put
+its environment in a `system` message inside `messages`, and retries any 5xx ten times. A drift shows up as a
+failing scenario, and the fix is in one file. Scripts drift with the scenarios they serve, in the same file.
+
+**Staleness.** `tools/model_double/check_cassettes.py` reports each cassette older than 14 days, and each harness
+whose latest release (npm) is newer than the version a cassette was recorded with. It needs no key. A pull
+request runs it offline, in the Recordings job, and each finding is a warning that does not fail it. The nightly
+run is to add `--strict`, which exits 1 on a finding, and open an issue with the output; that workflow is not
+built yet, so until it is, a cassette's age fails nothing. The replay test prints the
+Claude Code version when it differs from the cassette's, and does not fail on it: failing would make every pull
+request that bumps a harness re-record, which needs a key. A request the cassette has no exchange for still fails.
 
 ## In CI
 
@@ -422,8 +499,8 @@ takes about 8 to 10.
 
 | When | What |
 | --- | --- |
-| Every pull request | Everything that runs today, the conformance suite (built: in the Rust job, about 30 s), property tests at normal counts, the simulator on a fixed set of seeds (built: 200 runs of each gate family from seed 0, in release, in its own job), TLC on small bounds, Kani on the small proofs, the privacy scan, each in its own job |
-| Nightly | Property tests at high counts, the simulator on many new seeds, TLC on larger bounds, fuzzing, mutation testing, and the real-harness scenarios on numes.ai's free models, named by CI secrets ([real harnesses](#10-real-harnesses)), in a workflow that pull requests cannot reach |
+| Every pull request | Everything that runs today, the conformance suite (built: in the Rust job, about 30 s), property tests at normal counts, the simulator on a fixed set of seeds (built: 200 runs of each gate family from seed 0, in release, in its own job), TLC on small bounds, Kani on the small proofs, the privacy scan, each in its own job; real Claude Code and Codex on the [model double](#11-a-model-double), in the Rust job, and the cassettes' age as a warning |
+| Nightly | Property tests at high counts, the simulator on many new seeds, TLC on larger bounds, fuzzing, mutation testing, and the cassettes' age and harness releases, failing (`check_cassettes.py --strict`, [the model double](#11-a-model-double)) |
 | Weekly | Long simulator campaigns |
 
 ## In what order
@@ -441,7 +518,9 @@ takes about 8 to 10.
    ([D-093](../decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top)).
 2. The development tools: proptest, Kani, cargo-fuzz (on the nightly compiler, in its own job), cargo-mutants,
    fast-check and hypothesis. None ships in the program.
-3. The real-harness scenarios run nightly on numes.ai, with its key as a CI secret in a workflow pull requests
-   cannot reach ([D-094](../decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)).
+3. The real-harness scenarios run in CI on the model double, with no model key in CI at all
+   ([D-127](../decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key), which replaces
+   the nightly runs with a key of
+   [D-094](../decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)).
 4. Pull-request CI under 15 minutes, with caching and parallel jobs.
 5. The order above, fixing what is known first.

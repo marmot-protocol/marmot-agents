@@ -54,10 +54,50 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
+      - name: Install Node and the Claude Code driver's packages
+        # The Claude Code scenario on the model double (crates/marmot-agent/tests/claude.rs) runs
+        # the real driver and the Claude Code its SDK ships. The same Node as the TypeScript job:
+        # change the two together.
+        env:
+          NODE_VERSION: 24.22.3
+          NODE_SHA256: 4f2b175a6d53a5c617a80dba2676238a0688cef28c6da4eba35c7d844e66fcfb
+        run: |
+          set -euo pipefail
+          name="node-v${NODE_VERSION}-linux-x64"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/${name}.tar.xz" "https://nodejs.org/dist/v${NODE_VERSION}/${name}.tar.xz"
+          echo "${NODE_SHA256}  ${RUNNER_TEMP}/${name}.tar.xz" | sha256sum --check
+          tar -xJf "${RUNNER_TEMP}/${name}.tar.xz" -C "${RUNNER_TEMP}"
+          echo "${RUNNER_TEMP}/${name}/bin" >> "${GITHUB_PATH}"
+          PATH="${RUNNER_TEMP}/${name}/bin:${PATH}" npm ci --prefix packages/claude-code
+
+      - name: Install Codex
+        # The Codex scenario on the model double (crates/marmot-agent/tests/codex.rs) runs the real
+        # `codex app-server`. To move to another release, change the version and the checksum
+        # together: the checksum is the sha256 of the release's
+        # codex-x86_64-unknown-linux-musl.tar.gz. Codex runs commands in bubblewrap, which needs the
+        # user namespaces Ubuntu 24.04 keeps from unprivileged programs unless this is switched off.
+        env:
+          CODEX_VERSION: 0.171.0
+          CODEX_SHA256: 01baa2e47809f8597be5b2f8abd4e4dfe3fb5bcb6e504c2fbaaad97056c15e8d
+        run: |
+          set -euo pipefail
+          name="codex-x86_64-unknown-linux-musl"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/${name}.tar.gz" \
+            "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/${name}.tar.gz"
+          echo "${CODEX_SHA256}  ${RUNNER_TEMP}/${name}.tar.gz" | sha256sum --check
+          mkdir -p "${RUNNER_TEMP}/codex"
+          tar -xzf "${RUNNER_TEMP}/${name}.tar.gz" -C "${RUNNER_TEMP}/codex"
+          mv "${RUNNER_TEMP}/codex/${name}" "${RUNNER_TEMP}/codex/codex"
+          echo "${RUNNER_TEMP}/codex" >> "${GITHUB_PATH}"
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
       - name: Tests
         # The simulator's tests run in the Simulator job, in release, so they are not run twice. The
         # driver conformance suite (crates/marmot-agent-conformance) runs here, in about 30 s; its Pi
-        # tests need the runner's python3.
+        # tests need the runner's python3. The Claude Code and Codex scenarios run the real
+        # harnesses on the model double (tools/model_double), with no key, in about 30 s.
         run: cargo test --locked --workspace --all-features --exclude marmot-agent-sim
 
   simulator:
@@ -125,6 +165,18 @@ jobs:
 
       - name: The prototype handles what no recording holds
         run: python3 -m unittest discover -s tools/prototype -p 'test_*.py'
+
+      - name: The model double reads and writes each wire format
+        run: python3 -m unittest discover -s tools/model_double -p 'test_*.py'
+
+      # A report, not a check (D-127): a cassette older than 14 days is a warning here. It is to fail
+      # only the nightly run, which will run the same script with --strict once that workflow exists.
+      # A folder that is not there fails this step (exit 2), hence pipefail.
+      - name: Report the model double's cassettes that are due to be recorded again
+        run: |
+          set -o pipefail
+          python3 tools/model_double/check_cassettes.py fixtures/cassettes --offline |
+            while IFS= read -r line; do echo "::warning title=Cassette due::$line"; done
 
       - name: Every native message has a rule in the prototype
         run: >

@@ -10,14 +10,14 @@
 //! same chat, by the same agent key, in the turn that message started, and no request the gateway
 //! makes to its model after the move holds anything said before it.
 //!
-//! What stands in: the gateway's model is a scripted one this test serves on the loopback address,
-//! which answers each request by what the person's words in it say, so no model key is needed and
-//! nothing leaves the machine; the service manager is the one the other import tests use
-//! (`old_connector::Noted`), which notes what the import stops (no systemd is touched), and the
-//! core runs without a service
-//! (`--no-service`), started with the launcher the installer writes. The gateway runs in its
-//! container with the test's folder mounted at its own path, so the installer, on this machine,
-//! runs the gateway's own commands (`hermes`, `openclaw`) in that container, on the same files.
+//! What stands in: the gateway's model is the model double (`tools/model_double`), scripted, on the
+//! loopback address, which answers each request by what the person's words in it say, so no model
+//! key is needed and nothing leaves the machine; the service manager is the one the other import
+//! tests use (`old_connector::Noted`), which notes what the import stops (no systemd is touched),
+//! and the core runs without a service (`--no-service`), started with the launcher the installer
+//! writes. The gateway runs in its container with the test's folder mounted at its own path, so the
+//! installer, on this machine, runs the gateway's own commands (`hermes`, `openclaw`) in that
+//! container, on the same files.
 //!
 //! It needs Docker, and the network to build the images and the old plugin's packages the first
 //! time. A gateway's home with its runtime takes some hundreds of megabytes in the temporary
@@ -30,6 +30,7 @@
 //! ```
 
 mod common;
+mod model_double;
 mod old_connector;
 
 use agent_control::{AgentControlRequest, AgentControlResponse};
@@ -41,14 +42,13 @@ use marmot_agent::import::{self, Connector, Options};
 use marmot_agent::rights::Who;
 use marmot_agent_events::body::Body;
 use marmot_app::{AppMessageQuery, MarmotAppRuntime};
+use model_double::Double;
 use old_connector::{BEFORE, Noted, Unanswered, ask, chat_messages, local_app, places, setup};
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command as Std;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::{Child, Command};
 
 /// What the person writes after the move; before it, they write `old_connector::BEFORE`.
@@ -68,135 +68,36 @@ async fn old_connector() {
     old_connector::serve().await;
 }
 
-/// The scripted model: an OpenAI-compatible endpoint on the loopback address that answers every
-/// chat completion by what the turn's user messages say, streamed or not, and keeps the whole body
-/// of each request it was sent, oldest first.
+/// The scripted model: the model double (`tools/model_double`), an OpenAI-compatible endpoint on
+/// the loopback address that answers every chat completion by what the person's prompt in it
+/// says, streamed or not, and keeps the whole body of each request it was sent, oldest first.
 struct Model {
     url: String,
-    heard: Arc<Mutex<Vec<String>>>,
+    double: Double,
 }
 
 impl Model {
     async fn serve() -> Self {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}/v1", listener.local_addr().unwrap());
-        let heard = Arc::new(Mutex::new(Vec::new()));
-        let kept = heard.clone();
-        tokio::spawn(async move {
-            while let Ok((stream, _)) = listener.accept().await {
-                tokio::spawn(answer(stream, kept.clone()));
-            }
+        let answer = |when: &str, text: &str| json!({"when": when, "replies": [[{"text": text}]], "repeat": true});
+        let script = json!({
+            "prompts": [answer(AFTER, AFTER_ANSWER), answer(BEFORE, BEFORE_ANSWER), answer("", OTHER_ANSWER)],
+            "side": [{"text": OTHER_ANSWER}],
         });
-        Self { url, heard }
+        let double = Double::scripted_keeping_bodies(&script).await;
+        Self {
+            url: format!("{}/v1", double.url),
+            double,
+        }
     }
 
-    fn requests(&self) -> usize {
-        self.heard.lock().unwrap().len()
+    async fn requests(&self) -> usize {
+        self.double.log().await.len()
     }
 
     /// The bodies of the requests the model was sent after the first `from`.
-    fn since(&self, from: usize) -> Vec<String> {
-        self.heard.lock().unwrap()[from..].to_vec()
+    async fn since(&self, from: usize) -> Vec<String> {
+        self.double.bodies().await[from..].to_vec()
     }
-}
-
-fn scripted_answer(said: &str) -> &'static str {
-    if said.contains(AFTER) {
-        AFTER_ANSWER
-    } else if said.contains(BEFORE) {
-        BEFORE_ANSWER
-    } else {
-        OTHER_ANSWER
-    }
-}
-
-/// The text of a chat message's content, a string or a list of parts.
-fn text_of(content: &Value) -> String {
-    match content {
-        Value::String(s) => s.clone(),
-        Value::Array(parts) => parts
-            .iter()
-            .filter_map(|p| p.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
-    }
-}
-
-/// Answers one HTTP request on `stream`, and closes it.
-async fn answer(mut stream: tokio::net::TcpStream, heard: Arc<Mutex<Vec<String>>>) {
-    let mut buf = Vec::new();
-    let mut chunk = [0u8; 16384];
-    let head = loop {
-        let Ok(n) = stream.read(&mut chunk).await else {
-            return;
-        };
-        if n == 0 {
-            return;
-        }
-        buf.extend_from_slice(&chunk[..n]);
-        if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-            break i + 4;
-        }
-    };
-    let header = String::from_utf8_lossy(&buf[..head]).to_ascii_lowercase();
-    let length = header
-        .lines()
-        .find_map(|l| l.strip_prefix("content-length:"))
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .unwrap_or(0);
-    while buf.len() < head + length {
-        match stream.read(&mut chunk).await {
-            Ok(0) | Err(_) => return,
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
-        }
-    }
-    let request: Value = serde_json::from_slice(&buf[head..head + length]).unwrap_or(Value::Null);
-    let (kind, body) = if header.starts_with("get") {
-        let models = json!({"object": "list", "data": [{"id": "scripted", "object": "model", "owned_by": "test"}]});
-        ("application/json", models.to_string())
-    } else {
-        // What the turn is given: every user message since the model last answered. A gateway puts
-        // context of its own beside the person's words, before them or after.
-        let messages = request["messages"].as_array().cloned().unwrap_or_default();
-        let since = messages
-            .iter()
-            .rposition(|m| m["role"] == "assistant")
-            .map_or(0, |i| i + 1);
-        let said = (messages[since..].iter())
-            .filter(|m| m["role"] == "user")
-            .map(|m| text_of(&m["content"]))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let text = scripted_answer(&said);
-        let whole = String::from_utf8_lossy(&buf[head..head + length]).into_owned();
-        heard.lock().unwrap().push(whole);
-        let usage = json!({"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12});
-        if request["stream"] == true {
-            let chunk = |delta: Value, finish: Value| {
-                let c = json!({"id": "c1", "object": "chat.completion.chunk", "created": 0,
-                    "model": "scripted", "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]});
-                format!("data: {c}\n\n")
-            };
-            let mut events = chunk(json!({"role": "assistant", "content": text}), Value::Null);
-            events += &chunk(json!({}), json!("stop"));
-            let end = json!({"id": "c1", "object": "chat.completion.chunk", "created": 0,
-                "model": "scripted", "choices": [], "usage": usage});
-            events += &format!("data: {end}\n\ndata: [DONE]\n\n");
-            ("text/event-stream", events)
-        } else {
-            let whole = json!({"id": "c1", "object": "chat.completion", "created": 0, "model": "scripted",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}],
-                "usage": usage});
-            ("application/json", whole.to_string())
-        }
-    };
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    let _ = stream.write_all(response.as_bytes()).await;
-    let _ = stream.shutdown().await;
 }
 
 /// The repository's top folder.
@@ -667,8 +568,8 @@ impl Install {
     /// Checks that the gateway asked its model about the message after the move, and that none of
     /// the requests it made to its model since `moved` holds what was said before the move: the
     /// person's words or the agent's answer.
-    fn nothing_from_before(&self, model: &Model, moved: usize) {
-        let after = model.since(moved);
+    async fn nothing_from_before(&self, model: &Model, moved: usize) {
+        let after = model.since(moved).await;
         assert!(
             after.iter().any(|b| b.contains(AFTER)),
             "the gateway asked its model about the message after the move"
@@ -941,7 +842,7 @@ async fn a_hermes_install_moves_over() {
     let answered_before = install.answers(&group_hex, BEFORE_ANSWER);
     println!(
         "answered through the old plugin, {} model requests",
-        model.requests()
+        model.requests().await
     );
 
     // The move. The gateway keeps running meanwhile, as it does on the person's machine.
@@ -979,14 +880,14 @@ async fn a_hermes_install_moves_over() {
     let mut core = install.start_core("hermes", &settings).await;
     // The person's gateway is restarted, as the installer says, and loads our plugin.
     old_gateway.stop().await;
-    let moved = model.requests();
+    let moved = model.requests().await;
     let _new_gateway = gateway.start(&["hermes", "gateway", "run"], &root.join("plugin.log"));
     install.marked(&group_hex).await;
 
     install
         .exchange_after(&group, &group_hex, AFTER, AFTER_ANSWER)
         .await;
-    install.nothing_from_before(&model, moved);
+    install.nothing_from_before(&model, moved).await;
     assert_eq!(install.answers(&group_hex, BEFORE_ANSWER), answered_before);
 
     let _ = core.kill().await;
@@ -1211,7 +1112,7 @@ async fn an_openclaw_install_moves_over() {
     let answered_before = install.answers(&group_hex, BEFORE_ANSWER);
     println!(
         "answered through the old plugin, {} model requests",
-        model.requests()
+        model.requests().await
     );
 
     // The move. The gateway keeps running meanwhile, as it does on the person's machine.
@@ -1247,14 +1148,14 @@ async fn an_openclaw_install_moves_over() {
     let mut core = install.start_core("openclaw", &settings).await;
     // The person's gateway is restarted, as the installer says, and loads our plugin.
     old_gateway.stop().await;
-    let moved = model.requests();
+    let moved = model.requests().await;
     let _new_gateway = gateway.start(&["openclaw", "gateway", "run"], &root.join("plugin.log"));
     install.marked(&group_hex).await;
 
     install
         .exchange_after(&group, &group_hex, AFTER, AFTER_ANSWER)
         .await;
-    install.nothing_from_before(&model, moved);
+    install.nothing_from_before(&model, moved).await;
     assert_eq!(install.answers(&group_hex, BEFORE_ANSWER), answered_before);
 
     let _ = core.kill().await;

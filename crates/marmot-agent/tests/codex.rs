@@ -4,29 +4,117 @@
 //! agent sends a file from its working folder, which the person downloads and reads (D-090), and
 //! the chat moves the agent to a folder inside it, where its next session works (D-101).
 //!
-//! It approves only the exact command each step asks for, once, in a throwaway folder. It needs
-//! `codex` installed and signed in, so it runs only when asked for:
+//! It approves only the exact command each step asks for, once, in a throwaway folder. It runs
+//! twice. On the model double (`tools/model_double`), Codex is the real one and only its model is
+//! scripted: it needs `codex` installed, and no key or sign-in, so it always runs. On a signed-in
+//! Codex and its real model, it runs only when asked for:
 //!
 //! ```sh
 //! cargo test -p marmot-agent --test codex -- --ignored --nocapture
 //! ```
 
 mod common;
+mod model_double;
 
 use common::{Chat, TURN, World, files_sent, lines, within};
 use marmot_agent::carrier::Asked;
 use marmot_agent_codex::Codex;
 use marmot_agent_events::State;
 use marmot_agent_events::body::Body;
+use model_double::Double;
+use serde_json::{Value, json};
+use std::os::unix::fs::PermissionsExt;
 
-async fn codex(world: &World) -> Codex {
+/// The program the driver starts as `codex`: the machine's own, signed in, or one that runs it
+/// on the model double.
+struct Model {
+    program: String,
+    _home: Option<tempfile::TempDir>,
+}
+
+impl Model {
+    fn signed_in() -> Self {
+        Self {
+            program: "codex".into(),
+            _home: None,
+        }
+    }
+
+    /// Codex with a throwaway home, `CODEX_HOME`, whose settings name the double as the model's
+    /// provider, with a dummy key: nothing of the machine's own sign-in or settings is read or
+    /// touched. The driver starts it through a small script that sets that up.
+    fn double(double: &Double) -> Self {
+        let home = tempfile::tempdir().unwrap();
+        let codex_home = home.path().join("codex");
+        std::fs::create_dir(&codex_home).unwrap();
+        let settings = format!(
+            "model = \"scripted\"\nmodel_provider = \"double\"\n\n[model_providers.double]\n\
+             name = \"model double\"\nbase_url = \"{}/v1\"\nwire_api = \"responses\"\n\
+             env_key = \"MODEL_DOUBLE_KEY\"\n",
+            double.url
+        );
+        std::fs::write(codex_home.join("config.toml"), settings).unwrap();
+        let program = home.path().join("codex-on-the-double");
+        let script = format!(
+            "#!/bin/sh\nexec env -i PATH=\"$PATH\" HOME='{}' CODEX_HOME='{}' MODEL_DOUBLE_KEY=model-double codex \"$@\"\n",
+            home.path().display(),
+            codex_home.display()
+        );
+        std::fs::write(&program, script).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Self {
+            program: program.display().to_string(),
+            _home: Some(home),
+        }
+    }
+}
+
+async fn codex(world: &World, model: &Model) -> Codex {
     let setup = world.config.setup().unwrap();
-    Codex::start("codex", setup).await.expect("codex starts")
+    Codex::start(&model.program, setup)
+        .await
+        .expect("codex starts")
+}
+
+/// A model reply that runs `command` with Codex's shell tool.
+fn exec(command: &str) -> Value {
+    json!({"call": "exec_command", "input": {"cmd": command}})
+}
+
+/// What the model does at each step of the scenario, by words of the step's prompt.
+fn script() -> Value {
+    let then_done = |call: Value| json!([[call], [{"text": "done"}]]);
+    json!({"prompts": [
+        {"when": "`touch marker.txt`", "replies": [
+            [{"thinking": "One command, exactly as asked."}, {"text": "Running it."}, exec("touch marker.txt")],
+            [{"text": "done"}]]},
+        {"when": "`echo started >> started.txt && sleep 30`",
+         "replies": then_done(exec("echo started >> started.txt && sleep 30"))},
+        {"when": "`echo ran >> runs.txt && sleep 20`",
+         "replies": then_done(exec("echo ran >> runs.txt && sleep 20"))},
+        {"when": "Which shell command did you run last?",
+         "replies": [[{"text": "echo ran >> runs.txt && sleep 20"}]]},
+        {"when": "Send the file runs.txt",
+         "replies": then_done(json!({"call": "send_file", "input": {"path": "runs.txt"}}))},
+        {"when": "`touch moved.txt`", "replies": then_done(exec("touch moved.txt"))},
+    ]})
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs codex installed and signed in"]
 async fn codex_end_to_end() {
+    end_to_end(&Model::signed_in()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn codex_on_the_model_double() {
+    let double = Double::scripted(&script()).await;
+    end_to_end(&Model::double(&double)).await;
+    let asked = double.all_answered().await;
+    println!("the model double answered {asked} requests");
+}
+
+async fn end_to_end(model: &Model) {
     let work = tempfile::tempdir().unwrap();
     let settings = format!(
         "[codex]\ncwd = \"{}\"\napproval_policy = \"untrusted\"\n",
@@ -34,7 +122,7 @@ async fn codex_end_to_end() {
     );
     let world = World::new(&settings).await;
     world.runtime.start().await.unwrap();
-    let mut core = world.start(codex(&world).await);
+    let mut core = world.start(codex(&world, model).await);
 
     let group = world
         .runtime
@@ -100,7 +188,7 @@ async fn codex_end_to_end() {
     let cut_off = chat.turn_for(&asked).await;
     core.crash().await;
     println!("crashed mid-turn");
-    core = world.start(codex(&world).await);
+    core = world.start(codex(&world, model).await);
     chat.turn_at(&cut_off, State::Cancelled).await;
     let follow_up = chat
         .say("Which shell command did you run last? Reply with only the command.")
