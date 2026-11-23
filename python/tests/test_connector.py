@@ -106,13 +106,15 @@ def prompt(message, text="hello", chat=CHAT, sender=ALICE):
 
 
 def model_settings(user="u-1", model="m", read=None):
-    """A read of a session's model and Hermes's answer, the plugin's `read` id on both when given."""
+    """A read of a session's model and Hermes's answer, the plugin's `read` id on both when given. Hermes
+    names a direct chat's session after the chat alone, as `fixtures/recordings/hermes` shows, and a
+    group's after the chat and the sender."""
     source = {"chat_id": "c-1", "chat_type": "dm", "user_id": user}
     named = {} if read is None else {"id": read}
     return [{"dir": "out", "via": "call", "msg": {"method": "get_session_model_settings", **named,
                                                    "params": {"source": source}}},
             {"dir": "in", "via": "call", "msg": {"method": "get_session_model_settings", **named, "result": {
-                "session_key": f"agent:main:marmot:dm:c-1:{user}", "model": model, "provider": "custom"}}}]
+                "session_key": "agent:main:marmot:dm:c-1", "model": model, "provider": "custom"}}}]
 
 
 class Connected(unittest.IsolatedAsyncioTestCase):
@@ -187,7 +189,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
                   {"dir": "out", "via": "call", "msg": {"method": "get_session_model_settings", "params": {
                       "source": {"chat_id": "c-1", "chat_type": "dm", "user_id": "u-1"}}}},
                   {"dir": "in", "via": "call", "msg": {"method": "get_session_model_settings", "result": {
-                      "session_key": "agent:main:marmot:dm:c-1:u-1", "model": "m", "provider": "custom"}}},
+                      "session_key": "agent:main:marmot:dm:c-1", "model": "m", "provider": "custom"}}},
                   started("m-1"), said("Hi.", "m-1", notify=True), complete("m-1"))
         await asyncio.sleep(0.1)
         self.assertEqual([t["state"] for t in self.of("turn")], ["running", "done"])
@@ -575,7 +577,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         asking = "⚠️ **Confirm /new**\n\nThis starts a fresh session."
         self.feed(started(typed[2], "/new"),
                   hook("send_slash_confirm", chat_id="c-1", title="/new", message=asking,
-                       session_key="agent:main:marmot:dm:c-1:u-1", confirm_id="k-1", metadata=None),
+                       session_key="agent:main:marmot:dm:c-1", confirm_id="k-1", metadata=None),
                   said(asking, typed[2], notify=True), complete(typed[2]))
         self.assertEqual([e for e in self.sent if "settles" in e], [])
         await self.connector.serve("answer", {"request": "r-2", "item": "confirm:k-1", "by": ALICE,
@@ -597,7 +599,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         typed = self.hermes.typed[-1]
         asking = "⚠️ **Confirm /model**\n\nThis model costs more."
         self.feed(hook("send_slash_confirm", chat_id="c-1", title="/model", message=asking,
-                       session_key="agent:main:marmot:dm:c-1:u-1", confirm_id="k-2", metadata=None),
+                       session_key="agent:main:marmot:dm:c-1", confirm_id="k-2", metadata=None),
                   said(asking, typed[2], notify=True))
         self.assertEqual([e for e in self.sent if "settles" in e], [])
         await self.connector.serve("answer", {"request": "r-2", "item": "confirm:k-2", "by": ALICE,
@@ -620,7 +622,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         typed = self.hermes.typed[-1]
         asking = "⚠️ **Confirm /model**\n\nThis model costs more."
         self.feed(hook("send_slash_confirm", chat_id="c-1", title="/model", message=asking,
-                       session_key="agent:main:marmot:dm:c-1:u-1", confirm_id="k-2", metadata=None),
+                       session_key="agent:main:marmot:dm:c-1", confirm_id="k-2", metadata=None),
                   said(asking, typed[2], notify=True))
         yes = {"questions": [{"question": "q0", "options": ["o0"]}]}
         self.hermes.fails = ConnectionError("Hermes is busy")

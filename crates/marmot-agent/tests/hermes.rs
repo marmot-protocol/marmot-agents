@@ -2,7 +2,8 @@
 //! container and connects to the core's socket, and through MDK's test relay a person has a prompt
 //! answered, has a command approved and run, interrupts a turn while it waits for an approval,
 //! starts a new session, has Hermes crash in the middle of a turn and carries on, with nothing
-//! run twice (`docs/plan.md`, D-074), and has the agent send a file (D-090).
+//! run twice (`docs/plan.md`, D-074), has the agent send a file (D-090), and switches the model and
+//! back.
 //!
 //! Each command it asks for is harmless and runs in a throwaway folder mounted into the container.
 //! It needs Docker, and a model: `MODEL_BASE_URL`, `MODEL_NAME` and `MODEL_KEY_FILE`, the file
@@ -195,6 +196,7 @@ async fn hermes_end_to_end() {
         serve(marmot, &config, &store, listener, token, now(), stop).await
     });
     let lap = |what: &str| println!("{what} after {}s", started.elapsed().as_secs());
+    let model_name = model.name.clone();
     let mut hermes = Hermes::new(home.path(), work.path(), model);
     hermes.start();
 
@@ -336,6 +338,31 @@ async fn hermes_end_to_end() {
     assert_eq!(files[0].0, "report.txt");
     assert_eq!(files[0].1, b"a report\n");
     lap("sent a file");
+
+    // 7. The model switched from the chat, and back. The plugin types `/model` for Hermes and
+    //    tells from its reply that it was taken, by Hermes's own catalog of replies
+    //    (`agent.i18n.t`), which Hermes does not publish for plugins. The switch is to the model
+    //    Hermes runs, named, since the endpoint may offer no other: Hermes takes it as a switch and
+    //    keeps it as the session's own model, which the reset then clears (read in Hermes's source,
+    //    `gateway/slash_commands_model.py`; the scripted run in `import_gateways.rs` switches to
+    //    another).
+    for value in [model_name.as_str(), "reset"] {
+        let asked = Asked::Set {
+            setting: "model".into(),
+            value: value.into(),
+        };
+        let set = chat.ask(None, &asked, value).await;
+        let shown = chat.effect_of(&set).await;
+        let Body::Session(session) = shown.item.event.body() else {
+            panic!("not the session's item")
+        };
+        let now = session.settings.iter().find(|s| s.id == "model");
+        assert_eq!(
+            now.and_then(|m| m.value.as_deref()),
+            Some(model_name.as_str())
+        );
+    }
+    lap("switched the model and back");
 
     watching.abort();
     let _ = stop.send(());

@@ -95,6 +95,21 @@ def key_of(source):
     return f"{source.get('chat_type')}:{source.get('chat_id')}:{source.get('user_id')}"
 
 
+def names_session(named, key) -> bool:
+    """Whether Hermes's name for a session, `named`, is the session of `key` (`key_of`). Hermes names a
+    group's session after the chat and the sender, `agent:main:<platform>:group:<chat>:<sender>`, and a
+    direct chat's after the chat alone, `agent:main:<platform>:dm:<chat>`, as `fixtures/recordings/hermes`
+    shows: a direct chat has one person in it."""
+    named = str(named or "")
+    if not named:
+        return False
+    if named.endswith(":" + key):
+        return True
+    kind, _, rest = key.partition(":")
+    chat = rest.rpartition(":")[0]
+    return kind == "dm" and bool(chat) and named.endswith(f":dm:{chat}")
+
+
 class Translator:
     """One chat's Hermes calls, as agent events.
 
@@ -386,15 +401,15 @@ class Translator:
                 if f"session:{self.name(key)}" in self.sessions:
                     self.session_changed(key)
         elif method == "get_session_model_settings" and usable_settings(result):
-            # The session Hermes names (`agent:main:<platform>:<chat type>:<chat>:<sender>`), as it was
+            # The session Hermes names (`names_session`), as it was
             # when asked: a read that a new session, or a switch of model, overtook says nothing of now.
             named = str(result.get("session_key"))
             read = str(m["id"]) if "id" in m else next(
-                (r for r in reversed(list(self.reads)) if named.endswith(":" + self.reads[r][0])), None)
+                (r for r in reversed(list(self.reads)) if names_session(named, self.reads[r][0])), None)
             if read not in self.reads:
                 return
             key, generation, switches = self.reads.pop(read)
-            if (not named.endswith(":" + key) or generation != self.generation.get(key, 1)
+            if (not names_session(named, key) or generation != self.generation.get(key, 1)
                     or switches != self.switches[key]):
                 return
             self.put(key, "model", "Model", result.get("model"))
@@ -469,10 +484,9 @@ class Translator:
         return (ev["session"], turn) if ev is not None else None
 
     def turn_of_session(self, session_key):
-        """The running turn of the Hermes session `session_key`, which Hermes names after the chat and
-        the sender (`agent:main:<platform>:<chat type>:<chat>:<sender>`), if one is running."""
+        """The running turn of the Hermes session `session_key` (`names_session`), if one is running."""
         for turn, key in reversed(list(self.turn_key.items())):
-            if session_key and str(session_key).endswith(":" + key) and f"turn:{turn}" in self.open:
+            if names_session(session_key, key) and f"turn:{turn}" in self.open:
                 return turn
         return None
 
