@@ -100,23 +100,26 @@ harness_settings() {
     say "[connector]"
 }
 
-# Adds the plugin to the person's Hermes and points its platform at this agent's home.
+# Adds the plugin to the person's Hermes and points its platform at this agent's home. What it changes is
+# put back if the install fails or is stopped before the core is started (change_begin in lib.sh):
+# Hermes's settings, and the old connector's plugin, which it replaces, or, where there was none, ours.
+# Nothing changes before ours is in, and ours starts on the old plugin's settings too: Hermes reads a
+# platform's extra over its other settings (gateway/config.py), and the old one's names this home.
+# Everyone is let through only once ours is in, so the old plugin is never left with that.
 harness_connect() {
     if [ -z "$PLUGIN" ]; then
         say "would add the Marmot plugin to your Hermes, once it is installed and set up"
         return 0
     fi
-    backup_file "$HERMES_CONFIG"
-    [ -z "$HERMES_ENV" ] || backup_file "$HERMES_ENV"
-    [ "$OLD_PLUGIN" -eq 0 ] || backup_file "$PLUGIN"
+    local why=add
+    [ "$OLD_PLUGIN" -eq 0 ] || why=replace
+    set -- "$why" file "$HERMES_CONFIG"
+    [ -z "$HERMES_ENV" ] || set -- "$@" file "$HERMES_ENV"
+    # Our own plugin, in already, is not put back: only the old one, or none.
+    if [ "$OLD_PLUGIN" -eq 1 ] || [ ! -e "$PLUGIN" ]; then set -- "$@" folder "$PLUGIN"; fi
+    change_begin "$@"
     say "adding the Marmot plugin to your Hermes"
-    if [ "$DRY_RUN" -eq 1 ]; then
-        say "would copy $MA_LIB/python/marmot_hermes to $PLUGIN"
-    else
-        mkdir -p "$(dirname "$PLUGIN")"
-        rm -rf "$PLUGIN"
-        cp -R "$MA_LIB/python/marmot_hermes" "$PLUGIN"
-    fi
+    replace_dir "$MA_LIB/python/marmot_hermes" "$PLUGIN"
     # Enabling it the first time makes Hermes install what it needs, which takes a while.
     act "$HERMES" plugins enable marmot </dev/null
     act "$HERMES" config set platforms.marmot.enabled true
@@ -125,13 +128,14 @@ harness_connect() {
     # shapes its .env takes, or nothing.
     local before
     before=$("$HERMES" config get MARMOT_ALLOW_ALL_USERS 2>/dev/null) || before=""
-    [ "$before" != true ] || return 0
-    if [ "$DRY_RUN" -eq 1 ]; then
-        say "would record MARMOT_ALLOW_ALL_USERS as it is in $MA_AGENT_DIR/hermes-allow-all"
-    elif [ ! -f "$MA_AGENT_DIR/hermes-allow-all" ]; then
-        printf '%s\n' "$before" | put "$MA_AGENT_DIR/hermes-allow-all" 600
+    if [ "$before" != true ]; then
+        if [ "$DRY_RUN" -eq 1 ]; then
+            say "would record MARMOT_ALLOW_ALL_USERS as it is in $MA_AGENT_DIR/hermes-allow-all"
+        elif [ ! -f "$MA_AGENT_DIR/hermes-allow-all" ]; then
+            printf '%s\n' "$before" | put "$MA_AGENT_DIR/hermes-allow-all" 600
+        fi
+        act "$HERMES" config set MARMOT_ALLOW_ALL_USERS true
     fi
-    act "$HERMES" config set MARMOT_ALLOW_ALL_USERS true
 }
 
 harness_summary() {

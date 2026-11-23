@@ -6,9 +6,10 @@ Each script runs against a throwaway HOME, with stand-ins for the programs it ca
 systemctl, launchctl, docker, npm and node) on PATH, so nothing on the machine running the tests is
 installed, started or changed. The stand-ins for OpenClaw and Hermes keep their settings in files in
 that HOME, as the real ones do, and do what the installers ask of them: add a plugin, set and unset a
-setting. A stand-in marmot-agent plays the core; the download test serves a release from a folder,
-packaged by tools/release/package.sh. The OpenClaw installer reads JSON with node, so its tests use
-the node on the PATH the tests run with, and are skipped without one.
+setting. A move from today's connectors' plugins is also stopped at each step it takes (Interrupted).
+A stand-in marmot-agent plays the core; the download test serves a release from a folder, packaged by
+tools/release/package.sh. The OpenClaw installer reads JSON with node, so its tests use the node on
+the PATH the tests run with, and are skipped without one.
 """
 
 import hashlib
@@ -20,6 +21,7 @@ import subprocess
 import tempfile
 import tomllib
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -223,7 +225,7 @@ else:
 '''
 FAKE_HERMES = r'''#!/usr/bin/env python3
 """A stand-in for `hermes`: the commands the installer runs. Its config.yaml is JSON, which is YAML."""
-import json, os, sys
+import json, os, signal, sys
 from pathlib import Path
 
 args = sys.argv[1:]
@@ -308,6 +310,12 @@ elif args[:2] == ["config", "unset"]:
         save(c)
 elif args[:2] in (["plugins", "enable"], ["plugins", "disable"]):
     note()
+    if os.environ.get("FAKE_HERMES_FAIL") == " ".join(args[:2]):
+        sys.exit(f"the hermes stand-in fails {' '.join(args[:2])}, as asked")
+    if os.environ.get("FAKE_HERMES_KILL") == " ".join(args[:2]):
+        # The installer killed outright as it waits on this command.
+        os.kill(os.getppid(), signal.SIGKILL)
+        sys.exit(1)
     if not (home / "plugins" / args[2] / "plugin.yaml").is_file():
         sys.exit(f"no plugin {args[2]}")
     c = load()
@@ -319,6 +327,36 @@ elif args[:2] in (["plugins", "enable"], ["plugins", "disable"]):
 else:
     sys.exit(f"the hermes stand-in does not know: {args}")
 '''
+
+# What a move to our plugin changes in each gateway's folder in HOME, which going back puts back.
+CHANGED = {"hermes": (".hermes", ("config.yaml", ".env", "plugins/marmot")),
+           "openclaw": (".openclaw", ("openclaw.json", "extensions/marmot"))}
+# An mv that cannot exchange two folders, as on macOS or before GNU coreutils 9.5.
+MV_WITHOUT_EXCHANGE = f"""#!/bin/sh
+for a; do [ "$a" = --exchange ] && {{ echo "mv: unrecognized option '--exchange'" >&2; exit 1; }}; done
+exec {shutil.which("mv", path=SYSTEM_PATH)} "$@"
+"""
+MV_EXCHANGES = "--exchange" in subprocess.run(["mv", "--help"], capture_output=True, text=True,
+                                              env={"PATH": SYSTEM_PATH}).stdout
+
+# Runs the install script named after it, as `bash script` does, and sends STOP_SIGNAL to the script's
+# process group as it comes to step STOP_AT. A step is a call of act or put, through which the scripts
+# change things, or an rm, cp or mv they run outside one: counted as each is entered, so once, in the
+# subshell of a pipeline that runs it. The count is kept in the file STOP_COUNT, as a subshell counts
+# too; with STOP_AT 0 it only counts. No hook in the scripts themselves: bash's DEBUG trap, which -T
+# hands to functions and subshells.
+STOPPED = r"""set -T
+trap 'case ${FUNCNAME[0]:-}:$BASH_COMMAND in
+    act:act\ * | put:put\ *) step=1 ;;
+    *:rm\ * | *:cp\ * | *:mv\ *) case " ${FUNCNAME[*]:-} " in *" act "* | *" put "*) step=0 ;; *) step=1 ;; esac ;;
+    *) step=0 ;;
+esac
+if [ "$step" = 1 ]; then
+    read -r n <"$STOP_COUNT"; n=$((n + 1)); echo "$n" >"$STOP_COUNT"
+    if [ "$n" = "$STOP_AT" ]; then kill -s "$STOP_SIGNAL" 0; fi
+fi' DEBUG
+. "$0" "$@"
+"""
 
 
 def mode(path: Path) -> int:
@@ -337,6 +375,7 @@ class Machine:
         self.bin.mkdir()
         self.log = self.dir / "calls.log"
         self.log.touch()
+        self.steps = self.dir / "steps"
         self.core = self.dir / "marmot-agent"
         self.write(self.core, FAKE_CORE)
         for name in ("systemctl", "launchctl", "docker", *programs):
@@ -363,7 +402,8 @@ class Machine:
         path.write_text(text)
         path.chmod(0o755)
 
-    def run(self, harness: str, *args: str, env=None, check=True) -> subprocess.CompletedProcess:
+    def run(self, harness: str, *args: str, env=None, check=True, stop=None) -> subprocess.CompletedProcess:
+        """Runs an install script; with stop, a signal and a step (see STOPPED), stops it there."""
         environment = {
             "HOME": str(self.home),
             "PATH": f"{self.bin}:{SYSTEM_PATH}",
@@ -371,13 +411,21 @@ class Machine:
             "LANG": "C",
         }
         environment.update(env or {})
+        script = ["bash", str(HERE / f"{harness}.sh")]
+        if stop is not None:
+            signal, step = stop
+            self.steps.write_text("0\n")
+            environment.update({"STOP_SIGNAL": signal, "STOP_AT": str(step), "STOP_COUNT": str(self.steps)})
+            script = ["bash", "-c", STOPPED, str(HERE / f"{harness}.sh")]
         result = subprocess.run(
-            ["bash", str(HERE / f"{harness}.sh"), *args],
+            [*script, *args],
             env=environment,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=120,
+            # Its own process group, which the signal goes to, as a terminal's or a service manager's does.
+            start_new_session=stop is not None,
         )
         if check and result.returncode != 0:
             raise AssertionError(f"{harness}.sh failed ({result.returncode}):\n{result.stdout}\n{result.stderr}")
@@ -1112,6 +1160,69 @@ class Boundaries(unittest.TestCase):
         m.run("hermes", "--uninstall")
         self.assertNotIn("marmot", json.loads(config.read_text())["platforms"])
 
+    def test_a_failed_hermes_replacement_puts_the_old_plugin_back(self):
+        """Our plugin goes in place of the old one first; if a step after fails, both the old plugin and
+        Hermes's settings come back, and run again, it finishes the move."""
+        m = Machine(self)
+        old = m.home / ".hermes/plugins/marmot"
+        old.mkdir(parents=True)
+        (old / "plugin.yaml").write_text("name: marmot\ndescription: the old connector's\n")
+        self.imported(m, "hermes", "Hermes")
+        config, env = m.home / ".hermes/config.yaml", m.home / ".hermes/.env"
+        config.write_text(json.dumps({"plugins": {"enabled": ["marmot"]}, "platforms": {"marmot": {"enabled": True}}}))
+        env.write_text(f"MARMOT_ALLOWED_USERS={OWNER}\n")
+        before = config.read_text(), env.read_text()
+        args = m.args("hermes", "--binary", str(m.core), "--no-service", "--replace-plugin")
+        result = m.run("hermes", *args, env={"FAKE_HERMES_FAIL": "plugins enable"}, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("hermes plugins enable marmot", m.calls())
+        self.assertEqual((old / "plugin.yaml").read_text(), "name: marmot\ndescription: the old connector's\n")
+        self.assertEqual((config.read_text(), env.read_text()), before)
+        backups = m.data / "agents/hermes/backups"
+        self.assertIn("put your Hermes's settings and its old plugin back", result.stderr)
+        self.assertIn(str(next(backups.glob("marmot.*"))), result.stderr)
+        self.assertFalse((m.data / "agents/hermes/plugin-change").exists())
+        m.run("hermes", *args)
+        self.assertIn("marmot-agent's local socket", (old / "plugin.yaml").read_text())
+        self.assertIn("MARMOT_ALLOW_ALL_USERS=true", env.read_text())
+
+    def test_a_move_given_up_is_not_put_back_later(self):
+        """A move killed part way, then given up as docs/move.md says (--uninstall, and the copies listed in
+        before-move put back), is forgotten: a later move that fails puts back what the gateway had then,
+        not what it had before the first."""
+        m = Machine(self)
+        hermes = m.home / ".hermes"
+        old = hermes / "plugins/marmot"
+        old.mkdir(parents=True)
+        (old / "plugin.yaml").write_text("name: marmot\ndescription: the old connector's\n")
+        self.imported(m, "hermes", "Hermes")
+        config = hermes / "config.yaml"
+        config.write_text(json.dumps({"plugins": {"enabled": ["marmot"]}, "platforms": {"marmot": {"enabled": True}}}))
+        (hermes / ".env").write_text(f"MARMOT_ALLOWED_USERS={OWNER}\n")
+        args = m.args("hermes", "--binary", str(m.core), "--no-service", "--replace-plugin")
+        killed = m.run("hermes", *args, env={"FAKE_HERMES_KILL": "plugins enable"}, check=False)
+        self.assertEqual(killed.returncode, -9, killed.stderr)
+        agent = m.data / "agents/hermes"
+        self.assertTrue((agent / "plugin-change").exists())
+        uninstalled = m.run("hermes", "--uninstall")
+        self.assertFalse((agent / "plugin-change").exists())
+        self.assertIn("plugin-change", uninstalled.stdout)
+        for line in (agent / "backups/before-move").read_text().splitlines():
+            kind, path, copy = line.split("\t")
+            if kind == "folder":
+                shutil.rmtree(path, ignore_errors=True)
+                shutil.copytree(copy, path)
+            else:
+                shutil.copy(copy, path)
+        self.assertEqual((old / "plugin.yaml").read_text(), "name: marmot\ndescription: the old connector's\n")
+        # The person goes on with the old connector, and adds a platform.
+        now = {"plugins": {"enabled": ["marmot"]}, "platforms": {"marmot": {"enabled": True}, "telegram": {"enabled": True}}}
+        config.write_text(json.dumps(now))
+        failed = m.run("hermes", *args, env={"FAKE_HERMES_FAIL": "plugins enable"}, check=False)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertEqual(json.loads(config.read_text()), now)
+        self.assertEqual((old / "plugin.yaml").read_text(), "name: marmot\ndescription: the old connector's\n")
+
     def test_settings_imported_for_another_harness_are_refused(self):
         m = Machine(self)
         self.imported(m, "hermes", "OpenClaw")
@@ -1141,13 +1252,14 @@ class Boundaries(unittest.TestCase):
         m.run("openclaw", "--uninstall")
         self.assertNotIn("marmot", json.loads((m.home / ".openclaw/openclaw.json").read_text())["channels"])
 
-    def old_openclaw(self, m: Machine):
+    @staticmethod
+    def old_openclaw(m: Machine):
         """An OpenClaw with today's connector's plugin in it, its channel as that plugin's installer and the
         person set it, and the install imported. Gives the old home, the channel and the plugin's folder."""
         old = m.home / ".openclaw/extensions/marmot"
         old.mkdir(parents=True)
         (old / "package.json").write_text(json.dumps({"name": "@marmot-protocol/openclaw-marmot"}))
-        old_home, _ = self.imported(m, "openclaw", "OpenClaw")
+        old_home, _ = Boundaries.imported(m, "openclaw", "OpenClaw")
         old_channel = {"enabled": True, "home": str(old_home), "socketPath": f"{old_home}/dev/wn-agent.sock",
                        "accountIdHex": "ab" * 32, "dm": {"allowFrom": [OWNER]},
                        "senderPolicy": {"allowedUsers": [OWNER]}}
@@ -1248,6 +1360,231 @@ class Boundaries(unittest.TestCase):
         m.log.write_text("")
         subprocess.run([str(start)], check=True, env={"PATH": SYSTEM_PATH, "FAKE_LOG": str(m.log)})
         self.assertIn("with MODEL_BASE_URL=https://models.example/v1", m.calls())
+
+
+class Interrupted(unittest.TestCase):
+    """A move from today's connector's plugin (--replace-plugin) stopped at any step leaves the gateway
+    with the old plugin or ours, set up to start, and the same command run again finishes the move. Each
+    run is stopped at one step, for every step the script takes: by SIGTERM, after which it puts back
+    what it changed, and by SIGKILL, after which the next run finishes the change or, should that fail,
+    puts back what the killed run found. Ours is the move finished: our plugin set up to start, and the
+    core's service enabled and started. A run killed after ours is in and before the core is started
+    leaves the change noted as under way, and the next run finishes it."""
+
+    # Our plugin is in, set up to start, and the core it points at is not yet: a SIGKILL may leave it,
+    # with the change noted as under way, so that the next run finishes it.
+    STARTING = "ours, its core not started"
+
+    def every_step(self, harness: str, make, state, done, fail: dict, windows=(), mv=None) -> None:
+        """make(m) sets up the old install and gives what state(m, made) and done(m, made) need. state
+        says "old", "ours" (our plugin in and set up to start; the core's service is checked here) or
+        what is wrong; done lists what else is wrong once the move is finished. fail is the environment
+        that makes the stand-in fail a step that comes after the old plugin is out. windows are states a
+        SIGKILL may leave that no order of the gateway's own commands avoids, each left by exactly one
+        step, and finished by the next run. mv, given, stands in for mv."""
+
+        def machine() -> Machine:
+            m = Machine(self)
+            if mv:
+                m.write(m.bin / "mv", mv)
+            return m
+
+        m = machine()
+        made = make(m)
+        args = m.args(harness, "--binary", str(m.core), "--replace-plugin")
+        m.run(harness, *args, stop=("KILL", 0))
+        steps = int(m.steps.read_text())
+        self.assertGreater(steps, 10)
+        cases = [(signal, step) for signal in ("TERM", "KILL") for step in range(1, steps + 1)]
+        agent = f"agents/{harness}"
+
+        def started(m: Machine) -> bool:
+            unit = f"marmot-agent-{harness}.service"
+            calls = m.calls()
+            return f"systemctl --user enable {unit}" in calls and f"systemctl --user restart {unit}" in calls
+
+        def full(m: Machine, made) -> str:
+            after = state(m, made)
+            return self.STARTING if after == "ours" and not started(m) else after
+
+        def snapshot(path: Path):
+            if path.is_dir():
+                return {str(f.relative_to(path)): f.read_text() for f in sorted(path.rglob("*")) if f.is_file()}
+            return path.read_text() if path.is_file() else None
+
+        def found(m: Machine) -> dict:
+            """What the move changes, as the gateway has it."""
+            gateway, changed = CHANGED[harness]
+            return {str(m.home / gateway / name): snapshot(m.home / gateway / name) for name in changed}
+
+        def finished(m: Machine, made, before: dict) -> list:
+            """What is wrong once a run said it finished: the move, and the copies going back names."""
+            wrong = [] if full(m, made) == "ours" else [full(m, made)]
+            wrong += done(m, made)
+            if (m.data / agent / "plugin-change").exists():
+                wrong.append("the change is still marked as under way")
+            if (m.data / agent / "backups/.copying").exists():
+                wrong.append("a copy half made is left")
+            # Going back puts each copy before-move lists in its place (docs/move.md): what the gateway had.
+            listed = m.data / agent / "backups/before-move"
+            lines = [line.split("\t") for line in listed.read_text().splitlines()] if listed.exists() else []
+            if not lines:
+                wrong.append("no list of the copies kept before the move")
+            for kind, path, copy in lines:
+                if not copy or snapshot(Path(copy)) != before.get(path):
+                    wrong.append(f"before-move does not keep {path} as it was")
+            if sorted(path for _, path, _ in lines) != sorted(before):
+                wrong.append(f"before-move lists {[path for _, path, _ in lines]}, not {sorted(before)}")
+            return wrong
+
+        def one(case):
+            signal, step = case
+            m = machine()
+            made = make(m)
+            before = found(m)
+            stopped = m.run(harness, *args, stop=(signal, step), check=False)
+            after = full(m, made)
+            under_way = (m.data / agent / "plugin-change").exists()
+            plain = failed = after_failure = None
+            if signal == "KILL" and (under_way or after not in ("old", "ours")):
+                # Killed the same way and run again as it was, it finishes, from the copies the killed run
+                # took: it takes no more of the old plugin.
+                other = machine()
+                other_made = make(other)
+                other_before = found(other)
+                other.run(harness, *args, stop=(signal, step), check=False)
+                noted = (other.data / agent / "plugin-change").exists()
+                kept = sorted(p.name for p in (other.data / agent / "backups").glob("marmot.*"))
+                result = other.run(harness, *args, check=False)
+                plain = (result, finished(other, other_made, other_before),
+                         not noted or kept == sorted(p.name for p in (other.data / agent / "backups").glob("marmot.*")))
+                failed = m.run(harness, *args, env=fail, check=False)
+                after_failure = full(m, made)
+            again = m.run(harness, *args, check=False)
+            wrong = finished(m, made, before) if again.returncode == 0 else ["the run again failed"]
+            return case, stopped, after, under_way, plain, failed, after_failure, again, wrong
+
+        in_windows = []
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+            for (signal, step), stopped, after, under_way, plain, failed, after_failure, again, wrong in pool.map(one, cases):
+                with self.subTest(signal=signal, step=step):
+                    said = f"after SIG{signal} at step {step}:\n{stopped.stdout}\n{stopped.stderr}"
+                    self.assertNotEqual(stopped.returncode, 0, "the run was stopped")
+                    if signal == "KILL" and after in windows:
+                        in_windows.append(after)
+                    elif signal == "KILL" and after == self.STARTING:
+                        self.assertTrue(under_way, f"the change is noted as under way until the core is started {said}")
+                    else:
+                        self.assertIn(after, ("old", "ours"), said)
+                    if signal == "TERM":
+                        self.assertFalse(under_way, f"a change put back or finished {said}")
+                    if plain is not None:
+                        result, plain_wrong, same_copies = plain
+                        self.assertEqual(result.returncode, 0, f"{said}\nthen again:\n{result.stdout}\n{result.stderr}")
+                        self.assertEqual(plain_wrong, [], f"{said}\nthen again:\n{result.stdout}")
+                        self.assertTrue(same_copies, f"the next run took more copies of the plugin, {said}")
+                    if failed is not None:
+                        # What the killed run found is put back, not what it left.
+                        self.assertNotEqual(failed.returncode, 0)
+                        self.assertEqual(after_failure, "old", f"{said}\nthen failing:\n{failed.stdout}\n{failed.stderr}")
+                    self.assertEqual(again.returncode, 0, again.stderr)
+                    self.assertEqual(wrong, [], again.stdout)
+        self.assertEqual(sorted(in_windows), sorted(windows), "each window is left by one step")
+
+    def hermes(self, mv=None, windows=()):
+        ours = sorted(str(f.relative_to(ROOT / "python/marmot_hermes")) for f in (ROOT / "python/marmot_hermes").rglob("*")
+                      if f.is_file() and "__pycache__" not in f.parts and not f.name.startswith("test_"))
+        old_plugin = {"plugin.yaml": "name: marmot\ndescription: the old connector's\n", "adapter.py": "# the old one\n"}
+
+        def make(m: Machine):
+            # As MDK's install-hermes-marmot.sh leaves it: the plugin enabled, its platform's settings in
+            # extra, and who may write to it in .env (docs/reference/current-connectors.md).
+            old_home, _ = Boundaries.imported(m, "hermes", "Hermes")
+            hermes = m.home / ".hermes"
+            (hermes / "plugins/marmot").mkdir(parents=True)
+            for name, text in old_plugin.items():
+                (hermes / "plugins/marmot" / name).write_text(text)
+            extra = {"home": str(old_home), "socket_path": f"{old_home}/dev/wn-agent.sock", "account_id_hex": "cd" * 32}
+            (hermes / "config.yaml").write_text(json.dumps({
+                "plugins": {"enabled": ["marmot"]},
+                "platforms": {"marmot": {"enabled": True, "extra": extra}, "telegram": {"enabled": True}}}))
+            (hermes / ".env").write_text(f"THEIR_KEY=x\nMARMOT_ALLOWED_USERS={OWNER}\n")
+            return old_home, extra
+
+        def plugin(m: Machine):
+            folder = m.home / ".hermes/plugins/marmot"
+            return {str(f.relative_to(folder)): f.read_text() for f in folder.rglob("*") if f.is_file()} if folder.is_dir() else {}
+
+        def state(m: Machine, made):
+            old_home, extra = made
+            hermes = m.home / ".hermes"
+            config = json.loads((hermes / "config.yaml").read_text())
+            env = (hermes / ".env").read_text().splitlines()
+            platform = config.get("platforms", {}).get("marmot", {})
+            files = plugin(m)
+            if not ("marmot" in config.get("plugins", {}).get("enabled", []) and platform.get("enabled") is True):
+                return f"the plugin or its platform is not enabled: {config}"
+            if config["platforms"].get("telegram") != {"enabled": True}:
+                return "their other settings changed"
+            if files == old_plugin:
+                # The old one, as it was set up: never with everyone let through.
+                if platform.get("extra") != extra or env != ["THEIR_KEY=x", f"MARMOT_ALLOWED_USERS={OWNER}"]:
+                    return f"the old plugin, with settings changed: {platform}, {env}"
+                return "old"
+            if sorted(files) == ours:
+                # Hermes reads a platform's other keys and its extra into one, extra winning (gateway/config.py).
+                home = {**platform, **platform.get("extra", {})}.get("home")
+                return "ours" if home == str(old_home) else f"our plugin, pointed at {home}"
+            return f"neither plugin: {sorted(files)}"
+
+        def done(m: Machine, made):
+            wrong = []
+            hermes = m.home / ".hermes"
+            if "MARMOT_ALLOW_ALL_USERS=true" not in (hermes / ".env").read_text().splitlines():
+                wrong.append("not everyone the core lets through is let through")
+            leftovers = sorted(p.name for p in hermes.iterdir() if p.name.startswith(".marmot-agent"))
+            leftovers += [p.name for p in (hermes / "plugins").iterdir() if p.name != "marmot"]
+            if leftovers:
+                wrong.append(f"left over: {leftovers}")
+            return wrong
+
+        self.every_step("hermes", make, state, done, fail={"FAKE_HERMES_FAIL": "plugins enable"}, windows=windows, mv=mv)
+
+    def test_hermes(self):
+        """Where mv cannot exchange two folders, ours goes in by two renames, with neither between."""
+        self.hermes(mv=MV_WITHOUT_EXCHANGE, windows=("neither plugin: []",))
+
+    @unittest.skipUnless(MV_EXCHANGES, "mv cannot exchange two folders here (GNU coreutils 9.5 and later can)")
+    def test_hermes_exchanging(self):
+        """Where mv can exchange two folders, ours goes in in one step, and Hermes always has a plugin."""
+        self.hermes()
+
+    @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
+    def test_openclaw(self):
+        def make(m: Machine):
+            old_home, old_channel, _ = Boundaries.old_openclaw(m)
+            return old_home, old_channel
+
+        def state(m: Machine, made):
+            old_home, old_channel = made
+            state = m.home / ".openclaw"
+            config = json.loads((state / "openclaw.json").read_text())
+            channel = config.get("channels", {}).get("marmot")
+            package = state / "extensions/marmot/package.json"
+            name = json.loads(package.read_text()).get("name") if package.is_file() else None
+            if name == "@marmot-protocol/openclaw-marmot":
+                return "old" if channel == old_channel else f"the old plugin, with its channel {channel}"
+            if name == "marmot-agent-openclaw":
+                entry = config.get("plugins", {}).get("entries", {}).get("marmot", {})
+                if channel == {"enabled": True, "home": str(old_home)} and entry.get("enabled") is True:
+                    return "ours"
+                return f"our plugin, with its channel {channel}"
+            return "neither plugin"
+
+        # OpenClaw refuses settings in the channel that the plugin installed does not take, so the old
+        # plugin's channel comes out before ours goes in, and ours is set only once ours is in.
+        self.every_step("openclaw", make, state, lambda m, made: [], fail={"FAKE_OPENCLAW_FAIL": "plugins install"},
+                        windows=("the old plugin, with its channel None", "our plugin, with its channel None"))
 
 
 class FilesFrom(unittest.TestCase):

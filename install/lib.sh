@@ -296,9 +296,11 @@ check_version() {
 
 # Keeps a copy of a file of the person's own, such as a gateway's configuration, in the agent's folder,
 # readable by its owner only, before the install changes it. KEPT names the copy, or is empty when none
-# was made. A copy made earlier in the same second is kept too: the new one gets a number after it.
+# was made. A copy made earlier in the same second is kept too: the new one gets a number after it. The
+# copy is made under a hidden name and renamed once whole, so a run killed part way leaves none half made
+# under a name that says it is a copy.
 backup_file() {
-    local file=$1 copy base n=1
+    local file=$1 copy base n=1 making
     KEPT=""
     [ -e "$file" ] || return 0
     copy="$MA_AGENT_DIR/backups/$(basename "$file").$(date -u +%Y%m%dT%H%M%SZ)"
@@ -309,11 +311,167 @@ backup_file() {
     private_dir "$MA_AGENT_DIR/backups"
     base=$copy
     while [ -e "$copy" ]; do n=$((n + 1)) && copy="$base.$n"; done
-    (umask 077 && cp -R "$file" "$copy")
-    chmod -R go-rwx "$copy"
-    # shellcheck disable=SC2034 # read by the harness's script
+    making="$MA_AGENT_DIR/backups/.copying"
+    rm -rf "$making"
+    (umask 077 && cp -R "$file" "$making")
+    chmod -R go-rwx "$making"
+    mv "$making" "$copy"
     KEPT=$copy
     say "kept a copy of $file in $copy"
+}
+
+# ---------------------------------------------------------------------------------------------------
+# Changing a gateway's plugin
+#
+# Putting our plugin into a person's Hermes or OpenClaw, in place of the old connector's or not, must
+# not leave it with neither plugin set up to start. Before the first change, change_begin keeps a copy
+# of what is about to change and records the copies in the agent's folder. While that record is there,
+# a run that fails, or is stopped by HUP, INT or TERM, puts those copies back before it ends (finish). A
+# run after one killed outright finds the record, takes no copies of its own, finishes the change, and,
+# should it fail, puts back what the first run found, not what the killed run left. The change is done
+# once the core that our plugin connects to is set up as a service and started (main), as the old
+# connector's services are stopped by then: change_end then removes the record. --uninstall removes it
+# too, so a move given up is not put back over the gateway later.
+#
+# Replacing the old connector's plugin, the copies are also listed in backups/before-move, which a
+# person going back to that connector puts back (docs/move.md). It lists what the gateway had before
+# the latest run that found the old plugin and finished, or noted, its change.
+
+# Starts a change. Its first argument says whether it replaces the old connector's plugin (replace) or
+# not (add); then come pairs, file or folder and the path of one it changes. Each is copied first, and
+# one not there is taken away should the change be put back. A record a run before left is kept as it is.
+change_begin() {
+    MA_CHANGE="$MA_AGENT_DIR/plugin-change"
+    local why=$1 arg record=""
+    shift
+    for arg in "$@"; do no_control "a path to put back" "$arg"; done
+    if [ "$DRY_RUN" -eq 1 ]; then
+        while [ $# -ge 2 ]; do
+            backup_file "$2"
+            shift 2
+        done
+        say "would note in $MA_CHANGE what to put back should this fail"
+        return 0
+    fi
+    if [ -f "$MA_CHANGE" ]; then
+        say "a run before this one stopped part way through changing your $HARNESS_TITLE's plugin; this one finishes it, and puts back what that run found if it fails"
+        MA_CHANGING=1
+        return 0
+    fi
+    while [ $# -ge 2 ]; do
+        backup_file "$2"
+        record="$record$1	$2	$KEPT
+"
+        shift 2
+    done
+    # The list first: should this be killed before the record, nothing has changed yet, and the next
+    # run lists its own copies.
+    if [ "$why" = replace ]; then printf '%s' "$record" | put "$MA_AGENT_DIR/backups/before-move" 600; fi
+    printf '%s' "$record" | put "$MA_CHANGE" 600
+    MA_CHANGING=1
+}
+
+# Ends a change; one stopped before its record is gone is put back.
+change_end() {
+    [ "$DRY_RUN" -eq 1 ] || act rm -f "$MA_CHANGE"
+    MA_CHANGING=0
+}
+
+# Puts back what the record names, in its order; fails if any of it could not be put back.
+put_back_change() {
+    local kind path copy ok=0
+    while IFS='	' read -r kind path copy; do
+        case $kind in
+            file) put_back_file "$copy" "$path" || ok=1 ;;
+            folder) replace_dir "$copy" "$path" || ok=1 ;;
+        esac
+    done <"$MA_CHANGE"
+    return "$ok"
+}
+
+# After a change that did not end, its status given: what it changed put back, and the run ended,
+# saying what happened and what to do.
+change_put_back() {
+    local status=$1 kind path copy what="your $HARNESS_TITLE's settings" took="" copies="" how="" why again
+    while IFS='	' read -r kind path copy; do
+        if [ "$kind" = folder ] && [ -n "$copy" ]; then what="$what and its old plugin"; fi
+        if [ "$kind" = folder ] && [ -z "$copy" ]; then took=", and took our plugin out of it"; fi
+        [ -n "$copy" ] || continue
+        copies="${copies:+$copies, }$copy"
+        how="${how:+$how, }$copy to $path"
+    done <"$MA_CHANGE"
+    case $status in
+        129 | 130 | 143) why="the install was stopped" again="Run this again" ;;
+        *) why="putting our plugin into your $HARNESS_TITLE failed (above)" again="Run this again once what failed is fixed" ;;
+    esac
+    if put_back_change; then
+        rm -f "$MA_CHANGE"
+        printf 'error: %s\n' "$why, so this put $what back as they were$took${copies:+; the copies are $copies}. \
+$again, or go back to today's connector (docs/move.md)" >&2
+    elif [ -n "$how" ]; then
+        printf 'error: %s\n' "$why, and putting $what back failed too: copy $how yourself (docs/move.md). \
+$again after, and it puts back the same copies should it fail" >&2
+    else
+        printf 'error: %s\n' "$why, and putting $what back as they were failed too (above). $again" >&2
+    fi
+    return 0
+}
+
+# Puts a kept copy of a file in place of the file, or takes the file away given no copy. The copy is
+# written beside it and renamed into place, keeping the file's mode.
+# (Each function the exit trap runs ends with a status of its own: there, a bare return gives the status
+# the run ended with.)
+put_back_file() {
+    local copy=$1 file=$2
+    if [ -z "$copy" ]; then
+        act rm -f "$file" || return 1
+        return 0
+    fi
+    act cp "$copy" "$file.marmot-agent" || return 1
+    if [ -e "$file" ]; then act chmod "$(file_mode "$file")" "$file.marmot-agent" || return 1; fi
+    act mv -f "$file.marmot-agent" "$file"
+}
+
+# Puts a copy of folder FROM in place of folder TO, which need not be there, or takes TO away given no
+# FROM. The copy is made in the folder above the one that holds TO, where a gateway looking for its
+# plugins does not look (Hermes reads every folder beside its plugins, hidden ones too), and put in
+# place by renaming. Where mv can exchange two folders in one step (GNU coreutils 9.5 and later, on a
+# file system that can), a kill leaves the old folder or the new one. Elsewhere, as on macOS, the old
+# one is moved aside first, and a kill between the two renames leaves neither (docs/move.md).
+replace_dir() {
+    local from=$1 to=$2 above new old
+    if [ "$DRY_RUN" -eq 1 ]; then
+        if [ -n "$from" ]; then say "would copy $from to $to"; else say "would remove $to"; fi
+        return 0
+    fi
+    above=$(dirname "$(dirname "$to")")
+    new="$above/.marmot-agent-$(basename "$to").new"
+    old="$above/.marmot-agent-$(basename "$to").old"
+    act rm -rf "$new" "$old" || return 1
+    act mkdir -p "$(dirname "$to")" || return 1
+    if [ -n "$from" ]; then act cp -R "$from" "$new" || return 1; fi
+    if [ -n "$from" ] && [ -e "$to" ] && act mv -T --exchange "$new" "$to" 2>/dev/null; then
+        # The old folder is where the new one was.
+        act rm -rf "$new"
+    else
+        if [ -e "$to" ]; then act mv "$to" "$old" || return 1; fi
+        if [ -n "$from" ]; then act mv "$new" "$to" || return 1; fi
+        act rm -rf "$old"
+    fi
+}
+
+# What every run does as it ends, with its status: puts back a plugin change that did not end, and
+# removes what it staged.
+finish() {
+    local status=$1
+    set +e
+    trap '' HUP INT TERM
+    if [ "$status" -ne 0 ] && [ "${MA_CHANGING:-0}" -eq 1 ]; then
+        MA_CHANGING=0
+        change_put_back "$status"
+    fi
+    if [ -n "$MA_WORK" ]; then rm -rf "$MA_WORK"; fi
+    if [ "$MA_STAGED" -eq 1 ]; then rm -rf "$MA_STAGE"; fi
 }
 
 # ---------------------------------------------------------------------------------------------------
@@ -812,6 +970,12 @@ uninstall() {
         done
     fi
     if declare -F harness_uninstall >/dev/null; then harness_uninstall; fi
+    # A change a run killed outright left unfinished is given up, so that no later run puts back what
+    # that run found over what the gateway has by then.
+    if [ -f "$MA_AGENT_DIR/plugin-change" ]; then
+        say "giving up the change to your $HARNESS_TITLE's plugin that a run before this one left unfinished, noted in $MA_AGENT_DIR/plugin-change"
+        act rm -f "$MA_AGENT_DIR/plugin-change"
+    fi
     say "kept the agent's folder, with its settings and identity: $MA_AGENT_DIR"
     say "kept $MA_CORE and $MA_LIB, which other agents may use"
 }
@@ -1235,8 +1399,11 @@ main() {
     set_paths
     check_harness
     # MA_STAGED says whether this run made the folder in MA_STAGE: a dry run names the installed one.
-    MA_WORK="" MA_STAGE="" MA_STAGED=0
-    trap 'if [ -n "$MA_WORK" ]; then rm -rf "$MA_WORK"; fi; if [ "$MA_STAGED" -eq 1 ]; then rm -rf "$MA_STAGE"; fi' EXIT
+    MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0
+    trap 'finish $?' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     if [ "$UNINSTALL" -eq 1 ]; then
         uninstall
         return 0
@@ -1291,6 +1458,9 @@ main() {
         if [ "$OS" = Linux ]; then systemd_units; else launchd_agents; fi
         start_services
     fi
+    # A change to the gateway's plugin is done once the core it connects to is set up to start, and
+    # started unless --no-start or --no-service said not to.
+    if [ "$MA_CHANGING" -eq 1 ]; then change_end; fi
     summary
 }
 

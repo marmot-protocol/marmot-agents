@@ -66,8 +66,8 @@ For Hermes and OpenClaw, the script adds our channel plugin to your own Hermes o
 points it at the agent; you restart your gateway (`hermes gateway restart`, `openclaw gateway restart`) for it
 to load the plugin. It changes only what the plugin needs (the `marmot` platform or channel, and for Hermes
 `MARMOT_ALLOW_ALL_USERS`, so that Hermes takes whatever the agent lets through; for OpenClaw, if it forwards no
-approvals, those of Marmot chats), keeps a copy of your settings in the agent's folder first, and takes out
-what it added on `--uninstall`. One Hermes or OpenClaw serves one agent. If it has the Marmot plugin of today's
+approvals, those of Marmot chats), keeps a copy of your settings in the agent's folder first, puts them back
+if it fails or is stopped part way, and takes out what it added on `--uninstall`. One Hermes or OpenClaw serves one agent. If it has the Marmot plugin of today's
 connectors, the script stops: move that install over first, with its settings in the agent's folder
 ([`docs/move.md`](docs/move.md)), then run it with `--replace-plugin`. It then uses those settings and the
 identity in the old home, and makes no new one.
