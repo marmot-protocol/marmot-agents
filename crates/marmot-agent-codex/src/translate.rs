@@ -377,6 +377,42 @@ impl Translator {
         out
     }
 
+    /// A request of Codex's that Codex said was resolved before the driver could show it, as one
+    /// held for a session being resumed can be. It is shown as it would have been, with its native
+    /// message, but closed, as cancelled: nobody may answer it, and Codex waits for no reply, so
+    /// none is made (#142, D-008).
+    pub fn withdrawn(&mut self, message: &str) -> Vec<AgentEvent> {
+        let replies = self.outbox.len();
+        let shown = self.feed(Direction::In, message);
+        self.outbox.truncate(replies);
+        if let Ok(Some(id)) = serde_json::from_str::<Envelope<'_>>(message).map(|m| m.id) {
+            self.asked.remove(&id);
+        }
+        let mut out = Vec::new();
+        for event in shown {
+            if event.header().state != State::Waiting {
+                out.push(event);
+                continue;
+            }
+            let header = event.header();
+            let item = header.item.as_str().to_string();
+            let (title, text) = (header.title.clone(), header.text.clone());
+            let native = event.native().cloned();
+            let body = event.body().clone();
+            self.emit_owned(
+                &mut out,
+                owner(&event),
+                &item,
+                body,
+                State::Cancelled,
+                &title,
+                &text,
+                native,
+            );
+        }
+        out
+    }
+
     fn client_sent(&mut self, m: &Envelope<'_>, out: &mut Vec<AgentEvent>) {
         if let Some(method) = &m.method {
             if matches!(method.as_str(), "turn/start" | "turn/steer") {

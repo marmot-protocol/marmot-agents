@@ -1601,10 +1601,11 @@ async fn what_a_resumed_session_says_before_its_reply_is_kept() {
 }
 
 // A request a resumed session makes before the reply to the resume, which Codex then says is
-// resolved, waits for nobody: it is not shown as waiting once the reply makes the session the
-// chat's, and it is not refused either (#142).
+// resolved, waits for nobody: once the reply makes the session the chat's it is shown, with its
+// native message, as cancelled and never as waiting, and it is neither answered nor refused
+// (#142, D-008).
 #[tokio::test]
-async fn a_request_resolved_before_a_resume_replies_is_not_shown() {
+async fn a_request_resolved_before_a_resume_replies_is_shown_closed() {
     let (mut codex, mut fake) = connect().await;
     let driver = tokio::spawn(async move {
         let mut again = prompt("m-1", "where were we");
@@ -1636,10 +1637,15 @@ async fn a_request_resolved_before_a_resume_replies_is_not_shown() {
         _ => false,
     };
     let events = within(&mut codex, shows_m9).await.expect("the marker");
-    let waiting = events.iter().find(|e| {
-        matches!(e.event.body(), Body::Approval(_)) && e.event.header().state == State::Waiting
-    });
-    assert!(waiting.is_none(), "a resolved request is shown as waiting");
+    let approvals: Vec<&Emitted> = (events.iter())
+        .filter(|e| matches!(e.event.body(), Body::Approval(_)))
+        .collect();
+    assert_eq!(approvals.len(), 1, "shown once: {approvals:?}");
+    let shown = &approvals[0].event;
+    assert_eq!(shown.header().state, State::Cancelled, "{shown:?}");
+    let native = shown.native().expect("its native message");
+    let payload: Value = serde_json::from_str(native.payload.get()).unwrap();
+    assert_eq!(payload["command"], "ls", "{native:?}");
     assert!(
         !replied(&written(&mut fake), 7),
         "a resolved request was answered"

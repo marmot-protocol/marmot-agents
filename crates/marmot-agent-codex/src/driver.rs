@@ -211,8 +211,10 @@ struct Held {
     thread: String,
     line: String,
     /// Codex's id, while the message is a request Codex waits for a reply to: none for a
-    /// notification.
+    /// notification, or once Codex says the request is resolved.
     request: Option<Value>,
+    /// A request Codex said is resolved while it was held: it is shown closed (#142).
+    resolved: bool,
 }
 
 /// The Codex driver: one `codex app-server` process, serving every chat of one agent.
@@ -743,17 +745,17 @@ impl Codex {
     }
 
     /// Holds a message for a thread no chat has had, until something names its thread. Codex's
-    /// word that it no longer waits for a request held here means that request needs no reply and
-    /// is not shown: both are let go, so no chat shows it as waiting until its turn ends.
+    /// word that it no longer waits for a request held here means that request needs no reply: it
+    /// is shown closed once its thread is named, never as waiting (#142), and that word is held
+    /// like any notification.
     fn hold(&mut self, thread: &str, line: &str, message: &Value) {
         if message["method"] == "serverRequest/resolved" {
             let id = &message["params"]["requestId"];
-            let before = self.held.len();
-            self.held
-                .retain(|h| h.thread != thread || h.request.as_ref() != Some(id));
-            if self.held.len() < before {
-                self.unrouted += 2;
-                return;
+            for held in self.held.iter_mut().filter(|h| h.thread == thread) {
+                if held.request.as_ref() == Some(id) {
+                    held.request = None;
+                    held.resolved = true;
+                }
             }
         }
         let request = (message.get("id").cloned()).filter(|_| message.get("method").is_some());
@@ -761,6 +763,7 @@ impl Codex {
             thread: thread.to_string(),
             line: line.to_string(),
             request,
+            resolved: false,
         });
         while self.held.len() > HELD {
             let Some(held) = self.held.pop_front() else {
@@ -841,10 +844,29 @@ impl Codex {
         self.releasing = true;
         while let Some(at) = (self.held.iter()).position(|h| self.whose(&h.thread).is_some()) {
             let held = self.held.remove(at).expect("a held message");
-            self.route(&held.line);
+            if held.resolved {
+                self.withdrawn(&held.thread, &held.line);
+            } else {
+                self.route(&held.line);
+            }
         }
         self.releasing = false;
         self.let_go();
+    }
+
+    /// Shows a request of `thread`'s that Codex said was resolved while it was held: closed, with
+    /// no reply to Codex, which waits for none (#142).
+    fn withdrawn(&mut self, thread: &str, line: &str) {
+        let Some((chat, who)) = self.whose(thread) else {
+            return;
+        };
+        let c = self.chats.entry(chat.clone()).or_default();
+        let Some(translator) = c.translator_mut(who.as_deref()) else {
+            return;
+        };
+        for event in translator.withdrawn(line) {
+            self.ready_event(&chat, event, Vec::new(), true, None);
+        }
     }
 
     /// Codex calls the driver's own tool. A call to send a file goes to the core; any other is
