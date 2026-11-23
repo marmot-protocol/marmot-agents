@@ -156,6 +156,40 @@ async fn record_claude_code_turn() {
     println!("recorded {asked} requests");
 }
 
+/// A recording double's container holds the key, so it goes with its test, even one that fails.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs Docker"]
+async fn a_recording_container_goes_with_its_test() {
+    let files = tempfile::tempdir().unwrap();
+    let key = files.path().join("key");
+    std::fs::write(&key, "not-a-key").unwrap();
+    let out = files.path().join("out");
+    let (named, name) = tokio::sync::oneshot::channel();
+    let failed = tokio::spawn(async move {
+        let harness = ("claude-code", "0", "anthropic");
+        let double = Double::record(&key, "http://127.0.0.1:9", "m", &out, harness).await;
+        named.send(double.container.clone().unwrap()).unwrap();
+        panic!("a recording that fails");
+    })
+    .await;
+    assert!(failed.is_err());
+    let name = name.await.unwrap();
+    let listed = std::process::Command::new("docker")
+        .args(["ps", "-a", "-q", "--filter"])
+        .arg(format!("name=^{name}$"))
+        .output()
+        .unwrap();
+    assert!(listed.status.success());
+    let left = String::from_utf8(listed.stdout).unwrap();
+    let _ = std::process::Command::new("docker")
+        .args(["rm", "-f", &name])
+        .output();
+    assert!(
+        left.trim().is_empty(),
+        "the container {name} outlived its test"
+    );
+}
+
 /// A throwaway copy of the project the recordings are made in, `tools/record/demo`.
 fn demo() -> tempfile::TempDir {
     let work = tempfile::tempdir().unwrap();

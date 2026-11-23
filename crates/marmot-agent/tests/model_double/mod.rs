@@ -11,11 +11,15 @@ use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
-/// A running double, stopped when dropped.
+/// A running double, stopped when dropped, and its container, if any, removed.
 pub struct Double {
     /// Its address, `http://127.0.0.1:<port>`.
     pub url: String,
+    /// The container a recording double runs in, by name.
+    pub container: Option<String>,
     _child: Child,
+    /// Declared after the child, so the client is stopped first.
+    _removal: Option<Container>,
     /// The script, or a recording's output folder, kept while the double runs.
     _files: tempfile::TempDir,
 }
@@ -84,9 +88,20 @@ impl Double {
         let files = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(out).unwrap();
         let (name, version, format) = harness;
+        let container = format!(
+            "marmot-agent-model-double-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        // Made before the container, so a panic while it starts removes it too.
+        let removal = Container(container.clone());
         let mut command = Command::new("docker");
         command
-            .args(["run", "--rm", "-i", "--network", "host", "--user"])
+            .args(["run", "--rm", "-i", "--name", &container])
+            .args(["--network", "host", "--user"])
             .arg(format!("{}:{}", uid(), gid()))
             .arg("-v")
             .arg(format!("{}:/key:ro", key_file.display()))
@@ -117,7 +132,10 @@ impl Double {
                 "--format",
                 format,
             ]);
-        Self::start(command, files).await
+        let mut double = Self::start(command, files).await;
+        double.container = Some(container);
+        double._removal = Some(removal);
+        double
     }
 
     async fn start(mut command: Command, files: tempfile::TempDir) -> Self {
@@ -142,7 +160,9 @@ impl Double {
             .expect("the model double names its address");
         Self {
             url,
+            container: None,
             _child: child,
+            _removal: None,
             _files: files,
         }
     }
@@ -173,6 +193,20 @@ impl Double {
             "the model double had no answer for {unanswered:#?}"
         );
         log.len()
+    }
+}
+
+/// A container, by name, removed when dropped: on success, failure and panic alike. Killing
+/// the `docker run` client alone leaves the container running, with the key mounted.
+struct Container(String);
+
+impl Drop for Container {
+    fn drop(&mut self) {
+        let _ = std::process::Command::new("docker")
+            .args(["rm", "-f", &self.0])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
     }
 }
 
