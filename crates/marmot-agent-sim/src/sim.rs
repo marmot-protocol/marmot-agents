@@ -44,7 +44,9 @@ pub struct Failed {
     /// The property.
     #[serde(flatten)]
     pub failure: Failure,
-    /// The step after which it was found; `None` in the fair part at the end.
+    /// The step after which it was found; `None` in the fair part at the end. For a schedule that
+    /// fails [`Schedule::check`], rejected before any step runs, the step that names what the
+    /// schedule lacks, or `None` when a message is posted to a chat it lacks.
     pub step: Option<usize>,
 }
 
@@ -84,8 +86,20 @@ struct Sim<'a> {
     broken: Option<Failure>,
 }
 
-/// Runs a schedule from the start, on a fresh runtime with a paused clock.
+/// Runs a schedule from the start, on a fresh runtime with a paused clock. A schedule that names a
+/// chat or a message it does not have ([`Schedule::check`]) fails at once, as the property
+/// `schedule`, before anything runs.
 pub fn run(schedule: &Schedule) -> Report {
+    if let Err(bad) = schedule.check() {
+        return Report {
+            failure: Some(Failed {
+                failure: fail("schedule", &bad.detail),
+                step: bad.step,
+            }),
+            trace: Vec::new(),
+            stats: Stats::default(),
+        };
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .start_paused(true)
