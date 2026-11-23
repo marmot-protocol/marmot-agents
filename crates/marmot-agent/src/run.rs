@@ -298,7 +298,9 @@ pub struct Core<D: Driver, M: Side = Marmot> {
 
 /// Bugs fixed before, put back on purpose so the simulator can show it finds each
 /// (`docs/design/verification.md`, "A check must be shown to catch its bug"). Only in a build
-/// with the `sim-bugs` feature, which no release has.
+/// with the `sim-bugs` feature, which no release has. The core's hooks for them are named `bug_…`
+/// (and `with_bugs`): the nightly mutation run leaves them out by that name, since only the
+/// simulator exercises them.
 #[cfg(feature = "sim-bugs")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Bugs {
@@ -783,7 +785,7 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// read. A group that waits to be read again is read at its time.
     async fn live(&mut self, message: Message) -> Result<(), Unsaved> {
         #[cfg(feature = "sim-bugs")]
-        if self.bugs.mark_from_live && self.read.contains_key(&message.group) {
+        if self.bug_marks_from_live(&message.group) {
             return self.bug_mark_from_live(message).await;
         }
         let group = message.group;
@@ -1016,6 +1018,13 @@ impl<D: Driver, M: Side> Core<D, M> {
             (*w * 2).clamp(Duration::from_millis(10), QUEUED_WAIT_MAX)
         });
         (self.retry).insert(group.clone(), (Instant::now() + wait, wait));
+    }
+
+    /// Whether the bug "a live message moves the mark to its place" is put back and applies to a
+    /// message in `group`: one with a mark.
+    #[cfg(feature = "sim-bugs")]
+    fn bug_marks_from_live(&self, group: &GroupKey) -> bool {
+        self.bugs.mark_from_live && self.read.contains_key(group)
     }
 
     /// The bug "a live message moves the mark to its place": the message is found in storage, by
