@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Checks the CoreLifecycle model: every case must end as it says.
+"""Checks the TLA+ models, CoreLifecycle and SocketProtocol: every case must end as it says.
 
-    python3 tools/tla/check.py [--out DIR] [--only NAME ...] [--counterexamples]
+    python3 tools/tla/check.py [--out DIR] [--model NAME] [--only NAME ...] [--counterexamples]
 
-The cases (formal/tla/README.md lists them):
+The cases (formal/tla/README.md and formal/tla/SocketProtocol.md list them):
 
 - the fair configuration, and those that let a send be refused or given up, pass every property;
 - the unfair one, and the configurations that drop an assumption, fail as stated;
@@ -32,12 +32,13 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from schedule import constants_of, schedule_of  # noqa: E402
+from schedule import constants_of, named_steps_of, schedule_of  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL_DIR = ROOT / "formal" / "tla"
 COUNTEREXAMPLES = MODEL_DIR / "counterexamples"
 MODEL = "CoreLifecycle"
+SOCKET = "SocketProtocol"
 RUN = ROOT / "tools" / "tla" / "run.sh"
 
 PASS = "pass"
@@ -59,6 +60,7 @@ class Case:
 
     def __init__(self, name, cfg, expected, changes=None, counterexample=None, what=None):
         self.name = name
+        self.model = cfg.split(".")[0]
         self.cfg = cfg
         self.expected = expected
         # A change replaces the line that starts with its key; INVARIANTS and PROPERTIES lines
@@ -174,6 +176,46 @@ CASES = [
     probe("NeverResettled", "CoreLifecycle.giveup-notice.cfg", "NeverResettled-given-up"),
     probe("NeverDroppedEarly", "CoreLifecycle.livestore.cfg"),
 ]
+# SocketProtocol: the socket between the core and one connector of each kind, across connections.
+EXITS, FRESH, KEPT = (f"{SOCKET}.{kind}.cfg" for kind in ("exits", "fresh", "kept"))
+CASES += [
+    Case("socket-exits", EXITS, PASS),
+    Case("socket-fresh", FRESH, PASS),
+    Case("socket-kept", KEPT, PASS),
+    Case("socket-kept-remembers", KEPT, invariant("S2"),
+         {"Bug": '"NoReset"', "INVARIANTS": "S2", **SAFETY},
+         counterexample="kept-connector-remembers",
+         what="NoReset, the Hermes plugin before the fix: one connector across connections, which "
+              "forgets nothing of the old core's. The connection goes while the turn runs, and the "
+              "core closes the turn as cut short; Hermes runs on, the connector comes back and "
+              "sends the turn's end, and the core changes the closed turn to done (S2). A held end "
+              "let go after the connection does the same."),
+    Case("socket-answer-on-effect", EXITS, invariant("S11"),
+         {"Bug": '"AnswerOnEffect"', "INVARIANTS": "S11", **SAFETY},
+         counterexample="answer-on-effect",
+         what="AnswerOnEffect, Claude Code's interrupt and Hermes's /new and /model before the "
+              "fix: the connector answers a control only once its effect shows. The harness is "
+              "slow to show it, the core's patience runs out, and it gives up a connector that "
+              "was there and working (S11): the turn is cut short and the request fails."),
+    Case("socket-not-taken-in-time", KEPT, invariant("S11"),
+         {"TakenInTime": "FALSE", "INVARIANTS": "S11", **SAFETY}),
+    mutant("AnswerBeforeHandoff", "S11", KEPT, name="socket-bug-AnswerBeforeHandoff"),
+    mutant("SettleUnpending", "S1", KEPT, name="socket-bug-SettleUnpending"),
+    Case("socket-unsupervised", EXITS, TEMPORAL,
+         {"Supervised": "FALSE", "INVARIANTS": None, "PROPERTIES": "L4"}),
+    Case("socket-prompt-in-flight", KEPT, invariant("UndeliveredNotRun"),
+         {"INVARIANTS": "UndeliveredNotRun", **SAFETY},
+         counterexample="prompt-in-flight",
+         what="The accepted limit of D-037: the connector hands the prompt to the harness and "
+              "answers, and the connection goes before the core reads the answer. The core tells "
+              "the chat it may not have been delivered and never sends it again; the gateway runs it."),
+    probe("NeverCut", KEPT, "socket-NeverCut"),
+    probe("NeverReconnected", KEPT, "socket-NeverReconnected"),
+    probe("NeverSettledByEffect", KEPT, "socket-NeverSettledByEffect"),
+    probe("NeverEventBeforeAnswer", KEPT, "socket-NeverEventBeforeAnswer"),
+    probe("NeverHoldDropped", KEPT, "socket-NeverHoldDropped"),
+    probe("NeverRunOnAfterDrop", KEPT, "socket-NeverRunOnAfterDrop"),
+]
 NAMES = [case.name for case in CASES]
 assert len(set(NAMES)) == len(NAMES), "case names must differ"
 
@@ -233,12 +275,20 @@ def breaks(case, cfg_text):
     return prop
 
 
+# SocketProtocol's chat: one prompt, and one interrupt of its turn.
+SOCKET_MESSAGES = [{"id": "p1", "chat": "c1", "kind": "prompt"},
+                   {"id": "r1", "chat": "c1", "kind": "control", "interrupts": "t1"}]
+
+
 def schedule_text(case, cfg_text, log):
     """The committed form of a counterexample: one JSON object, one step to a line."""
-    made = schedule_of(log, constants_of(cfg_text))
+    if case.model == SOCKET:
+        made = {"messages": SOCKET_MESSAGES, **named_steps_of(log)}
+    else:
+        made = schedule_of(log, constants_of(cfg_text))
     head = {
         "case": case.counterexample,
-        "model": MODEL,
+        "model": case.model,
         "config": case.cfg,
         "breaks": breaks(case, cfg_text),
         "what": case.what,
@@ -265,11 +315,12 @@ def main():
                         help=f"run only these cases, from: {', '.join(NAMES)}")
     parser.add_argument("--except", dest="skip", nargs="+", choices=NAMES, metavar="NAME",
                         default=[], help="run every case but these")
+    parser.add_argument("--model", choices=[MODEL, SOCKET],
+                        help="run only the cases of this model")
     parser.add_argument("--counterexamples", action="store_true",
                         help="write the committed counterexample schedules again")
     args = parser.parse_args()
 
-    model = (MODEL_DIR / f"{MODEL}.tla").read_text()
     failed = []
     print(f"{'case':32} {'expected':18} {'result':18} {'distinct':>10} {'generated':>11} {'secs':>6}")
     for case in CASES:
@@ -277,20 +328,22 @@ def main():
             continue
         if case.name in args.skip:
             continue
+        if args.model and case.model != args.model:
+            continue
         folder = args.out / case.name
         if folder.exists():
             shutil.rmtree(folder)
         folder.mkdir(parents=True)
-        (folder / f"{MODEL}.tla").write_text(model)
+        (folder / f"{case.model}.tla").write_text((MODEL_DIR / f"{case.model}.tla").read_text())
         cfg_text = configure((MODEL_DIR / case.cfg).read_text(), case.changes)
-        (folder / f"{MODEL}.cfg").write_text(cfg_text)
+        (folder / f"{case.model}.cfg").write_text(cfg_text)
         began = time.monotonic()
         # A case that must fail runs on one worker, so its trace and its counts are the same on
         # every run; one that must pass may use more ($TLC_WORKERS).
         env = dict(os.environ)
         if case.expected != PASS:
             env["TLC_WORKERS"] = "1"
-        ran = subprocess.run([str(RUN), str(folder), f"{MODEL}.tla", f"{MODEL}.cfg"],
+        ran = subprocess.run([str(RUN), str(folder), f"{case.model}.tla", f"{case.model}.cfg"],
                              capture_output=True, text=True, env=env)
         secs = time.monotonic() - began
         log = ran.stdout + ran.stderr

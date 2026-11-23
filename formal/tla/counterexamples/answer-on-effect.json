@@ -1,0 +1,24 @@
+{
+  "case": "answer-on-effect",
+  "model": "SocketProtocol",
+  "config": "SocketProtocol.exits.cfg",
+  "breaks": "S11",
+  "what": "AnswerOnEffect, Claude Code's interrupt and Hermes's /new and /model before the fix: the connector answers a control only once its effect shows. The harness is slow to show it, the core's patience runs out, and it gives up a connector that was there and working (S11): the turn is cut short and the request fails.",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"Connector": "exits", "Holds": false, "MaxDrops": 2, "TakenInTime": true, "Supervised": true, "FairConnector": true, "FairHarness": true, "FairTime": true, "Bug": "AnswerOnEffect"},
+  "messages": [{"id": "p1", "chat": "c1", "kind": "prompt"}, {"id": "r1", "chat": "c1", "kind": "control", "interrupts": "t1"}],
+  "steps": [
+    {"action": "Connect"},
+    {"action": "Hello"},
+    {"action": "Hand", "r": "p1"},
+    {"action": "Take", "r": "p1"},
+    {"action": "Read", "m": {"r": "p1", "ok": true, "k": "resp"}},
+    {"action": "Run"},
+    {"action": "Read", "m": {"k": "ev", "st": "open", "s": []}},
+    {"action": "Ask"},
+    {"action": "Hand", "r": "r1"},
+    {"action": "Take", "r": "r1"},
+    {"action": "GiveUp"}
+  ],
+  "end": {"kind": "violation"}
+}

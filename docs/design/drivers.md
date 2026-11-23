@@ -372,12 +372,17 @@ session per chat:
   turn, the turn ends cancelled and the next prompt resumes the session.
 - An approval waits in Claude Code's `canUseTool` callback until the answer comes. "Allow once" allows the
   call as asked, a standing choice allows it with the rule Claude Code suggested, and the last choice denies.
-  A question from `AskUserQuestion` is answered the same way.
-- Interrupt calls `interrupt()`. New session closes the chat's SDK session, and the next prompt starts a
-  fresh one. `set` changes the permission mode or the model.
+  A question from `AskUserQuestion` is answered the same way. Each waits under the id the SDK gives the
+  request; one that came without, or with an empty one, would get one of the connector's own, so two never
+  share an item.
+- Interrupt calls `interrupt()`, and is taken once Claude Code has it: Claude Code may reply only once the
+  turn has stopped, later than the core waits. A reply within two seconds that refuses it refuses the request.
+  New session closes the chat's SDK session, and the next prompt starts a fresh one. `set` changes the
+  permission mode or the model.
 - The event that shows an answer's or a control's effect names it
   ([D-028](../decisions.md#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)): the
-  approval's next edit, the end of the interrupted turn, the session item's edit that shows the new setting
+  approval's next edit, the end of the turn as interrupted (a turn that finished on its own first settles
+  nothing, and the core settles the interrupt as having no effect), the session item's edit that shows the new setting
   (sent as soon as Claude Code takes it), or the end of the old session.
 - An event too large for a line of the socket (4 MB) goes without its native message, and if it is still too
   large, with its longest texts cut in the middle until it fits. Its `prompts` and `settles` are kept.
@@ -849,13 +854,25 @@ does, and feeds it to the chat's translator:
   call Hermes gives a platform for it, by the question's id, and is closed only once Hermes has taken the
   answer. A request to confirm a typed command is answered by typing the answer, as a person would.
 - For Hermes a control is a typed command. Interrupt types `/stop` in the turn's chat as its sender, new
-  session types `/new`, and setting the model types `/model <id>`, after which the plugin asks Hermes for the
-  session's model. No other setting can be changed from the chat yet. A session's name gives its sender, so
-  after a restart too a new session is asked for as the sender whose session it is.
+  session types `/new`, and setting the model types `/model <id>`, after which, once Hermes says it switched
+  (or, for `/model reset`, that it cleared the override), the plugin asks Hermes for the session's model. No other setting can be changed from the chat yet. A
+  session's name gives its sender, so after a restart too a new session is asked for as the sender whose
+  session it is. A control is taken once Hermes has the command, not once Hermes answers it: the core waits
+  only 30 seconds for a request to be taken, and the plugin takes the core's requests one at a time.
 - The event that shows an answer's or a control's effect names it: the approval's or question's next edit,
   the end of the interrupted turn, the end of the old session once Hermes has replaced it (or the new session,
-  when the old one was not shown since the plugin started), or the session item that shows the new model.
-  When Hermes refuses `/new` or `/model`, the request is refused with what Hermes said.
+  when the old one was not shown since the plugin started), or the session item that shows the model read
+  after Hermes took the change. When Hermes refuses `/new` or `/model`, its reply, which the chat sees as
+  command output, settles the request (provisional; before, the request was refused with Hermes's words).
+  When Hermes first asks to confirm the command, its question is not the outcome: its reply to the answer
+  is. One reset settles one request, so a second new session for a session whose reset is still on its way
+  is refused as `busy` (provisional). An answer Hermes did not take can
+  be given again.
+- The plugin keeps one connector while Hermes runs, across connections to the core. When a connection goes,
+  that core closes the items open in the chat and settles the requests it handed over
+  ([D-070](../decisions.md#d-070-a-restart-closes-the-turn-as-interrupted)); the plugin then sends nothing
+  more of those items, drops a turn's end it held, and forgets what waited for an effect, so the next core
+  hears only of what is new. A session item is still sent, with its next change.
 - The session item lists Hermes's commands, read once from Hermes's command registry, and the session's model,
   asked for once in each session.
 - Hermes can report a turn complete and start it again a moment later, for the first message of a session. The

@@ -665,6 +665,7 @@ impl Codex {
             let refused = Err(Refusal {
                 reason: Reason::Invalid,
                 detail: Some("the driver has no such tool, or it was not given a path.".into()),
+                unanswered: false,
             });
             let reply = tool_reply(&id, &refused);
             let then = Written {

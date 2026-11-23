@@ -1,5 +1,7 @@
 # CoreLifecycle: a TLA+ model of the core
 
+The socket between the core and a connector is a model of its own, [`SocketProtocol`](SocketProtocol.md).
+
 Status: built and checked with TLC on small bounds, as
 [D-093](../../docs/decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top) and
 [the verification page](../../docs/design/verification.md) plan. The model, its bounds and its switches are
@@ -69,7 +71,9 @@ tries a send again is not modelled: a send may be tried again at once.
 | `LastResortTaken` | MDK never refuses a last-resort send to a live group: the core's close of an item, or a `failed` notice in place of a dropped one, is as small as the core makes anything | an item left open in the chat, the accepted limit (`last-resort-refused`, below) |
 
 Besides the switches: a save is atomic (`Store::save` writes a new file and renames it); the driver goes when the
-core goes (a built-in driver is its child, and a socket connector starts again with a new core); MDK keeps what
+core goes (a built-in driver is its child; a socket connector need not go, and
+[`SocketProtocol`](SocketProtocol.md) checks what each kind does across a connection instead: one that outlives it
+starts from what the new core knows); MDK keeps what
 it stored across a crash; a refusal from MDK is for good (the group is gone, or MDK refuses those bytes again);
 MDK keeps a send's token before it answers, so a token MDK posted under is one it knows when the core tries again
 (with `TokenDedupe`).

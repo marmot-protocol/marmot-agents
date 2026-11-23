@@ -1,0 +1,25 @@
+{
+  "case": "kept-connector-remembers",
+  "model": "SocketProtocol",
+  "config": "SocketProtocol.kept.cfg",
+  "breaks": "S2",
+  "what": "NoReset, the Hermes plugin before the fix: one connector across connections, which forgets nothing of the old core's. The connection goes while the turn runs, and the core closes the turn as cut short; Hermes runs on, the connector comes back and sends the turn's end, and the core changes the closed turn to done (S2). A held end let go after the connection does the same.",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"Connector": "kept", "Holds": true, "MaxDrops": 2, "TakenInTime": true, "Supervised": true, "FairConnector": true, "FairHarness": true, "FairTime": true, "Bug": "NoReset"},
+  "messages": [{"id": "p1", "chat": "c1", "kind": "prompt"}, {"id": "r1", "chat": "c1", "kind": "control", "interrupts": "t1"}],
+  "steps": [
+    {"action": "Connect"},
+    {"action": "Hello"},
+    {"action": "Hand", "r": "p1"},
+    {"action": "Take", "r": "p1"},
+    {"action": "Read", "m": {"r": "p1", "ok": true, "k": "resp"}},
+    {"action": "Run"},
+    {"action": "Read", "m": {"k": "ev", "st": "open", "s": []}},
+    {"action": "Drop"},
+    {"action": "Connect"},
+    {"action": "Hello"},
+    {"action": "EndTurn", "hold": false},
+    {"action": "Read", "m": {"k": "ev", "st": "done", "s": []}}
+  ],
+  "end": {"kind": "violation"}
+}

@@ -768,6 +768,7 @@ impl Pi {
             let refused = Err(Refusal {
                 reason: Reason::Invalid,
                 detail: Some("it was not given a path.".into()),
+                unanswered: false,
             });
             let reply = file_reply(&dialog, &refused);
             let _ = self.send(chat, None, &reply); // a Pi that has gone needs no answer

@@ -381,6 +381,7 @@ mod tests {
         let refusal = Refusal {
             reason: Reason::Failed,
             detail: Some("could not read /home/alice/secret.txt".into()),
+            unanswered: false,
         };
         shows(&format!("{refusal:?}"), &["Failed"], &["secret.txt"]);
 

@@ -359,6 +359,38 @@ fn the_saved_session_is_named_until_the_driver_takes_a_prompt() {
     assert_eq!(next.session, None);
 }
 
+// A prompt whose answer was lost with the connection may have reached the harness: the chat is
+// told it may not have been delivered, and it is not sent again (D-037, D-129). One refused is
+// told it was not.
+#[test]
+fn a_prompt_whose_answer_was_lost_may_have_been_delivered() {
+    let (mut talk, prompt) = started();
+    let lost = Refusal {
+        unanswered: true,
+        ..Refusal::new(Reason::Failed)
+    };
+    let told = talk.prompted(&prompt, Err(lost));
+    let item = the_item(&mut talk, |_| told).2;
+    assert!(is_refused(&item, "failed"));
+    assert!(
+        item.event
+            .header()
+            .text
+            .starts_with("Your message may not have been passed to the agent"),
+        "{}",
+        item.event.header().text
+    );
+    let again = the_prompt(talk.heard(heard(direct(), "e2", OWNER, "and again")));
+    let told = talk.prompted(&again, Err(Refusal::new(Reason::Failed)));
+    let item = the_item(&mut talk, |_| told).2;
+    assert!(
+        item.event
+            .header()
+            .text
+            .starts_with("Your message was not passed to the agent")
+    );
+}
+
 fn session_item(approve_sandbox: bool) -> body::Session {
     body::Session {
         harness_version: "0.169.0".into(),
@@ -1460,6 +1492,39 @@ fn a_forgotten_item_goes_on_from_its_last_version() {
         (late.version, late.first),
         (3, Some(EventKey::from("e-old")))
     );
+}
+
+// A session goes on across connections, and so do its numbers (D-059): the number a session
+// reached is kept after the items that showed it are forgotten, so a connector's next connection
+// numbers that session's events after it.
+#[test]
+fn a_sessions_last_number_outlives_its_items() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let header = Header {
+        harness: "codex".into(),
+        session: Some("earlier".into()),
+        turn: Some("t0".into()),
+        item: "early".into(),
+        seq: 40,
+        state: State::Done,
+        title: "A title".into(),
+        text: "the plain rendering".into(),
+    };
+    sent(
+        &mut talk,
+        &chat,
+        AgentEvent::new(header, turn(), None).unwrap(),
+        "e-early",
+    );
+    ack_all(&mut talk);
+    finish_many(&mut talk, &chat, 3000);
+    assert!(
+        !kept_items(&talk).contains(&format!("{chat}/early")),
+        "forgotten"
+    );
+    let talk = conversation(talk.saved().clone());
+    assert_eq!(talk.saved().last_numbers().get("earlier"), Some(&40));
 }
 
 // Finished items kept only because their last version waited to be sent are forgotten once it

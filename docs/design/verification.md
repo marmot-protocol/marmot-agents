@@ -7,7 +7,8 @@ on 2026-11-21. The property list, the models and the layers below are the plan; 
 change as the work goes. It comes from reading all the code after M3 and the M4 work in progress, and from how MDK
 tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules). Under
 [first, fix what is known](#first-fix-what-is-known), the behaviour the fixes made visible is provisional: built,
-and waiting for the owner. Of the models, `CoreLifecycle` is built (2026-11-22); the others are planned. The
+and waiting for the owner. Of the models, `CoreLifecycle` is built (2026-11-22), and so is `SocketProtocol` (2026-11-23); the others
+are planned. The
 conformance suite's first phase, for the built-in drivers, is built (2026-11-22); its second, for the socket
 connectors, is designed. The core's sends went over to MDK 0.19.0's token-based sends on 2026-11-22, which ends
 the duplicate a restart could make; how often a send is tried is decided
@@ -350,7 +351,7 @@ simulator scenario. A test checks that the model's actions and the code's still 
 | --- | --- | --- | --- |
 | `CoreLifecycle` | The conversation, the run loop, saving and crashing: requests pending and settled, items and versions, read marks, sessions | S1 to S4, S10, S12, L1 to L3 | Built, in [`formal/tla`](../../formal/tla/README.md): checked on small bounds on every pull request, with its counterexamples, defects and reachability probes. It found two gaps when a send is given up or refused in a live group (S2, L1, L2), since fixed and checked; see its README |
 | `DriverTransport` | One driver's side, for any harness: requests in flight, effects awaiting settlement, a dropped wait, a restart of the harness, two chats | S1, S5, S11, S13, L1, L2 | Planned |
-| `SocketProtocol` | The hello, a request answered while events arrive, a connector going and another coming, one at a time | S11, L4 | Planned |
+| `SocketProtocol` | The hello, a request answered while events arrive, a connector going and another coming, one at a time; for each kind of connector, what survives a connection | S11, L4 | Built, in [`formal/tla`](../../formal/tla/SocketProtocol.md): checked on small bounds on every pull request. It showed that a connector kept across connections must forget what the old core knew, and that a connector must answer a request once its harness has it, both fixed for Hermes and Claude Code; see its page |
 | `Gateways` | Small models of OpenClaw's approval vouching and Hermes's held turn end | S5, S6, S1 | Planned |
 
 Model traces then drive the code: a trace the checker produces is replayed against the real conversation, and

@@ -479,6 +479,7 @@ impl Acp {
             let refused = Refusal {
                 reason: Reason::Invalid,
                 detail: Some(detail.into()),
+                unanswered: false,
             };
             let _ = call.reply.send(Err(refused));
         };

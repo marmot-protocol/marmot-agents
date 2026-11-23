@@ -15,12 +15,20 @@
 
 import type { AgentEvent, Line } from "./translate.ts";
 import { Translator } from "./translate.ts";
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { fileServer, SEND_FILE_TOOL, type FileServer } from "./files.ts";
 import { CoreConnection, MAX_MESSAGE, notificationSize, Refusal, type Capabilities, type Hello } from "./socket.ts";
 
 type Json = Record<string, unknown>;
+
+/**
+ * How long an interrupt waits for Claude Code's reply before it counts as taken. Claude Code can reply
+ * only once the turn has stopped, later than the core waits for a request to be taken (30 s); a reply
+ * within this time that refuses it still refuses the request.
+ */
+export const TAKEN_WITHIN_MS = 2000;
 
 /** A user message, as the SDK takes it on its streaming input. */
 export interface UserMessage {
@@ -401,9 +409,12 @@ export class Connector {
       return Promise.resolve({ behavior: "allow", updatedInput: input });
     }
     const { signal, ...rest } = opts;
-    const requestId = rest["requestId"];
+    // The SDK names every request (`requestId`, the control request's id). Were one to come without,
+    // the connector names it, so that two such requests waiting at once are never one item.
+    const named = rest["requestId"] !== undefined && rest["requestId"] !== null && rest["requestId"] !== "";
+    const requestId = named ? rest["requestId"] : randomUUID();
     const kind = toolName === "AskUserQuestion" ? "question" : "approval";
-    const item = `${kind}:${requestId === undefined || requestId === null ? "None" : String(requestId)}`;
+    const item = `${kind}:${String(requestId)}`;
     return new Promise((resolve) => {
       if (chat.run !== run || run.closed) {
         resolve({ behavior: "deny", message: DECLINED });
@@ -416,7 +427,9 @@ export class Connector {
         if (chat.waiting.get(item)?.resolve === resolve) chat.waiting.delete(item);
         resolve({ behavior: "deny", message: DECLINED });
       });
-      this.feed(chat, { dir: "in", via: "callback", msg: { kind: "can_use_tool", toolName, input, options: rest } });
+      const msg: Json = { kind: "can_use_tool", toolName, input, options: rest };
+      if (!named) msg["requestId"] = requestId;
+      this.feed(chat, { dir: "in", via: "callback", msg });
     });
   }
 
@@ -522,12 +535,29 @@ export class Connector {
     const run = chat.run!;
     if (request !== "") push(chat.byTurn, turn, request);
     this.feed(chat, { dir: "out", via: "call", msg: { method: "interrupt" } });
-    try {
-      const response = await run.q.interrupt();
-      if (chat.run === run) this.feed(chat, { dir: "in", via: "call", msg: { method: "interrupt", response: response ?? null } });
-    } catch {
+    const replied = run.q.interrupt().then(
+      (response) => {
+        if (chat.run === run) this.feed(chat, { dir: "in", via: "call", msg: { method: "interrupt", response: response ?? null } });
+        return true;
+      },
+      () => false,
+    );
+    // Taken once Claude Code has it: its reply may wait for the turn to stop.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const waited = new Promise<null>((r) => (timer = setTimeout(() => r(null), TAKEN_WITHIN_MS)));
+    const quick = await Promise.race([replied, waited]);
+    clearTimeout(timer);
+    if (quick === false) {
       this.unsettle(chat.byTurn, turn, request);
       throw new Refusal("failed");
+    }
+    if (quick === null) {
+      void replied.then((ok) => {
+        if (ok) return;
+        // Refused after it was taken: the turn's end is not its effect, and the core settles it (D-087).
+        this.warn("Claude Code refused an interrupt");
+        this.unsettle(chat.byTurn, turn, request);
+      });
     }
   }
 
@@ -598,7 +628,12 @@ export class Connector {
       };
       take(chat.byItem, event.item);
       const open = event.state === "running" || event.state === "waiting";
-      if (event.type === "turn" && !open) take(chat.byTurn, event.turn);
+      if (event.type === "turn" && !open) {
+        // An interrupt is settled only by a turn's end that shows it: a turn that finished on its own
+        // first was not stopped by it, and the core settles it as having no effect (D-087).
+        if (event.state === "cancelled") take(chat.byTurn, event.turn);
+        else if (event.turn !== undefined) chat.byTurn.delete(event.turn);
+      }
       if (event.type === "session") {
         const values = settingValues(event.body);
         const shown = (s: PendingSet) => s.session === event.session && values.get(s.setting) === s.value;

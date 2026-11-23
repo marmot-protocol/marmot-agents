@@ -56,6 +56,7 @@ fn refused(reason: Reason, detail: &str) -> Refusal {
     Refusal {
         reason,
         detail: Some(detail.into()),
+        unanswered: false,
     }
 }
 

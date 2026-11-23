@@ -293,6 +293,14 @@ class ClaudeApprovals(unittest.TestCase):
         self.assertEqual(self.reply(claude, "r2", "c0")["item"], "approval:r2")
         self.assertEqual(self.reply(claude, "r1", "c0")["item"], "approval:r1")
 
+    def test_a_request_named_empty_takes_the_name_the_driver_gave_it(self):
+        claude = translate.Claude()
+        claude.feed({"dir": "in", "via": "callback", "msg": {
+            "kind": "can_use_tool", "toolName": "Bash", "input": {"command": "ls"}, "requestId": "d1",
+            "options": {"toolUseID": "tool-1", "requestId": ""}}})
+        self.assertEqual(translate.crate_shape(claude.events[-1])["item"], "approval:d1")
+        self.assertEqual(self.reply(claude, "d1", "c0")["item"], "approval:d1")
+
     def test_a_standing_choice_is_recorded_as_that_choice(self):
         claude = translate.Claude()
         self.ask(claude, "r1", "ls", suggestions=[{"type": "addRules"}])

@@ -330,8 +330,9 @@ python3 -m unittest discover -s install -p 'test_*.py'   # runs each install scr
 `.github/workflows/release.yml` runs only on a version tag, so a change to it is checked by reading it, and by
 [actionlint](https://github.com/rhysd/actionlint) if you have it.
 
-For any change under `formal/` or `tools/tla/`, or to the core code a model follows (`formal/tla/README.md` says
-which), with Java 21, or Docker when there is no Java (the script then runs TLC in a pinned Java image):
+For any change under `formal/` or `tools/tla/`, or to the code a model follows (`formal/tla/README.md` and
+`formal/tla/SocketProtocol.md` say which), with Java 21, or Docker when there is no Java (the script then runs
+TLC in a pinned Java image):
 
 ```sh
 python3 tools/tla/check.py   # the fair model passes; every counterexample, deliberate defect and

@@ -240,6 +240,10 @@ pub struct Saved {
     /// again goes on from there instead of starting a new row.
     #[serde(default)]
     forgotten: VecDeque<Forgotten>,
+    /// The highest number each session's events reached, by session (`""` for events that name
+    /// none), kept apart from the items, which are forgotten (D-059).
+    #[serde(default)]
+    numbers: BTreeMap<String, u64>,
     /// Requests handed to the driver and not settled, by the core's id for them.
     pending: BTreeMap<String, Pending>,
     /// What is to be sent and has not been sent yet, oldest first: kept so a send that failed,
@@ -262,6 +266,21 @@ pub struct Saved {
 }
 
 impl Saved {
+    /// The last number each session's events reached, by session (`""` for events that name
+    /// none): as the state file keeps it, or, in one from before it kept them, as the items show it. A
+    /// driver whose numbering starts again, as a connector's does on each connection, goes on
+    /// from there (D-059).
+    pub fn last_numbers(&self) -> HashMap<String, u64> {
+        let mut last: HashMap<String, u64> = self.numbers.clone().into_iter().collect();
+        for record in self.items.values() {
+            let header = record.last.header();
+            let session = header.session.as_ref().map(|s| s.as_str().to_string());
+            let at = last.entry(session.unwrap_or_default()).or_insert(0);
+            *at = header.seq.max(*at);
+        }
+        last
+    }
+
     /// Takes up a state file whose items' first events went out under the temporary kind of
     /// D-069, which no edit applies to: each item's next version goes out as a new kind 1201
     /// event, the first of the item in the chat from then on. The agent's words were chat
@@ -783,6 +802,7 @@ impl Conversation {
                     return Err(Refusal {
                         reason: Reason::NotSupported,
                         detail: Some("A secret answer is taken only in a two-person chat. Answer it at the terminal.".into()),
+                        unanswered: false,
                     });
                 }
                 let replies = questions
@@ -932,6 +952,13 @@ impl Conversation {
                 self.saved.sessions.insert(chat.clone(), session.clone());
             }
         }
+        let session = header.session.as_ref().map(|s| s.as_str().to_string());
+        let number = self
+            .saved
+            .numbers
+            .entry(session.unwrap_or_default())
+            .or_insert(0);
+        *number = header.seq.max(*number);
         let key = format!("{chat}/{}", header.item.as_str());
         let started_by = match emitted.event.body() {
             Body::Turn(_) => emitted
@@ -1957,6 +1984,12 @@ fn not_acted_on(refusal: &Refusal) -> String {
 }
 
 fn not_delivered(refusal: &Refusal) -> String {
+    if refusal.unanswered {
+        // The harness may have it; it is still never sent again (D-037, D-129).
+        return "Your message may not have been passed to the agent: the connection to it was lost \
+                before it answered. It is not sent again."
+            .into();
+    }
     format!(
         "Your message was not passed to the agent. {}",
         not_acted_on(refusal)
