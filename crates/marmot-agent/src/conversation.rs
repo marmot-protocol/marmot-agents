@@ -1659,6 +1659,14 @@ impl Conversation {
                 }
             }
         }
+        // A chat that is not sent the agent's full activity is sent an item's shown fields, not
+        // its native message, which can hold what the chat is not sent (D-136).
+        if !self.sent_everything(&queued.group)
+            && let Sending::Item { item, .. } = &mut what
+            && item.event.native().is_some()
+        {
+            item.event = carrier::rebuild(&item.event, item.event.body().clone());
+        }
         let token = Token {
             send: queued.token.clone(),
             mdk: self.mdk_token(queued),

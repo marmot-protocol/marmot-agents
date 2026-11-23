@@ -3728,6 +3728,56 @@ fn the_owners_chat_is_read_from_its_members_at_each_send() {
     assert!(!queued_keys(&again, &g).contains(&format!("{chat}/r3")));
 }
 
+/// A turn's end as Claude Code reports a denied approval, with the tool's input in its native
+/// message.
+fn denied_turn_end() -> AgentEvent {
+    let native = marmot_agent_events::Native {
+        kind: "result".into(),
+        payload: serde_json::value::RawValue::from_string(
+            r#"{"permission_denials":[{"tool_input":{"command":"cat notes"}}]}"#.into(),
+        )
+        .unwrap(),
+    };
+    let header = event("t1", State::Done, turn()).header().clone();
+    AgentEvent::new(header, turn(), Some(native)).unwrap()
+}
+
+/// What the last item queued for `group` carries, as it goes out.
+fn last_sent_native(talk: &Conversation, group: &GroupKey) -> bool {
+    let Some((_, Sending::Item { item, .. })) = talk.queued(group).pop() else {
+        panic!("no item")
+    };
+    let out = carrier::item(&item).unwrap();
+    assert!(
+        out.tags.iter().all(|t| t[0] != "left_out"),
+        "{:?}",
+        out.tags
+    );
+    let read = carrier::read_item(out.kind, &out.content, &out.tags).unwrap();
+    let native = out.tags.iter().any(|t| t[0] == "native");
+    assert_eq!(read.item.event.native().is_some(), native);
+    native
+}
+
+// A chat without full activity is sent an item's shown fields and not its native message, which
+// can hold what the chat is not sent, such as a denied tool's input; the owner's chat and a
+// group the owner lists are sent it whole, and the core keeps it whole (D-007, D-136).
+#[test]
+fn a_chat_without_full_activity_is_sent_no_native_message() {
+    let (mut talk, chat) = prompted_in_group(conversation(Saved::default()));
+    assert!(goes_out(&mut talk, &chat, denied_turn_end()));
+    assert!(!last_sent_native(&talk, &group().group));
+
+    let (mut talk, prompt) = started();
+    assert!(goes_out(&mut talk, &prompt.chat.id.0, denied_turn_end()));
+    assert!(last_sent_native(&talk, &direct().group));
+
+    let listed = marmot_agent::FullActivity::Groups(vec![group().group]);
+    let (mut talk, chat) = prompted_in_group(conversation(Saved::default()).with_activity(listed));
+    assert!(goes_out(&mut talk, &chat, denied_turn_end()));
+    assert!(last_sent_native(&talk, &group().group));
+}
+
 // A notice that settles a control is how the harness says what came of it, such as a refused
 // new session or a failed compaction, so a group is sent it; a notice that settles nothing is
 // not (D-028, D-136).
