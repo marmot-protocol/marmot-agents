@@ -99,11 +99,14 @@ jobs:
         run: python3 tools/tla/check.py --bounds larger
 
       - name: Keep TLC's logs
+        # Each case's log and configuration, not TLC's state files, which take gigabytes.
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: tlc-larger-bounds
-          path: target/tla/
+          path: |
+            target/tla/*/tlc.log
+            target/tla/*/*.cfg
           if-no-files-found: ignore
           retention-days: 30
 
