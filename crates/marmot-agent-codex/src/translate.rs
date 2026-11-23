@@ -343,11 +343,7 @@ impl Translator {
                     let Some(p) = self.read::<RequestResolved>(method, params) else {
                         return;
                     };
-                    let thread = p.thread_id.as_deref();
-                    if thread.is_some()
-                        && self.session.is_some()
-                        && thread != self.session.as_deref()
-                    {
+                    if self.for_another_thread(p.thread_id.as_deref()) {
                         return;
                     }
                     if let Some(id) = &p.request_id {

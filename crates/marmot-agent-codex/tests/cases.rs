@@ -682,3 +682,26 @@ fn token_usage_for_another_thread_is_not_counted_in_this_turn() {
     assert_eq!(used.output_tokens, Some(40));
     assert_eq!(translator.other_threads(), 1);
 }
+
+// `serverRequest/resolved` for another thread is counted as another thread's message (D-060), as
+// every other message for another thread is.
+#[test]
+fn a_request_resolved_in_another_thread_is_counted() {
+    let mut translator = Translator::new();
+    for (direction, message) in [
+        (Direction::Out, PICK.to_string()),
+        (Direction::In, thread("th1")),
+        (Direction::In, TURN_STARTED.to_string()),
+        (
+            Direction::In,
+            r#"{"id": 0, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "c", "command": "ls"}}"#.to_string(),
+        ),
+        (
+            Direction::In,
+            r#"{"method": "serverRequest/resolved", "params": {"threadId": "th9", "requestId": 0}}"#.to_string(),
+        ),
+    ] {
+        translator.feed(direction, &message);
+    }
+    assert_eq!(translator.other_threads(), 1);
+}
