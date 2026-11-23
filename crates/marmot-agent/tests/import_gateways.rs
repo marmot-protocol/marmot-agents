@@ -37,7 +37,7 @@ use agent_control::{AgentControlRequest, AgentControlResponse};
 use common::within;
 use marmot_account::AccountHome;
 use marmot_agent::EventKey;
-use marmot_agent::carrier::{self, ITEM_KIND};
+use marmot_agent::carrier::{self, Asked, EDIT_KIND, ITEM_KIND};
 use marmot_agent::import::{self, Connector, Options};
 use marmot_agent::rights::Who;
 use marmot_agent_events::body::Body;
@@ -395,6 +395,63 @@ impl Install {
                 let turn = m.tags.iter().find(|t| t.len() >= 2 && t[0] == "turn")?;
                 turns.contains(&turn[1]).then(|| turn[1].clone())
             })
+    }
+
+    /// Sets the session's model from the chat, as an app's menu does: a `set` of `model` to
+    /// `value`, kind 1202 (D-029). Waits for what settles it, and checks that it is the session's
+    /// item, showing `shown` as the model, never a notice saying why it had no effect (D-028).
+    async fn set_model(
+        &self,
+        group: &cgka_traits::GroupId,
+        group_hex: &str,
+        value: &str,
+        shown: &str,
+    ) {
+        let asked = Asked::Set {
+            setting: "model".into(),
+            value: value.into(),
+        };
+        let out = carrier::request(
+            &marmot_agent::PubKey(self.agent.clone()),
+            None,
+            &asked,
+            value,
+        );
+        let sent = (self.person_runtime)
+            .send_custom_event(&self.person, group, out.kind, out.tags, out.content)
+            .await
+            .unwrap();
+        let request = EventKey(sent.message_ids[0].clone());
+        for _ in 0..ANSWER * 2 {
+            let query = AppMessageQuery {
+                group_id_hex: Some(group_hex.to_string()),
+                kinds: Some(vec![ITEM_KIND, EDIT_KIND]),
+                limit: None,
+            };
+            let settled = (self.person_runtime.messages_with_query(&self.person, query))
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| m.sender == self.agent)
+                .filter_map(|m| carrier::read_item(m.kind, &m.plaintext, &m.tags))
+                .find(|r| r.item.settles.contains(&request));
+            if let Some(read) = settled {
+                let event = &read.item.event;
+                let Body::Session(session) = event.body() else {
+                    self.show_log();
+                    panic!("{value:?} was not taken: {}", event.header().text);
+                };
+                let model = session.settings.iter().find(|s| s.id == "model");
+                assert_eq!(
+                    model.and_then(|m| m.value.as_deref()),
+                    Some(shown),
+                    "the session shows the model after {value:?}"
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        self.show_log();
+        panic!("the agent never settled the model's {value:?}");
     }
 
     /// Stops the old connector as systemd stops it, at once: with MDK at the revision the core
@@ -889,6 +946,16 @@ async fn a_hermes_install_moves_over() {
         .await;
     install.nothing_from_before(&model, moved).await;
     assert_eq!(install.answers(&group_hex, BEFORE_ANSWER), answered_before);
+
+    // The model switched from the chat, and back. The plugin types `/model` for Hermes and tells
+    // from its reply that it was taken, by Hermes's own catalog of replies (`agent.i18n.t`),
+    // which Hermes does not publish for plugins: this is what fails when that changes.
+    install
+        .set_model(&group, &group_hex, "scripted-two", "scripted-two")
+        .await;
+    install
+        .set_model(&group, &group_hex, "reset", "scripted")
+        .await;
 
     let _ = core.kill().await;
     install.end().await;
