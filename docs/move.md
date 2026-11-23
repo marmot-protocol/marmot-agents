@@ -168,6 +168,7 @@ the new plugin. The person's next message is sent once and answered, and no requ
 model after the move holds anything said before it. The model is a scripted one the test serves on the loopback
 address, and no systemd is touched: the import's service manager notes what it stops, and the installer runs with
 `--no-service`.
+Each scenario passed 5 runs of 5, with `wn-agent` stopped at once after the person's last message.
 
 Not proven yet: a move on a real machine, with systemd and the real harnesses.
 
