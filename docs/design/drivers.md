@@ -4,7 +4,8 @@ Status: draft. Which driver each harness gets is decided
 ([D-005](../decisions.md#d-005-which-driver-each-harness-gets)), and so is the preference for official
 libraries ([D-006](../decisions.md#d-006-prefer-official-interfaces-and-libraries)), and so are the trait and
 the capability flags ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)), and so is how
-the Codex driver splits its work ([D-060](../decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes)).
+the Codex driver splits its work ([D-060](../decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes)),
+and how it shows Codex's subagents ([D-117](../decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)).
 So is how drivers are tested
 ([D-074](../decisions.md#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)), and what the
 Pi driver builds on ([D-086](../decisions.md#d-086-the-pi-driver-reads-pis-rpc-messages-with-types-of-its-own)).
@@ -318,8 +319,14 @@ Codex reads a group message with its sender's name
 resumed ([D-063](../decisions.md#d-063-codex-keeps-a-session-so-it-can-be-resumed)), and a form from an MCP
 server is declined for now ([D-064](../decisions.md#d-064-the-codex-driver-declines-an-mcp-servers-form-until-forms-are-designed)). Both halves are written
 ([`crates/marmot-agent-codex`](../../crates/marmot-agent-codex)). The transport runs one Codex for every chat of an
-agent, and starts it with subagents switched off until how a chat shows them is decided
-([subagents as threads](subagents.md)). Every session it starts gets the driver's `send_file` tool
+agent, with Codex's subagents on, shown flat in the chat of the turn that started them
+([D-117](../decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them);
+threads of their own are [a proposal](subagents.md)). Each subagent's thread gets a translator of its own in its
+parent's chat, whose turns are `task` items and whose words name the `subagent` tool item that started it as
+`parent`; a message for a thread not yet named is held until the item that names it arrives. Codex does not stop
+a subagent when its parent is interrupted, so Stop interrupts every running turn under the one it names, each
+parent before the subagents it started, and is settled by the end of the last. A subagent's open items close when
+Codex stops or the chat's session ends. Every session it starts gets the driver's `send_file` tool
 ([sending a file](#sending-a-file)); a call becomes a `tool` item, of kind `other`, like any tool. A
 request waits for Codex at most a minute in all, to read what the driver writes, to pick a session, or for a
 request before it; a Codex that has not read or answered by then has stopped working, and the connection ends,

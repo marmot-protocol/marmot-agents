@@ -15,7 +15,7 @@ how each message relates to the proposed [event model](../design/event-model.md)
 | [`fixtures/recordings/acp/opencode`](../../fixtures/recordings/README.md#acp-opencode) | 12 scripted sessions with OpenCode 2.3.2 over ACP, recorded on 2026-11-21 | Read in full, for the [ACP section](#acp-opencode) only |
 | [`fixtures/recordings/acp/goose`](../../fixtures/recordings/README.md#acp-goose) | The same 12 with Goose 1.59.2, in a container, and `restart_mid_turn`, recorded on 2026-11-21 | Read in full, for the [Goose section](#acp-goose) only |
 | [`fixtures/recordings/acp/cursor`](../../fixtures/recordings/README.md#acp-cursor) | 11 of them with the Cursor Agent CLI 2026.11.19, recorded on 2026-11-21 | Read in full, for the [Cursor section](#acp-cursor) only |
-| [`tools/prototype/translate.py`](../../tools/prototype/translate.py) | A prototype that turns every recording into proposed agent events, except the subagent recordings, which nothing translates yet | To check that nothing is left without a home |
+| [`tools/prototype/translate.py`](../../tools/prototype/translate.py) | A prototype that turns every recording into proposed agent events, except the subagent recordings: it follows one thread, and showing several is the Codex driver's transport's work ([D-117](../decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)) | To check that nothing is left without a home |
 
 Limits of this evidence:
 
@@ -240,6 +240,16 @@ A client that wants Stop to stop everything has to interrupt each subagent's tur
 (`ephemeral: true`). Most `v2` runs failed: the agent reported a "thread-store error", "no rollout found". With
 `ephemeral: false`, all six worked. Inferred: a `v2` subagent's thread is stored beside its parent's, so the
 parent must be stored.
+
+**What Codex 0.171.0's schema adds.** Read on 2026-11-23 in the schema the installed `codex-cli 0.171.0` writes
+(`codex app-server generate-json-schema`), not recorded: a `Thread` has `parentThreadId`, "set if this thread is
+a subagent", and `thread/started` carries a `Thread`; `subAgentActivity`'s `kind` can also be `interrupted`; and
+`collabAgentToolCall`'s `tool` is one of `spawnAgent`, `sendInput`, `resumeAgent`, `wait`, `closeAgent`,
+`sendMessage`, `followupTask`, `interruptAgent` and `listAgents`, with `agentsStates` giving each subagent's
+status and message. Whether 0.171.0 sends `thread/started` for a subagent was not checked. A `Thread`'s
+`source` can also name threads Codex starts for a review, a compaction or memory consolidation. `codex features
+list` on that machine showed `multi_agent` as deprecated and on, and `multi_agent_v2` as stable and off; the
+driver starts Codex with its own settings, and the model list says which runtime each model uses.
 
 **Compared with T3 Code.** T3 Code's recordings of 0.156.1, read in its repository
 (`apps/server/src/orchestration-v2/testkit/fixtures/subagent*`) on 2026-11-20, agree on all of the above that
