@@ -210,10 +210,9 @@ class Connector:
             if word in CONFIRM and chat.translator.confirm in chat.translator.open:
                 self.awaiting[text_of(m.get("message_id"))] = chat.confirming
                 chat.confirming = None
-        model_read = (line.get("via") == "call" and line.get("dir") == "in"
-                      and m.get("method") == "get_session_model_settings" and "result" in m)
         before = dict(self.generations)
         events = chat.translator.feed(line)
+        model_read = chat.translator.model_read
         self.save_generations(before)
         if settled_by_reply is not None:
             # Hermes's reply is the command's outcome: the notice that shows it settles the request.
@@ -563,6 +562,7 @@ class Connector:
             if said.startswith(MODEL_TAKEN):
                 # Hermes took it: the session's model, read now, shows it, and settles the request.
                 pending["taken"] = True
+                chat.translator.model_switched(self.key_of(where, sender))
                 self.background(self.hermes.read_model_settings(where, sender))
                 return False
             if pending not in chat.sets:

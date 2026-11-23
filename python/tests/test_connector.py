@@ -88,10 +88,13 @@ def prompt(message, text="hello", chat=CHAT, sender=ALICE):
     return {"message": message, "text": text, "chat": chat, "sender": sender, "attachments": []}
 
 
-def model_settings(user="u-1", model="m"):
+def model_settings(user="u-1", model="m", read=None):
+    """A read of a session's model and Hermes's answer, the plugin's `read` id on both when given."""
     source = {"chat_id": "c-1", "chat_type": "dm", "user_id": user}
-    return [{"dir": "out", "via": "call", "msg": {"method": "get_session_model_settings", "params": {"source": source}}},
-            {"dir": "in", "via": "call", "msg": {"method": "get_session_model_settings", "result": {
+    named = {} if read is None else {"id": read}
+    return [{"dir": "out", "via": "call", "msg": {"method": "get_session_model_settings", **named,
+                                                   "params": {"source": source}}},
+            {"dir": "in", "via": "call", "msg": {"method": "get_session_model_settings", **named, "result": {
                 "session_key": f"agent:main:marmot:dm:c-1:{user}", "model": model, "provider": "custom"}}}]
 
 
@@ -650,6 +653,42 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.feed(said("Model switched to `vendor/n`", self.hermes.typed[-1][2], notify=True))
         await asyncio.sleep(0)
         self.assertEqual(self.of("session")[-1]["settles"], ["r-2"])
+
+    async def test_a_model_reset_to_the_model_shown_is_settled_by_the_read_after_it(self):
+        """A reset that leaves the model as it was shows nothing new: the read after it settles the
+        request all the same, without the core waiting for the effect it would not see."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), *model_settings(model="m"), complete("m-1"))
+        session = self.of("session")[-1]["session"]
+        self.hermes.read_model = lambda: self.feed(*model_settings(model="m"))
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "set", "session": session, "setting": "model", "value": "reset"}})
+        self.feed(said("Session model override cleared — now using `m` (the channel/global default). "
+                       "Conversation history kept.", self.hermes.typed[-1][2], notify=True))
+        await asyncio.sleep(0)
+        shown = self.of("session")[-1]
+        self.assertEqual((shown["text"], shown.get("settles")), ("Model: m, Provider: custom", ["r-1"]))
+
+    async def test_a_model_read_before_a_switch_neither_settles_it_nor_hides_the_read_after(self):
+        """A read of the model started before Hermes took a `/model` may answer after it, with the model
+        before: it settles nothing and shows nothing, and the read started after the switch still does."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"))
+        earlier_out, earlier_in = model_settings(model="m", read="read-1")
+        later_out, later_in = model_settings(model="n", read="read-2")
+        self.feed(earlier_out)
+        session = self.of("session")[-1]["session"]
+        self.hermes.read_model = lambda: self.feed(later_out)
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "set", "session": session, "setting": "model", "value": "n"}})
+        self.feed(said("Model switched to `n`\nProvider: Custom endpoint", self.hermes.typed[-1][2], notify=True))
+        await asyncio.sleep(0)
+        self.feed(earlier_in)
+        self.assertEqual([e for e in self.sent if "settles" in e], [])
+        self.assertNotIn("Model: m", [e["text"] for e in self.of("session")])
+        self.feed(later_in)
+        shown = self.of("session")[-1]
+        self.assertEqual((shown["text"], shown.get("settles")), ("Model: n, Provider: custom", ["r-1"]))
 
     async def test_what_is_not_offered_is_refused(self):
         with self.assertRaises(Refusal) as refused:

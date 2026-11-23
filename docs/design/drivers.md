@@ -862,7 +862,8 @@ does, and feeds it to the chat's translator:
 - The event that shows an answer's or a control's effect names it: the approval's or question's next edit,
   the end of the interrupted turn, the end of the old session once Hermes has replaced it (or the new session,
   when the old one was not shown since the plugin started), or the session item that shows the model read
-  after Hermes took the change. When Hermes refuses `/new` or `/model`, its reply, which the chat sees as
+  after Hermes took the change, sent even when the model is as it was; a read begun before the change shows
+  and settles nothing. When Hermes refuses `/new` or `/model`, its reply, which the chat sees as
   command output, settles the request (provisional; before, the request was refused with Hermes's words).
   When Hermes first asks to confirm the command, its question is not the outcome: its reply to the answer
   is. One reset settles one request, so a second new session for a session whose reset is still on its way

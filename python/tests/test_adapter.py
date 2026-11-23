@@ -141,6 +141,22 @@ class ModelReads(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.shown("group:c-2:u-1"), "Model: model-u-1, Provider: custom")
         self.assertEqual(self.shown("group:c-2:u-2"), "Model: model-u-2, Provider: custom")
 
+    async def test_each_read_and_its_answer_carry_one_id_of_their_own(self):
+        """Two reads of one session may be under way at once, as one at a turn's start and one after a
+        `/model`: each answer names its own read, so neither is taken for the other."""
+        lines = []
+        record = self.adapter.connector.record
+        self.adapter.connector.record = lambda line, chat: (lines.append(line), record(line, chat))
+        await self.start("m-a", "u-1")
+        self.adapter.read_settings(Source("c-2", "u-1"))
+        await self.answered("u-1")
+        await asyncio.gather(*self.adapter.reading)
+        reads = [(line["dir"], line["msg"].get("id")) for line in lines
+                 if line["msg"].get("method") == "get_session_model_settings"]
+        asked = [r for d, r in reads if d == "out"]
+        self.assertEqual(len(set(asked)), 2)
+        self.assertEqual(sorted(r for d, r in reads if d == "in"), sorted(asked))
+
     async def test_a_read_overtaken_by_a_new_session_or_failed_is_not_kept(self):
         connector = self.adapter.connector
         await self.start("m-a", "u-1")
