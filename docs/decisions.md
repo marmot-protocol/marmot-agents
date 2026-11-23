@@ -2006,10 +2006,13 @@ the turn that started it, as Claude Code's subagents already are. Nothing is add
 - Stop in the chat stops the agent's turn and every subagent under it, including one still working after the
   agent's turn has ended, and is settled once, when the last of them has ended
   ([D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it),
-  [D-029](#d-029-three-shared-controls-and-the-rest-comes-from-the-harness)). A Stop that names no item, once the
-  agent's turn has ended, stops what is still working beside it: the turn its newest open `task` names.
-- Every open subagent item closes as cancelled when Codex stops, when the chat's session ends, and when the core
-  restarts ([D-070](#d-070-a-restart-closes-the-turn-as-interrupted)).
+  [D-029](#d-029-three-shared-controls-and-the-rest-comes-from-the-harness)). A subagent whose turn starts while
+  the Stop waits is stopped too. If Codex refuses to stop one that then runs on, the Stop is settled as failed, by
+  that refusal. A Stop that names no item, once the agent's turn has ended, stops what is still working beside it:
+  the turn its newest open `task` names.
+- When the chat's session is replaced, its subagents still working are stopped, since Codex does not stop them
+  with it. Every open subagent item closes as cancelled when Codex stops, when the chat's session ends, and when
+  the core restarts ([D-070](#d-070-a-restart-closes-the-turn-as-interrupted)).
 
 How the transport does it is internal, and is point 8 of [subagents as threads](design/subagents.md#to-decide):
 each subagent's thread has a translator of its own, in the chat of the thread that started it; a message for a

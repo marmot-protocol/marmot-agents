@@ -103,7 +103,7 @@ one session.
 | `stop_after_the_turn_has_ended` | Stop naming the agent's ended turn stops the subagent still working under it |
 | `stop_stops_nested_subagents` | Stop stops the agent, its subagent and that subagent's subagent, each parent first |
 | `dies_with_subagents_running` | The harness dies while two subagents work: every item closes (S2) |
-| `new_session_with_subagents_running` | A new session while a subagent of the old one works: its items close (D-070) |
+| `new_session_with_subagents_running` | A new session while a subagent of the old one works: it is stopped, and its items close (D-070, D-117) |
 | `restart_with_subagents_running` | A restart while a subagent works: the next prompt takes the session up, and nothing of the old subagent is shown |
 
 `replays_subagent_recordings` plays four of `fixtures/recordings/codex/subagents` back through the Codex driver,

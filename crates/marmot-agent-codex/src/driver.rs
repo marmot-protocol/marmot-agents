@@ -22,8 +22,8 @@
 //! subagent can speak first. Interrupting a turn does not stop Codex's subagents, so Stop
 //! interrupts every turn under the one it names, each parent before the subagents it started, and
 //! any whose start is read while it waits; it is settled once, by the end of the last, or as failed
-//! by Codex's refusal to stop one that runs on. A subagent's open items close when Codex stops or
-//! the chat's session ends.
+//! by Codex's refusal to stop one that runs on. When the chat's session is replaced its subagents
+//! are interrupted. A subagent's open items close then, and when Codex stops.
 
 use crate::{
     Direction, SEND_FILE, Setup, Translator, collaboration_mode_list, initialize, initialized,
@@ -856,8 +856,8 @@ impl Codex {
         }
     }
 
-    /// The chat's session has ended: its subagents' open items close, and nothing more they say
-    /// is shown (D-070).
+    /// The chat's session has ended: its subagents are stopped, since Codex does not stop them
+    /// with it, their open items close, and nothing more they say is shown (D-070, D-117).
     fn let_subagents_go(&mut self, chat: &ChatId) {
         let Some(c) = self.chats.get_mut(chat) else {
             return;
@@ -865,8 +865,26 @@ impl Codex {
         let subagents = std::mem::take(&mut c.subagents);
         c.parents.clear();
         let mut closed = Vec::new();
-        for (thread, mut translator) in subagents {
+        let mut threads: Vec<_> = subagents.into_iter().collect();
+        threads.sort_by(|a, b| a.0.cmp(&b.0));
+        for (thread, mut translator) in threads {
             self.subthreads.remove(&thread);
+            if let Some(turn) = translator.turn().map(String::from) {
+                let id = self.id();
+                let action = Action::Interrupt {
+                    turn: turn.as_str().into(),
+                };
+                if let Ok(text) = translator.control(id, &action, &self.setup) {
+                    let then = Written {
+                        chat: chat.clone(),
+                        who: Some(thread.clone()),
+                        text: text.clone(),
+                        request: Some((id, Purpose::Plain)),
+                        settles: Vec::new(),
+                    };
+                    self.queue(&text, Some(then));
+                }
+            }
             closed.extend(translator.harness_stopped());
         }
         for event in closed {

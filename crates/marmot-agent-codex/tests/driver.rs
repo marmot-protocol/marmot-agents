@@ -1225,3 +1225,41 @@ async fn what_threads_said_before_they_were_named_keeps_its_order() {
     }
     assert_eq!(words, ["b1", "a1", "b2", "a2"]);
 }
+
+// A chat's session replaced while a subagent of it runs: Codex does not stop the subagent with
+// the session, so the driver does (D-117).
+#[tokio::test]
+async fn a_new_session_stops_the_old_ones_subagents() {
+    let (mut codex, mut fake) = running().await;
+    fake.say(started_by("a1", "sub1")).await;
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    fake.say(turn("turn/completed", "completed")).await;
+    until(&mut codex, is_turn(State::Done)).await;
+    let fresh = Control {
+        request: "r2".into(),
+        by: alice(),
+        action: Action::NewSession {
+            chat: prompt("m-0", "").chat,
+            session: Some("th1".into()),
+        },
+    };
+    let driver = tokio::spawn(async move {
+        codex.control(fresh).await.unwrap();
+        codex
+    });
+    let start = fake.hear().await;
+    assert_eq!(start["method"], "thread/start");
+    let mut codex = driver.await.unwrap();
+    fake.say(json!({"id": start["id"], "result": {"thread": {"id": "th2"}, "model": "m1"}}))
+        .await;
+    let reading = tokio::spawn(async move {
+        let events = until(&mut codex, |_| false).await;
+        (codex, events)
+    });
+    let interrupt = next_heard(&mut fake).await;
+    assert_eq!(interrupt["method"], "turn/interrupt");
+    assert_eq!(interrupt["params"]["threadId"], "sub1");
+    assert_eq!(interrupt["params"]["turnId"], "st1");
+    reading.abort();
+}

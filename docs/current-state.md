@@ -93,8 +93,9 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   [D-063](decisions.md#d-063-codex-keeps-a-session-so-it-can-be-resumed), [D-064](decisions.md#d-064-the-codex-driver-declines-an-mcp-servers-form-until-forms-are-designed)).
 - Codex's subagents are on, and shown flat in the chat that started them: a `subagent` tool item, a `subagent`
   task for each of its turns, its words naming that tool item as `parent`. Stop stops the agent and every
-  subagent under its turn, settled once when the last has ended; a Stop naming no item, after the turn, stops
-  what still works beside it ([D-117](decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)).
+  subagent under its turn, settled once when the last has ended, or as failed if one Codex refused to stop runs
+  on; a Stop naming no item, after the turn, stops what still works beside it; a new session stops the old one's
+  subagents ([D-117](decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)).
 - Pi: native, in Rust, on `pi --mode rpc`, with types of its own, running the person's own `pi` by default
   ([D-086](decisions.md#d-086-the-pi-driver-reads-pis-rpc-messages-with-types-of-its-own), [D-102](decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has), [D-092](decisions.md#d-092-the-choices-made-while-building-m3-are-accepted)).
 - OpenCode, Goose and Cursor: the ACP driver in the core ([D-005](decisions.md#d-005-which-driver-each-harness-gets), [D-080](decisions.md#d-080-cursor-is-driven-through-acp), [D-092](decisions.md#d-092-the-choices-made-while-building-m3-are-accepted)).

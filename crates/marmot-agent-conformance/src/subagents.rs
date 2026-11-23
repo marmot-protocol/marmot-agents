@@ -349,7 +349,8 @@ pub async fn dies_with_subagents_running<S: Subject>(subject: S) -> Result<(), V
 }
 
 /// A new session while a subagent of the old one works, after the agent's turn has ended: the old
-/// session has ended, and every item of its subagents closes (D-070).
+/// session has ended, its subagent is stopped, since the harness does not stop it with the
+/// session, and every item of its subagents closes (D-070, D-117).
 pub async fn new_session_with_subagents_running<S: Subject>(subject: S) -> Result<(), Violation> {
     let mut run = Run::start(subject).await;
     let m = taken(run.prompt("c-1", "#outlive #sleep").await?, "the prompt")?;
@@ -363,12 +364,20 @@ pub async fn new_session_with_subagents_running<S: Subject>(subject: S) -> Resul
     let session = (run.seen.iter())
         .find_map(|e| e.event.header().session.clone())
         .ok_or_else(|| broke(FLAT, "no session shown"))?;
+    let before = interrupts_heard(&run.subject.fake().heard());
     let (request, result) = run.new_session("c-1", Some(session.as_str())).await?;
     taken(result, "the new session")?;
     run.wait("L2", "the new session", |e| e.settles.contains(&request))
         .await?;
     run.drain(Duration::from_millis(100)).await;
     run.checkpoint().await?;
+    let heard = interrupts_heard(&run.subject.fake().heard()) - before;
+    if heard != 1 {
+        return Err(broke(
+            FLAT,
+            format!("{heard} subagents were stopped with their session, not 1"),
+        ));
+    }
     let open: Vec<String> = (items(&run.seen, "c-1").into_iter())
         .filter(|e| !matches!(e.event.body(), Body::Session(_)))
         .filter(|e| matches!(e.event.header().state, State::Running | State::Waiting))
