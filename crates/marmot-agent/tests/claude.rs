@@ -6,15 +6,18 @@
 //! downloads and reads (D-090), and the chat moves the agent to a folder inside it, where its next
 //! session works (D-101).
 //!
-//! It approves only the exact command each step asks for, once, in a throwaway folder. It needs
-//! Node 24, `npm ci` run in `packages/claude-code`, and a signed-in Claude Code, so it runs only
-//! when asked for:
+//! It approves only the exact command each step asks for, once, in a throwaway folder. It runs
+//! twice. On the model double (`tools/model_double`), Claude Code is the real one and only its
+//! model is scripted: it needs Node 24 and `npm ci` run in `packages/claude-code`, and no key or
+//! sign-in, so it always runs. On a signed-in Claude Code and its real model, it runs only when
+//! asked for:
 //!
 //! ```sh
 //! cargo test -p marmot-agent --test claude -- --ignored --nocapture
 //! ```
 
 mod common;
+mod model_double;
 
 use common::{Chat, TURN, World, files_sent, lines, within};
 use marmot_agent::carrier::Asked;
@@ -23,13 +26,31 @@ use marmot_agent::run::serve;
 use marmot_agent::socket::Endpoint;
 use marmot_agent_events::State;
 use marmot_agent_events::body::Body;
+use model_double::Double;
+use serde_json::{Value, json};
 use std::path::Path;
 use tokio::process::{Child, Command};
 
+/// The model Claude Code runs on.
+enum Model {
+    /// The real one, as the machine's Claude Code is signed in.
+    SignedIn,
+    /// The model double at this address, with a throwaway home for Claude Code, so nothing of the
+    /// machine's own sign-in or settings is read or touched.
+    Double(String, tempfile::TempDir),
+}
+
+impl Model {
+    fn double(double: &Double) -> Self {
+        Self::Double(double.url.clone(), tempfile::tempdir().unwrap())
+    }
+}
+
 /// Starts the Claude Code driver for the agent whose home is `home`, working in `work`.
-fn driver(home: &Path, work: &Path) -> Child {
+fn driver(home: &Path, work: &Path, model: &Model) -> Child {
     let package = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packages/claude-code");
-    Command::new("node")
+    let mut command = Command::new("node");
+    command
         .arg("src/main.ts")
         .arg("--home")
         .arg(home)
@@ -37,14 +58,61 @@ fn driver(home: &Path, work: &Path) -> Child {
         .arg(work)
         .args(["--model", "haiku", "--permission-mode", "default"])
         .current_dir(package)
-        .kill_on_drop(true)
-        .spawn()
-        .expect("node runs the driver")
+        .kill_on_drop(true);
+    if let Model::Double(url, own) = model {
+        // Only what Node needs from this machine; Claude Code's home and settings are new, and its
+        // key is a dummy the double takes.
+        command
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", own.path())
+            .env("CLAUDE_CONFIG_DIR", own.path().join("claude"))
+            .env("ANTHROPIC_BASE_URL", url)
+            .env("ANTHROPIC_API_KEY", "model-double")
+            .env("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "1");
+    }
+    command.spawn().expect("node runs the driver")
+}
+
+/// A model reply that runs `command` with Claude Code's shell tool.
+fn bash(command: &str) -> Value {
+    json!({"call": "Bash", "input": {"command": command, "description": "Run the command asked for"}})
+}
+
+/// What the model does at each step of the scenario, by words of the step's prompt.
+fn script() -> Value {
+    let then_done = |call: Value| json!([[call], [{"text": "done"}]]);
+    json!({"prompts": [
+        {"when": "`touch marker.txt`", "replies": [
+            [{"thinking": "One command, exactly as asked."}, {"text": "Running it."}, bash("touch marker.txt")],
+            [{"text": "done"}]]},
+        {"when": "`touch never.txt`", "replies": then_done(bash("touch never.txt"))},
+        {"when": "Reply with the word fresh.", "replies": [[{"text": "fresh"}]]},
+        {"when": "`echo ran >> runs.txt && sleep 20`",
+         "replies": then_done(bash("echo ran >> runs.txt && sleep 20"))},
+        {"when": "Which shell command did you run last?",
+         "replies": [[{"text": "echo ran >> runs.txt && sleep 20"}]]},
+        {"when": "Send the file runs.txt",
+         "replies": then_done(json!({"call": "mcp__marmot__send_file", "input": {"path": "runs.txt"}}))},
+        {"when": "`touch moved.txt`", "replies": then_done(bash("touch moved.txt"))},
+    ]})
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "needs Node, the driver's packages and a signed-in Claude Code"]
 async fn claude_code_end_to_end() {
+    end_to_end(&Model::SignedIn).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn claude_code_on_the_model_double() {
+    let double = Double::scripted(&script()).await;
+    end_to_end(&Model::double(&double)).await;
+    let asked = double.all_answered().await;
+    println!("the model double answered {asked} requests");
+}
+
+async fn end_to_end(model: &Model) {
     let work = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();
     // The connector states its folder in its hello, and files come from there (D-090, D-101).
@@ -61,7 +129,7 @@ async fn claude_code_end_to_end() {
         };
         serve(marmot, &config, &store, listener, token, now(), stop).await
     });
-    let mut claude = driver(home.path(), work.path());
+    let mut claude = driver(home.path(), work.path(), model);
 
     let group = world
         .runtime
@@ -118,7 +186,7 @@ async fn claude_code_end_to_end() {
     assert!(matches!(ended.item.event.body(), Body::Session(_)));
     // The driver restarts before the next prompt: the ended session must not come back.
     claude.kill().await.unwrap();
-    claude = driver(home.path(), work.path());
+    claude = driver(home.path(), work.path(), model);
     let asked = chat.say("Reply with the word fresh.").await;
     let turn = chat.turn_for(&asked).await;
     let done = chat.turn_at(&turn, State::Done).await;
@@ -138,7 +206,7 @@ async fn claude_code_end_to_end() {
     claude.kill().await.unwrap();
     println!("crashed mid-turn");
     chat.turn_at(&cut_off, State::Cancelled).await;
-    claude = driver(home.path(), work.path());
+    claude = driver(home.path(), work.path(), model);
     let follow_up = chat
         .say("Which shell command did you run last? Reply with only the command.")
         .await;

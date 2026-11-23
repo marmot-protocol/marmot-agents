@@ -78,6 +78,7 @@ being replaced by what is designed here, not extended.
 | Work on moving an install over | `crates/marmot-agent/src/import`, after `docs/move.md` and `docs/reference/current-connectors.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Plan or add tests, models or proofs | `docs/design/verification.md` |
+| Run a real harness on a scripted or recorded model, or record a cassette | `tools/model_double/README.md`, after `docs/design/verification.md` ("A model double") |
 | Work on the simulator, or replay one of its failure capsules | `crates/marmot-agent-sim/README.md`, after `docs/design/verification.md` |
 | Work on the driver conformance suite or its fake harnesses, or add a driver to it | `crates/marmot-agent-conformance/README.md`, after `docs/design/verification.md` |
 | Change the link check | `lychee.toml` |
@@ -247,6 +248,10 @@ The workspace's tests include the driver conformance suite (`crates/marmot-agent
 built-in driver on fakes of its harness in about 30 seconds; its Pi tests need `python3`, as Pi's own do. For a
 change to a driver, run it alone with `cargo test -p marmot-agent-conformance`.
 
+The workspace's tests also run the real Claude Code and the real Codex through the core on the model double
+(`tools/model_double`), which stands in for their model, so they need no key or sign-in. They need Node 24 with
+`npm ci` run in `packages/claude-code`, and `codex` on the `PATH`, at the release CI installs.
+
 The workspace's tests include the simulator's at a small count of runs. CI's Rust job leaves them out
 (`--exclude marmot-agent-sim`) and runs them in a job of its own, in release with more runs
 (`MARMOT_AGENT_SIM_RUNS`); for a change to the core's run loop, conversation or Marmot side, run that too:
@@ -342,7 +347,7 @@ python3 docs/images/generate.py   # commit the regenerated files
 git diff --stat                   # the SVG files must not change unless generate.py did
 ```
 
-For a change to the recordings, the recording tools, the prototype or the event model:
+For a change to the recordings, the recording tools, the model double, the prototype or the event model:
 
 ```sh
 python3 tools/record/inventory.py fixtures/recordings/codex --kinds    # every file must parse; CI does not run this
@@ -352,6 +357,7 @@ python3 tools/record/inventory.py fixtures/recordings/acp/goose --kinds      # n
 python3 tools/record/inventory.py fixtures/recordings/acp/cursor --kinds     # nor this
 python3 tools/record/inventory.py fixtures/recordings/pi --kinds             # nor this
 python3 -m unittest discover -s tools/prototype -p 'test_*.py'         # cases no recording holds
+python3 -m unittest discover -s tools/model_double -p 'test_*.py'      # the model double's wire formats
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
     fixtures/recordings/hermes fixtures/recordings/openclaw fixtures/recordings/acp/opencode \
     fixtures/recordings/acp/goose fixtures/recordings/acp/cursor fixtures/recordings/pi
