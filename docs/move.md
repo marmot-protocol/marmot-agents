@@ -8,6 +8,9 @@ start when one overlaps the home), `--leave-running`, what the import does with 
 identities, are proposals until the project owner accepts them. That an installer killed outright may leave a
 gateway with no plugin that works until it runs again, at the moments named below, is decided
 ([D-116](decisions.md#d-116-a-gateways-plugin-swap-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)).
+Decided for a gateway's move ([D-119](decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)): the
+OpenClaw installer finishes a half-done move in OpenClaw's settings file, the gateway's conversation starts
+fresh, and `--replace-plugin` lists the gateway's work folder in `files_from`, which it does not do yet.
 
 One of today's connectors (installed by MDK's `install-*-marmot.sh`) moves to the core without anyone inviting
 the agent again. The core uses the old account home where it is, so the agent keeps its identity, its keys, its
@@ -91,7 +94,8 @@ encryption state and its chats.
    back, but leaves that service in place, and the core may have run: to go back to today's connector
    from there, follow [going back](#going-back), with the backup of the home. A run that finds the new
    plugin in and the old plugin's settings still in the channel, which OpenClaw then refuses to read or
-   start with, takes those settings out of OpenClaw's settings file, after keeping a copy of it.
+   start with, takes those settings out of OpenClaw's settings file, after keeping a copy of it
+   ([D-119](decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)).
 
 On its first start the core reads nothing already in a chat as a prompt, so it never runs an old prompt again.
 That also means a message sent to the agent between the import and that first start is not answered: keep the
@@ -102,8 +106,8 @@ for the core ([MDK #3602](https://github.com/marmot-protocol/mdk/issues/3602)). 
 revision the core uses: the import tests stop `wn-agent` at once after the person's last message, and each
 passed 10 runs of 10.
 
-After the move, the gateway starts a new conversation in each chat: the new plugin names a chat by the
-core's own id for it, not by the group, so what Hermes or OpenClaw kept of a chat's conversation stays with
+After the move, the gateway starts a new conversation in each chat ([D-119](decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)): the new
+plugin names a chat by the core's own id for it, not by the group, so what Hermes or OpenClaw kept of a chat's conversation stays with
 the old one (seen with OpenClaw, and read in the Hermes plugin's code). The chat itself, and everything said in
 it, is where it was.
 
@@ -144,6 +148,10 @@ The rule is that nobody may do more afterwards than the old install let them:
   is never allowed by default. The core checks `files_from` against the home again each time it starts, and
   refuses to start if a folder has come to overlap it, unless the owner has allowed files from the home
   ([D-099](decisions.md#d-099-files-from-the-agents-own-home-are-refused-by-default-and-the-owner-may-allow-them)).
+  For Hermes and OpenClaw, `--replace-plugin` is to list the gateway's work folder in `files_from`, as a fresh
+  install does
+  ([D-119](decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)).
+  It does not yet: it leaves the `files_from` line the import wrote as it is.
 
 Who may approve is the owner alone, the default
 ([D-010](decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)). The harness works in one

@@ -146,6 +146,16 @@ The project owner agreed with this direction on 2026-11-17 and chose not to fix 
 standing settings live in a configuration file and nothing else administers the core
 ([D-073](decisions.md#d-073-standing-settings-live-in-a-configuration-file)). The rest waits until after it.
 
+### Q-32 What does the socket's chat section carry?
+
+Hermes and OpenClaw give their agents message tools, so an agent can act in its chat on its own initiative:
+send, edit and delete a message, react, and read history. What an agent may do there is decided
+([D-042](decisions.md#d-042-an-agent-may-act-in-its-own-chat-and-may-not-change-a-group-or-the-account)), and
+so is the channel plugins' contract without it
+([D-118](decisions.md#d-118-the-channel-plugin-contract-is-accepted-as-written)). The requests that carry it are
+not designed, except `send_file`, which is built: see [the chat section](design/socket-protocol.md#the-chat-section).
+Until they are, OpenClaw's message tool is offered no actions.
+
 ## Conversation handling
 
 ### Q-07 How does a chat map to a harness session?
