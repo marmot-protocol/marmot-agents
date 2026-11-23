@@ -18,6 +18,20 @@ CHAT = {"id": "c-1", "group": False, "name": "Alice"}
 GROUP = {"id": "c-2", "group": True, "name": "Family"}
 ALICE = {"id": "u-1", "name": "Alice"}
 BOB = {"id": "u-2", "name": "Bob"}
+# Hermes's replies, by their keys in its catalog, as the pinned Hermes renders them in English.
+PHRASES = json.loads((Path(__file__).parent / "hermes_phrases.json").read_text(encoding="utf-8"))["phrases"]
+
+
+def phrase(key, **fields):
+    """What Hermes's `agent.i18n.t(key, **fields)` says, as the pinned Hermes says it."""
+    return PHRASES.get(key, key).format(**fields)
+
+
+def switched(model):
+    """Hermes's reply to a `/model` it took (`_model_switch_confirmation`), its first lines."""
+    return "\n".join([phrase("gateway.model.switched", model=model),
+                      phrase("gateway.model.provider_label", provider="Custom endpoint"),
+                      phrase("gateway.model.session_only_hint")])
 
 
 class FakeHermes:
@@ -56,6 +70,9 @@ class FakeHermes:
         self.model_reads.append((chat["id"], sender["id"]))
         if self.read_model is not None:
             self.read_model()
+
+    def phrase(self, key, **fields):
+        return phrase(key, **fields)
 
 
 def hook(method, **params):
@@ -134,7 +151,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         for line in lines:
             self.connector.record(line, chat)
 
-    def resets(self, reply="✨ Session reset! Starting fresh."):
+    def resets(self, reply=phrase("gateway.reset.header_default")):
         """Hermes answers a typed /new as it does: a turn for the command, and its reply."""
         def answer(text, message_id):
             if text == "/new":
@@ -370,7 +387,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         settled = [e for e in self.sent if "settles" in e]
         self.assertEqual([(e["type"], e["text"], e["settles"]) for e in settled],
                          [("notice", "⛔ /new is admin-only here.", ["r-1"])])
-        self.hermes.answer = lambda text, message_id: answer(text, message_id, "✨ Session reset! Starting fresh.")
+        self.hermes.answer = lambda text, message_id: answer(text, message_id, phrase("gateway.reset.header_default"))
         await self.connector.serve("control", {"request": "r-2", "by": BOB, "action": {
             "type": "new_session", "chat": GROUP, "session": session}})
         settled = [e for e in self.sent if "settles" in e][1:]
@@ -392,7 +409,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         # Hermes answers the /new typed as Alice while Bob's turn is the latest, and starts no turn for it.
         def answer(text, message_id):
             if text == "/new":
-                self.feed(said("✨ Session reset! Starting fresh.", message_id, True, "c-2"), chat="c-2")
+                self.feed(said(phrase("gateway.reset.header_default"), message_id, True, "c-2"), chat="c-2")
         self.hermes.answer = answer
         await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
             "type": "new_session", "chat": GROUP, "session": "group:c-2:u-1"}})
@@ -518,7 +535,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(self.connector.serve("control", {"request": "r-2", "by": ALICE, "action": {
             "type": "new_session", "chat": CHAT, "session": session}}), 1)
         typed = self.hermes.typed[-1]
-        self.feed(started(typed[2], "/new"), said("✨ Session reset! Starting fresh.", typed[2], notify=True),
+        self.feed(started(typed[2], "/new"), said(phrase("gateway.reset.header_default"), typed[2], notify=True),
                   complete(typed[2]))
         settled = [e for e in self.sent if "settles" in e]
         self.assertEqual([(e["type"], e["session"], e["state"], e["settles"]) for e in settled[1:]],
@@ -534,7 +551,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         typed = self.hermes.typed[-1]
         self.assertEqual(typed[3], "/model n")
         self.assertEqual(self.hermes.model_reads, [])
-        self.feed(said("Model switched to `n`\nProvider: Custom endpoint", typed[2], notify=True))
+        self.feed(said(switched("n"), typed[2], notify=True))
         await asyncio.sleep(0)
         self.assertEqual(self.hermes.model_reads, [("c-1", "u-1")])
         shown = self.of("session")[-1]
@@ -542,7 +559,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         # A model Hermes does not switch to is settled by its words.
         await asyncio.wait_for(self.connector.serve("control", {"request": "r-2", "by": ALICE, "action": {
             "type": "set", "session": session, "setting": "model", "value": "x"}}), 1)
-        self.feed(said("Unknown model `x`.", self.hermes.typed[-1][2], notify=True))
+        self.feed(said(phrase("gateway.model.error_prefix", error="Unknown model `x`."), self.hermes.typed[-1][2], notify=True))
         self.assertEqual(self.of("notice")[-1]["settles"], ["r-2"])
 
     async def test_a_reset_hermes_asks_to_confirm_is_settled_by_the_session_it_replaced(self):
@@ -565,7 +582,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
                                               "given": {"questions": [{"question": "q0", "options": ["o0"]}]}})
         approve = self.hermes.typed[-1]
         self.assertEqual(approve[3], "/approve")
-        self.feed(started(approve[2], "/approve"), said("✨ Session reset! Starting fresh.", approve[2], notify=True),
+        self.feed(started(approve[2], "/approve"), said(phrase("gateway.reset.header_default"), approve[2], notify=True),
                   complete(approve[2]))
         settled = [(e["item"], e["state"], e["settles"]) for e in self.sent if "settles" in e]
         self.assertEqual(settled, [("confirm:k-1", "done", ["r-2"]), (f"session:{session}", "done", ["r-1"])])
@@ -586,7 +603,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         await self.connector.serve("answer", {"request": "r-2", "item": "confirm:k-2", "by": ALICE,
                                               "given": {"questions": [{"question": "q0", "options": ["o0"]}]}})
         approve = self.hermes.typed[-1]
-        self.feed(said("Model switched to `n`\nProvider: Custom endpoint", approve[2], notify=True))
+        self.feed(said(switched("n"), approve[2], notify=True))
         await asyncio.sleep(0)
         shown = self.of("session")[-1]
         self.assertEqual((shown["text"], shown["settles"]), ("Model: n, Provider: custom", ["r-1"]))
@@ -612,7 +629,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.hermes.fails = None
         await self.connector.serve("answer", {"request": "r-3", "item": "confirm:k-2", "by": ALICE, "given": yes})
         approve = self.hermes.typed[-1]
-        self.feed(said("Model switched to `n`\nProvider: Custom endpoint", approve[2], notify=True))
+        self.feed(said(switched("n"), approve[2], notify=True))
         await asyncio.sleep(0)
         self.assertEqual(self.hermes.model_reads, [("c-1", "u-1")])
         shown = self.of("session")[-1]
@@ -641,8 +658,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.hermes.read_model = lambda: self.feed(*model_settings(model="m"))
         await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
             "type": "set", "session": session, "setting": "model", "value": "reset"}})
-        self.feed(said("Session model override cleared — now using `m` (the channel/global default). "
-                       "Conversation history kept.", self.hermes.typed[-1][2], notify=True))
+        self.feed(said(phrase("gateway.model.reset_done", model="m"), self.hermes.typed[-1][2], notify=True))
         await asyncio.sleep(0)
         self.assertEqual(self.hermes.model_reads, [("c-1", "u-1")])
         shown = self.of("session")[-1]
@@ -650,7 +666,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.hermes.read_model = lambda: self.feed(*model_settings(model="vendor/n"))
         await self.connector.serve("control", {"request": "r-2", "by": ALICE, "action": {
             "type": "set", "session": session, "setting": "model", "value": "n"}})
-        self.feed(said("Model switched to `vendor/n`", self.hermes.typed[-1][2], notify=True))
+        self.feed(said(switched("vendor/n"), self.hermes.typed[-1][2], notify=True))
         await asyncio.sleep(0)
         self.assertEqual(self.of("session")[-1]["settles"], ["r-2"])
 
@@ -663,8 +679,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.hermes.read_model = lambda: self.feed(*model_settings(model="m"))
         await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
             "type": "set", "session": session, "setting": "model", "value": "reset"}})
-        self.feed(said("Session model override cleared — now using `m` (the channel/global default). "
-                       "Conversation history kept.", self.hermes.typed[-1][2], notify=True))
+        self.feed(said(phrase("gateway.model.reset_done", model="m"), self.hermes.typed[-1][2], notify=True))
         await asyncio.sleep(0)
         shown = self.of("session")[-1]
         self.assertEqual((shown["text"], shown.get("settles")), ("Model: m, Provider: custom", ["r-1"]))
@@ -681,7 +696,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.hermes.read_model = lambda: self.feed(later_out)
         await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
             "type": "set", "session": session, "setting": "model", "value": "n"}})
-        self.feed(said("Model switched to `n`\nProvider: Custom endpoint", self.hermes.typed[-1][2], notify=True))
+        self.feed(said(switched("n"), self.hermes.typed[-1][2], notify=True))
         await asyncio.sleep(0)
         before = self.of("session")
         self.feed(earlier_in)
@@ -702,7 +717,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.hermes.read_model = lambda: self.feed(read_out)
         await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
             "type": "set", "session": session, "setting": "model", "value": "n"}})
-        self.feed(said("Model switched to `n`\nProvider: Custom endpoint", self.hermes.typed[-1][2], notify=True))
+        self.feed(said(switched("n"), self.hermes.typed[-1][2], notify=True))
         await asyncio.sleep(0)
         # The read after the switch to `n` is still under way.
         with self.assertRaises(Refusal) as busy:
@@ -722,6 +737,135 @@ class Connected(unittest.IsolatedAsyncioTestCase):
             await self.connector.serve("control", {"request": "r-4", "by": ALICE, "action": {
                 "type": "set", "session": session, "setting": "model", "value": "q"}})
         self.assertEqual([t[3] for t in self.hermes.typed], ["hello", "/model n", "/model p", "/model q"])
+
+    async def test_a_session_showing_the_model_before_hermes_takes_the_switch_does_not_settle_it(self):
+        """A switch is settled by the read Hermes answers after taking it, never by a session event that
+        happens to show the model asked for before Hermes said anything: the switch still waits, holds
+        off a second one, and Hermes's refusal settles it (D-028)."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), *model_settings(model="m"), complete("m-1"))
+        session = self.of("session")[-1]["session"]
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "set", "session": session, "setting": "model", "value": "n"}})
+        typed = self.hermes.typed[-1]
+        # A read begun before Hermes answers the command shows the model asked for.
+        self.feed(*model_settings(model="n"))
+        self.assertEqual(self.of("session")[-1]["text"], "Model: n, Provider: custom")
+        self.assertEqual([e for e in self.sent if "settles" in e], [])
+        with self.assertRaises(Refusal) as busy:
+            await self.connector.serve("control", {"request": "r-2", "by": ALICE, "action": {
+                "type": "set", "session": session, "setting": "model", "value": "p"}})
+        self.assertEqual(busy.exception.reason, "busy")
+        refusal = phrase("gateway.model.error_prefix", error="Unknown model `n`.")
+        self.feed(said(refusal, typed[2], notify=True))
+        refused = self.of("notice")[-1]
+        self.assertEqual((refused["text"], refused["settles"]), (refusal, ["r-1"]))
+        self.assertEqual(self.hermes.model_reads, [])
+
+    async def busy_at_once(self, params):
+        """Serves a control that must be refused as busy before anything is handed to Hermes."""
+        task = asyncio.ensure_future(self.connector.serve("control", params))
+        for _ in range(3):
+            await asyncio.sleep(0)
+        if not task.done():
+            task.cancel()
+            self.fail(f"{params['request']} was handed to Hermes, not refused")
+        with self.assertRaises(Refusal) as busy:
+            task.result()
+        self.assertEqual(busy.exception.reason, "busy")
+
+    async def test_a_slow_handoff_holds_off_a_second_control_until_its_effect_window_ends(self):
+        """The core waits for a control's effect from when the plugin hands it over (D-087). The plugin
+        holds the session from before the handoff, however long Hermes takes to take it, and for as long
+        after as the core waits, so no second control is let through while the first can still settle."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), *model_settings(model="m"), complete("m-1"))
+        session = self.of("session")[-1]["session"]
+        loop = asyncio.get_running_loop()
+        clock = [loop.time()]
+        actions = [{"type": "set", "session": session, "setting": "model", "value": "n"},
+                   {"type": "new_session", "chat": CHAT, "session": session}]
+        for n, action in enumerate(actions):
+            gate = asyncio.Event()
+            inject = self.hermes.inject
+
+            async def slow(*args, gate=gate, inject=inject):
+                await gate.wait()
+                await inject(*args)
+            with mock.patch.object(self.hermes, "inject", slow), mock.patch.object(loop, "time", lambda: clock[0]):
+                first = asyncio.ensure_future(self.connector.serve("control", {
+                    "request": f"r-{n}a", "by": ALICE, "action": action}))
+                await asyncio.sleep(0)
+                clock[0] += EFFECT_SECONDS + 1
+                await self.busy_at_once({"request": f"r-{n}b", "by": ALICE, "action": action})
+                gate.set()
+                await first
+                clock[0] += EFFECT_SECONDS - 1
+                await self.busy_at_once({"request": f"r-{n}c", "by": ALICE, "action": action})
+                clock[0] += 2
+                await self.connector.serve("control", {"request": f"r-{n}d", "by": ALICE, "action": action})
+
+    async def test_every_reset_hermes_takes_is_settled_by_the_read_after_it(self):
+        """`/model reset` is taken in two ways (`gateway/slash_commands_model.py`, `_handle_model_reset`):
+        the session's own model cleared (`reset_done`), or none to clear (`reset_none`). Each is settled by
+        the model read after it, which shows the session even when nothing changed."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), *model_settings(model="m"), complete("m-1"))
+        session = self.of("session")[-1]["session"]
+        self.hermes.read_model = lambda: self.feed(*model_settings(model="m"))
+        for n, key in enumerate(("gateway.model.reset_none", "gateway.model.reset_done")):
+            await self.connector.serve("control", {"request": f"r-{n}", "by": ALICE, "action": {
+                "type": "set", "session": session, "setting": "model", "value": "reset"}})
+            self.feed(said(phrase(key, model="m"), self.hermes.typed[-1][2], notify=True))
+            await asyncio.sleep(0)
+            self.assertEqual(len(self.hermes.model_reads), n + 1)
+            shown = self.of("session")[-1]
+            self.assertEqual((shown["text"], shown.get("settles")), ("Model: m, Provider: custom", [f"r-{n}"]))
+            self.assertEqual([e for e in self.of("notice") if "settles" in e], [])
+
+    async def test_a_read_with_no_model_neither_shows_nor_settles(self):
+        """Hermes's getter can name the session and give a blank model (`gateway/platforms/session_model.py`,
+        with no default configured). That says nothing of the session: the model shown stays, and the
+        switch waits for a read that has one."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), *model_settings(model="m"), complete("m-1"))
+        session = self.of("session")[-1]["session"]
+        blank_out, blank_in = model_settings(model="", read="read-1")
+        later_out, later_in = model_settings(model="n", read="read-2")
+        reads = iter([blank_out, later_out])
+        self.hermes.read_model = lambda: self.feed(next(reads))
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "set", "session": session, "setting": "model", "value": "n"}})
+        self.feed(said(switched("n"), self.hermes.typed[-1][2], notify=True))
+        await asyncio.sleep(0)
+        before = list(self.sent)
+        self.feed(blank_in)
+        self.assertEqual(self.sent, before)
+        self.assertEqual(self.connector.chats["c-1"].translator.reads, {})
+        await self.connector.hermes.read_model_settings(CHAT, ALICE)
+        self.feed(later_in)
+        shown = self.of("session")[-1]
+        self.assertEqual((shown["text"], shown.get("settles")), ("Model: n, Provider: custom", ["r-1"]))
+
+    async def test_hermes_is_read_in_the_language_it_is_set_to(self):
+        """The plugin knows Hermes's reply by its key in Hermes's catalog, whatever the language; and
+        when Hermes knows none of the keys, the control is refused rather than guessed at."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), *model_settings(model="m"), complete("m-1"))
+        session = self.of("session")[-1]["session"]
+        other = {"gateway.model.switched": "Modell gewechselt zu `{model}`"}
+        self.hermes.phrase = lambda key, **fields: other.get(key, key).format(**fields)
+        self.hermes.read_model = lambda: self.feed(*model_settings(model="n"))
+        set_n = {"type": "set", "session": session, "setting": "model", "value": "n"}
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": set_n})
+        self.feed(said("Modell gewechselt zu `n`\nAnbieter: Custom", self.hermes.typed[-1][2], notify=True))
+        await asyncio.sleep(0)
+        self.assertEqual(self.of("session")[-1].get("settles"), ["r-1"])
+        self.hermes.phrase = lambda key, **fields: key
+        for action in (set_n, {"type": "new_session", "chat": CHAT, "session": session}):
+            with self.assertRaises(Refusal) as refused:
+                await self.connector.serve("control", {"request": "r-2", "by": ALICE, "action": action})
+            self.assertEqual(refused.exception.reason, "not_supported")
 
     async def test_what_is_not_offered_is_refused(self):
         with self.assertRaises(Refusal) as refused:

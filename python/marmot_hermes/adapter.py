@@ -426,6 +426,13 @@ class MarmotAdapter(BasePlatformAdapter):
 
         return bool(resolve_gateway_clarify(clarify_id, text))
 
+    def phrase(self, key: str, **fields) -> str:
+        """What Hermes says under `key` of its catalog, in the language it is set to, as its commands
+        make their replies. It answers a command only in text, and this is how the plugin knows which."""
+        from agent.i18n import t
+
+        return t(key, **fields)
+
     def read_commands(self) -> None:
         """Reads Hermes's slash commands once, for the session items. Hermes's own platform adapters
         build their command menus from this registry, and a plugin runs in the same process."""

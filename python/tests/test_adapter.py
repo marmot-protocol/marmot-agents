@@ -206,6 +206,18 @@ class ModelReads(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.shown("group:c-2:u-1"), "Model: model-u-1, Provider: custom")
 
 
+class Phrases(unittest.TestCase):
+    """Hermes answers a command in text from its catalog: the adapter reads it from Hermes's own `t`."""
+
+    def test_a_phrase_is_hermess_own(self):
+        i18n = types.ModuleType("agent.i18n")
+        i18n.t = lambda key, **fields: f"{key}|{fields['model']}"
+        with tempfile.TemporaryDirectory() as home, mock.patch.dict("os.environ", {"HERMES_HOME": home}), \
+                mock.patch.dict(sys.modules, {"agent": types.ModuleType("agent"), "agent.i18n": i18n}):
+            adapter = MarmotAdapter({})
+            self.assertEqual(adapter.phrase("gateway.model.switched", model="m"), "gateway.model.switched|m")
+
+
 class FakeCore:
     """The core's side of the socket, on a real Unix socket: it takes the hello, and answers each
     `send_file` with `answer(path)`, None for sent or a (reason, detail) refusal."""
