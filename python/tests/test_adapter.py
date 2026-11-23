@@ -111,6 +111,8 @@ class ModelReads(unittest.IsolatedAsyncioTestCase):
     def settings(self, source):
         """Hermes's answer, in a worker thread, once the test lets it through."""
         self.gates[source.user_id].wait(5)
+        if self.failing == "unusable":
+            return None
         if self.failing:
             raise RuntimeError("Hermes failed")
         return {"session_key": f"agent:main:marmot:group:c-2:{source.user_id}", "model": f"model-{source.user_id}",
@@ -157,7 +159,7 @@ class ModelReads(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(set(asked)), 2)
         self.assertEqual(sorted(r for d, r in reads if d == "in"), sorted(asked))
 
-    async def test_a_read_overtaken_by_a_new_session_or_failed_is_not_kept(self):
+    async def test_a_read_overtaken_by_a_new_session_failed_or_unusable_is_not_kept(self):
         connector = self.adapter.connector
         await self.start("m-a", "u-1")
         # Alice starts a new session while the read of her first one is under way.
@@ -176,6 +178,13 @@ class ModelReads(unittest.IsolatedAsyncioTestCase):
         await self.answered("u-1")
         self.assertEqual(self.shown("group:c-2:u-1#2"), "")
         self.assertTrue(connector.wants_model("group", "c-2", "u-1"))
+        # An answer that is no use ends its read too. No read that has ended is kept.
+        self.gates["u-1"].clear()
+        self.failing = "unusable"
+        self.adapter.read_settings(Source("c-2", "u-1"))
+        await self.answered("u-1")
+        self.assertEqual(self.shown("group:c-2:u-1#2"), "")
+        self.assertEqual(connector.chats["c-2"].translator.reads, {})
 
 
 class FakeCore:

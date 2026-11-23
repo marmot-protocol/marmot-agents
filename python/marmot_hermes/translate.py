@@ -364,9 +364,13 @@ class Translator:
             self.unknown[f"plugin hook {hook}"] += 1
 
     def asked(self, method, m):
+        result = m.get("result")
+        if method == "get_session_model_settings" and "id" in m and ("error" in m or not isinstance(result, dict)):
+            # Hermes's answer ends the read it names, even when it is of no use. A read the plugin did not
+            # name, as in a recording, is kept by its chat and sender, and the next read of theirs replaces it.
+            self.reads.pop(str(m["id"]), None)
         if "error" in m:
             return
-        result = m.get("result")
         if method == "hermes_cli.commands.COMMAND_REGISTRY":
             self.commands = [command(c.get("name"), c.get("description"), c.get("args_hint"))
                              for c in result or [] if c.get("gateway_available")]
