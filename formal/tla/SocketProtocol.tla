@@ -420,6 +420,8 @@ NeverEventBeforeAnswer ==
     ~(inflight # NoReq /\ \E j, k \in DOMAIN up : j < k /\ up[j].k = "ev" /\ up[k].k = "resp")
 \* A connector holds a turn's end when its connection goes, and the end goes with it (Hermes).
 NeverHoldDropped == ~holdGone
-\* The turn runs on in Hermes after its connection went, and its end is sent no more.
-NeverRunOnAfterDrop == ~(drops >= 1 /\ hT1 = "done" /\ chatT1 = "cut")
+\* The turn runs on in Hermes after its connection went, and its end is sent no more: the
+\* harness ends it after the core cut it, not before (an end not yet read when the connection
+\* went is cut too, and would reach the same values).
+NeverRunOnAfterDrop == ~(step.a = "EndTurn" /\ chatT1 = "cut")
 =============================================================================
