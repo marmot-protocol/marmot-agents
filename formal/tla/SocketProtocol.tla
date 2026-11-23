@@ -92,6 +92,8 @@ VARIABLES
                 \* closed it when its connection went)
     afterCut,   \* a connector changed t1 after the core closed it
     settled,    \* how many times r1 was settled in the chat
+    byEffect,   \* r1 was settled by an event that names it, while it was pending
+    holdGone,   \* a connection went while the connector held a turn's end, and the end went with it
     promptSaid, \* what the chat was told of p1: "none", "delivered", "undelivered", "refused"
     ran,        \* the harness ran p1
     unhanded,   \* the core counted p1 taken while the harness did not have it
@@ -102,7 +104,7 @@ core == <<phase, conn, drops, asked, handed, inflight, pending>>
 wire == <<up, down>>
 connector == <<cUp, cOn, cOpen, cClosed, cWait, cHeld, cOnEffect, cHanding>>
 harness == <<hGot, hStopped, hT1>>
-monitors == <<chatT1, afterCut, settled, promptSaid, ran, unhanded, needless>>
+monitors == <<chatT1, afterCut, settled, byEffect, holdGone, promptSaid, ran, unhanded, needless>>
 vars == <<core, wire, connector, harness, monitors, step>>
 
 Init ==
@@ -112,7 +114,8 @@ Init ==
     /\ cUp = TRUE /\ cOn = FALSE /\ cOpen = {} /\ cClosed = {} /\ cWait = "none"
     /\ cHeld = FALSE /\ cOnEffect = FALSE /\ cHanding = FALSE
     /\ hGot = FALSE /\ hStopped = FALSE /\ hT1 = "none"
-    /\ chatT1 = "none" /\ afterCut = FALSE /\ settled = 0 /\ promptSaid = "none"
+    /\ chatT1 = "none" /\ afterCut = FALSE /\ settled = 0 /\ byEffect = FALSE /\ holdGone = FALSE
+    /\ promptSaid = "none"
     /\ ran = FALSE /\ unhanded = FALSE /\ needless = FALSE
     /\ step = [a |-> "Init"]
 
@@ -169,8 +172,9 @@ End(why) ==
     /\ chatT1' = IF chatT1 = "open" THEN "cut" ELSE chatT1
     /\ cOn' = FALSE
     /\ Forget
+    /\ holdGone' = (holdGone \/ (cHeld /\ ~cHeld'))
     /\ step' = [a |-> why]
-    /\ UNCHANGED <<conn, asked, handed, afterCut, ran, unhanded>>
+    /\ UNCHANGED <<conn, asked, handed, afterCut, byEffect, ran, unhanded>>
 
 \* The core restarts, or the socket breaks.
 Drop ==
@@ -219,7 +223,7 @@ Hand(r) ==
                /\ UNCHANGED settled
     /\ step' = [a |-> "Hand", r |-> r]
     /\ UNCHANGED <<phase, conn, drops, asked, pending, up, connector, harness>>
-    /\ UNCHANGED <<chatT1, afterCut, promptSaid, ran, unhanded, needless>>
+    /\ UNCHANGED <<chatT1, afterCut, byEffect, holdGone, promptSaid, ran, unhanded, needless>>
 
 \* The connector reads the request and answers it once its harness has it. A prompt is handed
 \* to the harness (Hermes `inject`, OpenClaw's run started, Claude Code's input queued). An
@@ -267,13 +271,14 @@ ReadAt(k) ==
                      ELSE /\ pending' = IF m.ok THEN pending \cup {"r1"} ELSE pending
                           /\ settled' = IF m.ok THEN settled ELSE settled + 1
                           /\ UNCHANGED <<promptSaid, unhanded>>
-               /\ UNCHANGED <<chatT1, afterCut>>
+               /\ UNCHANGED <<chatT1, afterCut, byEffect>>
           ELSE \* An event of t1 changes its row, and settles what it names that is pending.
                /\ afterCut' = (afterCut \/ chatT1 = "cut")
                /\ chatT1' = m.st
                /\ settled' = settled + Cardinality(IF Bug = "SettleUnpending"
                                                        THEN m.s ELSE m.s \cap pending)
                /\ pending' = pending \ m.s
+               /\ byEffect' = (byEffect \/ "r1" \in m.s \cap pending)
                /\ UNCHANGED <<inflight, promptSaid, unhanded>>
 Read ==
     /\ phase = "serve"
@@ -282,7 +287,7 @@ Read ==
           /\ ReadAt(k)
           /\ step' = [a |-> "Read", m |-> up[k]]
     /\ UNCHANGED <<phase, conn, drops, asked, handed, down, connector, harness>>
-    /\ UNCHANGED <<ran, needless>>
+    /\ UNCHANGED <<holdGone, ran, needless>>
 
 \* The core's net: a control taken whose effect has not shown by its deadline is settled as
 \* having none (D-087).
@@ -291,7 +296,7 @@ Tick ==
     /\ pending' = pending \ {"r1"} /\ settled' = settled + 1
     /\ step' = [a |-> "Tick"]
     /\ UNCHANGED <<phase, conn, drops, asked, handed, inflight, wire, connector, harness>>
-    /\ UNCHANGED <<chatT1, afterCut, promptSaid, ran, unhanded, needless>>
+    /\ UNCHANGED <<chatT1, afterCut, byEffect, holdGone, promptSaid, ran, unhanded, needless>>
 
 -----------------------------------------------------------------------------
 (* The harness, and what the connector makes of it *)
@@ -304,7 +309,8 @@ Run ==
     /\ Emit(Ev("open", {}))
     /\ step' = [a |-> "Run"]
     /\ UNCHANGED <<core, down, cUp, cOn, cClosed, cWait, cHeld, cOnEffect, cHanding>>
-    /\ UNCHANGED <<hGot, hStopped, chatT1, afterCut, settled, promptSaid, unhanded, needless>>
+    /\ UNCHANGED <<hGot, hStopped, chatT1, afterCut, settled, byEffect, holdGone, promptSaid, unhanded>>
+    /\ UNCHANGED needless
 
 \* The turn ends: stopped, when the harness has r1, or done. The end settles what waits on it.
 \* A quiet end, which settles nothing, may be held back (Hermes, HOLD_SECONDS). A connector
@@ -407,13 +413,13 @@ L4 == phase # "serve" ~> phase = "serve"
 NeverCut == chatT1 # "cut"
 \* A second connector, or the same one again, serves the core.
 NeverReconnected == ~(conn >= 2 /\ phase = "serve")
-\* The interrupt is settled by the turn's end, the effect the connector named.
-NeverSettledByEffect == ~(settled = 1 /\ chatT1 = "done" /\ hStopped)
+\* The interrupt is settled by the turn's end, the effect the connector named, while it was pending.
+NeverSettledByEffect == ~byEffect
 \* An event waits behind the answer to a request: the core reads the answer first.
 NeverEventBeforeAnswer ==
     ~(inflight # NoReq /\ \E j, k \in DOMAIN up : j < k /\ up[j].k = "ev" /\ up[k].k = "resp")
-\* A connector holds a turn's end across a connection that goes (Hermes).
-NeverHeldAcross == ~(cHeld /\ drops >= 1 /\ "t1" \in cClosed)
+\* A connector holds a turn's end when its connection goes, and the end goes with it (Hermes).
+NeverHoldDropped == ~holdGone
 \* The turn runs on in Hermes after its connection went, and its end is sent no more.
 NeverRunOnAfterDrop == ~(drops >= 1 /\ hT1 = "done" /\ chatT1 = "cut")
 =============================================================================

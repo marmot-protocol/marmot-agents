@@ -83,14 +83,14 @@ connections that go (a drop or a give-up)**; each fair configuration is one kind
 
 | Case | Configuration | Expected | Distinct states | Counterexample |
 | --- | --- | --- | ---: | --- |
-| socket-exits | `SocketProtocol.exits.cfg` | every property holds | 236 | |
-| socket-fresh | `SocketProtocol.fresh.cfg` | every property holds | 204 | |
-| socket-kept | `SocketProtocol.kept.cfg` | every property holds | 725 | |
+| socket-exits | `SocketProtocol.exits.cfg` | every property holds | 247 | |
+| socket-fresh | `SocketProtocol.fresh.cfg` | every property holds | 213 | |
+| socket-kept | `SocketProtocol.kept.cfg` | every property holds | 780 | |
 | socket-not-taken-in-time | kept, without `TakenInTime` | S11 fails | 8 | |
-| socket-unsupervised | exits, without `Supervised` | L4 fails | 52 | |
+| socket-unsupervised | exits, without `Supervised` | L4 fails | 54 | |
 | socket-prompt-in-flight | kept, `UndeliveredNotRun` | fails: the accepted limit | 20 | [`prompt-in-flight`](counterexamples/prompt-in-flight.json) |
 
-At four connections that go, once on the same day: exits 436, fresh 372 and kept 1,485 distinct states, every
+At four connections that go, once on the same day: exits 457, fresh 389 and kept 1,620 distinct states, every
 property holding, each in a second.
 
 **Each check catches its bug** (`Bug`, on the configuration named, with only that property):
@@ -100,13 +100,13 @@ property holding, each in a second.
 | `NoReset` | a connector kept across connections forgets nothing of the old core's: the Hermes plugin before the fix (kept) | S2 | 291 | [`kept-connector-remembers`](counterexamples/kept-connector-remembers.json) |
 | `AnswerOnEffect` | a control is answered only once its effect shows: Claude Code's interrupt, Hermes's `/new` and `/model`, before the fix (exits) | S11 | 94 | [`answer-on-effect`](counterexamples/answer-on-effect.json) |
 | `AnswerBeforeHandoff` | a prompt is answered before the harness has it (kept) | S11 | 14 | |
-| `SettleUnpending` | an event settles a request no longer pending (kept) | S1 | 563 | |
+| `SettleUnpending` | an event settles a request no longer pending (kept) | S1 | 595 | |
 
 **No empty passes.** Each probe must be found false: on the kept configuration, `NeverCut` (the core closes the
 turn as its connection goes), `NeverReconnected` (a connector serves the core again), `NeverSettledByEffect`
-(the interrupt is settled by the turn's end), `NeverEventBeforeAnswer` (an event waits behind the answer to a
-request), `NeverHeldAcross` (a held end at a connection that goes) and `NeverRunOnAfterDrop` (the turn runs on in
-Hermes after its connection went). All within 480 distinct states.
+(the interrupt, while pending, is settled by the turn's end), `NeverEventBeforeAnswer` (an event waits behind the answer to a
+request), `NeverHoldDropped` (a held end goes with the connection) and `NeverRunOnAfterDrop` (the turn runs on in
+Hermes after its connection went). All within 510 distinct states.
 
 ## What the model found
 

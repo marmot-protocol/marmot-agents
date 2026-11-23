@@ -213,7 +213,7 @@ CASES += [
     probe("NeverReconnected", KEPT, "socket-NeverReconnected"),
     probe("NeverSettledByEffect", KEPT, "socket-NeverSettledByEffect"),
     probe("NeverEventBeforeAnswer", KEPT, "socket-NeverEventBeforeAnswer"),
-    probe("NeverHeldAcross", KEPT, "socket-NeverHeldAcross"),
+    probe("NeverHoldDropped", KEPT, "socket-NeverHoldDropped"),
     probe("NeverRunOnAfterDrop", KEPT, "socket-NeverRunOnAfterDrop"),
 ]
 NAMES = [case.name for case in CASES]
