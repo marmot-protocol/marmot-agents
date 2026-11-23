@@ -7,7 +7,8 @@ of its harness. A checker looks at every step and names the property a failure b
 Status: phase one is built (2026-11-22): the suite, fakes for Codex, ACP and Pi, the three built-in drivers run against
 it, and deliberate faults that show each check catches its bug. Two reviews' findings are fixed (2026-11-22), and so
 is the Pi driver's stall on a Pi that stops reading (2026-11-22). Files the agent sends (`send_file`) are covered for
-Codex, Pi and the three ACP shapes (2026-11-22).
+Codex, Pi and the three ACP shapes (2026-11-22). Six suspicions from a read of the drivers' state machines were
+tested (2026-11-23): five were real and are fixed, below; Pi's compaction was not.
 Phase two, the socket connectors, is a design, below. Everything here is internal: it ships in no program.
 
 ## How it fits
