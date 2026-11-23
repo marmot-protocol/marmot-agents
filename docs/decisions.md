@@ -2627,3 +2627,40 @@ then said it had installed the new ones. Without the whole list first, another h
 killed upgrade for its own before the killed run had named its harness's files.
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
+
+## D-135 The import gives owner-only rights where it cannot tell the old sender policy, and names what to check
+
+**Decision.** Wherever `marmot-agent import` cannot tell exactly which sender policy (who may prompt, who may
+approve) the old connector applied to the account being moved, it lets only the owner prompt and approve, the
+default of [D-010](#d-010-the-owner-sets-who-may-prompt-and-who-may-approve). It says so plainly in its
+summary, and names each old setting that may have applied, with its old value as written, for the person to
+check and widen `prompt` by hand. This extends the rule of
+[D-089](#d-089-an-install-moves-over-by-importing-its-account-home-in-place) that nobody may do more after the
+move than before. Two places it applies, found in issues #138 and #147:
+
+- **OpenClaw's accounts.** The import reads the sender policy of the one account MDK's OpenClaw plugin ran on
+  this home, as the plugin picks it: with `channels.marmot.accounts`, each named account runs on its own
+  settings and a `senderPolicy` at the channel's root applies to none of them; without, the root is the one
+  account. An account ran on this home when its `socketPath` is the old connector's socket and its
+  `accountIdHex`, if it has one, is the agent's. Where no account does, where several do, where one names no
+  `socketPath` (so the gateway's environment gave it one), or where the account has no policy of its own (so
+  the gateway's environment gave it one), only the owner may prompt.
+- **systemd environment files.** A unit's `EnvironmentFile=` is read as systemd reads it, not as a shell
+  would: quotes inside a bare value are kept, a value runs on over a line's end inside quotes or after a
+  backslash, `#` and `;` start a comment only at a line's start, and a line whose name is not a name, such
+  as `export A=1`, sets nothing. Where systemd has read a line otherwise by version (a line after a comment
+  ending in a backslash, which systemd before 254 took as comment too; a backslash in double quotes before
+  anything but `"`, `\` or the line's end), or a line such as `export A=1` meant a name, that name is unsure.
+  An unsure sender list lets only the owner prompt; any other setting the import reads, such as the relays,
+  makes the service doubtful, which stops the import as before.
+
+The old values are shown only to the person running the import, in its summary and its next steps, and never
+logged ([D-071](#d-071-what-may-be-logged)).
+
+**Why.** A move that guessed could give more people the right to prompt than the old connector did: the
+import read OpenClaw's root policy for every install, where the plugin gives a named account only its own, and
+read an environment file a line at a time as a shell would, so a quoted value running over two lines could hide
+a list from systemd and show it to the import. Failing closed keeps the agent safe; naming the setting and its
+value keeps the person from losing access they meant to give.
+
+Decided 2026-11-23. The project owner decided.
