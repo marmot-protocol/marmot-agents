@@ -10,9 +10,9 @@
 (*   "exits"  Claude Code (packages/claude-code): the connector goes with  *)
 (*            its connection, and the harness with it; something starts it *)
 (*            again.                                                       *)
-(*   "fresh"  OpenClaw (packages/openclaw): the gateway goes on, and makes *)
-(*            a new connector for each connection; what the old run says   *)
-(*            reaches the old connector, which has no socket.             *)
+(*   "fresh"  OpenClaw (packages/openclaw): the gateway goes on, cancels   *)
+(*            the connection's runs and waits for them, and makes a new    *)
+(*            connector for the next connection.                          *)
 (*   "kept"   Hermes (python/marmot_hermes): the gateway goes on, with one *)
 (*            connector across connections, which may hold a quiet turn's  *)
 (*            end back for a while.                                        *)
@@ -83,7 +83,6 @@ VARIABLES
     cHeld,      \* it holds t1's quiet end back (Hermes: `Chat.held`)
     cOnEffect,  \* it holds r1's answer until the effect shows (Bug "AnswerOnEffect")
     cHanding,   \* it answered p1 and has not handed it to the harness yet (Bug "AnswerBeforeHandoff")
-    cDeaf,      \* the harness's run reports to a connector that is gone (OpenClaw)
     \* The harness
     hGot,       \* it has p1
     hStopped,   \* it has r1: the turn is to stop
@@ -101,7 +100,7 @@ VARIABLES
 
 core == <<phase, conn, drops, asked, handed, inflight, pending>>
 wire == <<up, down>>
-connector == <<cUp, cOn, cOpen, cClosed, cWait, cHeld, cOnEffect, cHanding, cDeaf>>
+connector == <<cUp, cOn, cOpen, cClosed, cWait, cHeld, cOnEffect, cHanding>>
 harness == <<hGot, hStopped, hT1>>
 monitors == <<chatT1, afterCut, settled, promptSaid, ran, unhanded, needless>>
 vars == <<core, wire, connector, harness, monitors, step>>
@@ -111,16 +110,16 @@ Init ==
     /\ asked = {"p1"} /\ handed = {} /\ inflight = NoReq /\ pending = {}
     /\ up = <<>> /\ down = NoReq
     /\ cUp = TRUE /\ cOn = FALSE /\ cOpen = {} /\ cClosed = {} /\ cWait = "none"
-    /\ cHeld = FALSE /\ cOnEffect = FALSE /\ cHanding = FALSE /\ cDeaf = FALSE
+    /\ cHeld = FALSE /\ cOnEffect = FALSE /\ cHanding = FALSE
     /\ hGot = FALSE /\ hStopped = FALSE /\ hT1 = "none"
     /\ chatT1 = "none" /\ afterCut = FALSE /\ settled = 0 /\ promptSaid = "none"
     /\ ran = FALSE /\ unhanded = FALSE /\ needless = FALSE
     /\ step = [a |-> "Init"]
 
-\* What the connector writes reaches the core only on a connection it has greeted, and only
-\* while it hears its harness: an event for an item it sends nothing more of is not written.
+\* What the connector writes reaches the core only on a connection it has greeted: an event
+\* for an item it sends nothing more of is not written.
 Writes == cOn /\ phase = "serve"
-Emit(m) == up' = IF Writes /\ ~cDeaf /\ "t1" \notin cClosed THEN Append(up, m) ELSE up
+Emit(m) == up' = IF Writes /\ "t1" \notin cClosed THEN Append(up, m) ELSE up
 
 -----------------------------------------------------------------------------
 (* The connection *)
@@ -138,31 +137,26 @@ Hello ==
     /\ phase' = "serve" /\ cOn' = TRUE /\ up' = <<>> /\ down' = NoReq
     /\ step' = [a |-> "Hello"]
     /\ UNCHANGED <<conn, drops, asked, handed, inflight, pending>>
-    /\ UNCHANGED <<cUp, cOpen, cClosed, cWait, cHeld, cOnEffect, cHanding, cDeaf, harness, monitors>>
+    /\ UNCHANGED <<cUp, cOpen, cClosed, cWait, cHeld, cOnEffect, cHanding, harness, monitors>>
 
 \* What a connector forgets when its connection goes, by kind. A connector that exits takes its
-\* harness with it, and one made afresh no longer hears the run the old one started.
+\* harness with it; OpenClaw cancels the connection's runs (`abort`), and the next connection
+\* gets a new connector; Hermes goes on.
 Forget ==
-    CASE Connector = "exits" ->
-            /\ cUp' = FALSE
-            /\ cOpen' = {} /\ cClosed' = {} /\ cWait' = "none" /\ cHeld' = FALSE
-            /\ cOnEffect' = FALSE /\ cHanding' = FALSE /\ cDeaf' = FALSE
-            /\ hGot' = FALSE /\ hStopped' = FALSE
-            /\ hT1' = IF hT1 = "open" THEN "dead" ELSE hT1
-      [] Connector = "fresh" ->
-            /\ cUp' = TRUE
+    CASE Connector \in {"exits", "fresh"} ->
+            /\ cUp' = (Connector = "fresh")
             /\ cOpen' = {} /\ cClosed' = {} /\ cWait' = "none" /\ cHeld' = FALSE
             /\ cOnEffect' = FALSE /\ cHanding' = FALSE
-            /\ cDeaf' = (cDeaf \/ hGot \/ hT1 = "open")
-            /\ UNCHANGED harness
+            /\ hGot' = FALSE /\ hStopped' = FALSE
+            /\ hT1' = IF hT1 = "open" THEN "dead" ELSE hT1
       [] Connector = "kept" /\ Bug = "NoReset" ->
-            /\ UNCHANGED <<cUp, cOpen, cClosed, cWait, cHeld, cOnEffect, cHanding, cDeaf, harness>>
+            /\ UNCHANGED <<cUp, cOpen, cClosed, cWait, cHeld, cOnEffect, cHanding, harness>>
       [] Connector = "kept" ->
             \* `core_gone`: what the old core holds closed is sent no more, a held end is
             \* dropped, and nothing waits for an effect.
             /\ cClosed' = cClosed \cup cOpen \cup (IF cHeld THEN {"t1"} ELSE {})
             /\ cOpen' = {} /\ cWait' = "none" /\ cHeld' = FALSE /\ cOnEffect' = FALSE
-            /\ UNCHANGED <<cUp, cHanding, cDeaf, harness>>
+            /\ UNCHANGED <<cUp, cHanding, harness>>
 
 \* The connection ends. The core refuses the request it waited on as failed: a prompt is told
 \* as not delivered and never sent again (D-037); it settles every control taken as failed and
@@ -199,7 +193,7 @@ Restart ==
     /\ ~cUp /\ Supervised
     /\ cUp' = TRUE
     /\ step' = [a |-> "Restart"]
-    /\ UNCHANGED <<core, wire, cOn, cOpen, cClosed, cWait, cHeld, cOnEffect, cHanding, cDeaf>>
+    /\ UNCHANGED <<core, wire, cOn, cOpen, cClosed, cWait, cHeld, cOnEffect, cHanding>>
     /\ UNCHANGED <<harness, monitors>>
 
 -----------------------------------------------------------------------------
@@ -240,7 +234,7 @@ Take ==
                        /\ UNCHANGED <<hGot, cWait, cOnEffect, hStopped>>
                   ELSE /\ hGot' = TRUE /\ up' = Append(up, Resp("p1", TRUE))
                        /\ UNCHANGED <<cHanding, cWait, cOnEffect, hStopped>>
-          ELSE IF "t1" \in cOpen /\ (hT1 = "open" \/ cHeld) /\ ~cDeaf
+          ELSE IF "t1" \in cOpen /\ (hT1 = "open" \/ cHeld)
                   THEN /\ hStopped' = TRUE /\ cWait' = "t1"
                        /\ IF Bug = "AnswerOnEffect"
                              THEN cOnEffect' = TRUE /\ UNCHANGED up
@@ -249,14 +243,14 @@ Take ==
                   ELSE /\ up' = Append(up, Resp("r1", FALSE))
                        /\ UNCHANGED <<hGot, hStopped, cWait, cOnEffect, cHanding>>
     /\ step' = [a |-> "Take", r |-> down]
-    /\ UNCHANGED <<core, cUp, cOn, cOpen, cClosed, cHeld, cDeaf, hT1, monitors>>
+    /\ UNCHANGED <<core, cUp, cOn, cOpen, cClosed, cHeld, hT1, monitors>>
 
 \* Only with Bug "AnswerBeforeHandoff": the harness gets the prompt the connector answered.
 Handoff ==
     /\ cHanding
     /\ cHanding' = FALSE /\ hGot' = TRUE
     /\ step' = [a |-> "Handoff"]
-    /\ UNCHANGED <<core, wire, cUp, cOn, cOpen, cClosed, cWait, cHeld, cOnEffect, cDeaf>>
+    /\ UNCHANGED <<core, wire, cUp, cOn, cOpen, cClosed, cWait, cHeld, cOnEffect>>
     /\ UNCHANGED <<hStopped, hT1, monitors>>
 
 \* The core reads what the connector wrote, in order, except that while it waits on a request
@@ -309,7 +303,7 @@ Run ==
     /\ cOpen' = cOpen \cup {"t1"}
     /\ Emit(Ev("open", {}))
     /\ step' = [a |-> "Run"]
-    /\ UNCHANGED <<core, down, cUp, cOn, cClosed, cWait, cHeld, cOnEffect, cHanding, cDeaf>>
+    /\ UNCHANGED <<core, down, cUp, cOn, cClosed, cWait, cHeld, cOnEffect, cHanding>>
     /\ UNCHANGED <<hGot, hStopped, chatT1, afterCut, settled, promptSaid, unhanded, needless>>
 
 \* The turn ends: stopped, when the harness has r1, or done. The end settles what waits on it.
@@ -321,14 +315,14 @@ EndTurn(hold) ==
     /\ hT1' = "done"
     /\ LET s == IF cWait = "t1" THEN {"r1"} ELSE {}
            answer == IF cOnEffect /\ Writes THEN <<Resp("r1", TRUE)>> ELSE <<>>
-           shown == IF Writes /\ ~cDeaf /\ "t1" \notin cClosed /\ ~hold
+           shown == IF Writes /\ "t1" \notin cClosed /\ ~hold
                        THEN <<Ev("done", s)>> ELSE <<>>
        IN up' = up \o shown \o answer
     /\ cWait' = "none" /\ cOnEffect' = FALSE
     /\ cHeld' = hold
     /\ cOpen' = IF hold THEN cOpen ELSE cOpen \ {"t1"}
     /\ step' = [a |-> "EndTurn", hold |-> hold]
-    /\ UNCHANGED <<core, down, cUp, cOn, cClosed, cHanding, cDeaf, hGot, hStopped, monitors>>
+    /\ UNCHANGED <<core, down, cUp, cOn, cClosed, cHanding, hGot, hStopped, monitors>>
 
 \* A held end goes, once its time is up. It settles nothing: an interrupt taken while it was
 \* held found the turn already over (`send_held`).
@@ -337,7 +331,7 @@ Release ==
     /\ cHeld' = FALSE /\ cOpen' = cOpen \ {"t1"} /\ cWait' = "none"
     /\ Emit(Ev("done", {}))
     /\ step' = [a |-> "Release"]
-    /\ UNCHANGED <<core, down, cUp, cOn, cClosed, cOnEffect, cHanding, cDeaf, harness, monitors>>
+    /\ UNCHANGED <<core, down, cUp, cOn, cClosed, cOnEffect, cHanding, harness, monitors>>
 
 -----------------------------------------------------------------------------
 
@@ -420,6 +414,6 @@ NeverEventBeforeAnswer ==
     ~(inflight # NoReq /\ \E j, k \in DOMAIN up : j < k /\ up[j].k = "ev" /\ up[k].k = "resp")
 \* A connector holds a turn's end across a connection that goes (Hermes).
 NeverHeldAcross == ~(cHeld /\ drops >= 1 /\ "t1" \in cClosed)
-\* The turn runs on in a gateway after its connection went, and its end is sent no more.
+\* The turn runs on in Hermes after its connection went, and its end is sent no more.
 NeverRunOnAfterDrop == ~(drops >= 1 /\ hT1 = "done" /\ chatT1 = "cut")
 =============================================================================

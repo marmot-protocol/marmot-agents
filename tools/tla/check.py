@@ -215,7 +215,6 @@ CASES += [
     probe("NeverEventBeforeAnswer", KEPT, "socket-NeverEventBeforeAnswer"),
     probe("NeverHeldAcross", KEPT, "socket-NeverHeldAcross"),
     probe("NeverRunOnAfterDrop", KEPT, "socket-NeverRunOnAfterDrop"),
-    probe("NeverRunOnAfterDrop", FRESH, "socket-NeverRunOnAfterDrop-fresh"),
 ]
 NAMES = [case.name for case in CASES]
 assert len(set(NAMES)) == len(NAMES), "case names must differ"

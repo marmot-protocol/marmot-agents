@@ -17,7 +17,7 @@ the core goes. A connector on the socket need not: this model checks what each k
 | `Connector` | Which | What survives a connection that goes |
 | --- | --- | --- |
 | `exits` | Claude Code (`packages/claude-code`) | Nothing: the connector exits, and its harness with it. Something starts it again (`Supervised`) |
-| `fresh` | OpenClaw (`packages/openclaw`) | The gateway, whose run goes on; a new connector is made for the next connection, and what the old run says reaches the old one, which has no socket |
+| `fresh` | OpenClaw (`packages/openclaw`) | The gateway, which cancels the connection's runs (`abort`) and waits for them, and makes a new connector for the next connection |
 | `kept` | Hermes (`python/marmot_hermes`) | The gateway and its one connector, which may hold a quiet turn's end back (`Holds`, `HOLD_SECONDS`) |
 
 ## What is modelled
@@ -36,7 +36,7 @@ writes a counterexample.
 | `Run`, `EndTurn(hold)`, `Release` | The harness runs the prompt and ends its turn, stopped when it has `r1`; the end settles what waits on it. Hermes may hold a quiet end and let it go later (`send_held`) |
 | `Drop` | The connection goes: the core restarts, or the socket breaks |
 | `GiveUp` | `ANSWER_WITHIN`: the core's 30 s for a request to be taken runs out, and it gives the connector up |
-| (in `Drop`, `GiveUp`) | `ended`: the request waited on is refused as failed (a prompt is told as not delivered and never sent again, D-037), every control taken is settled as failed, every open item is closed (D-058, D-070). The connector forgets by its kind; Hermes's `core_gone` closes what was open on its side, drops a held end, and forgets what waited |
+| (in `Drop`, `GiveUp`) | `ended`: the request waited on is refused as failed (a prompt is told as not delivered and never sent again, D-037), every control taken is settled as failed, every open item is closed (D-058, D-070). The connector forgets by its kind: Claude Code exits, and its query with it; OpenClaw cancels the run; Hermes's `core_gone` closes what was open on its side, drops a held end, and forgets what waited, while Hermes runs on |
 | `Restart` | A connector that exited is started again |
 
 ## What is not
@@ -84,13 +84,13 @@ connections that go (a drop or a give-up)**; each fair configuration is one kind
 | Case | Configuration | Expected | Distinct states | Counterexample |
 | --- | --- | --- | ---: | --- |
 | socket-exits | `SocketProtocol.exits.cfg` | every property holds | 236 | |
-| socket-fresh | `SocketProtocol.fresh.cfg` | every property holds | 284 | |
+| socket-fresh | `SocketProtocol.fresh.cfg` | every property holds | 204 | |
 | socket-kept | `SocketProtocol.kept.cfg` | every property holds | 725 | |
 | socket-not-taken-in-time | kept, without `TakenInTime` | S11 fails | 8 | |
 | socket-unsupervised | exits, without `Supervised` | L4 fails | 52 | |
 | socket-prompt-in-flight | kept, `UndeliveredNotRun` | fails: the accepted limit | 20 | [`prompt-in-flight`](counterexamples/prompt-in-flight.json) |
 
-At four connections that go, once on the same day: exits 436, fresh 532 and kept 1,485 distinct states, every
+At four connections that go, once on the same day: exits 436, fresh 372 and kept 1,485 distinct states, every
 property holding, each in a second.
 
 **Each check catches its bug** (`Bug`, on the configuration named, with only that property):
@@ -106,8 +106,7 @@ property holding, each in a second.
 turn as its connection goes), `NeverReconnected` (a connector serves the core again), `NeverSettledByEffect`
 (the interrupt is settled by the turn's end), `NeverEventBeforeAnswer` (an event waits behind the answer to a
 request), `NeverHeldAcross` (a held end at a connection that goes) and `NeverRunOnAfterDrop` (the turn runs on in
-the gateway after its connection went); on the fresh one, `NeverRunOnAfterDrop` again. All within 480 distinct
-states.
+Hermes after its connection went). All within 480 distinct states.
 
 ## What the model found
 
@@ -120,9 +119,10 @@ states.
   core's patience runs out on a healthy connector, and everything open is cut short. Fixed on this branch for
   Claude Code's interrupt and Hermes's `/new` and `/model`; `AnswerOnEffect` puts it back.
 - **The accepted limit of D-037** (`prompt-in-flight`): a prompt whose answer a dropped connection took is told
-  as not delivered, and never sent again, but the harness may have it and run it; with a gateway, its turn
-  reaches the next core. The core cannot tell the two apart. The notice it gives says the prompt was not
-  delivered, which is then not always so (inferred from the model and the code, not seen in a recording).
+  as not delivered, and never sent again, but the harness may have it and run it: Claude Code and OpenClaw
+  until the connection's end stops the run, Hermes to the end, and its turn reaches the next core. The core
+  cannot tell the two apart. The notice it gives says the prompt was not delivered, which is then not always
+  so (inferred from the model and the code, not seen in a recording).
 
 ## Running
 
