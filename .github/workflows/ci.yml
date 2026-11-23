@@ -10,6 +10,7 @@ name: CI
 # - The merge queue (`merge_group`) runs the full gate: all of that whatever changed, the
 #   simulator at 200 runs, and the move-over tests in Docker, which need no key and no sign-in.
 # - A push to master runs the full gate too, so master stays checked, and saves the build caches.
+#   A run started by hand saves them for its own branch.
 #
 # The job `CI passed` needs every other job and is the one check a ruleset requires: a job that
 # failed or was cancelled fails it, and a job its tier or the path rule left out counts as passed.
@@ -118,7 +119,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
-      - if: github.event_name == 'push' && steps.rust.outputs.hit != 'true'
+      - if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.rust.outputs.hit != 'true'
         uses: ./.github/actions/rust
         with:
           cache: rust-lint
@@ -165,7 +166,7 @@ jobs:
       - name: Tests
         run: cargo test --locked --all-features ${{ matrix.packages }}
 
-      - if: github.event_name == 'push' && steps.rust.outputs.hit != 'true'
+      - if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.rust.outputs.hit != 'true'
         uses: ./.github/actions/rust
         with:
           cache: ${{ matrix.cache }}
@@ -214,7 +215,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - if: github.event_name == 'push' && steps.rust.outputs.hit != 'true'
+      - if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.rust.outputs.hit != 'true'
         uses: ./.github/actions/rust
         with:
           cache: rust-simulator

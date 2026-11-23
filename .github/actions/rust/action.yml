@@ -2,15 +2,18 @@
 #
 # Used twice in a job: first with `save: false`, which installs Odin and the pinned toolchain and
 # restores the cache named `cache`; then, as the job's last step, with `save: true` and the key the
-# first gave back, which saves the cache. Only a push to master saves one (ci.yml asks for that):
-# a pull request or a merge group reads master's caches and writes none, so what a pull request
-# built never reaches another run, and the caches stay within the repository's limit.
+# first gave back, which saves the cache. Only a run on a branch's own ref saves one, a push to
+# master or a run started by hand (ci.yml asks for that), and GitHub lets only that branch and the
+# branches made from it read it: a pull request or a merge group reads master's caches and writes
+# none, so what a pull request built never reaches another run, and the caches stay within the
+# repository's limit.
 #
 # The key is the job's cache name and what makes every dependency build differently: the compiler,
 # Cargo.lock, the Cargo settings and the Odin release. A key is written once, so a cache holds the
-# dependencies as they were first built for that key. When nothing has that key, a pull request or
-# a merge group falls back to the newest cache of the same name, whose dependencies are mostly still
-# good; master does not, so what it saves holds nothing stale.
+# dependencies as they were first built for that key. When nothing has that key, a run that saves
+# nothing (a pull request, a merge group, the nightly run) falls back to the newest cache of the same
+# name, whose dependencies are mostly still good; a run that saves does not, so what it saves holds
+# nothing stale.
 #
 # The workspace's own crates are left out of what is saved: their sources are newer than anything
 # cached after every checkout, so Cargo builds them again whatever the cache holds.
@@ -72,7 +75,7 @@ runs:
           ~/.cargo/git/checkouts/
           target/
         key: ${{ inputs.cache }}-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', '.cargo/config.toml', 'tools/odin/install.sh') }}
-        restore-keys: ${{ github.event_name != 'push' && format('{0}-{1}-', inputs.cache, runner.os) || '' }}
+        restore-keys: ${{ github.event_name != 'push' && github.event_name != 'workflow_dispatch' && format('{0}-{1}-', inputs.cache, runner.os) || '' }}
 
     - name: Leave the workspace's own crates out of the cache
       if: inputs.save == 'true'
