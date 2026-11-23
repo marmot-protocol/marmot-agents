@@ -8,8 +8,9 @@ plays the person instead.
 
 Everything runs on one machine, with nothing else needed but a signed-in `codex`. To install an agent as a
 service of your account instead, use a script in `install/`, as the [README](../README.md#installing-an-agent)
-says. Building needs the pinned Odin
-compiler that MDK uses: see "Verification" in [`AGENTS.md`](../AGENTS.md).
+says. Building works on Linux, on x86_64 or arm64, and on macOS with Apple silicon, and needs the pinned Odin
+compiler that MDK uses: install it once with `bash tools/odin/install.sh <absolute folder>` and set `ODIN` to
+the `odin` program in that folder, as "Verification" in [`AGENTS.md`](../AGENTS.md) says.
 
 ## Steps
 
@@ -91,12 +92,13 @@ Then invite the agent and talk to it in the client as before.
 
 The scripts in `install/` set an agent up with the harness you already have
 ([D-102](decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)). To try one with the
-client in place of White Noise, give it the client's relay and no service, and run its `start` script:
+client in place of White Noise, give it the client's relay and no service, and run its `start` script. There
+is no release yet, so give the script the core built in step 1:
 
 ```sh
-target/release/marmot-agent-chat /tmp/try/person --serve 7777     # as in step 2; note your key
+target/debug/marmot-agent-chat /tmp/try/person --serve 7777     # as in step 2; note your key
 install/opencode.sh --owner <your key> --local-relay ws://127.0.0.1:7777 --cwd /tmp/try/work \
-    --binary target/release/marmot-agent --no-service
+    --binary target/debug/marmot-agent --no-service
 ~/.local/share/marmot-agent/agents/opencode/start
 ```
 
