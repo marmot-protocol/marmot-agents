@@ -405,6 +405,49 @@ In `model_switch` Alice sent `/model`, then `/model z-ai/glm-5.3:free`, ran a tu
 The model is the one setting Hermes will report as data. See [What Hermes hands over as
 data](#what-hermes-hands-over-as-data).
 
+### How the plugin tells what became of a command
+
+Read on 2026-11-23 in Hermes's source at commit `40d1e95f`: `gateway/slash_commands_model.py`
+(`_handle_model_command_locked`, `_handle_model_reset`, `_commit_model_switch_locked`),
+`gateway/slash_commands_session.py` (`_handle_reset_command`), `gateway/platforms/session_model.py`,
+`agent/i18n.py`, `hermes_cli/plugins.py` and `locales/en.yaml`. Not run; the recordings hold only the
+switch and the `reset_done` reply.
+
+**There is no structured outcome.** A command's handler returns a string, which the gateway sends with
+`send`. No hook reports a command's result: `pre_command` fires before the handler and returns nothing,
+and Hermes registers no hook after it. `get_session_model_settings` gives the model in effect, not whether
+a switch was taken, and a switch to the model already in use leaves it as it was.
+
+**The reply is made from a catalog.** Every reply below is `agent.i18n.t(key, **fields)`, in the language
+Hermes is set to (`HERMES_LANGUAGE`, then `display.language`, then English), falling back to English, then
+to the bare key. A platform plugin runs in Hermes's process, so it can call `t` itself and know a reply by
+its key. That is what the plugin does: it renders each key with a mark in place of each field, and matches
+the reply's first line against it. `t` is not in Hermes's published list of what a plugin may use
+(inferred: the list was not read again for this).
+
+What `/model <id>` and `/model reset` can answer, from the pinned source:
+
+| Key, and its English text | When | Taken? |
+| --- | --- | --- |
+| `gateway.model.switched`: ``Model switched to `{model}` ``, then more lines | A switch committed; also a `/model reset` in a local session, which is a switch to the default | Yes |
+| `gateway.model.reset_done`: ``Session model override cleared — now using `{model}` …`` | `/model reset` with an override to clear | Yes |
+| `gateway.model.reset_none`: ``No session model override is active — already using `{model}` …`` | `/model reset` with no override: nothing changes | Yes |
+| `gateway.model.error_prefix`: `Error: {error}` | The model or provider not found, the switch failed on the running agent, `--once` in a local session, or the code on disk newer than the gateway | No |
+| `❌ ` and the parser's message, not from the catalog | Arguments Hermes cannot parse | No |
+| `gateway.model.guard_confirm` | A costly or restricted model: a question, sent with `send_slash_confirm` | Not yet; its reply to the answer is the outcome |
+| `gateway.model.switch_cancelled` | The answer to that question was cancel | No |
+| `gateway.model.current_label` and the list | No model named | No |
+
+What `/new` can answer: `gateway.reset.header_default` (`✨ Session reset! Starting fresh.`),
+`gateway.reset.header_new` (`✨ New session started!`), or `gateway.reset.header_titled` for `/new <title>`,
+each followed by more lines. On Telegram a topic's own header replaces them; it does not reach this
+platform. Anything else, such as a refusal for want of rights, is not a new session.
+
+**A model read can say nothing.** `get_session_model_settings` returns None without a runner or for a profile
+route it refuses, and it names the session with a blank model when neither the session, the channel nor
+`config.yaml` names one. The plugin treats both as no answer: it shows nothing, settles nothing, and asks
+again at the next turn when it was the session's first read.
+
 ### The model picker
 
 In `model_picker` the recorder claimed a model picker, by defining `send_model_picker` on its adapter. `/model`
@@ -668,7 +711,9 @@ interface (`BasePlatformAdapter`, `MessageEvent`, `SendResult`) and `ctx.registe
 | `COMMAND_REGISTRY` and `_is_gateway_available`, from `hermes_cli.commands` | The commands a session item lists ([D-044](../decisions.md#d-044-a-connector-supplies-what-its-harness-does-not-say)) | No; Hermes's plugin check warns about the import | **Nothing yet.** The plugin logs a warning and the session item lists no commands; the end-to-end scenario, `crates/marmot-agent/tests/hermes.rs`, does not look at the list, and `python/tests` fake it |
 | `resolve_gateway_approval_card`, from `tools.approval` | Answering an approval card, as the person who answered | Not known | The approval step of the end-to-end scenario: the command is never run |
 | `resolve_gateway_clarify`, from `tools.clarify_gateway` | Answering a question | Not known | **Nothing yet.** The scenario asks no question, and `python/tests` fake the call |
+| `t`, from `agent.i18n` | Telling from a reply to `/model` or `/new` whether Hermes took it ([above](#how-the-plugin-tells-what-became-of-a-command)) | Not known | **Nothing yet** in a test that runs Hermes: the scenario sends neither command, and `python/tests` read the pinned English texts from `python/tests/hermes_phrases.json`. The plugin refuses both controls as `not_supported` when `t` knows none of the keys |
 | `_mark_connected` and `_mark_disconnected`, helpers of `BasePlatformAdapter` | Telling Hermes the platform is up or down | Not known; the leading underscore suggests not (inferred) | The scenario's first step, if a change makes the call fail: the platform then does not start (inferred, not tried) |
 
-The two rows marked "nothing yet" break the rule that each such reliance has a test that fails when it changes.
-Closing them is code: the scenario checking that the session item lists commands, and asking one question.
+The three rows marked "nothing yet" break the rule that each such reliance has a test that fails when it changes.
+Closing them is code: the scenario checking that the session item lists commands, asking one question, and
+switching the model.
