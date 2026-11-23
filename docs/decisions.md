@@ -2584,3 +2584,24 @@ changes nothing for anyone else. MDK, which places items in threads, asked for t
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points, on MDK's
 request.
+
+## D-134 An upgrade of the core and its support files is put back on failure, and finished by a re-run after a kill
+
+**Decision.** Every agent on an account starts the one `marmot-agent` in `~/.local/bin` with the one set of
+support files in `~/.local/share/marmot-agent/lib`, so an install script upgrades the two together. It prepares
+the new core and the new files, with the harness's packages or images, in a folder of the run's own, and only
+then puts them in place, one after the other. Before the first of these changes it keeps a copy of the core it
+replaces, in `~/.local/share/marmot-agent/upgrade`, and moves each part of the files it replaces there. If the
+run fails, or is stopped with TERM, INT or HUP, before its agent is set up and started, it puts all of them back,
+and says so. After a SIGKILL, running the installer again finishes the upgrade or, should it fail, puts back what
+the killed run found; another harness's installer, which cannot finish it, puts it back before it starts. A first install that fails takes away the core and files it put in place. The install
+tests stop an upgrade at every step to check this. It is the same protection
+[D-116](#d-116-a-gateways-plugin-swap-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill) gives a
+gateway's plugin.
+
+**Why.** The installer used to replace the core first, and the support files later. One that failed in between,
+as when the Claude Code driver's packages or a container image could not be made, left every agent of every
+harness to start, at its next restart, on the new core with the old files. Agents other than the one being
+installed were broken by an install that said it had failed.
+
+Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
