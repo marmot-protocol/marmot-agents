@@ -359,6 +359,38 @@ fn the_saved_session_is_named_until_the_driver_takes_a_prompt() {
     assert_eq!(next.session, None);
 }
 
+// A prompt whose answer was lost with the connection may have reached the harness: the chat is
+// told it may not have been delivered, and it is not sent again (D-037, D-129). One refused is
+// told it was not.
+#[test]
+fn a_prompt_whose_answer_was_lost_may_have_been_delivered() {
+    let (mut talk, prompt) = started();
+    let lost = Refusal {
+        unanswered: true,
+        ..Refusal::new(Reason::Failed)
+    };
+    let told = talk.prompted(&prompt, Err(lost));
+    let item = the_item(&mut talk, |_| told).2;
+    assert!(is_refused(&item, "failed"));
+    assert!(
+        item.event
+            .header()
+            .text
+            .starts_with("Your message may not have been passed to the agent"),
+        "{}",
+        item.event.header().text
+    );
+    let again = the_prompt(talk.heard(heard(direct(), "e2", OWNER, "and again")));
+    let told = talk.prompted(&again, Err(Refusal::new(Reason::Failed)));
+    let item = the_item(&mut talk, |_| told).2;
+    assert!(
+        item.event
+            .header()
+            .text
+            .starts_with("Your message was not passed to the agent")
+    );
+}
+
 fn session_item(approve_sandbox: bool) -> body::Session {
     body::Session {
         harness_version: "0.169.0".into(),

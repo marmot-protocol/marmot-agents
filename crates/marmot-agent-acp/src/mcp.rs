@@ -271,6 +271,7 @@ impl rmcp::ServerHandler for Handler {
             let refused = Refusal {
                 reason: Reason::Invalid,
                 detail: Some("there is no such tool.".into()),
+                unanswered: false,
             };
             return Ok(result(&Err(refused)).into());
         }

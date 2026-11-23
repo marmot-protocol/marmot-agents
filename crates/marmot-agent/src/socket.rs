@@ -339,7 +339,8 @@ impl SocketDriver {
 
     /// Sends a request and waits for its response, holding back the events read meanwhile
     /// (D-058). A connection that drops, or a connector that has not answered in time, refuses it
-    /// as failed and is given up: a prompt is then not delivered, and never sent again (D-037).
+    /// as failed and is given up: a prompt is then perhaps not delivered, and never sent again
+    /// (D-037, D-129).
     async fn request(&mut self, request: wire::CoreRequest) -> Result<(), Refusal> {
         if self.gone {
             return Err(Refusal::new(Reason::Failed));
@@ -356,14 +357,19 @@ impl SocketDriver {
             self.gone = true;
             return Err(Refusal::new(Reason::Failed));
         }
+        // Written: from here on the connector may have the request, and the answer is what is lost.
+        let unanswered = Refusal {
+            unanswered: true,
+            ..Refusal::new(Reason::Failed)
+        };
         let deadline = tokio::time::Instant::now() + self.answer_within;
         loop {
             let Ok(next) = tokio::time::timeout_at(deadline, self.read()).await else {
                 self.gone = true;
-                return Err(Refusal::new(Reason::Failed));
+                return Err(unanswered);
             };
             let Some(envelope) = next else {
-                return Err(Refusal::new(Reason::Failed));
+                return Err(unanswered);
             };
             let is_response = envelope.jsonrpc.as_deref() == Some("2.0")
                 && envelope.method.is_none()
@@ -392,6 +398,7 @@ impl SocketDriver {
                 Refusal {
                     reason: Reason::Invalid,
                     detail: Some("Another file with this request's id is still being sent.".into()),
+                    unanswered: false,
                 },
             );
             if write_line(&mut self.writer, &message).await.is_err() {
@@ -604,6 +611,7 @@ fn refusal(error: &Value) -> Refusal {
     Refusal {
         reason,
         detail: data["detail"].as_str().map(String::from),
+        unanswered: false,
     }
 }
 
@@ -735,9 +743,12 @@ mod tests {
         let mut driver = greeted(core)
             .await
             .answer_within(Duration::from_millis(100));
-        let result = driver.request(a_prompt()).await;
-        assert_eq!(result.unwrap_err().reason, Reason::Failed);
+        let result = driver.request(a_prompt()).await.unwrap_err();
+        assert_eq!(result.reason, Reason::Failed);
+        assert!(result.unanswered, "the connector may have it");
         assert!(driver.next_event().await.is_none(), "given up");
+        // A request made after the connector was given up never reached it.
+        assert!(!driver.request(a_prompt()).await.unwrap_err().unanswered);
         let mut seen = vec![0u8; 1024];
         let _ = connector.read(&mut seen).await;
     }
@@ -801,6 +812,7 @@ mod tests {
         let refusal = Refusal {
             reason: Reason::NotAllowed,
             detail: Some("The file is outside the folders.".into()),
+            unanswered: false,
         };
         driver.file_sent(asked[1].id.clone(), Err(refusal)).await;
         let sent: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();

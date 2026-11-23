@@ -886,6 +886,7 @@ pub async fn send_file<S: Subject>(subject: S) -> Result<(), Violation> {
     let refused = Refusal {
         reason: Reason::NotAllowed,
         detail: Some("the file is not in a folder files may be sent from.".into()),
+        unanswered: false,
     };
     run.file_sent(&second, Err(refused)).await?;
     told(&mut run, 3, false).await?;

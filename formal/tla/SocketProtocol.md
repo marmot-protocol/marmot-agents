@@ -36,7 +36,7 @@ writes a counterexample.
 | `Run`, `EndTurn(hold)`, `Release` | The harness runs the prompt and ends its turn, stopped when it has `r1`; the end settles what waits on it. Hermes may hold a quiet end and let it go later (`send_held`) |
 | `Drop` | The connection goes: the core restarts, or the socket breaks |
 | `GiveUp` | `ANSWER_WITHIN`: the core's 30 s for a request to be taken runs out, and it gives the connector up |
-| (in `Drop`, `GiveUp`) | `ended`: the request waited on is refused as failed (a prompt is told as not delivered and never sent again, D-037), every control taken is settled as failed, every open item is closed (D-058, D-070). The connector forgets by its kind: Claude Code exits, and its query with it; OpenClaw cancels the run; Hermes's `core_gone` closes what was open on its side, drops a held end, and forgets what waited, while Hermes runs on |
+| (in `Drop`, `GiveUp`) | `ended`: the request waited on is refused as failed (a prompt is told as perhaps not delivered and never sent again, D-037, D-129), every control taken is settled as failed, every open item is closed (D-058, D-070). The connector forgets by its kind: Claude Code exits, and its query with it; OpenClaw cancels the run; Hermes's `core_gone` closes what was open on its side, drops a held end, and forgets what waited, while Hermes runs on |
 | `Restart` | A connector that exited is started again |
 
 ## What is not
@@ -119,10 +119,11 @@ Hermes after its connection went). All within 510 distinct states.
   core's patience runs out on a healthy connector, and everything open is cut short. Fixed on this branch for
   Claude Code's interrupt and Hermes's `/new` and `/model`; `AnswerOnEffect` puts it back.
 - **The accepted limit of D-037** (`prompt-in-flight`): a prompt whose answer a dropped connection took is told
-  as not delivered, and never sent again, but the harness may have it and run it: Claude Code and OpenClaw
+  as perhaps not delivered, and never sent again, but the harness may have it and run it: Claude Code and OpenClaw
   until the connection's end stops the run, Hermes to the end, and its turn reaches the next core. The core
-  cannot tell the two apart. The notice it gives says the prompt was not delivered, which is then not always
-  so (inferred from the model and the code, not seen in a recording).
+  cannot tell the two apart (inferred from the model and the code, not seen in a recording), so the notice it
+  gives says the prompt may not have been delivered
+  ([D-129](../../docs/decisions.md#d-129-a-prompt-whose-answer-a-dropped-connection-lost-is-told-as-perhaps-not-delivered)).
 
 ## Running
 

@@ -721,6 +721,7 @@ async fn a_file_the_agent_sends_goes_to_the_core_and_the_result_back_to_pi() {
     let refused = Refusal {
         reason: Reason::NotAllowed,
         detail: Some("the file is not in a folder the settings allow.".into()),
+        unanswered: false,
     };
     pi.file_sent(file.id, Err(refused)).await;
     until(&mut pi, |e| is_turn(e, State::Done)).await;

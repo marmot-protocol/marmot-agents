@@ -208,7 +208,7 @@ CASES += [
          counterexample="prompt-in-flight",
          what="The accepted limit of D-037: the connector hands the prompt to the harness and "
               "answers, and the connection goes before the core reads the answer. The core tells "
-              "the chat it was not delivered and never sends it again; the gateway runs it."),
+              "the chat it may not have been delivered and never sends it again; the gateway runs it."),
     probe("NeverCut", KEPT, "socket-NeverCut"),
     probe("NeverReconnected", KEPT, "socket-NeverReconnected"),
     probe("NeverSettledByEffect", KEPT, "socket-NeverSettledByEffect"),

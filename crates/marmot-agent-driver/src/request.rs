@@ -312,6 +312,10 @@ pub struct Refusal {
     /// A driver puts the harness's own words here only when it can be sure of that, and otherwise
     /// leaves them out.
     pub detail: Option<String>,
+    /// The request reached the driver's side and no answer came, as when a connector's connection
+    /// goes before it answers: the harness may have it. A prompt refused so is told as perhaps
+    /// not delivered, and is still never sent again (D-037, D-129).
+    pub unanswered: bool,
 }
 
 impl Refusal {
@@ -320,6 +324,7 @@ impl Refusal {
         Self {
             reason,
             detail: None,
+            unanswered: false,
         }
     }
 }

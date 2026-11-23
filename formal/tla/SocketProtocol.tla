@@ -162,8 +162,8 @@ Forget ==
             /\ UNCHANGED <<cUp, cHanding, harness>>
 
 \* The connection ends. The core refuses the request it waited on as failed: a prompt is told
-\* as not delivered and never sent again (D-037); it settles every control taken as failed and
-\* closes every item open (D-058, D-070); and it waits for the next connector.
+\* as perhaps not delivered and never sent again (D-037, D-129); it settles every control taken
+\* as failed and closes every item open (D-058, D-070); and it waits for the next connector.
 End(why) ==
     /\ phase' = "accept" /\ drops' = drops + 1
     /\ inflight' = NoReq /\ pending' = {} /\ up' = <<>> /\ down' = NoReq
@@ -386,9 +386,9 @@ S2 == ~afterCut
 \* that has taken it and waits for its effect (D-058, D-066; `ANSWER_WITHIN`).
 S11 == ~unhanded /\ ~needless
 
-\* The accepted limit of D-037: a prompt whose answer the drop took is told as not delivered,
-\* and is never sent again; the harness may have it, and run it. Not a property the code
-\* keeps: check.py shows that it fails (counterexample `prompt-in-flight`).
+\* The accepted limit of D-037: a prompt whose answer the drop took is told as perhaps not
+\* delivered (D-129), and is never sent again; the harness may have it, and run it. Not a
+\* property the code keeps: check.py shows that it fails (counterexample `prompt-in-flight`).
 UndeliveredNotRun == ~(promptSaid = "undelivered" /\ ran)
 
 -----------------------------------------------------------------------------

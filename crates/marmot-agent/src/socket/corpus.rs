@@ -462,6 +462,7 @@ async fn from_the_core() -> Vec<Example> {
     let refusal = Refusal {
         reason: Reason::NotAllowed,
         detail: Some("The file is outside the folders the agent may send files from.".into()),
+        unanswered: false,
     };
     wire.driver
         .file_sent(asked[1].id.clone(), Err(refusal))
@@ -732,6 +733,7 @@ async fn from_a_connector() -> Vec<Example> {
             Err(Refusal {
                 reason: Reason::Busy,
                 detail: Some("A turn is running.".into()),
+                unanswered: false,
             }),
         ),
         (

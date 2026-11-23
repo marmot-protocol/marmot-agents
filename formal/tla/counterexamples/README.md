@@ -87,4 +87,4 @@ prompt `p1`, whose turn is `t1`, and one control `r1`, an interrupt of it.
 | --- | --- | --- |
 | [`kept-connector-remembers`](kept-connector-remembers.json) | S2 | With `NoReset`, the Hermes plugin before the fix: the connection goes while the turn runs, the core closes it as cut short, and the turn's end that Hermes sends after it reconnects changes it to done |
 | [`answer-on-effect`](answer-on-effect.json) | S11 | With `AnswerOnEffect`: the connector holds the interrupt's answer until the turn stops, and the core gives up a connector that was there and working |
-| [`prompt-in-flight`](prompt-in-flight.json) | `UndeliveredNotRun` | The accepted limit of D-037: the connection goes before the core reads the prompt's answer, so the chat is told it was not delivered, and the harness runs it |
+| [`prompt-in-flight`](prompt-in-flight.json) | `UndeliveredNotRun` | The accepted limit of D-037: the connection goes before the core reads the prompt's answer, so the chat is told it may not have been delivered, and the harness runs it |

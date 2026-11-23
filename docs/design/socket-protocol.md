@@ -218,7 +218,7 @@ harness apply to the Rust trait, whose flags are the seven in D-058, not the row
 | The connection drops during a turn | Closes the turn and every open item, with the reason. The chat shows the turn as interrupted |
 | The connector comes back | Takes a new hello. Nothing is replayed. A connector that outlived the connection, as a gateway's plugin does, starts from what the new core knows: it sends nothing more of the items that were open, and names none of the requests the old core settled |
 | The connector has not taken a request after 30 seconds | Refuses it as failed and gives the connector up, as for a drop. So a connector answers once its harness has the request, never once its effect shows |
-| A prompt was sent and no response came before the drop | Reports it as not delivered. It is never sent again |
+| A prompt was sent and no response came before the drop | Reports it as perhaps not delivered: the harness may have it ([D-129](../decisions.md#d-129-a-prompt-whose-answer-a-dropped-connection-lost-is-told-as-perhaps-not-delivered)). It is never sent again |
 | An answer or a control was taken and nothing settled it before the drop | Settles it with a notice that it failed ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)) |
 | An event names an unknown turn or session | Accepts it. A harness can produce work outside a turn |
 | A message is not valid | Answers with an error and keeps the connection |

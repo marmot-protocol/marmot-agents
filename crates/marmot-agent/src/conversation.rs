@@ -802,6 +802,7 @@ impl Conversation {
                     return Err(Refusal {
                         reason: Reason::NotSupported,
                         detail: Some("A secret answer is taken only in a two-person chat. Answer it at the terminal.".into()),
+                        unanswered: false,
                     });
                 }
                 let replies = questions
@@ -1983,6 +1984,12 @@ fn not_acted_on(refusal: &Refusal) -> String {
 }
 
 fn not_delivered(refusal: &Refusal) -> String {
+    if refusal.unanswered {
+        // The harness may have it; it is still never sent again (D-037, D-129).
+        return "Your message may not have been passed to the agent: the connection to it was lost \
+                before it answered. It is not sent again."
+            .into();
+    }
     format!(
         "Your message was not passed to the agent. {}",
         not_acted_on(refusal)

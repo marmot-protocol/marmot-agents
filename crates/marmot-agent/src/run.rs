@@ -540,6 +540,7 @@ impl<D: Driver, M: Side> Core<D, M> {
             let result = Err(Refusal {
                 reason: Reason::Invalid,
                 detail: Some("The agent named a chat it is not in.".into()),
+                unanswered: false,
             });
             return self.file_done(Uploaded { id, chat, result }).await;
         };
@@ -1099,6 +1100,7 @@ async fn upload(
                 return Err(Refusal {
                     reason: Reason::Failed,
                     detail: Some("It could not be uploaded or sent.".into()),
+                    unanswered: false,
                 });
             }
         }
@@ -1110,6 +1112,7 @@ async fn upload(
     Err(Refusal {
         reason: Reason::Busy,
         detail: Some("The agent's account stayed busy. Try again later.".into()),
+        unanswered: false,
     })
 }
 

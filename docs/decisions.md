@@ -565,6 +565,9 @@ again.
 Decided 2026-11-18. What else happens to a turn on a restart is still open
 (Q-27, since settled as [D-070](#d-070-a-restart-closes-the-turn-as-interrupted)).
 
+Refined by [D-129](#d-129-a-prompt-whose-answer-a-dropped-connection-lost-is-told-as-perhaps-not-delivered):
+a prompt the connector may have had when the connection went is told as perhaps not delivered.
+
 ## D-038 Each connector has its own token
 
 **Decision.** The socket is in a folder only the owner's user account can open. Each connector has its own
@@ -2462,5 +2465,19 @@ when it comes. The request is settled once, by the `no_effect` notice; the late 
 **Why.** Otherwise the harness works in one folder while the chat's files come from another, which is what the
 folder rules exist to prevent. Only a running driver can still show a late session, so nothing is kept across a
 restart.
+
+Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
+
+## D-129 A prompt whose answer a dropped connection lost is told as perhaps not delivered
+
+**Decision.** When a connector's connection goes, or the core gives it up, after the core wrote a prompt to it
+and before its answer came, the chat is told: "Your message may not have been passed to the agent: the
+connection to it was lost before it answered. It is not sent again." A prompt the connector never got, or
+refused, is still told it was not passed to the agent. Either way it is never sent again
+([D-037](#d-037-a-prompt-is-delivered-at-most-once)).
+
+**Why.** The connector may have handed the prompt to the harness before the connection went, and the harness
+may run it (the `prompt-in-flight` counterexample of `formal/tla/SocketProtocol.md`). The core cannot tell the
+two apart, so "not delivered" would be wrong when the agent then answers.
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.

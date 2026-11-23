@@ -3,7 +3,7 @@
   "model": "SocketProtocol",
   "config": "SocketProtocol.kept.cfg",
   "breaks": "UndeliveredNotRun",
-  "what": "The accepted limit of D-037: the connector hands the prompt to the harness and answers, and the connection goes before the core reads the answer. The core tells the chat it was not delivered and never sends it again; the gateway runs it.",
+  "what": "The accepted limit of D-037: the connector hands the prompt to the harness and answers, and the connection goes before the core reads the answer. The core tells the chat it may not have been delivered and never sends it again; the gateway runs it.",
   "generated_by": "python3 tools/tla/check.py --counterexamples",
   "constants": {"Connector": "kept", "Holds": true, "MaxDrops": 2, "TakenInTime": true, "Supervised": true, "FairConnector": true, "FairHarness": true, "FairTime": true, "Bug": "none"},
   "messages": [{"id": "p1", "chat": "c1", "kind": "prompt"}, {"id": "r1", "chat": "c1", "kind": "control", "interrupts": "t1"}],
