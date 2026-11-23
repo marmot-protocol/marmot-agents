@@ -163,10 +163,13 @@ pub(crate) struct Message {
 }
 
 #[derive(Default, Deserialize)]
-#[serde(default)]
+#[serde(rename_all = "camelCase", default)]
 pub(crate) struct ItemNote<'a> {
     #[serde(borrow)]
     pub item: Option<Item<'a>>,
+    /// The turn the item is in, which can have ended: what a parent's thread says of a subagent
+    /// can come after the parent's turn (recorded).
+    pub turn_id: Option<String>,
 }
 
 #[derive(Default, Deserialize)]

@@ -1485,4 +1485,89 @@ async fn a_request_the_driver_cannot_read_is_answered() {
     );
     fake.say(turn("turn/completed", "completed")).await;
     reading.await.unwrap();
+
+/// A turn running with subagent `sub1` running turn `st1` under it, then the turn ended: the
+/// subagent outlives it.
+async fn outliving() -> (Codex, Fake) {
+    let (mut codex, mut fake) = running().await;
+    fake.say(started_by("a1", "sub1")).await;
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    fake.say(turn("turn/completed", "completed")).await;
+    until(&mut codex, is_turn(State::Done)).await;
+    (codex, fake)
+}
+
+// What the parent's thread says of a subagent after the parent's turn has ended (recorded in
+// `subagent_interrupt`) is shown under the turn it names, not under none.
+#[tokio::test]
+async fn a_subagents_end_after_its_parents_turn_keeps_that_turn() {
+    let (mut codex, mut fake) = outliving().await;
+    let ended = json!({"type": "subAgentActivity", "id": "a2", "kind": "completed",
+        "agentThreadId": "sub1", "agentPath": "/root/a"});
+    fake.say(
+        json!({"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1",
+        "item": ended}}),
+    )
+    .await;
+    let events = until(&mut codex, |e| e.event.header().item.as_str() == "a2").await;
+    let header = events.last().unwrap().event.header();
+    assert_eq!(header.turn.as_ref().map(|t| t.as_str()), Some("t1"));
+}
+
+// Work given to a subagent while its turn runs is for its next turn: the running turn's words
+// still name what it is working for.
+#[tokio::test]
+async fn work_given_during_a_subagents_turn_is_for_its_next() {
+    let (mut codex, mut fake) = running().await;
+    fake.say(started_by("a1", "sub1")).await;
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    let more = json!({"type": "subAgentActivity", "id": "a2", "kind": "interacted",
+        "agentThreadId": "sub1", "agentPath": "/root/a"});
+    fake.say(
+        json!({"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1",
+        "item": more}}),
+    )
+    .await;
+    fake.say(
+        json!({"method": "item/completed", "params": {"threadId": "sub1", "turnId": "st1",
+        "item": {"type": "agentMessage", "id": "w1", "text": "first", "phase": "final_answer"}}}),
+    )
+    .await;
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "completed"))
+        .await;
+    fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
+        .await;
+    let events = until(&mut codex, |e| e.event.header().item.as_str() == "task:st2").await;
+    let parent = (events.iter()).find_map(|e| match e.event.body() {
+        Body::Message(m) if e.event.header().item.as_str() == "w1" => Some(m.parent.clone()),
+        _ => None,
+    });
+    assert_eq!(parent, Some(Some("a1".into())), "the running turn's words");
+    let subject = |item: &str| {
+        (events.iter().rev()).find_map(|e| match e.event.body() {
+            Body::Task(t) if e.event.header().item.as_str() == item => Some(t.subject.clone()),
+            _ => None,
+        })
+    };
+    assert_eq!(subject("task:st1"), Some(Some("a1".into())));
+    assert_eq!(subject("task:st2"), Some(Some("a2".into())));
+}
+
+// A tool for subagents that failed is not titled as having worked.
+#[tokio::test]
+async fn a_failed_spawn_is_not_shown_as_started() {
+    let (mut codex, mut fake) = running().await;
+    let spawn = json!({"type": "collabAgentToolCall", "id": "c1", "tool": "spawnAgent",
+        "status": "failed", "receiverThreadIds": [], "prompt": "look"});
+    fake.say(
+        json!({"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1",
+        "item": spawn}}),
+    )
+    .await;
+    let events = until(&mut codex, |e| e.event.header().item.as_str() == "c1").await;
+    let header = events.last().unwrap().event.header();
+    assert_eq!(header.state, State::Failed);
+    assert_ne!(header.title, "Started a subagent");
 }
