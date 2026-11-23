@@ -10,7 +10,7 @@ gateway with no plugin that works until it runs again, at the moments named belo
 ([D-116](decisions.md#d-116-a-gateways-plugin-swap-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)).
 Decided for a gateway's move ([D-119](decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)): the
 OpenClaw installer finishes a half-done move in OpenClaw's settings file, the gateway's conversation starts
-fresh, and `--replace-plugin` lists the gateway's work folder in `files_from`, which it does not do yet.
+fresh, and `--replace-plugin` lists the gateway's work folder in `files_from`.
 
 One of today's connectors (installed by MDK's `install-*-marmot.sh`) moves to the core without anyone inviting
 the agent again. The core uses the old account home where it is, so the agent keeps its identity, its keys, its
