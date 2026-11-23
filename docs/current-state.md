@@ -212,7 +212,7 @@ Decided, and not built: the core, the drivers, MDK and the apps each have their 
   models changed), the merge queue and each push to `master` (everything, the simulator at 200 runs and the
   Docker move-over tests), and a nightly run (new simulator seeds, larger TLA+ bounds, coverage, a 64th of the
   core's mutants, the cassettes), whose failed jobs open issues. One job, `CI passed`, is the only required
-  check ([D-130](decisions.md#d-130-ci-runs-in-three-tiers-with-one-required-check)).
+  check, and fails unless every job its tier expects ran and passed ([D-130](decisions.md#d-130-ci-runs-in-three-tiers-with-one-required-check)).
 - The Rust workspace builds with MDK's compiler and forbids unsafe code ([D-053](decisions.md#d-053-the-rust-workspace-builds-with-mdks-compiler-and-forbids-unsafe-code)).
 - Work follows `plan.md`; the builder decides what is internal and merges once CI passes and review left no
   blocker. Every commit is signed ([D-068](decisions.md#d-068-work-follows-the-plan-and-the-builder-decides-what-is-internal), [D-054](decisions.md#d-054-changes-arrive-as-small-signed-pull-requests-that-ci-checks)).

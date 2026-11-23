@@ -2510,8 +2510,10 @@ Decided 2026-11-23 by the builder, under the project owner's instruction to deci
   found when it found something: the mutants missed, the cassettes due.
 
 One job, `CI passed`, needs every job of the first two tiers and is the only check the `master` ruleset requires:
-it fails when a job failed or was cancelled, and a job left out by its tier or the path rule counts as passed. CI
-uses no third-party action and no secret. Build caches are written by a push to `master` and by a run started by
+it fails when a job failed or was cancelled, and it lists the run's jobs and fails unless every job the tier
+expects ran and passed, since GitHub can report a matrix job as passed when one of its legs never ran. A job left
+out by its tier or the path rule counts as passed. CI uses no third-party action and no secret; the gate's token
+may read the run's jobs, and nothing more. Build caches are written by a push to `master` and by a run started by
 hand on its own branch; a pull request and the merge queue read `master`'s and write none.
 
 **Why.** A pull request gets its answer fast, and the slower checks still run before anything reaches `master`,

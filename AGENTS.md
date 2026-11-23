@@ -240,7 +240,9 @@ If you change a command here, change it there. CI runs in three tiers
 | Merge queue | Each pull request queued to merge, and each push to `master`; aim under 30 minutes | All of the pull-request tier whatever changed, the simulator at `MARMOT_AGENT_SIM_RUNS=200`, and the move-over tests that need Docker, below |
 | Nightly | Once a night on `master` (`.github/workflows/nightly.yml`), and by hand | The simulator on a new seed with many runs, TLC on larger bounds, a coverage report, a 64th of the core's mutants, and `check_cassettes.py --strict` on the model double's cassettes; a failed job opens an issue |
 
-The job `CI passed` needs every other job of the first two tiers and is the one check `master` requires. Either
+The job `CI passed` needs every other job of the first two tiers and is the one check `master` requires. It
+checks the run's jobs against a list of the names each tier expects (`EXPECTED` in `ci.yml`), so a new job, or a
+new leg of a matrix, goes in that list and in its `needs`. Either
 tier can be run on a branch by hand: `gh workflow run ci.yml --ref <branch> -f tier=pull-request` (or
 `tier=full`). CI's Rust jobs also set `CARGO_INCREMENTAL=0` and `CARGO_PROFILE_DEV_DEBUG=line-tables-only`,
 which change how fast they build and what a cache holds, not what is tested.
@@ -355,7 +357,13 @@ python3 -m unittest discover -s install -p 'test_*.py'   # runs each install scr
 `.github/workflows/release.yml` runs only on a version tag, so a change to it is checked by reading it, and by
 [actionlint](https://github.com/rhysd/actionlint) if you have it. Check a change to `ci.yml`, `nightly.yml` or
 `.github/actions/` with actionlint too, and by running the tier it changes on its branch by hand (above);
-`nightly.yml` can be run by hand only once it is on `master`.
+`nightly.yml` can be run by hand only once it is on `master`. For a change to `ci.yml`'s jobs or to `tools/ci`,
+which the `CI passed` job runs:
+
+```sh
+python3 -m unittest discover -s tools/ci -p 'test_*.py'   # the gate passes each tier, and fails when a job
+                                                          # the tier expects never ran, was skipped or failed
+```
 
 For any change under `formal/` or `tools/tla/`, or to the code a model follows (the core for `CoreLifecycle`,
 `formal/tla/README.md`; the core's socket and the Claude Code, OpenClaw and Hermes connectors for

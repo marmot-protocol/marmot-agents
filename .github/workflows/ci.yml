@@ -13,7 +13,9 @@ name: CI
 #   A run started by hand saves them for its own branch.
 #
 # The job `CI passed` needs every other job and is the one check a ruleset requires: a job that
-# failed or was cancelled fails it, and a job its tier or the path rule left out counts as passed.
+# failed or was cancelled fails it, and so does a job its tier expects that did not run and pass,
+# which it finds by listing the run's jobs (tools/ci/passed.py). A job its tier or the path rule
+# left out counts as passed.
 # `workflow_dispatch` runs either tier on any branch, to try this file before a pull request.
 # The long checks are in nightly.yml.
 #
@@ -521,8 +523,11 @@ jobs:
   passed:
     # The one check the master ruleset requires, on pull requests and in the merge queue. It runs
     # whatever happened above (`always()`: a required check that is skipped would count as
-    # passed), and fails if any job failed or was cancelled. A job its tier or the path rule left
-    # out is skipped, and counts as passed. A new job must be added to `needs`.
+    # passed). It fails if any job failed or was cancelled, and, since GitHub can report a matrix
+    # job as passed when a leg was cancelled before a runner took it, it also lists the run's jobs
+    # and fails unless every job the tier expects ran and passed (tools/ci/passed.py). A job its
+    # tier or the path rule left out may be skipped. A new job, or a new leg of a matrix, must be
+    # added to `needs` and to EXPECTED below, under the name the run shows.
     name: CI passed
     if: always()
     needs:
@@ -539,6 +544,10 @@ jobs:
       - documents
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      # To list this run's jobs. Read only.
+      actions: read
     steps:
       - name: Every job passed, or was left out by the tier or the path rule
         env:
@@ -550,3 +559,40 @@ jobs:
             echo "::error::A job failed or was cancelled."
             exit 1
           fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: tools/ci
+
+      - name: The gate's own check passes its tests
+        run: python3 -m unittest discover -s tools/ci -p 'test_*.py'
+
+      - name: Every job the tier expects ran and passed
+        # `[full]`: only in the full gate. `[models]`: only when the models run.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL: ${{ needs.changes.outputs.full }}
+          MODELS: ${{ needs.changes.outputs.models }}
+          EXPECTED: |
+            Tier and changed paths
+            Rust format and Clippy
+            Rust tests (core)
+            Rust tests (drivers and the rest)
+            Simulator
+            Move-over tests (Docker) [full]
+            Recordings
+            TypeScript (claude-code)
+            TypeScript (openclaw)
+            Python
+            Install scripts
+            TLA+ models (fair) [models]
+            TLA+ models (give-up) [models]
+            TLA+ models (the other cases) [models]
+            Documents
+        run: |
+          set -euo pipefail
+          gh api --paginate --jq '.jobs[] | {name, status, conclusion}' \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?filter=latest&per_page=100" \
+            > "${RUNNER_TEMP}/jobs.jsonl"
+          python3 tools/ci/passed.py --jobs "${RUNNER_TEMP}/jobs.jsonl" --full "${FULL}" --models "${MODELS}"
