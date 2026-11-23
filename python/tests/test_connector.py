@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from marmot_hermes.connector import Connector
+from marmot_hermes.connector import EFFECT_SECONDS, Connector
 from marmot_hermes.core import PROTOCOL, CoreConnection, Refusal, Refused
 from protocol import Reads, core_requests, event_problems, problems, unknown_reads
 
@@ -689,6 +689,38 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.feed(later_in)
         shown = self.of("session")[-1]
         self.assertEqual((shown["text"], shown.get("settles")), ("Model: n, Provider: custom", ["r-1"]))
+
+    async def test_a_second_model_switch_while_one_is_waiting_for_its_read_is_refused(self):
+        """One model read settles one switch: a second `/model` for a session whose switch is still
+        waiting for the read that shows it is refused as busy, so the first is never settled by an
+        event showing the second's model (D-028)."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), *model_settings(model="m"), complete("m-1"))
+        session = self.of("session")[-1]["session"]
+        read_out, read_in = model_settings(model="n", read="read-1")
+        self.hermes.read_model = lambda: self.feed(read_out)
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "set", "session": session, "setting": "model", "value": "n"}})
+        self.feed(said("Model switched to `n`\nProvider: Custom endpoint", self.hermes.typed[-1][2], notify=True))
+        await asyncio.sleep(0)
+        # The read after the switch to `n` is still under way.
+        with self.assertRaises(Refusal) as busy:
+            await self.connector.serve("control", {"request": "r-2", "by": ALICE, "action": {
+                "type": "set", "session": session, "setting": "model", "value": "p"}})
+        self.assertEqual(busy.exception.reason, "busy")
+        self.assertEqual([t[3] for t in self.hermes.typed], ["hello", "/model n"])
+        self.feed(read_in)
+        shown = self.of("session")[-1]
+        self.assertEqual((shown["text"], shown.get("settles")), ("Model: n, Provider: custom", ["r-1"]))
+        # Once it is settled, the next switch is taken; and a switch left waiting longer than a control
+        # waits for its effect holds up no other.
+        await self.connector.serve("control", {"request": "r-3", "by": ALICE, "action": {
+            "type": "set", "session": session, "setting": "model", "value": "p"}})
+        with mock.patch.object(asyncio.get_running_loop(), "time",
+                               return_value=asyncio.get_running_loop().time() + EFFECT_SECONDS + 1):
+            await self.connector.serve("control", {"request": "r-4", "by": ALICE, "action": {
+                "type": "set", "session": session, "setting": "model", "value": "q"}})
+        self.assertEqual([t[3] for t in self.hermes.typed], ["hello", "/model n", "/model p", "/model q"])
 
     async def test_what_is_not_offered_is_refused(self):
         with self.assertRaises(Refusal) as refused:

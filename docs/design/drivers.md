@@ -867,7 +867,9 @@ does, and feeds it to the chat's translator:
   command output, settles the request (provisional; before, the request was refused with Hermes's words).
   When Hermes first asks to confirm the command, its question is not the outcome: its reply to the answer
   is. One reset settles one request, so a second new session for a session whose reset is still on its way
-  is refused as `busy` (provisional). An answer Hermes did not take can
+  is refused as `busy` (provisional). Likewise one model read settles one switch, so a second `/model` for a
+  session whose switch has not yet been settled is refused as `busy`, until the first is settled or has
+  waited as long as the core waits for a control's effect (provisional). An answer Hermes did not take can
   be given again.
 - The plugin keeps one connector while Hermes runs, across connections to the core. When a connection goes,
   that core closes the items open in the chat and settles the requests it handed over

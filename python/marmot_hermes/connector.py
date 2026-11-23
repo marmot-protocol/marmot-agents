@@ -69,7 +69,7 @@ class Chat:
         self.by_turn: dict[str, list[str]] = {}  # interrupts, settled by the end of the turn
         # (chat and sender, their session count then, the request, when it was taken)
         self.new_session: list[tuple[str, int, str, float]] = []
-        self.sets: list[dict] = []  # `set` controls waiting for a session event showing the value
+        self.sets: list[dict] = []  # `set` controls waiting for a session event showing the value, one a session
         # What waits for Hermes's reply to a command Hermes asked to confirm: the reply to the answer.
         self.confirming = None
         self.answered: set[str] = set()
@@ -554,7 +554,14 @@ class Connector:
         if chat is None:
             raise Refusal("nothing_to_do")
         where, sender = self.source_of(chat, session, by)
-        pending = {"request": request, "session": session, "setting": "model", "value": value, "taken": False}
+        now = asyncio.get_running_loop().time()
+        chat.sets = [s for s in chat.sets if now - s["at"] < EFFECT_SECONDS]
+        if any(s["session"] == session for s in chat.sets):
+            # The model read after a switch settles it, and a read shows only the model then: one
+            # read cannot tell two switches apart.
+            raise Refusal("busy", "A change of model is already on its way.")
+        pending = {"request": request, "session": session, "setting": "model", "value": value, "taken": False,
+                   "at": now}
         if request:
             chat.sets.append(pending)
 
