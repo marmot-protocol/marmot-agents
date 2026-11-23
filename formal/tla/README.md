@@ -6,7 +6,8 @@ Status: built and checked with TLC on small bounds, as
 internal and change as the work goes. Read on 2026-11-22 against master `74b56d6`, and again for the fix of
 `conversation.rs` `refused` on branch `dropped-sends` the same day, and for its review round 1, and again for
 the sends under MDK 0.19.0's tokens on branch `crash-safe-sends` the same day, which took the lookup's place, and
-again for the reading by insertion order of MDK #3606 on branch `mdk-insertion-paging` the same day.
+again for the reading by insertion order of MDK #3606 on branch `mdk-insertion-paging` the same day; and again on
+2026-11-23 for a driver that ends during a catch-up, on branch `core-socket-backlog`.
 
 This folder holds three models: `CoreLifecycle`, the core, which this page is about; `SocketProtocol`, the socket
 between the core and a connector, which [its own page](SocketProtocol.md) is about; and `DriverTransport`, one
@@ -35,7 +36,7 @@ drive it.
 | `Send(c, outcome)` | `flush` for the oldest send of a group, under its token (`marmot.rs` `send`), with what it carries saved first: MDK says `sent`, `busy`, `ambiguous-posted`, `ambiguous-lost`, `rejected` (it took the send and dropped it before it went out: up to `MaxRejected` tries; the next is under a new token, and after `RejectedTries` of them the send is given up), or `refused`: every send to a gone group, and up to `MaxRefusals` sends to a live one (`run.rs` `failed`: `EventTooLarge`, `InvalidAppMessagePayload`), each refused again whenever it is sent; the group stays live. With `TokenDedupe`, MDK answers a token it posted with the event it posted, and a token it dropped with its drop. A refused or given-up send goes to `refused`, below |
 | (in `Send`) | `conversation.rs` `refused`, for a send MDK refused or the core gave up: it is dropped, and, unless it is itself a last resort (`last_resort`), something stands in for it (`stand_in_for`): for an item's version, the item's close when that version closed it and nothing later is queued (`close_undelivered`, a last resort), then a `failed` notice settling what the version settled; for a notice that settled requests, or a `failed` notice (`tells`), a `failed` notice settling what it settled, a last resort. A `failed` notice tells the chat of the version it stands in for, or of what the notice it replaces told of (`ToldBy`) |
 | `Crash` | the process dies: memory, the event stream and the driver are lost |
-| `DriverStops`, `Stop` | the loop ends: `ended` closes every open item and settles every pending request, all queued and saved before any is sent |
+| `DriverStops`, `Stop` | the loop ends: `ended` closes every open item and settles every pending request, all queued and saved before any is sent. A driver that ends during a catch-up is handed nothing more (`run.rs` `driver_ready`, D-139): the core stops reading there, as `DriverStops`, which waits for the core to be idle, has it, and what is left is read at `Restart` |
 | `Restart` | `Core::new` and `recover`: open items closed, pending requests settled as failed, then catch-up; sends left queued go again under the tokens they were saved with |
 
 `Queue` is not a step: the steps that put something in the outbox call it. How long the core waits before it

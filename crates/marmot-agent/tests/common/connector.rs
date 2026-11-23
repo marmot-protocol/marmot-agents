@@ -4,8 +4,9 @@
 use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::net::UnixStream;
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
 /// What the scripted connector does with a prompt.
 #[derive(Clone, Copy)]
@@ -14,6 +15,8 @@ pub enum Script {
     Echo,
     /// Starts a turn and then goes, as a connector that crashes does.
     Vanish,
+    /// Goes as soon as it reads a prompt, before it answers: the prompt may have reached it.
+    Drop,
 }
 
 /// The texts of the prompts a scripted connector was given, oldest first.
@@ -24,27 +27,43 @@ pub async fn send(stream: &mut tokio::net::unix::OwnedWriteHalf, message: Value)
     stream.write_all(line.as_bytes()).await.unwrap();
 }
 
+/// A connection a scripted connector has greeted the core on. What it reads is buffered once for
+/// the whole connection, so a request read in the same chunk as the core's answer to the hello is
+/// kept for the script.
+pub struct Connection {
+    lines: Lines<BufReader<OwnedReadHalf>>,
+    write: OwnedWriteHalf,
+}
+
 /// Connects, gives `hello`, and gives back the core's answer to it.
-pub async fn connect(socket: &Path, hello: Value) -> (Value, UnixStream) {
+pub async fn connect(socket: &Path, hello: Value) -> (Value, Connection) {
     let stream = UnixStream::connect(socket).await.unwrap();
     let (read, mut write) = stream.into_split();
     send(&mut write, hello).await;
     let mut lines = BufReader::new(read).lines();
     let answer: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
-    let stream = lines.into_inner().into_inner().reunite(write).unwrap();
-    (answer, stream)
+    (answer, Connection { lines, write })
 }
 
 /// Runs the scripted connector on a connection until the core or the script ends it. It takes
 /// every request and does nothing with any but a prompt, whose text it adds to `heard`. Its item
 /// ids start with `name`, so two connections never reuse one: a reused id would edit the earlier
 /// item.
-pub async fn run(stream: UnixStream, script: Script, name: &str, heard: Heard) {
-    let (read, mut write) = stream.into_split();
-    let mut lines = BufReader::new(read).lines();
+pub async fn run(connection: Connection, script: Script, name: &str, heard: Heard) {
+    let Connection {
+        mut lines,
+        mut write,
+    } = connection;
     let mut turns = 0;
     while let Ok(Some(line)) = lines.next_line().await {
         let request: Value = serde_json::from_str(&line).unwrap();
+        if let Script::Drop = script
+            && request["method"] == "prompt"
+        {
+            let text = request["params"]["text"].as_str().unwrap().to_string();
+            heard.lock().unwrap().push(text);
+            return;
+        }
         if request.get("id").is_some() {
             send(
                 &mut write,

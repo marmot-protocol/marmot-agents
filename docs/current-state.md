@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-23, at `master` commit `0580e96`, through [D-137](decisions.md#d-137-a-secret-answers-membership-check-is-not-bound-to-the-epoch-it-is-sent-under). A change that adds or replaces
+Brought up to date on 2026-11-23, at `master` commit `42d7f1a`, through [D-139](decisions.md#d-139-prompts-a-driver-that-ended-was-never-given-wait-for-the-next-driver). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -36,8 +36,9 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
 - A restart closes the running turn and its open items as interrupted, and settles open requests as failed.
   Nothing is sent again, and a prompt is delivered at most once ([D-070](decisions.md#d-070-a-restart-closes-the-turn-as-interrupted), [D-037](decisions.md#d-037-a-prompt-is-delivered-at-most-once)).
   A prompt whose answer a dropped connection lost is told as perhaps not delivered ([D-129](decisions.md#d-129-a-prompt-whose-answer-a-dropped-connection-lost-is-told-as-perhaps-not-delivered)).
+  Messages a driver that ended was never given wait for the next driver ([D-139](decisions.md#d-139-prompts-a-driver-that-ended-was-never-given-wait-for-the-next-driver)).
 - The core waits for every request it hands a driver. A harness that stops reading for a minute is stopped, and
-  its requests are refused as failed ([D-066](decisions.md#d-066-the-core-finishes-every-request-it-starts), [D-098](decisions.md#d-098-a-harness-that-stops-reading-ends-its-connection)).
+  its requests are refused as failed; a connector on the socket, after 30 seconds ([D-066](decisions.md#d-066-the-core-finishes-every-request-it-starts), [D-098](decisions.md#d-098-a-harness-that-stops-reading-ends-its-connection), [D-138](decisions.md#d-138-a-connector-that-stops-reading-is-given-up-in-a-requests-time)).
 - No word-by-word streaming, and the QUIC preview stack is removed ([D-012](decisions.md#d-012-word-by-word-streaming-is-not-required-now), [D-067](decisions.md#d-067-the-quic-preview-stack-is-removed)).
 - Logs never hold message text, prompts, output, native messages, keys, public keys, event or group ids, relay
   addresses, paths, or a harness's session or turn ids ([D-071](decisions.md#d-071-what-may-be-logged)).

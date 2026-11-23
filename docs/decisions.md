@@ -1724,6 +1724,8 @@ that keeps its input open but stops reading would otherwise stall every chat. Th
 
 Decided 2026-11-22. The project owner accepted the recommendations.
 
+Extended to the socket by [D-138](#d-138-a-connector-that-stops-reading-is-given-up-in-a-requests-time): a
+connector that stops reading is given up after 30 seconds.
 ## D-099 Files from the agent's own home are refused by default, and the owner may allow them
 
 **Decision.** By default the core refuses to send any file inside the agent's account home, which holds its keys
@@ -2778,3 +2780,40 @@ harness's terminal until then; neither is done.
 **Why.** People are added to a chat to see what happens there.
 
 Decided 2026-11-23. The project owner decided.
+
+## D-138 A connector that stops reading is given up in a request's time
+
+**Decision.** The core's 30 seconds for a connector to take a request cover writing the request too, and every
+other line the core writes to a connector, such as its answer to a `send_file`, has the same 30 seconds. A
+connector that stops reading, so that a line no longer fits in the socket, is given up when they run out, as one
+that does not answer is, and the core goes on. A prompt of which part was written is told as perhaps not
+delivered ([D-129](#d-129-a-prompt-whose-answer-a-dropped-connection-lost-is-told-as-perhaps-not-delivered)), and
+one of which nothing was written as not delivered; neither is sent again
+([D-037](#d-037-a-prompt-is-delivered-at-most-once)).
+
+**Why.** A write waits for room in the socket, and nothing bounded that wait. A connector that kept its connection
+open and stopped reading held the core in the write: no chat went on, and a stop waited for it for good. It is
+what [D-098](#d-098-a-harness-that-stops-reading-ends-its-connection) does for the built-in drivers, with the
+socket's own time. Part of a line may reach the connector, perhaps all of it but its end, which a reader may take
+as whole when the connection closes, so a part counts as the prompt perhaps delivered. Issue #134.
+
+Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
+
+## D-139 Prompts a driver that ended was never given wait for the next driver
+
+**Decision.** Once a driver has ended, as when a connector's connection goes or the core gives it up, the core
+reads no more messages for it: it does not move a read mark past a message it did not try to hand on, and ends,
+as for any driver that ends ([D-058](#d-058-the-driver-trait-and-the-capability-flags)). The next driver, such as
+the next connector on the socket, is given those messages from the marks, each once. Only a prompt the core
+handed to the driver that ended is told as not delivered or perhaps not delivered, and it is never sent again
+([D-037](#d-037-a-prompt-is-delivered-at-most-once),
+[D-129](#d-129-a-prompt-whose-answer-a-dropped-connection-lost-is-told-as-perhaps-not-delivered)).
+
+**Why.** The core went on reading what was stored while it handed it on, and handed every later message to a
+driver that had ended. Each was refused at once, the chat was told it was not passed to the agent, and its mark
+was saved past it, so no later connector got it, though none had been tried. What arrives while no connector is
+there already waits for the next one; this is the same. The core sees that a driver has ended by asking for its
+next event without waiting, before each message it reads. A connection that goes after that look and before the
+prompt is written still has that one prompt told as not passed. Issue #135.
+
+Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.

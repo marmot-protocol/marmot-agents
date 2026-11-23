@@ -234,7 +234,9 @@ impl SocketDriver {
     pub async fn greet(stream: UnixStream, token: &str, agent: &str) -> Result<Self, HelloError> {
         let (read, mut writer) = stream.into_split();
         let mut lines = Lines::new(read);
-        let line = tokio::time::timeout(HELLO_WITHIN, lines.next())
+        // The hello and the core's answer to it, in the same time.
+        let deadline = tokio::time::Instant::now() + HELLO_WITHIN;
+        let line = tokio::time::timeout_at(deadline, lines.next())
             .await
             .ok()
             .flatten()
@@ -253,25 +255,30 @@ impl SocketDriver {
             },
         };
         if hello["method"] != "hello" {
-            let _ = write_line(&mut writer, &refuse(-32600, "open with a hello")).await;
+            let _ = write_line(&mut writer, &refuse(-32600, "open with a hello"), deadline).await;
             return Err(HelloError::NotHello);
         }
         let params = &hello["params"];
         if params["protocol"] != PROTOCOL {
             let needed = format!("the core speaks {PROTOCOL}");
-            let _ = write_line(&mut writer, &refuse(-32001, &needed)).await;
+            let _ = write_line(&mut writer, &refuse(-32001, &needed), deadline).await;
             return Err(HelloError::Protocol);
         }
         let given = params["token"].as_str();
         if !given.is_some_and(|given| !token.is_empty() && same(given, token)) {
-            let _ = write_line(&mut writer, &refuse(-32002, "not this agent's token")).await;
+            let _ = write_line(
+                &mut writer,
+                &refuse(-32002, "not this agent's token"),
+                deadline,
+            )
+            .await;
             return Err(HelloError::Token);
         }
         // Read field by field, as before the schema: the schema checks what this repository's
         // connectors send, and the core stays as lenient as it was with what it can do without.
         let Ok(capabilities) = wire::Capabilities::deserialize(&params["capabilities"]) else {
             let refusal = refuse(-32602, "capabilities missing or invalid");
-            let _ = write_line(&mut writer, &refusal).await;
+            let _ = write_line(&mut writer, &refusal, deadline).await;
             return Err(HelloError::NotHello);
         };
         let capabilities = Capabilities::from(capabilities);
@@ -283,7 +290,7 @@ impl SocketDriver {
             }
             Some(_) => {
                 let refusal = refuse(-32602, "folder is not a whole path");
-                let _ = write_line(&mut writer, &refusal).await;
+                let _ = write_line(&mut writer, &refusal, deadline).await;
                 return Err(HelloError::NotHello);
             }
         };
@@ -304,7 +311,7 @@ impl SocketDriver {
                 agent: wire::AgentName { name: agent.into() },
             },
         };
-        write_line(&mut writer, &welcome)
+        write_line(&mut writer, &welcome, deadline)
             .await
             .map_err(|_| HelloError::Gone)?;
         Ok(Self {
@@ -338,14 +345,19 @@ impl SocketDriver {
     }
 
     /// Sends a request and waits for its response, holding back the events read meanwhile
-    /// (D-058). A connection that drops, or a connector that has not answered in time, refuses it
-    /// as failed and is given up: a prompt is then perhaps not delivered, and never sent again
-    /// (D-037, D-129).
+    /// (D-058). A connection that drops, or a connector that has not taken the request in time,
+    /// refuses it as failed and is given up: a prompt is then perhaps not delivered, and never
+    /// sent again (D-037, D-129). The time is for writing the request and answering it both, so a
+    /// connector that stops reading cannot hold the core either.
     async fn request(&mut self, request: wire::CoreRequest) -> Result<(), Refusal> {
         if self.gone {
             return Err(Refusal::new(Reason::Failed));
         }
-        self.answer_duplicates().await;
+        let deadline = tokio::time::Instant::now() + self.answer_within;
+        self.answer_duplicates(deadline).await;
+        if self.gone {
+            return Err(Refusal::new(Reason::Failed));
+        }
         self.next_id += 1;
         let id = self.next_id;
         let message = wire::CoreRequestMessage {
@@ -353,16 +365,23 @@ impl SocketDriver {
             id,
             request,
         };
-        if write_line(&mut self.writer, &message).await.is_err() {
-            self.gone = true;
-            return Err(Refusal::new(Reason::Failed));
-        }
-        // Written: from here on the connector may have the request, and the answer is what is lost.
+        // Once any of it is written, the connector may have the request, and the answer is what
+        // is lost.
         let unanswered = Refusal {
             unanswered: true,
             ..Refusal::new(Reason::Failed)
         };
-        let deadline = tokio::time::Instant::now() + self.answer_within;
+        match write_line(&mut self.writer, &message, deadline).await {
+            Ok(()) => {}
+            Err(Unwritten::Nothing) => {
+                self.gone = true;
+                return Err(Refusal::new(Reason::Failed));
+            }
+            Err(Unwritten::Part) => {
+                self.gone = true;
+                return Err(unanswered);
+            }
+        }
         loop {
             let Ok(next) = tokio::time::timeout_at(deadline, self.read()).await else {
                 self.gone = true;
@@ -388,7 +407,8 @@ impl SocketDriver {
     }
 
     /// Answers each `send_file` that reused an unanswered id: `invalid`, and nothing was sent.
-    async fn answer_duplicates(&mut self) {
+    /// Each is written by `deadline`, or the connector is given up.
+    async fn answer_duplicates(&mut self, deadline: tokio::time::Instant) {
         for id in std::mem::take(&mut self.duplicates) {
             if self.gone {
                 return;
@@ -401,7 +421,10 @@ impl SocketDriver {
                     unanswered: false,
                 },
             );
-            if write_line(&mut self.writer, &message).await.is_err() {
+            if write_line(&mut self.writer, &message, deadline)
+                .await
+                .is_err()
+            {
                 self.gone = true;
             }
         }
@@ -552,7 +575,9 @@ impl Driver for SocketDriver {
     }
 
     async fn file_sent(&mut self, id: String, result: Result<(), Refusal>) {
-        self.answer_duplicates().await;
+        // Written in the time a request has, or the connector is given up.
+        let deadline = tokio::time::Instant::now() + self.answer_within;
+        self.answer_duplicates(deadline).await;
         let Some(connector_id) = self.files.remove(&id) else {
             return;
         };
@@ -569,25 +594,59 @@ impl Driver for SocketDriver {
                         id,
                         result: wire::Taken {},
                     },
+                    deadline,
                 )
                 .await
             }
-            Err(refusal) => write_line(&mut self.writer, &refused(id, refusal)).await,
+            Err(refusal) => write_line(&mut self.writer, &refused(id, refusal), deadline).await,
         };
         if written.is_err() {
             self.gone = true;
         }
     }
 }
-/// Writes one message as a line. One over the limit is not written (D-033).
-async fn write_line(writer: &mut OwnedWriteHalf, message: &impl Serialize) -> io::Result<()> {
-    let mut line = serde_json::to_string(message).map_err(io::Error::other)?;
+
+/// Why a message was not written whole.
+#[derive(Debug)]
+enum Unwritten {
+    /// None of it: the connector cannot have it.
+    Nothing,
+    /// Part of it, perhaps all but the line's end: the connector may read it as whole.
+    Part,
+}
+
+/// Writes one message as a line, by `deadline`. One over the limit is not written (D-033). A
+/// connector that stops reading fills the socket and leaves the write waiting: it is not waited
+/// for past `deadline`, and the connection is not used again.
+async fn write_line(
+    writer: &mut OwnedWriteHalf,
+    message: &impl Serialize,
+    deadline: tokio::time::Instant,
+) -> Result<(), Unwritten> {
+    let Ok(mut line) = serde_json::to_string(message) else {
+        return Err(Unwritten::Nothing);
+    };
     if line.len() > MAX_MESSAGE {
-        return Err(io::Error::other("a message over the limit"));
+        return Err(Unwritten::Nothing);
     }
     line.push('\n');
-    writer.write_all(line.as_bytes()).await?;
-    writer.flush().await
+    let bytes = line.as_bytes();
+    let mut written = 0;
+    let whole = tokio::time::timeout_at(deadline, async {
+        while written < bytes.len() {
+            match writer.write(&bytes[written..]).await {
+                Ok(0) | Err(_) => return false,
+                Ok(wrote) => written += wrote,
+            }
+        }
+        true
+    })
+    .await;
+    match whole {
+        Ok(true) => Ok(()),
+        _ if written == 0 => Err(Unwritten::Nothing),
+        _ => Err(Unwritten::Part),
+    }
 }
 
 /// Compares two tokens in time that does not depend on where they differ.
@@ -751,6 +810,77 @@ mod tests {
         assert!(!driver.request(a_prompt()).await.unwrap_err().unanswered);
         let mut seen = vec![0u8; 1024];
         let _ = connector.read(&mut seen).await;
+    }
+
+    // A connector that stops reading cannot hold the core: a request bigger than the socket can
+    // hold is given up within the request's time, as one not taken is, and the connector with it.
+    // Part of it may have reached the connector, so a prompt is told as perhaps not passed.
+    #[tokio::test]
+    async fn a_connector_that_stops_reading_is_given_up() {
+        let (core, mut connector) = UnixStream::pair().unwrap();
+        connector
+            .write_all(hello(json!(TOKEN)).as_bytes())
+            .await
+            .unwrap();
+        let mut driver = greeted(core)
+            .await
+            .answer_within(Duration::from_millis(100));
+        let mut big = a_prompt();
+        if let wire::CoreRequest::Prompt(params) = &mut big {
+            params.text = "x".repeat(MAX_MESSAGE / 2);
+        }
+        let result = tokio::time::timeout(Duration::from_secs(5), driver.request(big))
+            .await
+            .expect("the write is given up in time")
+            .unwrap_err();
+        assert_eq!(result.reason, Reason::Failed);
+        assert!(
+            result.unanswered,
+            "part of it may have reached the connector"
+        );
+        assert!(driver.next_event().await.is_none(), "given up");
+        drop(connector);
+    }
+
+    // The request's time covers its write and its answer together: a connector that reads the
+    // request only late in that time, and answers after it ran out, is given up, though the
+    // answer came well within the time from when it read the request (D-138).
+    #[tokio::test]
+    async fn a_late_read_leaves_the_answer_only_what_is_left_of_the_time() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let (core, mut connector) = UnixStream::pair().unwrap();
+        connector
+            .write_all(hello(json!(TOKEN)).as_bytes())
+            .await
+            .unwrap();
+        let within = Duration::from_millis(1000);
+        let mut driver = greeted(core).await.answer_within(within);
+        let mut big = a_prompt();
+        if let wire::CoreRequest::Prompt(params) = &mut big {
+            params.text = "x".repeat(MAX_MESSAGE / 2);
+        }
+        let peer = tokio::spawn(async move {
+            // Most of the time goes before the connector reads at all.
+            tokio::time::sleep(within * 7 / 10).await;
+            let mut reader = BufReader::new(connector);
+            let (mut welcome, mut line) = (String::new(), String::new());
+            reader.read_line(&mut welcome).await.unwrap();
+            reader.read_line(&mut line).await.unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            // Answered past the request's time, but well within the time from the read.
+            tokio::time::sleep(within * 6 / 10).await;
+            let taken = json!({"jsonrpc": "2.0", "id": request["id"], "result": {}});
+            let _ = reader
+                .get_mut()
+                .write_all(format!("{taken}\n").as_bytes())
+                .await;
+            reader
+        });
+        let result = driver.request(big).await.unwrap_err();
+        assert_eq!(result.reason, Reason::Failed);
+        assert!(result.unanswered, "written whole, so the connector has it");
+        assert!(driver.next_event().await.is_none(), "given up");
+        drop(peer.await.unwrap());
     }
 
     // A response with only an id, not a result or an error, is not taken as an acknowledgement.
