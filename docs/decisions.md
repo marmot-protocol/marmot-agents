@@ -2491,6 +2491,33 @@ two apart, so "not delivered" would be wrong when the agent then answers.
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
 
+## D-129 CI runs in three tiers, with one required check
+
+**Decision.** CI runs in three tiers, and adds to
+[D-094](#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly):
+
+- **Pull request**, aimed at under 10 minutes: formatting, Clippy, the workspace's tests with the conformance
+  suite, the simulator at its normal count, and the TypeScript, Python, install-script, recording and document
+  checks. The TLA+ models run on small bounds only when the core or the models changed, which a step of CI's own
+  finds with `git diff`.
+- **Merge queue** (GitHub's, on `master`), aimed at under 30 minutes: all of the pull-request tier whatever
+  changed, the simulator at 200 runs, and the tests that need Docker and no key or sign-in. A push to `master`
+  runs the same, so `master` stays checked.
+- **Nightly**: the simulator on new seeds, TLC on larger bounds, and a coverage report; mutation testing when a
+  slice of it fits. A failed job opens an issue, or adds to the one it opened.
+
+One job, `CI passed`, needs every job of the first two tiers and is the only check the `master` ruleset requires:
+it fails when a job failed or was cancelled, and a job left out by its tier or the path rule counts as passed. CI
+uses no third-party action and no secret; build caches are written only from `master`.
+
+**Why.** A pull request gets its answer fast, and the slower checks still run before anything reaches `master`,
+on the code as it will be merged. One required check means the ruleset need not change when a job is added.
+Detecting paths with a step of our own, and no third-party actions, keeps what CI runs to what the repository
+holds, for the supply chain.
+
+Decided 2026-11-23. The project owner agreed the tiers; the settings that switch on the queue and the required
+check are the owner's.
+
 ## D-131 The Codex driver refuses a request of Codex's that no chat takes
 
 **Decision.** Codex waits for a reply to each of its requests, so the Codex driver answers with an error every

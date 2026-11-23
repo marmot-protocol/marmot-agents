@@ -1,6 +1,6 @@
 name: Nightly
 
-# The long checks (D-094, D-115), on master once a night and by hand: the simulator on many new
+# The long checks (D-094, D-129), on master once a night and by hand: the simulator on many new
 # seeds, TLC on larger bounds, a coverage report, and the places kept for mutation testing and
 # the model-double scenarios. Nothing here gates a pull request; a job that fails opens an issue,
 # or adds to the one it opened before.

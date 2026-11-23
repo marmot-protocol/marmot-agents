@@ -187,8 +187,9 @@ that settled requests is posted). On the live-before-store configuration, `Never
 over before it was stored is dropped, then stored). All seventeen are reached within 3,200 distinct states.
 
 **Larger bounds**, safety only, on the same day with 8 workers and a 6 GB heap, the other constants as in the fair
-configuration, before the sends took MDK's tokens (not run again since). Liveness at these sizes did not finish in 15 minutes with a 2 GB heap, so it is for a nightly run
-with more memory, which is not set up yet:
+configuration, before the sends took MDK's tokens. Liveness at these sizes did not finish in 15 minutes with a 2 GB
+heap. Both, safety and liveness apart, are now `check.py --bounds larger`, which the nightly workflow runs with 4
+workers and a 12 GB heap (`.github/workflows/nightly.yml`); the times below are from before the tokens:
 
 | Bounds | Distinct states | Time |
 | --- | ---: | ---: |
@@ -196,10 +197,10 @@ with more memory, which is not set up yet:
 | two chats, `p1` and `r1` in `c1`, `r2` in `c2`, item `t1`, 1 down | 9,544,632 | 2 min 5 s |
 
 All of `check.py` takes about 10 minutes here with 4 workers (the fair and give-up configurations take about 3½
-each, since live messages are taken in any order); CI runs it on every pull request with 4 workers, in two
-jobs side by side: the fair model (`--model CoreLifecycle --only fair`) and every other case
-(`--model CoreLifecycle --except fair`), each under D-094's
-15 minutes. For
+each, since live messages are taken in any order); CI runs it with 4 workers, in three jobs side by side: the
+fair model (`--model CoreLifecycle --only fair`), the give-up configuration
+(`--model CoreLifecycle --only give-up-closes-item`), and every other case
+(`--model CoreLifecycle --except fair give-up-closes-item`), each about 4 minutes. For
 review round 1 it took 24 minutes, on a machine busy with the simulator and the Rust tests at the same time. The
 larger bounds were not run again for the fix: no send is refused or given up in them.
 
@@ -252,10 +253,13 @@ python3 tools/tla/check.py --model CoreLifecycle   # this model's cases
 python3 tools/tla/check.py --only fair     # one case
 python3 tools/tla/check.py --counterexamples   # writes the committed schedules again, from TLC's traces
 tools/tla/run.sh formal/tla CoreLifecycle.tla CoreLifecycle.fair.cfg   # TLC on one configuration
+python3 tools/tla/check.py --bounds larger # the larger bounds, safety and liveness apart, as nightly
 ```
 
 `tools/tla/run.sh` downloads TLC v1.7.4 (the release MDK pins, with the same SHA-256) into
 `~/.cache/marmot-agents/tla` once, and runs it with the local Java, or, when there is none, in a pinned Eclipse
 Temurin 21 image with Docker. `TLC_WORKERS` sets TLC's workers (default 1); `TLC_HEAP` its heap (default 2g).
-CI runs `check.py` in the `TLA+ models` jobs on every pull request: two for this model, one for
-`SocketProtocol` and one for `DriverTransport`.
+
+CI runs `check.py` in the `TLA+ models` jobs, three for this model, one for `SocketProtocol` and one for
+`DriverTransport`: in the merge queue and on `master` always, and on a pull request when it changes `formal/`,
+`tools/tla/`, the code a model follows or `.github/workflows/ci.yml`.

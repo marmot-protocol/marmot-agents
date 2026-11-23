@@ -76,7 +76,7 @@ being replaced by what is designed here, not extended.
 | Work on the install scripts | `install/lib.sh`, then the harness's script beside it, after `README.md` ("Installing an agent") |
 | Work on the release | `.github/workflows/release.yml` and `tools/release/package.sh` |
 | Work on moving an install over | `crates/marmot-agent/src/import`, after `docs/move.md` and `docs/reference/current-connectors.md` |
-| Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
+| Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml`, `nightly.yml` and `.github/actions/rust` |
 | Plan or add tests, models or proofs | `docs/design/verification.md` |
 | Run a real harness on a scripted or recorded model, or record a cassette | `tools/model_double/README.md`, after `docs/design/verification.md` ("A model double") |
 | Work on the simulator, or replay one of its failure capsules | `crates/marmot-agent-sim/README.md`, after `docs/design/verification.md` |
@@ -229,9 +229,21 @@ Recorded sessions have their own rules:
 
 ## Verification
 
-CI runs these commands on each pull request and on `master` (`.github/workflows/ci.yml`), with two exceptions
-that are marked below: the diagrams and `tools/record/inventory.py`. Those two are checked only by you. Run
-everything that applies before you push. If you change a command here, change it there.
+CI runs these commands (`.github/workflows/ci.yml`), with two exceptions that are marked below: the diagrams
+and `tools/record/inventory.py`. Those two are checked only by you. Run everything that applies before you push.
+If you change a command here, change it there. CI runs in three tiers
+([D-129](docs/decisions.md#d-129-ci-runs-in-three-tiers-with-one-required-check)):
+
+| Tier | When | What |
+| --- | --- | --- |
+| Pull request | Each push to a pull request; aim under 10 minutes | Every command below that CI runs, with the simulator at its normal count. The TLA+ models run only when `formal/`, `tools/tla/`, `crates/marmot-agent/src/` or `ci.yml` changed |
+| Merge queue | Each pull request queued to merge, and each push to `master`; aim under 30 minutes | All of the pull-request tier whatever changed, the simulator at `MARMOT_AGENT_SIM_RUNS=200`, and the move-over tests that need Docker, below |
+| Nightly | Once a night on `master` (`.github/workflows/nightly.yml`), and by hand | The simulator on a new seed with many runs, TLC on larger bounds, and a coverage report; a failed job opens an issue |
+
+The job `CI passed` needs every other job of the first two tiers and is the one check `master` requires. Either
+tier can be run on a branch by hand: `gh workflow run ci.yml --ref <branch> -f tier=pull-request` (or
+`tier=full`). CI's Rust jobs also set `CARGO_INCREMENTAL=0` and `CARGO_PROFILE_DEV_DEBUG=line-tables-only`,
+which change how fast they build and what a cache holds, not what is tested.
 
 For any change to Rust code, `Cargo.toml`, `Cargo.lock` or `rust-toolchain.toml`:
 
@@ -252,13 +264,26 @@ The workspace's tests also run the real Claude Code and the real Codex through t
 (`tools/model_double`), which stands in for their model, so they need no key or sign-in. They need Node 24 with
 `npm ci` run in `packages/claude-code`, and `codex` on the `PATH`, at the release CI installs.
 
-The workspace's tests include the simulator's at a small count of runs. CI's Rust job leaves them out
-(`--exclude marmot-agent-sim`) and runs them in a job of its own, in release with more runs
-(`MARMOT_AGENT_SIM_RUNS`); for a change to the core's run loop, conversation or Marmot side, run that too:
+CI runs the workspace's tests in two jobs side by side, the core's package (`-p marmot-agent`) and every other
+(`--workspace --exclude marmot-agent --exclude marmot-agent-sim`), which together are the command above.
+
+The workspace's tests include the simulator's at a small count of runs. CI's Rust jobs leave them out and run
+them in a job of its own, in release: at the normal count on a pull request, and at 200 in the merge queue. For a
+change to the core's run loop, conversation or Marmot side, run that too:
 
 ```sh
 MARMOT_AGENT_SIM_RUNS=200 cargo test --locked --release -p marmot-agent-sim --all-features
 ```
+
+The merge queue also runs the move-over tests that need Docker and nothing else, no key and no sign-in: today's
+Hermes and OpenClaw installs moved over, with a scripted model. Run them for a change to the import or the
+install scripts:
+
+```sh
+cargo test --locked --all-features -p marmot-agent --test import_gateways -- --ignored --nocapture --test-threads=1
+```
+
+Every other ignored test needs a model key or a signed-in harness, and CI runs none of them.
 
 A failure prints the path of a capsule, and CI keeps the capsules as the run's `simulator-capsules` artifact;
 `crates/marmot-agent-sim/README.md` says how to replay one.
@@ -328,7 +353,9 @@ python3 -m unittest discover -s install -p 'test_*.py'   # runs each install scr
 ```
 
 `.github/workflows/release.yml` runs only on a version tag, so a change to it is checked by reading it, and by
-[actionlint](https://github.com/rhysd/actionlint) if you have it.
+[actionlint](https://github.com/rhysd/actionlint) if you have it. Check a change to `ci.yml`, `nightly.yml` or
+`.github/actions/` with actionlint too, and by running the tier it changes on its branch by hand (above);
+`nightly.yml` can be run by hand only once it is on `master`.
 
 For any change under `formal/` or `tools/tla/`, or to the code a model follows (the core for `CoreLifecycle`,
 `formal/tla/README.md`; the core's socket and the Claude Code, OpenClaw and Hermes connectors for
@@ -342,6 +369,9 @@ python3 tools/tla/check.py   # the fair models pass; every counterexample, delib
                              # is the committed one. TLC is downloaded once, pinned by version and
                              # checksum, by tools/tla/run.sh
 ```
+
+The nightly workflow runs `python3 tools/tla/check.py --bounds larger`, the larger bounds in
+`formal/tla/README.md`, which take longer than a pull request may.
 
 For a change to a diagram, which CI does not check:
 

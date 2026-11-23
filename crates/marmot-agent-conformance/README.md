@@ -240,7 +240,7 @@ cargo test -p marmot-agent-conformance --test acp # one driver
 ```
 
 The Pi tests need `python3` for the relay, as Pi's own tests do. The suite is part of the workspace's tests, so CI's Rust
-job runs it on every pull request.
+tests run it on every pull request.
 
 The scenarios are listed once, in `with_scenarios!` (`src/scenarios.rs`). A driver that runs them all makes one test
 for each from that list, as `tests/codex.rs` does, so a scenario added there is run at once. A driver that runs only
@@ -291,7 +291,7 @@ Faults that need frames on the harness's side (`partial`, half a frame) do not a
 called in process. In their place the channel can make the connector's own socket writes come in pieces, through its
 `socket.ts` or `core.py` writer, so the core's reader is tried the same way.
 
-**CI.** One job, `Conformance (socket)`, beside the Rust job: Node and Python at the versions CI already pins, the Rust
+**CI.** One job, `Conformance (socket)`, beside the Rust tests: Node and Python at the versions CI already pins, the Rust
 build from the shared cache, and the core crate's conformance test alone. It should take as long as the simulator's job,
 inside the 15 minutes (D-094).
 
