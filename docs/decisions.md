@@ -1812,7 +1812,9 @@ Decided 2026-11-22. The project owner decided.
   whole home, holds or lies in the agents' data, or holds or lies in a gateway's home or media cache, or when
   Hermes runs its commands in a sandbox, or OpenClaw's Marmot chats may go to more than one agent. A folder that
   lies inside OpenClaw's state folder, as its default workspace does, is allowed. A `files_from` already in the
-  settings is never changed by a re-run.
+  settings is never changed by a re-run. (Replaced in part by
+  [D-119](#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation):
+  `--replace-plugin` adds the gateway's folder to the line the import wrote.)
 - **Media caches stay out.** Hermes's and OpenClaw's media caches are never allowed, since they also hold files
   people sent the gateway in any of its chats, on any platform.
 
@@ -2051,7 +2053,12 @@ Decided 2026-11-23. The project owner decided.
 
 - **`--replace-plugin` lists the gateway's work folder in `files_from`**, as a fresh install does
   ([a gateway's files](design/drivers.md#a-gateways-files)): the folder the installer finds for that gateway,
-  under the same rules, and none in the same cases.
+  under the same rules, and none in the same cases. It is added beside the old connector's folders the import
+  wrote, not in their place, and only to the line the import wrote, which a re-run leaves as it is once the
+  folder is there; a `files_from` the person wrote is left alone, and the installer says what to add. A folder
+  that holds or lies inside the moved account's home, or the import's backup of it, is never added. (These
+  details were decided 2026-11-23 by the builder, under the project owner's instruction to decide minor
+  points.)
 - **The installer edits `openclaw.json` itself to finish a half-done move.** A move stopped after our plugin went
   into OpenClaw and before the old plugin's settings came out of its `marmot` channel leaves an OpenClaw that
   refuses to read or change any of its settings, or to start, so its own commands cannot finish the move. When
