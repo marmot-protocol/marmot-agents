@@ -469,15 +469,21 @@ class Connector:
 
     async def typed_answer(self, chat: Chat, item: str, request: str, where: dict, sender: dict, text: str) -> None:
         """Types an answer. The item counts as answered from then on, so a second answer is refused, unless
-        Hermes did not take it: then it waits for another."""
+        Hermes did not take it: then it waits for another, and the command it confirms waits for the reply
+        to that one."""
         chat.answered.add(item)
         if request:
             chat.by_item.setdefault(item, []).append(request)
+        self.typed_n += 1
+        message_id = f"hermes-{self.boot}-{self.typed_n}"
         try:
-            await self.type(where, sender, text)
+            await self.type(where, sender, text, message_id)
         except BaseException:
             chat.answered.discard(item)
             unsettle(chat.by_item, item, request)
+            confirming = self.awaiting.pop(message_id, None)
+            if confirming is not None:
+                chat.confirming = confirming
             raise
 
     async def control(self, params: dict) -> None:

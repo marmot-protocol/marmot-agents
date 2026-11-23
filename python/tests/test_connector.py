@@ -588,6 +588,33 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         shown = self.of("session")[-1]
         self.assertEqual((shown["text"], shown["settles"]), ("Model: n, Provider: custom", ["r-1"]))
 
+    async def test_a_confirmation_hermes_did_not_take_still_settles_the_command_once_answered_again(self):
+        """The answer to Hermes's question is typed, and Hermes does not take it: the next answer's reply
+        is still the command's outcome."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), *model_settings(model="m"), complete("m-1"))
+        session = self.of("session")[-1]["session"]
+        self.hermes.read_model = lambda: self.feed(*model_settings(model="n"))
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "set", "session": session, "setting": "model", "value": "n"}})
+        typed = self.hermes.typed[-1]
+        asking = "⚠️ **Confirm /model**\n\nThis model costs more."
+        self.feed(hook("send_slash_confirm", chat_id="c-1", title="/model", message=asking,
+                       session_key="agent:main:marmot:dm:c-1:u-1", confirm_id="k-2", metadata=None),
+                  said(asking, typed[2], notify=True))
+        yes = {"questions": [{"question": "q0", "options": ["o0"]}]}
+        self.hermes.fails = ConnectionError("Hermes is busy")
+        with self.assertRaises(ConnectionError):
+            await self.connector.serve("answer", {"request": "r-2", "item": "confirm:k-2", "by": ALICE, "given": yes})
+        self.hermes.fails = None
+        await self.connector.serve("answer", {"request": "r-3", "item": "confirm:k-2", "by": ALICE, "given": yes})
+        approve = self.hermes.typed[-1]
+        self.feed(said("Model switched to `n`\nProvider: Custom endpoint", approve[2], notify=True))
+        await asyncio.sleep(0)
+        self.assertEqual(self.hermes.model_reads, [("c-1", "u-1")])
+        shown = self.of("session")[-1]
+        self.assertEqual((shown["text"], shown["settles"]), ("Model: n, Provider: custom", ["r-1"]))
+
     async def test_a_second_reset_while_one_is_on_its_way_is_refused(self):
         """One reset settles one request: a second `/new` for the same session waits for the first."""
         await self.connector.serve("prompt", prompt("m-1"))
