@@ -115,8 +115,8 @@ A step lists the lines it wrote (`writes`) and the requests it settled (`settles
 | --- | --- | --- |
 | [`driver-unfair-harness-never-reads`](driver-unfair-harness-never-reads.json) | L1 | Without `FairHarness`: an interrupt is taken and written, and the harness never reads it, so the turn never ends and nothing settles it |
 | [`driver-stray-while-picking`](driver-stray-while-picking.json) | L2 | Found in the ACP driver, and fixed in #122: a request from a session no chat has, read while a chat's session is picked, is held (`early`) and dropped unanswered once the pick is done. Now the defect `HeldDropped`, which puts the old way back |
-| [`driver-codex-stray`](driver-codex-stray.json) | L2 | Found in the Codex driver: a request for a thread no chat has is never answered |
-| [`driver-codex-unshown`](driver-codex-unshown.json) | L2 | Found in the Codex driver: a request it cannot show is never answered, and nothing in the chat waits on it |
+| [`driver-codex-stray`](driver-codex-stray.json) | L2 | Found in the Codex driver, and fixed on 2026-11-23: a request for a thread no chat has is never answered. Now the defect `StrayUnanswered` |
+| [`driver-codex-unshown`](driver-codex-unshown.json) | L2 | Found in the Codex driver, and fixed on 2026-11-23: a request it cannot show is never answered, and nothing in the chat waits on it. Now the defect `UnshownUnanswered` on Codex's shape |
 | [`driver-reask-after-restart`](driver-reask-after-restart.json) | S13 | With `ReaskAfterRestart`: after a restart, ACP's driver names an approval for a tool call it named before, as the chat has seen |
 
 Driving the code with them is step 5, as for `CoreLifecycle`'s: the conformance suite's fake harnesses would
