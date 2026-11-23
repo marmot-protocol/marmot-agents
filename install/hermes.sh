@@ -102,7 +102,8 @@ harness_settings() {
 
 # Adds the plugin to the person's Hermes and points its platform at this agent's home. What it changes is
 # put back if the install fails or is stopped before the core is started (change_begin in lib.sh):
-# Hermes's settings, and the old connector's plugin, which it replaces, or, where there was none, ours.
+# Hermes's settings, and the plugin it replaces, the old connector's or an older one of ours, or, where
+# there was none, ours.
 # Nothing changes before ours is in, and ours starts on the old plugin's settings too: Hermes reads a
 # platform's extra over its other settings (gateway/config.py), and the old one's names this home.
 # Everyone is let through only once ours is in, so the old plugin is never left with that.
@@ -115,8 +116,13 @@ harness_connect() {
     [ "$OLD_PLUGIN" -eq 0 ] || why=replace
     set -- "$why" file "$HERMES_CONFIG"
     [ -z "$HERMES_ENV" ] || set -- "$@" file "$HERMES_ENV"
-    # Our own plugin, in already, is not put back: only the old one, or none.
-    if [ "$OLD_PLUGIN" -eq 1 ] || [ ! -e "$PLUGIN" ]; then set -- "$@" folder "$PLUGIN"; fi
+    # The old connector's plugin, none, or ours as an earlier install put it in, which goes with the
+    # core that install put in, and is put back with it should this fail.
+    if [ "$OLD_PLUGIN" -eq 1 ] || [ ! -e "$PLUGIN" ]; then
+        set -- "$@" folder "$PLUGIN"
+    else
+        set -- "$@" own "$PLUGIN"
+    fi
     change_begin "$@"
     say "adding the Marmot plugin to your Hermes"
     replace_dir "$MA_LIB/python/marmot_hermes" "$PLUGIN"

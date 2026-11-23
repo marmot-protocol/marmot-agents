@@ -35,10 +35,22 @@ harness_check() {
     check_version "$PI" "$PI_TESTED" "$PI_HOW"
 }
 
+# The image is built under a tag of its own, and given the one tools/pi/pi.sh runs once the install is
+# done ("Container images" in lib.sh).
 harness_prepare() {
     [ "$CONTAINER" = 1 ] || return 0
     say "building Pi's container image"
-    act docker build -q -t marmot-agents-pi "$MA_STAGE/tools/pi"
+    act docker build -q -t marmot-agents-pi:staging "$MA_STAGE/tools/pi"
+}
+
+harness_commit() {
+    [ "$CONTAINER" = 1 ] || return 0
+    image_commit marmot-agents-pi
+}
+
+harness_put_back() {
+    [ "$CONTAINER" = 1 ] || return 0
+    image_put_back marmot-agents-pi
 }
 
 harness_settings() {

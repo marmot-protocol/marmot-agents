@@ -2584,3 +2584,46 @@ changes nothing for anyone else. MDK, which places items in threads, asked for t
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points, on MDK's
 request.
+
+## D-134 An upgrade of the core and its support files is put back on failure, and finished by a re-run after a kill
+
+**Decision.** Every agent on an account starts the one `marmot-agent` in `~/.local/bin` with the one set of
+support files in `~/.local/share/marmot-agent/lib`, so an install script upgrades the two together. It prepares
+the new core and the new files, with the harness's packages, in a folder of the run's own, and only then puts
+them in place, one after the other. Before the first of these changes it makes a record,
+`~/.local/share/marmot-agent/upgrade`: a copy of the core it replaces, and a list of every part of the files it
+replaces, written whole before the record takes its name; it moves each part there as it replaces it. If the
+run fails, or is stopped with TERM, INT or HUP, before its agent is set up and started, it puts all of them back,
+and says so. Once the agent is started, the record is renamed away in one step, which ends the upgrade, and then
+deleted. After a SIGKILL, running the installer again finishes the upgrade or, should it fail, puts back what
+the killed run found; another harness's installer, which cannot finish it, puts it back before it starts. A
+first install that fails takes away the core and files it put in place.
+
+Three things go with the core and are put back with it. Pi's and Goose's container image is built under a tag
+of its own, `marmot-agents-pi:staging` or `marmot-agents-goose:staging`, and given the tag their scripts run only
+once the upgrade is done; a failed run leaves the old tag on the old image and takes the staging tag away. The
+Hermes and OpenClaw plugin an earlier install put into the person's gateway is copied before it is replaced, as
+the old connector's is ([D-116](#d-116-a-gateways-plugin-swap-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)),
+and put back with the core; the copy is deleted once the update is done.
+
+Only one install runs in a home at a time. Each holds a lock on `~/.local/share/marmot-agent/install.lock`
+from before it looks for an upgrade left under way until it ends, so no install takes over, finishes or puts
+back an upgrade another is still making; one that finds the lock held says so and waits. The lock is taken
+with `flock`, and where there is none, as on macOS, with `perl`, which macOS ships; the system lets it go
+when the install ends, however it ends.
+
+The install tests stop an upgrade at every step to check this, run two installs at once, with and without
+`flock`, and fail an upgrade after Pi's and Goose's image is built and after the gateway's plugin is replaced.
+It is the same protection
+[D-116](#d-116-a-gateways-plugin-swap-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill) gives a
+gateway's plugin.
+
+**Why.** The installer used to replace the core first, and the support files later. One that failed in between,
+as when the Claude Code driver's packages or a container image could not be made, left every agent of every
+harness to start, at its next restart, on the new core with the old files. Agents other than the one being
+installed were broken by an install that said it had failed. Without the lock, a second install could take an
+upgrade still under way for one left by a killed run, fail, and put the old files back under the first, which
+then said it had installed the new ones. Without the whole list first, another harness's install could take a
+killed upgrade for its own before the killed run had named its harness's files.
+
+Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.

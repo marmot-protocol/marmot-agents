@@ -10,6 +10,7 @@
 #   ~/.local/share/marmot-agent/lib/                   the connectors, the plugins and the container
 #                                                      files; an install replaces only the parts its
 #                                                      harness uses
+#   ~/.local/share/marmot-agent/install.lock           locked by the install that runs, so one runs at a time
 #   ~/.local/share/marmot-agent/agents/NAME/           this agent: settings.toml, its account home in home/,
 #                                                      what its harness keeps, start (which runs the core
 #                                                      with service.env), and the service's files
@@ -57,12 +58,13 @@ say() { printf '%s\n' "$*"; }
 warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-# Runs a command, or, in a dry run, says it would.
+# Runs a command, or, in a dry run, says it would. The command does not get the lock on installs
+# (lock_installs), so that nothing it leaves running, such as a gateway it restarts, holds it.
 act() {
     if [ "$DRY_RUN" -eq 1 ]; then
         say "would run: $*"
     else
-        "$@"
+        "$@" 9>&-
     fi
 }
 
@@ -338,8 +340,10 @@ backup_file() {
 # the latest run that found the old plugin and finished, or noted, its change.
 
 # Starts a change. Its first argument says whether it replaces the old connector's plugin (replace) or
-# not (add); then come pairs, file or folder and the path of one it changes. Each is copied first, and
-# one not there is taken away should the change be put back. A record a run before left is kept as it is.
+# not (add); then come pairs, file, folder or own and the path of one it changes, own being the folder of
+# our plugin as an earlier install put it in, which an update replaces. Each is copied first, and one not
+# there is taken away should the change be put back. The copy of our own plugin is removed once it is
+# not needed. A record a run before left is kept as it is.
 change_begin() {
     MA_CHANGE="$MA_AGENT_DIR/plugin-change"
     local why=$1 arg record=""
@@ -373,8 +377,28 @@ change_begin() {
 
 # Ends a change; one stopped before its record is gone is put back.
 change_end() {
-    [ "$DRY_RUN" -eq 1 ] || act rm -f "$MA_CHANGE"
+    local own
+    if [ "$DRY_RUN" -eq 0 ]; then
+        own=$(own_copies)
+        act rm -f "$MA_CHANGE"
+        drop_copies "$own"
+    fi
     MA_CHANGING=0
+}
+
+# The copies of our own plugin the record names, one a line.
+own_copies() {
+    awk -F '\t' '$1 == "own" && $3 != "" { print $3 }' "$MA_CHANGE"
+}
+
+# Removes the copies named, one a line, once the record that names them is gone.
+drop_copies() {
+    local copy
+    while IFS= read -r copy; do
+        [ -z "$copy" ] || rm -rf "$copy"
+    done <<EOF
+$1
+EOF
 }
 
 # Puts back what the record names, in its order; fails if any of it could not be put back.
@@ -383,7 +407,7 @@ put_back_change() {
     while IFS='	' read -r kind path copy; do
         case $kind in
             file) put_back_file "$copy" "$path" || ok=1 ;;
-            folder) replace_dir "$copy" "$path" || ok=1 ;;
+            folder | own) replace_dir "$copy" "$path" || ok=1 ;;
         esac
     done <"$MA_CHANGE"
     return "$ok"
@@ -392,20 +416,24 @@ put_back_change() {
 # After a change that did not end, its status given: what it changed put back, and the run ended,
 # saying what happened and what to do.
 change_put_back() {
-    local status=$1 kind path copy what="your $HARNESS_TITLE's settings" took="" copies="" how="" why again
+    local status=$1 kind path copy what="your $HARNESS_TITLE's settings" took="" copies="" how="" why again own
     while IFS='	' read -r kind path copy; do
         if [ "$kind" = folder ] && [ -n "$copy" ]; then what="$what and its old plugin"; fi
         if [ "$kind" = folder ] && [ -z "$copy" ]; then took=", and took our plugin out of it"; fi
+        if [ "$kind" = own ] && [ -n "$copy" ]; then what="$what and our plugin as it was"; fi
         [ -n "$copy" ] || continue
-        copies="${copies:+$copies, }$copy"
         how="${how:+$how, }$copy to $path"
+        [ "$kind" != own ] || continue
+        copies="${copies:+$copies, }$copy"
     done <"$MA_CHANGE"
+    own=$(own_copies)
     case $status in
         129 | 130 | 143) why="the install was stopped" again="Run this again" ;;
         *) why="putting our plugin into your $HARNESS_TITLE failed (above)" again="Run this again once what failed is fixed" ;;
     esac
     if put_back_change; then
         rm -f "$MA_CHANGE"
+        drop_copies "$own"
         printf 'error: %s\n' "$why, so this put $what back as they were$took${copies:+; the copies are $copies}. \
 $again, or go back to today's connector (docs/move.md)" >&2
     elif [ -n "$how" ]; then
@@ -460,8 +488,8 @@ replace_dir() {
     fi
 }
 
-# What every run does as it ends, with its status: puts back a plugin change that did not end, and
-# removes what it staged.
+# What every run does as it ends, with its status: puts back a plugin change and an upgrade that did
+# not end, and removes what it staged.
 finish() {
     local status=$1
     set +e
@@ -470,8 +498,76 @@ finish() {
         MA_CHANGING=0
         change_put_back "$status"
     fi
+    if [ "$status" -ne 0 ] && [ "${MA_UPGRADING:-0}" -eq 1 ]; then
+        MA_UPGRADING=0
+        upgrade_put_back
+    fi
+    if [ "$status" -ne 0 ] && [ "${MA_PREPARED:-0}" -eq 1 ] && declare -F harness_put_back >/dev/null; then
+        harness_put_back
+    fi
     if [ -n "$MA_WORK" ]; then rm -rf "$MA_WORK"; fi
     if [ "$MA_STAGED" -eq 1 ]; then rm -rf "$MA_STAGE"; fi
+}
+
+# ---------------------------------------------------------------------------------------------------
+# One install at a time
+#
+# The core, the support files and the record of an upgrade are shared by every agent in a home, and a
+# gateway's plugin by the agents of one gateway, so the installs in a home run one at a time: each holds
+# a lock on $MA_DATA/install.lock from before it looks at what a run before it left until it ends, having
+# finished or put back what it changed. The lock is on the file open as descriptor 9, and the system lets
+# it go when the run ends, however it ends. It is taken with flock, which Linux has (util-linux), or,
+# where there is none, as on macOS, with perl, which macOS ships, on the same descriptor. The commands a
+# run starts do not get the descriptor (act).
+lock_installs() {
+    [ "$DRY_RUN" -eq 0 ] || return 0
+    mkdir -p "$MA_DATA"
+    exec 9>>"$MA_DATA/install.lock"
+    if lock_fd -n; then return 0; fi
+    say "another install of marmot-agent in this home is under way; waiting for it to end"
+    lock_fd || die "waiting for the other install of marmot-agent in this home failed"
+}
+
+# Locks descriptor 9; given -n, fails at once if another run holds it.
+lock_fd() {
+    if program_path flock >/dev/null; then
+        flock "$@" 9
+    elif program_path perl >/dev/null; then
+        perl -MFcntl=:flock -e 'open(my $f, ">&=", 9) or exit 2; flock($f, LOCK_EX | ($ARGV[0] ? LOCK_NB : 0)) or exit 1' \
+            -- "${1:-}"
+    else
+        die "installing runs one install at a time, which needs flock or perl: install either, then run this again"
+    fi
+}
+
+# ---------------------------------------------------------------------------------------------------
+# Container images
+#
+# Pi's and Goose's scripts in $MA_LIB run the image tagged NAME. An install builds the new image as
+# NAME:staging and tags it NAME only once the upgrade is done (main), so one that fails leaves NAME on the
+# image the scripts it puts back were made for, and takes NAME:staging away.
+
+# Tags NAME:staging as NAME, noting the image NAME was, for image_put_back.
+image_commit() {
+    local image=$1
+    if [ "$DRY_RUN" -eq 0 ]; then
+        IMAGE_BEFORE=$(docker image inspect -f '{{.Id}}' "$image" 2>/dev/null 9>&-) || IMAGE_BEFORE=""
+    fi
+    act docker tag "$image:staging" "$image"
+    IMAGE_TAGGED=1
+    act docker rmi "$image:staging" >/dev/null || warn "docker could not take the tag $image:staging away"
+}
+
+# After a run that did not end: NAME back on the image it was, should image_commit have moved it, and
+# NAME:staging taken away.
+image_put_back() {
+    local image=$1
+    if [ "${IMAGE_TAGGED:-0}" -eq 1 ] && [ -n "${IMAGE_BEFORE:-}" ]; then
+        docker tag "$IMAGE_BEFORE" "$image" 9>&- || warn "docker could not tag $IMAGE_BEFORE as $image again: run this again"
+    elif [ "${IMAGE_TAGGED:-0}" -eq 1 ]; then
+        docker rmi "$image" >/dev/null 9>&- || true
+    fi
+    docker rmi "$image:staging" >/dev/null 2>&1 9>&- || true
 }
 
 # ---------------------------------------------------------------------------------------------------
@@ -563,24 +659,184 @@ lib_parts() {
     printf '%s\n' LICENSE install $HARNESS_SUPPORT
 }
 
-# Moves the staged parts into $MA_LIB, each in place of its old copy.
+# Puts the staged core in place of $MA_CORE and the staged parts into $MA_LIB, once everything they
+# need is prepared, keeping what each replaces until the install is done (upgrade_begin).
 publish_support() {
     local part
     if [ "$DRY_RUN" -eq 1 ]; then
+        say "would install marmot-agent to $MA_CORE, keeping the one there until the agent is started"
         say "would put $(lib_parts | tr '\n' ' ')into $MA_LIB"
         return 0
     fi
+    upgrade_begin
+    mkdir -p "$MA_BIN_DIR"
+    install -m 0755 "$MA_STAGE/.core/marmot-agent" "$MA_CORE.new"
+    mv -f "$MA_CORE.new" "$MA_CORE"
+    say "installed $MA_CORE"
     for part in $(lib_parts); do
         [ -e "$MA_STAGE/$part" ] || continue
+        upgrade_keep "$part"
         mkdir -p "$(dirname "$MA_LIB/$part")"
-        rm -rf "$MA_LIB/$part.old"
-        if [ -e "$MA_LIB/$part" ]; then mv "$MA_LIB/$part" "$MA_LIB/$part.old"; fi
         mv "$MA_STAGE/$part" "$MA_LIB/$part"
-        rm -rf "$MA_LIB/$part.old"
     done
     rm -rf "$MA_STAGE"
     MA_STAGED=0
     say "installed $(lib_parts | tr '\n' ' ')in $MA_LIB"
+}
+
+# ---------------------------------------------------------------------------------------------------
+# Upgrading the core and its support files
+#
+# Every agent starts the one core in $MA_CORE, with the support files in $MA_LIB, so an install that
+# replaced one and then failed would leave every agent, not only its own, to start on the new core with
+# the old files, or the other way round. So both are prepared first, in this run's own folder, and put in
+# place together (publish_support); before that, upgrade_begin keeps a copy of the core in $MA_UPGRADE,
+# a folder whose being there records that an upgrade is under way, with a list of every part of $MA_LIB
+# the run replaces; the folder is made whole under another name and renamed into place. Each part is
+# moved there as it is replaced. While the folder is there, a run that fails, or is stopped by HUP, INT
+# or TERM, puts all of it back (finish). A run after one killed outright finds it, keeps nothing more of
+# what is installed, which is by then partly that run's, finishes the upgrade, and, should it fail, puts
+# back what the killed run found. The upgrade is done once the agent is set up and started, as a plugin
+# change is (main): upgrade_end then renames the folder away, which ends it in one step, and removes it.
+#
+# Only one install runs in a home at a time (lock_installs), from before it looks for an upgrade left
+# under way until it ends, so no run takes over, finishes or puts back an upgrade another is making.
+
+# Starts an upgrade, or takes over one a run before this one left under way. One that replaces a part
+# this run does not, as another harness's install does, this run cannot finish: it puts it back first.
+upgrade_begin() {
+    local making kind part others=""
+    [ "${MA_UPGRADING:-0}" -eq 0 ] || return 0
+    if [ -d "$MA_UPGRADE" ]; then
+        while IFS='	' read -r kind part _; do
+            [ "$kind" = part ] || continue
+            lib_parts | grep -qxF "$part" || others="$others $part"
+        done <"$MA_UPGRADE/list"
+        if [ -z "$others" ]; then
+            MA_UPGRADING=1
+            say "a run before this one stopped part way through installing marmot-agent; this one finishes that, and puts back the core and support files that run found if it fails"
+            upgrade_list "$MA_UPGRADE"
+            return 0
+        fi
+        upgrade_put_back other || die "fix what stops it, then run this again"
+    fi
+    MA_UPGRADING=1
+    # Made under another name and renamed once whole, so a run killed before then has changed nothing.
+    making="$MA_DATA/.upgrade.new"
+    rm -rf "$making"
+    mkdir -p "$making/lib"
+    if [ -e "$MA_CORE" ]; then
+        cp -p "$MA_CORE" "$making/marmot-agent"
+        printf 'core\tpresent\n' >"$making/list"
+    else
+        printf 'core\tabsent\n' >"$making/list"
+    fi
+    upgrade_list "$making"
+    mv "$making" "$MA_UPGRADE"
+}
+
+# Names in the list of the upgrade in a folder each part of $MA_LIB this run replaces that it does not
+# name yet, as present or absent. Written beside the list and renamed over it, so the list names all
+# of them before any is replaced, or none.
+upgrade_list() {
+    local folder=$1 part found more=""
+    for part in $(lib_parts); do
+        [ -z "$(upgrade_found "$part" "$folder")" ] || continue
+        if [ -e "$MA_LIB/$part" ]; then found=present; else found=absent; fi
+        more="${more}part	$part	$found
+"
+    done
+    [ -n "$more" ] || return 0
+    { cat "$folder/list" && printf '%s' "$more"; } >"$folder/list.new"
+    mv -f "$folder/list.new" "$folder/list"
+}
+
+# Whether a part of $MA_LIB was there before the upgrade, as its list says (that of the upgrade in the
+# folder given second, or $MA_UPGRADE): present, absent, or nothing when the list does not name it.
+upgrade_found() {
+    awk -F '\t' -v part="$1" '$1 == "part" && $2 == part { print $3; exit }' "${2:-$MA_UPGRADE}/list"
+}
+
+# Clears the way for a new copy of a part of $MA_LIB, which the upgrade's list names: the one there
+# before the upgrade is moved into $MA_UPGRADE; what a run before this one put there is removed.
+upgrade_keep() {
+    local part=$1 kept="$MA_UPGRADE/lib/$1" found
+    found=$(upgrade_found "$part")
+    if [ -e "$kept" ] || [ "$found" = absent ]; then
+        rm -rf "${MA_LIB:?}/${part:?}"
+    elif [ -e "$MA_LIB/$part" ]; then
+        mkdir -p "$(dirname "$kept")"
+        mv "$MA_LIB/$part" "$kept"
+    fi
+}
+
+# Removes the folders above a path, up to $MA_LIB, that are left empty.
+empty_above() {
+    local folder
+    folder=$(dirname "$1")
+    while [ "$folder" != "$MA_LIB" ] && rmdir "$folder" 2>/dev/null; do folder=$(dirname "$folder"); done
+}
+
+# Ends an upgrade: what it replaced is no longer needed.
+upgrade_end() {
+    [ "$DRY_RUN" -eq 1 ] || upgrade_retire
+    MA_UPGRADING=0
+    [ "$DRY_RUN" -eq 1 ] || rm -rf "$MA_DATA/.upgrade.done.$$"
+}
+
+# Takes the record of an upgrade out of its place in one step, under a name a later run removes
+# (install_core) should this one be stopped before it has: a record half removed is never read.
+upgrade_retire() {
+    rm -rf "$MA_DATA/.upgrade.done.$$" && mv "$MA_UPGRADE" "$MA_DATA/.upgrade.done.$$"
+}
+
+# After an upgrade that did not end: the core and the parts of $MA_LIB there before it put back, a part
+# that was not there removed, and what happened said. Given "other", the upgrade is one a run before
+# this one left, which this one puts back before it starts, and the status says whether it could.
+upgrade_put_back() {
+    local why=${1:-} kind part found ok=0
+    # Gone already: upgrade_end took it away, and the upgrade is done.
+    [ -f "$MA_UPGRADE/list" ] || return 0
+    while IFS='	' read -r kind part found; do
+        case $kind in
+            core)
+                if [ "$part" = present ]; then
+                    { cp -p "$MA_UPGRADE/marmot-agent" "$MA_CORE.new" && mv -f "$MA_CORE.new" "$MA_CORE"; } || ok=1
+                else
+                    rm -f "$MA_CORE" || ok=1
+                fi
+                ;;
+            part)
+                if [ -e "$MA_UPGRADE/lib/$part" ]; then
+                    { rm -rf "${MA_LIB:?}/${part:?}" && mv "$MA_UPGRADE/lib/$part" "$MA_LIB/$part"; } || ok=1
+                elif [ "$found" = absent ]; then
+                    rm -rf "${MA_LIB:?}/${part:?}" || ok=1
+                    empty_above "$MA_LIB/$part"
+                fi
+                # Otherwise the part there before was not moved yet, and is still in place.
+                ;;
+        esac
+    done <"$MA_UPGRADE/list"
+    if [ "$why" = other ]; then
+        if [ "$ok" -eq 0 ] && upgrade_retire; then
+            rm -rf "$MA_DATA/.upgrade.done.$$"
+            say "a run of another installer before this one stopped part way through installing marmot-agent; this put back the core and support files that run found"
+            return 0
+        fi
+        printf 'error: %s\n' "a run of another installer before this one stopped part way through installing \
+marmot-agent, and putting back the core and support files that run found failed (above); they are in $MA_UPGRADE" >&2
+        return 1
+    fi
+    if [ "$ok" -eq 0 ] && upgrade_retire; then
+        rm -rf "$MA_DATA/.upgrade.done.$$"
+        printf 'error: %s\n' "the install did not finish, so this put back the marmot-agent core and support files \
+that were installed before it, which every agent on this account starts with" >&2
+    else
+        printf 'error: %s\n' "the install did not finish, and putting back the marmot-agent core and support files \
+that were installed before it failed too (above); they are in $MA_UPGRADE. Run this again: it finishes the \
+install, or puts them back should it fail" >&2
+    fi
+    return 0
 }
 
 release_target() {
@@ -633,7 +889,7 @@ fetch_release() {
 
 # Installs the core and the support files, from wherever they come from.
 install_core() {
-    local tree binary work=""
+    local tree binary work="" stage
     if [ -n "$BINARY_FROM" ]; then
         [ -x "$BINARY_FROM" ] || die "--binary names no program"
         binary=$BINARY_FROM
@@ -667,20 +923,31 @@ install_core() {
     fi
     owner_hex "$binary"
     if [ "$DRY_RUN" -eq 1 ]; then
-        say "would install marmot-agent to $MA_CORE"
         say "would copy the support files of $HARNESS_TITLE to $MA_LIB"
         MA_STAGE=$MA_LIB
         return 0
     fi
-    mkdir -p "$MA_BIN_DIR" "$MA_DATA"
-    install -m 0755 "$binary" "$MA_CORE.new"
-    mv -f "$MA_CORE.new" "$MA_CORE"
-    say "installed $MA_CORE"
-    # The support files are prepared in a folder of this run's own and published after; the exit trap
-    # removes it if the run stops before then.
+    # Nothing is written before the checks above, and nothing is read that another install changes
+    # before the lock is held.
+    lock_installs
+    # An upgrade a run before this one left under way is finished by this one, or put back should this
+    # one fail before it is.
+    if [ -d "$MA_UPGRADE" ]; then upgrade_begin; fi
+    mkdir -p "$MA_DATA"
+    # What a run killed outright staged, or left of an upgrade's record it was removing, is removed: a
+    # folder named after a process that is gone.
+    for stage in "$MA_DATA"/lib.new.* "$MA_DATA"/.upgrade.done.*; do
+        [ -d "$stage" ] || continue
+        kill -0 "${stage##*.}" 2>/dev/null || rm -rf "$stage"
+    done
+    # The core and the support files are prepared in a folder of this run's own, and put in place
+    # together once the harness's are ready (publish_support); the exit trap removes the folder if the
+    # run stops before then.
     MA_STAGE=$MA_DATA/lib.new.$$
     rm -rf "$MA_STAGE"
     MA_STAGED=1
+    mkdir -p "$MA_STAGE/.core"
+    install -m 0755 "$binary" "$MA_STAGE/.core/marmot-agent"
     # shellcheck disable=SC2046 # one part per word
     copy_support "$tree" "$MA_STAGE" $(lib_parts)
 }
@@ -1146,6 +1413,7 @@ set_paths() {
     # With links resolved: MDK refuses an account home whose path goes through a link.
     MA_DATA=$(canonical "${XDG_DATA_HOME:-$HOME/.local/share}/marmot-agent") || die "the data folder names a loop of links"
     MA_LIB=$MA_DATA/lib
+    MA_UPGRADE=$MA_DATA/upgrade
     MA_AGENT_DIR=$MA_DATA/agents/$NAME
     MA_SETTINGS=$MA_AGENT_DIR/settings.toml
     MA_HOME=$MA_AGENT_DIR/home
@@ -1515,12 +1783,13 @@ main() {
     set_paths
     check_harness
     # MA_STAGED says whether this run made the folder in MA_STAGE: a dry run names the installed one.
-    MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0
+    MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0 MA_UPGRADING=0 MA_PREPARED=0 IMAGE_TAGGED=0 IMAGE_BEFORE=""
     trap 'finish $?' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT
     trap 'exit 143' TERM
     if [ "$UNINSTALL" -eq 1 ]; then
+        if [ -d "$MA_DATA" ]; then lock_installs; fi
         uninstall
         return 0
     fi
@@ -1551,6 +1820,7 @@ main() {
     fi
 
     install_core
+    MA_PREPARED=1
     harness_prepare
     publish_support
     private_dir "$MA_DATA"
@@ -1574,8 +1844,10 @@ main() {
         if [ "$OS" = Linux ]; then systemd_units; else launchd_agents; fi
         start_services
     fi
-    # A change to the gateway's plugin is done once the core it connects to is set up to start, and
-    # started unless --no-start or --no-service said not to.
+    # An upgrade, with a container image of its harness's, and a change to the gateway's plugin, are
+    # done once the core is set up to start, and started unless --no-start or --no-service said not to.
+    if declare -F harness_commit >/dev/null; then harness_commit; fi
+    if [ "$MA_UPGRADING" -eq 1 ]; then upgrade_end; fi
     if [ "$MA_CHANGING" -eq 1 ]; then change_end; fi
     summary
 }

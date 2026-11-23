@@ -29,7 +29,7 @@ OUR_CHANNEL_KEYS="enabled home"
 
 harness_check() {
     # What harness_connect reads, also when a dry run goes on without OpenClaw.
-    OLD_PLUGIN="" OPENCLAW_FOUND=0
+    OLD_PLUGIN="" OUR_FOLDER="" OPENCLAW_FOUND=0
     choose_files_from ""
     need_node
     OPENCLAW=$(program_path openclaw) || {
@@ -56,8 +56,11 @@ harness_check() {
     local found package
     found=$(plugin_found)
     package=$(plugin_package "${found#* }")
-    if [ -z "$found" ] || [ "$package" = "$OUR_PACKAGE" ]; then
+    if [ -z "$found" ]; then
         :
+    elif [ "$package" = "$OUR_PACKAGE" ]; then
+        # Ours, as an earlier install put it in: an update replaces it.
+        if [ "${found%% *}" = installed ]; then OUR_FOLDER=${found#* }; fi
     elif [ "${found%% *}" = found ]; then
         # A plugin OpenClaw loads from a folder it is pointed at wins over one it installed.
         missing "room for our Marmot plugin" "Your OpenClaw loads another plugin called marmot ($package) from" \
@@ -231,12 +234,14 @@ harness_connect() {
         return 0
     fi
     # What it changes is put back if the install fails or is stopped before the core is started
-    # (change_begin in lib.sh): OpenClaw's settings, and the old connector's plugin, which it replaces.
+    # (change_begin in lib.sh): OpenClaw's settings, and the plugin it replaces, the old connector's or
+    # an older one of ours, which goes with the core the install before put in.
     config=$("$OPENCLAW" config file 2>/dev/null) || config=""
     set -- add
     [ -z "$OLD_PLUGIN" ] || set -- replace
     [ -z "$config" ] || set -- "$@" file "$config"
     [ -z "$OLD_PLUGIN" ] || set -- "$@" folder "$OLD_PLUGIN"
+    [ -z "$OUR_FOLDER" ] || set -- "$@" own "$OUR_FOLDER"
     change_begin "$@"
     channel=$("$NODE" -e 'process.stdout.write(JSON.stringify({ enabled: true, home: process.argv[1] }))' "$MA_HOME")
     put_plugin_in "$channel"

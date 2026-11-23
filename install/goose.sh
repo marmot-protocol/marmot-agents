@@ -39,10 +39,22 @@ harness_check() {
     check_version "$GOOSE" "$GOOSE_TESTED" "$GOOSE_HOW"
 }
 
+# The image is built under a tag of its own, and given the one tools/goose/goose-acp.sh runs once the
+# install is done ("Container images" in lib.sh).
 harness_prepare() {
     [ "$CONTAINER" = 1 ] || return 0
     say "building Goose's container image"
-    act docker build -q -t marmot-agents-goose "$MA_STAGE/tools/goose"
+    act docker build -q -t marmot-agents-goose:staging "$MA_STAGE/tools/goose"
+}
+
+harness_commit() {
+    [ "$CONTAINER" = 1 ] || return 0
+    image_commit marmot-agents-goose
+}
+
+harness_put_back() {
+    [ "$CONTAINER" = 1 ] || return 0
+    image_put_back marmot-agents-goose
 }
 
 harness_settings() {
