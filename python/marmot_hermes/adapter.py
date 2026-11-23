@@ -255,6 +255,9 @@ class MarmotAdapter(BasePlatformAdapter):
             finally:
                 core.close()
                 self.core = None
+                # That core closed what was open and settled what it handed over: the next starts
+                # from what it knows.
+                self.connector.core_gone()
             await asyncio.sleep(RECONNECT_SECONDS)
 
     # -- what a platform must implement

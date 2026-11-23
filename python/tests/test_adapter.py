@@ -62,6 +62,7 @@ def stand_in_for_gateway():
 
 stand_in_for_gateway()
 from gateway.platforms.base import MessageEvent, MessageType  # noqa: E402
+from marmot_hermes import adapter as adapter_module  # noqa: E402
 from marmot_hermes.adapter import MarmotAdapter  # noqa: E402
 from marmot_hermes.core import CoreConnection  # noqa: E402
 from protocol import event_problems, problems  # noqa: E402
@@ -331,6 +332,36 @@ class Hello(unittest.IsolatedAsyncioTestCase):
                 server.close()
             self.assertEqual(hello["params"]["token"], "a-token")
             self.assertEqual(problems("FromConnector", hello), [])
+
+    async def test_each_connection_starts_from_what_its_core_knows(self):
+        """When a connection goes, the connector forgets what that core was told, before the next hello."""
+        with tempfile.TemporaryDirectory() as folder:
+            home = Path(folder)
+            (home / "socket").mkdir()
+            (home / "connector.token").write_text("a-token\n", encoding="utf-8")
+            hellos = asyncio.Queue()
+
+            async def core(reader, writer):
+                hello = json.loads(await reader.readline())
+                writer.write(json.dumps({"jsonrpc": "2.0", "id": hello["id"], "result": {}}).encode() + b"\n")
+                await writer.drain()
+                await hellos.put(gone.call_count)
+                writer.close()
+
+            server = await asyncio.start_unix_server(core, str(home / "socket" / "marmot-agent.sock"))
+            with mock.patch.dict("os.environ", {"HERMES_HOME": folder, "MARMOT_AGENT_HOME": folder}):
+                adapter = MarmotAdapter({})
+            gone = mock.Mock()
+            adapter.connector.core_gone = gone
+            with mock.patch.object(adapter_module, "RECONNECT_SECONDS", 0.01):
+                running = asyncio.ensure_future(adapter.run_core())
+                try:
+                    first = await asyncio.wait_for(hellos.get(), 5)
+                    second = await asyncio.wait_for(hellos.get(), 5)
+                finally:
+                    running.cancel()
+                    server.close()
+            self.assertEqual((first, second), (0, 1))
 
 
 if __name__ == "__main__":

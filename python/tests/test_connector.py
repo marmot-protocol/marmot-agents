@@ -31,8 +31,13 @@ class FakeHermes:
         self.questions = []
         self.question_answer = True
         self.answer = None
+        self.fails = None  # an error inject raises: Hermes did not take the message
+        self.model_reads = []
+        self.read_model = None  # what Hermes says when a session's model is read
 
     async def inject(self, chat, sender, message_id, text, reply_to):
+        if self.fails is not None:
+            raise self.fails
         self.typed.append((chat["id"], sender["id"], message_id, text))
         if self.answer is not None:
             self.answer(text, message_id)
@@ -48,7 +53,9 @@ class FakeHermes:
         return self.question_answer
 
     async def read_model_settings(self, chat, sender):
-        pass
+        self.model_reads.append((chat["id"], sender["id"]))
+        if self.read_model is not None:
+            self.read_model()
 
 
 def hook(method, **params):
@@ -353,16 +360,17 @@ class Connected(unittest.IsolatedAsyncioTestCase):
                 self.feed(started(message_id, "/new", "c-2", "u-1", "group"), said(reply, message_id, True, "c-2"),
                           complete(message_id), chat="c-2")
         self.hermes.answer = answer
-        with self.assertRaises(Refusal) as refused:
-            await self.connector.serve("control", {"request": "r-1", "by": BOB, "action": {
-                "type": "new_session", "chat": GROUP, "session": session}})
-        self.assertEqual(refused.exception.reason, "failed")
+        await self.connector.serve("control", {"request": "r-1", "by": BOB, "action": {
+            "type": "new_session", "chat": GROUP, "session": session}})
         self.assertEqual(self.hermes.typed[-1][:2] + self.hermes.typed[-1][3:], ("c-2", "u-1", "/new"))
-        self.assertFalse([e for e in self.sent if "settles" in e])
+        # Hermes refused: its words settle the request, and no session ends.
+        settled = [e for e in self.sent if "settles" in e]
+        self.assertEqual([(e["type"], e["text"], e["settles"]) for e in settled],
+                         [("notice", "⛔ /new is admin-only here.", ["r-1"])])
         self.hermes.answer = lambda text, message_id: answer(text, message_id, "✨ Session reset! Starting fresh.")
         await self.connector.serve("control", {"request": "r-2", "by": BOB, "action": {
             "type": "new_session", "chat": GROUP, "session": session}})
-        settled = [e for e in self.sent if "settles" in e]
+        settled = [e for e in self.sent if "settles" in e][1:]
         self.assertEqual(len(settled), 1)
         self.assertEqual((settled[0]["type"], settled[0]["settles"]), ("session", ["r-2"]))
         self.assertEqual((settled[0]["session"], settled[0]["state"]), (session, "done"))
@@ -438,6 +446,101 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.feed(started("m-1"), complete("m-1", "cancelled"))
         end = self.of("turn")[-1]
         self.assertEqual((end["turn"], end["state"], end["settles"]), ("m-1", "cancelled", ["r-1"]))
+
+    def asks_in_text(self, message="m-1"):
+        """Hermes asks for an approval in text, as it does without buttons: answered by typing."""
+        self.feed(started(message), said("⚠️ **Hermes wants to run** `rm -rf /work/x`", message, notify=True))
+        return self.of("approval")[-1]["item"]
+
+    async def test_a_new_connection_starts_from_what_the_new_core_knows(self):
+        """When the connection goes, the core closes every item open in the chat and settles every
+        request it handed over (D-058, D-070). Hermes goes on, and keeps one connector across connections:
+        what it says next of those items, a turn's end it held, and the requests the old core settled
+        reach the next core not at all. What is new still does."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        approval = self.asks_in_text("m-1")
+        await self.connector.serve("answer", {"request": "r-1", "item": approval, "by": ALICE,
+                                              "given": {"choice": "c0"}})
+        await self.connector.serve("control", {"request": "r-2", "by": ALICE,
+                                               "action": {"type": "interrupt", "turn": "m-1"}})
+        # A quiet turn in another chat, whose end is held.
+        await self.connector.serve("prompt", prompt("m-2", chat=GROUP, sender=BOB))
+        self.feed(started("m-2", chat="c-2", user="u-2", chat_type="group"), complete("m-2"), chat="c-2")
+        held = self.of("turn")[-1]["item"]
+        turn = self.of("turn")[0]["item"]
+        self.connector.core_gone()
+        self.sent.clear()
+        self.feed(said("✅ Command approved", "m-1"), said("Done.", "m-1", notify=True), complete("m-1", "cancelled"))
+        await asyncio.sleep(0.1)
+        self.assertEqual([e for e in self.sent if e["item"] in (approval, turn, held)], [])
+        self.assertEqual([e for e in self.sent if "settles" in e], [])
+        self.assertEqual([e["text"] for e in self.of("message")], ["Done."])
+        with self.assertRaises(Refusal) as closed:
+            await self.connector.serve("answer", {"request": "r-3", "item": approval, "by": ALICE,
+                                                  "given": {"choice": "c0"}})
+        self.assertEqual(closed.exception.reason, "not_waiting")
+        await self.connector.serve("prompt", prompt("m-3"))
+        self.feed(started("m-3"))
+        self.assertEqual(self.of("turn")[-1]["prompts"], ["m-3"])
+
+    async def test_an_answer_hermes_did_not_take_can_be_given_again(self):
+        await self.connector.serve("prompt", prompt("m-1"))
+        approval = self.asks_in_text("m-1")
+        self.hermes.fails = OSError("Hermes did not take it")
+        with self.assertRaises(Exception):
+            await self.connector.serve("answer", {"request": "r-1", "item": approval, "by": ALICE,
+                                                  "given": {"choice": "c0"}})
+        self.hermes.fails = None
+        await self.connector.serve("answer", {"request": "r-2", "item": approval, "by": ALICE,
+                                              "given": {"choice": "c0"}})
+        self.feed(said("✅ Command approved", "m-1"))
+        answered = self.of("approval")[-1]
+        self.assertEqual((answered["state"], answered["settles"]), ("done", ["r-2"]))
+
+    async def test_a_new_session_is_taken_once_typed_and_settled_by_what_hermes_says(self):
+        """The core waits 30 s for a request to be taken (`ANSWER_WITHIN`), and a request that waits holds
+        up the next. A control is taken once Hermes has it; what Hermes says of it then settles it: the
+        end of the session it replaced, or its words when it did not."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), said("Hi.", "m-1", notify=True), complete("m-1"))
+        session = self.of("session")[0]["session"]
+        await asyncio.wait_for(self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "new_session", "chat": CHAT, "session": session}}), 1)
+        typed = self.hermes.typed[-1]
+        self.assertEqual(typed[3], "/new")
+        self.assertEqual([e for e in self.sent if "settles" in e], [])
+        self.feed(said("⛔ /new is admin-only here.", typed[2], notify=True))
+        refused = self.of("notice")[-1]
+        self.assertEqual((refused["text"], refused["settles"]), ("⛔ /new is admin-only here.", ["r-1"]))
+        await asyncio.wait_for(self.connector.serve("control", {"request": "r-2", "by": ALICE, "action": {
+            "type": "new_session", "chat": CHAT, "session": session}}), 1)
+        typed = self.hermes.typed[-1]
+        self.feed(started(typed[2], "/new"), said("✨ Session reset! Starting fresh.", typed[2], notify=True),
+                  complete(typed[2]))
+        settled = [e for e in self.sent if "settles" in e]
+        self.assertEqual([(e["type"], e["session"], e["state"], e["settles"]) for e in settled[1:]],
+                         [("session", session, "done", ["r-2"])])
+
+    async def test_a_model_is_taken_once_typed_and_settled_by_the_session_that_shows_it(self):
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), *model_settings(model="m"), complete("m-1"))
+        session = self.of("session")[-1]["session"]
+        self.hermes.read_model = lambda: self.feed(*model_settings(model="n"))
+        await asyncio.wait_for(self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "set", "session": session, "setting": "model", "value": "n"}}), 1)
+        typed = self.hermes.typed[-1]
+        self.assertEqual(typed[3], "/model n")
+        self.assertEqual(self.hermes.model_reads, [])
+        self.feed(said("Model switched to `n`\nProvider: Custom endpoint", typed[2], notify=True))
+        await asyncio.sleep(0)
+        self.assertEqual(self.hermes.model_reads, [("c-1", "u-1")])
+        shown = self.of("session")[-1]
+        self.assertEqual((shown["text"], shown["settles"]), ("Model: n, Provider: custom", ["r-1"]))
+        # A model Hermes does not switch to is settled by its words.
+        await asyncio.wait_for(self.connector.serve("control", {"request": "r-2", "by": ALICE, "action": {
+            "type": "set", "session": session, "setting": "model", "value": "x"}}), 1)
+        self.feed(said("Unknown model `x`.", self.hermes.typed[-1][2], notify=True))
+        self.assertEqual(self.of("notice")[-1]["settles"], ["r-2"])
 
     async def test_what_is_not_offered_is_refused(self):
         with self.assertRaises(Refusal) as refused:
