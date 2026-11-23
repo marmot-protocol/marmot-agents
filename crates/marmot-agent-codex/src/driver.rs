@@ -1027,7 +1027,14 @@ impl Codex {
         let started = (translator.turn())
             .filter(|t| turn.as_deref() != Some(*t))
             .map(String::from);
-        let ended = turn.filter(|t| translator.turn() != Some(t.as_str()));
+        // The turn whose end Codex reports is the one it names, which need not be the current
+        // one: an end read after the next turn started is still that turn's (#143).
+        let named = (direction == Direction::In && text.contains("turn/completed"))
+            .then(|| serde_json::from_str::<Value>(text).ok())
+            .flatten()
+            .filter(|m| m["method"] == "turn/completed")
+            .and_then(|m| m["params"]["turn"]["id"].as_str().map(String::from));
+        let ended = named.or_else(|| turn.filter(|t| translator.turn() != Some(t.as_str())));
         let replies = translator.take_replies();
         if before != after && who.is_none() {
             if let Some(old) = before {

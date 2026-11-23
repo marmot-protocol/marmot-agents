@@ -1824,6 +1824,46 @@ async fn a_late_end_of_a_subagents_older_turn_does_not_settle_a_stop() {
     assert_eq!(settling.event.header().state, State::Cancelled);
 }
 
+// A Stop of a subagent's turn `st1` that is under way when the subagent's next turn `st2` starts,
+// before `st1`'s end is read: it waits for both, and `st1`'s end, read late, counts for `st1`, so
+// the Stop is settled by `st2`'s and not left waiting for an end already read (#143).
+#[tokio::test]
+async fn a_stop_of_a_subagents_turn_settles_when_its_end_comes_after_the_next_start() {
+    let (codex, mut fake) = outliving().await;
+    let driver = tokio::spawn(async move {
+        let mut codex = codex;
+        codex.control(stop_t1()).await.unwrap();
+        codex
+    });
+    let first = fake.hear().await;
+    assert_eq!(first["params"]["turnId"], "st1");
+    let mut codex = driver.await.unwrap();
+    fake.say(json!({"id": first["id"], "result": {}})).await;
+    fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
+        .await;
+    let (more, _) = read_so_far(&mut codex, &mut fake).await;
+    let second = (more.iter()).find(|m| m["method"] == "turn/interrupt");
+    let second = second
+        .expect("the subagent's next turn is stopped too")
+        .clone();
+    assert_eq!(second["params"]["turnId"], "st2", "{second}");
+    fake.say(json!({"id": second["id"], "result": {}})).await;
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "interrupted"))
+        .await;
+    assert!(
+        within(&mut codex, settles_r1).await.is_none(),
+        "settled while st2 runs"
+    );
+    fake.say(sub_turn("turn/completed", "sub1", "st2", "interrupted"))
+        .await;
+    let events = within(&mut codex, settles_r1).await;
+    let events = events.expect("the Stop is settled once both turns have ended");
+    assert_eq!(
+        events.last().unwrap().event.header().state,
+        State::Cancelled
+    );
+}
+
 // And when Codex refuses to stop it, the Stop failed, though the driver let the subagent go.
 #[tokio::test]
 async fn a_new_session_during_a_stop_codex_refuses_leaves_it_failed() {
