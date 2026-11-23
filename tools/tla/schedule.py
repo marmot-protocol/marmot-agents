@@ -1,4 +1,4 @@
-"""Turns a TLC error trace of the CoreLifecycle model into a schedule in the shared action names.
+"""Turns a TLC error trace of a model into a schedule in the shared action names.
 
 TLC v1.7.4 prints each state of a trace in full, headed by the name of the action that led to it,
 without the action's arguments. The arguments, and the outcome of each send, are read
@@ -8,6 +8,10 @@ the trace ends (an invariant broken at its last step, a stutter for ever, or a l
 
     from schedule import schedule_of
     schedule_of(log_text, constants)   # -> {"messages": [...], "steps": [...], "end": {...}}
+    named_steps_of(log_text)           # SocketProtocol's: -> {"steps": [...], "end": {...}}
+
+The rest of this page is about CoreLifecycle. SocketProtocol names each step in a variable of its
+own, so its schedule is read from that variable (`named_steps_of`).
 
 docs/design/verification.md names the actions. A step names what the model's action did:
 
@@ -349,6 +353,34 @@ def schedule_of(log, constants):
                   "new_session": r in constants["NewSession"]}
                  for r in sorted(constants["Requests"])]
     return {"messages": messages, "steps": steps, "end": end}
+
+
+def plain(value):
+    """A TLC value as JSON takes it: a set as a sorted list."""
+    if isinstance(value, frozenset):
+        return sorted(plain(v) for v in value)
+    if isinstance(value, dict):
+        return {k: plain(v) for k, v in value.items()}
+    if isinstance(value, tuple):
+        return [plain(v) for v in value]
+    return value
+
+
+def named_steps_of(log):
+    """The schedule of a model whose every state names the step that led to it in its variable
+    `step`, as SocketProtocol's do: the steps in order, and how the trace ends."""
+    trace, end = states(log)
+    if not trace:
+        raise ValueError("no trace in the log")
+    steps = []
+    for _, state in trace[1:]:
+        named = plain(state["step"])
+        steps.append({"action": named.pop("a"), **named})
+    if end["kind"] == "loop":
+        # State n is reached by the step at index n - 2; from the step after state `to_state` on,
+        # the behaviour repeats for ever.
+        end = {"kind": "loop", "from_step": end["to_state"] - 1}
+    return {"steps": steps, "end": end}
 
 
 def constants_of(cfg_text):

@@ -1,4 +1,7 @@
-# CoreLifecycle counterexamples
+# Counterexamples
+
+The files of [`SocketProtocol`](../SocketProtocol.md) are [at the end](#socketprotocol). The rest are
+`CoreLifecycle`'s.
 
 One file per configuration that must fail, each a schedule in the shared action names of
 [the verification plan](../../../docs/design/verification.md). Nothing here is written by hand:
@@ -72,3 +75,16 @@ own steps. These files cannot be fed to it as they are. Trace validation, step 5
 - **An unfair end.** A `stutter` or `loop` end means MDK, or another party, never takes the step that would end
   it. The simulator always runs a fair tail; step 5 needs a schedule that stops MDK answering, and an oracle that
   then reports the property `breaks` names.
+
+## SocketProtocol
+
+`SocketProtocol` names each step in a variable of its own, so its schedules are its steps as they are:
+`Connect`, `Hello`, `Hand` (`r`), `Take` (`r`), `Read` (`m`, the answer or event read: `k` is `resp` or `ev`),
+`Run`, `EndTurn` (`hold`), `Release`, `Ask`, `Tick`, `Drop`, `GiveUp`, `Restart`, `Handoff`. The chat has one
+prompt `p1`, whose turn is `t1`, and one control `r1`, an interrupt of it.
+
+| File | Breaks | What it shows |
+| --- | --- | --- |
+| [`kept-connector-remembers`](kept-connector-remembers.json) | S2 | With `NoReset`, the Hermes plugin before the fix: the connection goes while the turn runs, the core closes it as cut short, and the turn's end that Hermes sends after it reconnects changes it to done |
+| [`answer-on-effect`](answer-on-effect.json) | S11 | With `AnswerOnEffect`: the connector holds the interrupt's answer until the turn stops, and the core gives up a connector that was there and working |
+| [`prompt-in-flight`](prompt-in-flight.json) | `UndeliveredNotRun` | The accepted limit of D-037: the connection goes before the core reads the prompt's answer, so the chat is told it was not delivered, and the harness runs it |
