@@ -4,6 +4,7 @@ what it writes parses as each format's stream. Run with:
     python3 -m unittest discover -s tools/model_double -p 'test_*.py'
 """
 
+import datetime
 import json
 import tempfile
 import threading
@@ -11,6 +12,7 @@ import unittest
 import urllib.request
 from pathlib import Path
 
+import check_cassettes
 import double
 
 REMINDER = "<system-reminder>\nSomething the harness adds.\n</system-reminder>\n"
@@ -193,6 +195,30 @@ class Served(unittest.TestCase):
             self.assertEqual(header["harness"], "h")
             self.assertEqual(exchanges, [{"key": {"kind": "main", "prompt": "Run `ls`", "after": 0, "last": "prompt"},
                                           "reply": [{"text": "hi"}]}])
+
+
+class Staleness(unittest.TestCase):
+    def test_old_cassettes_and_newer_releases_are_reported(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for name, harness, version, day in [("a.jsonl", "claude-code", "2.1.326", "2026-11-01"),
+                                                ("b.jsonl", "codex", "0.171.0", "2026-11-20"),
+                                                ("c.jsonl", "hermes", "1.0", "2026-11-20")]:
+                header = {"cassette": 1, "harness": harness, "version": version, "recorded": day}
+                (Path(folder) / name).write_text(json.dumps(header) + "\n")
+            latest = {"@anthropic-ai/claude-code": "2.1.330", "@openai/codex": "0.171.0"}.__getitem__
+            found = check_cassettes.check(Path(folder), datetime.date(2026, 11, 23), 14, latest)
+        self.assertEqual(found, [
+            "stale: a.jsonl was recorded 22 days ago, on 2026-11-01; record it again",
+            "newer: claude-code 2.1.330 is out; cassettes were recorded with 2.1.326",
+            "unknown: no release lookup for hermes; check it by hand",
+        ])
+
+    def test_versions(self):
+        self.assertTrue(check_cassettes.newer("2.1.330", "2.1.326"))
+        self.assertTrue(check_cassettes.newer("0.172.0", "0.171.0"))
+        self.assertFalse(check_cassettes.newer("0.171.0", "0.171.0"))
+        self.assertTrue(check_cassettes.newer("1.0.0", "1.0.0-alpha.1"))
+        self.assertFalse(check_cassettes.newer("0.9.10", "0.10.0"))
 
 
 if __name__ == "__main__":
