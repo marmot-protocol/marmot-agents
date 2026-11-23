@@ -155,47 +155,67 @@ fn permission(id: &str, call: &str) -> String {
     )
 }
 
-// A second request for one tool call is an approval of its own, and its name must not be one a
-// first request could have: here a tool call whose id holds the delimiter and the second request's
-// id. Each approval takes an answer that reaches its own request, and only it.
+/// A form of the agent's, with its JSON-RPC id, for a tool call of session `s1`: one question
+/// that takes typed text.
+fn form(id: &str, call: &str) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"method":"elicitation/create","params":{{"mode":"form","sessionId":"s1","toolCallId":"{call}","message":"Questions","requestedSchema":{{"type":"object","properties":{{"q0":{{"type":"string","title":"Pick"}}}}}}}}}}"#
+    )
+}
+
+// A second request for one tool call is an item of its own, an approval or a question, and its
+// name must not be one a first request could have: here a tool call whose id holds the delimiter
+// and the second request's id. Each item takes an answer that reaches its own request, and only it.
 #[test]
-fn a_repeated_approval_takes_no_name_a_first_could_have() {
-    use marmot_agent_driver::{Answer, Given, Person};
+fn a_repeated_request_takes_no_name_a_first_could_have() {
+    use marmot_agent_driver::{Answer, Given, Person, Reply};
+    let chosen = Given::Choice("c0".into());
+    let typed = Given::Questions(vec![Reply {
+        question: "q0".into(),
+        options: Vec::new(),
+        text: Some("Yes".into()),
+    }]);
+    type Request = fn(&str, &str) -> String;
+    let kinds: [(&str, Request, Given); 2] =
+        [("approval", permission, chosen), ("question", form, typed)];
     let first = [("9", "t:7"), ("5", "t"), ("7", "t")];
     let repeat_first = [("5", "t"), ("7", "t"), ("9", "t:7")];
-    for asked in [first, repeat_first] {
-        let (mut acp, _) = started();
-        let mut items = Vec::new();
-        for (id, call) in asked {
-            for e in acp.feed(Direction::In, &permission(id, call)) {
-                if matches!(e.body(), Body::Approval(_)) {
-                    items.push((id, e.header().item.clone()));
+    for (kind, request, given) in kinds {
+        for asked in [first, repeat_first] {
+            let (mut acp, _) = started();
+            let mut items = Vec::new();
+            for (id, call) in asked {
+                for e in acp.feed(Direction::In, &request(id, call)) {
+                    if matches!(e.body(), Body::Approval(_) | Body::Question(_)) {
+                        items.push((id, e.header().item.clone()));
+                    }
                 }
             }
-        }
-        let names: std::collections::HashSet<_> = items.iter().map(|(_, i)| i.clone()).collect();
-        assert_eq!(
-            names.len(),
-            3,
-            "each request is an approval of its own: {asked:?}"
-        );
-        for (id, item) in &items {
-            let answer = Answer {
-                request: "r".into(),
-                item: item.clone(),
-                by: Person {
-                    id: "u-1".into(),
-                    name: "Alice".into(),
-                },
-                given: Given::Choice("c0".into()),
-            };
-            let reply: serde_json::Value =
-                serde_json::from_str(&acp.reply(&answer).expect("the approval waits")).unwrap();
+            let names: std::collections::HashSet<_> =
+                items.iter().map(|(_, i)| i.clone()).collect();
             assert_eq!(
-                reply["id"].to_string(),
-                *id,
-                "{asked:?}: each reaches its own request"
+                names.len(),
+                3,
+                "{kind}: each request is an item of its own: {asked:?}"
             );
+            for (id, item) in &items {
+                let answer = Answer {
+                    request: "r".into(),
+                    item: item.clone(),
+                    by: Person {
+                        id: "u-1".into(),
+                        name: "Alice".into(),
+                    },
+                    given: given.clone(),
+                };
+                let reply = acp.reply(&answer).expect("the item waits");
+                let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+                assert_eq!(
+                    reply["id"].to_string(),
+                    *id,
+                    "{kind}, {asked:?}: each reaches its own request"
+                );
+            }
         }
     }
 }

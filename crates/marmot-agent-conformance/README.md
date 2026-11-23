@@ -182,6 +182,8 @@ Ten driver bugs were found, each fixed after its scenario failed:
 - **The ACP driver gave two permission requests for one tool call one item** (`two_requests_for_one_tool_call_take_one_answer_each`
   in `tests/acp.rs`, 2026-11-23). The second edited the first's approval, and an answer went to whichever request
   the driver found first. Now each request is an approval of its own; the first for a tool call keeps its name.
+  A form (a question) asked again for one tool call was named the same way and is now an item of its own too
+  (`a_repeated_request_takes_no_name_a_first_could_have` in the driver's own `tests/cases.rs`, 2026-11-23).
 - **The ACP driver never answered a permission or form it could not show** (`a_request_the_driver_cannot_show_is_answered`
   in `tests/acp.rs`, 2026-11-23): one it could not read, or a form at a web address, which it never offers. The
   agent waited for ever. Now it is refused with -32602, invalid params, as the official ACP library refuses a
