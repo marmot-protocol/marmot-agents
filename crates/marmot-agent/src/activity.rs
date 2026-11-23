@@ -6,7 +6,7 @@
 //! plans, tasks, notices and a subagent's words go to such a chat only when the owner lists it in
 //! the settings, or sets `full_activity = "all"`. The core decides this, not a driver (D-004).
 
-use crate::keys::GroupKey;
+use crate::keys::{GroupKey, PubKey};
 use marmot_agent_events::AgentEvent;
 use marmot_agent_events::body::Body;
 use serde::Deserialize;
@@ -66,6 +66,15 @@ impl FullActivity {
             Self::Groups(groups) => groups.contains(group),
         }
     }
+}
+
+/// Whether a group is the owner's two-person chat with the agent, which is sent everything: `two`,
+/// the two accounts MDK keeps for a direct chat, are the agent and its owner, who is someone else
+/// (D-136).
+pub fn owners_chat(agent: &PubKey, owner: &PubKey, two: Option<&[PubKey]>) -> bool {
+    two.is_some_and(|two| {
+        two.len() == 2 && agent != owner && two.contains(agent) && two.contains(owner)
+    })
 }
 
 /// Whether every chat is sent `event`, whatever the owner set, when it `settles` requests from

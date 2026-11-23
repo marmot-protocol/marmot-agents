@@ -1164,12 +1164,7 @@ impl Conversation {
     /// after a restart too: a chat that is not sent the agent's full activity now has what is
     /// queued of it held back, and every item sent without its native message.
     pub fn members_now(&mut self, group: &GroupKey, two: Option<&[PubKey]>) {
-        let owners = two.is_some_and(|two| {
-            two.len() == 2
-                && self.agent != self.rights.owner
-                && two.contains(&self.agent)
-                && two.contains(&self.rights.owner)
-        });
+        let owners = activity::owners_chat(&self.agent, &self.rights.owner, two);
         self.set_owners(group, owners);
     }
 

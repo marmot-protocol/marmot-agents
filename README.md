@@ -56,7 +56,10 @@ invite it from White Noise, and runs it as a service of your account: systemd `-
 macOS. Only you may prompt it or approve what it does until you change its settings. Its reasoning, tools, plans and
 notices go only to your two-person chat with it: a group is sent its words, its turns, what it asks and its
 errors, unless you list the group's id as `full_activity` in its settings, or set `full_activity = "all"`
-([D-136](docs/decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)). The core runs the coding
+([D-136](docs/decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)).
+To find a group's id, stop the agent and run `marmot-agent groups` on its settings,
+`~/.local/share/marmot-agent/agents/<harness>/settings.toml`: it prints, to the terminal only, each group the
+agent is in, with its id, its name, whether it is your two-person chat and whether `full_activity` lists it. The core runs the coding
 harnesses as you, in the work folder (`--cwd`), which must not hold the agents' folder. Pi asks nobody before a
 tool runs, so it acts with your rights, as when you run it yourself; `pi.sh --container` runs it in a throwaway
 container instead, for a boundary, and `goose.sh --container` does the same for Goose. A container runs on a

@@ -5,10 +5,12 @@
 //! or a control comes in as kind 1202, as [`carrier`] writes and reads them (D-076). The agent's
 //! words are chat messages carrying their turn (D-022).
 
+use crate::activity::{FullActivity, owners_chat};
 use crate::carrier::{self, REQUEST_KIND};
 use crate::config::Config;
 use crate::conversation::{Heard, HeardQuote, HeardRequest, Sending, Token, Where};
 use crate::files::Outgoing;
+use crate::groups::Listed;
 use crate::keys::{EventKey, GroupKey, PubKey};
 use cgka_traits::GroupId;
 use marmot_account::{AccountHome, AccountSummary};
@@ -621,6 +623,27 @@ impl Marmot {
         Ok((groups.into_iter())
             .filter(|g| !g.pending_confirmation && !g.archived)
             .map(|g| GroupKey(g.group_id_hex))
+            .collect())
+    }
+
+    /// Each group the agent has accepted, as `marmot-agent groups` shows it to `owner`: its id, its
+    /// name, whether it is the owner's two-person chat and whether `activity` lists it (D-136).
+    /// [`NotNow`] when MDK could not list them.
+    pub fn listed(&self, owner: &PubKey, activity: &FullActivity) -> Result<Vec<Listed>, NotNow> {
+        let groups = self.app.groups(&self.label).map_err(|_| NotNow)?;
+        Ok((groups.into_iter())
+            .filter(|g| !g.pending_confirmation && !g.archived)
+            .map(|g| {
+                let two: Option<Vec<PubKey>> =
+                    (g.direct_member_ids_hex).map(|ids| ids.into_iter().map(PubKey).collect());
+                let group = GroupKey(g.group_id_hex);
+                Listed {
+                    owners_chat: owners_chat(&self.agent, owner, two.as_deref()),
+                    full_activity: activity.includes(&group),
+                    name: g.profile.name,
+                    group,
+                }
+            })
             .collect())
     }
 
