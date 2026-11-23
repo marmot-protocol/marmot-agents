@@ -985,6 +985,32 @@ async fn a_refused_start_and_the_setup_print_no_path() {
     }
 }
 
+// A Codex that never replies to the greeting fails start-up after a minute, as an ACP agent does,
+// so the program can end and be started again rather than wait for ever (#133).
+#[tokio::test(start_paused = true)]
+async fn a_codex_that_never_replies_fails_to_start_in_time() {
+    let (driver_side, fake_side) = duplex(1 << 16);
+    let (from_driver, _to_driver) = tokio::io::split(fake_side);
+    let (driver_reads, driver_writes) = tokio::io::split(driver_side);
+    let codex = tokio::spawn(Codex::connect(
+        driver_reads,
+        driver_writes,
+        Setup::new("/w"),
+    ));
+    let mut lines = BufReader::new(from_driver).lines();
+    let hello: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(hello["method"], "initialize");
+    let began = tokio::time::Instant::now();
+    let waited = tokio::time::timeout(std::time::Duration::from_secs(120), codex).await;
+    let error = waited
+        .expect("start-up gave up within two minutes")
+        .unwrap()
+        .err()
+        .expect("start-up failed");
+    assert!(began.elapsed() >= std::time::Duration::from_secs(60));
+    assert!(error.to_string().contains("in time"), "{error}");
+}
+
 // -- subagents (D-117)
 
 /// A subagent's turn, under the person's turn `t1`.
@@ -1574,6 +1600,58 @@ async fn what_a_resumed_session_says_before_its_reply_is_kept() {
     assert_eq!(codex.unrouted(), 0);
 }
 
+// A request a resumed session makes before the reply to the resume, which Codex then says is
+// resolved, waits for nobody: once the reply makes the session the chat's it is shown, with its
+// native message, as cancelled and never as waiting, and it is neither answered nor refused
+// (#142, D-008).
+#[tokio::test]
+async fn a_request_resolved_before_a_resume_replies_is_shown_closed() {
+    let (mut codex, mut fake) = connect().await;
+    let driver = tokio::spawn(async move {
+        let mut again = prompt("m-1", "where were we");
+        again.session = Some("th0".into());
+        codex.prompt(again).await.unwrap();
+        codex
+    });
+    let resume = fake.hear().await;
+    assert_eq!(resume["method"], "thread/resume");
+    fake.say(json!({"id": 7, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th0", "turnId": "t0", "itemId": "c", "command": "ls"}})).await;
+    fake.say(
+        json!({"method": "serverRequest/resolved", "params": {"threadId": "th0", "requestId": 7}}),
+    )
+    .await;
+    fake.say(json!({"id": resume["id"], "result": {"thread": {"id": "th0"}}}))
+        .await;
+    fake.answer("turn/start", json!({"turn": {"id": "t1"}}))
+        .await;
+    let mut codex = driver.await.unwrap();
+    fake.say(
+        json!({"method": "thread/settings/updated", "params": {"threadId": "th0",
+        "threadSettings": {"model": "m9"}}}),
+    )
+    .await;
+    let shows_m9 = |e: &Emitted| match e.event.body() {
+        Body::Session(s) => {
+            (s.settings.iter()).any(|x| x.id == "model" && x.value.as_deref() == Some("m9"))
+        }
+        _ => false,
+    };
+    let events = within(&mut codex, shows_m9).await.expect("the marker");
+    let approvals: Vec<&Emitted> = (events.iter())
+        .filter(|e| matches!(e.event.body(), Body::Approval(_)))
+        .collect();
+    assert_eq!(approvals.len(), 1, "shown once: {approvals:?}");
+    let shown = &approvals[0].event;
+    assert_eq!(shown.header().state, State::Cancelled, "{shown:?}");
+    let native = shown.native().expect("its native message");
+    let payload: Value = serde_json::from_str(native.payload.get()).unwrap();
+    assert_eq!(payload["command"], "ls", "{native:?}");
+    assert!(
+        !replied(&written(&mut fake), 7),
+        "a resolved request was answered"
+    );
+}
+
 // Two Stops under way when a subagent's turn starts: the turn and the subagent are each
 // interrupted once, and each Stop waits for both, so neither is settled while the subagent runs.
 #[tokio::test]
@@ -1685,6 +1763,105 @@ async fn a_new_session_during_a_stop_of_a_subagent_settles_it_by_its_end() {
         "{settling:?}"
     );
     assert_eq!(settling[0].event.header().state, State::Cancelled);
+}
+
+// The end of an older turn, read late while `t1` runs for `m-1`, is that turn's: it does not take
+// `m-1` from `t1`, nor settle a Stop of `t1`, and `t1`'s own end still carries `m-1` (#143).
+#[tokio::test]
+async fn a_late_end_of_an_older_turn_keeps_the_running_turns_prompts() {
+    let (mut codex, mut fake) = running().await;
+    until(&mut codex, is_turn(State::Running)).await;
+    let driver = tokio::spawn(async move {
+        codex.control(stop_t1()).await.unwrap();
+        codex
+    });
+    let interrupt = fake.hear().await;
+    assert_eq!(interrupt["method"], "turn/interrupt");
+    let mut codex = driver.await.unwrap();
+    fake.say(json!({"id": interrupt["id"], "result": {}})).await;
+    let old = json!({"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t0",
+        "items": [], "status": "completed", "error": null}}});
+    fake.say(old).await;
+    let events = until(&mut codex, is_turn(State::Done)).await;
+    let late = events.last().unwrap();
+    assert_eq!(
+        late.event.header().turn.as_ref().map(|t| t.as_str()),
+        Some("t0")
+    );
+    assert!(late.prompts.is_empty(), "{:?}", late.prompts);
+    assert!(
+        !events.iter().any(settles_r1),
+        "settled by another turn's end"
+    );
+    fake.say(turn("turn/completed", "interrupted")).await;
+    let events = until(&mut codex, is_turn(State::Cancelled)).await;
+    let end = events.last().unwrap();
+    assert_eq!(
+        end.event.header().turn.as_ref().map(|t| t.as_str()),
+        Some("t1")
+    );
+    assert_eq!(end.prompts, ["m-1".into()]);
+    assert!(settles_r1(end), "the Stop is settled by its turn's end");
+}
+
+// The end of an older turn of that subagent, read late, does not settle the Stop: only the end of
+// the turn it stops does (#143).
+#[tokio::test]
+async fn a_late_end_of_a_subagents_older_turn_does_not_settle_a_stop() {
+    let (mut codex, mut fake, interrupt) = new_session_during_a_stop().await;
+    fake.say(json!({"id": interrupt["id"], "result": {}})).await;
+    fake.say(sub_turn("turn/completed", "sub1", "st0", "completed"))
+        .await;
+    assert!(
+        within(&mut codex, settles_r1).await.is_none(),
+        "settled by the end of another turn"
+    );
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "interrupted"))
+        .await;
+    let events = within(&mut codex, settles_r1).await;
+    let events = events.expect("the Stop is settled by its turn's end");
+    let settling = events.last().unwrap();
+    assert_eq!(settling.event.header().state, State::Cancelled);
+}
+
+// A Stop of a subagent's turn `st1` that is under way when the subagent's next turn `st2` starts,
+// before `st1`'s end is read: it waits for both, and `st1`'s end, read late, counts for `st1`, so
+// the Stop is settled by `st2`'s and not left waiting for an end already read (#143).
+#[tokio::test]
+async fn a_stop_of_a_subagents_turn_settles_when_its_end_comes_after_the_next_start() {
+    let (codex, mut fake) = outliving().await;
+    let driver = tokio::spawn(async move {
+        let mut codex = codex;
+        codex.control(stop_t1()).await.unwrap();
+        codex
+    });
+    let first = fake.hear().await;
+    assert_eq!(first["params"]["turnId"], "st1");
+    let mut codex = driver.await.unwrap();
+    fake.say(json!({"id": first["id"], "result": {}})).await;
+    fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
+        .await;
+    let (more, _) = read_so_far(&mut codex, &mut fake).await;
+    let second = (more.iter()).find(|m| m["method"] == "turn/interrupt");
+    let second = second
+        .expect("the subagent's next turn is stopped too")
+        .clone();
+    assert_eq!(second["params"]["turnId"], "st2", "{second}");
+    fake.say(json!({"id": second["id"], "result": {}})).await;
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "interrupted"))
+        .await;
+    assert!(
+        within(&mut codex, settles_r1).await.is_none(),
+        "settled while st2 runs"
+    );
+    fake.say(sub_turn("turn/completed", "sub1", "st2", "interrupted"))
+        .await;
+    let events = within(&mut codex, settles_r1).await;
+    let events = events.expect("the Stop is settled once both turns have ended");
+    assert_eq!(
+        events.last().unwrap().event.header().state,
+        State::Cancelled
+    );
 }
 
 // And when Codex refuses to stop it, the Stop failed, though the driver let the subagent go.

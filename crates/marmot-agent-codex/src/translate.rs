@@ -185,7 +185,8 @@ pub struct Translator {
     /// The client's requests that will start a turn, oldest first: who they count as, and the
     /// thread they name.
     starts: Vec<(Id, StartedBy, Option<String>)>,
-    started_by: Option<StartedBy>,
+    /// Who started each turn that has not ended: the end of one read late is still its own.
+    started_by: HashMap<Option<String>, StartedBy>,
     known: Known,
     models: Option<Vec<String>>,
     modes: Option<Vec<String>>,
@@ -348,7 +349,7 @@ impl Translator {
     /// open items and the open turn itself.
     pub fn harness_stopped(&mut self) -> Vec<AgentEvent> {
         let mut out = Vec::new();
-        self.close_open_items(&mut out, false);
+        self.close_open_items(&mut out, false, None);
         let turn_item = self.turn_item(self.turn.as_deref());
         if let Some(prev) = self.open_event(&turn_item) {
             let body = prev.body().clone();
@@ -374,6 +375,42 @@ impl Translator {
         self.starts.clear();
         self.usage.clear();
         self.turn = None;
+        out
+    }
+
+    /// A request of Codex's that Codex said was resolved before the driver could show it, as one
+    /// held for a session being resumed can be. It is shown as it would have been, with its native
+    /// message, but closed, as cancelled: nobody may answer it, and Codex waits for no reply, so
+    /// none is made (#142, D-008).
+    pub fn withdrawn(&mut self, message: &str) -> Vec<AgentEvent> {
+        let replies = self.outbox.len();
+        let shown = self.feed(Direction::In, message);
+        self.outbox.truncate(replies);
+        if let Ok(Some(id)) = serde_json::from_str::<Envelope<'_>>(message).map(|m| m.id) {
+            self.asked.remove(&id);
+        }
+        let mut out = Vec::new();
+        for event in shown {
+            if event.header().state != State::Waiting {
+                out.push(event);
+                continue;
+            }
+            let header = event.header();
+            let item = header.item.as_str().to_string();
+            let (title, text) = (header.title.clone(), header.text.clone());
+            let native = event.native().cloned();
+            let body = event.body().clone();
+            self.emit_owned(
+                &mut out,
+                owner(&event),
+                &item,
+                body,
+                State::Cancelled,
+                &title,
+                &text,
+                native,
+            );
+        }
         out
     }
 
@@ -634,7 +671,7 @@ impl Translator {
             }
             by
         };
-        self.started_by = Some(started_by);
+        self.started_by.insert(self.turn.clone(), started_by);
         let item = format!("turn:{}", show(self.turn.as_deref()));
         let body = Body::Turn(Turn {
             started_by,
@@ -650,12 +687,29 @@ impl Translator {
             return;
         };
         let turn = note.turn.unwrap_or_default();
+        // The end of a turn other than the current one, read late, ends only that turn, and is
+        // shown as that turn's: the current turn, and what is open in it, stay (#143).
+        let current = match (&turn.id, &self.turn) {
+            (Some(ended), Some(current)) => ended == current,
+            _ => true,
+        };
+        let ended = if current {
+            self.turn.clone()
+        } else {
+            turn.id.clone()
+        };
         // A question answered by the person's next message still waits after a turn that
         // completed. Anything else open will never report again.
         let completed = turn.status.as_deref() == Some("completed");
-        self.close_open_items(out, completed);
+        if current {
+            self.close_open_items(out, completed, None);
+        } else if self.subagent.is_none() {
+            // A subagent's items are shown under the person's turn, whichever of its own turns
+            // they were in, so only the session's can be told apart.
+            self.close_open_items(out, completed, ended.as_deref());
+        }
         if self.subagent.is_some() {
-            return self.subagent_ended(turn, method, params, out);
+            return self.subagent_ended(turn, current, method, params, out);
         }
         let (state, title) = match turn.status.as_deref() {
             Some("interrupted") => (State::Cancelled, "Interrupted"),
@@ -668,17 +722,20 @@ impl Translator {
             output_tokens: Some(less(&total.output_tokens, &before.output_tokens)),
         });
         let body = Body::Turn(Turn {
-            started_by: self.started_by.unwrap_or(StartedBy::User),
+            started_by: (self.started_by.remove(&ended)).unwrap_or(StartedBy::User),
             duration_ms: turn.duration_ms,
             usage,
         });
         let item = format!("turn:{}", show(turn.id.as_deref()));
         let native = native(method, params);
-        self.emit(out, &item, body, state, title, &text, native);
+        let owner = (self.session.clone(), ended);
+        self.emit_owned(out, owner, &item, body, state, title, &text, native);
         if let Some(id) = &turn.id {
             self.turn_requests.remove(id); // nothing more comes for this turn
         }
-        self.turn = None; // nothing that follows belongs to this turn
+        if current {
+            self.turn = None; // nothing that follows belongs to this turn
+        }
     }
 
     // -- items
@@ -1060,10 +1117,12 @@ impl Translator {
         );
     }
 
-    /// A subagent's turn ends, and its task with it.
+    /// A subagent's turn ends, and its task with it. `current` when it is the turn the subagent
+    /// is in.
     fn subagent_ended(
         &mut self,
         turn: messages::TurnInfo,
+        current: bool,
         method: &str,
         params: &str,
         out: &mut Vec<AgentEvent>,
@@ -1092,8 +1151,12 @@ impl Translator {
             self.usage.remove(&Some(id.clone()));
         }
         let native = native(method, params);
-        self.emit(out, &item, body, state, title, &text, native);
-        self.turn = None; // nothing that follows belongs to this turn
+        let ended = if current { self.turn.clone() } else { turn.id };
+        let owner = (self.session.clone(), ended);
+        self.emit_owned(out, owner, &item, body, state, title, &text, native);
+        if current {
+            self.turn = None; // nothing that follows belongs to this turn
+        }
     }
 
     // -- approvals and questions
@@ -1730,10 +1793,20 @@ impl Translator {
 
     // -- events
 
-    /// A turn ended. Anything still running will never report again, so the driver closes it.
-    fn close_open_items(&mut self, out: &mut Vec<AgentEvent>, keep_message_questions: bool) {
+    /// A turn ended. Anything still running will never report again, so the driver closes it:
+    /// everything open, or only what is in turn `only`.
+    fn close_open_items(
+        &mut self,
+        out: &mut Vec<AgentEvent>,
+        keep_message_questions: bool,
+        only: Option<&str>,
+    ) {
         let open: Vec<(String, AgentEvent)> = self.open.clone();
         for (item, prev) in open {
+            let turn = prev.header().turn.as_ref().map(|t| t.as_str());
+            if only.is_some() && turn != only {
+                continue;
+            }
             match prev.body() {
                 // Tasks and sessions may outlive the turn; the turn closes itself.
                 Body::Turn(_) | Body::Task(_) | Body::Session(_) => continue,

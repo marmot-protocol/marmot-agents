@@ -18,5 +18,6 @@ tokio = { version = "1", features = ["io-util", "process", "time"] }
 
 [dev-dependencies]
 serde = { version = "1", features = ["derive"] }
-tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
+# `test-util` pauses the clock, so a wait of a minute is tested in no time.
+tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "sync", "test-util", "time"] }
 serde_json = { version = "1", features = ["raw_value"] }

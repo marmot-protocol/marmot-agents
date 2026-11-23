@@ -290,6 +290,57 @@ fn a_turn_nobody_asked_for_was_started_by_the_agent() {
     );
 }
 
+// The end of an older turn, read after the next has started, is that turn's: it closes what was
+// open in it and nothing of the running turn, and says who started it (#143).
+#[test]
+fn a_late_end_of_an_older_turn_closes_only_that_turn() {
+    let turn = |method: &str, id: &str| {
+        format!(
+            r#"{{"method": "{method}", "params": {{"threadId": "th1", "turn": {{"id": "{id}", "items": [], "status": "completed", "error": null}}}}}}"#
+        )
+    };
+    let command = |turn: &str, id: &str| {
+        format!(
+            r#"{{"method": "item/started", "params": {{"threadId": "th1", "turnId": "{turn}", "item": {{"type": "commandExecution", "id": "{id}", "command": "sleep 60", "cwd": "/w", "status": "inProgress"}}}}}}"#
+        )
+    };
+    let mut translator = Translator::new();
+    let start = r#"{"id": 1, "method": "turn/start", "params": {"threadId": "th1", "input": []}}"#;
+    translator.feed(Direction::Out, start);
+    for message in [
+        turn("turn/started", "t0"),
+        command("t0", "cmd0"),
+        turn("turn/started", "t1"),
+        command("t1", "cmd1"),
+    ] {
+        translator.feed(Direction::In, &message);
+    }
+    let late = translator.feed(Direction::In, &turn("turn/completed", "t0"));
+    let shown: Vec<(&str, Option<&str>, State)> = (late.iter())
+        .map(|e| {
+            let h = e.header();
+            (
+                h.item.as_str(),
+                h.turn.as_ref().map(|t| t.as_str()),
+                h.state,
+            )
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            ("cmd0", Some("t0"), State::Cancelled),
+            ("turn:t0", Some("t0"), State::Done)
+        ]
+    );
+    assert_eq!(turn_body(&late[1]).started_by, StartedBy::User);
+    assert_eq!(translator.turn(), Some("t1"));
+    let end = translator.feed(Direction::In, &turn("turn/completed", "t1"));
+    let items: Vec<&str> = end.iter().map(|e| e.header().item.as_str()).collect();
+    assert_eq!(items, ["cmd1", "turn:t1"]);
+    assert_eq!(turn_body(&end[1]).started_by, StartedBy::Agent);
+}
+
 #[test]
 fn what_follows_a_turn_does_not_belong_to_it() {
     let refused = r#"{"id": 5, "error": {"code": -32600, "message": "no such setting"}}"#;

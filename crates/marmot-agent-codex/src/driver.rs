@@ -52,7 +52,8 @@ use tokio::process::{Child, Command};
 type Reader = Lines<BufReader<Box<dyn AsyncRead + Unpin + Send>>>;
 
 /// How long one of the core's requests waits for Codex before the driver gives up on it: to read
-/// what the driver writes, to pick a session, or to answer a request before it.
+/// what the driver writes, to pick a session, or to answer a request before it; and how long
+/// start-up waits for Codex to reply to its greeting.
 const PATIENCE: Duration = Duration::from_secs(60);
 type Writer = Box<dyn AsyncWrite + Unpin + Send>;
 
@@ -212,6 +213,8 @@ struct Held {
     /// Codex's id, while the message is a request Codex waits for a reply to: none for a
     /// notification, or once Codex says the request is resolved.
     request: Option<Value>,
+    /// A request Codex said is resolved while it was held: it is shown closed (#142).
+    resolved: bool,
 }
 
 /// The Codex driver: one `codex app-server` process, serving every chat of one agent.
@@ -337,9 +340,14 @@ impl Codex {
         let id = codex.id();
         codex.queue(&initialize(id), None);
         codex.flush().await?;
+        // A Codex that never replies fails start-up, so the program can end and be started again.
+        let deadline = tokio::time::Instant::now() + PATIENCE;
         let reply = loop {
-            let line = codex.reader.next_line().await?;
-            let Some(line) = line else {
+            let read = tokio::time::timeout_at(deadline, codex.reader.next_line()).await;
+            let Ok(line) = read else {
+                return Err(io::Error::other("codex app-server did not reply in time"));
+            };
+            let Some(line) = line? else {
                 return Err(io::Error::other("codex app-server ended before it replied"));
             };
             let message: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
@@ -737,13 +745,16 @@ impl Codex {
     }
 
     /// Holds a message for a thread no chat has had, until something names its thread. Codex's
-    /// word that it no longer waits for a request held here means that request needs no reply.
+    /// word that it no longer waits for a request held here means that request needs no reply: it
+    /// is shown closed once its thread is named, never as waiting (#142), and that word is held
+    /// like any notification.
     fn hold(&mut self, thread: &str, line: &str, message: &Value) {
         if message["method"] == "serverRequest/resolved" {
             let id = &message["params"]["requestId"];
             for held in self.held.iter_mut().filter(|h| h.thread == thread) {
                 if held.request.as_ref() == Some(id) {
                     held.request = None;
+                    held.resolved = true;
                 }
             }
         }
@@ -752,6 +763,7 @@ impl Codex {
             thread: thread.to_string(),
             line: line.to_string(),
             request,
+            resolved: false,
         });
         while self.held.len() > HELD {
             let Some(held) = self.held.pop_front() else {
@@ -832,10 +844,29 @@ impl Codex {
         self.releasing = true;
         while let Some(at) = (self.held.iter()).position(|h| self.whose(&h.thread).is_some()) {
             let held = self.held.remove(at).expect("a held message");
-            self.route(&held.line);
+            if held.resolved {
+                self.withdrawn(&held.thread, &held.line);
+            } else {
+                self.route(&held.line);
+            }
         }
         self.releasing = false;
         self.let_go();
+    }
+
+    /// Shows a request of `thread`'s that Codex said was resolved while it was held: closed, with
+    /// no reply to Codex, which waits for none (#142).
+    fn withdrawn(&mut self, thread: &str, line: &str) {
+        let Some((chat, who)) = self.whose(thread) else {
+            return;
+        };
+        let c = self.chats.entry(chat.clone()).or_default();
+        let Some(translator) = c.translator_mut(who.as_deref()) else {
+            return;
+        };
+        for event in translator.withdrawn(line) {
+            self.ready_event(&chat, event, Vec::new(), true, None);
+        }
     }
 
     /// Codex calls the driver's own tool. A call to send a file goes to the core; any other is
@@ -996,7 +1027,14 @@ impl Codex {
         let started = (translator.turn())
             .filter(|t| turn.as_deref() != Some(*t))
             .map(String::from);
-        let ended = turn.filter(|t| translator.turn() != Some(t.as_str()));
+        // The turn whose end Codex reports is the one it names, which need not be the current
+        // one: an end read after the next turn started is still that turn's (#143).
+        let named = (direction == Direction::In && text.contains("turn/completed"))
+            .then(|| serde_json::from_str::<Value>(text).ok())
+            .flatten()
+            .filter(|m| m["method"] == "turn/completed")
+            .and_then(|m| m["params"]["turn"]["id"].as_str().map(String::from));
+        let ended = named.or_else(|| turn.filter(|t| translator.turn() != Some(t.as_str())));
         let replies = translator.take_replies();
         if before != after && who.is_none() {
             if let Some(old) = before {
