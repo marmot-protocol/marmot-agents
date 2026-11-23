@@ -129,7 +129,7 @@ marmot_agent_conformance::with_scenarios!(conformance!(OpenCode));
 // own, in Cursor's to-do list, and in how each keeps the driver's tool server and names the session
 // that calls it: they run the scenarios that reach those, and the answer to an agent that has gone. The rest go through the same code as OpenCode's.
 conformance!(Goose:
-    run: [two_chats, answered_once, answer_after_death, answer_after_interrupt, dies_mid_turn, restart, new_session, folder, send_file];
+    run: [two_chats, answered_once, answer_after_death, answer_after_interrupt, dies_mid_turn, restart, new_session, new_session_unnamed, folder, send_file];
     left_out: [
         one_turn,
         dies_with_requests_pending,
@@ -156,6 +156,7 @@ conformance!(Cursor:
         stops_reading,
         late_replies,
         new_session,
+        new_session_unnamed,
         folder,
         settings,
     ]

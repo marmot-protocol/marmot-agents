@@ -40,6 +40,7 @@ macro_rules! with_scenarios {
             late_replies,
             restart,
             new_session,
+            new_session_unnamed,
             folder,
             send_file,
             settings
@@ -619,6 +620,59 @@ pub async fn new_session<S: Subject>(subject: S) -> Result<(), Violation> {
     }
     if run.prompt_in("c-2", "let me in", Some(&old)).await?.is_ok() {
         return Err(broke("S5", "a chat took up another chat's session"));
+    }
+    run.end().await
+}
+
+/// A new session asked for while the core names none, as before it has seen the chat's session
+/// (the core names the session it saved), just after a setting was changed, with the harness
+/// slow: the setting's edit of the chat's current session comes after the new session is asked
+/// for. Only the new session settles the request (S1: a request is settled by its own effect). A
+/// driver may refuse it instead.
+pub async fn new_session_unnamed<S: Subject>(subject: S) -> Result<(), Violation> {
+    let mut run = Run::start(subject).await;
+    let first = taken(run.prompt("c-1", "hello").await?, "the first prompt")?;
+    run.wait("L2", "the first turn's end", ended_turn_of(&first))
+        .await?;
+    let chat = ChatId::from("c-1");
+    let old = (run.check.session_of(&chat).cloned())
+        .ok_or_else(|| broke("L2", "the chat's session was never shown"))?;
+    run.subject.fake().set_knobs(Knobs {
+        slow: Some(Duration::from_millis(50)),
+        ..Knobs::default()
+    });
+    let (set, set_result) = run.set("c-1", &old).await?;
+    let (request, result) = run.new_session("c-1", None).await?;
+    if result.is_err() {
+        return run.end().await; // refused: nothing settles it
+    }
+    run.patience = Duration::from_secs(10);
+    let is_new = |e: &Emitted| {
+        matches!(e.event.body(), Body::Session(_))
+            && e.event.header().state == State::Running
+            && (e.event.header().session.as_ref()).is_some_and(|s| s.as_str() != old)
+    };
+    run.wait("L1", "the new session", is_new).await?;
+    if set_result.is_ok() {
+        let deadline = tokio::time::Instant::now() + run.patience;
+        while !run.seen.iter().any(|e| e.settles.contains(&set)) {
+            if tokio::time::Instant::now() > deadline {
+                return Err(broke("L1", "the setting was never settled"));
+            }
+            run.drain(Duration::from_millis(20)).await;
+        }
+    }
+    run.checkpoint().await?;
+    let settled_by = (run.seen.iter()).find(|e| e.settles.contains(&request));
+    match settled_by {
+        None => return Err(broke("S1", "the new session was never settled")),
+        Some(e) if !is_new(e) => {
+            return Err(broke(
+                "S1",
+                "the new session was settled by an event of the session it replaces",
+            ));
+        }
+        Some(_) => {}
     }
     run.end().await
 }

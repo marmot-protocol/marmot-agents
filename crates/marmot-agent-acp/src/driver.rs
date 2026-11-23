@@ -1156,7 +1156,12 @@ impl Driver for Acp {
                 if self.translator(&chat).and_then(Translator::turn).is_some() {
                     return Err(Refusal::new(Reason::Busy));
                 }
-                let old = session.as_ref().map(|s| s.as_str().to_string());
+                // Only a session other than the one the chat is in shows the effect. The core
+                // names the session it saved, and none before it has seen one, so the driver's own
+                // comes first: an edit of the chat's session must not settle the request.
+                let current = self.translator(&chat).and_then(Translator::session);
+                let old = (current.map(str::to_string))
+                    .or_else(|| session.as_ref().map(|s| s.as_str().to_string()));
                 if let Some(c) = self.chats.get_mut(&chat) {
                     c.effects.push((request.clone(), Effect::NewSession(old)));
                 }

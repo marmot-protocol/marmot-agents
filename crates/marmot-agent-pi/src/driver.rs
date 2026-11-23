@@ -1059,11 +1059,15 @@ impl Driver for Pi {
             Action::NewSession { chat, session } => {
                 let folder = chat.folder.clone();
                 let chat = chat.id.clone();
-                let old = session.as_ref().map(|s| s.as_str().to_string());
                 let c = self.chats.entry(chat.clone()).or_default();
                 if c.process.is_some() && c.translator.running() {
                     return Err(Refusal::new(Reason::Busy));
                 }
+                // Only a session other than the one the chat is in shows the effect. The core
+                // names the session it saved, and none before it has seen one, so the driver's own
+                // comes first: an edit of the chat's session must not settle the request.
+                let old = (c.translator.session().map(str::to_string))
+                    .or_else(|| session.as_ref().map(|s| s.as_str().to_string()));
                 // Pi works where it was started: a session in another folder needs a new Pi
                 // there (D-101). The Pi it replaces is let go, as one that stopped.
                 if c.process.is_some() && c.folder != folder {

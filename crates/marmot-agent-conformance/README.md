@@ -70,6 +70,7 @@ Every driver runs these, but where the table under "What was run" says otherwise
 | `late_replies` | Every reply comes half a second late (for Pi, everything slow): a prompt in a new chat, which waits more than once, is still taken |
 | `restart` | A turn, a restart, a prompt naming the chat's session, a prompt naming none; then a restart in the middle of a turn |
 | `new_session` | A prompt naming the chat's session; a new session, settled by the new session; the next prompt goes to it, and not to the session named before; another chat naming the old one is refused |
+| `new_session_unnamed` | A setting changed and a new session asked for at once, naming no session, as the core does before it has seen the chat's (it names the one it saved), with the harness slow: the setting's edit of the current session comes after; only the new session may settle the request. A driver may refuse it |
 | `folder` | A chat moves the harness to another folder (D-101): a chat that chose none opens its session in the driver's own folder; a new session naming another folder is taken, settled by the new session, which opens there, and the next prompt goes to it; a chat with no session yet moves and its first session opens there; a third chat stays in the driver's folder; after a restart the moved session is taken up in its folder. Checked against the folder the fake heard (`cwd` on Codex's and ACP's session requests, the folder Pi's relay was started in), and reported as D-101 |
 | `send_file` | The agent sends a file with the driver's own tool (D-090): each request must name the chat whose harness asked, with its relative path made whole from that chat's folder (D-101), and how it went must reach that harness, and only it, as the tool's result. Two chats open sessions in the driver's folder, chat 2's last, so an agent that keeps one tool server for a folder's sessions (OpenCode) reaches the driver through chat 2's and only the call names chat 1's session; chat 1's file is sent. While it waits for the core's word, chat 1 prompts again: the prompt must return within a second, taken or refused, since the core cannot give the word until it does (S11; an agent awaiting its tool ends a cancelled turn only once the call comes back, and so does the fake). Then chat 2 moves to another folder, and two files are asked for at once, chat 2's there and chat 1's, both waiting, answered the other way round: chat 1's sent, chat 2's refused, and the core's words must reach chat 2's new session. Checked against what the fake heard as its tool's result, which must come without the driver being polled again. A driver that gives its harness no such tool (`Subject::sends_files`, false by default) must hand over no file; every built-in driver gives one |
 | `settings` | A setting changed, settled once |
@@ -109,7 +110,7 @@ nothing.
 | --- | --- | --- | --- |
 | Codex | all, `dies_at_every_step` (6) | `simple`, `approval_allowed`, `command` | all 21 that one harness for every chat can show |
 | ACP, OpenCode-shaped | all, `dies_at_every_step` (3) | `simple`, `approval_allowed` | `PromptTwice` and the five for files |
-| ACP, Goose-shaped | `two_chats`, `answered_once`, `answer_after_death`, `answer_after_interrupt`, `dies_mid_turn`, `restart`, `new_session`, `folder`, `send_file`, `dies_at_every_step` (3) | `simple`, `approval_allowed` | the five for files |
+| ACP, Goose-shaped | `two_chats`, `answered_once`, `answer_after_death`, `answer_after_interrupt`, `dies_mid_turn`, `restart`, `new_session`, `new_session_unnamed`, `folder`, `send_file`, `dies_at_every_step` (3) | `simple`, `approval_allowed` | the five for files |
 | ACP, Cursor-shaped | `two_chats`, `answered_once`, `answer_after_death`, `answer_after_interrupt`, `restart`, `send_file`, `dies_at_every_step` (4) | `simple`, `approval_allowed` | the five for files |
 | Pi | all, `dies_at_every_step` (6) | `gate_allowed`, `command` | 13: those that turn on a harness for each chat, `TakeUnhanded`, `SwallowPrompt` and the five for files |
 
@@ -145,7 +146,7 @@ names the property, the test also requires the words of the check meant for the 
 alone (S5, OpenCode-shaped, where the token is the last chat's), by the session it names alone (L2, Cursor-shaped, which
 names none: the file never comes), and a relative path made whole from the driver's folder instead of the chat's (D-101).
 
-Six driver bugs were found, each fixed after its scenario failed:
+Eight driver bugs were found, each fixed after its scenario failed:
 
 - **The ACP driver took an answer the agent could no longer read** (`answer_after_death`). A request's message went to
   the writer task's queue and the request returned at once, then fed the translator, so an answer to an agent that had
@@ -170,6 +171,10 @@ Six driver bugs were found, each fixed after its scenario failed:
   the driver closes a waiting question, but it kept the dialog, so a later answer was written to Pi, which had
   resolved the dialog itself on the abort (Pi 1.6.0's `createDialogPromise`) and drops a late reply; the answer was
   never settled. Now a question closed with its turn takes no answer.
+- **The ACP and Pi drivers settled a new session by an edit of the old one** (`new_session_unnamed`, 2026-11-23).
+  A new session was settled by any running session item whose id differed from the one the core named; when the
+  core named none, an edit of the chat's current session, such as a setting's, settled it before the new session
+  came. Now the session the driver knows the chat is in comes first, as Codex's driver already checked.
 
 Not covered yet, and why:
 
