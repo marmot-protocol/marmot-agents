@@ -1,0 +1,22 @@
+# The one pinned Node release CI uses: for the TypeScript jobs and the move-over job in ci.yml,
+# and the harnesses action. Each installs its own packages after it.
+name: Node
+description: Install the pinned Node release, checked against its checksum, and put it on the PATH.
+runs:
+  using: composite
+  steps:
+    - name: Install Node
+      # To move to another release, change the version and the checksum together: the checksum is
+      # this file's line in the release's SHASUMS256.txt.
+      shell: bash
+      env:
+        NODE_VERSION: 24.22.3
+        NODE_SHA256: 4f2b175a6d53a5c617a80dba2676238a0688cef28c6da4eba35c7d844e66fcfb
+      run: |
+        set -euo pipefail
+        name="node-v${NODE_VERSION}-linux-x64"
+        curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+          --output "${RUNNER_TEMP}/${name}.tar.xz" "https://nodejs.org/dist/v${NODE_VERSION}/${name}.tar.xz"
+        echo "${NODE_SHA256}  ${RUNNER_TEMP}/${name}.tar.xz" | sha256sum --check
+        tar -xJf "${RUNNER_TEMP}/${name}.tar.xz" -C "${RUNNER_TEMP}"
+        echo "${RUNNER_TEMP}/${name}/bin" >> "${GITHUB_PATH}"

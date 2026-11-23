@@ -1,0 +1,113 @@
+# The Rust jobs' setup and their build cache, in one place for ci.yml and nightly.yml.
+#
+# Used twice in a job: first with `save: false`, which installs Odin and the pinned toolchain and
+# restores the cache named `cache`; then, as the job's last step, with `save: true` and the key the
+# first gave back, which saves the cache. Only a run on a branch's own ref saves one, a push to
+# master or a run started by hand (ci.yml asks for that), and GitHub lets only that branch and the
+# branches made from it read it: a pull request or a merge group reads master's caches and writes
+# none, so what a pull request built never reaches another run, and the caches stay within the
+# repository's limit.
+#
+# The key is the job's cache name and what makes every dependency build differently: the compiler,
+# Cargo.lock, the Cargo settings and the Odin release. A key is written once, so a cache holds the
+# dependencies as they were first built for that key. When nothing has that key, a run that saves
+# nothing (a pull request, a merge group, the nightly run) falls back to the newest cache of the same
+# name, whose dependencies are mostly still good; a run that saves does not, so what it saves holds
+# nothing stale.
+#
+# The workspace's own crates are left out of what is saved: their sources are newer than anything
+# cached after every checkout, so Cargo builds them again whatever the cache holds.
+name: Rust
+description: Install Odin and the pinned toolchain and restore the build cache, or save it.
+inputs:
+  cache:
+    description: The cache's name, one per job and build profile, such as `rust-lint`.
+    required: true
+  save:
+    description: "`true` to save the cache under `key` instead of setting up."
+    required: false
+    default: "false"
+  key:
+    description: With `save`, the key the setup step gave back.
+    required: false
+    default: ""
+outputs:
+  key:
+    description: The cache's key, for the step that saves it.
+    value: ${{ steps.restore.outputs.cache-primary-key }}
+  hit:
+    description: "`true` when a cache with exactly this key was restored, so there is nothing to save."
+    value: ${{ steps.restore.outputs.cache-hit }}
+runs:
+  using: composite
+  steps:
+    - name: Install Odin
+      # MDK's markdown parser is written in Odin and its build needs this exact release. The
+      # script pins it by version, commit and checksum.
+      if: inputs.save != 'true'
+      shell: bash
+      run: |
+        bash tools/odin/install.sh "${RUNNER_TEMP}/odin"
+        echo "ODIN=${RUNNER_TEMP}/odin/odin" >> "${GITHUB_ENV}"
+
+    - name: Install the pinned toolchain
+      # With no arguments this installs what rust-toolchain.toml names.
+      if: inputs.save != 'true'
+      shell: bash
+      run: |
+        rustup toolchain install
+        rustc --version
+        cargo --version
+
+    - name: Restore the build
+      # The sources Cargo unpacked are kept with their times: a build script that watches a file
+      # (MDK's Odin parser watches its folder) would otherwise run again, and everything above it
+      # build again.
+      if: inputs.save != 'true'
+      id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/registry/src/
+          ~/.cargo/git/db/
+          ~/.cargo/git/checkouts/
+          target/
+        key: ${{ inputs.cache }}-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', '.cargo/config.toml', 'tools/odin/install.sh') }}
+        restore-keys: ${{ github.event_name != 'push' && github.event_name != 'workflow_dispatch' && format('{0}-{1}-', inputs.cache, runner.os) || '' }}
+
+    - name: Leave the workspace's own crates out of the cache
+      if: inputs.save == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        for profile in target/debug target/release; do
+          [ -d "${profile}" ] || continue
+          for crate in crates/*/; do
+            name="$(basename "${crate}")"
+            lib="${name//-/_}"
+            rm -rf "${profile}/.fingerprint/${name}-"* "${profile}/build/${name}-"*
+            rm -f "${profile}/deps/lib${lib}-"* "${profile}/deps/${lib}-"*
+          done
+          # Test programs: executables with no extension. The libraries have one.
+          find "${profile}/deps" -maxdepth 1 -type f -perm -u+x ! -name '*.*' -delete
+          # The workspace's programs, and what the tests left.
+          find "${profile}" -maxdepth 1 -type f -delete
+          rm -rf "${profile}/incremental" "${profile}/examples"
+        done
+        rm -rf target/tmp target/tla
+        du -sh target ~/.cargo/registry ~/.cargo/git 2>/dev/null || true
+
+    - name: Save the build
+      if: inputs.save == 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/registry/src/
+          ~/.cargo/git/db/
+          ~/.cargo/git/checkouts/
+          target/
+        key: ${{ inputs.key }}

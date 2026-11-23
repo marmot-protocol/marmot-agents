@@ -83,8 +83,8 @@ The crate needs Odin like the core (`AGENTS.md`, "Verification").
 
 ```sh
 cargo test -p marmot-agent-sim --all-features          # the gate, the bug switches, replay
-MARMOT_AGENT_SIM_RUNS=200 cargo test --locked --release -p marmot-agent-sim --all-features   # as CI
-MARMOT_AGENT_SIM_SEED=42 MARMOT_AGENT_SIM_RUNS=2000 cargo test --release -p marmot-agent-sim --test seeds  # nightly
+MARMOT_AGENT_SIM_RUNS=200 cargo test --locked --release -p marmot-agent-sim --all-features   # as the merge queue
+MARMOT_AGENT_SIM_SEED=42 MARMOT_AGENT_SIM_RUNS=5000 cargo test --release -p marmot-agent-sim --test seeds  # nightly
 
 cargo run --release -p marmot-agent-sim -- run --family gate --seed 0 --runs 100 --out /tmp/sim
 cargo run --release -p marmot-agent-sim -- show crash 0 7         # the schedule a name makes
@@ -96,6 +96,8 @@ leaves it behind. A schedule that cannot be written stops `run` before that run,
 is reported and fails it. A failure leaves `NAME.capsule.json`: the schedule shrunk to a short one that fails the same
 property, the original, the property and the trace. The seed tests write theirs under the target folder
 (`target/tmp/marmot-agent-sim`), and CI keeps that folder as the `simulator-capsules` artifact of a failed run.
+A pull request runs the gate at the normal count (20), the merge queue at 200, and the nightly workflow 5,000 runs
+from a new seed each night, its run's id, which the run prints.
 
 ## Replaying a capsule
 

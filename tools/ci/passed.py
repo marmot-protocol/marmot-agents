@@ -1,0 +1,104 @@
+"""The check behind CI's one required job, `CI passed` (D-130).
+
+`needs.<job>.result` is not enough: GitHub can report a matrix job as passed when one of its legs
+was cancelled before a runner took it. So the gate also lists the run's jobs, as GitHub's API gives
+them, and checks them against the jobs the tier expects:
+
+- every job in the list that the tier expects ran and passed;
+- every job in the run finished, and passed or was skipped;
+- every job in the run that passed is in the list, so the list keeps up with ci.yml.
+
+The list is one job's name per line, as the run shows it (a matrix leg with its part). A name
+followed by `[full]` is expected only in the full gate, and one followed by `[models]` only when
+the TLA+ models run; any other job is expected in every tier.
+
+Usage, with the list in the environment variable EXPECTED:
+
+    passed.py --jobs JOBS --full true|false --models true|false
+
+JOBS holds one JSON object per line, each with the job's `name`, `status` and `conclusion`, as
+`gh api .../actions/runs/RUN/jobs --jq '.jobs[] | {name, status, conclusion}'` writes them.
+"""
+
+import argparse
+import json
+import os
+import sys
+
+GATE = "CI passed"
+CONDITIONS = ("full", "models")
+
+
+def parse_expected(text):
+    """The list as (name, condition) pairs; the condition is None, "full" or "models"."""
+    expected = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        condition = None
+        if line.endswith("]") and " [" in line:
+            line, _, tag = line.rpartition(" [")
+            condition = tag[:-1]
+            if condition not in CONDITIONS:
+                raise ValueError(f"unknown condition [{condition}] in the list of expected jobs")
+        expected.append((line, condition))
+    if not expected:
+        raise ValueError("the list of expected jobs is empty")
+    return expected
+
+
+def check(expected_text, jobs, full, models):
+    """What is wrong with the run's `jobs`, as messages: none when the gate passes."""
+    expected = parse_expected(expected_text)
+    applies = {None: True, "full": full, "models": models}
+    listed = {name for name, _ in expected}
+    errors = []
+    others = [j for j in jobs if j["name"] != GATE]
+    for j in others:
+        name, status, conclusion = j["name"], j["status"], j["conclusion"]
+        if status != "completed":
+            errors.append(f"{name}: not finished ({status})")
+        elif conclusion not in ("success", "skipped"):
+            errors.append(f"{name}: {conclusion}")
+        elif conclusion == "success" and name not in listed:
+            errors.append(f"{name}: passed, but is not in the list of expected jobs in ci.yml")
+    for name, condition in expected:
+        if not applies[condition]:
+            continue
+        found = [j for j in others if j["name"] == name]
+        if not found:
+            errors.append(f"{name}: never ran, though this tier needs it")
+        for j in found:
+            if j["status"] == "completed" and j["conclusion"] == "skipped":
+                errors.append(f"{name}: skipped, though this tier needs it")
+    return errors
+
+
+def flag(value):
+    if value not in ("true", "false"):
+        raise argparse.ArgumentTypeError(f"expected true or false, not {value!r}")
+    return value == "true"
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--jobs", required=True, help="the run's jobs, one JSON object per line")
+    parser.add_argument("--full", required=True, type=flag, help="whether this is the full gate")
+    parser.add_argument("--models", required=True, type=flag, help="whether the models run")
+    args = parser.parse_args()
+    with open(args.jobs, encoding="utf-8") as f:
+        jobs = [json.loads(line) for line in f if line.strip()]
+    for j in jobs:
+        print(f"{j['name']}: {j['status']}, {j['conclusion']}")
+    errors = check(os.environ.get("EXPECTED", ""), jobs, args.full, args.models)
+    for error in errors:
+        print(f"::error::{error}")
+    if errors:
+        return 1
+    print(f"Every job the tier expects passed (full gate: {args.full}, models: {args.models}).")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

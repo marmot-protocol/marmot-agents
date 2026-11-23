@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-23, at `master` commit `ff445e2`, through [D-133](decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags) (D-130 is in an open pull request). A change that adds or replaces
+Brought up to date on 2026-11-23, at `master` commit `3d29c9d`, through [D-133](decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -207,7 +207,12 @@ Decided, and not built: the core, the drivers, MDK and the apps each have their 
 - CI on a pull request stays under 15 minutes; long checks run nightly ([D-094](decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)).
 - Real Claude Code and Codex run their scenarios in CI on the model double, with no model key in CI at all;
   cassettes are recorded through numes by hand, a cassette older than 14 days is a warning on a pull request and
-  is to fail the nightly run (not built yet), and the gateways stay scripted ([D-127](decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key)).
+  fails the nightly run, and the gateways stay scripted ([D-127](decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key)).
+- CI runs in three tiers: a pull request (aimed at under 10 minutes; the TLA+ models only when the models or the
+  code they follow changed), the merge queue and each push to `master` (everything, the simulator at 200 runs and the
+  Docker move-over tests), and a nightly run (new simulator seeds, larger TLA+ bounds, coverage, a 64th of the
+  core's mutants, the cassettes), whose failed jobs open issues. One job, `CI passed`, is the only required
+  check, and fails unless every job its tier expects ran and passed ([D-130](decisions.md#d-130-ci-runs-in-three-tiers-with-one-required-check)).
 - The Rust workspace builds with MDK's compiler and forbids unsafe code ([D-053](decisions.md#d-053-the-rust-workspace-builds-with-mdks-compiler-and-forbids-unsafe-code)).
 - Work follows `plan.md`; the builder decides what is internal and merges once CI passes and review left no
   blocker. Every commit is signed ([D-068](decisions.md#d-068-work-follows-the-plan-and-the-builder-decides-what-is-internal), [D-054](decisions.md#d-054-changes-arrive-as-small-signed-pull-requests-that-ci-checks)).

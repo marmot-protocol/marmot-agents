@@ -3,7 +3,8 @@
 Status: the approach is decided
 ([D-093](../decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top)), and
 so is the CI budget ([D-094](../decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)),
-on 2026-11-21. The property list, the models and the layers below are the plan; their details are internal and
+on 2026-11-21, and CI's three tiers ([D-130](../decisions.md#d-130-ci-runs-in-three-tiers-with-one-required-check)),
+on 2026-11-23, built with the nightly workflow the same day. The property list, the models and the layers below are the plan; their details are internal and
 change as the work goes. It comes from reading all the code after M3 and the M4 work in progress, and from how MDK
 tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules). Under
 [first, fix what is known](#first-fix-what-is-known), the behaviour the fixes made visible is provisional: built,
@@ -434,8 +435,8 @@ these names.
 Status: decided ([D-127](../decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key), 2026-11-23): real harnesses run in CI on the double, with no model key in CI;
 cassettes are recorded through numes on a non-vendor model; replay reports a newer harness version and does not
 fail on it; a cassette older than 14 days is a warning on a pull request and fails the nightly run; the gateways
-stay scripted. Claude Code and Codex run on it; the nightly run that fails on age is not built yet; the matching
-rule and the formats' details are internal.
+stay scripted. Claude Code and Codex run on it, and the nightly run fails on age; the matching rule and the
+formats' details are internal.
 
 The scenarios against real harnesses need a signed-in harness or a model key, so they never run on a pull request,
 and Codex and Claude Code have no free model. The model double runs the **real harness program** against a
@@ -486,7 +487,7 @@ Pi fakes already are; the Rust side starts it with `python3`. A mocking crate wo
 three wire formats, and no crate has those. Recording uses the `python` image the repository already pins. The stub model the gateway tests had, about 130 lines of Rust, is gone.
 
 **What CI needs.** For scripted and replay: `python3`, Node 24 with `npm ci` in `packages/claude-code`, and a
-pinned `codex` binary, which the Rust job now installs with its checksum. Codex runs commands in bubblewrap, so the
+pinned `codex` binary, which the core's tests job installs with its checksum (`.github/actions/harnesses`). Codex runs commands in bubblewrap, so the
 job lifts Ubuntu 24.04's limit on unprivileged user namespaces. No Docker, key or network to a model. Recording needs Docker and a key, on the owner's
 machine.
 
@@ -497,22 +498,24 @@ failing scenario, and the fix is in one file. Scripts drift with the scenarios t
 **Staleness.** `tools/model_double/check_cassettes.py` reports each cassette older than 14 days, and each harness
 whose latest release (npm) is newer than the version a cassette was recorded with. It needs no key. A pull
 request runs it offline, in the Recordings job, and each finding is a warning that does not fail it. The nightly
-run is to add `--strict`, which exits 1 on a finding, and open an issue with the output; that workflow is not
-built yet, so until it is, a cassette's age fails nothing. The replay test prints the
+run adds `--strict`, which exits 1 on a finding, and opens an issue with the output: a cassette due for its age,
+or for a newer release of its harness. The replay test prints the
 Claude Code version when it differs from the cassette's, and does not fail on it: failing would make every pull
 request that bumps a harness re-record, which needs a key. A request the cassette has no exchange for still fails.
 
 ## In CI
 
 Pull requests keep CI under 15 minutes, by caching builds and running independent checks as parallel jobs
-([D-094](../decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)). Today it
-takes about 8 to 10.
+([D-094](../decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)), and CI
+runs in three tiers ([D-130](../decisions.md#d-130-ci-runs-in-three-tiers-with-one-required-check)). Rows marked
+"planned" are not built yet.
 
 | When | What |
 | --- | --- |
-| Every pull request | Everything that runs today, the conformance suite (built: in the Rust job, about 30 s), property tests at normal counts, the simulator on a fixed set of seeds (built: 200 runs of each gate family from seed 0, in release, in its own job), TLC on small bounds, Kani on the small proofs, the privacy scan, each in its own job; real Claude Code and Codex on the [model double](#11-a-model-double), in the Rust job, and the cassettes' age as a warning |
-| Nightly | Property tests at high counts, the simulator on many new seeds, TLC on larger bounds, fuzzing, mutation testing, and the cassettes' age and harness releases, failing (`check_cassettes.py --strict`, [the model double](#11-a-model-double)) |
-| Weekly | Long simulator campaigns |
+| Every pull request, aimed at under 10 minutes | Formatting and Clippy; the workspace's tests in two jobs side by side, the core's and every other, with the conformance suite (about 30 s) and real Claude Code and Codex on the [model double](#11-a-model-double) in the core's; the simulator on a fixed set of seeds at its normal count (20 runs of each gate family from seed 0, in release, in its own job); TLC on small bounds, every model's cases in five jobs, only when the models or the code they follow changed; the TypeScript, Python, install-script, recording and document checks, and the cassettes' age as a warning. Planned: property tests at normal counts, Kani on the small proofs, the privacy scan |
+| The merge queue, and each push to `master`, aimed at under 30 minutes | All of the above whatever changed; the simulator at 200 runs of each family; the move-over tests that need Docker and no key (Hermes and OpenClaw installs moved over, on the model double, scripted) |
+| Nightly (`.github/workflows/nightly.yml`) | The simulator on a new seed each night, 5,000 runs of each family, its capsules kept; TLC on `CoreLifecycle`'s larger bounds, safety only (liveness there takes hours and is run by hand); a coverage report (`cargo llvm-cov`, a report only); mutation testing on a 64th of the core's 1,639 mutants (the simulator's hooks left out, since only it exercises them), by the day of the year, so each shard runs about every two months; the cassettes' age and harness releases, failing (`check_cassettes.py --strict`, [the model double](#11-a-model-double)). Planned: property tests at high counts, fuzzing. A failed job opens an issue, with the mutants missed or the cassettes due |
+| Weekly (planned) | Long simulator campaigns |
 
 ## In what order
 
