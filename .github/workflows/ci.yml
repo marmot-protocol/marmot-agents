@@ -6,7 +6,7 @@ name: CI
 # - A pull request runs the fast tier, under 10 minutes: formatting, Clippy, the workspace's tests
 #   with the conformance suite, the simulator at its normal count, the TypeScript, Python,
 #   install-script, recording and document checks, and the TLA+ models on small bounds when the
-#   core or the models changed.
+#   code a model follows or the models changed.
 # - The merge queue (`merge_group`) runs the full gate: all of that whatever changed, the
 #   simulator at 200 runs, and the move-over tests in Docker, which need no key and no sign-in.
 # - A push to master runs the full gate too, so master stays checked, and saves the build caches.
@@ -70,8 +70,10 @@ jobs:
           fetch-depth: 2
 
       - name: Choose the tier, and whether the models run
-        # The models follow the core (formal/tla/README.md), so they run when the core's code,
-        # the models or their tools change, or this file. Anything that cannot tell runs them.
+        # The models follow code: CoreLifecycle the core (formal/tla/README.md), SocketProtocol
+        # the core's socket and the three connectors on it (SocketProtocol.md), DriverTransport
+        # the built-in drivers (DriverTransport.md). So they run when that code, the models or
+        # their tools change, or this file. Anything that cannot tell runs them.
         id: tier
         env:
           EVENT: ${{ github.event_name }}
@@ -92,7 +94,11 @@ jobs:
             git diff --name-only --no-renames HEAD^1 HEAD || true
             status=0
             git diff --quiet --no-renames HEAD^1 HEAD -- \
-              formal/ tools/tla/ crates/marmot-agent/src/ .github/workflows/ci.yml || status=$?
+              formal/ tools/tla/ .github/workflows/ci.yml \
+              crates/marmot-agent/src/ \
+              packages/claude-code/src/ packages/openclaw/src/ python/marmot_hermes/ \
+              crates/marmot-agent-driver/src/ crates/marmot-agent-codex/src/ \
+              crates/marmot-agent-acp/src/ crates/marmot-agent-pi/src/ || status=$?
             case "${status}" in
               0) models=false ;;
               1) ;;
@@ -420,7 +426,8 @@ jobs:
   models:
     name: TLA+ models (${{ matrix.part }})
     needs: changes
-    # On a pull request, only when the core or the models changed; always in the full gate.
+    # On a pull request, only when the code a model follows or the models changed; always in the
+    # full gate.
     if: needs.changes.outputs.models == 'true'
     runs-on: ubuntu-24.04
     # The small bounds, in five jobs side by side: CoreLifecycle's fair configuration, its give-up
@@ -565,6 +572,8 @@ jobs:
             TLA+ models (fair) [models]
             TLA+ models (give-up) [models]
             TLA+ models (the other cases) [models]
+            TLA+ models (SocketProtocol) [models]
+            TLA+ models (DriverTransport) [models]
             Documents
         run: |
           set -euo pipefail

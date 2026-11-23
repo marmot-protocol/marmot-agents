@@ -70,10 +70,11 @@ jobs:
   models:
     name: TLA+ models on larger bounds
     runs-on: ubuntu-24.04
-    # formal/tla/README.md, "Larger bounds": the fair configuration with two items and two
-    # downs, and with two chats, safety only; liveness there had not finished on a runner in
-    # 1½ hours (`--bounds larger-liveness`, by hand). The runner has 4 processors and 16 GB, of
-    # which TLC takes 12.
+    # formal/tla/README.md, "Larger bounds": CoreLifecycle's fair configuration with two items
+    # and two downs, and with two chats, safety only; liveness there had not finished on a runner
+    # in 1½ hours (`--bounds larger-liveness`, by hand). SocketProtocol and DriverTransport have
+    # no larger bounds; ci.yml runs their cases. The runner has 4 processors and 16 GB, of which
+    # TLC takes 12.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -236,7 +236,7 @@ If you change a command here, change it there. CI runs in three tiers
 
 | Tier | When | What |
 | --- | --- | --- |
-| Pull request | Each push to a pull request; aim under 10 minutes | Every command below that CI runs, with the simulator at its normal count. The TLA+ models run only when `formal/`, `tools/tla/`, `crates/marmot-agent/src/` or `ci.yml` changed |
+| Pull request | Each push to a pull request; aim under 10 minutes | Every command below that CI runs, with the simulator at its normal count. The TLA+ models run only when `formal/`, `tools/tla/`, `ci.yml` or the code a model follows changed (the paths are in `ci.yml`'s first job) |
 | Merge queue | Each pull request queued to merge, and each push to `master`; aim under 30 minutes | All of the pull-request tier whatever changed, the simulator at `MARMOT_AGENT_SIM_RUNS=200`, and the move-over tests that need Docker, below |
 | Nightly | Once a night on `master` (`.github/workflows/nightly.yml`), and by hand | The simulator on a new seed with many runs, TLC on larger bounds, a coverage report, a 64th of the core's mutants, and `check_cassettes.py --strict` on the model double's cassettes; a failed job opens an issue |
 
@@ -378,8 +378,8 @@ python3 tools/tla/check.py   # the fair models pass; every counterexample, delib
                              # checksum, by tools/tla/run.sh
 ```
 
-The nightly workflow runs `python3 tools/tla/check.py --bounds larger`, safety on the larger bounds in
-`formal/tla/README.md`, which takes longer than a pull request may.
+The nightly workflow runs `python3 tools/tla/check.py --bounds larger`, safety on `CoreLifecycle`'s larger
+bounds in `formal/tla/README.md`, which takes longer than a pull request may.
 
 For a change to a diagram, which CI does not check:
 

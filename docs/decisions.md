@@ -2499,12 +2499,12 @@ Decided 2026-11-23 by the builder, under the project owner's instruction to deci
 - **Pull request**, aimed at under 10 minutes: formatting, Clippy, the workspace's tests with the conformance
   suite and the real Claude Code and Codex on the model double
   ([D-127](#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key)), the simulator at its normal count, and the TypeScript, Python, install-script, recording and document
-  checks. The TLA+ models run on small bounds only when the core or the models changed, which a step of CI's own
-  finds with `git diff`.
+  checks. The TLA+ models run on small bounds, every model's cases, only when the models or the code one of them
+  follows changed, which a step of CI's own finds with `git diff`.
 - **Merge queue** (GitHub's, on `master`), aimed at under 30 minutes: all of the pull-request tier whatever
   changed, the simulator at 200 runs, and the tests that need Docker and no key or sign-in. A push to `master`
   runs the same, so `master` stays checked.
-- **Nightly**: the simulator on new seeds, TLC on larger bounds, a coverage report, a 64th of the core's mutants
+- **Nightly**: the simulator on new seeds, TLC on `CoreLifecycle`'s larger bounds, a coverage report, a 64th of the core's mutants
   (by the day of the year), and the model double's cassettes against their age and the harnesses' releases, which
   fails the night as D-127 says. A failed job opens an issue, or adds to the one it opened, with what the job
   found when it found something: the mutants missed, the cassettes due.

@@ -208,8 +208,8 @@ Decided, and not built: the core, the drivers, MDK and the apps each have their 
 - Real Claude Code and Codex run their scenarios in CI on the model double, with no model key in CI at all;
   cassettes are recorded through numes by hand, a cassette older than 14 days is a warning on a pull request and
   fails the nightly run, and the gateways stay scripted ([D-127](decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key)).
-- CI runs in three tiers: a pull request (aimed at under 10 minutes; the TLA+ models only when the core or the
-  models changed), the merge queue and each push to `master` (everything, the simulator at 200 runs and the
+- CI runs in three tiers: a pull request (aimed at under 10 minutes; the TLA+ models only when the models or the
+  code they follow changed), the merge queue and each push to `master` (everything, the simulator at 200 runs and the
   Docker move-over tests), and a nightly run (new simulator seeds, larger TLA+ bounds, coverage, a 64th of the
   core's mutants, the cassettes), whose failed jobs open issues. One job, `CI passed`, is the only required
   check, and fails unless every job its tier expects ran and passed ([D-130](decisions.md#d-130-ci-runs-in-three-tiers-with-one-required-check)).
