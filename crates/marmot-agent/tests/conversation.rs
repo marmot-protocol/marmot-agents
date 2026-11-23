@@ -4,6 +4,7 @@
 
 use marmot_agent::carrier::{self, Asked, AskedReply, Item};
 use marmot_agent::chat_folder::FolderRule;
+use marmot_agent::conversation::EFFECT_LIMIT_SECS;
 use marmot_agent::{
     Act, Conversation, EventKey, GroupKey, Heard, HeardQuote, HeardRequest, PubKey, Rights, Saved,
     Sending, Where, Who,
@@ -3020,6 +3021,49 @@ fn a_move_is_the_chats_only_once_its_session_shows() {
     assert_eq!(talk.chosen_folder(&chat), None);
     let prompt = the_prompt(talk.heard(heard(direct(), "e3", OWNER, "still here?")));
     assert_eq!(prompt.chat.folder, None);
+}
+
+// A move whose new session shows only after the core settled it for want of an effect (D-087) is
+// still the chat's then: the harness works in the new folder, so the chat's folder, which its
+// files come from, and its session item, show that folder, and not the one it left. The effect
+// settles nothing more. The same holds when the core restarted in between.
+#[test]
+fn a_move_whose_session_shows_late_is_still_the_chats() {
+    let place = layout();
+    for restart in [false, true] {
+        let mut talk = moving(&place, None, Saved::default());
+        let chat = the_prompt(talk.heard(heard(direct(), "e1", OWNER, "hello")))
+            .chat
+            .id;
+        let _ = sent(
+            &mut talk,
+            &chat.0,
+            session_event("s1", "th1", State::Running),
+            "es1",
+        );
+        let (control, _, _) = the_new_session(talk.asked(set_folder("r1", OWNER, None, "a")));
+        assert!(talk.requested(&control.request, Ok(()), 0).is_empty());
+        let (_, _, overdue) = the_item(&mut talk, |t| t.overdue(EFFECT_LIMIT_SECS));
+        assert!(is_refused(&overdue, "no_effect"));
+        assert_eq!(talk.chosen_folder(&chat), None, "not moved yet");
+        if restart {
+            talk = moving(&place, None, talk.saved().clone());
+            let _ = talk.recover();
+        }
+
+        let mut late = emitted(&chat.0, session_event("s2", "th2", State::Running));
+        late.settles = vec![control.request.clone()];
+        let (_, _, item) = the_item(&mut talk, |t| t.emitted(late));
+        assert!(item.settles.is_empty(), "settled already");
+        assert_eq!(
+            folder_shown(&item).and_then(|s| s.value),
+            Some(place.work.join("a").display().to_string()),
+            "restart: {restart}"
+        );
+        assert_eq!(talk.chosen_folder(&chat), Some(place.work.join("a")));
+        let prompt = the_prompt(talk.heard(heard(direct(), "e2", OWNER, "where now?")));
+        assert_eq!(prompt.chat.folder, Some(place.work.join("a")));
+    }
 }
 
 // A saved folder is checked again when the core starts: one the owner no longer allows is the

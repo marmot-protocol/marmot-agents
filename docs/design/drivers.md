@@ -252,7 +252,10 @@ OpenClaw keep the workspace they manage. Built 2026-11-22; what other programs a
 - **It applies from the next session, so setting it starts one.** The core hands the driver a new session for
   the chat, with the new folder on the chat (`Chat::folder`). The folder is the chat's once the new
   session's item shows, which settles the `set`: the folder and the session are saved together, and a new
-  session the driver or the harness refuses moves nothing. A session the driver starts for a prompt meanwhile
+  session the driver or the harness refuses moves nothing. A new session that shows only after the core
+  settled the `set` for want of an effect ([D-087](../decisions.md#d-087-the-core-settles-a-request-whose-effect-never-shows))
+  still moves the chat, since the harness works there then: the core keeps the latest such moves, across a
+  restart, until their session shows. A session the driver starts for a prompt meanwhile
   starts in the new folder. Every prompt after names the folder, and the driver starts the chat's next session
   there, or takes up its session there after a restart. A chat that chose none is named no folder, and works in the driver's own.
 - **Each driver:** Codex gives the folder as `cwd` on `thread/start` and `thread/resume`; an ACP agent as

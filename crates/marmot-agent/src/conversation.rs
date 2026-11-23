@@ -232,6 +232,11 @@ pub struct Saved {
     /// chat that chose none works in the driver's own folder.
     #[serde(default)]
     folders: BTreeMap<String, PathBuf>,
+    /// The latest moves the core settled for want of an effect before their new session showed
+    /// (D-087), oldest first: a session item that shows one later still makes its folder the
+    /// chat's, since the harness then works there (D-101).
+    #[serde(default)]
+    late_moves: VecDeque<LateMove>,
     /// Every item sent and not yet forgotten, by the core's name for it.
     items: BTreeMap<String, Record>,
     /// The order finished items were finished in, oldest first, so the oldest are forgotten.
@@ -382,6 +387,18 @@ impl Sending {
     }
 }
 
+/// A move to a folder the core settled before its new session showed.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+struct LateMove {
+    request: String,
+    chat: String,
+    folder: PathBuf,
+}
+
+/// How many late moves are kept. A move's session shows minutes late at most, so only the latest
+/// few could still show.
+const LATE_MOVES: usize = 16;
+
 /// Where a forgotten item stood: enough for its next version to follow on.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct Forgotten {
@@ -506,6 +523,11 @@ impl Conversation {
                 self.saved.sessions.remove(&chat);
             }
         }
+        // So is a move that may yet show late: one no longer allowed moves nothing.
+        (self.saved.late_moves).retain(|m| {
+            let still = (m.folder.to_str()).and_then(|f| rule.check(f, rule.default_folder()).ok());
+            still.as_ref() == Some(&m.folder)
+        });
         self.folders = Some(rule);
         self
     }
@@ -870,10 +892,25 @@ impl Conversation {
             .iter()
             .find(|(_, p)| p.deadline.is_some_and(|deadline| now >= deadline))
             .map(|(request, _)| request.clone());
-        match late {
-            Some(request) => self.settle_pending(&request, "no_effect", NO_EFFECT.into()),
-            None => Vec::new(),
+        let Some(request) = late else {
+            return Vec::new();
+        };
+        // A move the harness makes after all still moves the chat: it is kept, to be known when
+        // its session shows (D-101).
+        if let Some(pending) = self.saved.pending.get(&request)
+            && let Some(folder) = pending.folder.clone()
+        {
+            let chat = pending.chat.clone();
+            if self.saved.late_moves.len() >= LATE_MOVES {
+                self.saved.late_moves.pop_front();
+            }
+            (self.saved.late_moves).push_back(LateMove {
+                request: request.clone(),
+                chat,
+                folder,
+            });
         }
+        self.settle_pending(&request, "no_effect", NO_EFFECT.into())
     }
 
     /// An event from the driver.
@@ -1600,7 +1637,9 @@ impl Conversation {
 
     /// A session item that shows the effect of a move makes the move's folder the chat's, as the
     /// session item makes the session the chat's: both are saved together, and a move the harness
-    /// refuses changes neither (D-101).
+    /// refuses changes neither (D-101). So does one that shows after the core settled the move for
+    /// want of an effect (D-087): the harness works in the new folder then, and the chat's files
+    /// come from the folder it works in.
     fn moved(&mut self, chat: &str, emitted: &Emitted) {
         if !matches!(emitted.event.body(), Body::Session(_)) {
             return;
@@ -1611,6 +1650,11 @@ impl Conversation {
                 && let Some(folder) = pending.folder.take()
             {
                 self.saved.folders.insert(chat.to_string(), folder);
+            } else if let Some(at) = (self.saved.late_moves.iter())
+                .position(|m| m.request == request.0 && m.chat == chat)
+            {
+                let late = self.saved.late_moves.remove(at).expect("found");
+                self.saved.folders.insert(chat.to_string(), late.folder);
             }
         }
     }
