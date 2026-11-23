@@ -36,11 +36,7 @@ CONSTANTS
                     \* `serverRequest/resolved`), and, after a turn's end, for each it dropped
     Unshowable,     \* the harness can ask what the driver cannot show (a form at a web address,
                     \* params it cannot read)
-    UnshownAnswered,\* the driver answers at once what it cannot show (ACP's -32602, Codex's
-                    \* declined form)
     StrayAsks,      \* the harness can ask in a session no chat has (session 0)
-    StrayAnswered,  \* the driver answers a request from a session no chat has: at once when no
-                    \* session is being picked, and else once none is (ACP's -32002, #122)
     CallNamed,      \* an approval's item is named after its session and tool call (ACP), not
                     \* after the request (Codex, Pi)
     CancelOnInterrupt, \* the driver answers each waiting request as cancelled before it
@@ -65,10 +61,12 @@ Bugs == {"none",
          "OneItemPerCall",     \* S13: two approvals for one tool call share an item, as ACP's
                                \* driver did before #118
          "UnshownUnanswered",  \* L2: a request the driver cannot show is never answered, as
-                               \* ACP's driver did before #118
+                               \* ACP's driver did before #118, and Codex's until 2026-11-23
          "HeldDropped",        \* L2: a request from a session no chat has, held while a session
                                \* is picked, is dropped unanswered once none is, as ACP's driver
                                \* did before #122
+         "StrayUnanswered",    \* L2: a request from a session no chat has is never answered, at
+                               \* once or once held, as Codex's driver did until 2026-11-23
          "CallOnly",           \* S5: an approval's item is named after its tool call alone, so
                                \* two chats' approvals can share a name
          "TakeUnwritten",      \* S11: an answer is taken, and shown as given, when the harness
@@ -323,8 +321,8 @@ Prompt(c) ==
 \* The reply that picks a session: the chat is in it from now on, and its session item shows
 \* it. That item settles each new-session control waiting in the chat whose old session it is
 \* not (`ready_event`, `Effect::NewSession`). Requests held while a session was picked that name
-\* a session still unknown are answered once no session is being picked (`early`, #122), or,
-\* where the driver answers no such request (Codex), dropped.
+\* a session still unknown are answered once no session is being picked (`early`; ACP's since
+\* #122, Codex's since 2026-11-23).
 RouteOpened(p, msg) ==
     LET c == msg.c
         s == msg.s
@@ -333,7 +331,7 @@ RouteOpened(p, msg) ==
         picking2 == [picking EXCEPT ![c] = "none"]
         stillPicking == \E d \in Chats : picking2[d] # "none"
         released == IF stillPicking THEN {} ELSE early
-        refused == IF StrayAnswered /\ Bug # "HeldDropped" THEN released ELSE {}
+        refused == IF Bug \in {"HeldDropped", "StrayUnanswered"} THEN {} ELSE released
     IN
     /\ dSess' = [dSess EXCEPT ![c] = s]
     /\ picking' = picking2
@@ -360,9 +358,9 @@ RouteStarted(p, msg) ==
 
 \* A request of the harness. In a chat, and shown, it is an item that waits (and, while ACP
 \* cancels the turn, it is answered as cancelled at once); in a chat and not shown, it is
-\* answered at once (ACP's -32602, Codex's declined form). From a session no chat has, it is
-\* held while a session is picked, and otherwise answered at once (ACP's -32002, #122), or not at
-\* all (Codex: `unrouted`).
+\* answered at once (ACP's -32602, Codex's declined form or -32602). From a session no chat has,
+\* it is held while a session is picked, and otherwise answered at once (ACP's -32002, #122;
+\* Codex's -32602).
 RouteAsk(p, msg) ==
     LET a == msg.a
         c == ChatOf(p, hAsk[a].s)
@@ -370,8 +368,8 @@ RouteAsk(p, msg) ==
         stray == c = "none"
         pickingAny == \E d \in Chats : picking[d] # "none"
         shown == ~stray /\ hAsk[a].shown
-        answerNow == IF stray THEN ~pickingAny /\ StrayAnswered
-                     ELSE ~hAsk[a].shown /\ UnshownAnswered /\ Bug # "UnshownUnanswered"
+        answerNow == IF stray THEN ~pickingAny /\ Bug # "StrayUnanswered"
+                     ELSE ~hAsk[a].shown /\ Bug # "UnshownUnanswered"
         cancelNow == shown /\ CancelOnInterrupt /\ cancelling[c]
     IN
     /\ toH' = IF answerNow THEN [toH EXCEPT ![p] = Append(@, Reply(a, "refuse"))]

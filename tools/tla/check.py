@@ -266,22 +266,25 @@ CASES += [
                 "while a chat's session is being picked. The driver holds the request (`early`) "
                 "in case the pick makes its session known; once no pick is left it drops it, "
                 "unanswered, and the agent waits for ever (L2)."),
-    # What the model found in today's code (DriverTransport.md, "What the model found"). Each is
-    # a committed counterexample and an ignored test that fails, until the code is fixed.
-    driver("codex-stray", CODEX, TEMPORAL,
-           {"StrayAsks": "TRUE", "StrayAnswered": "FALSE", **ONE_ASK, "INVARIANTS": None,
+    # A request for a thread no chat has, and one the driver cannot show, are refused at once
+    # by Codex's driver too (since 2026-11-23); the defects put the old way back.
+    driver("codex-stray", CODEX, PASS, {"StrayAsks": "TRUE", **ONE_ASK}),
+    driver("bug-StrayUnanswered", CODEX, TEMPORAL,
+           {"Bug": '"StrayUnanswered"', "StrayAsks": "TRUE", **ONE_ASK, "INVARIANTS": None,
             "PROPERTIES": "L2"},
            counterexample="driver-codex-stray",
-           what="Codex: a request for a thread no chat has is counted as unrouted and never "
-                "answered (only a call of the driver's tool is refused), so Codex waits for ever "
-                "(L2)."),
-    driver("codex-unshown", CODEX, TEMPORAL,
-           {"Unshowable": "TRUE", "UnshownAnswered": "FALSE", **ONE_ASK, "INVARIANTS": None,
+           what="StrayUnanswered, the Codex driver until 2026-11-23: a request for a thread no "
+                "chat has is counted as unrouted and never answered (only a call of the driver's "
+                "tool is refused), so Codex waits for ever (L2)."),
+    driver("codex-unshown", CODEX, PASS, {"Unshowable": "TRUE", **ONE_ASK}),
+    driver("bug-UnshownUnanswered-codex", CODEX, TEMPORAL,
+           {"Bug": '"UnshownUnanswered"', "Unshowable": "TRUE", **ONE_ASK, "INVARIANTS": None,
             "PROPERTIES": "L2"},
            counterexample="driver-codex-unshown",
-           what="Codex: a request the driver cannot show (a question with two questions of one "
-                "id, or params it cannot read) is never answered, and nothing in the chat waits "
-                "on it, so its turn waits until someone interrupts it (L2)."),
+           what="UnshownUnanswered on Codex's shape, the Codex driver until 2026-11-23: a request "
+                "the driver cannot show (a question with two questions of one id, or params it "
+                "cannot read) is never answered, and nothing in the chat waits on it, so its turn "
+                "waits until someone interrupts it (L2)."),
     driver("reask-after-restart", ACP, invariant("S13"),
            {"ReaskAfterRestart": "TRUE", "INVARIANTS": "S13", **SAFETY},
            counterexample="driver-reask-after-restart",

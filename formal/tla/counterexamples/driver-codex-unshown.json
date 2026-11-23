@@ -3,9 +3,9 @@
   "model": "DriverTransport",
   "config": "DriverTransport.codex.cfg",
   "breaks": "L2",
-  "what": "Codex: a request the driver cannot show (a question with two questions of one id, or params it cannot read) is never answered, and nothing in the chat waits on it, so its turn waits until someone interrupts it (L2).",
+  "what": "UnshownUnanswered on Codex's shape, the Codex driver until 2026-11-23: a request the driver cannot show (a question with two questions of one id, or params it cannot read) is never answered, and nothing in the chat waits on it, so its turn waits until someone interrupts it (L2).",
   "generated_by": "python3 tools/tla/check.py --counterexamples",
-  "constants": {"Chats": ["c1"], "Asks": ["a1"], "Calls": ["k1"], "Answers": ["r1"], "Interrupts": ["r2"], "NewSessions": ["r3"], "MaxSessions": 5, "MaxPrompts": 2, "MaxDeaths": 1, "MaxEdits": 1, "PerChat": false, "SelfResolves": true, "Unshowable": true, "UnshownAnswered": false, "StrayAsks": false, "StrayAnswered": false, "CallNamed": false, "CancelOnInterrupt": false, "ReaskAfterRestart": false, "FairDriver": true, "FairHarness": true, "Bug": "none"},
+  "constants": {"Chats": ["c1"], "Asks": ["a1"], "Calls": ["k1"], "Answers": ["r1"], "Interrupts": ["r2"], "NewSessions": ["r3"], "MaxSessions": 5, "MaxPrompts": 2, "MaxDeaths": 1, "MaxEdits": 1, "PerChat": false, "SelfResolves": true, "Unshowable": true, "StrayAsks": false, "CallNamed": false, "CancelOnInterrupt": false, "ReaskAfterRestart": false, "FairDriver": true, "FairHarness": true, "Bug": "UnshownUnanswered"},
   "messages": [{"id": "r1", "kind": "answer"}, {"id": "r2", "kind": "interrupt"}, {"id": "r3", "kind": "new_session"}],
   "steps": [
     {"action": "NewSession", "req": "r3", "outcome": "taken", "old_session": 0, "writes": [{"c": "c1", "m": "open", "r": "r3", "resume": 0}]},

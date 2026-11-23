@@ -5,7 +5,7 @@
   "breaks": "L1",
   "what": "Without FairHarness, the harness never reads what the driver wrote: an interrupt the driver took is written, and the turn it names never ends, so nothing settles it (L1).",
   "generated_by": "python3 tools/tla/check.py --counterexamples",
-  "constants": {"Chats": ["c1"], "Asks": ["a1"], "Calls": ["k1"], "Answers": ["r1"], "Interrupts": ["r2"], "NewSessions": ["r3"], "MaxSessions": 5, "MaxPrompts": 2, "MaxDeaths": 1, "MaxEdits": 1, "PerChat": false, "SelfResolves": true, "Unshowable": false, "UnshownAnswered": false, "StrayAsks": false, "StrayAnswered": false, "CallNamed": false, "CancelOnInterrupt": false, "ReaskAfterRestart": false, "FairDriver": true, "FairHarness": false, "Bug": "none"},
+  "constants": {"Chats": ["c1"], "Asks": ["a1"], "Calls": ["k1"], "Answers": ["r1"], "Interrupts": ["r2"], "NewSessions": ["r3"], "MaxSessions": 5, "MaxPrompts": 2, "MaxDeaths": 1, "MaxEdits": 1, "PerChat": false, "SelfResolves": true, "Unshowable": false, "StrayAsks": false, "CallNamed": false, "CancelOnInterrupt": false, "ReaskAfterRestart": false, "FairDriver": true, "FairHarness": false, "Bug": "none"},
   "messages": [{"id": "r1", "kind": "answer"}, {"id": "r2", "kind": "interrupt"}, {"id": "r3", "kind": "new_session"}],
   "steps": [
     {"action": "HarnessDies", "proc": "h"},
