@@ -619,20 +619,23 @@ impl Marmot {
     /// The groups the agent has accepted; [`NotNow`] when MDK could not list them, which is not
     /// an account with none.
     pub fn groups(&self) -> Result<Vec<GroupKey>, NotNow> {
-        let groups = self.app.groups(&self.label).map_err(|_| NotNow)?;
-        Ok((groups.into_iter())
-            .filter(|g| !g.pending_confirmation && !g.archived)
+        Ok((self.accepted()?)
             .map(|g| GroupKey(g.group_id_hex))
             .collect())
+    }
+
+    /// MDK's record of each group the agent has accepted, for [`Marmot::groups`] and
+    /// [`Marmot::listed`] alike.
+    fn accepted(&self) -> Result<impl Iterator<Item = marmot_app::AppGroupRecord>, NotNow> {
+        let groups = self.app.groups(&self.label).map_err(|_| NotNow)?;
+        Ok((groups.into_iter()).filter(|g| !g.pending_confirmation && !g.archived))
     }
 
     /// Each group the agent has accepted, as `marmot-agent groups` shows it to `owner`: its id, its
     /// name, whether it is the owner's two-person chat and whether `activity` lists it (D-136).
     /// [`NotNow`] when MDK could not list them.
     pub fn listed(&self, owner: &PubKey, activity: &FullActivity) -> Result<Vec<Listed>, NotNow> {
-        let groups = self.app.groups(&self.label).map_err(|_| NotNow)?;
-        Ok((groups.into_iter())
-            .filter(|g| !g.pending_confirmation && !g.archived)
+        Ok((self.accepted()?)
             .map(|g| {
                 let two: Option<Vec<PubKey>> =
                     (g.direct_member_ids_hex).map(|ids| ids.into_iter().map(PubKey).collect());
