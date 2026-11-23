@@ -1081,8 +1081,8 @@ async fn stopping_with_a_subagent() -> (Codex, Fake, Value, Value) {
         codex.control(stop_t1()).await.unwrap();
         codex
     });
-    let first = fake.hear().await;
-    let second = fake.hear().await;
+    let first = next_heard(&mut fake).await;
+    let second = next_heard(&mut fake).await;
     assert_eq!(first["params"]["threadId"], "th1", "the parent first");
     assert_eq!(second["params"]["threadId"], "sub1");
     (driver.await.unwrap(), fake, first, second)
@@ -1146,7 +1146,7 @@ async fn a_stop_also_stops_a_subagent_whose_start_was_still_unread() {
         codex.control(stop_t1()).await.unwrap();
         codex
     });
-    let first = fake.hear().await;
+    let first = next_heard(&mut fake).await;
     assert_eq!(first["params"]["threadId"], "th1");
     let mut codex = driver.await.unwrap();
     fake.say(json!({"id": first["id"], "result": {}})).await;
