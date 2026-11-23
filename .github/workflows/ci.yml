@@ -1,6 +1,6 @@
 name: CI
 
-# Three tiers (D-129). The same commands are in AGENTS.md under "Verification"; keep the two in
+# Three tiers (D-130). The same commands are in AGENTS.md under "Verification"; keep the two in
 # step.
 #
 # - A pull request runs the fast tier, under 10 minutes: formatting, Clippy, the workspace's tests

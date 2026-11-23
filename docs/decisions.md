@@ -2491,7 +2491,7 @@ two apart, so "not delivered" would be wrong when the agent then answers.
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
 
-## D-129 CI runs in three tiers, with one required check
+## D-130 CI runs in three tiers, with one required check
 
 **Decision.** CI runs in three tiers, and adds to
 [D-094](#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly):

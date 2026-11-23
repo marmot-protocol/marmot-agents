@@ -232,7 +232,7 @@ Recorded sessions have their own rules:
 CI runs these commands (`.github/workflows/ci.yml`), with two exceptions that are marked below: the diagrams
 and `tools/record/inventory.py`. Those two are checked only by you. Run everything that applies before you push.
 If you change a command here, change it there. CI runs in three tiers
-([D-129](docs/decisions.md#d-129-ci-runs-in-three-tiers-with-one-required-check)):
+([D-130](docs/decisions.md#d-130-ci-runs-in-three-tiers-with-one-required-check)):
 
 | Tier | When | What |
 | --- | --- | --- |

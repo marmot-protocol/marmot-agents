@@ -3,7 +3,7 @@
 Status: the approach is decided
 ([D-093](../decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top)), and
 so is the CI budget ([D-094](../decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)),
-on 2026-11-21, and CI's three tiers ([D-129](../decisions.md#d-129-ci-runs-in-three-tiers-with-one-required-check)),
+on 2026-11-21, and CI's three tiers ([D-130](../decisions.md#d-130-ci-runs-in-three-tiers-with-one-required-check)),
 on 2026-11-23, built with the nightly workflow the same day. The property list, the models and the layers below are the plan; their details are internal and
 change as the work goes. It comes from reading all the code after M3 and the M4 work in progress, and from how MDK
 tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules). Under
@@ -507,7 +507,7 @@ request that bumps a harness re-record, which needs a key. A request the cassett
 
 Pull requests keep CI under 15 minutes, by caching builds and running independent checks as parallel jobs
 ([D-094](../decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)), and CI
-runs in three tiers ([D-129](../decisions.md#d-129-ci-runs-in-three-tiers-with-one-required-check)). Rows marked
+runs in three tiers ([D-130](../decisions.md#d-130-ci-runs-in-three-tiers-with-one-required-check)). Rows marked
 "planned" are not built yet.
 
 | When | What |
