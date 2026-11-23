@@ -43,6 +43,7 @@ It has no dependencies.
 from __future__ import annotations
 
 import collections
+import itertools
 import json
 import sys
 from pathlib import Path
@@ -1382,11 +1383,13 @@ class Acp(Translator):
             subject = f"{p.get('sessionId')}:{subject}" if subject else None  # the tool item
             item = f"approval:{subject}" if subject else f"approval:{self.turn}:{rid}"
             # A second request for one tool call, while the first waits or after, is an approval of
-            # its own, named after the request as well.
-            made = self.__dict__.setdefault("approvals", set())
-            if item in made:
-                item = f"approval:{subject}:{json.dumps(rid)}"
-            made.add(item)
+            # its own, named after the request as well and starting `approval+`, which no first,
+            # always `approval:`, can. No item id already used is taken again.
+            taken = {e["item"] for e in self.events}
+            if item in taken:
+                key = json.dumps(rid, ensure_ascii=False, separators=(",", ":"))
+                names = (f"approval+{key}{f'+{n}' if n else ''}:{subject}" for n in itertools.count())
+                item = next(name for name in names if name not in taken)
             raw = call.get("rawInput") if isinstance(call.get("rawInput"), dict) else {}
             self.pending[("s", rid)] = {"item": item, "native_choices": native_choices}
             what = {"execute": "command", "edit": "edit", "delete": "edit", "move": "edit"}.get(call.get("kind"), "action")

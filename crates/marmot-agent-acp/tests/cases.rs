@@ -147,3 +147,55 @@ fn a_reply_with_a_stop_reason_nobody_knows_ends_the_turn_as_failed() {
         ]
     );
 }
+
+/// A permission request of the agent's, with its JSON-RPC id, for a tool call of session `s1`.
+fn permission(id: &str, call: &str) -> String {
+    format!(
+        r#"{{"jsonrpc":"2.0","id":{id},"method":"session/request_permission","params":{{"sessionId":"s1","toolCall":{{"toolCallId":"{call}"}},"options":[{{"optionId":"once","name":"Allow once","kind":"allow_once"}}]}}}}"#
+    )
+}
+
+// A second request for one tool call is an approval of its own, and its name must not be one a
+// first request could have: here a tool call whose id holds the delimiter and the second request's
+// id. Each approval takes an answer that reaches its own request, and only it.
+#[test]
+fn a_repeated_approval_takes_no_name_a_first_could_have() {
+    use marmot_agent_driver::{Answer, Given, Person};
+    let first = [("9", "t:7"), ("5", "t"), ("7", "t")];
+    let repeat_first = [("5", "t"), ("7", "t"), ("9", "t:7")];
+    for asked in [first, repeat_first] {
+        let (mut acp, _) = started();
+        let mut items = Vec::new();
+        for (id, call) in asked {
+            for e in acp.feed(Direction::In, &permission(id, call)) {
+                if matches!(e.body(), Body::Approval(_)) {
+                    items.push((id, e.header().item.clone()));
+                }
+            }
+        }
+        let names: std::collections::HashSet<_> = items.iter().map(|(_, i)| i.clone()).collect();
+        assert_eq!(
+            names.len(),
+            3,
+            "each request is an approval of its own: {asked:?}"
+        );
+        for (id, item) in &items {
+            let answer = Answer {
+                request: "r".into(),
+                item: item.clone(),
+                by: Person {
+                    id: "u-1".into(),
+                    name: "Alice".into(),
+                },
+                given: Given::Choice("c0".into()),
+            };
+            let reply: serde_json::Value =
+                serde_json::from_str(&acp.reply(&answer).expect("the approval waits")).unwrap();
+            assert_eq!(
+                reply["id"].to_string(),
+                *id,
+                "{asked:?}: each reaches its own request"
+            );
+        }
+    }
+}

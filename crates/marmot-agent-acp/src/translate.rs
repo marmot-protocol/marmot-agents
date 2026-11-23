@@ -155,9 +155,8 @@ pub struct Translator {
     sent: HashMap<String, Sent>,
     /// The agent's requests not yet answered, by the id's JSON text.
     asked: HashMap<String, Asked_>,
-    /// Every approval item made, so that a second request for one tool call is an item of its
-    /// own.
-    approvals: HashSet<String>,
+    /// Every item id an event was made for, so that no new item takes one already used.
+    items: HashSet<String>,
     /// The session being replayed by `session/load`, until the reply.
     loading: Option<String>,
     /// The id of the message or thinking being streamed.
@@ -209,7 +208,7 @@ impl Translator {
             sessions: HashMap::new(),
             sent: HashMap::new(),
             asked: HashMap::new(),
-            approvals: HashSet::new(),
+            items: HashSet::new(),
             loading: None,
             buffer: None,
             streamed: HashMap::new(),
@@ -986,13 +985,22 @@ impl Translator {
                     options.push((format!("c{n}"), o.option_id.0.to_string()));
                 }
                 // An approval is named after its tool call. The agent may ask again for the same
-                // call, while the first waits or after: each request is an approval of its own,
-                // named after the request as well, so each takes its own answer.
-                let mut item = format!("approval:{subject}");
-                if !self.approvals.insert(item.clone()) {
-                    item = format!("approval:{subject}:{key}");
-                    self.approvals.insert(item.clone());
-                }
+                // call, while the first waits or after: each request is an approval of its own, so
+                // each takes its own answer, named after the request as well and starting
+                // `approval+`, which no first, always `approval:`, can. No name already used is
+                // taken again, whatever the ids hold.
+                let first = format!("approval:{subject}");
+                let item = if self.items.contains(&first) {
+                    (0..)
+                        .map(|n| match n {
+                            0 => format!("approval+{key}:{subject}"),
+                            n => format!("approval+{key}+{n}:{subject}"),
+                        })
+                        .find(|name| !self.items.contains(name))
+                        .unwrap_or_default()
+                } else {
+                    first
+                };
                 let f = &p.tool_call.fields;
                 let command = f
                     .raw_input
@@ -1645,6 +1653,7 @@ impl Translator {
         let Ok(event) = AgentEvent::new(header, body, native) else {
             return;
         };
+        self.items.insert(item.to_string());
         let waiting = matches!(state, State::Running | State::Waiting);
         match self.open.iter().position(|(open, _)| open == item) {
             Some(at) if waiting => self.open[at].1 = event.clone(),

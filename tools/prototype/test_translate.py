@@ -371,6 +371,20 @@ class AcpTurns(unittest.TestCase):
         acp.feed({"dir": "in", "msg": {"jsonrpc": "2.0", "id": 2, "result": {"stopReason": "something_new"}}})
         self.assertEqual(self.turns(acp), [("s1:2", "running"), ("s1:2", "failed")])
 
+    def test_a_repeated_approval_takes_no_name_a_first_could_have(self):
+        """A second request for one tool call is an approval of its own, and its name is not one a
+        first request could have, even for a tool call whose id holds the delimiter and the second
+        request's id. As `a_repeated_approval_takes_no_name_a_first_could_have` in the ACP crate."""
+        for asked in ([(9, "t:7"), (5, "t"), (7, "t")], [(5, "t"), (7, "t"), (9, "t:7")]):
+            acp = self.started()
+            for rid, call in asked:
+                acp.feed({"dir": "in", "msg": {"jsonrpc": "2.0", "id": rid, "method": "session/request_permission",
+                    "params": {"sessionId": "s1", "toolCall": {"toolCallId": call},
+                               "options": [{"optionId": "once", "name": "Allow once", "kind": "allow_once"}]}}})
+            items = [e["item"] for e in acp.events if e["type"] == "approval"]
+            self.assertEqual(len(set(items)), 3, (asked, items))
+            self.assertTrue(all(i.startswith("approval:") or i.startswith("approval+") for i in items), items)
+
 
 if __name__ == "__main__":
     unittest.main()
