@@ -3,7 +3,7 @@
 against it with only the model faked (a proposal in docs/design/verification.md, "A model double").
 
 Usage:
-    double.py scripted <script.json>  [--save <cassette.jsonl> --harness NAME --version V]
+    double.py scripted <script.json>
     double.py replay   <cassette.jsonl>
     double.py record   <cassette.jsonl> --upstream URL --key-file FILE --model NAME --harness NAME --version V
 
@@ -15,7 +15,12 @@ as the first line of its output. It answers:
 - OpenAI Chat Completions, `POST …/chat/completions`, as OpenCode, Goose, Pi, Hermes and OpenClaw send them;
 - `GET …/models`, a list with one model, `scripted`;
 - `GET /_double/log`, what it was asked, as keys (below), and whether each was answered (with each request's
-  whole body too, given `--keep-bodies`).
+  whole body too, given `--keep-bodies`). Every POST is in it: a token count as `count_tokens`, and one to a
+  path it does not serve as `other`, answered 404.
+
+What it prints, on its error output, is never anything a request holds: no prompt, path, host name or key.
+An unanswered request is printed by its format, `kind`, `after` and `last`, and why it was not answered;
+with `--verbose`, an answered one the same way. Only the log holds a prompt, and a body.
 
 Every request is read into one neutral form, whatever its format: the conversation as user, assistant and
 tool messages, and whether tools were offered. A reply is neutral too, a list of parts (`{"text": …}`,
@@ -37,10 +42,9 @@ Modes:
 - scripted: the script says what the model does. `{"prompts": [{"when": "<words in the prompt>",
   "replies": [[part, …], …]}], "side": [part, …]}`: the first entry whose `when` is in the prompt answers, its
   reply number `after` (or its last, for any later one, when the entry has `"repeat": true`); a side request
-  gets `side` (`ok` if none). With `--save`, what it answered is written
-  as a cassette too.
-- replay: a cassette answers. A request matches the exchange with the same `kind`, `prompt` and `after`; if
-  its `last` differs, or no exchange matches, it is refused with status 400 and logged as unmatched.
+  gets `side` (`ok` if none).
+- replay: a cassette answers. A request matches the exchange with the same key, all four parts; if none has
+  it, it is refused with status 400 and logged as unmatched, with what differs from the nearest exchange.
 - record: each request is sent on to a real model at `--upstream`, an OpenAI-compatible Chat Completions
   endpoint (a request in another format is translated to it), not streamed, and the reply is kept as a
   cassette. The key is read from `--key-file`; run it in a container that has that file mounted read-only.
@@ -60,6 +64,7 @@ import json
 import re
 import sys
 import threading
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -521,7 +526,8 @@ class Scripted:
                     return replies[key["after"]]
                 if entry.get("repeat"):
                     return replies[-1]
-                raise Unmatched(f"the script has {len(replies)} replies for {entry['when']!r}")
+                raise Unmatched(f"entry {self.script['prompts'].index(entry)} of the script has "
+                                f"{len(replies)} replies")
         raise Unmatched("no entry of the script is in the prompt")
 
 
@@ -531,11 +537,14 @@ class Replay:
 
     def answer(self, fmt: str, key: Json, body: Json) -> list[Json]:
         for e in self.exchanges:
-            k = e["key"]
-            if (k["kind"], k["prompt"], k["after"]) == (key["kind"], key["prompt"], key["after"]):
-                if k["last"] != key["last"]:
-                    raise Unmatched(f"the cassette answers {k['last']!r} here, the harness sent {key['last']!r}")
+            if e["key"] == key:
                 return e["reply"]
+        # Only to say why: the nearest exchanges, those that differ from it in `last` alone.
+        near = [e["key"]["last"] for e in self.exchanges
+                if all(e["key"][k] == key[k] for k in ("kind", "prompt", "after"))]
+        if near:
+            raise Unmatched(f"the cassette answers {' or '.join(map(repr, near))} here, "
+                            f"the harness sent {key['last']!r}")
         raise Unmatched("the cassette has no exchange for it")
 
 
@@ -571,9 +580,8 @@ def fmt_of(path: str) -> str | None:
 class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, port: int, mode: Any, save: Cassette | None, dump: Path | None = None) -> None:
+    def __init__(self, port: int, mode: Any, save: Cassette | None = None) -> None:
         super().__init__(("127.0.0.1", port), Handler)
-        self.dump = dump
         self.keep_bodies = False
         self.verbose = False
         self.mode = mode
@@ -609,44 +617,49 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(200, "application/json", json.dumps(listed))
         self.send(404, "application/json", json.dumps({"error": {"message": "not served by the double"}}))
 
+    def keep(self, entry: Json, raw: bytes) -> None:
+        if self.server.keep_bodies:
+            entry["body"] = raw.decode("utf-8", "replace")
+        with self.server.lock:
+            self.server.log.append(entry)
+
     def do_POST(self) -> None:  # noqa: N802 - the base class's name
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length)
         path = self.path.split("?", 1)[0].rstrip("/")
         if path.endswith("/count_tokens"):
+            self.keep({"format": "count_tokens"}, raw)
             return self.send(200, "application/json", json.dumps({"input_tokens": USAGE_IN}))
         fmt = fmt_of(path)
         if fmt is None:
+            # Kept, so a test that reads the bodies sees what a harness sent any other way.
+            self.keep({"format": "other"}, raw)
             return self.send(404, "application/json", json.dumps({"error": {"message": "not served"}}))
         body = json.loads(raw or b"{}")
-        if self.server.dump is not None:
-            with self.server.lock:
-                n = len(list(self.server.dump.iterdir()))
-            (self.server.dump / f"{n:03d}-{fmt}.json").write_bytes(raw)
         key = key_of(fmt, body)
         entry = {"format": fmt, **key}
-        if self.server.keep_bodies:
-            entry["body"] = raw.decode("utf-8", "replace")
+        # What is printed names the request by its shape only, never its prompt or anything else it holds.
+        shape = f"{fmt} {key['kind']} request, after {key['after']}, answering {key['last']}"
         try:
             parts = self.server.mode.answer(fmt, key, body)
         except Unmatched as e:
             entry["unmatched"] = str(e)
-            with self.server.lock:
-                self.server.log.append(entry)
-            print(f"model double: unmatched {json.dumps(entry)}", file=sys.stderr, flush=True)
+            self.keep(entry, raw)
+            print(f"model double: unmatched {shape}: {e}", file=sys.stderr, flush=True)
             # A 4xx: a harness retries a 5xx, Claude Code ten times.
             return self.send(400, "application/json",
                              json.dumps({"type": "error", "error": {"type": "double_unmatched", "message": str(e)}}))
         except Exception as e:  # an upstream failure while recording
             entry["error"] = type(e).__name__
-            with self.server.lock:
-                self.server.log.append(entry)
-            print(f"model double: {type(e).__name__} {e}", file=sys.stderr, flush=True)
+            self.keep(entry, raw)
+            # The kind and the status only: an upstream's message can name its address.
+            status = f" {e.code}" if isinstance(e, urllib.error.HTTPError) else ""
+            print(f"model double: upstream failed for {shape}: {type(e).__name__}{status}",
+                  file=sys.stderr, flush=True)
             return self.send(502, "application/json", json.dumps({"error": {"message": "upstream failed"}}))
-        with self.server.lock:
-            self.server.log.append(entry)
+        self.keep(entry, raw)
         if self.server.verbose:
-            print(f"model double: answered {json.dumps(key)}", file=sys.stderr, flush=True)
+            print(f"model double: answered {shape}", file=sys.stderr, flush=True)
         if self.server.save is not None:
             self.server.save.keep(key, parts)
         kind, text = WRITERS[fmt](parts, body)
@@ -658,15 +671,14 @@ def main() -> None:
     parser.add_argument("mode", choices=["scripted", "replay", "record"])
     parser.add_argument("file", type=Path, help="the script (scripted) or the cassette (replay, record)")
     parser.add_argument("--port", type=int, default=0)
-    parser.add_argument("--save", type=Path, help="scripted: also write what was answered as a cassette")
-    parser.add_argument("--harness", default="")
-    parser.add_argument("--version", default="")
-    parser.add_argument("--format", default="", help="the wire format the harness speaks, for the cassette")
+    parser.add_argument("--harness", default="", help="record: the harness, for the cassette")
+    parser.add_argument("--version", default="", help="record: the harness's version, for the cassette")
+    parser.add_argument("--format", default="", help="record: the wire format the harness speaks")
     parser.add_argument("--upstream")
     parser.add_argument("--key-file", type=Path)
     parser.add_argument("--model")
-    parser.add_argument("--dump", type=Path, help="write each request's body to this folder, to study it")
-    parser.add_argument("--verbose", action="store_true", help="print each request's key as it is answered")
+    parser.add_argument("--verbose", action="store_true",
+                        help="print each request's shape (format, kind, after, last) as it is answered")
     parser.add_argument("--keep-bodies", action="store_true", help="put each request's whole body in the log")
     args = parser.parse_args()
 
@@ -675,8 +687,6 @@ def main() -> None:
     save = None
     if args.mode == "scripted":
         mode: Any = Scripted(json.loads(args.file.read_text()))
-        if args.save:
-            save = Cassette(args.save, header)
     elif args.mode == "replay":
         _, exchanges = load_cassette(args.file)
         mode = Replay(exchanges)
@@ -685,7 +695,7 @@ def main() -> None:
             parser.error("record needs --upstream, --key-file and --model")
         mode = Record(args.upstream, args.key_file, args.model)
         save = Cassette(args.file, header)
-    server = Server(args.port, mode, save, args.dump)
+    server = Server(args.port, mode, save)
     server.keep_bodies = args.keep_bodies
     server.verbose = args.verbose
     print(f"http://127.0.0.1:{server.server_address[1]}", flush=True)

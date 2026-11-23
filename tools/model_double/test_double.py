@@ -4,7 +4,9 @@ what it writes parses as each format's stream. Run with:
     python3 -m unittest discover -s tools/model_double -p 'test_*.py'
 """
 
+import contextlib
 import datetime
+import io
 import json
 import tempfile
 import threading
@@ -101,6 +103,13 @@ class Modes(unittest.TestCase):
         with self.assertRaises(double.Unmatched):
             replay.answer("anthropic", {**self.key, "after": 0}, {})
 
+    def test_replay_matches_the_whole_key_first(self):
+        # Two exchanges that differ only in what the model answers: each is answered by its own.
+        replay = double.Replay([{"key": {**self.key, "last": "results:Read"}, "reply": [{"text": "a"}]},
+                                {"key": self.key, "reply": [{"text": "b"}]}])
+        self.assertEqual(replay.answer("anthropic", self.key, {}), [{"text": "b"}])
+        self.assertEqual(replay.answer("anthropic", {**self.key, "last": "results:Read"}, {}), [{"text": "a"}])
+
 
 def events(text):
     """The data of each server-sent event."""
@@ -171,37 +180,105 @@ class Translation(unittest.TestCase):
         self.assertEqual(double.parts_of_chat(reply), PARTS)
 
 
+def post(url, path, body):
+    request = urllib.request.Request(url + path, data=json.dumps(body).encode())
+    with urllib.request.urlopen(request) as r:
+        return r.read().decode()
+
+
+class Serving:
+    """A double on the loopback address, stopped on leaving."""
+
+    def __init__(self, mode, save=None, keep_bodies=False, verbose=False):
+        self.server = double.Server(0, mode, save)
+        self.server.keep_bodies = keep_bodies
+        self.server.verbose = verbose
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def __enter__(self):
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        return self
+
+    def __exit__(self, *_):
+        self.server.shutdown()
+        self.server.server_close()
+
+    def log(self):
+        with urllib.request.urlopen(self.url + "/_double/log") as r:
+            return json.loads(r.read())
+
+
+# What a request holds that must never reach a log line: a person's words, a path, a host name.
+PRIVATE = ["Run `ls` in secret-folder", "/home/someone", "somehost.example"]
+
+
+def chat_request(prompt):
+    return {"stream": True, "tools": [{"type": "function"}],
+            "messages": [{"role": "system", "content": "cwd /home/someone on somehost.example"},
+                         {"role": "user", "content": prompt}]}
+
+
 class Served(unittest.TestCase):
     """The server itself, on the loopback address: a request in, a stream out, and the log."""
 
-    def test_scripted_server_and_cassette(self):
-        with tempfile.TemporaryDirectory() as folder:
-            saved = double.Cassette(Path(folder) / "c.jsonl", {"cassette": 1, "harness": "h"})
-            script = double.Scripted({"prompts": [{"when": "`ls`", "replies": [[{"text": "hi"}]]}]})
-            server = double.Server(0, script, saved)
-            threading.Thread(target=server.serve_forever, daemon=True).start()
-            url = f"http://127.0.0.1:{server.server_address[1]}"
-            try:
-                body = {"stream": True, "tools": [{"type": "function"}],
-                        "messages": [{"role": "user", "content": "Run `ls`"}]}
-                request = urllib.request.Request(url + "/v1/chat/completions", data=json.dumps(body).encode())
-                with urllib.request.urlopen(request) as r:
-                    self.assertIn("data: [DONE]", r.read().decode())
-                body["messages"][0]["content"] = "something else"
-                request = urllib.request.Request(url + "/v1/chat/completions", data=json.dumps(body).encode())
-                with self.assertRaises(urllib.error.HTTPError) as refused:
-                    urllib.request.urlopen(request)
-                self.assertEqual(refused.exception.code, 400)
-                with urllib.request.urlopen(url + "/_double/log") as r:
-                    log = json.loads(r.read())
-                self.assertEqual([e.get("unmatched") is None for e in log], [True, False])
-            finally:
-                server.shutdown()
-                server.server_close()
+    def test_scripted_server(self):
+        script = double.Scripted({"prompts": [{"when": "`ls`", "replies": [[{"text": "hi"}]]}]})
+        with Serving(script) as served:
+            self.assertIn("data: [DONE]", post(served.url, "/v1/chat/completions", chat_request("Run `ls`")))
+            with self.assertRaises(urllib.error.HTTPError) as refused:
+                post(served.url, "/v1/chat/completions", chat_request("something else"))
+            self.assertEqual(refused.exception.code, 400)
+            log = served.log()
+        self.assertEqual([e.get("unmatched") is None for e in log], [True, False])
+        self.assertNotIn("body", log[0])
+
+    def test_nothing_of_a_request_is_printed(self):
+        script = double.Scripted({"prompts": [{"when": "secret-folder", "replies": [[{"text": "hi"}]]}]})
+        printed = io.StringIO()
+        with contextlib.redirect_stderr(printed), Serving(script, keep_bodies=True, verbose=True) as served:
+            post(served.url, "/v1/chat/completions", chat_request(PRIVATE[0]))
+            answered = chat_request(PRIVATE[0])
+            answered["messages"].append({"role": "assistant", "content": "hi"})
+            for asked in [answered, chat_request("Run ls on somehost.example")]:
+                with self.assertRaises(urllib.error.HTTPError):
+                    post(served.url, "/v1/chat/completions", asked)
+            log = served.log()
+        lines = printed.getvalue().splitlines()
+        self.assertEqual(len(lines), 3, lines)
+        self.assertIn("unmatched chat main request, after 1, answering assistant", lines[1])
+        for line in lines:
+            for private in PRIVATE + ["secret"]:
+                self.assertNotIn(private, line)
+        # The log a test reads keeps each body whole.
+        self.assertTrue(all(PRIVATE[1] in e["body"] for e in log))
+
+    def test_every_post_is_logged(self):
+        with Serving(double.Scripted({}), keep_bodies=True) as served:
+            post(served.url, "/v1/messages/count_tokens", {"messages": [{"role": "user", "content": "one"}]})
+            with self.assertRaises(urllib.error.HTTPError) as refused:
+                post(served.url, "/v1/somewhere/else", {"input": "two"})
+            self.assertEqual(refused.exception.code, 404)
+            log = served.log()
+        self.assertEqual([e["format"] for e in log], ["count_tokens", "other"])
+        self.assertIn("one", log[0]["body"])
+        self.assertIn("two", log[1]["body"])
+        self.assertTrue(all("unmatched" not in e for e in log))
+
+    def test_record_keeps_what_the_model_said(self):
+        upstream = double.Scripted({"prompts": [{"when": "`ls`", "replies": [[{"text": "hi"}]]}]})
+        with tempfile.TemporaryDirectory() as folder, Serving(upstream, keep_bodies=True) as model:
+            key = Path(folder) / "key"
+            key.write_text("not-a-key\n")
+            cassette = double.Cassette(Path(folder) / "c.jsonl", {"cassette": 1, "harness": "h"})
+            with Serving(double.Record(model.url + "/v1", key, "m"), cassette) as served:
+                body = anthropic({"role": "user", "content": "Run `ls`"})
+                self.assertIn("message_stop", post(served.url, "/v1/messages", body))
+            sent = json.loads(model.log()[0]["body"])
             header, exchanges = double.load_cassette(Path(folder) / "c.jsonl")
-            self.assertEqual(header["harness"], "h")
-            self.assertEqual(exchanges, [{"key": {"kind": "main", "prompt": "Run `ls`", "after": 0, "last": "prompt"},
-                                          "reply": [{"text": "hi"}]}])
+        self.assertEqual((sent["model"], sent["stream"]), ("m", False))
+        self.assertEqual(header["harness"], "h")
+        self.assertEqual(exchanges, [{"key": {"kind": "main", "prompt": "Run `ls`", "after": 0, "last": "prompt"},
+                                      "reply": [{"text": "hi"}]}])
 
 
 class Staleness(unittest.TestCase):
