@@ -67,6 +67,19 @@ there, and `:chat <label>` switches to that chat and shows again what waits in i
 starts a new session, and `:set <setting> <value>` changes one of the session's settings. A message that starts
 with a slash goes to Codex as typed.
 
+Your two-person chat with the agent is sent everything it does. A group is sent its words, its turns, what it
+asks and its errors, and its reasoning, tools, plans and notices only if its settings list the group under
+`full_activity` ([D-136](decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)).
+To find a group's id, stop the agent and print the groups it is in, each with its id, its name, whether it is your
+two-person chat and whether `full_activity` lists it:
+
+```sh
+target/debug/marmot-agent groups agent.toml
+```
+
+The ids are printed to the terminal and nowhere else. Then add `full_activity = ["<the group's id>"]` to the
+settings, above the `[codex]` section, and run the agent again.
+
 The relay keeps nothing when the client stops, so start again from step 2 with fresh folders.
 
 The agent can send a file from its working folder with its `send_file` tool (Codex, Claude Code and Pi), but

@@ -9,6 +9,7 @@
 //! - [`run`]: the program loop that joins MDK, a driver and the conversation.
 //! - [`socket`]: a driver that is a separate program, on the local socket.
 //! - [`config`]: the standing settings (D-073).
+//! - [`groups`]: what `marmot-agent groups` prints, the groups the agent is in.
 //! - [`files`]: which files the agent may send, and reading them (D-090).
 //! - [`chat_folder`]: which folder a chat may move its harness to (D-101).
 //! - [`import`]: taking over one of today's connector installs (D-089).
@@ -19,6 +20,7 @@ pub mod chat_folder;
 pub mod config;
 pub mod conversation;
 pub mod files;
+pub mod groups;
 pub mod import;
 pub mod keys;
 pub mod marmot;

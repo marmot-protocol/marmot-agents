@@ -19,7 +19,9 @@
 //!                                      # in the home (D-101)
 //! full_activity = ["<group id>"]       # the groups also sent the agent's reasoning, tools,
 //!                                      # plans, tasks and notices, or "all"; by default only
-//!                                      # the owner's two-person chat with it (D-136)
+//!                                      # the owner's two-person chat with it (D-136).
+//!                                      # `marmot-agent groups <settings>`, with the agent
+//!                                      # stopped, prints each group's id
 //!
 //! [codex]                              # Codex, built in; or, for a connector on the socket,
 //! cwd = "/home/me/work"                # an empty [connector] section in its place

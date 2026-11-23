@@ -4,6 +4,8 @@
 //! ```text
 //! marmot-agent init <settings.toml>   make the agent's identity, and print its public key
 //! marmot-agent run <settings.toml>    run until stopped
+//! marmot-agent groups <settings.toml> print the groups the agent is in, with their ids, for
+//!                                     `full_activity`; with the agent stopped (D-136)
 //! marmot-agent key <hex or npub>      print a public key in hex, or fail (for the install scripts)
 //! marmot-agent import <old home> [--harness <name>] [--owner <key>] [--cwd <folder>]
 //!                     [--settings <file>] [--leave-running <service>]... [--dry-run]
@@ -58,6 +60,7 @@ fn main() -> ExitCode {
     let outcome = match command.as_str() {
         "init" => runtime.block_on(init(&config)),
         "run" => runtime.block_on(run(&config)),
+        "groups" => runtime.block_on(groups(&config)),
         _ => return usage(),
     };
     match outcome {
@@ -67,7 +70,9 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: marmot-agent init|run <settings.toml>, or marmot-agent key <hex or npub>");
+    eprintln!(
+        "usage: marmot-agent init|run|groups <settings.toml>, or marmot-agent key <hex or npub>"
+    );
     eprintln!(
         "       marmot-agent import <old home> [--harness <name>] [--owner <key>] \
          [--cwd <folder>] [--settings <file>] [--leave-running <service>]... [--dry-run]"
@@ -108,6 +113,26 @@ async fn init(config: &Config) -> Result<(), String> {
     runtime.shutdown().await;
     // The agent's own public key, for its owner to invite it.
     println!("{}", made.account.account_id_hex);
+    Ok(())
+}
+
+/// Prints each group the agent is in, for the owner to choose the ids `full_activity` lists
+/// (D-136): to the terminal only, as a group's id is never logged (D-071). It opens the home
+/// without starting MDK, so nothing is fetched or sent, and only while the agent is stopped.
+async fn groups(config: &Config) -> Result<(), String> {
+    let (home, app, runtime) = marmot::open(config)?;
+    let account = marmot::identity(&home)?;
+    let marmot = Marmot {
+        runtime: runtime.clone(),
+        app,
+        label: account.label,
+        agent: PubKey(account.account_id_hex),
+        faults: Default::default(),
+    };
+    let listed = marmot.listed(&config.owner, &config.full_activity);
+    runtime.shutdown().await;
+    let listed = listed.map_err(|_| "the agent's groups could not be read")?;
+    print!("{}", marmot_agent::groups::table(&listed));
     Ok(())
 }
 

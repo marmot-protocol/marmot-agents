@@ -5,9 +5,10 @@
 mod common;
 
 use common::{Echo, World, eventually};
-use marmot_agent::GroupKey;
+use marmot_agent::groups::Listed;
 use marmot_agent::marmot::Fault;
 use marmot_agent::run::Store;
+use marmot_agent::{FullActivity, GroupKey, PubKey};
 use marmot_agent_events::State;
 use marmot_agent_events::body::Body;
 use marmot_app::MarmotAppEvent;
@@ -995,4 +996,108 @@ async fn an_invitation_from_someone_not_allowed_is_declined() {
     );
     core.stop().await;
     world.runtime.shutdown().await;
+}
+
+// `marmot-agent groups` lists each group the agent is in: its id, its name, whether it is the
+// owner's two-person chat, which is sent the agent's full activity as it is, and whether
+// `full_activity` lists it (D-136).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_groups_the_agent_is_in_are_listed() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let core = world.start(Echo::new(Arc::new(AtomicUsize::new(0))));
+    let named = world
+        .runtime
+        .create_group(
+            &world.person,
+            "Team",
+            std::slice::from_ref(&world.agent),
+            None,
+        )
+        .await
+        .unwrap()
+        .operation
+        .expect("the group is made");
+    let named = GroupKey(world.joined(&named).await);
+    let direct = world
+        .runtime
+        .start_direct_conversation(&world.person, &world.agent)
+        .await
+        .unwrap();
+    let direct = GroupKey(world.joined(&direct).await);
+    core.stop().await;
+
+    let owner = &world.config.owner;
+    let listed = |owner: &PubKey, activity: &FullActivity| {
+        let mut listed = world.marmot.listed(owner, activity).unwrap();
+        listed.sort_by(|a, b| a.name.cmp(&b.name));
+        listed
+    };
+    let row = |group: &GroupKey, name: &str, owners_chat, full_activity| Listed {
+        group: group.clone(),
+        name: name.into(),
+        owners_chat,
+        full_activity,
+    };
+    assert_eq!(
+        listed(owner, &FullActivity::Groups(vec![named.clone()])),
+        vec![
+            row(&direct, "", true, false),
+            row(&named, "Team", false, true),
+        ]
+    );
+    assert_eq!(
+        listed(owner, &FullActivity::All),
+        vec![
+            row(&direct, "", true, true),
+            row(&named, "Team", false, true)
+        ]
+    );
+    // A named group of two is not the owner's two-person chat, and neither is a direct chat
+    // with someone who is not the owner.
+    assert_eq!(
+        listed(&PubKey("ab".repeat(32)), &FullActivity::default()),
+        vec![
+            row(&direct, "", false, false),
+            row(&named, "Team", false, false),
+        ]
+    );
+    world.runtime.shutdown().await;
+}
+
+// The command itself, on a home `marmot-agent init` made: it opens the home without the core and
+// prints, to the terminal, that the agent is in no groups yet.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_groups_command_reads_the_agents_home() {
+    let relay = common::relay().await;
+    let url = relay.url().await.to_string();
+    let dir = tempfile::tempdir().unwrap();
+    let settings = dir.path().join("settings.toml");
+    std::fs::write(
+        &settings,
+        format!(
+            "home = {home:?}\nrelays = [{url:?}]\nowner = \"{owner}\"\nwhite_noise = false\n\
+             allow_loopback_relays = true\n\n[connector]\n",
+            home = dir.path().join("agent").display().to_string(),
+            owner = "ab".repeat(32),
+        ),
+    )
+    .unwrap();
+    let agent = |command: &str| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_marmot-agent"))
+            .arg(command)
+            .arg(&settings)
+            .output()
+            .unwrap()
+    };
+    assert!(
+        agent("init").status.success(),
+        "the agent's identity is made"
+    );
+    let listed = agent("groups");
+    assert!(listed.status.success(), "{listed:?}");
+    assert_eq!(
+        String::from_utf8(listed.stdout).unwrap(),
+        "The agent is in no groups.\n"
+    );
 }
