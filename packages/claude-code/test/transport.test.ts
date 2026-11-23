@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterEach, test } from "node:test";
 import { CAPABILITIES, run, type PermissionResult, type QueryLike, type UserMessage } from "../src/connector.ts";
 import type { SendFile } from "../src/files.ts";
+import { problems } from "./protocol.ts";
 
 type Json = Record<string, unknown>;
 
@@ -82,9 +83,14 @@ class FakeQuery implements QueryLike {
   }
 }
 
-/** The core's side of the socket: it takes the hello, sends requests and keeps the events. */
+/**
+ * The core's side of the socket: it takes the hello, sends requests and keeps the events. Every line
+ * either way is checked against the core's own schema (`fixtures/socket`), and what is not as the core's
+ * types say is kept in `invalid`, which every test ends by finding empty.
+ */
 class FakeCore {
   hello: Json | undefined;
+  readonly invalid: string[] = [];
   readonly events: Json[] = [];
   /** The size of every line the connector sent, in bytes, without its newline. */
   readonly lines: number[] = [];
@@ -108,22 +114,29 @@ class FakeCore {
           pending = [];
           chunk = chunk.subarray(at + 1);
           this.lines.push(line.length);
-          this.read(JSON.parse(line.toString("utf8")) as Json);
+          const m = JSON.parse(line.toString("utf8")) as Json;
+          for (const p of problems("FromConnector", m)) this.invalid.push(`from the connector: ${p}`);
+          this.read(m);
         }
         if (chunk.length > 0) pending.push(chunk);
       });
     });
   }
+  /** Writes a line as the core, checked as the core's. */
+  private write(m: Json): void {
+    for (const p of problems("FromCore", m)) this.invalid.push(`from the core: ${p}`);
+    this.socket!.write(JSON.stringify(m) + "\n");
+  }
   private read(m: Json): void {
     if (m["method"] === "hello") {
       this.hello = m;
-      this.socket!.write(JSON.stringify({ jsonrpc: "2.0", id: m["id"], result: { core: { version: "0" }, agent: { name: "a" } } }) + "\n");
+      this.write({ jsonrpc: "2.0", id: m["id"], result: { core: { version: "0" }, agent: { name: "a" } } });
     } else if (m["method"] === "event") {
       this.events.push(m["params"] as Json);
     } else if (m["method"] === "send_file") {
       this.files.push(m["params"] as Json);
       const answer = this.answerFile(m["params"] as Json);
-      this.socket!.write(JSON.stringify({ jsonrpc: "2.0", id: m["id"], ...answer }) + "\n");
+      this.write({ jsonrpc: "2.0", id: m["id"], ...answer });
     } else if (typeof m["id"] === "number") {
       this.responses.get(m["id"])?.(m);
     }
@@ -132,7 +145,7 @@ class FakeCore {
     const id = (this.nextId += 1);
     return new Promise((resolve) => {
       this.responses.set(id, resolve);
-      this.socket!.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+      this.write({ jsonrpc: "2.0", id, method, params });
     });
   }
   event(where: (e: Json) => boolean): Json | undefined {
@@ -180,6 +193,7 @@ async function start(cwd = "/nowhere"): Promise<{
     core.close();
     await running;
     rmSync(home, { recursive: true, force: true });
+    assert.deepEqual(core.invalid, [], "every line either way is as the core's types say");
   };
   // A test that fails before it stops the connector must not keep the others waiting.
   stopping.add(done);
