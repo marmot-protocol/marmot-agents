@@ -706,8 +706,10 @@ export class Translator {
   private permissionRequest(m: Json): void {
     const tool = m["toolName"];
     const inp = object(m["input"]);
-    // The SDK names each request in its options; the driver names one that came without (top level).
-    const opts: Json = { ...object(m["options"]), requestId: object(m["options"])["requestId"] ?? m["requestId"] };
+    // The SDK names each request in its options; the driver names one that came without, or with an
+    // empty name (top level).
+    const given = object(m["options"])["requestId"];
+    const opts: Json = { ...object(m["options"]), requestId: given === undefined || given === null || given === "" ? m["requestId"] : given };
     const subject = opts["toolUseID"] ?? null;
     if (tool === "AskUserQuestion") {
       const qs = list(inp["questions"]).map((asked, n) => {

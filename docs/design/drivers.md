@@ -373,14 +373,16 @@ session per chat:
 - An approval waits in Claude Code's `canUseTool` callback until the answer comes. "Allow once" allows the
   call as asked, a standing choice allows it with the rule Claude Code suggested, and the last choice denies.
   A question from `AskUserQuestion` is answered the same way. Each waits under the id the SDK gives the
-  request; one that came without would get one of the connector's own, so two never share an item.
+  request; one that came without, or with an empty one, would get one of the connector's own, so two never
+  share an item.
 - Interrupt calls `interrupt()`, and is taken once Claude Code has it: Claude Code may reply only once the
   turn has stopped, later than the core waits. A reply within two seconds that refuses it refuses the request.
   New session closes the chat's SDK session, and the next prompt starts a fresh one. `set` changes the
   permission mode or the model.
 - The event that shows an answer's or a control's effect names it
   ([D-028](../decisions.md#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)): the
-  approval's next edit, the end of the interrupted turn, the session item's edit that shows the new setting
+  approval's next edit, the end of the turn as interrupted (a turn that finished on its own first settles
+  nothing, and the core settles the interrupt as having no effect), the session item's edit that shows the new setting
   (sent as soon as Claude Code takes it), or the end of the old session.
 - An event too large for a line of the socket (4 MB) goes without its native message, and if it is still too
   large, with its longest texts cut in the middle until it fits. Its `prompts` and `settles` are kept.
