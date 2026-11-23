@@ -584,8 +584,10 @@ These are the same as for every connector on the socket.
   ([D-081](../decisions.md#d-081-the-socket-messages-as-built-are-accepted)): a hello with all seven capability
   flags, then prompts, answers and controls in, events out.
 - **The same events.** Everything the gateway hands the channel becomes events of the shared vocabulary, each
-  with the gateway's own payload as its native message
-  ([D-007](../decisions.md#d-007-one-shared-event-vocabulary), [D-008](../decisions.md#d-008-pass-everything-through)).
+  with the gateway's own payload as its native message, except a secret question that is no longer waiting,
+  which carries none
+  ([D-007](../decisions.md#d-007-one-shared-event-vocabulary), [D-008](../decisions.md#d-008-pass-everything-through),
+  [D-056](../decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)).
   Each answer and control it takes is settled by the event that shows its effect, or refused
   ([D-028](../decisions.md#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it),
   [D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)).
@@ -625,7 +627,9 @@ These are the same as for every connector on the socket.
 - **A chat's folder.** The plugin states no `folder` in its hello, so the core offers no `folder` setting
   ([a chat's folder](#a-chats-folder),
   [D-101](../decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder)). The gateway keeps the
-  workspace it manages, and the installer lists it in `files_from`.
+  workspace it manages, and the installer lists it in `files_from`, except in the cases
+  [above](#a-gateways-files) where it lists none, such as Hermes's default of the whole home; the owner then
+  names a folder before the agent can send a file.
 - **A tool of the core's.** The core gives a channel plugin's agent no `send_file` tool; the agent sends files in
   the gateway's own way, which the plugin turns into `send_file`.
 - **More tool activity than the gateway hands a channel.** The plugin passes through all it is handed, at the
