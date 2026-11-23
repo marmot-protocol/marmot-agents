@@ -6,7 +6,8 @@ Each script runs against a throwaway HOME, with stand-ins for the programs it ca
 systemctl, launchctl, docker, npm and node) on PATH, so nothing on the machine running the tests is
 installed, started or changed. The stand-ins for OpenClaw and Hermes keep their settings in files in
 that HOME, as the real ones do, and do what the installers ask of them: add a plugin, set and unset a
-setting. A move from today's connectors' plugins is also stopped at each step it takes (Interrupted).
+setting. A move from today's connectors' plugins is also stopped at each step it takes (Interrupted), and so is
+an upgrade of the core and its support files (Upgrade).
 A stand-in marmot-agent plays the core; the download test serves a release from a folder, packaged by
 tools/release/package.sh. The OpenClaw installer reads JSON with node, so its tests use the node on
 the PATH the tests run with, and are skipped without one.
@@ -61,12 +62,15 @@ case $1 in
     run) echo "with MODEL_BASE_URL=${{MODEL_BASE_URL:-}}" >> "$FAKE_LOG" ;;
 esac
 """
+# A stand-in fails a command that starts as FAKE_FAIL says, such as "systemctl --user restart".
 FAKE_LOGGER = """#!/bin/sh
 echo "$(basename "$0") $*" >> "$FAKE_LOG"
+if [ -n "${FAKE_FAIL:-}" ]; then case "$(basename "$0") $*" in "$FAKE_FAIL"*) echo "failing, as asked" >&2; exit 1 ;; esac; fi
 """
 # npm ci makes the packages it installs, and npm pack the archive, as the real one does.
 FAKE_NPM = """#!/bin/sh
 echo "npm $*" >> "$FAKE_LOG"
+if [ -n "${FAKE_FAIL:-}" ]; then case "npm $*" in "$FAKE_FAIL"*) echo "failing, as asked" >&2; exit 1 ;; esac; fi
 command=$1 prefix=.
 while [ $# -gt 0 ]; do [ "$1" = --prefix ] && prefix=$2; shift; done
 case $command in
@@ -1585,6 +1589,155 @@ class Interrupted(unittest.TestCase):
         # plugin's channel comes out before ours goes in, and ours is set only once ours is in.
         self.every_step("openclaw", make, state, lambda m, made: [], fail={"FAKE_OPENCLAW_FAIL": "plugins install"},
                         windows=("the old plugin, with its channel None", "our plugin, with its channel None"))
+
+
+class Upgrade(unittest.TestCase):
+    """Every agent runs the one core, with the one set of support files. An install over an older one,
+    here of another agent of the same harness, that fails or is stopped at any step leaves both as they
+    were, or, once it is finished, both new: never the new core with the old files, or the other way
+    round. Stopped by SIGTERM, it puts back what it changed; killed by SIGKILL, the same command run
+    again finishes the upgrade, or, should that fail, puts back what the killed run found."""
+
+    HARNESS = "claude-code"
+    # The parts of the support files Claude Code's install replaces.
+    PARTS = ("LICENSE", "install", "packages/claude-code")
+
+    def older(self, m: Machine) -> None:
+        """An agent installed with an older core and older support files."""
+        older = m.dir / "older-core"
+        m.write(older, FAKE_CORE + "# an older core\n")
+        m.run(self.HARNESS, *m.args(self.HARNESS, "--binary", str(older), "--name", "first"))
+        lib = m.data / "lib"
+        (lib / "LICENSE").write_text((lib / "LICENSE").read_text() + "an older licence\n")
+        for part in self.PARTS[1:]:
+            (lib / part / "OLDER").write_text("an older file\n")
+
+    def args(self, m: Machine) -> list:
+        return m.args(self.HARNESS, "--binary", str(m.core), "--name", "second")
+
+    @staticmethod
+    def snapshot(m: Machine) -> dict:
+        """The core and the support files every agent starts with."""
+        core = m.home / ".local/bin/marmot-agent"
+        files = {"core": core.read_text() if core.exists() else None}
+        lib = m.data / "lib"
+        for path in sorted(lib.rglob("*")) if lib.exists() else []:
+            files[str(path.relative_to(lib))] = path.read_text() if path.is_file() else "(a folder)"
+        return files
+
+    def setUp(self):
+        m = Machine(self)
+        self.older(m)
+        self.before = self.snapshot(m)
+        m.run(self.HARNESS, *self.args(m))
+        self.after = self.snapshot(m)
+        self.assertNotEqual(self.before, self.after)
+        self.assertEqual(self.after["core"], FAKE_CORE)
+        self.assertNotIn("install/OLDER", self.after)
+
+    def state(self, m: Machine) -> str:
+        now = self.snapshot(m)
+        if now == self.before:
+            return "older"
+        if now == self.after:
+            return "new"
+        changed = sorted(k for k in set(now) | set(self.before) if now.get(k) != self.before.get(k))
+        return f"mixed: {changed}"
+
+    def leftovers(self, m: Machine) -> list:
+        return sorted(p.name for p in m.data.iterdir() if p.name not in ("agents", "lib"))
+
+    def failed(self, fail: str) -> None:
+        m = Machine(self)
+        self.older(m)
+        result = m.run(self.HARNESS, *self.args(m), env={"FAKE_FAIL": fail}, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.state(m), "older", result.stderr)
+        self.assertEqual(self.leftovers(m), [], "nothing staged or kept is left")
+        m.run(self.HARNESS, *self.args(m))
+        self.assertEqual(self.state(m), "new")
+        self.assertEqual(self.leftovers(m), [])
+
+    def test_a_failure_preparing_the_new_files_keeps_the_older_core(self):
+        self.failed("npm ci")
+
+    def test_a_failure_once_the_new_core_is_in_puts_back_the_older_one(self):
+        self.failed("systemctl --user restart")
+
+    def test_a_first_install_that_fails_leaves_no_core(self):
+        m = Machine(self)
+        result = m.run(self.HARNESS, *self.args(m), env={"FAKE_FAIL": "systemctl --user restart"}, check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.snapshot(m), {"core": None})
+
+    def test_another_harness_puts_back_an_upgrade_it_cannot_finish(self):
+        """A run of another harness, which has none of Claude Code's files to put in, finds an upgrade a
+        killed run left under way: it puts back what that run found, then installs as if none had run."""
+        reference = Machine(self)
+        self.older(reference)
+        reference.run("codex", *reference.args("codex", "--binary", str(reference.core)))
+        expected = self.snapshot(reference)
+        steps = Machine(self)
+        self.older(steps)
+        steps.run(self.HARNESS, *self.args(steps), stop=("KILL", 0))
+        tried = 0
+        for step in range(1, int(steps.steps.read_text()) + 1):
+            m = Machine(self)
+            self.older(m)
+            m.run(self.HARNESS, *self.args(m), stop=("KILL", step), check=False)
+            if not (m.data / "upgrade").exists() or not (m.data / "upgrade/lib/packages").exists():
+                continue
+            tried += 1
+            m.run("codex", *m.args("codex", "--binary", str(m.core)))
+            self.assertEqual(self.snapshot(m), expected, f"killed at step {step}")
+            self.assertEqual(self.leftovers(m), [])
+        self.assertGreater(tried, 0)
+
+    def test_every_step(self):
+        m = Machine(self)
+        self.older(m)
+        m.run(self.HARNESS, *self.args(m), stop=("KILL", 0))
+        steps = int(m.steps.read_text())
+        self.assertGreater(steps, 10)
+        cases = [(signal, step) for signal in ("TERM", "KILL") for step in range(1, steps + 1)]
+
+        def one(case):
+            signal, step = case
+            m = Machine(self)
+            self.older(m)
+            stopped = m.run(self.HARNESS, *self.args(m), stop=(signal, step), check=False)
+            after = self.state(m)
+            under_way = (m.data / "upgrade").exists()
+            failed = after_failure = None
+            if signal == "KILL" and under_way:
+                # On a copy killed the same way, a run that fails puts back what the killed run found.
+                other = Machine(self)
+                self.older(other)
+                other.run(self.HARNESS, *self.args(other), stop=(signal, step), check=False)
+                failed = other.run(self.HARNESS, *self.args(other), env={"FAKE_FAIL": "systemctl --user restart"},
+                                   check=False)
+                after_failure = (self.state(other), self.leftovers(other))
+            again = m.run(self.HARNESS, *self.args(m), check=False)
+            return case, stopped, after, under_way, failed, after_failure, again, self.state(m), self.leftovers(m)
+
+        taken_over = 0
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+            for (signal, step), stopped, after, under_way, failed, after_failure, again, finished, left in pool.map(one, cases):
+                taken_over += failed is not None
+                with self.subTest(signal=signal, step=step):
+                    said = f"after SIG{signal} at step {step}:\n{stopped.stdout}\n{stopped.stderr}"
+                    self.assertNotEqual(stopped.returncode, 0, "the run was stopped")
+                    if signal == "TERM" or not under_way:
+                        self.assertIn(after, ("older", "new"), said)
+                    if signal == "TERM":
+                        self.assertFalse(under_way, f"an upgrade put back or finished {said}")
+                    if failed is not None:
+                        self.assertNotEqual(failed.returncode, 0)
+                        self.assertEqual(after_failure, ("older", []), f"{said}\nthen failing:\n{failed.stderr}")
+                    self.assertEqual(again.returncode, 0, f"{said}\nthen again:\n{again.stderr}")
+                    self.assertEqual(finished, "new", again.stdout)
+                    self.assertFalse(any(name.startswith((".upgrade", "upgrade")) for name in left), left)
+        self.assertGreater(taken_over, 0, "some step leaves an upgrade under way for the next run")
 
 
 class FilesFrom(unittest.TestCase):
