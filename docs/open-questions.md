@@ -81,8 +81,12 @@ use for each:
 `partial_answer`, are settled by D-059 and tested with hand-written messages in
 [`crates/marmot-agent-codex/tests/cases.rs`](../crates/marmot-agent-codex/tests/cases.rs).
 
-**Fields only the prototype has, from Hermes and OpenClaw.** The crate does not have them. Each is for
-the connector that produces it to bring up. Those Claude Code had (`model` on a turn, `cost_usd` in its usage,
+**Fields only the prototype has, from Hermes and OpenClaw.** The crate does not have them, so the core passes
+over them. Each is for the connector that produces it to bring up. On 2026-11-23 the socket's schema check
+found that only OpenClaw still sends any, the ones in
+[`fixtures/socket/passed-over.json`](../fixtures/socket/passed-over.json), which its tests allow and no
+others: neither `command` nor `reason` on an approval, nor the eight notice kinds, is sent by any connector
+now, and Hermes sends none of the table. Those Claude Code had (`model` on a turn, `cost_usd` in its usage,
 `patch` and `parent` on a tool, `tool` on an approval, `usage` on a task, `attempt` on a retry, `parent` on
 reasoning) were left out on 2026-11-21, when its expected events were written: every event in
 [`fixtures/recordings/claude/expected`](../fixtures/recordings/claude/expected) is read by the item types with

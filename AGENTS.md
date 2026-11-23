@@ -49,6 +49,7 @@ being replaced by what is designed here, not extended.
 | Work on what people send back to an agent | `docs/design/answers-and-controls.md` |
 | Work on how a chat shows subagents | `docs/design/subagents.md`, then `fixtures/recordings/codex/subagents` |
 | Work on the boundary to TypeScript and Python programs | `docs/design/socket-protocol.md` |
+| Change a socket message, or see every one exactly | `crates/marmot-agent/src/socket/wire.rs`, then `fixtures/socket` |
 | Add or change a harness driver | `docs/design/drivers.md`, then `docs/reference/harness-interfaces.md` |
 | See what a channel plugin must and need not do | `docs/design/drivers.md` ("Channel plugins"), then the gateway's reference page |
 | Check what today's MDK connectors do | `docs/reference/current-connectors.md` |
@@ -257,6 +258,20 @@ MARMOT_AGENT_SIM_RUNS=200 cargo test --locked --release -p marmot-agent-sim --al
 A failure prints the path of a capsule, and CI keeps the capsules as the run's `simulator-capsules` artifact;
 `crates/marmot-agent-sim/README.md` says how to replay one.
 
+The socket's messages are described by `fixtures/socket/schema.json`, made from the types in
+`crates/marmot-agent/src/socket/wire.rs`, with examples of each message in `fixtures/socket/examples.json`
+that the core writes and reads. The workspace's tests fail when either file differs from what the types and
+the socket make. When a message changes on purpose, write both again and commit them:
+
+```sh
+MARMOT_AGENT_WRITE_SOCKET=1 cargo test -p marmot-agent --lib socket::corpus
+```
+
+The Claude Code and OpenClaw packages and the Hermes plugin check themselves against both files in their own
+tests, so a change on one side only fails one of them. A field a connector sends that the core's types do not
+hold fails too, unless `fixtures/socket/passed-over.json` lists it as an open question
+([Q-01](docs/open-questions.md#q-01-what-exactly-is-in-an-agent-event)).
+
 The core links MDK, whose markdown parser is written in Odin and needs one exact Odin release to build. Install
 it once with `bash tools/odin/install.sh <absolute folder>`, which checks its checksum, and set `ODIN` to the
 `odin` program in that folder. The MDK revision, the `[patch]` entries in `Cargo.toml` and
@@ -283,8 +298,9 @@ version named in `.github/workflows/ci.yml`):
 cd packages/claude-code   # or packages/openclaw
 npm ci
 npm run check   # tsc --noEmit
-npm test        # replays every recording of that harness against its expected events, and runs the
-                # transport against fakes: a fake core and a fake SDK, or a fake OpenClaw
+npm test        # replays every recording of that harness against its expected events, runs the
+                # transport against fakes: a fake core and a fake SDK, or a fake OpenClaw, and checks
+                # every message both ways against fixtures/socket
 ```
 
 For any change under `python/`, with Python 3.14 (CI uses the release named in `python/.python-version` and
@@ -293,8 +309,9 @@ else:
 
 ```sh
 cd python
-python3 -m unittest discover -s tests   # replays every Hermes recording against its expected events, and
-                                        # runs the transport against a fake core and a fake Hermes
+python3 -m unittest discover -s tests   # replays every Hermes recording against its expected events,
+                                        # runs the transport against a fake core and a fake Hermes, and
+                                        # checks every message both ways against fixtures/socket
 ```
 
 For any change under `install/` or `tools/release/`, or to `tools/tla/run.sh`, with

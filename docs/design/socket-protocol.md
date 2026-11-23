@@ -15,6 +15,12 @@ end of M2 ([D-081](../decisions.md#d-081-the-socket-messages-as-built-are-accept
 section, `send_file`, is built and is a proposal until the owner accepts it. Not designed: the other requests of
 the chat section, and administration ([Q-05](../open-questions.md#q-05-how-is-the-agent-administered)).
 
+Every message as built is described exactly by a JSON Schema made from the core's own types,
+[`fixtures/socket/schema.json`](../../fixtures/socket/schema.json), with an example of each in
+[`examples.json`](../../fixtures/socket/examples.json) beside it. They are generated and checked, not
+designed: the core's tests fail when they fall behind its types, and each connector's tests check it against
+them. They add nothing to this page; where the two seem to differ, the schema is what the core does.
+
 ## What it is for
 
 Some connectors cannot be compiled into the core, because the harness's interface exists only in another
@@ -261,7 +267,10 @@ In the chat this is one message from the agent, and three rows that each updated
 
 ## The messages, as built
 
-What `crates/marmot-agent/src/socket.rs` sends and reads. Decided at the end of M2
+What `crates/marmot-agent/src/socket.rs` sends and reads, through the types in
+[`socket/wire.rs`](../../crates/marmot-agent/src/socket/wire.rs). Every field of every message is in
+[the schema](../../fixtures/socket/schema.json), and every message has an example in
+[`examples.json`](../../fixtures/socket/examples.json). Decided at the end of M2
 ([D-081](../decisions.md#d-081-the-socket-messages-as-built-are-accepted)). The socket is `socket/marmot-agent.sock` in the agent's home, in a folder only the owner can open, and the
 token is `connector.token` there, which the core writes the first time ([D-038](../decisions.md#d-038-each-connector-has-its-own-token)).
 
@@ -303,7 +312,11 @@ the eight words above) and, if it likes, a `detail` for the chat.
 **`event`**, a notification: an agent event as `marmot-agent-events` writes it (`item`, `type`, `state`,
 `title`, `text`, `body`, and `session`, `turn` and `native` when there are any), with three more fields: `chat`,
 the chat it belongs to; `prompts`, on a turn; and `settles`, the requests whose effect it shows. The connector
-leaves out `harness` and `seq`: the core fills them in.
+leaves out `harness` and `seq`: the core fills them in. The core passes over a field its types do not know,
+so it never reaches the chat; the schema admits none, so a connector's tests catch one. The few the
+connectors send today are listed, each an open question
+([Q-01](../open-questions.md#q-01-what-exactly-is-in-an-agent-event)), in
+[`passed-over.json`](../../fixtures/socket/passed-over.json).
 
 **`send_file`**, a request from the connector, provisional: the agent sends a file to the chat.
 
