@@ -11,8 +11,9 @@
 //!
 //! The rule throughout: the new settings never let anyone do more than the old install let them.
 //! Where the old lists disagree, only what they all allow is kept; where what the old install
-//! allowed cannot be read for certain, it counts as allowing nobody; and where the owner is not
-//! the one person the old install let both invite and prompt the agent, it must be named.
+//! allowed cannot be read for certain, it counts as allowing nobody, and the old settings that
+//! may have applied are named, with their values, to check by hand (D-135); and where the owner
+//! is not the one person the old install let both invite and prompt the agent, it must be named.
 //!
 //! - [`services`]: finding, reading and stopping the old services.
 //! - [`backup`]: the checked, owner-only copy of the home.
@@ -252,6 +253,8 @@ pub struct Plan {
     pub not_mapped: Vec<String>,
     /// What the person does after the import.
     pub next: Vec<String>,
+    /// Old settings to check by hand, where only the owner may prompt now.
+    pub review: Vec<String>,
 }
 
 /// Keys, relay addresses, paths and the settings stay out of logs (D-071): only the shape is shown.
@@ -326,6 +329,9 @@ struct Senders {
     allowed: Allowed,
     /// The places it was read from, in words; empty when it could not be established.
     from: Vec<String>,
+    /// Where it could not be established: each old setting that may have applied, with its
+    /// old value, for the person to check and widen `prompt` by hand (D-135).
+    review: Vec<String>,
 }
 
 /// Reads the old install, changing nothing, and works out what the import will do. `services`
@@ -417,7 +423,18 @@ pub fn plan(options: &Options, services: &mut dyn Services) -> Result<Plan, Stri
 
     // Who may invite, and who may write to the agent.
     let (policy, welcomers) = read_allowlist(home, &agent, &mut not_mapped);
-    let senders = read_senders(connector, home, places, &services, &mut not_mapped);
+    let old_socket = connector_service
+        .and_then(|s| s.values_of("--socket").pop())
+        .map_or_else(|| home.join("dev/wn-agent.sock"), PathBuf::from);
+    let senders = read_senders(
+        connector,
+        home,
+        &agent,
+        &old_socket,
+        places,
+        &services,
+        &mut not_mapped,
+    );
     let env = harness_env(connector, home, &services);
 
     // The owner prompts, approves and invites, so only someone the old install let both invite
@@ -593,9 +610,6 @@ pub fn plan(options: &Options, services: &mut dyn Services) -> Result<Plan, Stri
         .unwrap_or_else(|| options.places.user_home.to_string_lossy().into_owned());
     let section = section(connector, &cwd, &env, &mut mapped, &mut not_mapped);
 
-    let old_socket = connector_service
-        .and_then(|s| s.values_of("--socket").pop())
-        .map_or_else(|| home.join("dev/wn-agent.sock"), PathBuf::from);
     let settings = options
         .settings
         .clone()
@@ -633,6 +647,7 @@ pub fn plan(options: &Options, services: &mut dyn Services) -> Result<Plan, Stri
         mapped,
         not_mapped,
         next: Vec::new(),
+        review: senders.review,
     };
     plan.settings_text = settings_text(&plan, options.now);
     Config::parse(&plan.settings_text).map_err(|e| format!("the settings made are wrong: {e}"))?;
@@ -954,16 +969,20 @@ fn hermes_policy(env: &[(String, String)]) -> Result<Allowed, &'static str> {
     })
 }
 
-/// Who the old install let write to the agent. What cannot be read for certain allows nobody.
+/// Who the old install let write to the agent. What cannot be read for certain allows nobody,
+/// and names what to check (D-135).
 fn read_senders(
     connector: Connector,
     home: &Path,
+    agent: &PubKey,
+    old_socket: &Path,
     places: &Places,
     services: &[Service],
     not_mapped: &mut Vec<String>,
 ) -> Senders {
     let mut allowed = Allowed::Everyone;
     let mut from = Vec::new();
+    let mut review = Vec::new();
     let unclear = |why: String, not_mapped: &mut Vec<String>| {
         not_mapped.push(format!("{why}; only the owner may prompt now"));
         Allowed::nobody()
@@ -1017,27 +1036,59 @@ fn read_senders(
             let config = std::fs::read_to_string(&places.openclaw_config)
                 .ok()
                 .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
-            let policy = config
-                .as_ref()
-                .and_then(|c| c.pointer("/channels/marmot"))
-                .and_then(|m| m.as_object())
-                .and_then(|m| m.get("senderPolicy"));
-            match policy.map(openclaw_policy) {
-                Some(Ok(policy)) => {
-                    allowed = policy;
-                    from.push("OpenClaw's sender policy".into());
-                }
-                Some(Err(why)) => {
+            let marmot = config.as_ref().and_then(|c| c.pointer("/channels/marmot"));
+            let here = OpenClawHere {
+                agent,
+                socket: old_socket,
+                user_home: &places.user_home,
+            };
+            match marmot.map(|m| openclaw_account(m, &here)) {
+                Some(Ok((setting, Some(policy)))) => match openclaw_policy(policy) {
+                    Ok(policy) => {
+                        allowed = policy;
+                        from.push(format!("`{setting}.senderPolicy` in OpenClaw's settings"));
+                    }
+                    Err(why) => {
+                        allowed = unclear(
+                            format!(
+                                "OpenClaw's `{setting}.senderPolicy` {why}, so the old plugin let \
+                                 nobody write"
+                            ),
+                            not_mapped,
+                        );
+                    }
+                },
+                Some(Ok((setting, None))) => {
                     allowed = unclear(
                         format!(
-                            "OpenClaw's sender policy {why}, so the old plugin let nobody write"
+                            "OpenClaw's account on this home, `{setting}`, has no sender policy \
+                             of its own, so the old plugin took `MARMOT_ALLOWED_USERS` from the \
+                             gateway's environment, which is not read{}",
+                            if setting == "channels.marmot" {
+                                ""
+                            } else {
+                                "; a policy at the channel's root applies to no named account"
+                            }
                         ),
                         not_mapped,
                     );
+                    review = marmot.map(openclaw_policies).unwrap_or_default();
+                    review.push(
+                        "`MARMOT_ALLOWED_USERS` and `MARMOT_ALLOW_ALL_USERS` in the OpenClaw \
+                         gateway's environment, which the import does not read"
+                            .into(),
+                    );
+                }
+                Some(Err(why)) => {
+                    allowed = unclear(
+                        format!("{why}, so which sender policy applied is not clear"),
+                        not_mapped,
+                    );
+                    review = marmot.map(openclaw_policies).unwrap_or_default();
                 }
                 None => {
                     allowed = unclear(
-                        "OpenClaw's sender policy was not found in its settings, and \
+                        "OpenClaw's Marmot channel was not found in its settings, and \
                          `MARMOT_ALLOWED_USERS` in the gateway's environment is not read"
                             .into(),
                         not_mapped,
@@ -1055,15 +1106,38 @@ fn read_senders(
             // Every place the harness's settings are kept: each service that runs it, as it
             // ran, and the env file in the home. Only who all of them allow is kept.
             let mut sources: Vec<(String, Result<BTreeSet<PubKey>, &'static str>)> = Vec::new();
-            // A service whose environment could not be read in full has stopped the plan.
+            // A service whose environment could not be read in full has stopped the plan; one
+            // whose environment file sets the list unsurely lets only the owner prompt.
             for service in services.iter().filter(|s| runs_harness(s, terminal)) {
+                let unsure = service.unsure.iter().find(|u| {
+                    u.name == name
+                        || (Some(u.name.as_str()) == legacy && service.env(&name).is_none())
+                });
+                if let Some(u) = unsure {
+                    allowed = unclear(
+                        format!(
+                            "`{}` in the service {}'s environment file {} is written in a way \
+                             systemd reads otherwise by version",
+                            u.name, service.name, u.file
+                        ),
+                        not_mapped,
+                    );
+                    review.push(format!(
+                        "`{}` in {}, which the service {} read: `{}`",
+                        u.name,
+                        u.file,
+                        service.name,
+                        u.written.trim()
+                    ));
+                    continue;
+                }
                 sources.push((format!("the service {}", service.name), read(&service.env)));
             }
             let file = home.join(format!("dev/wn-{}.env", terminal.name()));
             if let Ok(text) = std::fs::read_to_string(&file) {
                 sources.push(("the harness's env file".into(), read(&env_file(&text))));
             }
-            if sources.is_empty() {
+            if sources.is_empty() && review.is_empty() {
                 allowed = unclear(
                     "the harness's list of senders was not found".into(),
                     not_mapped,
@@ -1095,7 +1169,110 @@ fn read_senders(
     if allowed == Allowed::nobody() {
         from.clear();
     }
-    Senders { allowed, from }
+    Senders {
+        allowed,
+        from,
+        review,
+    }
+}
+
+/// What tells OpenClaw's account for this home: the agent, and the old connector's socket.
+struct OpenClawHere<'a> {
+    agent: &'a PubKey,
+    socket: &'a Path,
+    /// What `~` stands for, as the plugin expands it.
+    user_home: &'a Path,
+}
+
+/// Which of OpenClaw's Marmot accounts ran on this home, as MDK's plugin picks its settings:
+/// with `accounts`, each named account runs on its own settings and nothing at the channel's
+/// root; without, the root is the one account. An account is on this home when its
+/// `socketPath` is the old connector's socket and its `accountIdHex`, if any, is the agent's.
+/// One that names no socket took it from the gateway's environment, which is not read, so it
+/// may be. Gives the account's setting and its own sender policy, if it has one; or why no one
+/// account is certain.
+fn openclaw_account<'a>(
+    marmot: &'a serde_json::Value,
+    here: &OpenClawHere,
+) -> Result<(String, Option<&'a serde_json::Value>), String> {
+    let Some(root) = marmot.as_object() else {
+        return Err("OpenClaw's Marmot channel settings are not an object".into());
+    };
+    let accounts: Vec<(String, &serde_json::Value)> = match root.get("accounts") {
+        // The plugin takes any value JavaScript counts as true as naming accounts.
+        None | Some(serde_json::Value::Null) | Some(serde_json::Value::Bool(false)) => {
+            vec![("channels.marmot".into(), marmot)]
+        }
+        Some(serde_json::Value::Object(named)) => named
+            .iter()
+            .map(|(id, cfg)| (format!("channels.marmot.accounts.{id}"), cfg))
+            .collect(),
+        Some(_) => return Err("OpenClaw's Marmot `accounts` is not an object".into()),
+    };
+    let mut on_home = Vec::new();
+    let mut maybe = Vec::new();
+    for (setting, cfg) in accounts {
+        let Some(cfg) = cfg.as_object() else {
+            maybe.push(setting);
+            continue;
+        };
+        let text = |key: &str| cfg.get(key).and_then(|v| v.as_str()).map(str::trim);
+        if let Some(id) = text("accountIdHex").filter(|id| !id.is_empty()) {
+            let id = id.to_ascii_lowercase();
+            if id.strip_prefix("0x").unwrap_or(&id) != here.agent.as_str() {
+                continue;
+            }
+        }
+        match text("socketPath").filter(|p| !p.is_empty()) {
+            Some(path) => {
+                let path = match path.strip_prefix("~/") {
+                    Some(rest) => here.user_home.join(rest),
+                    None if path == "~" => here.user_home.to_path_buf(),
+                    None => PathBuf::from(path),
+                };
+                if lexical(&path) == lexical(here.socket) {
+                    on_home.push((setting, cfg.get("senderPolicy")));
+                }
+            }
+            None => maybe.push(setting),
+        }
+    }
+    if let Some(first) = maybe.first() {
+        return Err(format!(
+            "OpenClaw's account `{first}` names no `socketPath`, so it took its socket from the \
+             gateway's environment, which is not read, and may have run on this home"
+        ));
+    }
+    let count = on_home.len();
+    let mut on_home = on_home.into_iter();
+    match (on_home.next(), on_home.next()) {
+        (Some((setting, policy)), None) => Ok((setting, policy)),
+        (None, _) => Err(
+            "no account of OpenClaw's Marmot channel names this home's socket and identity".into(),
+        ),
+        _ => Err(format!(
+            "{count} accounts of OpenClaw's Marmot channel name this home's socket"
+        )),
+    }
+}
+
+/// Every sender policy in OpenClaw's Marmot channel, each with its old value, to check.
+fn openclaw_policies(marmot: &serde_json::Value) -> Vec<String> {
+    let mut policies = Vec::new();
+    let mut add = |setting: String, cfg: &serde_json::Value| {
+        if let Some(policy) = cfg.get("senderPolicy") {
+            policies.push(format!(
+                "`{setting}.senderPolicy` in OpenClaw's settings: `{policy}`"
+            ));
+        }
+    };
+    add("channels.marmot".into(), marmot);
+    if let Some(named) = marmot.get("accounts").and_then(|a| a.as_object()) {
+        for (id, cfg) in named {
+            add(format!("channels.marmot.accounts.{id}"), cfg);
+        }
+    }
+    policies
 }
 
 fn approve_note(connector: Connector) -> &'static str {
@@ -1296,12 +1473,20 @@ fn next_steps(plan: &Plan, cwd: &str) -> Vec<String> {
         ),
         _ => {}
     }
+    for line in &plan.review {
+        next.push(format!(
+            "check {line}; if those people should still prompt the agent, widen `prompt` in {} \
+             by hand",
+            plan.settings.display()
+        ));
+    }
     next
 }
 
 impl Plan {
     /// Prints what the import found and will do. Keys and relay addresses are counted, not
-    /// shown; they are in the settings file.
+    /// shown; they are in the settings file. Only an old sender setting to check by hand is
+    /// shown as it was written (D-135).
     pub fn print(&self, out: &mut dyn Write) -> std::io::Result<()> {
         writeln!(
             out,
@@ -1321,6 +1506,16 @@ impl Plan {
         writeln!(out, "\nNot carried over, or changed:")?;
         for line in &self.not_mapped {
             writeln!(out, "  - {line}")?;
+        }
+        if !self.review.is_empty() {
+            writeln!(
+                out,
+                "\nOnly the owner may prompt now, as which of these the old install applied is not \
+                 certain. Check them, and widen `prompt` in the settings by hand to keep one:"
+            )?;
+            for line in &self.review {
+                writeln!(out, "  - {line}")?;
+            }
         }
         writeln!(out, "\nThe import will:")?;
         if self.services.is_empty() {
@@ -1791,9 +1986,11 @@ mod tests {
         let (home, ids) = home_with(root.path(), "openclaw", &["some-label"]);
         let p = people(root.path(), 3);
         welcomers(&home, &ids[0], "allowlist", &p[..1]);
+        let socket = home.join("dev/wn-agent.sock");
         let write = |policy: serde_json::Value| {
-            let config =
-                serde_json::json!({ "channels": { "marmot": { "senderPolicy": policy } } });
+            let config = serde_json::json!({ "channels": { "marmot": {
+                "socketPath": socket, "senderPolicy": policy
+            } } });
             std::fs::create_dir_all(root.path().join(".openclaw")).unwrap();
             std::fs::write(
                 root.path().join(".openclaw/openclaw.json"),
@@ -1823,6 +2020,191 @@ mod tests {
                 .not_mapped
                 .iter()
                 .any(|l| l.contains("let nobody write"))
+        );
+    }
+
+    /// OpenClaw's settings, as `channels.marmot`.
+    fn openclaw_settings(root: &Path, marmot: serde_json::Value) {
+        std::fs::create_dir_all(root.join(".openclaw")).unwrap();
+        std::fs::write(
+            root.join(".openclaw/openclaw.json"),
+            serde_json::json!({ "channels": { "marmot": marmot } }).to_string(),
+        )
+        .unwrap();
+    }
+
+    /// With named accounts, MDK's plugin runs each on its own settings, and a sender policy at
+    /// the channel's root applies to none of them (#138). The import reads the policy of the
+    /// one account on this home's socket, and where it cannot tell which, or that account has
+    /// none of its own, lets only the owner prompt and names each policy to check.
+    #[test]
+    fn openclaw_reads_the_policy_of_the_account_on_this_home() {
+        let root = tempfile::tempdir().unwrap();
+        let (home, ids) = home_with(root.path(), "openclaw", &["some-label"]);
+        let p = people(root.path(), 3);
+        welcomers(&home, &ids[0], "allowlist", &p[..1]);
+        let socket = home.join("dev/wn-agent.sock");
+        let wide = serde_json::json!({ "allowedUsers": [p[0], p[1], p[2]] });
+        let main = serde_json::json!({ "allowedUsers": [p[0], p[1]] });
+        openclaw_settings(
+            root.path(),
+            serde_json::json!({
+                "senderPolicy": wide,
+                "accounts": {
+                    "other": { "socketPath": "/elsewhere/wn-agent.sock",
+                               "senderPolicy": { "allowAll": true } },
+                    "main": { "socketPath": "~/openclaw/dev/wn-agent.sock",
+                              "accountIdHex": ids[0].to_uppercase(),
+                              "senderPolicy": main },
+                },
+            }),
+        );
+        let plan = plan(&options(root.path(), &home)).unwrap();
+        assert_eq!(plan.owner.as_str(), p[0]);
+        assert_eq!(plan.prompt, Who::People(vec![PubKey(p[1].clone())]));
+        assert!(plan.review.is_empty(), "{:?}", plan.review);
+
+        let mut named = options(root.path(), &home);
+        named.owner = Some(p[0].clone());
+        let owner_only = |marmot: serde_json::Value, why: &str, settings: &[&str]| {
+            openclaw_settings(root.path(), marmot.clone());
+            let plan = self::plan(&named).unwrap();
+            assert_eq!(plan.prompt, Who::Owner, "{marmot}");
+            assert!(
+                plan.not_mapped
+                    .iter()
+                    .any(|l| l.contains(why) && l.contains("only the owner may prompt now")),
+                "{why}: {:?}",
+                plan.not_mapped
+            );
+            for setting in settings {
+                assert!(
+                    plan.review.iter().any(|l| l.contains(setting)),
+                    "{setting}: {:?}",
+                    plan.review
+                );
+            }
+            // Each policy named is shown as it was, to widen `prompt` by hand.
+            assert!(
+                plan.review.iter().any(|l| l.contains(&p[0])),
+                "{:?}",
+                plan.review
+            );
+            assert!(plan.next.iter().any(|l| l.contains("`prompt`")));
+            let mut printed = Vec::new();
+            plan.print(&mut printed).unwrap();
+            let printed = String::from_utf8(printed).unwrap();
+            assert!(printed.contains(settings[0]), "{printed}");
+        };
+        // The account on this home has no policy of its own: the gateway's environment
+        // decided, never the root's.
+        owner_only(
+            serde_json::json!({
+                "senderPolicy": wide,
+                "accounts": { "main": { "socketPath": socket } },
+            }),
+            "no sender policy of its own",
+            &["`channels.marmot.senderPolicy`", "`MARMOT_ALLOWED_USERS`"],
+        );
+        // Two accounts on this home.
+        owner_only(
+            serde_json::json!({ "accounts": {
+                "a": { "socketPath": socket, "senderPolicy": main },
+                "b": { "socketPath": socket, "senderPolicy": wide },
+            } }),
+            "2 accounts",
+            &[
+                "`channels.marmot.accounts.a.senderPolicy`",
+                "`channels.marmot.accounts.b.senderPolicy`",
+            ],
+        );
+        // An account whose socket came from the gateway's environment may be on this home.
+        owner_only(
+            serde_json::json!({ "accounts": {
+                "a": { "socketPath": socket, "senderPolicy": main },
+                "b": { "home": home, "senderPolicy": wide },
+            } }),
+            "`socketPath`",
+            &["`channels.marmot.accounts.b.senderPolicy`"],
+        );
+        // No account on this home: the root's names another socket, or another identity.
+        owner_only(
+            serde_json::json!({ "socketPath": "/elsewhere/wn-agent.sock", "senderPolicy": main }),
+            "no account",
+            &["`channels.marmot.senderPolicy`"],
+        );
+        owner_only(
+            serde_json::json!({ "socketPath": socket, "accountIdHex": p[2], "senderPolicy": main }),
+            "no account",
+            &["`channels.marmot.senderPolicy`"],
+        );
+    }
+
+    /// A harness's unit with `vars.env` as its `EnvironmentFile=`, holding `text`, and its list
+    /// in `Environment=` as `p0`.
+    fn codex_unit_with_file(root: &Path, home: &Path, first: &str, text: &str) {
+        let vars = root.join("vars.env");
+        std::fs::write(&vars, text).unwrap();
+        unit(
+            root,
+            "wn-codex.service",
+            &format!(
+                "[Service]\nEnvironment=MARMOT_HOME={}\nEnvironment=WN_CODEX_ALLOWED_SENDERS_HEX={first}\n\
+                 EnvironmentFile={}\nExecStart=/x/wn-codex\n",
+                home.display(),
+                vars.display()
+            ),
+        );
+    }
+
+    /// A harness's list in a systemd `EnvironmentFile=` is read as systemd reads it, not as a
+    /// shell would (#147); a line systemd reads otherwise by version lets only the owner prompt,
+    /// naming the setting and the line to check.
+    #[test]
+    fn a_harness_list_in_an_environment_file_is_read_as_systemd_reads_it() {
+        let root = tempfile::tempdir().unwrap();
+        let (home, ids) = home_with(root.path(), "codex", &["codex-harness-agent"]);
+        let p = people(root.path(), 2);
+        welcomers(&home, &ids[0], "allowlist", &p[..1]);
+        let mut named = options(root.path(), &home);
+        named.owner = Some(p[0].clone());
+        let senders = "WN_CODEX_ALLOWED_SENDERS_HEX";
+        let prompt = |text: String| {
+            codex_unit_with_file(root.path(), &home, &p[0], &text);
+            self::plan(&named).unwrap()
+        };
+        // A quoted value goes on over the line's end, so the list below is part of `FOO`.
+        let plan = prompt(format!("FOO=\"x\n{senders}={},{}\"\n", p[0], p[1]));
+        assert_eq!(plan.prompt, Who::Owner);
+        // Quotes inside a bare value are kept, so the harness refused the list.
+        let plan = prompt(format!("{senders}={},\"{}\"\n", p[0], p[1]));
+        assert_eq!(plan.prompt, Who::Owner);
+        assert!(
+            plan.not_mapped
+                .iter()
+                .any(|l| l.contains("could not start"))
+        );
+        // A backslash at the end goes on to the next line.
+        let plan = prompt(format!("{senders}={},\\\n{}\n", p[0], p[1]));
+        assert_eq!(plan.prompt, Who::People(vec![PubKey(p[1].clone())]));
+        assert!(plan.review.is_empty());
+        // After a comment ending in a backslash, systemd before 254 read the next line as
+        // comment too, and later ones as a setting.
+        let plan = prompt(format!("# old \\\n{senders}={},{}\n", p[0], p[1]));
+        assert_eq!(plan.prompt, Who::Owner);
+        assert!(
+            plan.not_mapped
+                .iter()
+                .any(|l| l.contains(senders) && l.contains("only the owner may prompt now")),
+            "{:?}",
+            plan.not_mapped
+        );
+        assert!(
+            plan.review
+                .iter()
+                .any(|l| l.contains(senders) && l.contains(&p[1]) && l.contains("vars.env")),
+            "{:?}",
+            plan.review
         );
     }
 
