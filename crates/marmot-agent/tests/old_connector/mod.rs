@@ -59,6 +59,7 @@ pub fn places(root: &Path) -> Places {
 
 /// An app on a home, as `wn-agent` and the test client open one, with only the test relay.
 pub fn local_app(home: &Path, relay: &str) -> MarmotApp {
+    marmot_agent::marmot::start_sqlite();
     MarmotApp::try_with_relays_and_account_home_and_config(
         home,
         vec![relay.to_string()],
