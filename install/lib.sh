@@ -1292,10 +1292,10 @@ check_cwd() {
 
 # The folder a gateway's agent works in, from which the core may send the files it names (D-090), for
 # a harness whose plugin states no folder: FILES_FROM, or none and FILES_WHY saying why. Never the home
-# itself (D-099), nor a folder that holds or lies in the agents' data, which would stop the core. Nor one
-# that holds or lies in a folder of GATEWAY_CACHE, where the gateway keeps the files people sent it on
-# any platform, or that holds one of GATEWAY_STATE, its own folder, which holds that cache. Provisional,
-# for the owner's review.
+# itself (D-099), nor a folder that holds or lies in the agents' data or the agent's home, which would
+# stop the core. Nor one that holds or lies in a folder of GATEWAY_CACHE, where the gateway keeps the
+# files people sent it on any platform, or that holds one of GATEWAY_STATE, its own folder, which holds
+# that cache. Provisional, for the owner's review.
 choose_files_from() {
     local folder=$1 kept
     FILES_FROM="" FILES_WHY="" FILES_CHOSEN=1
@@ -1312,6 +1312,12 @@ choose_files_from() {
         return 0
     elif inside "$folder" "$MA_DATA" || inside "$MA_DATA" "$folder"; then
         FILES_WHY="its work folder holds or lies in $MA_DATA, which holds the agents' keys"
+        return 0
+    fi
+    # An imported agent's home stays where the old connector had it, out of MA_DATA.
+    kept=$(canonical "$MA_HOME") || kept=$MA_HOME
+    if inside "$folder" "$kept" || inside "$kept" "$folder"; then
+        FILES_WHY="its work folder holds or lies in $kept, the agent's home, which holds its keys"
         return 0
     fi
     for kept in ${GATEWAY_CACHE[@]+"${GATEWAY_CACHE[@]}"}; do
@@ -1355,11 +1361,13 @@ files_from_settings() {
 # Settings kept from an earlier run that list no folder, as those from before the installer chose one
 # do, get the folder chosen now, as files_from_settings writes it, before their first table, where a
 # top-level setting must be; nothing else in them changes. A files_from line there is the person's,
-# and is left as it is (FILES_KEPT). With no folder to list, the summary says how to name one.
+# and is left as it is (FILES_KEPT), except in an install moved over (add_gateway_folder). With no
+# folder to list, the summary says how to name one.
 add_files_from() {
     [ "$FILES_CHOSEN" -eq 1 ] || return 0
     if grep -Eq '^[[:space:]]*files_from[[:space:]]*=' "$MA_SETTINGS"; then
         FILES_KEPT=1
+        if [ "$REPLACE_PLUGIN" -eq 1 ] && [ -n "$FILES_FROM" ]; then add_gateway_folder; fi
         return 0
     fi
     [ -n "$FILES_FROM" ] || return 0
@@ -1370,10 +1378,40 @@ add_files_from() {
         END { if (!done) { print ""; print ENVIRON["FILES_LINES"] } }' "$MA_SETTINGS" | put "$MA_SETTINGS" 600
 }
 
+# An install moved over from today's connector lists the gateway's folder, chosen as for a fresh
+# install, after the old connector's media folders, which stay (D-119): in the files_from line the
+# import wrote, one line as `files_from = [...]`, whose comment above it is made to say so. Run again,
+# it finds the folder there and changes nothing (FILES_ALSO). A line written otherwise is the person's:
+# it is left as it is, and the summary says to add the folder (FILES_ADD).
+add_gateway_folder() {
+    local folder lines
+    folder=$(toml_str "$FILES_FROM")
+    lines=$(grep -Ec '^[[:space:]]*files_from[[:space:]]*=' "$MA_SETTINGS")
+    if [ "$lines" -ne 1 ] || ! grep -Eq '^files_from = \[.*\]$' "$MA_SETTINGS"; then
+        FILES_ADD=1
+        return 0
+    fi
+    FILES_ALSO=1
+    if grep -E '^files_from = \[.*\]$' "$MA_SETTINGS" | grep -qF "$folder"; then return 0; fi
+    say "adding $FILES_FROM to files_from in $MA_SETTINGS"
+    FOLDER=$folder COMMENT="# The folders the old connector let files be sent from, and the one $HARNESS_TITLE works in (D-119)." awk '
+        $0 == "# Only the folders the old connector let files be sent from; never the working folder." {
+            held = $0; next
+        }
+        /^files_from = \[.*\]$/ {
+            if (held != "") { print ENVIRON["COMMENT"]; held = "" }
+            sub(/\]$/, ($0 ~ /\[\]$/ ? "" : ", ") ENVIRON["FOLDER"] "]")
+            print; next
+        }
+        { if (held != "") { print held; held = "" } print }
+        END { if (held != "") print held }' "$MA_SETTINGS" | put "$MA_SETTINGS" 600
+}
+
 # The core opens the folders files_from lists when it starts, and one not there then allows nothing
 # until it starts again: the folder listed is made first.
 make_files_from() {
-    if [ -z "$FILES_FROM" ] || [ "$FILES_KEPT" -eq 1 ] || [ -d "$FILES_FROM" ]; then return 0; fi
+    if [ -z "$FILES_FROM" ] || [ -d "$FILES_FROM" ]; then return 0; fi
+    if [ "$FILES_KEPT" -eq 1 ] && [ "$FILES_ALSO" -eq 0 ]; then return 0; fi
     if [ "$DRY_RUN" -eq 1 ]; then
         say "would make folder $FILES_FROM"
         return 0
@@ -1384,7 +1422,12 @@ make_files_from() {
 
 # What the summary says about the files the agent may send.
 files_from_summary() {
-    if [ "$FILES_KEPT" -eq 1 ]; then
+    if [ "$FILES_ALSO" -eq 1 ]; then
+        say "files_from in its settings lists the folders the agent sent files from before, and $FILES_FROM, where $HARNESS_TITLE works."
+    elif [ "$FILES_ADD" -eq 1 ]; then
+        say "files_from in its settings lists the folders the agent may send files from, as it did before;"
+        say "add $FILES_FROM, where $HARNESS_TITLE works, for the agent to send the files it makes there."
+    elif [ "$FILES_KEPT" -eq 1 ]; then
         say "files_from in its settings lists the folders the agent may send files from, as it did before."
     elif [ -n "$FILES_FROM" ]; then
         say "The agent may send the files in $FILES_FROM to a chat; change that with files_from in its settings."
@@ -1417,7 +1460,7 @@ main() {
 
     settle_values
     # What choose_files_from finds, for a harness whose plugin states no folder for the agent's files.
-    FILES_CHOSEN=0 FILES_KEPT=0 FILES_FROM="" FILES_WHY=""
+    FILES_CHOSEN=0 FILES_KEPT=0 FILES_ALSO=0 FILES_ADD=0 FILES_FROM="" FILES_WHY=""
     GATEWAY_STATE=()
     GATEWAY_CACHE=()
     harness_check

@@ -148,10 +148,13 @@ The rule is that nobody may do more afterwards than the old install let them:
   is never allowed by default. The core checks `files_from` against the home again each time it starts, and
   refuses to start if a folder has come to overlap it, unless the owner has allowed files from the home
   ([D-099](decisions.md#d-099-files-from-the-agents-own-home-are-refused-by-default-and-the-owner-may-allow-them)).
-  For Hermes and OpenClaw, `--replace-plugin` is to list the gateway's work folder in `files_from`, as a fresh
-  install does
+  For Hermes and OpenClaw, `--replace-plugin` then lists the gateway's work folder in `files_from` too, after
+  the old media folders, which stay, as a fresh install finds it and under the same rules
+  ([a gateway's files](design/drivers.md#a-gateways-files)): none when the gateway works in the whole home, in a
+  sandbox, in or around its own media or state or the agent's home, or for more than one agent. It adds the
+  folder to the one-line `files_from = [...]` the import wrote, once, and says so; a `files_from` the person
+  has written otherwise is left as it is, and the installer says to add the folder
   ([D-119](decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)).
-  It does not yet: it leaves the `files_from` line the import wrote as it is.
 
 Who may approve is the owner alone, the default
 ([D-010](decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)). The harness works in one

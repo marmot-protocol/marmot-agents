@@ -224,15 +224,17 @@ each file, as today's connectors turn it into `send_media`.
   the gateway's agent works in as `files_from`, and makes it if it is not there, since the core opens it when
   it starts: Hermes's `terminal.cwd`, or the workspace of the OpenClaw agent that takes the Marmot chats, as
   `openclaw agents list` and `openclaw agents bindings` say (`~/.openclaw/workspace` by default). It lists
-  none when that folder is the whole home, as Hermes's default is, or holds or lies in the agents' data, or
-  holds or lies in the gateway's media cache (Hermes's home; OpenClaw's media store), or holds OpenClaw's
+  none when that folder is the whole home, as Hermes's default is, or holds or lies in the agents' data or
+  the agent's own home (an imported agent's stays where the old connector had it), or holds or lies in the
+  gateway's media cache (Hermes's home; OpenClaw's media store), or holds OpenClaw's
   state folder, or when Hermes runs its commands in a sandbox, or OpenClaw's Marmot chats may go to more than
   one agent; the settings and the summary then say how to name one. The media caches are never listed: they
   also hold the files people sent the gateway in any of its chats, on any platform. Settings kept from an
-  earlier install that list no folder get the one found now; a `files_from` already there is left as it is.
-  `--replace-plugin` is to list the gateway's folder too, as a fresh install does
-  ([D-119](../decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation));
-  it does not yet, since the import always writes a `files_from` line, which is then left as it is.
+  earlier install that list no folder get the one found now; a `files_from` already there is left as it is,
+  except that `--replace-plugin`, for an install moved over ([move](../move.md)), lists the gateway's folder,
+  found the same way, after the old connector's media folders in the `files_from` line the import wrote; a
+  line the person has written otherwise is left as it is, and the summary says to add the folder
+  ([D-119](../decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)).
   The containers this project runs Hermes and OpenClaw in mount the work folder at its own path, so a path
   the agent names is the same for the core.
 
