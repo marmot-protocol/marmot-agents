@@ -1462,6 +1462,39 @@ fn a_forgotten_item_goes_on_from_its_last_version() {
     );
 }
 
+// A session goes on across connections, and so do its numbers (D-059): the number a session
+// reached is kept after the items that showed it are forgotten, so a connector's next connection
+// numbers that session's events after it.
+#[test]
+fn a_sessions_last_number_outlives_its_items() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let header = Header {
+        harness: "codex".into(),
+        session: Some("earlier".into()),
+        turn: Some("t0".into()),
+        item: "early".into(),
+        seq: 40,
+        state: State::Done,
+        title: "A title".into(),
+        text: "the plain rendering".into(),
+    };
+    sent(
+        &mut talk,
+        &chat,
+        AgentEvent::new(header, turn(), None).unwrap(),
+        "e-early",
+    );
+    ack_all(&mut talk);
+    finish_many(&mut talk, &chat, 3000);
+    assert!(
+        !kept_items(&talk).contains(&format!("{chat}/early")),
+        "forgotten"
+    );
+    let talk = conversation(talk.saved().clone());
+    assert_eq!(talk.saved().last_numbers().get("earlier"), Some(&40));
+}
+
 // Finished items kept only because their last version waited to be sent are forgotten once it
 // has gone, without waiting for another item to finish.
 #[test]

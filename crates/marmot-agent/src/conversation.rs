@@ -240,6 +240,10 @@ pub struct Saved {
     /// again goes on from there instead of starting a new row.
     #[serde(default)]
     forgotten: VecDeque<Forgotten>,
+    /// The highest number each session's events reached, by session (`""` for events that name
+    /// none), kept apart from the items, which are forgotten (D-059).
+    #[serde(default)]
+    numbers: BTreeMap<String, u64>,
     /// Requests handed to the driver and not settled, by the core's id for them.
     pending: BTreeMap<String, Pending>,
     /// What is to be sent and has not been sent yet, oldest first: kept so a send that failed,
@@ -263,10 +267,11 @@ pub struct Saved {
 
 impl Saved {
     /// The last number each session's events reached, by session (`""` for events that name
-    /// none), as far as the items kept show it. A driver whose numbering starts again, as a
-    /// connector's does on each connection, goes on from there (D-059).
+    /// none): as the state file keeps it, or, in one from before it kept them, as the items show it. A
+    /// driver whose numbering starts again, as a connector's does on each connection, goes on
+    /// from there (D-059).
     pub fn last_numbers(&self) -> HashMap<String, u64> {
-        let mut last = HashMap::new();
+        let mut last: HashMap<String, u64> = self.numbers.clone().into_iter().collect();
         for record in self.items.values() {
             let header = record.last.header();
             let session = header.session.as_ref().map(|s| s.as_str().to_string());
@@ -946,6 +951,13 @@ impl Conversation {
                 self.saved.sessions.insert(chat.clone(), session.clone());
             }
         }
+        let session = header.session.as_ref().map(|s| s.as_str().to_string());
+        let number = self
+            .saved
+            .numbers
+            .entry(session.unwrap_or_default())
+            .or_insert(0);
+        *number = header.seq.max(*number);
         let key = format!("{chat}/{}", header.item.as_str());
         let started_by = match emitted.event.body() {
             Body::Turn(_) => emitted
