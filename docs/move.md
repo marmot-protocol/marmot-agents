@@ -98,8 +98,10 @@ encryption state and its chats.
    ([D-119](decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)).
 
 On its first start the core reads nothing already in a chat as a prompt, so it never runs an old prompt again.
-That also means a message sent to the agent between the import and that first start is not answered: keep the
-gap short, or ask again afterwards.
+A message sent to the agent while neither program ran, which the old connector never read, may or may not be
+answered: the core takes it as a prompt only if it reaches the agent after the second the core started in
+([D-111](decisions.md#d-111-a-group-the-core-has-never-read-starts-after-what-arrived-before-the-core-did)).
+Keep the gap short, and ask again afterwards if no answer comes.
 
 Up to MDK 0.19.0, a `wn-agent` stopped in the moment after a message reached it left the home deaf to that chat
 for the core ([MDK #3602](https://github.com/marmot-protocol/mdk/issues/3602)). That is fixed in the MDK

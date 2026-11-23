@@ -5,7 +5,7 @@
 //! is stopped as systemd stops it, the import backs the home up and writes the settings, and the
 //! core program, `marmot-agent run` on those settings, takes the home over in place: the person's
 //! next message reaches the harness and is answered in the same chat, by the same agent key, and
-//! nothing written before the move is read as a prompt.
+//! nothing the old connector read before the move is read as a prompt.
 //!
 //! The core runs with the harness's own driver, from the settings the import wrote, on a
 //! stand-in for the harness, since each real one needs a model or an account:

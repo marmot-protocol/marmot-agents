@@ -270,27 +270,47 @@ pub async fn invited(folder: &str, label: &str) -> Invited {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
     assert!(joined, "the old connector joined the chat");
-    let mut stored = false;
+    // The person writes, and writes again if the old connector has not stored it after a
+    // while, as MDK can take some seconds to settle a chat it has just joined. Then every copy
+    // sent is waited for, so the old connector is stopped having read all the person wrote: a
+    // copy still on its way would reach the core after the move, and the core rightly takes
+    // what reaches it after it started as a prompt (D-111).
+    let copies = async || {
+        let texts = timeline(&socket, &agent, &group_hex)
+            .await
+            .unwrap_or_default();
+        texts.iter().filter(|t| *t == BEFORE).count()
+    };
+    let (mut sent, mut stored) = (0, 0);
     for _ in 0..20 {
         person_runtime
             .send_message(&person, &group, BEFORE.as_bytes().to_vec())
             .await
             .unwrap();
+        sent += 1;
         for _ in 0..6 {
             tokio::time::sleep(Duration::from_millis(500)).await;
-            let texts = timeline(&socket, &agent, &group_hex)
-                .await
-                .unwrap_or_default();
-            stored = texts.iter().any(|t| t == BEFORE);
-            if stored {
+            stored = copies().await;
+            if stored > 0 {
                 break;
             }
         }
-        if stored {
+        if stored > 0 {
             break;
         }
     }
-    assert!(stored, "the old connector stored the person's message");
+    assert!(stored > 0, "the old connector stored the person's message");
+    for _ in 0..120 {
+        if stored == sent {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        stored = copies().await;
+    }
+    assert_eq!(
+        stored, sent,
+        "the old connector stored every copy of the person's message it was sent"
+    );
     // Stopped at once: with MDK at the revision the core uses, a wn-agent stopped in the moment
     // after a message reached it no longer leaves the home deaf to that chat (MDK #3602).
     // Stopped as systemd stops it.
