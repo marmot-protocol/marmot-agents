@@ -104,6 +104,10 @@ the plain rendering give them that. The native payload keeps full fidelity for c
 A secret question that is no longer waiting goes without its native payload
 ([D-056](#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)).
 
+Narrowed for the pilot by
+[D-136](#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group):
+a chat that is not sent the agent's full activity is sent each item without its native payload.
+
 ## D-008 Pass everything through
 
 **Decision.** Reasoning, tool calls, tool results, plans and other agent activity are sent to the chat. The old
@@ -2700,8 +2704,20 @@ what the people in it need to follow the agent and to answer it:
 | `error` | Yes | It says why the agent stopped, or did not do what was asked |
 | `session` | Yes | It says what can be set and done, which the controls people send need ([D-029](#d-029-three-shared-controls-and-the-rest-comes-from-the-harness)) |
 | `reasoning`, `tool`, `plan`, `task` | Only with full activity | How the agent works |
-| `notice` from the harness | Only with full activity | About that work: compaction, a retry, a warning, a model change, a command's output |
+| `notice` from the harness that settles a request | Yes | It says what came of an answer or a control, such as a refused new session or a failed compaction ([D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)) |
+| Any other `notice` from the harness | Only with full activity | About that work: compaction, a retry, a warning, a model change, a command's output |
 | `message` of a subagent, with a `parent` | Only with full activity | A subagent's words are part of its work, not the agent's words to the chat ([D-117](#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)) |
+
+Hermes hands its channel its tool activity as formatted lines, which the plugin sends as the agent's commentary
+messages, never as `tool` items
+([D-118](#d-118-the-channel-plugin-contract-is-accepted-as-written)), so a Hermes agent's tool narration still
+reaches every chat.
+
+A chat that is not sent the agent's full activity is sent each item it is sent without its native payload: its
+shown fields only, the type's own fields and the plain rendering. A native payload can hold what such a chat is
+not sent: Claude Code's turn end after a denied approval carries the denied tool's input. The owner's two-person
+chat and the groups listed are sent the native payload, and the core keeps the whole event either way. This is an
+exception to [D-007](#d-007-one-shared-event-vocabulary) for those chats.
 
 The core's own notices, which say why something a person sent was not acted on or was not delivered, go to the
 chat they concern, as do the files the agent sends
@@ -2716,14 +2732,19 @@ setting, a change takes effect when the core starts again, and there is no turni
 
 The core applies the rule, the same for every harness and gateway; a driver or a channel plugin never decides
 what reaches whom ([D-004](#d-004-four-layers-with-drivers-behind-one-trait)). A chat is the owner's two-person
-chat when MDK marks it direct, no name and two accounts, and the owner writes in it; the core notes this each
-time a message or a request arrives from a chat, and keeps it across a restart. An item the chat is not sent is
-still kept by the core, so a Stop there still stops a subagent the chat is not shown
+chat while MDK's members of it are exactly the agent and the owner: MDK marks it direct, no name and two
+accounts, and those two accounts are theirs. The core reads this from MDK before each send, each version of an
+item and each try again included, and after a restart before anything queued goes; it saves none of it. So a
+person added to the owner's chat, by the owner or anyone, is sent none of the agent's full activity from then
+on, even with no message since: not what was queued before they came, nor later versions of an item the chat was
+sent before. Such an item stays in the chat as it was last sent. An item the chat is not sent is still kept by
+the core, so a Stop there still stops a subagent the chat is not shown
 ([D-117](#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)), and what it
 settles is settled by the next version of its turn, or else of the chat's session, so the person who asked sees
 the request settled by what came of it
-([D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)). An item a chat was
-already sent goes on to it until it closes.
+([D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)). With neither in the chat,
+a notice of the core's own settles it, "Done": "The agent acted on this. What it did is shown only where the owner
+sees all its activity." When MDK cannot say who is in a chat, the core waits and reads it again before it sends.
 
 This narrows [D-008](#d-008-pass-everything-through) and
 [D-009](#d-009-groups-are-first-class-and-every-member-sees-agent-activity) for the pilot, settles
@@ -2736,11 +2757,14 @@ anyone else does. The people in a group need the agent's answers and what they c
 client that hides tool rows does not withhold them, so the core holds them back before anything reaches a relay.
 
 What the builder chose, and the owner has not yet seen: the exact list above, `session` and `error` among what
-every chat is sent, and the setting's name and shape. Until the core next hears from the owner's two-person chat,
-a third person the owner adds to it is sent what the owner is (inferred from how MDK marks a chat direct; not
-tested against MDK).
+every chat is sent, a harness's notice that settles a request among them, the setting's name and shape, and the
+words of the core's notice that settles in place of an item held back. The review of the change found that a
+chat's membership was read only when someone wrote in it; the builder settled the open point of a person added to
+the owner's chat with the strict answer above, and decided, following the owner's decision for the pilot, that a
+chat without full activity is sent no native payload. That MDK keeps a direct chat's two accounts current, as the
+core reads them, is read from MDK's source and not tested against MDK.
 
-Decided 2026-11-23. The project owner decided.
+Decided 2026-11-23. The project owner decided the rule; the builder decided the points above, on 2026-11-23.
 
 ## D-137 A secret answer's membership check is not bound to the epoch it is sent under
 

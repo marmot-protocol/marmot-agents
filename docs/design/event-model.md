@@ -57,8 +57,9 @@ as separate things and the other as one generic tool call; a single type with a 
 
 **Not every chat is sent every type.** For the pilot, the owner's two-person chat with the agent, and the groups
 the owner lists, are sent everything. Every other chat is sent `turn`, the agent's own `message`, `approval`,
-`question`, `error` and `session`; not `reasoning`, `tool`, `plan`, `task`, a harness's `notice`, nor a
-subagent's `message`. The core decides, not the driver, which produces every event as before
+`question`, `error`, `session` and a harness's `notice` that settles a request; not `reasoning`, `tool`, `plan`,
+`task`, another `notice`, nor a subagent's `message`, and each item without its `native` payload. The core
+decides, not the driver, which produces every event as before
 ([D-136](../decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)).
 
 ## An agent event

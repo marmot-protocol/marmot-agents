@@ -58,10 +58,13 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   everything the agent does is passed through: reasoning, tools, results, plans ([D-007](decisions.md#d-007-one-shared-event-vocabulary), [D-059](decisions.md#d-059-eight-points-about-what-an-agent-event-carries), [D-008](decisions.md#d-008-pass-everything-through)).
 - For the pilot, that full activity goes only to the owner's two-person chat with the agent, and to the groups
   the owner lists as `full_activity` in the settings, or every chat with `"all"`. Every other chat is sent the
-  agent's words, its turns, its approvals and questions, a subagent's too, its errors and its session; not its
-  reasoning, tools, plans, tasks, notices or a subagent's words. The core applies it, and settles what an item it
-  holds back settles by the item's turn ([D-136](decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)).
-- Two exceptions to the native payload: a secret question no longer waiting carries none, and the core leaves
+  agent's words, its turns, its approvals and questions, a subagent's too, its errors, its session and a
+  harness's notice that settles a request; not its reasoning, tools, plans, tasks, other notices or a subagent's
+  words, and no native payload. The owner's chat is one whose members MDK says are exactly the agent and the
+  owner, read before each send. The core applies it, and settles what an item it holds back settles by the
+  item's turn ([D-136](decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)).
+- Three exceptions to the native payload: a secret question no longer waiting carries none, for the pilot a chat
+  without the full activity is sent none ([D-136](decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)), and the core leaves
   it out of an item over 64 KB, then cuts the output. A driver never cuts anything ([D-056](decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting), [D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb),
   [D-057](decisions.md#d-057-the-core-applies-the-64-kb-limit)).
 - Alerts: the final answer, a waiting approval or question, and a failed turn. Nothing else ([D-024](decisions.md#d-024-who-an-agent-event-alerts),

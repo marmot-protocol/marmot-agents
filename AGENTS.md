@@ -134,9 +134,11 @@ replacement entry.
 - Pass agent activity through: reasoning, tool calls, results, plans. Do not hide it
   ([D-008](docs/decisions.md#d-008-pass-everything-through)).
 - Never drop the native payload when translating
-  ([D-007](docs/decisions.md#d-007-one-shared-event-vocabulary)). There are two exceptions: a secret
+  ([D-007](docs/decisions.md#d-007-one-shared-event-vocabulary)). There are three exceptions: a secret
   question that is no longer waiting carries none
   ([D-056](docs/decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)),
+  for the pilot the core sends none to a chat that is not sent the agent's full activity
+  ([D-136](docs/decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)),
   and the core leaves it out of an item over 64 KB. A driver never leaves out or cuts anything to fit
   that limit ([D-026](docs/decisions.md#d-026-an-agent-item-is-at-most-64-kb),
   [D-057](docs/decisions.md#d-057-the-core-applies-the-64-kb-limit)).
