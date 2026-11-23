@@ -572,6 +572,78 @@ fn a_secret_answer_is_refused_in_a_group() {
     assert!(!item.event.header().text.contains("hunter2"));
 }
 
+// A question of several parts, answered from the chat by someone who may prompt, reaches the
+// driver as one answer to the item, with each part's choices and text as given, in order; a secret
+// part is taken in a two-person chat (D-041). A second answer to it is refused (D-028).
+#[test]
+fn a_question_of_several_parts_is_answered_at_once() {
+    let (mut talk, prompt) = started();
+    let part = |id: &str, options: &[&str], secret: bool| body::Asked {
+        id: id.into(),
+        header: None,
+        text: format!("{id}?"),
+        options: (options.iter())
+            .map(|o| body::Offered {
+                id: (*o).into(),
+                label: o.to_uppercase(),
+                description: None,
+            })
+            .collect(),
+        multiple: options.len() > 1,
+        allow_text: true,
+        secret,
+    };
+    let parts = vec![
+        part("colour", &["red", "blue", "green"], false),
+        part("name", &[], false),
+        part("token", &[], true),
+    ];
+    let question = body::Question::new(body::AnswerVia::Request, None, parts).unwrap();
+    let waiting = event("q", State::Waiting, Body::Question(question));
+    sent(&mut talk, &prompt.chat.id.0, waiting, "e-q");
+    let reply = |question: &str, options: &[&str], text: Option<&str>| AskedReply {
+        question: question.into(),
+        options: options.iter().map(|o| (*o).into()).collect(),
+        text: text.map(Into::into),
+    };
+    let answer = |event: &str| {
+        request(
+            direct(),
+            event,
+            FRIEND,
+            Some("e-q"),
+            Asked::Questions {
+                questions: vec![
+                    reply("colour", &["red", "green"], None),
+                    reply("name", &[], Some("Ada")),
+                    reply("token", &[], Some("s3cret")),
+                ],
+            },
+        )
+    };
+    let Ok([Act::Answer(given)]) = <[Act; 1]>::try_from(talk.asked(answer("r1"))) else {
+        panic!("not one answer")
+    };
+    assert_eq!(given.item.as_str(), "q");
+    let Given::Questions(replies) = &given.given else {
+        panic!("not answers to questions")
+    };
+    let replies: Vec<_> = (replies.iter())
+        .map(|r| (r.question.as_str(), r.options.clone(), r.text.as_deref()))
+        .collect();
+    assert_eq!(
+        replies,
+        vec![
+            ("colour", vec!["red".to_string(), "green".to_string()], None),
+            ("name", Vec::new(), Some("Ada")),
+            ("token", Vec::new(), Some("s3cret")),
+        ]
+    );
+    assert!(talk.requested(&given.request, Ok(()), 0).is_empty());
+    let (_, _, again) = the_item(&mut talk, |t| t.asked(answer("r2")));
+    assert!(is_refused(&again, "already_answered"));
+}
+
 // A setting the session item marks needs the right to approve; others need the right to
 // prompt (D-043).
 #[test]
