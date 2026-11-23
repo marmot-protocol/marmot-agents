@@ -70,8 +70,11 @@ impl Endpoint {
         if self.socket.exists() {
             std::fs::remove_file(&self.socket)?;
         }
+        // The token before the socket: a connector that finds the socket must find the token
+        // beside it, and a stale socket is gone before the token says the core is starting.
+        let token = self.token()?;
         let listener = UnixListener::bind(&self.socket)?;
-        Ok((listener, self.token()?))
+        Ok((listener, token))
     }
 
     /// The token: 32 random bytes as hex. A file that holds anything else, empty included, is
@@ -657,6 +660,28 @@ mod tests {
         SocketDriver::greet(core, TOKEN, "agent")
             .await
             .expect("a good hello")
+    }
+
+    // A connector that sees the socket the moment it appears finds the token beside it.
+    #[tokio::test]
+    async fn the_token_is_there_once_the_socket_is() {
+        let home = tempfile::tempdir().unwrap();
+        let endpoint = Endpoint::in_home(home.path());
+        let (socket, token_file) = (endpoint.socket.clone(), endpoint.token_file.clone());
+        let watcher = std::thread::spawn(move || {
+            loop {
+                if socket.exists() {
+                    return std::fs::read_to_string(&token_file);
+                }
+                std::hint::spin_loop();
+            }
+        });
+        let (_listener, token) = endpoint.listen().unwrap();
+        let read = watcher
+            .join()
+            .unwrap()
+            .expect("the token, once the socket is there");
+        assert_eq!(read.trim(), token);
     }
 
     // A hello with no token, or a token that is not a string, is refused, even against an
