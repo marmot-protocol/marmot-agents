@@ -1961,7 +1961,7 @@ schema admits no field the types do not name: it is strict for checking this rep
 itself stays as lenient as the socket was before ([D-081](#d-081-the-socket-messages-as-built-are-accepted)): it
 passes over fields it does not know and reads each field it needs on its own. The OpenClaw plugin stops sending
 the 13 body fields the core passes over (listed in `fixtures/socket/passed-over.json`), rather than the event
-model gaining them; until it does, the checks allow exactly those.
+model gaining them; until it does, the checks allow exactly those. (It stopped on 2026-11-23: the list is removed, and the checks allow no field the core does not read.)
 
 **Why.** Each capability was added by hand in four places, and each client was tested only against its own fake
 of the core, so the four could drift apart without a test failing. Making the description from the core's types

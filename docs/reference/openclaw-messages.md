@@ -458,7 +458,7 @@ came from what OpenClaw returned to the plugin's own calls.
 | The other two copies of tool activity: `onToolResult`, and `tool` deliveries that repeat an item | 92 |
 | Text, thinking and command output so far | 61 |
 | `onAssistantMessageStart`, before a message has text | 48 |
-| `onModelSelected`. The model is kept and put on the turn | 35 |
+| `onModelSelected`. The model is kept on the session item, not put on the turn | 35 |
 | Calls that only repeat or prepare another: the start of a tool before its arguments, the second copy of a wrapped call, a command's end before its output, an update with nothing new | 55 |
 | The account starting and stopping | 51 |
 | The rest: thinking that ended with no text, approval prompts and outcomes that arrived a second time, the calls around a tool call that became a question or a message | 30 |
@@ -493,8 +493,8 @@ came from what OpenClaw returned to the plugin's own calls.
 | Action | Calls | What the prototype made of it | What that leaves |
 | --- | --- | --- | --- |
 | `send` | 2 | A `message` item, not a tool call | It is text the agent says to the chat. In `message_actions` it was the agent's only reply |
-| `react` | 1 | A `tool` item of kind `other`, with the chat and the message reacted to in its body | No item type says the agent acted on somebody's message. A client that draws tool calls shows "used a tool" for a thumbs-up |
-| `delete` | 1 | A `tool` item of kind `other`, whose `subject` is the `message` item that was deleted | The deleted message's own item stays `done`. An item changes only by being sent again, and none of the six states means "withdrawn" |
+| `react` | 1 | A `tool` item of kind `other`, whose arguments are only what the tool call carried | No item type says the agent acted on somebody's message. A client that draws tool calls shows "used a tool" for a thumbs-up |
+| `delete` | 1 | A `tool` item of kind `other`, whose arguments are only what the tool call carried | The deleted message's own item stays `done`. An item changes only by being sent again, and none of the six states means "withdrawn" |
 | `edit` | 1 | A `tool` item, `failed` | OpenClaw refused the edit before asking the plugin. An edit that goes through was not recorded, so it was not mapped |
 
 **2. Replies to slash commands belong to no turn.** OpenClaw answers `/help`, `/status` and `/approve` itself,

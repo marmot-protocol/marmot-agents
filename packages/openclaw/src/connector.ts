@@ -792,7 +792,7 @@ export class Connector {
     settle.test = (e) => e.type === "notice";
     this.dispatch(chat, held, null, null, settle);
     if (!settle.done) {
-      const body = { kind: "command_output", command };
+      const body = { kind: "command_output" };
       this.dispatch(chat, chat.translator.notice("Command output", `OpenClaw did not answer ${command}.`, body), null, null, settle);
     }
   }
@@ -886,7 +886,7 @@ export class Connector {
       const open = event.state === "running" || event.state === "waiting";
       if (event.type === "turn" && !open) take(chat.byTurn, event.turn);
       const own = run !== null && chat.nextSession.includes(run);
-      const answersNew = event.type === "notice" && ["/new", "/reset"].includes(text(event.body["command"]));
+      const answersNew = event.type === "notice" && ["/new", "/reset"].includes(chat.translator.commandAnswered(event.item) ?? "");
       // The run of a /new starts the session, or answers the command and starts none: either is all
       // there is of its effect.
       if (own && (event.type === "session" || answersNew)) {
@@ -919,13 +919,7 @@ export class Connector {
 
   /** Keeps what an answer to a waiting approval or question needs. */
   private remember(chat: Chat, event: AgentEvent): void {
-    const natives = new Map<string, unknown>();
-    if (event.type === "approval") {
-      for (const c of Array.isArray(event.body["choices"]) ? event.body["choices"] : []) natives.set(text(object(c)["id"]), object(c)["native"]);
-    } else {
-      const first = object(Array.isArray(event.body["questions"]) ? event.body["questions"][0] : {});
-      for (const o of Array.isArray(first["options"]) ? first["options"] : []) natives.set(text(object(o)["id"]), object(o)["native"]);
-    }
+    const natives = chat.translator.valuesOf(event.item);
     const id = event.item.slice(event.item.indexOf(":") + 1);
     this.asking.set(event.item, { chat: chat.id, kind: event.type as "approval" | "question", id, natives });
   }
