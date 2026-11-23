@@ -2073,7 +2073,9 @@ for a subagent's thread.
 
 Replaced in part by [D-131](#d-131-the-codex-driver-refuses-a-request-of-codexs-that-no-chat-takes): a request
 of Codex's for a thread not known yet is held only while a session is being picked or a subagent started, and
-refused after.
+refused after. Replaced in part by
+[D-132](#d-132-a-stop-waiting-for-a-subagent-is-settled-by-codex-after-a-new-session): a subagent a Stop waits
+for, when the chat's session ends, closes when Codex says what came of the Stop.
 
 **Why.** Codex's subagents were switched off only because nothing showed them, and an approval from one would
 have had nowhere to go. Shown flat, they need nothing new from the apps, the event model or MDK, and the
@@ -2512,6 +2514,24 @@ its thread. A notification is still held so.
 interrupts it. The `DriverTransport` model found both cases (`driver-codex-stray`, `driver-codex-unshown`). An
 error is how Codex's own server refuses what it cannot take, and Codex reads it as a refusal. Holding while a
 pick or a spawn is under way keeps an early request from a subagent able to reach its chat.
+
+Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
+
+## D-132 A Stop waiting for a subagent is settled by Codex after a new session
+
+**Decision.** When a chat's session is replaced while a Stop waits for one of its Codex subagents, the driver
+does not settle the Stop itself, and does not interrupt that subagent a second time. It follows the subagent
+only for what Codex says next of the Stop's interrupt and of the subagent's turn: the turn's end settles the
+Stop, and Codex's refusal to stop it settles the Stop as failed. The subagent's open items close then, rather
+than when the session is replaced, and when Codex stops. Nothing else the subagent says is shown, and a request
+from it is refused ([D-131](#d-131-the-codex-driver-refuses-a-request-of-codexs-that-no-chat-takes)).
+
+This replaces in part [D-117](#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them),
+under which every open subagent item closes when the chat's session ends.
+
+**Why.** Settling the Stop when the driver let the subagent go reported a success Codex had not given: if Codex
+then refused to stop it, the subagent ran on while the chat said it had stopped. Closing its items once Codex
+has spoken keeps what the chat shows true.
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
 

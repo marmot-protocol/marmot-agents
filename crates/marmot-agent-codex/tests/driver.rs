@@ -23,10 +23,18 @@ impl Fake {
         self.to_driver.write_all(line.as_bytes()).await.unwrap();
     }
 
+    /// The next message the driver wrote, or a failure if it writes none in a few seconds.
+    async fn receive(&mut self) -> Value {
+        let wait = std::time::Duration::from_secs(5);
+        let heard = tokio::time::timeout(wait, self.heard.recv()).await;
+        let heard = heard.expect("the driver wrote nothing in time");
+        heard.expect("the driver wrote")
+    }
+
     /// The next message the driver wrote that is not one of `skip`.
     async fn hear(&mut self) -> Value {
         loop {
-            let message = self.heard.recv().await.expect("the driver wrote");
+            let message = self.receive().await;
             let method = message["method"].as_str().unwrap_or_default();
             if !matches!(
                 method,
@@ -68,7 +76,7 @@ async fn connect() -> (Codex, Fake) {
         driver_writes,
         Setup::new("/w"),
     ));
-    let hello = fake.heard.recv().await.unwrap();
+    let hello = fake.receive().await;
     assert_eq!(hello["method"], "initialize");
     let agent = "codex_cli_rs/0.169.0 (Linux; x86_64)";
     fake.say(json!({"id": hello["id"], "result": {"userAgent": agent}}))
@@ -213,7 +221,7 @@ async fn an_answer_reaches_codex_and_its_event_settles_it() {
         given: Given::Choice("c0".into()),
     };
     codex.answer(allow.clone()).await.unwrap();
-    let reply = fake.heard.recv().await.unwrap();
+    let reply = fake.receive().await;
     assert_eq!(reply, json!({"id": 0, "result": {"decision": "accept"}}));
     let answered = codex
         .next_event()
@@ -341,10 +349,7 @@ async fn a_new_session_during_a_waiting_turn_is_refused_so_the_approval_can_be_a
         given: Given::Choice("c0".into()),
     };
     codex.answer(allow).await.unwrap();
-    assert_eq!(
-        fake.heard.recv().await.unwrap()["result"]["decision"],
-        "accept"
-    );
+    assert_eq!(fake.receive().await["result"]["decision"], "accept");
 }
 
 /// A writer that takes only `allowed` more bytes, then waits until given more.
@@ -410,11 +415,11 @@ async fn a_message_cut_short_is_finished_before_the_next() {
     });
     let mut fake = Fake { heard, to_driver };
     let codex = tokio::spawn(Codex::connect(driver_reads, choke, Setup::new("/w")));
-    let hello = fake.heard.recv().await.unwrap();
+    let hello = fake.receive().await;
     fake.say(json!({"id": hello["id"], "result": {"userAgent": "codex_cli_rs/0.169.0"}}))
         .await;
     let mut codex = codex.await.unwrap().unwrap();
-    assert_eq!(fake.heard.recv().await.unwrap()["method"], "initialized");
+    assert_eq!(fake.receive().await["method"], "initialized");
 
     allowed.store(10, Ordering::SeqCst); // the next message gets ten bytes out, then stalls
     let cut = tokio::time::timeout(
@@ -430,12 +435,12 @@ async fn a_message_cut_short_is_finished_before_the_next() {
         codex.prompt(prompt("m-1", "hi")).await.unwrap();
         codex
     });
-    let first = fake.heard.recv().await.unwrap();
+    let first = fake.receive().await;
     assert_eq!(
         first["method"], "model/list",
         "the cut message arrives whole, first"
     );
-    let second = fake.heard.recv().await.unwrap();
+    let second = fake.receive().await;
     assert_eq!(
         second["method"], "collaborationMode/list",
         "and what was queued with it"
@@ -739,7 +744,7 @@ async fn never_received(failure: u8) {
     });
     let mut fake = Fake { heard, to_driver };
     let codex = tokio::spawn(Codex::connect(driver_reads, writer, Setup::new("/w")));
-    let hello = fake.heard.recv().await.unwrap();
+    let hello = fake.receive().await;
     fake.say(json!({"id": hello["id"], "result": {"userAgent": "codex_cli_rs/0.169.0"}}))
         .await;
     let mut codex = codex.await.unwrap().unwrap();
@@ -1063,12 +1068,6 @@ fn settles_r1(e: &Emitted) -> bool {
     e.settles.contains(&"r1".into())
 }
 
-/// The next message the driver writes, or a failure if it writes none in a few seconds.
-async fn next_heard(fake: &mut Fake) -> Value {
-    let heard = tokio::time::timeout(std::time::Duration::from_secs(5), fake.hear()).await;
-    heard.expect("the driver wrote")
-}
-
 /// A turn running with a subagent `sub1` running turn `st1` under it, and a Stop of the turn sent
 /// and taken: the interrupts it sent, in order, unanswered.
 async fn stopping_with_a_subagent() -> (Codex, Fake, Value, Value) {
@@ -1154,7 +1153,7 @@ async fn a_stop_also_stops_a_subagent_whose_start_was_still_unread() {
         let events = until(&mut codex, is_task(State::Cancelled)).await;
         (codex, events)
     });
-    let second = next_heard(&mut fake).await;
+    let second = fake.hear().await;
     assert_eq!(second["method"], "turn/interrupt");
     assert_eq!(second["params"]["threadId"], "sub1");
     assert_eq!(second["params"]["turnId"], "st1");
@@ -1268,7 +1267,7 @@ async fn a_new_session_stops_the_old_ones_subagents() {
         let events = until(&mut codex, |_| false).await;
         (codex, events)
     });
-    let interrupt = next_heard(&mut fake).await;
+    let interrupt = fake.hear().await;
     assert_eq!(interrupt["method"], "turn/interrupt");
     assert_eq!(interrupt["params"]["threadId"], "sub1");
     assert_eq!(interrupt["params"]["turnId"], "st1");
@@ -1298,11 +1297,32 @@ async fn written_so_far(fake: &mut Fake) -> Vec<Value> {
         .await;
     let mut written = Vec::new();
     loop {
-        let message = next_heard(fake).await;
+        let message = fake.hear().await;
         if message["id"] == 999 && message.get("method").is_none() {
             return written;
         }
         written.push(message);
+    }
+}
+
+/// [`written_so_far`], with the driver read meanwhile by the test itself: what it wrote, and the
+/// events it made.
+async fn read_so_far(codex: &mut Codex, fake: &mut Fake) -> (Vec<Value>, Vec<Emitted>) {
+    fake.say(json!({"id": 999, "method": "item/something/new", "params": {"threadId": "th1", "turnId": "t1"}}))
+        .await;
+    let (mut written, mut events) = (Vec::new(), Vec::new());
+    loop {
+        tokio::select! {
+            event = codex.next_event() => {
+                events.extend(event.and_then(Output::into_event));
+            }
+            message = fake.hear() => {
+                if message["id"] == 999 && message.get("method").is_none() {
+                    return (written, events);
+                }
+                written.push(message);
+            }
+        }
     }
 }
 
@@ -1485,4 +1505,388 @@ async fn a_request_the_driver_cannot_read_is_answered() {
     );
     fake.say(turn("turn/completed", "completed")).await;
     reading.await.unwrap();
+}
+
+/// Events until one matches, or none if none comes in a few seconds.
+async fn within(codex: &mut Codex, done: impl Fn(&Emitted) -> bool) -> Option<Vec<Emitted>> {
+    let wait = std::time::Duration::from_secs(3);
+    tokio::time::timeout(wait, until(codex, done)).await.ok()
+}
+
+fn stop_of(request: &str, turn: &str) -> Control {
+    Control {
+        request: request.into(),
+        by: alice(),
+        action: Action::Interrupt { turn: turn.into() },
+    }
+}
+
+/// What the driver wrote that is not yet read, without waiting for more.
+fn written(fake: &mut Fake) -> Vec<Value> {
+    std::iter::from_fn(|| fake.heard.try_recv().ok()).collect()
+}
+
+/// A turn running with subagent `sub1` running turn `st1` under it, then the turn ended: the
+/// subagent outlives it.
+async fn outliving() -> (Codex, Fake) {
+    let (mut codex, mut fake) = running().await;
+    fake.say(started_by("a1", "sub1")).await;
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    fake.say(turn("turn/completed", "completed")).await;
+    until(&mut codex, is_turn(State::Done)).await;
+    (codex, fake)
+}
+
+// A session being resumed can speak before Codex's reply to the resume: what it says is kept, and
+// shown once the reply makes it the chat's.
+#[tokio::test]
+async fn what_a_resumed_session_says_before_its_reply_is_kept() {
+    let (mut codex, mut fake) = connect().await;
+    let driver = tokio::spawn(async move {
+        let mut again = prompt("m-1", "where were we");
+        again.session = Some("th0".into());
+        codex.prompt(again).await.unwrap();
+        codex
+    });
+    let resume = fake.hear().await;
+    assert_eq!(resume["method"], "thread/resume");
+    fake.say(
+        json!({"method": "thread/settings/updated", "params": {"threadId": "th0",
+        "threadSettings": {"model": "m9"}}}),
+    )
+    .await;
+    fake.say(json!({"id": resume["id"], "result": {"thread": {"id": "th0"}}}))
+        .await;
+    fake.answer("turn/start", json!({"turn": {"id": "t1"}}))
+        .await;
+    let mut codex = driver.await.unwrap();
+    let shows_m9 = |e: &Emitted| match e.event.body() {
+        Body::Session(s) => {
+            (s.settings.iter()).any(|x| x.id == "model" && x.value.as_deref() == Some("m9"))
+        }
+        _ => false,
+    };
+    assert!(
+        within(&mut codex, shows_m9).await.is_some(),
+        "what the session said first is shown"
+    );
+    assert_eq!(codex.unrouted(), 0);
+}
+
+// Two Stops under way when a subagent's turn starts: the turn and the subagent are each
+// interrupted once, and each Stop waits for both, so neither is settled while the subagent runs.
+#[tokio::test]
+async fn every_stop_under_way_waits_for_a_subagent_that_starts_meanwhile() {
+    let (mut codex, mut fake) = running().await;
+    fake.say(started_by("a1", "sub1")).await;
+    until(&mut codex, |e| matches!(e.event.body(), Body::Tool(_))).await;
+    let driver = tokio::spawn(async move {
+        codex.control(stop_of("r1", "t1")).await.unwrap();
+        codex
+    });
+    let interrupt = fake.hear().await;
+    assert_eq!(interrupt["params"]["threadId"], "th1");
+    fake.say(json!({"id": interrupt["id"], "result": {}})).await;
+    let mut codex = driver.await.unwrap();
+    codex.control(stop_of("r2", "t1")).await.unwrap(); // it joins the interrupt of t1
+    let (more, _) = read_so_far(&mut codex, &mut fake).await;
+    assert!(
+        !more.iter().any(|m| m["method"] == "turn/interrupt"),
+        "t1 is interrupted once: {more:?}"
+    );
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    let reading = tokio::spawn(async move {
+        let events = until(&mut codex, is_task(State::Cancelled)).await;
+        (codex, events)
+    });
+    let late = fake.hear().await;
+    assert_eq!(late["method"], "turn/interrupt");
+    assert_eq!(late["params"]["threadId"], "sub1");
+    fake.say(json!({"id": late["id"], "result": {}})).await;
+    fake.say(turn("turn/completed", "interrupted")).await;
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "interrupted"))
+        .await;
+    let (_, events) = reading.await.unwrap();
+    for request in ["r1", "r2"] {
+        let settling: Vec<&Emitted> = (events.iter())
+            .filter(|e| e.settles.contains(&request.into()))
+            .collect();
+        assert_eq!(settling.len(), 1, "{request} settled once");
+        assert!(
+            matches!(settling[0].event.body(), Body::Task(_)),
+            "{request} settled by the subagent's end, the last"
+        );
+    }
+    let again = written(&mut fake);
+    assert!(
+        !again.iter().any(|m| m["method"] == "turn/interrupt"),
+        "the subagent is interrupted once: {again:?}"
+    );
+}
+
+/// A Stop of `t1` sent while subagent `sub1` outlives it, its interrupt written and not answered,
+/// and then the chat's session replaced: what Codex says next of that interrupt and that turn.
+async fn new_session_during_a_stop() -> (Codex, Fake, Value) {
+    let (codex, mut fake) = outliving().await;
+    let driver = tokio::spawn(async move {
+        let mut codex = codex;
+        codex.control(stop_t1()).await.unwrap();
+        codex
+    });
+    let interrupt = fake.hear().await;
+    assert_eq!(interrupt["params"]["threadId"], "sub1");
+    let codex = driver.await.unwrap();
+    let fresh = Control {
+        request: "r2".into(),
+        by: alice(),
+        action: Action::NewSession {
+            chat: prompt("m-0", "").chat,
+            session: Some("th1".into()),
+        },
+    };
+    let driver = tokio::spawn(async move {
+        let mut codex = codex;
+        codex.control(fresh).await.unwrap();
+        codex
+    });
+    let start = fake.hear().await;
+    assert_eq!(start["method"], "thread/start");
+    let mut codex = driver.await.unwrap();
+    fake.say(json!({"id": start["id"], "result": {"thread": {"id": "th2"}, "model": "m1"}}))
+        .await;
+    let (more, events) = read_so_far(&mut codex, &mut fake).await;
+    assert!(
+        !more.iter().any(|m| m["method"] == "turn/interrupt"),
+        "the subagent is not interrupted again: {more:?}"
+    );
+    assert!(
+        !events.iter().any(settles_r1),
+        "settled before Codex said anything of the interrupt: {events:?}"
+    );
+    (codex, fake, interrupt)
+}
+
+// A new session while a Stop waits for a subagent that outlived its turn: the Stop is settled by
+// what Codex then says of the subagent, its turn's end, not by the driver letting it go.
+#[tokio::test]
+async fn a_new_session_during_a_stop_of_a_subagent_settles_it_by_its_end() {
+    let (mut codex, mut fake, interrupt) = new_session_during_a_stop().await;
+    fake.say(json!({"id": interrupt["id"], "result": {}})).await;
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "interrupted"))
+        .await;
+    let events = within(&mut codex, settles_r1).await;
+    let events = events.expect("the Stop is settled");
+    let settling: Vec<&Emitted> = events.iter().filter(|e| settles_r1(e)).collect();
+    assert_eq!(settling.len(), 1, "settled once");
+    assert!(
+        matches!(settling[0].event.body(), Body::Task(_)),
+        "{settling:?}"
+    );
+    assert_eq!(settling[0].event.header().state, State::Cancelled);
+}
+
+// And when Codex refuses to stop it, the Stop failed, though the driver let the subagent go.
+#[tokio::test]
+async fn a_new_session_during_a_stop_codex_refuses_leaves_it_failed() {
+    let (mut codex, mut fake, interrupt) = new_session_during_a_stop().await;
+    fake.say(json!({"id": interrupt["id"], "error": {"code": -32600, "message": "no"}}))
+        .await;
+    let events = within(&mut codex, settles_r1).await;
+    let events = events.expect("the Stop is settled");
+    let settler = events.last().unwrap();
+    assert!(
+        matches!(settler.event.body(), Body::Error(_)),
+        "{settler:?}"
+    );
+    assert_eq!(settler.event.header().state, State::Failed);
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "completed"))
+        .await;
+    let more = within(&mut codex, settles_r1).await;
+    assert!(more.is_none(), "settled once");
+}
+
+// A second Stop of a turn whose interrupt is already written joins it: one interrupt, and both
+// Stops settled once, by the turn's end.
+#[tokio::test]
+async fn a_second_stop_joins_the_interrupt_already_written() {
+    let (codex, mut fake) = outliving().await;
+    let driver = tokio::spawn(async move {
+        let mut codex = codex;
+        codex.control(stop_t1()).await.unwrap();
+        codex
+    });
+    let interrupt = fake.hear().await;
+    assert_eq!(interrupt["params"]["threadId"], "sub1");
+    let mut codex = driver.await.unwrap();
+    codex.control(stop_of("r2", "t1")).await.unwrap();
+    let (more, _) = read_so_far(&mut codex, &mut fake).await;
+    assert!(
+        !more.iter().any(|m| m["method"] == "turn/interrupt"),
+        "the second Stop sent another interrupt: {more:?}"
+    );
+    fake.say(json!({"id": interrupt["id"], "result": {}})).await;
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "interrupted"))
+        .await;
+    let events = within(&mut codex, is_task(State::Cancelled)).await;
+    let events = events.expect("the subagent's turn ends");
+    for request in ["r1", "r2"] {
+        let settling: Vec<&Emitted> = (events.iter())
+            .filter(|e| e.settles.contains(&request.into()))
+            .collect();
+        assert_eq!(settling.len(), 1, "{request} settled once");
+        assert!(matches!(settling[0].event.body(), Body::Task(_)));
+    }
+}
+
+// A Stop of the chat's next turn does not stop a subagent left working by the turn before: it is
+// under that turn, not this one (D-117).
+#[tokio::test]
+async fn a_stop_leaves_a_subagent_of_an_earlier_turn_alone() {
+    let (codex, mut fake) = outliving().await;
+    let driver = tokio::spawn(async move {
+        let mut codex = codex;
+        codex.prompt(prompt("m-2", "next")).await.unwrap();
+        codex
+    });
+    fake.answer("turn/start", json!({"turn": {"id": "t2"}}))
+        .await;
+    let mut codex = driver.await.unwrap();
+    let t2 = |method: &str, status: &str| {
+        json!({"method": method, "params": {"threadId": "th1",
+        "turn": {"id": "t2", "items": [], "status": status, "error": null}}})
+    };
+    fake.say(t2("turn/started", "inProgress")).await;
+    until(&mut codex, is_turn(State::Running)).await;
+    let driver = tokio::spawn(async move {
+        codex.control(stop_of("r3", "t2")).await.unwrap();
+        codex
+    });
+    let interrupt = fake.hear().await;
+    assert_eq!(interrupt["params"]["threadId"], "th1");
+    assert_eq!(interrupt["params"]["turnId"], "t2");
+    fake.say(json!({"id": interrupt["id"], "result": {}})).await;
+    let mut codex = driver.await.unwrap();
+    fake.say(t2("turn/completed", "interrupted")).await;
+    let settled = within(&mut codex, |e| e.settles.contains(&"r3".into())).await;
+    let events = settled.expect("settled by the turn's end");
+    assert!(matches!(events.last().unwrap().event.body(), Body::Turn(_)));
+    let more = written(&mut fake);
+    assert!(
+        !more.iter().any(|m| m["params"]["threadId"] == "sub1"),
+        "the earlier turn's subagent is left alone: {more:?}"
+    );
+}
+
+// What the parent's thread says of a subagent after the parent's turn has ended (recorded in
+// `subagent_interrupt`) is shown under the turn it names, not under none.
+#[tokio::test]
+async fn a_subagents_end_after_its_parents_turn_keeps_that_turn() {
+    let (mut codex, mut fake) = outliving().await;
+    let ended = json!({"type": "subAgentActivity", "id": "a2", "kind": "completed",
+        "agentThreadId": "sub1", "agentPath": "/root/a"});
+    fake.say(
+        json!({"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1",
+        "item": ended}}),
+    )
+    .await;
+    let events = until(&mut codex, |e| e.event.header().item.as_str() == "a2").await;
+    let header = events.last().unwrap().event.header();
+    assert_eq!(header.turn.as_ref().map(|t| t.as_str()), Some("t1"));
+}
+
+// Work given to a subagent while its turn runs is for its next turn: the running turn's words
+// still name what it is working for.
+#[tokio::test]
+async fn work_given_during_a_subagents_turn_is_for_its_next() {
+    let (mut codex, mut fake) = running().await;
+    fake.say(started_by("a1", "sub1")).await;
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    let more = json!({"type": "subAgentActivity", "id": "a2", "kind": "interacted",
+        "agentThreadId": "sub1", "agentPath": "/root/a"});
+    fake.say(
+        json!({"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1",
+        "item": more}}),
+    )
+    .await;
+    fake.say(
+        json!({"method": "item/completed", "params": {"threadId": "sub1", "turnId": "st1",
+        "item": {"type": "agentMessage", "id": "w1", "text": "first", "phase": "final_answer"}}}),
+    )
+    .await;
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "completed"))
+        .await;
+    fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
+        .await;
+    let events = until(&mut codex, |e| e.event.header().item.as_str() == "task:st2").await;
+    let parent = (events.iter()).find_map(|e| match e.event.body() {
+        Body::Message(m) if e.event.header().item.as_str() == "w1" => Some(m.parent.clone()),
+        _ => None,
+    });
+    assert_eq!(parent, Some(Some("a1".into())), "the running turn's words");
+    let subject = |item: &str| {
+        (events.iter().rev()).find_map(|e| match e.event.body() {
+            Body::Task(t) if e.event.header().item.as_str() == item => Some(t.subject.clone()),
+            _ => None,
+        })
+    };
+    assert_eq!(subject("task:st1"), Some(Some("a1".into())));
+    assert_eq!(subject("task:st2"), Some(Some("a2".into())));
+}
+
+// Work given after a subagent's turn has ended replaces work given while it ran: the next turn
+// works for the newest.
+#[tokio::test]
+async fn the_newest_work_given_is_the_next_turns() {
+    let (mut codex, mut fake) = running().await;
+    fake.say(started_by("a1", "sub1")).await;
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    let more = |id: &str| {
+        let item = json!({"type": "subAgentActivity", "id": id, "kind": "interacted",
+            "agentThreadId": "sub1", "agentPath": "/root/a"});
+        json!({"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1",
+            "item": item}})
+    };
+    fake.say(more("a2")).await; // while st1 runs
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "completed"))
+        .await;
+    fake.say(more("a3")).await; // after it ended
+    fake.say(started_by("a1", "sub1")).await; // the first item again
+    fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
+        .await;
+    let events = until(&mut codex, |e| e.event.header().item.as_str() == "task:st2").await;
+    let Body::Task(task) = events.last().unwrap().event.body() else {
+        panic!("a task");
+    };
+    assert_eq!(task.subject, Some("a3".into()));
+}
+
+// A tool for subagents that failed, or was stopped, is not titled as having worked.
+#[tokio::test]
+async fn a_failed_spawn_is_not_shown_as_started() {
+    let (mut codex, mut fake) = running().await;
+    for (id, status, state, title) in [
+        ("c1", "failed", State::Failed, "A subagent tool failed"),
+        (
+            "c2",
+            "interrupted",
+            State::Cancelled,
+            "A subagent tool was stopped",
+        ),
+    ] {
+        let spawn = json!({"type": "collabAgentToolCall", "id": id, "tool": "spawnAgent",
+            "status": status, "receiverThreadIds": [], "prompt": "look"});
+        fake.say(
+            json!({"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1",
+            "item": spawn}}),
+        )
+        .await;
+        let events = until(&mut codex, |e| e.event.header().item.as_str() == id).await;
+        let header = events.last().unwrap().event.header();
+        assert_eq!(header.state, state, "{status}");
+        assert_eq!(header.title, title, "{status}");
+    }
 }

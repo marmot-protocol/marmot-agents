@@ -137,6 +137,9 @@ struct Subagent {
     /// The turn the person started that its last turn ran under: what it says between turns
     /// belongs to.
     root: Option<String>,
+    /// The work its next turn is for: the item that gave it, and what it is for. The newest
+    /// given, while a turn runs or between turns, and taken when the next turn starts.
+    next: Option<(String, Option<String>)>,
 }
 
 /// Turns the messages of one chat's Codex session into agent events.
@@ -213,30 +216,40 @@ impl Translator {
         }
     }
 
-    /// The item that gave a subagent its work, and what that work is, as its next turn shows them.
-    /// A task already running with no subject, because its turn started before the item that
-    /// names it came, takes them now: the events returned show it. Nothing for a translator that
-    /// follows the chat's session.
+    /// The item that gave a subagent its work, and what that work is, as its next turn shows them:
+    /// the newest given waits for that turn (`next`). A task already running with no subject,
+    /// because its turn started before the item that names it came, takes them now: the events
+    /// returned show it. A task running with a subject keeps it, and its words theirs. Codex
+    /// names one item more than once (its start, its end): a repeat of the item the running or
+    /// last task names gives no new work. Nothing for a translator that follows the chat's
+    /// session.
     pub fn given_work(&mut self, subject: &str, description: Option<&str>) -> Vec<AgentEvent> {
         let mut out = Vec::new();
+        let item = self.turn_item(self.turn.as_deref());
+        let running = self.open_event(&item);
         let Some(sub) = self.subagent.as_mut() else {
             return out;
         };
-        sub.subject = Some(subject.to_string());
-        if let Some(description) = description.filter(|d| !d.is_empty()) {
-            sub.description = Some(description.to_string());
+        let description = description.filter(|d| !d.is_empty()).map(String::from);
+        let has_subject = match running.as_ref().map(AgentEvent::body) {
+            Some(Body::Task(task)) => task.subject.is_some(),
+            _ => true,
+        };
+        if has_subject {
+            if sub.subject.as_deref() != Some(subject) {
+                sub.next = Some((subject.to_string(), description));
+            }
+            return out;
         }
-        let sub = sub.clone();
-        let item = self.turn_item(self.turn.as_deref());
-        let Some(prev) = self.open_event(&item) else {
+        let Some(prev) = running else {
             return out;
         };
         let Body::Task(task) = prev.body() else {
             return out;
         };
-        if task.subject.is_some() {
-            return out; // it works for what it was given first; the next turn for this
-        }
+        sub.subject = Some(subject.to_string());
+        sub.description = description.or(sub.description.take());
+        let sub = sub.clone();
         let native = prev.native().cloned();
         let body = Body::Task(Task {
             kind: task.kind.clone(),
@@ -268,6 +281,12 @@ impl Translator {
     pub fn root_turn(&self) -> Option<&str> {
         let turn = self.turn.as_deref()?;
         Some(self.roots.get(turn).map_or(turn, String::as_str))
+    }
+
+    /// For a subagent's running turn, the turn the person started as Codex names it
+    /// (`rootTurnId`), when it does.
+    pub fn named_root_turn(&self) -> Option<&str> {
+        self.roots.get(self.turn.as_deref()?).map(String::as_str)
     }
 
     /// Methods Codex sent that the driver has no rule for, in the order they came. A newer Codex
@@ -596,7 +615,13 @@ impl Translator {
         };
         let turn = p.turn.unwrap_or_default();
         self.turn = turn.id;
-        if let Some(sub) = self.subagent.clone() {
+        if let Some(sub) = self.subagent.as_mut() {
+            // Work given while the last turn ran is this one's.
+            if let Some((subject, description)) = sub.next.take() {
+                sub.subject = Some(subject);
+                sub.description = description.or(sub.description.take());
+            }
+            let sub = sub.clone();
             return self.subagent_started(sub, turn.root_turn_id, method, params, out);
         }
         // The oldest request that starts a turn started this one. With none, Codex started it.
@@ -663,6 +688,9 @@ impl Translator {
             return;
         };
         let it = note.item.unwrap_or_default();
+        // What a parent's thread says of a subagent can come after the parent's turn has ended
+        // (recorded): it stays under the turn it names.
+        let in_turn = (self.session.clone(), note.turn_id.or(self.turn.clone()));
         let started = method == "item/started";
         let kind = it.kind.as_deref();
         let native_kind = format!("{method} [{}]", show(kind));
@@ -945,7 +973,8 @@ impl Translator {
                 let title = if started { doing } else { done };
                 let tool = tool(ToolKind::Subagent, "subAgentActivity");
                 let text = it.agent_path.unwrap_or_default();
-                self.emit(out, &iid, Body::Tool(tool), state, title, &text, native());
+                let body = Body::Tool(tool);
+                self.emit_owned(out, in_turn, &iid, body, state, title, &text, native());
             }
             Some("collabAgentToolCall") => {
                 // A tool for subagents: on the older runtime the one that starts them, and on
@@ -971,9 +1000,16 @@ impl Translator {
                         .collect();
                     tool.output = (!said.is_empty()).then(|| said.join("\n"));
                 }
-                let title = if started { doing } else { done };
+                // One that failed or was stopped is not titled as having worked.
+                let title = match state {
+                    State::Running => doing,
+                    State::Failed => "A subagent tool failed",
+                    State::Cancelled => "A subagent tool was stopped",
+                    _ => done,
+                };
                 let text = it.prompt.unwrap_or_default();
-                self.emit(out, &iid, Body::Tool(tool), state, title, &text, native());
+                let body = Body::Tool(tool);
+                self.emit_owned(out, in_turn, &iid, body, state, title, &text, native());
             }
             _ => self.unknown.push(native_kind.clone()),
         }

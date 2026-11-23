@@ -9,9 +9,10 @@ how each message relates to the proposed [event model](../design/event-model.md)
 
 | Source | What it is | How it was used |
 | --- | --- | --- |
-| [`fixtures/recordings`](../../fixtures/recordings/README.md) | 58 scripted sessions, 29 with Codex and 29 with Claude Code, recorded on 2026-11-17 and 2026-11-18 (Codex's `send_file` on 2026-11-21), and six more Codex sessions with subagents, recorded on 2026-11-20 | Read in full. Every claim on this page about order, fields and behaviour comes from these |
+| [`fixtures/recordings`](../../fixtures/recordings/README.md) | 58 scripted sessions, 29 with Codex and 29 with Claude Code, recorded on 2026-11-17 and 2026-11-18 (Codex's `send_file` on 2026-11-21), and six more Codex sessions with subagents, recorded on 2026-11-20 | Read in full. Every claim on this page about order and behaviour comes from these, and every claim about fields, except where a section says a field was read in a schema |
 | [`data/claude-sdk-message-structures.txt`](data/claude-sdk-message-structures.txt) | The structure of 176,652 Claude Agent SDK messages from four days of real use on one developer's machine | Counts and field names only. No content was read or kept |
 | Codex's generated protocol schema | `codex app-server generate-json-schema`, codex-cli 0.169.0 | The list of methods |
+| Codex's generated protocol schema, again | The same, codex-cli 0.171.0, read on 2026-11-23 | The fields for subagents that no recording holds, in [what 0.171.0's schema adds](#subagents) |
 | [`fixtures/recordings/acp/opencode`](../../fixtures/recordings/README.md#acp-opencode) | 12 scripted sessions with OpenCode 2.3.2 over ACP, recorded on 2026-11-21 | Read in full, for the [ACP section](#acp-opencode) only |
 | [`fixtures/recordings/acp/goose`](../../fixtures/recordings/README.md#acp-goose) | The same 12 with Goose 1.59.2, in a container, and `restart_mid_turn`, recorded on 2026-11-21 | Read in full, for the [Goose section](#acp-goose) only |
 | [`fixtures/recordings/acp/cursor`](../../fixtures/recordings/README.md#acp-cursor) | 11 of them with the Cursor Agent CLI 2026.11.19, recorded on 2026-11-21 | Read in full, for the [Cursor section](#acp-cursor) only |

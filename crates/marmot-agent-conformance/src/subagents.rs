@@ -68,9 +68,10 @@ fn items<'a>(seen: &'a [Emitted], chat: &str) -> Vec<&'a Emitted> {
 
 /// What a chat shows of its subagents, from the last version of each item: the tool items that
 /// started them or gave them work, each subagent's tasks, by the tool item they name, and each
-/// message that names a parent, by that parent.
+/// message that names a parent, by that parent. A tool item that names no turn is kept apart.
 struct Shown {
     tools: Vec<String>,
+    turnless: Vec<String>,
     tasks: Vec<(Option<String>, State)>,
     words: Vec<(String, String)>,
 }
@@ -78,6 +79,7 @@ struct Shown {
 fn shown(seen: &[Emitted], chat: &str) -> Shown {
     let mut shown = Shown {
         tools: Vec::new(),
+        turnless: Vec::new(),
         tasks: Vec::new(),
         words: Vec::new(),
     };
@@ -86,6 +88,9 @@ fn shown(seen: &[Emitted], chat: &str) -> Shown {
         match e.event.body() {
             Body::Tool(t) if t.kind == ToolKind::Subagent => {
                 shown.tools.push(header.item.as_str().to_string());
+                if header.turn.is_none() {
+                    shown.turnless.push(header.item.as_str().to_string());
+                }
             }
             Body::Task(t) if t.kind == "subagent" => {
                 let subject = t.subject.as_ref().map(|s| s.as_str().to_string());
@@ -124,7 +129,8 @@ fn flat(run: &Run<impl Subject>, chat: &str, count: usize, state: State) -> Resu
 
 /// What `seen` shows in `chat`: `count` subagents, each started by a `subagent` tool item, each
 /// task naming one, each having spoken with its tool item as parent, and every task ended as
-/// `state`, all in the chat's one session.
+/// `state`, all in the chat's one session, and every tool item under a turn, even one that came
+/// after its turn had ended.
 pub fn shown_flat(
     seen: &[Emitted],
     chat: &str,
@@ -143,6 +149,9 @@ fn subagents_shown(
 ) -> Result<(), Violation> {
     let s = shown(seen, chat);
     let fail = |detail: String| Err(broke(FLAT, detail));
+    if let Some(item) = s.turnless.first() {
+        return fail(format!("the subagent tool item {item} names no turn"));
+    }
     if s.tasks.len() != count {
         return fail(format!(
             "{} subagent tasks shown, not {count}",
@@ -200,13 +209,17 @@ pub async fn subagent_speaks_first<S: Subject>(subject: S) -> Result<(), Violati
 }
 
 /// A subagent that starts one of its own: both are shown in the chat, the inner one named by the
-/// item of the outer one that started it.
+/// item of the outer one that started it, not by the item that started the outer one.
 pub async fn nested_subagents<S: Subject>(subject: S) -> Result<(), Violation> {
     let mut run = Run::start(subject).await;
     let m = taken(run.prompt("c-1", "#nest").await?, "the prompt")?;
     run.wait("L2", "the turn's end", ended_turn_of(&m)).await?;
     run.checkpoint().await?;
     flat(&run, "c-1", 2, State::Done)?;
+    let s = shown(&run.seen, "c-1");
+    if s.tasks.first().map(|t| &t.0) == s.tasks.get(1).map(|t| &t.0) {
+        return Err(broke(FLAT, "both subagents name the same item"));
+    }
     run.end().await
 }
 
