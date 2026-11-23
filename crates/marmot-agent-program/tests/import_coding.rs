@@ -21,6 +21,7 @@
 //! Each stand-in sits where the installer found the harness's program, which is what the
 //! import carries over.
 
+#[path = "../../marmot-agent/tests/common/mod.rs"]
 mod common;
 mod old_connector;
 
@@ -28,9 +29,9 @@ use common::connector::{self, Heard, Script};
 use common::within;
 use marmot_account::AccountHome;
 use marmot_agent::config::Config;
-use marmot_agent::import::{self, Connector, Options};
 use marmot_agent::rights::Who;
 use marmot_agent::socket::PROTOCOL;
+use marmot_agent_import::{self as import, Connector, Options};
 use old_connector::{
     BEFORE, CLAUDE, GOOSE, Invited, Noted, OPENCODE, PI, Terminal, chat_messages, installed,
     invited, places,

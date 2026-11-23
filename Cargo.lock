@@ -2997,8 +2997,6 @@ dependencies = [
 name = "marmot-agent"
 version = "0.1.0"
 dependencies = [
- "agent-connector",
- "agent-control",
  "bech32 0.12.0",
  "cgka-traits",
  "getrandom 0.3.4",
@@ -3099,6 +3097,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "marmot-agent-import"
+version = "0.1.0"
+dependencies = [
+ "marmot-account",
+ "marmot-agent",
+ "marmot-app",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
+
+[[package]]
 name = "marmot-agent-pi"
 version = "0.1.0"
 dependencies = [
@@ -3108,6 +3120,31 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "marmot-agent-program"
+version = "0.1.0"
+dependencies = [
+ "agent-connector",
+ "agent-control",
+ "cgka-traits",
+ "hex",
+ "marmot-account",
+ "marmot-agent",
+ "marmot-agent-acp",
+ "marmot-agent-codex",
+ "marmot-agent-driver",
+ "marmot-agent-events",
+ "marmot-agent-import",
+ "marmot-agent-pi",
+ "marmot-app",
+ "nostr-relay-builder",
+ "serde_json",
+ "sha2 0.10.9",
+ "storage-sqlite",
  "tempfile",
  "tokio",
 ]

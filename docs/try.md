@@ -16,7 +16,7 @@ compiler that MDK uses: see "Verification" in [`AGENTS.md`](../AGENTS.md).
 1. Build both programs, and make a folder for Codex to work in:
 
    ```sh
-   cargo build -p marmot-agent -p marmot-agent-chat
+   cargo build -p marmot-agent-program -p marmot-agent-chat
    mkdir -p /tmp/try/work
    ```
 

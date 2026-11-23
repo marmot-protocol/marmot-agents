@@ -106,7 +106,7 @@ invited again, and every harness that allows it can send a file.
 
 Built so far, provisional until the owner accepts what others can see:
 
-- **Moving the coding connectors over.** A test (`crates/marmot-agent/tests/import.rs` and `import_coding.rs`)
+- **Moving the coding connectors over.** A test (`crates/marmot-agent-program/tests/import.rs` and `import_coding.rs`)
   moves an install of each of today's coding connectors over: Codex, Claude Code, OpenCode, Pi and Goose. It
   runs today's real `wn-agent`, at the MDK revision the core uses, laid out as MDK's installer lays it out,
   lets a person invite it and write to it, stops it as systemd does, and imports the home. Then the core
@@ -115,7 +115,7 @@ Built so far, provisional until the owner accepts what others can see:
   OpenCode, Goose and Pi the core is `marmot-agent run` on the imported settings with its own driver; for
   Claude Code, a stand-in for its driver connects to the socket; for Codex, a stand-in driver runs in the
   test. See [what is proven](move.md#what-is-proven).
-- **Moving the gateway plugins over.** A second test (`crates/marmot-agent/tests/import_gateways.rs`) does the
+- **Moving the gateway plugins over.** A second test (`crates/marmot-agent-program/tests/import_gateways.rs`) does the
   same for Hermes and OpenClaw against the real gateways in containers, with today's plugin in them, through
   `install/hermes.sh` and `install/openclaw.sh` with `--replace-plugin`. It needs Docker and runs when asked; the
   gateways' model is a scripted one the test serves.

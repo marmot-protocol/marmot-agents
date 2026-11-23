@@ -12,7 +12,6 @@
 
 use marmot_agent::PubKey;
 use marmot_agent::config::Config;
-use marmot_agent::import::{self, Options, Places};
 use marmot_agent::marmot::{self, Marmot};
 use marmot_agent::run::{Core, Store, serve};
 use marmot_agent::socket::Endpoint;
@@ -38,7 +37,7 @@ fn main() -> ExitCode {
         };
     }
     if command == "import" {
-        return match import(path, &args[3..]) {
+        return match marmot_agent_import::command(path, &args[3..]) {
             Ok(()) => ExitCode::SUCCESS,
             Err(why) => fail(&why),
         };
@@ -216,54 +215,4 @@ fn stopped() -> impl std::future::Future<Output = ()> {
             _ = next(interrupt) => {}
         }
     }
-}
-
-/// Takes over one of today's connector installs: plans, prints the plan, and carries it out
-/// unless `--dry-run` is given.
-fn import(home: &str, rest: &[String]) -> Result<(), String> {
-    let mut options = Options {
-        home: std::path::absolute(home).map_err(|_| "the old home's path could not be read")?,
-        harness: None,
-        owner: None,
-        cwd: None,
-        settings: None,
-        leave_running: Vec::new(),
-        places: Places::of_this_user()?,
-        now: std::time::SystemTime::now(),
-    };
-    let mut dry_run = false;
-    let mut rest = rest.iter();
-    while let Some(flag) = rest.next() {
-        // An option where a value belongs is a mistake, never the value: `--settings --dry-run`
-        // must not write the settings to `--dry-run` and carry the import out.
-        let mut value = || match rest.next() {
-            Some(value) if !value.starts_with('-') => Ok(value.clone()),
-            _ => Err(format!("`{flag}` needs a value; nothing was changed")),
-        };
-        match flag.as_str() {
-            "--harness" => options.harness = Some(value()?),
-            "--owner" => options.owner = Some(value()?),
-            "--cwd" => options.cwd = Some(value()?),
-            "--settings" => {
-                // Whole, so the commands printed afterwards work from any folder.
-                let settings = std::path::absolute(value()?)
-                    .map_err(|_| "the settings' path could not be read")?;
-                options.settings = Some(settings);
-            }
-            "--leave-running" => options.leave_running.push(value()?),
-            "--dry-run" => dry_run = true,
-            _ => return Err(format!("`{flag}` is not an option of import")),
-        }
-    }
-    let mut services = import::services::System::default();
-    let plan = import::plan(&options, &mut services)?;
-    let mut out = std::io::stdout();
-    plan.print(&mut out)
-        .map_err(|_| "the plan could not be printed")?;
-    if dry_run {
-        println!("\nDry run: nothing was changed.");
-        return Ok(());
-    }
-    println!();
-    import::carry_out(&options, &plan, &mut services, &mut out)
 }

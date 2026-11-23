@@ -478,7 +478,7 @@ fn built(name: &str, file: &Path, loaded: &Loaded, mut doubts: Vec<String>) -> O
         }
         match fs::read_to_string(path) {
             Ok(text) => {
-                for (k, v) in crate::import::env_file(&text) {
+                for (k, v) in crate::env_file(&text) {
                     set(&mut env, &k, &v);
                 }
             }

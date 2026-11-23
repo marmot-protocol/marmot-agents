@@ -26,9 +26,10 @@
 //! finds free and then lets go of, so run one scenario at a time. They run only when asked for:
 //!
 //! ```sh
-//! cargo test -p marmot-agent --test import_gateways -- --ignored --nocapture --test-threads=1
+//! cargo test -p marmot-agent-program --test import_gateways -- --ignored --nocapture --test-threads=1
 //! ```
 
+#[path = "../../marmot-agent/tests/common/mod.rs"]
 mod common;
 mod old_connector;
 
@@ -37,9 +38,9 @@ use common::within;
 use marmot_account::AccountHome;
 use marmot_agent::EventKey;
 use marmot_agent::carrier::{self, ITEM_KIND};
-use marmot_agent::import::{self, Connector, Options};
 use marmot_agent::rights::Who;
 use marmot_agent_events::body::Body;
+use marmot_agent_import::{self as import, Connector, Options};
 use marmot_app::{AppMessageQuery, MarmotAppRuntime};
 use old_connector::{BEFORE, Noted, Unanswered, ask, chat_messages, local_app, places, setup};
 use serde_json::{Value, json};

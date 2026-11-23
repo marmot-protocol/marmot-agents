@@ -19,8 +19,8 @@
 use agent_control::{AgentControlEnvelope, AgentControlRequest, AgentControlResponse};
 use cgka_traits::GroupId;
 use marmot_account::AccountHome;
-use marmot_agent::import::Places;
-use marmot_agent::import::services::{Loaded, Service, Services};
+use marmot_agent_import::Places;
+use marmot_agent_import::services::{Loaded, Service, Services};
 use marmot_app::{
     AccountSetupRequest, AppMessageQuery, AppMessageRecord, MarmotApp, MarmotAppConfig,
     MarmotAppRuntime,

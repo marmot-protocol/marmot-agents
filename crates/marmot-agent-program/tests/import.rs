@@ -3,6 +3,7 @@
 //! files its installer writes are put around it. The import backs the home up and writes the settings, and the core then
 //! runs on the home in place: the same identity, in the same chat, without being invited again.
 
+#[path = "../../marmot-agent/tests/common/mod.rs"]
 mod common;
 mod old_connector;
 
@@ -10,10 +11,10 @@ use common::{Echo, eventually, within};
 use marmot_account::AccountHome;
 use marmot_agent::PubKey;
 use marmot_agent::config::Config;
-use marmot_agent::import::{self, Connector, Options};
 use marmot_agent::marmot::{self, Marmot};
 use marmot_agent::rights::Who;
 use marmot_agent::run::{Core, Store};
+use marmot_agent_import::{self as import, Connector, Options};
 use old_connector::{Invited, Noted, chat_messages, invited, places};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;

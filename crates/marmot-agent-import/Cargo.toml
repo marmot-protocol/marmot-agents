@@ -1,0 +1,27 @@
+[package]
+name = "marmot-agent-import"
+description = "`marmot-agent import`: taking over one of today's connector installs (D-089), until they are gone"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Only the program (`crates/marmot-agent-program`) uses this crate. When MDK deletes today's
+# connectors, it goes: this folder, the program's dependency on it and its `import` command, and
+# the move tests beside the program (`tests/import*.rs`, `tests/old_connector`), which run the
+# program and so are its tests.
+
+[dependencies]
+marmot-agent = { path = "../marmot-agent" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+# Moving the home's backup into place without replacing anything already there.
+rustix = { version = "1", features = ["fs"] }
+# MDK, as a library (D-002), at the core's revision: the old home's identities, and its lease.
+marmot-app = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
+marmot-account = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
+
+[dev-dependencies]
+tempfile = "3"

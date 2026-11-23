@@ -1,0 +1,45 @@
+[package]
+name = "marmot-agent-program"
+description = "The program `marmot-agent` (D-050): the core, and the commands that set it up"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# The program is a package of its own, beside the core's library (`crates/marmot-agent`), so that
+# it can use `marmot-agent-import`, which uses the core: one package holding both would depend
+# on itself.
+[[bin]]
+name = "marmot-agent"
+path = "src/main.rs"
+
+[dependencies]
+marmot-agent = { path = "../marmot-agent" }
+marmot-agent-acp = { path = "../marmot-agent-acp" }
+marmot-agent-codex = { path = "../marmot-agent-codex" }
+marmot-agent-pi = { path = "../marmot-agent-pi" }
+# `marmot-agent import`, until today's connectors are gone.
+marmot-agent-import = { path = "../marmot-agent-import" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+# MDK, as a library (D-002), at the core's revision.
+marmot-app = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
+cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
+
+# The tests that run the program: how it stops, and the move tests, which go with
+# `marmot-agent-import`. They share the core's test helpers (`crates/marmot-agent/tests/common`).
+[dev-dependencies]
+marmot-agent-driver = { path = "../marmot-agent-driver" }
+marmot-agent-events = { path = "../marmot-agent-events" }
+marmot-account = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
+serde_json = "1"
+hex = "0.4"
+sha2 = "0.10"
+tempfile = "3"
+nostr-relay-builder = "0.44"
+storage-sqlite = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8", features = ["test-support"] }
+# The move tests run today's connector, wn-agent, from MDK at the same revision, and speak to
+# its socket.
+agent-connector = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
+agent-control = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
+tokio = { version = "1", features = ["io-util", "net", "process", "sync", "test-util", "time"] }

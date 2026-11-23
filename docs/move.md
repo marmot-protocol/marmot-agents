@@ -138,7 +138,7 @@ identity is its own program ([D-072](decisions.md#d-072-one-agent-identity-per-c
 ## What is proven
 
 A test moves an install of each coding connector over: Codex, Claude Code, OpenCode, Pi and Goose
-(`crates/marmot-agent/tests/import.rs` and `import_coding.rs`). For each, it:
+(`crates/marmot-agent-program/tests/import.rs` and `import_coding.rs`). For each, it:
 
 - runs today's `wn-agent`, MDK's `agent-connector` at the revision the core uses, on a home laid out as MDK's
   `install-terminal-harness-marmot.sh` lays it out: the harness's env file in the home, and the two systemd
@@ -158,8 +158,8 @@ socket, and a stand-in for the Claude Code driver connects to it as the driver d
 in the test with a stand-in driver.
 
 A second test moves an install of each gateway plugin over: Hermes and OpenClaw
-(`crates/marmot-agent/tests/import_gateways.rs`). It needs Docker, so it runs only when asked, one scenario at a
-time (`cargo test -p marmot-agent --test import_gateways -- --ignored --test-threads=1`). The real gateway runs
+(`crates/marmot-agent-program/tests/import_gateways.rs`). It needs Docker, so it runs only when asked, one scenario at a
+time (`cargo test -p marmot-agent-program --test import_gateways -- --ignored --test-threads=1`). The real gateway runs
 in the repository's image (`python/hermes`, `packages/openclaw/container`) with today's plugin, built from MDK's
 sources as MDK's release builds it and set up as MDK's installer sets it up, and the person has a message
 answered through it. Then the import, `install/hermes.sh` or `install/openclaw.sh` with `--replace-plugin`
@@ -171,6 +171,11 @@ address, and no systemd is touched: the import's service manager notes what it s
 Each scenario passed 5 runs of 5, with `wn-agent` stopped at once after the person's last message.
 
 Not proven yet: a move on a real machine, with systemd and the real harnesses.
+
+The import is a crate of its own, `crates/marmot-agent-import`, so that it can be deleted when MDK deletes
+today's connectors without touching the core. Its tests run the program, so they are the program's, in
+`crates/marmot-agent-program/tests` (`import.rs`, `import_coding.rs`, `import_gateways.rs` and `old_connector`),
+and go with it.
 
 ## Going back
 

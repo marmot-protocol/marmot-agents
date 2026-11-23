@@ -488,7 +488,7 @@ install_core() {
             die "--from-source needs the pinned Odin: run bash tools/odin/install.sh <absolute folder> and set ODIN to the odin program there"
         say "building marmot-agent from source (this takes a while)"
         # shellcheck disable=SC2016 # expanded by that shell
-        act sh -c 'cd "$1" && cargo build --locked --release -p marmot-agent' sh "$MA_ROOT"
+        act sh -c 'cd "$1" && cargo build --locked --release -p marmot-agent-program' sh "$MA_ROOT"
         binary="$MA_ROOT/target/release/marmot-agent"
         tree=$MA_ROOT
     elif [ -z "$VERSION" ] && [ -x "$MA_ROOT/bin/marmot-agent" ]; then

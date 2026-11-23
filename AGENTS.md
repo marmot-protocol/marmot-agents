@@ -8,11 +8,13 @@ duplicate it here.
 Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) into Marmot group chats.
 
 **Status: every harness is driven; building towards the swap (M4).** The Rust workspace under `crates/` has
-nine crates, and CI checks them: `marmot-agent-events`, the agent event and its eleven item types;
+eleven crates, and CI checks them: `marmot-agent-events`, the agent event and its eleven item types;
 `marmot-agent-driver`, the trait a driver implements; the built-in drivers `marmot-agent-codex` (Codex, with
 subagents switched off for now), `marmot-agent-acp` (OpenCode, Goose and Cursor over ACP) and `marmot-agent-pi`
 (Pi, in a container from `tools/pi`); `marmot-agent`, the core, which runs one agent's account through MDK and
-drives a built-in driver or serves a local socket; `marmot-agent-chat`, a terminal client for trying it;
+drives a built-in driver or serves a local socket; `marmot-agent-program`, which builds the program
+`marmot-agent` from the core and its commands; `marmot-agent-import`, its `import` command, which moves one of
+today's MDK connector installs over and goes when they do; `marmot-agent-chat`, a terminal client for trying it;
 `marmot-agent-sim`, a deterministic simulator that runs the real core against a simulated MDK and a scripted
 driver, with faults, from a seed; and `marmot-agent-conformance`, the suite every driver must pass, on scriptable
 fakes of the harnesses.
@@ -65,9 +67,10 @@ being replaced by what is designed here, not extended.
 | Work on the Hermes plugin's translation | `python/marmot_hermes/translate.py`, after `fixtures/recordings/hermes` and its `expected/` events |
 | Work on the Hermes plugin's transport | `python/marmot_hermes/connector.py` and `adapter.py`, after `docs/design/drivers.md` and `docs/reference/hermes-messages.md` |
 | Work on the core | `crates/marmot-agent`, after `docs/plan.md` and `docs/design/architecture.md` |
+| Work on the program's command line | `crates/marmot-agent-program` |
 | Work on the install scripts | `install/lib.sh`, then the harness's script beside it, after `README.md` ("Installing an agent") |
 | Work on the release | `.github/workflows/release.yml` and `tools/release/package.sh` |
-| Work on moving an install over | `crates/marmot-agent/src/import`, after `docs/move.md` and `docs/reference/current-connectors.md` |
+| Work on moving an install over | `crates/marmot-agent-import`, and its tests in `crates/marmot-agent-program/tests`, after `docs/move.md` and `docs/reference/current-connectors.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml` |
 | Plan or add tests, models or proofs | `docs/design/verification.md` |
 | Work on the simulator, or replay one of its failure capsules | `crates/marmot-agent-sim/README.md`, after `docs/design/verification.md` |

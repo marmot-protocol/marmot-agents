@@ -3,6 +3,7 @@
 //! after a message arrives hears the chat again when it is started on the same home; stopped just
 //! after one, or just after one, does too, since MDK's fix for its #3602.
 
+#[path = "../../marmot-agent/tests/common/mod.rs"]
 mod common;
 
 use common::{relay, within};
