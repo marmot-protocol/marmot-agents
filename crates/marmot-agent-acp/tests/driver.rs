@@ -616,7 +616,8 @@ async fn a_request_with_an_escaped_id_is_answered_once() {
 /// picked can speak before the reply that picks it; when the reply names another session, the
 /// request is refused as the official ACP library refuses a request for a session it does not
 /// have: -32002, resource not found, with the session in `data`. So is one that comes when no
-/// session is being picked.
+/// session is being picked. One from the session the reply names, held with it, is the chat's,
+/// and takes the person's answer.
 #[tokio::test]
 async fn a_request_from_a_session_no_chat_has_is_refused_as_not_found() {
     let (mut acp, mut stand) = connected().await;
@@ -625,12 +626,20 @@ async fn a_request_from_a_session_no_chat_has_is_refused_as_not_found() {
         let new = stand.next().await;
         assert_eq!(new["method"], "session/new");
         stand.ask_permission(30, "s-gone", "t1").await;
+        stand.ask_permission(29, "s1", "t0").await;
         stand.reply(&new, json!({"sessionId": "s1"})).await;
         let mut heard = Vec::new();
-        while heard.len() < 2 {
+        while heard.len() < 3 {
             let next = tokio::time::timeout(wait, stand.next()).await;
-            heard.push(next.expect("the driver answers the request held while picking"));
+            heard.push(next.expect("the driver answers both requests held while picking"));
         }
+        let answered = heard.iter().find(|m| m["id"] == 29);
+        let answered = answered.expect("the chat's request is answered");
+        assert_eq!(
+            answered["result"],
+            json!({"outcome": {"outcome": "selected", "optionId": "once"}}),
+            "the chat's request takes the person's answer"
+        );
         let prompted = heard.iter().find(|m| m["method"] == "session/prompt");
         let prompted = prompted.expect("the prompt").clone();
         let refused = heard.iter().find(|m| m["id"] == 30);
@@ -651,13 +660,27 @@ async fn a_request_from_a_session_no_chat_has_is_refused_as_not_found() {
         stand
     });
     acp.prompt(prompt("hello")).await.unwrap();
+    let mut asked = 0;
     loop {
         let e = event(&mut acp).await;
+        if let Body::Approval(a) = e.event.body()
+            && e.event.header().state == State::Waiting
+        {
+            asked += 1;
+            let answer = Answer {
+                request: RequestId::from("r-1"),
+                item: e.event.header().item.clone(),
+                by: person(),
+                given: Given::Choice(a.choices[0].id.clone()),
+            };
+            acp.answer(answer).await.unwrap();
+        }
         if matches!(e.event.body(), Body::Turn(_)) && e.event.header().state == State::Done {
             break;
         }
     }
     agent.await.unwrap();
+    assert_eq!(asked, 1, "only the chat's request reaches it");
 }
 
 /// What a session being picked says before the reply that picks it goes to its chat once the reply
