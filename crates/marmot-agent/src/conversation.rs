@@ -36,7 +36,7 @@ use marmot_agent_driver::{
 use marmot_agent_events::body::{Body, Notice, NoticeKind, Setting};
 use marmot_agent_events::{AgentEvent, Header, ItemId, SessionId, State, TurnId};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
 /// A request older than this that points at nothing, such as "new session", is dropped (D-028).
@@ -236,10 +236,6 @@ pub struct Saved {
     /// chat that chose none works in the driver's own folder.
     #[serde(default)]
     folders: BTreeMap<String, PathBuf>,
-    /// The chats that were the owner's two-person chat with the agent when last heard from, by
-    /// the core's chat id: they are sent its full activity (D-136).
-    #[serde(default)]
-    owners_chats: BTreeSet<String>,
     /// Every item sent and not yet forgotten, by the core's name for it.
     items: BTreeMap<String, Record>,
     /// The order finished items were finished in, oldest first, so the oldest are forgotten.
@@ -374,11 +370,6 @@ struct Record {
     /// that is dropped leaves the chat showing it closed, and the core does not close it again.
     #[serde(default)]
     closed_in_chat: bool,
-    /// Whether the chat is not sent it, since it is the agent's full activity and the chat is
-    /// not sent that (D-136). It is kept all the same, so a Stop finds a subagent's turn by it
-    /// (D-117), and what it would have settled is settled by another item.
-    #[serde(default)]
-    hidden: bool,
 }
 
 /// Something queued to be sent to a group.
@@ -489,6 +480,13 @@ const CLOSED_TITLE: &str = "Not delivered";
 /// Its text.
 const CLOSED_TEXT: &str = "This could not be delivered to the chat.";
 
+/// The title of the core's notice that settles what an item a chat is not sent settled (D-136).
+const NOT_SHOWN_TITLE: &str = "Done";
+
+/// Its text.
+const NOT_SHOWN: &str =
+    "The agent acted on this. What it did is shown only where the owner sees all its activity.";
+
 /// What a request the driver took and that had no effect is settled with (D-087).
 const NO_EFFECT: &str = "The agent took this, but nothing has come of it.";
 
@@ -500,6 +498,10 @@ pub struct Conversation {
     capabilities: Capabilities,
     /// Which chats, besides the owner's two-person chat, are sent the full activity (D-136).
     activity: FullActivity,
+    /// Whether each group is the owner's two-person chat with the agent, as MDK last said: read
+    /// before each send, and from each message heard. Never saved: a group not yet read is sent
+    /// only what every chat is sent (D-136).
+    owners: HashMap<GroupKey, bool>,
     /// The rule for a chat's folder, when the driver works in one a chat may move (D-101).
     folders: Option<FolderRule>,
     saved: Saved,
@@ -540,6 +542,7 @@ impl Conversation {
             rights,
             capabilities,
             activity: FullActivity::default(),
+            owners: HashMap::new(),
             folders: None,
             saved,
             taken: HashSet::new(),
@@ -1012,8 +1015,6 @@ impl Conversation {
                 }
                 _ => (None, None, 0),
             };
-        let hidden =
-            !self.sent_everything(&chat, &group) && !activity::for_every_chat(&emitted.event);
         let record = self
             .saved
             .items
@@ -1029,7 +1030,6 @@ impl Conversation {
                 started_by: None,
                 held: Vec::new(),
                 closed_in_chat: false,
-                hidden,
             });
         let was_waiting = record.last.header().state == State::Waiting;
         record.last = emitted.event.clone();
@@ -1037,7 +1037,15 @@ impl Conversation {
             record.started_by = started_by;
         }
         let open = record.open();
-        if record.hidden {
+        // Not queued to a chat that is not sent the agent's full activity. The item is kept all
+        // the same, so a Stop finds a subagent's turn by it (D-117). A chat the core has not
+        // read yet is decided when the send is taken.
+        let settles_here = (emitted.settles.iter())
+            .any(|r| (self.saved.pending.get(&r.0)).is_some_and(|p| p.group == group));
+        if self.owners.get(&group) == Some(&false)
+            && !self.activity.includes(&group)
+            && !activity::for_every_chat(&emitted.event, settles_here)
+        {
             let requests: Vec<String> = emitted.settles.iter().map(|r| r.0.clone()).collect();
             let acts = self.settle_for_hidden(&chat, &group, header.turn.as_ref(), &requests);
             self.keep_track(key, open);
@@ -1143,21 +1151,143 @@ impl Conversation {
     }
 
     /// Notes, from a message or a request heard in `place`, whether it is the owner's two-person
-    /// chat with the agent: the one person in a direct chat writes in it (D-136). MDK no longer
-    /// marks a chat direct once a third person is in it.
+    /// chat with the agent: a direct chat, of two accounts, that the owner writes in (D-136).
     fn note_place(&mut self, place: &Where, author: &PubKey) {
-        if place.direct && *author == self.rights.owner {
-            let chat = self.chat(place);
-            self.saved.owners_chats.insert(chat.id.0);
-        } else if let Some(chat) = self.saved.chats.get(&place.group) {
-            self.saved.owners_chats.remove(chat);
+        let owners = place.direct && *author == self.rights.owner;
+        self.set_owners(&place.group, owners);
+    }
+
+    /// Notes who is in `group` now, as MDK says: `two`, its two accounts when MDK marks it a
+    /// two-person chat, or `None`. It is the owner's two-person chat with the agent only when
+    /// they are the agent and the owner (D-136). The program calls this before it takes each
+    /// send for the group with [`Conversation::next_send`], each try again included, and so
+    /// after a restart too: a chat that is not sent the agent's full activity now has what is
+    /// queued of it held back, and every item sent without its native message.
+    pub fn members_now(&mut self, group: &GroupKey, two: Option<&[PubKey]>) {
+        let owners = two.is_some_and(|two| {
+            two.len() == 2
+                && self.agent != self.rights.owner
+                && two.contains(&self.agent)
+                && two.contains(&self.rights.owner)
+        });
+        self.set_owners(group, owners);
+    }
+
+    fn set_owners(&mut self, group: &GroupKey, owners: bool) {
+        self.owners.insert(group.clone(), owners);
+        if !self.sent_everything(group) {
+            self.hold_back(group);
         }
     }
 
-    /// Whether the chat is sent the agent's full activity: the owner's two-person chat with it,
-    /// and the chats the owner listed (D-136).
-    fn sent_everything(&self, chat: &str, group: &GroupKey) -> bool {
-        self.saved.owners_chats.contains(chat) || self.activity.includes(group)
+    /// Whether the group is sent the agent's full activity: the owner's two-person chat with it,
+    /// as MDK last said, and the groups the owner listed (D-136).
+    fn sent_everything(&self, group: &GroupKey) -> bool {
+        self.owners.get(group) == Some(&true) || self.activity.includes(group)
+    }
+
+    /// Whether a queued send is the agent's full activity, by the type of its item: one of the
+    /// core's own, with no item kept for it, is not, and a harness's notice is not when it
+    /// settles something (D-136).
+    fn full_activity_only(&self, queued: &Queued) -> bool {
+        let Some(record) = self.saved.items.get(queued.what.key()) else {
+            return false;
+        };
+        let settles = match &queued.what {
+            Sending::Item { item, .. } => !item.settles.is_empty(),
+            Sending::Words { settles, .. } => !settles.is_empty(),
+        };
+        !activity::for_every_chat(&record.last, settles)
+    }
+
+    /// Takes out of what is queued for `group`, which is not sent the agent's full activity, each
+    /// send of that activity, and settles what it would have settled by the next version of its
+    /// turn, or else of the chat's session (D-028, D-136). An item of it the chat was already sent
+    /// stays as it was last sent.
+    fn hold_back(&mut self, group: &GroupKey) {
+        let mut held = Vec::new();
+        let mut at = 0;
+        while at < self.saved.outbox.len() {
+            let queued = &self.saved.outbox[at];
+            if queued.group == *group && self.full_activity_only(queued) {
+                held.extend(self.saved.outbox.remove(at));
+            } else {
+                at += 1;
+            }
+        }
+        for queued in held {
+            let key = queued.what.key().to_string();
+            let settles = match queued.what {
+                Sending::Item { item, .. } => item.settles,
+                Sending::Words { settles, .. } => settles,
+            };
+            let Some(record) = self.saved.items.get(&key) else {
+                continue;
+            };
+            if settles.is_empty() {
+                continue;
+            }
+            let (chat, turn) = (record.chat.clone(), record.last.header().turn.clone());
+            match self.carrier_of(&chat, turn.as_ref()) {
+                Some(by) => {
+                    let last = self.saved.items[&by].last.clone();
+                    self.queue_versions(&by, group, last, settles, None);
+                }
+                None => self.settle_unshown(group, &chat, settles),
+            }
+        }
+    }
+
+    /// Settles requests that an item the chat is not sent settled, when the chat has neither its
+    /// turn nor its session to carry them: by a notice of the core's own.
+    fn settle_unshown(&mut self, group: &GroupKey, chat: &str, settles: Vec<EventKey>) {
+        let chat = Chat {
+            id: ChatId(chat.into()),
+            group: true,
+            name: None,
+            folder: None,
+        };
+        for settles in settles.chunks(SETTLES_MAX) {
+            let made = self.notice(group, &chat, "not_shown", NOT_SHOWN.into());
+            let header = Header {
+                title: NOT_SHOWN_TITLE.into(),
+                ..made.header().clone()
+            };
+            let body = Body::Notice(Notice {
+                kind: NoticeKind::Warning,
+                duration_ms: None,
+                reason: Some("not_shown".into()),
+            });
+            let event = AgentEvent::new(header, body, None).expect("a notice repeats no secret");
+            self.send_notice(group, event, None, settles.to_vec());
+        }
+    }
+
+    /// The item of `chat` whose next version carries what an item the chat is not sent settles:
+    /// its turn, or else the chat's session.
+    fn carrier_of(&self, chat: &str, turn: Option<&TurnId>) -> Option<String> {
+        self.turn_item(chat, turn).or_else(|| {
+            let session = self.saved.sessions.get(chat)?;
+            (self.saved.items.iter())
+                .find(|(_, r)| {
+                    r.chat == chat
+                        && matches!(r.last.body(), Body::Session(_))
+                        && r.last.header().session.as_ref() == Some(session)
+                })
+                .map(|(key, _)| key.clone())
+        })
+    }
+
+    /// The item of `chat` that is the turn `turn`.
+    fn turn_item(&self, chat: &str, turn: Option<&TurnId>) -> Option<String> {
+        let turn = turn?;
+        (self.saved.items.iter())
+            .find(|(_, r)| {
+                r.chat == chat
+                    && matches!(r.last.body(), Body::Turn(_))
+                    && r.last.header().turn.as_ref() == Some(turn)
+            })
+            .map(|(key, _)| key.clone())
     }
 
     /// Settles `requests` that an item the chat is not sent names (D-136): by the next version of
@@ -1175,27 +1305,7 @@ impl Conversation {
         {
             return Vec::new();
         }
-        let shown = |record: &Record| record.chat == chat && !record.hidden;
-        let the_turn = turn.and_then(|turn| {
-            (self.saved.items.iter())
-                .find(|(_, r)| {
-                    shown(r)
-                        && matches!(r.last.body(), Body::Turn(_))
-                        && r.last.header().turn.as_ref() == Some(turn)
-                })
-                .map(|(key, _)| key.clone())
-        });
-        let the_session = || {
-            let session = self.saved.sessions.get(chat)?;
-            (self.saved.items.iter())
-                .find(|(_, r)| {
-                    shown(r)
-                        && matches!(r.last.body(), Body::Session(_))
-                        && r.last.header().session.as_ref() == Some(session)
-                })
-                .map(|(key, _)| key.clone())
-        };
-        let Some(key) = the_turn.or_else(the_session) else {
+        let Some(key) = self.carrier_of(chat, turn) else {
             return Vec::new();
         };
         let settles = take_pending(&mut self.saved.pending, group, requests);
@@ -1245,16 +1355,7 @@ impl Conversation {
         requests: Vec<String>,
         shown_by: Option<String>,
     ) -> Vec<Act> {
-        let found = turn.and_then(|turn| {
-            (self.saved.items.iter())
-                .find(|(_, r)| {
-                    r.chat == chat
-                        && matches!(r.last.body(), Body::Turn(_))
-                        && r.last.header().turn.as_ref() == Some(turn)
-                })
-                .map(|(key, _)| key.clone())
-        });
-        let Some(key) = found else {
+        let Some(key) = self.turn_item(chat, turn) else {
             if let Some(record) = self.saved.items.get_mut(words) {
                 record.held.extend(requests);
             }

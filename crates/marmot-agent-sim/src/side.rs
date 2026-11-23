@@ -191,6 +191,14 @@ impl Side for SimSide {
             .collect())
     }
 
+    /// Every chat of a simulation is the owner's two-person chat with the agent.
+    fn two_people(&self, group: &GroupKey) -> Result<Option<Vec<PubKey>>, NotNow> {
+        let world = lock(&self.world);
+        Ok(world
+            .chat_of(group)
+            .map(|_| vec![world.agent.clone(), world.owner.clone()]))
+    }
+
     fn stored(&self, group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {
         let mut world = lock(&self.world);
         world.land();

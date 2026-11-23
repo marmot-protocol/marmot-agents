@@ -68,17 +68,20 @@ impl FullActivity {
     }
 }
 
-/// Whether every chat is sent `event`, whatever the owner set: what the people in a chat need to
-/// follow the agent and to answer it (D-136).
+/// Whether every chat is sent `event`, whatever the owner set, when it `settles` requests from
+/// that chat or none: what the people in a chat need to follow the agent and to answer it
+/// (D-136).
 ///
 /// - The agent's words are what it says to them, and the turn's start and end show it working.
 /// - An approval or a question waits for someone in the chat to answer it, a subagent's too.
 /// - An error says why the agent stopped or did not do what was asked.
 /// - The session says what can be set and done, which the controls people send need (D-029).
+/// - A notice that settles a request says what came of it, such as a refused new session.
 ///
-/// Its reasoning, tools, plans and tasks are how it works, and a notice and a subagent's words
-/// are about that work: those are its full activity.
-pub fn for_every_chat(event: &AgentEvent) -> bool {
+/// Its reasoning, tools, plans and tasks are how it works, and another notice and a subagent's
+/// words are about that work: those are its full activity. What one of those settles is settled
+/// by another item.
+pub fn for_every_chat(event: &AgentEvent, settles: bool) -> bool {
     match event.body() {
         Body::Turn(_)
         | Body::Approval(_)
@@ -86,8 +89,7 @@ pub fn for_every_chat(event: &AgentEvent) -> bool {
         | Body::Error(_)
         | Body::Session(_) => true,
         Body::Message(message) => message.parent.is_none(),
-        Body::Reasoning(_) | Body::Tool(_) | Body::Plan(_) | Body::Task(_) | Body::Notice(_) => {
-            false
-        }
+        Body::Notice(_) => settles,
+        Body::Reasoning(_) | Body::Tool(_) | Body::Plan(_) | Body::Task(_) => false,
     }
 }

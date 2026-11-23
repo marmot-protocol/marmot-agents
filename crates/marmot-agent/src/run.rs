@@ -917,7 +917,19 @@ impl<D: Driver, M: Side> Core<D, M> {
         {
             return Ok(());
         }
-        while let Some((token, what)) = self.conversation.next_send(group) {
+        loop {
+            // Who is in the group is read before each send, each try again included: what the
+            // group is sent follows who is in it now, not when the send was queued (D-136).
+            match self.marmot.two_people(group) {
+                Ok(two) => self.conversation.members_now(group, two.as_deref()),
+                Err(NotNow) => {
+                    self.wait_longer(group);
+                    return Ok(());
+                }
+            }
+            let Some((token, what)) = self.conversation.next_send(group) else {
+                break;
+            };
             let made = self.drained.entry(group.clone()).or_default();
             if self.bounded && *made >= DRAIN {
                 // More is queued: come back to it in the loop's next turn, after other work.
@@ -1267,6 +1279,10 @@ mod tests {
 
         fn groups(&self) -> Result<Vec<GroupKey>, NotNow> {
             Ok(Vec::new())
+        }
+
+        fn two_people(&self, _group: &GroupKey) -> Result<Option<Vec<PubKey>>, NotNow> {
+            unreachable!("only files are sent")
         }
 
         fn stored(&self, _group: &GroupKey, _after: i64, _limit: usize) -> Result<Page, NotNow> {

@@ -189,6 +189,10 @@ impl Side for Mdk {
         Ok(vec![group()])
     }
 
+    fn two_people(&self, _group: &GroupKey) -> Result<Option<Vec<PubKey>>, NotNow> {
+        Ok(Some(vec![self.agent.clone(), owner()]))
+    }
+
     fn stored(&self, _group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {
         if self.read_fails() {
             return Err(NotNow);

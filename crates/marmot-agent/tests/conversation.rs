@@ -3642,3 +3642,122 @@ fn a_stop_in_a_group_stops_a_subagent_it_is_not_shown() {
         "{acts:?}"
     );
 }
+
+/// The keys of the items queued for `group`, in order.
+fn queued_keys(talk: &Conversation, group: &GroupKey) -> Vec<String> {
+    (talk.queued(group).into_iter())
+        .filter_map(|(_, what)| match what {
+            Sending::Item { key, .. } => Some(key),
+            Sending::Words { .. } => None,
+        })
+        .collect()
+}
+
+/// An interrupt of the turn whose first event is `e-t1`, from the owner in `chat` as `event`,
+/// that the driver took.
+fn interrupt_taken_in(
+    talk: &mut Conversation,
+    chat: Where,
+    event: &str,
+) -> marmot_agent_driver::RequestId {
+    let interrupt = request(chat, event, OWNER, Some("e-t1"), Asked::Interrupt);
+    let Some(Act::Control(control)) = talk.asked(interrupt).into_iter().next() else {
+        panic!("no control")
+    };
+    assert!(talk.requested(&control.request, Ok(()), 0).is_empty());
+    control.request
+}
+
+// Whether a chat is the owner's two-person chat is read from MDK's members at each send, not
+// from the last message: a third person added during a turn, with no message since, gets none
+// of the agent's activity, not even what was queued before they came, and what that settled is
+// settled by the turn. The same after a restart, and in someone else's two-person chat (D-136).
+#[test]
+fn the_owners_chat_is_read_from_its_members_at_each_send() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let g = direct().group;
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    let request = interrupt_taken(&mut talk, "r1");
+    let (tool, _) = every_type().swap_remove(7);
+    let mut queued_tool = emitted(&chat, tool.clone());
+    queued_tool.settles = vec![request];
+    let acts = talk.emitted(queued_tool);
+    assert!(!sends(&talk, acts).is_empty());
+    let both = [PubKey::from(AGENT), PubKey::from(OWNER)];
+    talk.members_now(&g, Some(&both));
+    assert_eq!(queued_keys(&talk, &g), vec![format!("{chat}/cmd")]);
+
+    // A third person is added: MDK no longer marks it a two-person chat.
+    talk.members_now(&g, None);
+    let keys = queued_keys(&talk, &g);
+    assert_eq!(keys, vec![format!("{chat}/t1")], "the tool is held back");
+    let Some((_, Sending::Item { item, .. })) = talk.next_send(&g) else {
+        panic!("no turn")
+    };
+    assert_eq!(
+        item.settles,
+        vec![EventKey::from("r1")],
+        "settled by the turn"
+    );
+    let reasoning = event("r2", State::Done, Body::Reasoning(body::Reasoning {}));
+    assert!(!goes_out(&mut talk, &chat, reasoning));
+    let done = event(
+        "cmd",
+        State::Done,
+        every_type().swap_remove(7).0.body().clone(),
+    );
+    assert!(!goes_out(&mut talk, &chat, done), "a later version too");
+
+    // The owner alone with the agent again: its activity goes again.
+    talk.members_now(&g, Some(&both));
+    let reasoning = event("r3", State::Done, Body::Reasoning(body::Reasoning {}));
+    assert!(goes_out(&mut talk, &chat, reasoning));
+
+    // Queued before a restart, checked when it goes after: here, someone else's chat now.
+    let saved = talk.saved().clone();
+    let mut again = conversation(saved);
+    assert!(queued_keys(&again, &g).contains(&format!("{chat}/r3")));
+    let theirs = [PubKey::from(AGENT), PubKey::from(FRIEND)];
+    again.members_now(&g, Some(&theirs));
+    assert!(!queued_keys(&again, &g).contains(&format!("{chat}/r3")));
+}
+
+// A notice that settles a control is how the harness says what came of it, such as a refused
+// new session or a failed compaction, so a group is sent it; a notice that settles nothing is
+// not (D-028, D-136).
+#[test]
+fn a_notice_that_settles_a_control_reaches_a_group() {
+    let (mut talk, chat) = prompted_in_group(conversation(Saved::default()));
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    let request = interrupt_taken_in(&mut talk, group(), "r1");
+    let refusal = Body::Notice(body::Notice {
+        kind: NoticeKind::Warning,
+        duration_ms: None,
+        reason: None,
+    });
+    let mut notice = emitted(&chat, event("n1", State::Done, refusal.clone()));
+    notice.settles = vec![request];
+    let acts = talk.emitted(notice);
+    let items = items_of(&talk, acts);
+    assert_eq!(items.len(), 1);
+    assert!(matches!(items[0].event.body(), Body::Notice(_)));
+    assert_eq!(items[0].settles, vec![EventKey::from("r1")]);
+
+    // Queued so, it still goes when the members are read at its send.
+    talk.members_now(&group().group, None);
+    assert!(queued_keys(&talk, &group().group).contains(&format!("{chat}/n1")));
+
+    let alone = emitted(&chat, event("n2", State::Done, refusal));
+    assert!(!goes_out(&mut talk, &chat, alone.event));
+}
