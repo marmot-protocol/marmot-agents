@@ -188,9 +188,12 @@ Every name above can be changed when installing (`MARMOT_HOME`, `MARMOT_AGENT_LA
   (`~/.hermes` by default), which Hermes loads over its own environment. Hermes also reads `allowed_users`,
   `allowed_users_hex` and `allow_all_users` from its `config.yaml`, and combines the two; the import does not
   follow that and treats such a config as unclear.
-- **Who may write to OpenClaw** is `channels.marmot.senderPolicy` (`allowedUsers`, `allowAll`) in
-  `$OPENCLAW_HOME/.openclaw/openclaw.json` (`$HOME` by default), and otherwise the same two variables in the
-  gateway's environment. The plugin parses it strictly: any field besides those two, an `allowAll` that is not
+- **Who may write to OpenClaw** is the `senderPolicy` (`allowedUsers`, `allowAll`) of the account the plugin
+  runs, in `$OPENCLAW_HOME/.openclaw/openclaw.json` (`$HOME` by default), and otherwise the same two variables
+  in the gateway's environment. Without `channels.marmot.accounts` that is `channels.marmot.senderPolicy`;
+  with it, each account runs on `channels.marmot.accounts.<id>.senderPolicy`, and a policy at the channel's
+  root applies to none of them (checked in `integrations/openclaw/marmot/src/channel.ts` and
+  `sender-policy.ts` at MDK commit `c210e7d9`, on 2026-11-23). The plugin parses it strictly: any field besides those two, an `allowAll` that is not
   a boolean, or any `allowedUsers` entry that is not 64 hex digits makes the whole policy invalid, which denies
   every sender, even with `allowAll: true`. An empty list without `allowAll` denies everyone too.
 - **The socket** is `dev/wn-agent.sock` in the home, and its token `control.token`. The core's own are

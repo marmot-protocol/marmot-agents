@@ -154,14 +154,18 @@ The rule is that nobody may do more afterwards than the old install let them:
 - For OpenClaw, the import reads the sender policy of the account MDK's plugin ran on this home. With
   `channels.marmot.accounts`, each named account runs on its own settings, and a `senderPolicy` at the
   channel's root applies to none of them; without, the root is the one account. An account ran on this home
-  when its `socketPath` is the old connector's socket and its `accountIdHex`, if any, is the agent's. If no
-  account does, several do, one names no `socketPath`, or the account has no `senderPolicy` of its own, only
-  the owner may prompt.
+  when its `socketPath` is the old connector's socket and its `accountIdHex`, if any, is the agent's, both
+  written out: a socket or identity from a `${...}` reference, no `socketPath`, a relative one, a path that
+  may lead to this home's socket, or an `$include` in the settings, means that account may have run on this
+  home. If no account did, several did or may have, or the account has no `senderPolicy` of its own, only
+  the owner may prompt, and the import names the policies of just those accounts, or the gateway's
+  environment settings for one with no policy of its own.
 - In a systemd environment file, a line that systemd has read otherwise by version (one after a comment
   ending in a backslash, or a backslash in double quotes before anything but `"`, `\` or the line's end), or
   one such as `export WN_CODEX_ALLOWED_SENDERS_HEX=…` that systemd leaves out, makes that name unsure. An
   unsure sender list lets only the owner prompt; an unsure relay list or other setting the import reads stops
-  the import, as a doubtful unit does.
+  the import, as a doubtful unit does. So does an environment file holding a NUL byte, which systemd refuses
+  whole.
 - The owner may always prompt, approve and invite. So the import makes someone the owner only if the old
   install let exactly that one person both invite and prompt the agent; otherwise it asks for `--owner`, and
   says what the named owner may now do that they could not before. The same key given once in hex and once

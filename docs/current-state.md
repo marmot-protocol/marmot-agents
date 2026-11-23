@@ -191,8 +191,9 @@ Decided, and not built: the core, the drivers, MDK and the apps each have their 
 - An install moves over with `marmot-agent import`, which uses the old account home in place, backs it up
   first, and prints the paths needed to undo it ([D-089](decisions.md#d-089-an-install-moves-over-by-importing-its-account-home-in-place), [D-095](decisions.md#d-095-the-import-prints-the-paths-it-needs-to-undo-a-move)).
 - Where the import cannot tell exactly which sender policy the old connector applied to the account, such as
-  which of OpenClaw's named accounts ran on the home or a systemd environment file line read otherwise by
-  version, only the owner may prompt, and it names each old setting and its value to check by hand ([D-135](decisions.md#d-135-the-import-gives-owner-only-rights-where-it-cannot-tell-the-old-sender-policy-and-names-what-to-check)).
+  which of OpenClaw's named accounts ran on the home, told only from settings written out literally, or a
+  systemd environment file line read otherwise by version, only the owner may prompt, and it names each old
+  setting that may have applied on the home, and its value, to check by hand ([D-135](decisions.md#d-135-the-import-gives-owner-only-rights-where-it-cannot-tell-the-old-sender-policy-and-names-what-to-check)).
 - A gateway's plugin change is put back if the installer fails or is stopped, and a re-run after a kill always
   finishes or puts it back; a few named moments after a kill leave neither plugin working until then ([D-116](decisions.md#d-116-a-gateways-plugin-swap-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)).
 - An upgrade puts the new core and support files in place together, once both are prepared, and puts back
