@@ -50,7 +50,9 @@ tries a send again is not modelled: a send may be tried again at once.
   at once (unknown item, not waiting, already answered). The new session the driver starts is not an item of its
   own: what matters to S12 is that the chat is taken once the driver took the control.
 - **Rights, chats and people** (S5, S6): everyone may do everything. **Invitations**: every group is joined at
-  start with mark 0.
+  start with mark 0. Every chat is the owner's two-person chat, so is sent the agent's full activity: the
+  members `flush` reads before each send, and the sends it holds back from any other chat with what they
+  settle moved to the turn (D-136), are not modelled.
 - **Sizes and caps** (S7): `SETTLES_MAX`, the eight sends per group per turn, the cache of finished items
   (`KEPT`). The outbox is in order per group, and the core may send whenever it is idle. So the versions that
   spread what one event settles are not modelled, nor is what stands in for a dropped send leaving out a session
