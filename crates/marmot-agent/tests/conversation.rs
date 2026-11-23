@@ -954,6 +954,10 @@ fn a_request_the_agent_cannot_read_is_still_heard() {
         Some(r#"{"action":"set","setting":"model"}"#),
         Some(r#"{"action":7}"#),
         Some(r#"["set"]"#),
+        // A field given twice is refused, never read as its last value.
+        Some(r#"{"action":"choice","choice":7,"choice":"allow"}"#),
+        Some(r#"{"action":"choice","choice":"deny","choice":"allow"}"#),
+        Some(r#"{"action":"rewind","action":"choice","choice":"allow"}"#),
     ] {
         assert_eq!(
             read(invalid),
@@ -989,6 +993,15 @@ fn every_action_the_agent_reads_is_known() {
             id: "compact".into(),
         },
     ] {
+        // A new action fails to build here until it is sampled above, and so read back.
+        match asked {
+            Asked::Choice { .. }
+            | Asked::Questions { .. }
+            | Asked::Interrupt
+            | Asked::NewSession
+            | Asked::Set { .. }
+            | Asked::Own { .. } => {}
+        }
         let out = carrier::request(&agent, None, &asked, "words");
         let (_, read) = carrier::read_request(&agent, &out.tags).unwrap();
         assert!(read == Ok(asked.clone()), "{asked:?}");
@@ -1002,7 +1015,11 @@ fn every_action_the_agent_reads_is_known() {
         details[1] = value.to_string();
         let (_, read) = carrier::read_request(&agent, &bad).unwrap();
         // Extra fields are let through, as serde does; a wrong one is invalid, never unknown.
-        assert_ne!(read.err(), Some(Unreadable::UnknownAction), "{asked:?}");
+        if matches!(asked, Asked::Interrupt | Asked::NewSession) {
+            assert!(read == Ok(asked.clone()), "{asked:?}");
+        } else {
+            assert_eq!(read.err(), Some(Unreadable::Invalid), "{asked:?}");
+        }
     }
 }
 

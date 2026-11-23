@@ -853,14 +853,16 @@ pub fn read_request(
     Some((value(tags, "e").map(EventKey::from), asked))
 }
 
+/// Read straight from the text, so that a field given twice is refused, as `Asked` refuses it;
+/// only a request that does not read is looked at again, to tell an unknown action from the rest.
 fn read_asked(details: &str) -> Result<Asked, Unreadable> {
-    let details: serde_json::Value =
-        serde_json::from_str(details).map_err(|_| Unreadable::Invalid)?;
-    let action = details.get("action").and_then(serde_json::Value::as_str);
-    if action.is_some_and(|a| !ACTIONS.contains(&a)) {
-        return Err(Unreadable::UnknownAction);
-    }
-    serde_json::from_value(details).map_err(|_| Unreadable::Invalid)
+    serde_json::from_str(details).map_err(|_| {
+        let read: Option<serde_json::Value> = serde_json::from_str(details).ok();
+        match read.as_ref().and_then(|d| d.get("action")?.as_str()) {
+            Some(action) if !ACTIONS.contains(&action) => Unreadable::UnknownAction,
+            _ => Unreadable::Invalid,
+        }
+    })
 }
 
 /// The tags of the agent's words, a chat message (D-022): the turn they belong to, for a remark
