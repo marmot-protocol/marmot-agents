@@ -1227,13 +1227,24 @@ async fn what_threads_said_before_they_were_named_keeps_its_order() {
 }
 
 // A chat's session replaced while a subagent of it runs: Codex does not stop the subagent with
-// the session, so the driver does (D-117).
+// the session, so the driver does (D-117). A subagent the old one was still starting will name
+// no thread a chat has, so a later request for a thread never seen is refused at once, not held
+// until the driver starts again.
 #[tokio::test]
 async fn a_new_session_stops_the_old_ones_subagents() {
     let (mut codex, mut fake) = running().await;
     fake.say(started_by("a1", "sub1")).await;
     fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
         .await;
+    // The subagent starts one of its own, on Codex's older runtime, which names its thread only
+    // when the item completes.
+    let nested = json!({"type": "collabAgentToolCall", "id": "c9", "tool": "spawnAgent",
+        "status": "inProgress", "receiverThreadIds": [], "prompt": "look"});
+    fake.say(
+        json!({"method": "item/started", "params": {"threadId": "sub1", "turnId": "st1",
+        "item": nested}}),
+    )
+    .await;
     fake.say(turn("turn/completed", "completed")).await;
     until(&mut codex, is_turn(State::Done)).await;
     let fresh = Control {
@@ -1261,7 +1272,11 @@ async fn a_new_session_stops_the_old_ones_subagents() {
     assert_eq!(interrupt["method"], "turn/interrupt");
     assert_eq!(interrupt["params"]["threadId"], "sub1");
     assert_eq!(interrupt["params"]["turnId"], "st1");
+    fake.say(json!({"id": 12, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th-other", "turnId": "t9", "itemId": "c", "command": "ls"}})).await;
+    let reply = reply_to(&mut fake, 12).await;
     reading.abort();
+    let reply = reply.expect("a request for a thread never seen was held after the session went");
+    assert_eq!(reply["error"], no_chat_has("th-other"));
 }
 
 /// The driver's reply to Codex's request `id`, if it wrote one within half a second.
@@ -1273,6 +1288,27 @@ async fn reply_to(fake: &mut Fake, id: i64) -> Option<Value> {
         }
     }
     None
+}
+
+/// What the driver wrote up to the moment it had handled every line said before this: a request
+/// of a kind it has no rule for, in the chat's own thread, is refused as it is read, and the
+/// driver reads in order. Without the refusal itself.
+async fn written_so_far(fake: &mut Fake) -> Vec<Value> {
+    fake.say(json!({"id": 999, "method": "item/something/new", "params": {"threadId": "th1", "turnId": "t1"}}))
+        .await;
+    let mut written = Vec::new();
+    loop {
+        let message = next_heard(fake).await;
+        if message["id"] == 999 && message.get("method").is_none() {
+            return written;
+        }
+        written.push(message);
+    }
+}
+
+/// Whether the driver replied to Codex's request `id` among `written`.
+fn replied(written: &[Value], id: i64) -> bool {
+    (written.iter()).any(|m| m["id"] == id && m.get("method").is_none())
 }
 
 /// The error a request for a thread no chat has is refused with.
@@ -1368,10 +1404,8 @@ async fn a_request_held_while_a_subagent_starts_is_answered_once_it_has() {
     let asks = |id: i64, thread: &str| json!({"id": id, "method": "item/commandExecution/requestApproval", "params": {"threadId": thread, "turnId": "st1", "itemId": "c", "command": "ls"}});
     fake.say(asks(8, "subA")).await;
     fake.say(asks(9, "th-other")).await;
-    assert!(
-        reply_to(&mut fake, 9).await.is_none(),
-        "held while the spawn is under way"
-    );
+    let written = written_so_far(&mut fake).await;
+    assert!(!replied(&written, 9), "held while the spawn is under way");
     fake.say(spawn("completed", json!(["subA"]))).await;
     let reply = reply_to(&mut fake, 9).await;
     let reply = reply.expect("the request still for no chat was never answered");
@@ -1383,6 +1417,30 @@ async fn a_request_held_while_a_subagent_starts_is_answered_once_it_has() {
     assert_eq!(item, "approval:st1:8");
     assert!(asked.try_recv().is_err(), "and only it");
     reading.abort();
+}
+
+/// A request held while a subagent starts, which Codex then says is resolved, needs no reply:
+/// Codex waits for it no longer. It is not refused once the spawn is done.
+#[tokio::test]
+async fn a_held_request_codex_resolves_is_not_refused() {
+    let (mut codex, mut fake) = running().await;
+    let reading = tokio::spawn(async move { until(&mut codex, |_| false).await });
+    let spawn = |method: &str, status: &str| {
+        let item = json!({"type": "collabAgentToolCall", "id": "c1", "tool": "spawnAgent",
+            "status": status, "receiverThreadIds": ["subA"], "prompt": "look"});
+        json!({"method": method, "params": {"threadId": "th1", "turnId": "t1", "item": item}})
+    };
+    fake.say(spawn("item/started", "inProgress")).await;
+    fake.say(json!({"id": 9, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th-other", "turnId": "t9", "itemId": "c", "command": "ls"}})).await;
+    fake.say(json!({"method": "serverRequest/resolved", "params": {"threadId": "th-other", "requestId": 9}}))
+        .await;
+    fake.say(spawn("item/completed", "completed")).await;
+    let written = written_so_far(&mut fake).await;
+    reading.abort();
+    assert!(
+        !replied(&written, 9),
+        "a resolved request was refused: {written:?}"
+    );
 }
 
 /// The error a request the driver cannot show is refused with.

@@ -165,6 +165,15 @@ impl Chat {
     }
 }
 
+/// A message for a thread no chat has had, held until something names the thread.
+struct Held {
+    thread: String,
+    line: String,
+    /// Codex's id, while the message is a request Codex waits for a reply to: none for a
+    /// notification, or once Codex says the request is resolved.
+    request: Option<Value>,
+}
+
 /// The Codex driver: one `codex app-server` process, serving every chat of one agent.
 pub struct Codex {
     reader: Reader,
@@ -196,9 +205,9 @@ pub struct Codex {
     starting: HashMap<i64, MessageId>,
     /// The prompts each running turn responds to.
     prompts: HashMap<(ChatId, String), Vec<MessageId>>,
-    /// Messages naming a thread no chat has had, with that thread, oldest first: a session being
-    /// picked, or a subagent, can speak before the message that names its thread.
-    held: VecDeque<(String, String)>,
+    /// Messages naming a thread no chat has had, oldest first: a session being picked, or a
+    /// subagent, can speak before the message that names its thread.
+    held: VecDeque<Held>,
     /// Held messages are being released.
     releasing: bool,
     /// Subagents being started on Codex's older runtime, which names a subagent's thread only
@@ -517,12 +526,14 @@ impl Codex {
                 None if thread.is_some_and(|t| !self.owners.contains_key(t))
                     && (!request || self.naming()) =>
                 {
-                    self.hold(thread.unwrap_or_default(), line);
+                    self.hold(thread.unwrap_or_default(), line, &message);
                 }
                 // Codex waits for a reply to its request, so one for no chat is refused.
                 None => {
                     self.unrouted += 1;
-                    self.refuse_unrouted(&message);
+                    if request {
+                        self.refuse_unrouted(&message["id"], thread);
+                    }
                 }
             }
             self.release();
@@ -645,16 +656,31 @@ impl Codex {
         self.owners.insert(thread.to_string(), chat.clone());
     }
 
-    /// Holds a message for a thread no chat has had, until something names its thread.
-    fn hold(&mut self, thread: &str, line: &str) {
-        self.held.push_back((thread.to_string(), line.to_string()));
+    /// Holds a message for a thread no chat has had, until something names its thread. Codex's
+    /// word that it no longer waits for a request held here means that request needs no reply.
+    fn hold(&mut self, thread: &str, line: &str, message: &Value) {
+        if message["method"] == "serverRequest/resolved" {
+            let id = &message["params"]["requestId"];
+            for held in self.held.iter_mut().filter(|h| h.thread == thread) {
+                if held.request.as_ref() == Some(id) {
+                    held.request = None;
+                }
+            }
+        }
+        let request = (message.get("id").cloned()).filter(|_| message.get("method").is_some());
+        self.held.push_back(Held {
+            thread: thread.to_string(),
+            line: line.to_string(),
+            request,
+        });
         while self.held.len() > HELD {
-            let Some((_, line)) = self.held.pop_front() else {
+            let Some(held) = self.held.pop_front() else {
                 break;
             };
             self.unrouted += 1;
-            let message: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
-            self.refuse_unrouted(&message);
+            if let Some(id) = held.request {
+                self.refuse_unrouted(&id, Some(&held.thread));
+            }
         }
     }
 
@@ -688,33 +714,32 @@ impl Codex {
 
     /// Refuses a request of Codex's that no chat takes, so Codex does not wait for it: invalid
     /// params, naming the thread, as Codex's own server refuses what it cannot take. Codex takes
-    /// any error as a refusal (an approval denied, a question with no answers). Nothing for a
-    /// message that is not a request.
-    fn refuse_unrouted(&mut self, message: &Value) {
-        let (Some(id), Some(_)) = (message.get("id"), message.get("method")) else {
-            return;
-        };
+    /// any error as a refusal (an approval denied, a question with no answers).
+    fn refuse_unrouted(&mut self, id: &Value, thread: Option<&str>) {
         let mut error = json!({"code": -32602, "message": "Invalid params"});
-        if let Some(thread) = message["params"]["threadId"].as_str() {
+        if let Some(thread) = thread {
             error["data"] = json!({"threadId": thread});
         }
         self.queue(&json!({"id": id, "error": error}).to_string(), None);
     }
 
     /// Once nothing may name a thread no chat knows yet, a request still held for one is refused.
+    /// What is held stays, in case its thread is named later; what Codex waits for does not.
     fn let_go(&mut self) {
-        if self.releasing || self.naming() {
+        if self.releasing || self.naming() || !self.held.iter().any(|h| h.request.is_some()) {
             return;
         }
-        let held = std::mem::take(&mut self.held);
-        for (thread, line) in held {
-            let message: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
-            if message.get("id").is_some() {
-                self.unrouted += 1;
-                self.refuse_unrouted(&message);
-            } else {
-                self.held.push_back((thread, line));
+        let mut refused = Vec::new();
+        self.held.retain(|h| match &h.request {
+            Some(id) => {
+                refused.push((id.clone(), h.thread.clone()));
+                false
             }
+            None => true,
+        });
+        for (id, thread) in refused {
+            self.unrouted += 1;
+            self.refuse_unrouted(&id, Some(&thread));
         }
     }
 
@@ -725,9 +750,9 @@ impl Codex {
             return; // the release under way goes on with what is now named
         }
         self.releasing = true;
-        while let Some(at) = (self.held.iter()).position(|(t, _)| self.whose(t).is_some()) {
-            let (_, line) = self.held.remove(at).expect("a held message");
-            self.route(&line);
+        while let Some(at) = (self.held.iter()).position(|h| self.whose(&h.thread).is_some()) {
+            let held = self.held.remove(at).expect("a held message");
+            self.route(&held.line);
         }
         self.releasing = false;
         self.let_go();
@@ -899,6 +924,7 @@ impl Codex {
         if before != after && who.is_none() {
             if let Some(old) = before {
                 self.threads.remove(&old);
+                self.spawning.retain(|(t, _)| *t != old); // what it starts, nothing will name
                 self.let_subagents_go(chat); // its session has ended (D-070)
             }
             if let Some(new) = after {
@@ -951,6 +977,7 @@ impl Codex {
         threads.sort_by(|a, b| a.0.cmp(&b.0));
         for (thread, mut translator) in threads {
             self.subthreads.remove(&thread);
+            self.spawning.retain(|(t, _)| *t != thread); // what it starts, nothing will name
             if let Some(turn) = translator.turn().map(String::from) {
                 let id = self.id();
                 let action = Action::Interrupt {
