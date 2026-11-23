@@ -84,6 +84,12 @@ def reply_to_question(question, text):
     return {"question": question["id"], "options": [], "text": text}
 
 
+def usable_settings(result) -> bool:
+    """Whether Hermes's answer to a read of a session's model has one: its getter can name the session
+    and give a blank model, when none is configured (`gateway/platforms/session_model.py`)."""
+    return isinstance(result, dict) and isinstance(result.get("model"), str) and bool(result["model"].strip())
+
+
 def key_of(source):
     """A Hermes session's chat and sender, as Hermes keeps one session for each."""
     return f"{source.get('chat_type')}:{source.get('chat_id')}:{source.get('user_id')}"
@@ -125,7 +131,12 @@ class Translator:
         self.commands: list[dict] = []
         self.typed: dict[str, tuple] = {}
         self.typed_key: dict[str, str] = {}  # message typed -> the chat and sender whose session it reaches
-        self.reads: dict[str, int] = {}  # chat and sender -> their session count when its model was asked for
+        # A read of a session's model -> (the chat and sender, their session count and switches then). A read
+        # the plugin named by an id is kept by it; one it did not, as in a recording, by the chat and sender.
+        self.reads: dict[str, tuple[str, int, int]] = {}
+        self.switches = collections.Counter()  # chat and sender -> the model switches Hermes took
+        self.switched: set[str] = set()  # chats and senders whose next model read follows a switch
+        self.model_read = False  # the line read was a model read that the session now shows
         self.reset_by_hook = False
         self.turn_key: dict[str, str] = {}  # turn -> the chat and sender whose session it runs in, oldest first
         self.questions: dict[str, str | None] = {}  # question item -> the chat and sender it asks, if known
@@ -160,13 +171,13 @@ class Translator:
             self.emit(item, ev["type"], "cancelled", ev["title"], ev["text"], ev["body"], native=None,
                       owner=(ev.get("session"), ev.get("turn")))
 
-    def session_item(self, name, native=True):
-        """The session item of `name`, sent only when its body changed."""
+    def session_item(self, name, native=True, always=False):
+        """The session item of `name`, sent only when its body changed, unless `always`."""
         item = f"session:{name}"
         body = {"harness_version": self.version, "settings": list(self.settings.setdefault(name, {}).values()),
                 "actions": [], "commands": list(self.commands)}
         key = json.dumps(body, sort_keys=True)
-        if self.sessions.get(item) == key:
+        if self.sessions.get(item) == key and not always:
             return
         self.sessions[item] = key
         text = ", ".join(f"{x['label']}: {x['value']}" for x in body["settings"] if x.get("value") is not None)
@@ -177,6 +188,7 @@ class Translator:
     def feed(self, line) -> list[dict]:
         """The events one recorded line makes."""
         self.out = []
+        self.model_read = False
         m, via = line["msg"], line.get("via")
         self.msg = m
         # The native message's kind is what the line is: the method Hermes called on the adapter, the
@@ -195,7 +207,8 @@ class Translator:
                 src = (m.get("params") or {}).get("source")
                 if src and m.get("method") == "get_session_model_settings":
                     key = key_of(src)
-                    self.reads[key] = self.generation.get(key, 1)
+                    read = str(m["id"]) if "id" in m else key
+                    self.reads[read] = (key, self.generation.get(key, 1), self.switches[key])
                 elif src:
                     self.key = key_of(src)
         elif via == "result":
@@ -312,6 +325,12 @@ class Translator:
         n = self.generation.setdefault(key, 1)
         return key if n == 1 else f"{key}#{n}"
 
+    def model_switched(self, key):
+        """Hermes took a switch of model for the session of `key`: a read of its model started before
+        says nothing of now, and the next read shows the session."""
+        self.switches[key] += 1
+        self.switched.add(key)
+
     def session_changed(self, key, native=True):
         self.session_item(self.name(key), native)
 
@@ -351,9 +370,14 @@ class Translator:
             self.unknown[f"plugin hook {hook}"] += 1
 
     def asked(self, method, m):
+        result = m.get("result")
+        if method == "get_session_model_settings" and "id" in m and ("error" in m or not usable_settings(result)):
+            # Hermes's answer ends the read it names, even when it is of no use, as one with no model is: it
+            # shows nothing and settles nothing. A read the plugin did not name, as in a recording, is kept
+            # by its chat and sender, and the next read of theirs replaces it.
+            self.reads.pop(str(m["id"]), None)
         if "error" in m:
             return
-        result = m.get("result")
         if method == "hermes_cli.commands.COMMAND_REGISTRY":
             self.commands = [command(c.get("name"), c.get("description"), c.get("args_hint"))
                              for c in result or [] if c.get("gateway_available")]
@@ -361,15 +385,25 @@ class Translator:
             for key in list(self.generation):
                 if f"session:{self.name(key)}" in self.sessions:
                     self.session_changed(key)
-        elif method == "get_session_model_settings" and isinstance(result, dict):
+        elif method == "get_session_model_settings" and usable_settings(result):
             # The session Hermes names (`agent:main:<platform>:<chat type>:<chat>:<sender>`), as it was
-            # when asked: a read that a new session overtook says nothing about the new one.
-            key = next((k for k in reversed(list(self.reads)) if str(result.get("session_key")).endswith(":" + k)), None)
-            if key is None or self.reads.pop(key) != self.generation.get(key, 1):
+            # when asked: a read that a new session, or a switch of model, overtook says nothing of now.
+            named = str(result.get("session_key"))
+            read = str(m["id"]) if "id" in m else next(
+                (r for r in reversed(list(self.reads)) if named.endswith(":" + self.reads[r][0])), None)
+            if read not in self.reads:
+                return
+            key, generation, switches = self.reads.pop(read)
+            if (not named.endswith(":" + key) or generation != self.generation.get(key, 1)
+                    or switches != self.switches[key]):
                 return
             self.put(key, "model", "Model", result.get("model"))
             self.put(key, "provider", "Provider", result.get("provider"))
-            self.session_changed(key)
+            self.model_read = True
+            # The read after a switch shows the session even when nothing changed, as a reset to the
+            # model shown: it is the switch's outcome.
+            self.session_item(self.name(key), always=key in self.switched)
+            self.switched.discard(key)
         elif method == "list_session_model_picker_providers" and isinstance(result, list):
             self.model_options(self.key, result)
         elif method == "on_model_selected":

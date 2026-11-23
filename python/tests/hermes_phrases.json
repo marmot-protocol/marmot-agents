@@ -1,0 +1,15 @@
+{
+  "source": "Hermes Agent at commit 40d1e95f, locales/en.yaml: the replies the plugin reads by their keys, as `agent.i18n.t` renders them",
+  "phrases": {
+    "gateway.model.switched": "Model switched to `{model}`",
+    "gateway.model.provider_label": "Provider: {provider}",
+    "gateway.model.session_only_hint": "_(session only — add `--global` to persist)_",
+    "gateway.model.reset_done": "Session model override cleared — now using `{model}` (the channel/global default). Conversation history kept.",
+    "gateway.model.reset_none": "No session model override is active — already using `{model}` (the channel/global default).",
+    "gateway.model.error_prefix": "Error: {error}",
+    "gateway.model.switch_cancelled": "🟡 Model switch cancelled. Current model unchanged ({model}).",
+    "gateway.reset.header_default": "✨ Session reset! Starting fresh.",
+    "gateway.reset.header_new": "✨ New session started!",
+    "gateway.reset.header_titled": "✨ New session started: {title}"
+  }
+}

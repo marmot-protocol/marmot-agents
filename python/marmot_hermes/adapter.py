@@ -47,7 +47,7 @@ from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageTyp
 
 from .connector import Connector
 from .core import CoreConnection, HelloRefused, Refused, line_of
-from .translate import VERSION
+from .translate import VERSION, usable_settings
 
 PLATFORM = "marmot"
 PLUGIN_VERSION = "0.1.0"
@@ -199,6 +199,7 @@ class MarmotAdapter(BasePlatformAdapter):
         self.loop: asyncio.AbstractEventLoop | None = None
         self.task = None
         self.reading: set[asyncio.Task] = set()  # reads of a session's model, kept until they end
+        self.reads_n = 0  # names each read of a session's model, and its answer
         self.n = 0
 
     @staticmethod
@@ -425,6 +426,13 @@ class MarmotAdapter(BasePlatformAdapter):
 
         return bool(resolve_gateway_clarify(clarify_id, text))
 
+    def phrase(self, key: str, **fields) -> str:
+        """What Hermes says under `key` of its catalog, in the language it is set to, as its commands
+        make their replies. It answers a command only in text, and this is how the plugin knows which."""
+        from agent.i18n import t
+
+        return t(key, **fields)
+
     def read_commands(self) -> None:
         """Reads Hermes's slash commands once, for the session items. Hermes's own platform adapters
         build their command menus from this registry, and a plugin runs in the same process."""
@@ -444,22 +452,27 @@ class MarmotAdapter(BasePlatformAdapter):
 
     def read_settings(self, source, session: str | None = None) -> asyncio.Task:
         """Asks Hermes for the model of the session of `source`, in the background. The request is
-        recorded at once, and the translator applies the answer to the session Hermes names in it, if
-        that session was not replaced since. `session` is the connector's name for it, if it chose to ask."""
+        recorded at once, under an id its answer carries too, and the translator applies the answer to
+        the session Hermes names in it, if that session was not replaced, nor its model switched, since.
+        `session` is the connector's name for it, if it chose to ask."""
         chat = str(source.chat_id)
         method = "get_session_model_settings"
-        self.note({"dir": "out", "via": "call", "msg": {"method": method, "params": {"source": jsonable(source)}}}, chat)
-        task = asyncio.ensure_future(self.settings_of(source, chat, session))
+        self.reads_n += 1
+        read = f"read-{self.reads_n}"
+        self.note({"dir": "out", "via": "call", "msg": {"method": method, "id": read,
+                                                         "params": {"source": jsonable(source)}}}, chat)
+        task = asyncio.ensure_future(self.settings_of(source, chat, session, read))
         self.reading.add(task)
         task.add_done_callback(self.reading.discard)
         return task
 
-    async def settings_of(self, source, chat: str, session: str | None) -> None:
+    async def settings_of(self, source, chat: str, session: str | None, read: str) -> None:
         method = "get_session_model_settings"
         try:
             result = await asyncio.to_thread(self.get_session_model_settings, source)
         except Exception as e:
-            self.note({"dir": "in", "via": "call", "msg": {"method": method, "error": type(e).__name__}}, chat)
+            self.note({"dir": "in", "via": "call", "msg": {"method": method, "id": read,
+                                                            "error": type(e).__name__}}, chat)
             if session:
                 self.connector.model_not_read(session)
             return
@@ -467,7 +480,10 @@ class MarmotAdapter(BasePlatformAdapter):
         if isinstance(result, dict):
             # The model's address is the owner's configuration, and the chat has no need of it.
             result.pop("base_url", None)
-        self.note({"dir": "in", "via": "call", "msg": {"method": method, "result": result}}, chat)
+        self.note({"dir": "in", "via": "call", "msg": {"method": method, "id": read, "result": result}}, chat)
+        if session and not usable_settings(result):
+            # An answer with no model shows nothing: the next turn asks again, as after a failure.
+            self.connector.model_not_read(session)
 
 
 for _name in dir(BasePlatformAdapter):

@@ -111,6 +111,12 @@ class ModelReads(unittest.IsolatedAsyncioTestCase):
     def settings(self, source):
         """Hermes's answer, in a worker thread, once the test lets it through."""
         self.gates[source.user_id].wait(5)
+        if self.failing == "unusable":
+            return None
+        if self.failing == "blank":
+            # Hermes's getter with no model configured: the session named, its model blank.
+            return {"session_key": f"agent:main:marmot:group:c-2:{source.user_id}", "model": "",
+                    "provider": "custom", "base_url": ""}
         if self.failing:
             raise RuntimeError("Hermes failed")
         return {"session_key": f"agent:main:marmot:group:c-2:{source.user_id}", "model": f"model-{source.user_id}",
@@ -141,7 +147,23 @@ class ModelReads(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.shown("group:c-2:u-1"), "Model: model-u-1, Provider: custom")
         self.assertEqual(self.shown("group:c-2:u-2"), "Model: model-u-2, Provider: custom")
 
-    async def test_a_read_overtaken_by_a_new_session_or_failed_is_not_kept(self):
+    async def test_each_read_and_its_answer_carry_one_id_of_their_own(self):
+        """Two reads of one session may be under way at once, as one at a turn's start and one after a
+        `/model`: each answer names its own read, so neither is taken for the other."""
+        lines = []
+        record = self.adapter.connector.record
+        self.adapter.connector.record = lambda line, chat: (lines.append(line), record(line, chat))
+        await self.start("m-a", "u-1")
+        self.adapter.read_settings(Source("c-2", "u-1"))
+        await self.answered("u-1")
+        await asyncio.gather(*self.adapter.reading)
+        reads = [(line["dir"], line["msg"].get("id")) for line in lines
+                 if line["msg"].get("method") == "get_session_model_settings"]
+        asked = [r for d, r in reads if d == "out"]
+        self.assertEqual(len(set(asked)), 2)
+        self.assertEqual(sorted(r for d, r in reads if d == "in"), sorted(asked))
+
+    async def test_a_read_overtaken_by_a_new_session_failed_or_unusable_is_not_kept(self):
         connector = self.adapter.connector
         await self.start("m-a", "u-1")
         # Alice starts a new session while the read of her first one is under way.
@@ -160,6 +182,40 @@ class ModelReads(unittest.IsolatedAsyncioTestCase):
         await self.answered("u-1")
         self.assertEqual(self.shown("group:c-2:u-1#2"), "")
         self.assertTrue(connector.wants_model("group", "c-2", "u-1"))
+        # An answer that is no use ends its read too. No read that has ended is kept.
+        self.gates["u-1"].clear()
+        self.failing = "unusable"
+        self.adapter.read_settings(Source("c-2", "u-1"))
+        await self.answered("u-1")
+        self.assertEqual(self.shown("group:c-2:u-1#2"), "")
+        self.assertEqual(connector.chats["c-2"].translator.reads, {})
+
+    async def test_a_first_read_with_no_model_is_asked_again(self):
+        """A session's first read that names it but gives a blank model shows nothing, and the next turn
+        asks again, as after a read that failed."""
+        connector = self.adapter.connector
+        self.failing = "blank"
+        await self.start("m-a", "u-1")
+        await self.answered("u-1")
+        self.assertEqual(self.shown("group:c-2:u-1"), "")
+        self.assertEqual(connector.chats["c-2"].translator.reads, {})
+        self.gates["u-1"].clear()
+        self.failing = False
+        await self.start("m-b", "u-1")
+        await self.answered("u-1")
+        self.assertEqual(self.shown("group:c-2:u-1"), "Model: model-u-1, Provider: custom")
+
+
+class Phrases(unittest.TestCase):
+    """Hermes answers a command in text from its catalog: the adapter reads it from Hermes's own `t`."""
+
+    def test_a_phrase_is_hermess_own(self):
+        i18n = types.ModuleType("agent.i18n")
+        i18n.t = lambda key, **fields: f"{key}|{fields['model']}"
+        with tempfile.TemporaryDirectory() as home, mock.patch.dict("os.environ", {"HERMES_HOME": home}), \
+                mock.patch.dict(sys.modules, {"agent": types.ModuleType("agent"), "agent.i18n": i18n}):
+            adapter = MarmotAdapter({})
+            self.assertEqual(adapter.phrase("gateway.model.switched", model="m"), "gateway.model.switched|m")
 
 
 class FakeCore:

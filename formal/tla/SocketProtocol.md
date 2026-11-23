@@ -106,7 +106,7 @@ property holding, each in a second.
 turn as its connection goes), `NeverReconnected` (a connector serves the core again), `NeverSettledByEffect`
 (the interrupt, while pending, is settled by the turn's end), `NeverEventBeforeAnswer` (an event waits behind the answer to a
 request), `NeverHoldDropped` (a held end goes with the connection) and `NeverRunOnAfterDrop` (the turn runs on in
-Hermes after its connection went). All within 510 distinct states.
+Hermes after its connection went, and the harness ends it after the core cut it). All within 510 distinct states.
 
 ## What the model found
 

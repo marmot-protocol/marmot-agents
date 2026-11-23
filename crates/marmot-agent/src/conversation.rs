@@ -271,14 +271,25 @@ impl Saved {
     /// driver whose numbering starts again, as a connector's does on each connection, goes on
     /// from there (D-059).
     pub fn last_numbers(&self) -> HashMap<String, u64> {
-        let mut last: HashMap<String, u64> = self.numbers.clone().into_iter().collect();
+        self.numbers_with_items().into_iter().collect()
+    }
+
+    /// Keeps the number each session's items reached, as a state file from before did not, so
+    /// forgetting the items afterwards loses none of them.
+    fn take_up_numbers(&mut self) {
+        self.numbers = self.numbers_with_items();
+    }
+
+    /// The numbers kept, each raised to the highest its session's items show.
+    fn numbers_with_items(&self) -> BTreeMap<String, u64> {
+        let mut numbers = self.numbers.clone();
         for record in self.items.values() {
             let header = record.last.header();
             let session = header.session.as_ref().map(|s| s.as_str().to_string());
-            let at = last.entry(session.unwrap_or_default()).or_insert(0);
+            let at = numbers.entry(session.unwrap_or_default()).or_insert(0);
             *at = header.seq.max(*at);
         }
-        last
+        numbers
     }
 
     /// Takes up a state file whose items' first events went out under the temporary kind of
@@ -507,6 +518,7 @@ impl Conversation {
         if !saved.kind_1201 {
             saved.move_to_kind_1201();
         }
+        saved.take_up_numbers();
         Self {
             agent,
             harness: harness.into(),

@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import secrets
 import tempfile
 from pathlib import Path
@@ -30,11 +31,17 @@ from .translate import CONFIRM, OPEN, VERSION, Translator
 # session (`docs/reference/hermes-messages.md`). The end of a turn that showed nothing is held this
 # long, and dropped if the turn starts again meanwhile.
 HOLD_SECONDS = 10.0
-# What Hermes says when it took a `/model <id>`, and a `/model reset` (`fixtures/recordings/hermes/model_switch.jsonl`):
-# the session's model, read then, shows the change.
-MODEL_TAKEN = ("Model switched to", "Session model override cleared")
-# How long a control waits for its effect before the core settles it as having none (D-087). A reset
-# still waiting after this settles nothing.
+# Hermes answers a command only in text, which it makes from its catalog (`agent.i18n.t`) in the language
+# it is set to: no field says what became of the command. The plugin knows the reply by its key, from the
+# same catalog. Hermes took a `/model <id>` or a `/model reset` when it replies with one of these
+# (`gateway/slash_commands_model.py`); anything else is a refusal.
+MODEL_TAKEN = ("gateway.model.switched", "gateway.model.reset_done", "gateway.model.reset_none")
+# And it replaced the session when it replies to a `/new` with one of these (`gateway/slash_commands_session.py`).
+RESET_TAKEN = ("gateway.reset.header_default", "gateway.reset.header_new", "gateway.reset.header_titled")
+# Stands for a value in a reply, as each field of the catalog's text.
+MARK = "\x00"
+# How long a control waits for its effect, from when the plugin handed it to Hermes, before the core
+# settles it as having none (D-087). A control still waiting after this settles nothing.
 EFFECT_SECONDS = 120.0
 # What Hermes says, on the first message after it restarted, about a session whose turn a crash cut off.
 # The session stays paused until someone sends `/discard`, which drops the lost turn without running it
@@ -67,9 +74,12 @@ class Chat:
         self.translator = translator
         self.by_item: dict[str, list[str]] = {}  # requests settled by an item's next event
         self.by_turn: dict[str, list[str]] = {}  # interrupts, settled by the end of the turn
-        # (chat and sender, their session count then, the request, when it was taken)
-        self.new_session: list[tuple[str, int, str, float]] = []
-        self.sets: list[dict] = []  # `set` controls waiting for a session event showing the value
+        # Resets waiting for the session they replace to end, one for each chat and sender: {"key", its
+        # session count then, "request", "at": when Hermes was handed it, None until then}
+        self.new_session: list[dict] = []
+        # Model switches waiting for the read after Hermes took them, one a session: {"request", "session",
+        # "taken": Hermes said it took it, "at": as for a reset}
+        self.sets: list[dict] = []
         # What waits for Hermes's reply to a command Hermes asked to confirm: the reply to the answer.
         self.confirming = None
         self.answered: set[str] = set()
@@ -210,10 +220,9 @@ class Connector:
             if word in CONFIRM and chat.translator.confirm in chat.translator.open:
                 self.awaiting[text_of(m.get("message_id"))] = chat.confirming
                 chat.confirming = None
-        model_read = (line.get("via") == "call" and line.get("dir") == "in"
-                      and m.get("method") == "get_session_model_settings" and "result" in m)
         before = dict(self.generations)
         events = chat.translator.feed(line)
+        model_read = chat.translator.model_read
         self.save_generations(before)
         if settled_by_reply is not None:
             # Hermes's reply is the command's outcome: the notice that shows it settles the request.
@@ -250,17 +259,17 @@ class Connector:
                 settles += chat.by_turn.pop(turn, [])
             if event["type"] == "session":
                 session = event.get("session")
-                values = {s.get("id"): s.get("value") for s in event["body"].get("settings") or []}
-                # A `set` is settled by the session showing its value, or, once Hermes said it took the
-                # change, by the model read after: a reset names no model, and Hermes may spell one otherwise.
-                shown = [s for s in chat.sets if s["session"] == session
-                         and (values.get(s["setting"]) == s["value"] or (s["taken"] and model_read))]
+                # A switch is settled only by the session as a read begun after Hermes took it shows it: the
+                # translator applies no read begun before (`Translator.model_switched`). A session that shows
+                # the model asked for before then says nothing of the switch.
+                shown = [s for s in chat.sets if s["session"] == session and s["taken"] and model_read]
                 settles += [s["request"] for s in shown]
                 chat.sets = [s for s in chat.sets if s not in shown]
                 # A reset is settled by the first session event after Hermes replaced that sender's
                 # session: the old session's end, or, when it was not shown since starting, the new one.
-                replaced = [r for r in chat.new_session if chat.translator.generation.get(r[0], 1) > r[1]]
-                settles += [request for _, _, request, _ in replaced]
+                replaced = [r for r in chat.new_session
+                            if chat.translator.generation.get(r["key"], 1) > r["generation"]]
+                settles += [r["request"] for r in replaced]
                 chat.new_session = [r for r in chat.new_session if r not in replaced]
             out = {k: v for k, v in event.items() if k not in ("harness", "seq")}
             out["chat"] = chat.id
@@ -391,6 +400,40 @@ class Connector:
             self.awaiting.pop(message_id, None)
             raise
 
+    def taken_by(self, keys) -> re.Pattern | None:
+        """The replies of Hermes's that say it took a command: the catalog's texts of `keys`, each value in
+        them any one line. None when Hermes knows none of them."""
+        said = []
+        for key in keys:
+            try:
+                text = self.hermes.phrase(key, model=MARK, title=MARK)
+            except Exception:
+                text = None
+            if isinstance(text, str) and text and text != key:  # Hermes gives back a key it does not know
+                said.append("[^\n]*".join(re.escape(part) for part in text.split(MARK)))
+        return re.compile(f"(?:{'|'.join(said)})(?:\n|$)") if said else None
+
+    def reserve(self, waiting: list[dict], pending: dict, by: str, what: str) -> None:
+        """Holds `pending[by]` until `pending` settles, or until the core stops waiting for its effect,
+        `EFFECT_SECONDS` after it was handed over. One effect can settle only one request."""
+        now = asyncio.get_running_loop().time()
+        waiting[:] = [w for w in waiting if w["at"] is None or now - w["at"] < EFFECT_SECONDS]
+        if any(w[by] == pending[by] for w in waiting):
+            raise Refusal("busy", f"A {what} is already on its way.")
+        if pending["request"]:
+            waiting.append(pending)
+
+    async def handed(self, waiting: list[dict], pending: dict, work) -> None:
+        """Hands Hermes a control held by `reserve`. The core's wait for its effect starts once it is
+        handed over (D-087), and so does the plugin's; if Hermes does not take it, nothing is held."""
+        try:
+            await work
+        except BaseException:
+            if pending in waiting:
+                waiting.remove(pending)
+            raise
+        pending["at"] = asyncio.get_running_loop().time()
+
     def background(self, work) -> None:
         task = asyncio.ensure_future(work)
         self.tasks.add(task)
@@ -469,15 +512,21 @@ class Connector:
 
     async def typed_answer(self, chat: Chat, item: str, request: str, where: dict, sender: dict, text: str) -> None:
         """Types an answer. The item counts as answered from then on, so a second answer is refused, unless
-        Hermes did not take it: then it waits for another."""
+        Hermes did not take it: then it waits for another, and the command it confirms waits for the reply
+        to that one."""
         chat.answered.add(item)
         if request:
             chat.by_item.setdefault(item, []).append(request)
+        self.typed_n += 1
+        message_id = f"hermes-{self.boot}-{self.typed_n}"
         try:
-            await self.type(where, sender, text)
+            await self.type(where, sender, text, message_id)
         except BaseException:
             chat.answered.discard(item)
             unsettle(chat.by_item, item, request)
+            confirming = self.awaiting.pop(message_id, None)
+            if confirming is not None:
+                chat.confirming = confirming
             raise
 
     async def control(self, params: dict) -> None:
@@ -510,28 +559,22 @@ class Connector:
             session = action.get("session") if isinstance(action.get("session"), str) else None
             _, sender = self.source_of(chat, session, by)
             key = self.key_of(where, sender)
-            now = asyncio.get_running_loop().time()
-            chat.new_session = [r for r in chat.new_session if now - r[3] < EFFECT_SECONDS]
-            if any(r[0] == key for r in chat.new_session):
-                # One reset shows as one session's end, which can settle only one request.
-                raise Refusal("busy", "A new session is already on its way.")
-            pending = (key, chat.translator.generation.get(key, 1), request, now)
-            if request:
-                chat.new_session.append(pending)
+            taken = self.taken_by(RESET_TAKEN)
+            if taken is None:
+                raise Refusal("not_supported", "This Hermes does not say how it answers /new.")
+            # One reset shows as one session's end, which can settle only one request.
+            pending = {"key": key, "generation": chat.translator.generation.get(key, 1), "request": request,
+                       "at": None}
+            self.reserve(chat.new_session, pending, "key", "new session")
 
             def replied(said: str) -> bool:
-                # "✨" is Hermes's reset, which the end of the session it replaced shows. Anything else
-                # is a refusal, or a question of its own: no session was replaced.
-                if said.startswith("✨") or pending not in chat.new_session:
+                # A reset Hermes took is settled by the end of the session it replaced. Anything else is
+                # a refusal, or a question of its own: no session was replaced.
+                if taken.match(said) or pending not in chat.new_session:
                     return False
                 chat.new_session.remove(pending)
                 return True
-            try:
-                await self.command(chat, where, sender, "/new", request, replied)
-            except BaseException:
-                if pending in chat.new_session:
-                    chat.new_session.remove(pending)
-                raise
+            await self.handed(chat.new_session, pending, self.command(chat, where, sender, "/new", request, replied))
             return
         if kind == "set":
             return await self.set(request, by, action)
@@ -539,7 +582,8 @@ class Connector:
 
     async def set(self, request: str, by: dict, action: dict) -> None:
         """Only the model can be set from the chat for now: by `/model <id>`, which Hermes answers in
-        text. The plugin then asks Hermes for the session's model, which the session item shows."""
+        text. When the reply says Hermes took it, the plugin asks Hermes for the session's model, and the
+        session item that read shows settles the request; any other reply is a refusal, and settles it."""
         session, setting, value = text_of(action.get("session")), action.get("setting"), action.get("value")
         if setting != "model":
             raise Refusal("not_supported")
@@ -549,23 +593,23 @@ class Connector:
         if chat is None:
             raise Refusal("nothing_to_do")
         where, sender = self.source_of(chat, session, by)
-        pending = {"request": request, "session": session, "setting": "model", "value": value, "taken": False}
-        if request:
-            chat.sets.append(pending)
+        taken = self.taken_by(MODEL_TAKEN)
+        if taken is None:
+            raise Refusal("not_supported", "This Hermes does not say how it answers /model.")
+        # The model read after a switch settles it, and a read shows only the model then: one read cannot
+        # tell two switches apart.
+        pending = {"request": request, "session": session, "taken": False, "at": None}
+        self.reserve(chat.sets, pending, "session", "change of model")
 
         def replied(said: str) -> bool:
-            if said.startswith(MODEL_TAKEN):
-                # Hermes took it: the session's model, read now, shows it, and settles the request.
+            if taken.match(said):
+                # Hermes took it: the session's model, read from now on, shows it, and settles the request.
                 pending["taken"] = True
+                chat.translator.model_switched(self.key_of(where, sender))
                 self.background(self.hermes.read_model_settings(where, sender))
                 return False
             if pending not in chat.sets:
                 return False
             chat.sets.remove(pending)
             return True
-        try:
-            await self.command(chat, where, sender, f"/model {value}", request, replied)
-        except BaseException:
-            if pending in chat.sets:
-                chat.sets.remove(pending)
-            raise
+        await self.handed(chat.sets, pending, self.command(chat, where, sender, f"/model {value}", request, replied))

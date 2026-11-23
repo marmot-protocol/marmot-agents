@@ -1527,6 +1527,41 @@ fn a_sessions_last_number_outlives_its_items() {
     assert_eq!(talk.saved().last_numbers().get("earlier"), Some(&40));
 }
 
+// A state file from before the core kept each session's number apart from its items still has
+// those numbers in its items: they are taken up when the conversation starts, so forgetting the
+// items afterwards loses none of them (D-059).
+#[test]
+fn a_state_file_from_before_keeps_its_items_numbers() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let header = Header {
+        harness: "codex".into(),
+        session: Some("earlier".into()),
+        turn: Some("t0".into()),
+        item: "early".into(),
+        seq: 40,
+        state: State::Done,
+        title: "A title".into(),
+        text: "the plain rendering".into(),
+    };
+    sent(
+        &mut talk,
+        &chat,
+        AgentEvent::new(header, turn(), None).unwrap(),
+        "e-early",
+    );
+    ack_all(&mut talk);
+    let mut before = serde_json::to_value(talk.saved()).unwrap();
+    before.as_object_mut().unwrap().remove("numbers");
+    let mut talk = conversation(serde_json::from_value(before).unwrap());
+    finish_many(&mut talk, &chat, 3000);
+    assert!(
+        !kept_items(&talk).contains(&format!("{chat}/early")),
+        "forgotten"
+    );
+    assert_eq!(talk.saved().last_numbers().get("earlier"), Some(&40));
+}
+
 // Finished items kept only because their last version waited to be sent are forgotten once it
 // has gone, without waiting for another item to finish.
 #[test]
