@@ -652,3 +652,23 @@ Two points for the people deciding, not for the connector:
   [D-021](../decisions.md#d-021-approval-behaviour-belongs-to-the-harness) leaves approval behaviour to the
   harness, so this is Hermes behaving as designed. It does mean that a group sees no approval for some
   commands that Hermes itself flags as dangerous.
+
+## What the plugin relies on outside the published plugin interface
+
+Listed on 2026-11-23 by reading the plugin's code at that day's `master` (`python/marmot_hermes`) and its tests,
+for Hermes at commit `40d1e95f`. Not re-checked against a newer Hermes, and Hermes's published list of what a
+plugin may use was not read again for this: where this table says a call is not in it, that is from
+[what Hermes hands over as data](#what-hermes-hands-over-as-data); where it says it is not known, nobody has
+checked. A [channel plugin](../design/drivers.md#channel-plugins) lists here everything it uses that Hermes may
+not publish for plugins, with the test that fails when it changes. The rest is the platform adapter's own
+interface (`BasePlatformAdapter`, `MessageEvent`, `SendResult`) and `ctx.register_platform`.
+
+| What | Read for | Published? | What fails when it changes |
+| --- | --- | --- | --- |
+| `COMMAND_REGISTRY` and `_is_gateway_available`, from `hermes_cli.commands` | The commands a session item lists ([D-044](../decisions.md#d-044-a-connector-supplies-what-its-harness-does-not-say)) | No; Hermes's plugin check warns about the import | **Nothing yet.** The plugin logs a warning and the session item lists no commands; the end-to-end scenario, `crates/marmot-agent/tests/hermes.rs`, does not look at the list, and `python/tests` fake it |
+| `resolve_gateway_approval_card`, from `tools.approval` | Answering an approval card, as the person who answered | Not known | The approval step of the end-to-end scenario: the command is never run |
+| `resolve_gateway_clarify`, from `tools.clarify_gateway` | Answering a question | Not known | **Nothing yet.** The scenario asks no question, and `python/tests` fake the call |
+| `_mark_connected` and `_mark_disconnected`, helpers of `BasePlatformAdapter` | Telling Hermes the platform is up or down | Not known; the leading underscore suggests not (inferred) | The scenario's first step, if a change makes the call fail: the platform then does not start (inferred, not tried) |
+
+The two rows marked "nothing yet" break the rule that each such reliance has a test that fails when it changes.
+Closing them is code: the scenario checking that the session item lists commands, and asking one question.

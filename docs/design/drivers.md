@@ -20,7 +20,9 @@ That a chat can move a coding harness to another folder is decided
 ([D-101](../decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder)); how, in
 [a chat's folder](#a-chats-folder), is built; the `folders` list, the account home and what a move does are
 decided ([D-104](../decisions.md#d-104-how-a-chats-folder-works-as-built)), and the setting's name and refusals
-are provisional.
+are provisional. That Hermes and OpenClaw are channel plugins, with a narrower contract than a driver, is decided
+([D-113](../decisions.md#d-113-hermes-and-openclaw-are-channel-plugins-with-a-narrower-contract-than-a-driver));
+the contract itself, in [channel plugins](#channel-plugins), is a proposal until the owner accepts it.
 
 ## What a driver does
 
@@ -45,8 +47,8 @@ It does not decide who is allowed to do anything, and it does not touch Marmot. 
 | Other ACP agents | ACP | Rust | Each agent's ACP command | `agent-client-protocol` |
 | Claude Code | Native | TypeScript | The Claude Agent SDK | `@anthropic-ai/claude-agent-sdk` |
 | Cursor | ACP | Rust | `cursor-agent acp` | `agent-client-protocol` ([D-080](../decisions.md#d-080-cursor-is-driven-through-acp)) |
-| Hermes | Plugin | Python | Hermes's platform plugin interface | Hermes itself |
-| OpenClaw | Plugin | TypeScript | OpenClaw's channel plugin interface | OpenClaw itself |
+| Hermes | Channel plugin | Python | Hermes's platform plugin interface | Hermes itself |
+| OpenClaw | Channel plugin | TypeScript | OpenClaw's channel plugin interface | OpenClaw itself |
 
 The facts behind each choice are in [`../reference/harness-interfaces.md`](../reference/harness-interfaces.md).
 
@@ -66,12 +68,14 @@ harness-specific extensions, or is missing. So:
 Because all drivers sit behind the same trait, a harness can move from ACP to a native driver later without any
 change above the driver.
 
-### Why Hermes and OpenClaw are plugins
+### Why Hermes and OpenClaw are channel plugins
 
-Hermes and OpenClaw are not coding tools driven by one person. They are agent runtimes with their own idea of
-users, channels and routing. ACP models one editor user per session, so it has no place for who sent a message
-or which group it came from. Their own plugin interfaces do. Each plugin runs inside its runtime and connects to
-the core over [the socket](socket-protocol.md).
+Hermes and OpenClaw are not coding tools driven by one person. They are messaging gateways with their own idea
+of users, channels and routing, and the Marmot plugin is one channel among many inside them. ACP models one
+editor user per session, so it has no place for who sent a message or which group it came from. Their own
+plugin interfaces do. Each plugin runs inside its gateway and connects to the core over
+[the socket](socket-protocol.md). It keeps a narrower contract than a driver
+([channel plugins](#channel-plugins)).
 
 ### What Hermes can and cannot report
 
@@ -556,9 +560,124 @@ Its capabilities: it can interrupt; a message sent during a turn folds into it; 
 and they can be resumed; no approvals; no files (`files_in` is `none`, provisional: Pi takes images, and
 passing them on is a later step); no approval commands.
 
+## Channel plugins
+
+That Hermes and OpenClaw are channel plugins, with a narrower contract than a driver, is decided
+([D-113](../decisions.md#d-113-hermes-and-openclaw-are-channel-plugins-with-a-narrower-contract-than-a-driver)).
+The contract below is a proposal until the owner accepts it. It was drawn on 2026-11-23 from what the two plugins
+do at that day's `master`.
+
+A channel plugin runs inside a messaging gateway as one of its channels, beside the gateway's others, and
+connects to the core over [the socket](socket-protocol.md#the-messages-as-built). The gateway owns the
+conversation's sessions, its media, its own allow-lists and its own setting for how much tool activity it sends.
+The plugin turns what the gateway hands a channel into agent events, and what the core sends into the gateway's
+own calls, as a driver does; it is not asked to make the gateway behave like a harness the core drives.
+
+### What a channel plugin promises
+
+These are the same as for every connector on the socket.
+
+- **The socket, as built.** It connects with its own token
+  ([D-038](../decisions.md#d-038-each-connector-has-its-own-token)), as one agent
+  ([D-035](../decisions.md#d-035-each-harness-install-is-its-own-identity-with-its-own-sessions)), and speaks
+  [the messages, as built](socket-protocol.md#the-messages-as-built)
+  ([D-081](../decisions.md#d-081-the-socket-messages-as-built-are-accepted)): a hello with all seven capability
+  flags, then prompts, answers and controls in, events out.
+- **The same events.** Everything the gateway hands the channel becomes events of the shared vocabulary, each
+  with the gateway's own payload as its native message, except a secret question that is no longer waiting,
+  which carries none
+  ([D-007](../decisions.md#d-007-one-shared-event-vocabulary), [D-008](../decisions.md#d-008-pass-everything-through),
+  [D-056](../decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting)).
+  Each answer and control it takes is settled by the event that shows its effect, or refused
+  ([D-028](../decisions.md#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it),
+  [D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)).
+- **The core decides who may prompt and who may approve**
+  ([D-010](../decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve),
+  [D-084](../decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)). The
+  gateway's own check is opened for what the plugin delivers, so the core's is the one that counts:
+  - Hermes: `install/hermes.sh` sets `MARMOT_ALLOW_ALL_USERS=true` in Hermes's settings, so Hermes's allow-list
+    admits every sender the plugin hands it, and puts the earlier value back on `--uninstall`. The plugin
+    answers an approval card or a question as the person whose answer the core sent.
+  - OpenClaw: `install/openclaw.sh` sets no allow-list. The plugin hands OpenClaw an open policy with every
+    message it delivers (`dmPolicy` and `groupPolicy` `open`, `allowFrom` `*`), and answers OpenClaw's question
+    whether a sender may approve (`authorizeActorAction`) with yes only for a sender the core has vouched for.
+  - Its list of typed commands that need the right to approve (`approval_commands`) is complete for the gateway
+    version it was read in, since the core checks every message against it
+    ([D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights),
+    [D-047](../decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts)). Neither gateway marks
+    these commands, so the list is the plugin's own.
+- **Nothing of Marmot.** It never sees a key, a group, a relay or an event kind
+  ([D-034](../decisions.md#d-034-the-core-does-the-shared-work-and-a-connector-speaks-only-in-agent-events)),
+  hands the gateway only the core's ids for chats and senders
+  ([D-036](../decisions.md#d-036-the-ids-a-connector-sees-are-the-cores-own)), and logs only what
+  [D-071](../decisions.md#d-071-what-may-be-logged) allows.
+- **Files go through the core.** Each file the gateway hands its channel becomes the core's `send_file`, and the
+  core decides whether it goes ([a gateway's files](#a-gateways-files),
+  [D-108](../decisions.md#d-108-how-an-agents-file-reaches-the-core-as-built)).
+- **Tested like a driver** ([D-074](../decisions.md#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)):
+  its translation replays the gateway's recordings, its transport runs against a fake gateway and a fake core,
+  and one scenario runs it inside the real gateway, at the version it is pinned to.
+
+### What a channel plugin is not asked for
+
+- **Sessions named by the core.** The gateway keeps its own sessions, so `sessions` is always `own`. The core
+  never names a session in a prompt
+  ([D-065](../decisions.md#d-065-a-prompt-names-a-session-only-to-resume-one)), and `new_session` asks the
+  gateway for one in its own way.
+- **A chat's folder.** The plugin states no `folder` in its hello, so the core offers no `folder` setting
+  ([a chat's folder](#a-chats-folder),
+  [D-101](../decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder)). The gateway keeps the
+  workspace it manages, and the installer lists it in `files_from`, except in the cases
+  [above](#a-gateways-files) where it lists none, such as Hermes's default of the whole home; the owner then
+  names a folder before the agent can send a file.
+- **A tool of the core's.** The core gives a channel plugin's agent no `send_file` tool; the agent sends files in
+  the gateway's own way, which the plugin turns into `send_file`.
+- **More tool activity than the gateway hands a channel.** The plugin passes through all it is handed, at the
+  gateway's own setting, which the installers leave alone
+  ([D-105](../decisions.md#d-105-which-gateway-settings-the-installers-change)). Hermes hands formatted lines,
+  so its tool activity shows as commentary messages and never as `tool` items
+  ([what Hermes can and cannot report](#what-hermes-can-and-cannot-report)); OpenClaw hands structured tool
+  events when its own settings ask for them.
+- **Controls the gateway has no command for.** Interrupt, new session and each setting go as the gateway's own
+  typed commands, from the person who sent them; a setting with no command is refused. Settings, values and
+  commands the gateway does not report as data, the plugin fills in from its own knowledge of the gateway
+  ([D-044](../decisions.md#d-044-a-connector-supplies-what-its-harness-does-not-say)).
+- **Changes to the person's gateway.** The installer changes only the plugin's own channel and what the core's
+  check needs; the person's agent, model, approval mode and other channels stay theirs
+  ([D-105](../decisions.md#d-105-which-gateway-settings-the-installers-change)).
+
+The seven flags, and where each plugin stands:
+
+| Flag | A driver | A channel plugin | OpenClaw | Hermes |
+| --- | --- | --- | --- | --- |
+| `interrupt` | yes or no | Yes when the gateway has a command that stops a turn | Yes (`/stop`) | Yes (`/stop`) |
+| `mid_turn` | `fold`, `restart` or `queue` | What the gateway does; the plugin does not change it | `queue` | `fold` |
+| `sessions` | `core` or `own` | Always `own` | `own` | `own` |
+| `resume` | yes or no | Whether the gateway's own store outlives a restart | Yes, in its state folder | Yes, in Hermes's home |
+| `approvals` | yes or no | Yes only when the gateway hands its channel approvals | Yes, once forwarding is on, which the installer turns on for Marmot chats when it is off | Yes, as approval cards, which the plugin claims |
+| `files_in` | `none`, `images` or `any` | `none`, as for every driver until files passed to a harness are designed ([D-083](../decisions.md#d-083-the-core-passes-no-files-to-a-harness-yet)) | `none` | `none` |
+| `approval_commands` | a list | The gateway's commands that approve or widen what the agent may do, read in its source | `/approve`, `/exec`, `/elevated`, `/elev` anywhere; `/config` and eight more at the start ([the OpenClaw plugin](#the-openclaw-plugin)) | `/approve`, `/deny`, `/yolo`, `/approvals`, `/memory`, `/skills`, `/codex-runtime`, at the start |
+
+What a channel plugin needs that a driver does not is the socket's chat section, for the gateway's own message
+tools ([D-020](../decisions.md#d-020-the-socket-speaks-agent-control-v3-with-a-clean-cutover),
+[D-042](../decisions.md#d-042-an-agent-may-act-in-its-own-chat-and-may-not-change-a-group-or-the-account)). It is
+not designed yet, so OpenClaw's message tool is offered no actions.
+
+### Relying on a gateway's internals
+
+A channel plugin builds on what the gateway publishes for its plugins
+([D-006](../decisions.md#d-006-prefer-official-interfaces-and-libraries)). Where it must use something the
+gateway does not publish, its reference page lists it, with the version it was read in, and a test fails when
+that internal changes. The tests of the plugin's own package run against a fake gateway, which stands in for
+these internals, so they cannot see such a change; the test that can is the end-to-end scenario against the
+real gateway, which runs on demand and must pass before a milestone closes. The lists are in
+[OpenClaw's reference page](../reference/openclaw-messages.md#what-the-plugin-relies-on-outside-the-plugin-sdk) and
+[Hermes's](../reference/hermes-messages.md#what-the-plugin-relies-on-outside-the-published-plugin-interface). On
+2026-11-23 two of them have no such test yet; each page says which.
+
 ## The OpenClaw plugin
 
-A channel plugin named `marmot`, in TypeScript, that runs inside OpenClaw
+A [channel plugin](#channel-plugins) named `marmot`, in TypeScript, that runs inside OpenClaw
 ([`packages/openclaw`](../../packages/openclaw)) and connects to the core over the
 [socket](socket-protocol.md#the-messages-as-built). It is built as JavaScript and installed into OpenClaw from a
 packed archive, as a release is. The core is started with a `[connector]` section, as for Claude Code.
@@ -639,7 +758,7 @@ provisional, for the owner's review.
 
 ## The Hermes plugin
 
-A Hermes platform plugin in Python, [`python/marmot_hermes`](../../python/marmot_hermes), that runs inside
+A [channel plugin](#channel-plugins) in Python, a Hermes platform plugin, [`python/marmot_hermes`](../../python/marmot_hermes), that runs inside
 Hermes and connects to the core over the [socket](socket-protocol.md#the-messages-as-built). It uses the
 standard library and what Hermes provides, nothing else. Hermes sees a chat platform called `marmot`. The core
 is started with a `[connector]` section, as for Claude Code.
@@ -731,4 +850,5 @@ commands, each counted at the start of a message, are `/approve`, `/deny`, `/yol
 3. **Does it matter enough, or is its ACP support poor?** Write a native driver: in Rust if the interface is a
    documented wire protocol, or as a separate program over the socket if the official library is in another
    language.
-4. **Is it a runtime with its own users and channels?** Write a plugin for it that connects over the socket.
+4. **Is it a messaging gateway, with its own users and channels?** Write a channel plugin for it that connects
+   over the socket and keeps [the contract](#channel-plugins).

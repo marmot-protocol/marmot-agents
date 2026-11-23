@@ -934,3 +934,18 @@ plugin's debug file and OpenClaw's own log. They are not in a committed recordin
   answers so only for the sender whose answer the core sent.
 - **The free model endpoint refused often** with 503 and 522, which OpenClaw reports as `overloaded`. It then
   tries the fallback models in `agents.defaults.model.fallbacks`, and the turn went on.
+
+## What the plugin relies on outside the plugin SDK
+
+Listed on 2026-11-23 by reading the plugin's code at that day's `master` (`packages/openclaw/src`) and its
+tests, for OpenClaw 2026.11.5. Not re-checked against a newer OpenClaw. A [channel plugin](../design/drivers.md#channel-plugins)
+lists here everything it uses that OpenClaw does not publish for plugins, with the test that fails when it
+changes. Everything else the plugin calls is an export of `openclaw/plugin-sdk/…` or a function of the channel
+runtime OpenClaw hands `gateway.startAccount`.
+
+| What | Read for | Where it was found | What fails when it changes |
+| --- | --- | --- | --- |
+| `replyMediaSourceUrls`, in OpenClaw's record of a reply payload at `globalThis[Symbol.for("openclaw.replyPayloadMetadata")]` (a `WeakMap`) | The path the agent named for a reply's file, since the payload names only OpenClaw's copy ([media a channel is handed](#media-a-channel-is-handed), [D-108](../decisions.md#d-108-how-an-agents-file-reaches-the-core-as-built)) | OpenClaw's bundled code (`src/auto-reply/reply/reply-media-paths.ts`); no export or type declaration names it | The file step of the end-to-end scenario, `crates/marmot-agent/tests/openclaw.rs`: without the record the plugin sends the copy's path, the core refuses it, and no file reaches the chat. `packages/openclaw/test/transport.test.ts` fakes the record, so it cannot see a change |
+
+The project asks OpenClaw to expose the original path
+([D-108](../decisions.md#d-108-how-an-agents-file-reaches-the-core-as-built)); once it does, this row goes.

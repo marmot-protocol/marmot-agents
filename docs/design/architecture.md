@@ -3,8 +3,10 @@
 Status: draft. The layers, the core program, the socket and the driver choices are decided
 ([D-002](../decisions.md#d-002-one-rust-core-program-with-mdk-as-a-library) to
 [D-005](../decisions.md#d-005-which-driver-each-harness-gets)), and so are the driver trait and the capability
-flags ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)). The other details on this
-page are proposals.
+flags ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)), and that Hermes and OpenClaw
+connect through channel plugins, with a narrower contract than a driver
+([D-113](../decisions.md#d-113-hermes-and-openclaw-are-channel-plugins-with-a-narrower-contract-than-a-driver)).
+The other details on this page are proposals.
 
 Read [the three-minute overview](../README.md) first. This page goes one level deeper: what each part is
 responsible for, and what happens during a turn.
@@ -54,16 +56,26 @@ a recorded session through it.
 A driver knows nothing about Marmot, groups or permissions. The core knows nothing about any harness's
 interface.
 
+### Channel plugins
+
+Hermes and OpenClaw are messaging gateways: they have their own users, chats and sessions, and many channels
+besides Marmot. For them the connector is a **channel plugin**, one more channel inside the gateway. It does a
+driver's two jobs, speaking to the gateway and translating, under a narrower contract: the gateway keeps its
+sessions, its media, its own allow-lists and its own setting for how much tool activity it sends, and the
+plugin passes on what the gateway hands a channel. The core still decides who may prompt and who may approve,
+and the gateway's own check is opened for what the plugin delivers. See
+[channel plugins](drivers.md#channel-plugins).
+
 ### The socket
 
 Drivers written in Rust are compiled into the core. Everything else connects over a local socket:
 
 - the Claude Code driver, a TypeScript program built on Anthropic's official SDK;
-- the Hermes and OpenClaw plugins, which run inside those runtimes;
+- the Hermes and OpenClaw channel plugins, which run inside those gateways;
 - later, connectors written by other people.
 
-To the core, a program on the socket is just another driver. It sends the same events and receives the same
-controls as a built-in one. See [`socket-protocol.md`](socket-protocol.md).
+To the core, a program on the socket, driver or channel plugin, is a connector like any other. It sends the
+same events and receives the same controls as a built-in driver. See [`socket-protocol.md`](socket-protocol.md).
 
 ## What happens during a turn
 
@@ -107,7 +119,7 @@ Three things to notice:
 
 | Layer | Must never |
 | --- | --- |
-| Driver | Decide who may prompt or approve; touch keys, groups or relays |
+| Driver or channel plugin | Decide who may prompt or approve; touch keys, groups or relays |
 | Translation | Keep state between events; drop the native payload |
 | Conversation handling | Depend on which harness is behind a driver |
 | Marmot side | Know anything about agents beyond the shared event kinds |
@@ -129,5 +141,5 @@ will do. Nothing above a driver checks the harness's name. Decided as
 | --- | --- | --- |
 | Marmot events | Core and the group | Unsigned Nostr-shaped events inside MLS messages; see [`event-model.md`](event-model.md) |
 | Driver trait | Core and Rust drivers | A Rust trait; see [`drivers.md`](drivers.md) |
-| Socket protocol | Core and other programs | A local socket; see [`socket-protocol.md`](socket-protocol.md) |
+| Socket protocol | Core and other programs: the Claude Code driver and the channel plugins | A local socket; see [`socket-protocol.md`](socket-protocol.md) |
 | Harness interface | Driver and harness | Whatever the harness provides; see [`../reference/harness-interfaces.md`](../reference/harness-interfaces.md) |

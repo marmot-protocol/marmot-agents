@@ -23,7 +23,8 @@ what it is doing, approve what it asks, and control it as fully as you could at 
 2. Each harness gets a small driver that translates its events into one shared set of Marmot events.
 3. One core program handles everything that is the same for all harnesses: the Marmot account, who may talk to the
    agent, and which chat belongs to which session.
-4. Harnesses that need another language connect to the core over a local socket.
+4. Harnesses that need another language connect to the core over a local socket, and so do Hermes and OpenClaw,
+   messaging gateways in their own right, through a channel plugin that runs inside each.
 
 ## Installing an agent
 
@@ -61,7 +62,7 @@ it in its settings
 Code must be signed in on your account (run `claude`, then `/login`): an `ANTHROPIC_API_KEY` in your shell
 does not reach the service, and the script refuses to rely on one.
 
-For Hermes and OpenClaw, the script adds our plugin to your own Hermes or OpenClaw with their own commands, and
+For Hermes and OpenClaw, the script adds our channel plugin to your own Hermes or OpenClaw with their own commands, and
 points it at the agent; you restart your gateway (`hermes gateway restart`, `openclaw gateway restart`) for it
 to load the plugin. It changes only what the plugin needs (the `marmot` platform or channel, and for Hermes
 `MARMOT_ALLOW_ALL_USERS`, so that Hermes takes whatever the agent lets through; for OpenClaw, if it forwards no
