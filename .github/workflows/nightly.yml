@@ -1,9 +1,9 @@
 name: Nightly
 
 # The long checks (D-094, D-129), on master once a night and by hand: the simulator on many new
-# seeds, TLC on larger bounds, a coverage report, and the places kept for mutation testing and
-# the model-double scenarios. Nothing here gates a pull request; a job that fails opens an issue,
-# or adds to the one it opened before.
+# seeds, TLC on larger bounds, a coverage report, one shard of the core's mutants, and the model
+# double's cassettes against their age and the harnesses' releases (D-127). Nothing here gates a
+# pull request; a job that fails opens an issue, or adds to the one it opened before.
 #
 # Rules for this file, as for ci.yml: every action is pinned to a commit and every downloaded
 # tool to a version and a checksum, the token can only read except in the job that writes issues,
@@ -128,6 +128,9 @@ jobs:
           # its own.
           cache: rust-test-rest
 
+      # The core's tests run the real Claude Code and Codex on the model double.
+      - uses: ./.github/actions/harnesses
+
       - name: Install cargo-llvm-cov
         # A tool CI runs, not a dependency of the code. It uses llvm-tools-preview, which
         # rust-toolchain.toml installs, and it keeps the flags in .cargo/config.toml. To move to
@@ -166,17 +169,19 @@ jobs:
           retention-days: 30
 
   mutants:
-    name: Mutation testing (off)
-    # Switched off: it does not fit a night. On 2026-11-23 cargo-mutants 27.1.0 listed 1,649
-    # mutants in the core (`cargo mutants --list -p marmot-agent`), and each needs the core's test
-    # programs built again and about three minutes of the core's tests: days, not hours. To switch
-    # it on, give it a slice that fits, such as one shard a night (`--shard "$((day % 64))/64"`
-    # with `day` the day of the year, about 26 mutants) or the files a model follows, then set
-    # the repository variable NIGHTLY_MUTANTS to `true` (Settings, Secrets and variables,
-    # Actions, Variables).
-    if: vars.NIGHTLY_MUTANTS == 'true'
+    name: Mutation testing, one shard
+    # The core's mutants, a 64th of them a night: on 2026-11-23 cargo-mutants 27.1.0 listed 1,649
+    # (`cargo mutants --list -p marmot-agent`), about 26 a shard, and each needs the core's tests
+    # built again and run, about three minutes. The shard is the day of the year modulo 64, so
+    # every shard runs about every two months. A mutant the tests miss fails the job, and the
+    # issue lists the mutants missed.
     runs-on: ubuntu-24.04
     timeout-minutes: 300
+    outputs:
+      findings: ${{ steps.mutants.outputs.findings }}
+    env:
+      # Each mutant changes one crate: an incremental build of it is faster. It changes no test.
+      CARGO_INCREMENTAL: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -185,6 +190,9 @@ jobs:
       - uses: ./.github/actions/rust
         with:
           cache: rust-test-core
+
+      # The core's tests run the real Claude Code and Codex on the model double.
+      - uses: ./.github/actions/harnesses
 
       - name: Install cargo-mutants
         # A tool CI runs, not a dependency of the code. To move to another release, change the
@@ -204,10 +212,31 @@ jobs:
           tar -xzf "${RUNNER_TEMP}/${name}" -C "${RUNNER_TEMP}/mutants"
           echo "${RUNNER_TEMP}/mutants" >> "${GITHUB_PATH}"
 
-      - name: The core's mutants
-        run: cargo mutants --package marmot-agent --all-features --in-place --no-shuffle --output target
+      - name: The core's mutants, tonight's shard
+        # cargo-mutants exits 2 when the tests missed a mutant, 3 when one timed out and 4 when the
+        # tests fail without one; each fails the job. The missed ones go to the issue: each is a
+        # file, a line and the change, nothing from a test's output.
+        id: mutants
+        run: |
+          set -euo pipefail
+          shard="$(( 10#$(date -u +%j) % 64 ))"
+          echo "Shard ${shard} of 64." | tee -a "${GITHUB_STEP_SUMMARY}"
+          status=0
+          cargo mutants --package marmot-agent --all-features --in-place --no-shuffle \
+            --shard "${shard}/64" --output target || status=$?
+          missed=target/mutants.out/missed.txt
+          if [ -s "${missed}" ]; then
+            {
+              echo "findings<<END_OF_FINDINGS"
+              echo "Shard ${shard} of 64. Mutants the core's tests missed:"
+              sed 's/^/- /' "${missed}"
+              echo "END_OF_FINDINGS"
+            } >> "${GITHUB_OUTPUT}"
+            sed 's/^/- /' "${missed}" >> "${GITHUB_STEP_SUMMARY}"
+          fi
+          exit "${status}"
 
-      - name: Keep what survived
+      - name: Keep the results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -216,11 +245,37 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-  # The model-double scenarios go here: each harness against a model double instead of a real
-  # model, which another piece of work is building. They need no key, so they belong in this
-  # workflow and, once they are fast enough, in the merge queue's gate (ci.yml). When they land,
-  # add their job here, after the Rust setup (./.github/actions/rust, cache rust-test-core), and
-  # add it to the report's `needs`.
+  cassettes:
+    name: The model double's cassettes
+    # D-127: a cassette older than 14 days fails the nightly run, and so does a harness with a
+    # release newer than the one a cassette was recorded with, which the script looks up in npm's
+    # registry; both mean it is time to record it again, which needs a key and is done by hand
+    # (tools/model_double/README.md). Its findings are cassettes' names, dates and versions, and
+    # go to the issue.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      findings: ${{ steps.check.outputs.findings }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Each cassette is younger than 14 days, and its harness has no newer release
+        id: check
+        run: |
+          set -euo pipefail
+          status=0
+          python3 tools/model_double/check_cassettes.py fixtures/cassettes --strict > "${RUNNER_TEMP}/findings.txt" || status=$?
+          cat "${RUNNER_TEMP}/findings.txt"
+          if [ -s "${RUNNER_TEMP}/findings.txt" ]; then
+            {
+              echo "findings<<END_OF_FINDINGS"
+              sed 's/^/- /' "${RUNNER_TEMP}/findings.txt"
+              echo "END_OF_FINDINGS"
+            } >> "${GITHUB_OUTPUT}"
+          fi
+          exit "${status}"
 
   report:
     name: Open an issue for each job that failed
@@ -231,6 +286,7 @@ jobs:
       - models
       - coverage
       - mutants
+      - cassettes
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -238,8 +294,9 @@ jobs:
       issues: write
     steps:
       - name: Open or add to one issue per failed job
-        # The issue holds the job's name, the run's link, the commit and the date, and nothing
-        # from the logs: they stay behind the link, as CI printed them.
+        # The issue holds the job's name, the run's link, the commit and the date, and what a job
+        # gives as its `findings` (the mutants missed, the cassettes due), nothing else from the
+        # logs: they stay behind the link, as CI printed them.
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -254,6 +311,7 @@ jobs:
               models) echo "TLA+ models on larger bounds" ;;
               coverage) echo "Coverage report" ;;
               mutants) echo "Mutation testing" ;;
+              cassettes) echo "The model double's cassettes" ;;
               *) echo "$1" ;;
             esac
           }
@@ -261,6 +319,12 @@ jobs:
           for job in $(jq -r 'to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key' <<< "${NEEDS}"); do
             title="Nightly: $(title_of "${job}") failed"
             body="The nightly job \`$(title_of "${job}")\` failed on ${day}, at commit ${SHA}: ${RUN_URL}"
+            findings="$(jq -r --arg job "${job}" '.[$job].outputs.findings // empty' <<< "${NEEDS}")"
+            if [ -n "${findings}" ]; then
+              body="${body}
+
+          ${findings}"
+            fi
             number="$(gh issue list --state open --search "\"${title}\" in:title" --json number,title \
               --jq "map(select(.title == \"${title}\")) | first | .number // empty")"
             if [ -n "${number}" ]; then
