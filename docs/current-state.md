@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-23, at `master` commit `c02ca81`, through [D-137](decisions.md#d-137-a-secret-answers-membership-check-is-not-bound-to-the-epoch-it-is-sent-under). A change that adds or replaces
+Brought up to date on 2026-11-23, at `master` commit `0580e96`, through [D-137](decisions.md#d-137-a-secret-answers-membership-check-is-not-bound-to-the-epoch-it-is-sent-under). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
