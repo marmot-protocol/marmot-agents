@@ -3,7 +3,7 @@
 Status: built and checked with TLC on small bounds, as
 [D-093](../../docs/decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top) and
 [the verification page](../../docs/design/verification.md) plan. The model, its bounds and its switches are
-internal and change as the work goes. Read on 2026-11-23 against master `d98d3d4` (#118), on branch
+internal and change as the work goes. Read on 2026-11-23 against master `c5c41be` (#122), on branch
 `tla-driver-transport`.
 
 `DriverTransport.tla` models one driver between the core and its harness, for any harness: the core's answers
@@ -18,7 +18,7 @@ A configuration picks the harness's shape, so one model follows three drivers:
 | Shape | Configuration | What differs |
 | --- | --- | --- |
 | Codex | `DriverTransport.codex.cfg` | One `codex app-server` for every chat; Codex resolves a request by itself and says so (`serverRequest/resolved`), and says so after a turn's end for each request the end dropped, as the recording `approval_unanswered` shows; an approval's item is named after Codex's request |
-| ACP | `DriverTransport.acp.cfg` | One agent for every chat; the driver answers at once a request it cannot show (-32602) and one from a session no chat has (-32601), and, when it interrupts, each request still waiting, as cancelled (`cancel_replies`); an approval's item is named after its session and tool call (`approval:{session}:{call}`), a repeat after its request (`approval+…`) |
+| ACP | `DriverTransport.acp.cfg` | One agent for every chat; the driver answers at once a request it cannot show (-32602), and one from a session no chat has (-32002, resource not found), at once or, when it comes while a session is picked, once none is (#122); when it interrupts, it answers each request still waiting as cancelled (`cancel_replies`); an approval's or question's item is named after its session and tool call (`approval:{session}:{call}`), a repeat after its request (`approval+…`, #122 for questions) |
 | Pi | `DriverTransport.pi.cfg` | A Pi for each chat, started again on the chat's session when it dies (`ready_for`), its lines from an earlier Pi dropped; Pi drops a dialog when its turn ends and says nothing of it |
 | Two chats | `DriverTransport.chats.cfg` | ACP's shape, with two chats on one agent, each asked about the same tool call |
 
@@ -30,7 +30,7 @@ A configuration picks the harness's shape, so one model follows three drivers:
 | `Interrupt(r, c, turn)` | `Driver::control` with `Action::Interrupt`: taken when the turn named is the chat's running turn, its effect `Effect::TurnEnded` watched for from the moment it is written. ACP's `cancel` first answers every request still waiting as cancelled (`cancel_replies`), and marks the chat `cancelling` |
 | `NewSession(r, c, named)` | `Driver::control` with `Action::NewSession`: taken while the chat is idle and no session is being picked for it (Codex's `ask` waits while Codex has yet to answer, ACP's `picked`, Pi's busy refusal, #118). Its effect, `Effect::NewSession(old)`, is a session other than the chat's own as the driver knows it, or else than the one the core named (#118). The core names the session it saved, or none: the model lets it name none or any session the chat has had |
 | `Pick(c)`, `Prompt(c)` | `Driver::prompt`: a chat with no session first picks one (Codex's and ACP's `pick`, Pi's `ready_for`), the one the core saved after a restart (D-065); the prompt starts a turn. The driver counts the turn from the moment it writes the prompt (ACP's `session/prompt`, Codex's `turn/start` until Codex answers it). Prompts themselves are `CoreLifecycle`'s |
-| `Route(p)` | Codex's and ACP's `route`, Pi's `handle`: one line read from the harness and handled in one step. A session the harness opened becomes the chat's and settles the new-session controls whose old session it is not (`ready_event`); a turn's start; a request of the harness, made an item that waits, or answered at once (not shown, from a session no chat has, or while ACP cancels), or held while a session is picked (`early`) and dropped once no pick is left; `serverRequest/resolved` (the driver forgets the request, #118); a turn's end, which closes the items waiting in it (#118) and settles an interrupt of it; a session item shown again; the end of the harness's output (`stopped`) |
+| `Route(p)` | Codex's and ACP's `route`, Pi's `handle`: one line read from the harness and handled in one step. A session the harness opened becomes the chat's and settles the new-session controls whose old session it is not (`ready_event`); a turn's start; a request of the harness, made an item that waits, or answered at once (not shown, from a session no chat has, or while ACP cancels), or held while a session is picked (`early`) and, once no pick is left, answered (ACP, #122) or dropped (Codex); `serverRequest/resolved` (the driver forgets the request, #118); a turn's end, which closes the items waiting in it (#118) and settles an interrupt of it; a session item shown again; the end of the harness's output (`stopped`) |
 | `DropWait(p)` | Only with the defect `LoseOnDrop`: a line taken off the pipe and the wait it was read in dropped before it is handled |
 | `Restart`, `Spawn(c)` | A driver whose one harness died has ended, and the core starts a new one (`Codex::start`, `Acp::start`) that knows nothing of what came before. Pi's driver starts a new Pi for the chat whose Pi stopped (`ready_for`) |
 | `HarnessReads(p)` | The harness reads the next line the driver wrote: a session to open or take up, a prompt, a reply to one of its requests (counted, and taken only while it waits), an interrupt |
@@ -62,9 +62,9 @@ answered or interrupted from then on.
 | Switch | When on | Shown when off, or on |
 | --- | --- | --- |
 | `FairHarness` | The harness eventually reads what the driver wrote, and ends a turn it was told to stop | off: an interrupt never settled (`driver-unfair-harness-never-reads`) |
-| `ReaskAfterRestart` (off) | The harness never asks again about a tool call it asked about before it died, in the session it takes up again | on: a reused item id in ACP's shape (`driver-reask-after-restart`) |
+| `ReaskAfterRestart` (off) | The harness never asks again about a tool call it asked about before it died, in the session it takes up again | on: a reused item id in ACP's shape (`driver-reask-after-restart`). Kept as an assumption, not fixed (the owner, 2026-11-23) |
 | `Unshowable` (off for Codex and Pi) | The harness asks only what the driver can show | on, with Codex's driver: a request never answered (`driver-codex-unshown`) |
-| `StrayAsks` (off) | The harness never asks in a session no chat has | on: requests never answered in ACP's shape (`driver-stray-while-picking`) and Codex's (`driver-codex-stray`) |
+| `StrayAsks` (off) | The harness never asks in a session no chat has | on: every property holds in ACP's shape (`driver-stray`, since #122); a request never answered in Codex's (`driver-codex-stray`) |
 
 Besides the switches: each `Route` is one step, as each driver reads a whole line (`next_line`, safe to drop)
 and handles it without waiting on anything (Codex's `route` and Pi's `handle` are not `async`; ACP's `write`
@@ -72,7 +72,9 @@ hands a line to its writer task without waiting); the core never drops a request
 kept (the trait's contract, D-066); Pi's dialogs are the four its driver shows (`DIALOGS`), not checked
 against Pi here (so `Unshowable` is off for Pi); a request's item name, in the Codex and Pi shapes, is unique
 because the harness's request ids are; in ACP's, a tool call's id is unique within its session (ACP's
-schema says so).
+schema says so). The model names every request of the harness as the driver names an approval; until #122
+ACP's driver named a question after its tool call alone, so a second question for one call shared the first's
+item, which the model could not show.
 
 ## Properties
 
@@ -110,8 +112,8 @@ sessions.** Each configuration says how it differs.
 | `driver-acp` | `DriverTransport.acp.cfg` (one chat, two requests for one tool call) | every property holds | 297,609 | |
 | `driver-pi` | `DriverTransport.pi.cfg` (two chats, a Pi each, one request) | every property holds | 179,931 | |
 | `driver-chats` | `DriverTransport.chats.cfg` (two chats on one agent, two requests, no death or new session) | every property holds | 22,203 | |
+| `driver-stray` | `DriverTransport.stray.cfg` (ACP's, one request, `StrayAsks`) | every property holds | 56,143 | |
 | `driver-unfair` | `DriverTransport.unfair.cfg` (Codex's, one request, no `FairHarness`) | L1 fails | 46,152 | [`driver-unfair-harness-never-reads`](counterexamples/driver-unfair-harness-never-reads.json) |
-| `driver-stray-while-picking` | `DriverTransport.stray.cfg` (ACP's, one request, `StrayAsks`) | L2 fails | 63,559 | [`driver-stray-while-picking`](counterexamples/driver-stray-while-picking.json) |
 | `driver-codex-stray` | Codex's, one request, `StrayAsks` | L2 fails | 77,757 | [`driver-codex-stray`](counterexamples/driver-codex-stray.json) |
 | `driver-codex-unshown` | Codex's, one request, `Unshowable` | L2 fails | 59,754 | [`driver-codex-unshown`](counterexamples/driver-codex-unshown.json) |
 | `driver-reask-after-restart` | ACP's, `ReaskAfterRestart`, safety only | S13 fails | 79,366 | [`driver-reask-after-restart`](counterexamples/driver-reask-after-restart.json) |
@@ -120,7 +122,8 @@ The counterexamples are schedules in this model's action names, made from TLC's 
 `tools/tla/schedule_driver.py`; [their README](counterexamples/README.md) says how.
 
 **Each check catches its bug.** Each defect is a value of the constant `Bug`; with it, TLC must report the
-property named, on the configuration named, with only that property. The first six put back what #118 fixed:
+property named, on the configuration named, with only that property. The first six put back what #118 fixed,
+the seventh what #122 fixed, whose counterexample is committed as the one the model found before it:
 
 | `Bug` | What it puts back | Configuration | Property | Distinct states to the violation |
 | --- | --- | --- | --- | ---: |
@@ -130,9 +133,13 @@ property named, on the configuration named, with only that property. The first s
 | `TwoNewSessions` | Pi: a second new-session control taken while one waits, and both settled by the first new session | Pi's, with `r4` a second new-session control | S1 | 255 |
 | `OneItemPerCall` | ACP: two permission requests for one tool call share one item | ACP's | S13 | 1,432 |
 | `UnshownUnanswered` | ACP: a request the driver cannot show is never answered | ACP's | L2 | 11,304 |
+| `HeldDropped` | ACP: a request from a session no chat has, held while a session is picked, dropped unanswered once none is ([`driver-stray-while-picking`](counterexamples/driver-stray-while-picking.json)) | ACP's with `StrayAsks` | L2 | 63,559 (searched whole, as a committed counterexample is) |
 | `CallOnly` | An approval named after its tool call alone, so two chats' approvals share a name and one chat's answer reaches the other's | two chats | S5 | 7,507 |
 | `TakeUnwritten` | An answer taken, and shown as given, when the harness can no longer read it (the ACP driver's bug the conformance suite found) | Codex's | S11 | 1,057 |
 | `LoseOnDrop` | A line read from the harness lost when the core drops the wait it was read in | Codex's | L1 | 6,555 |
+
+The counts for the L1 and L2 defects without a committed counterexample move from run to run (`UnshownUnanswered`
+11,304 to 23,276, `LoseOnDrop` 6,013 to 6,555 seen), as TLC checks liveness on a timer while it searches.
 
 **No empty passes.** Each probe says an interesting state is never reached, and TLC must find it false. On
 Codex's shape: `NeverAnswered` (an answer reaches a waiting request), `NeverAnswerRefused` (an answer is
@@ -145,9 +152,10 @@ cannot show is answered), `NeverCancelled` (a waiting request is answered as can
 `NeverClosedAtTurnEnd` (an item closed by its turn's end), `NeverRestarted` (a chat has its session in a new
 Pi), `NeverFailed` (a control settled as failed). On two chats: `NeverTwoChats` (both chats' turns run at once).
 With `StrayAsks`: `NeverStrayAnswered` (a request from a session no chat has is answered). All sixteen are
-reached within 2,300 distinct states.
+reached within 2,300 distinct states. That a request held while a session is picked is answered is shown by
+`HeldDropped`: the defect changes only that step, so the passing `driver-stray` reaches it.
 
-All 35 DriverTransport cases take 3½ to 5½ minutes with 4 workers here, on a machine busy with other work (the
+All 36 DriverTransport cases take 3½ to 5½ minutes with 4 workers here, on a machine busy with other work (the
 Codex shape 1 to 2 minutes, ACP's and Pi's under 1 each, two chats 10 s, every failing case under 15 s); CI runs them on every
 pull request in a job of their own (`--model DriverTransport`), beside `CoreLifecycle`'s two, under D-094's 15
 minutes.
@@ -159,15 +167,18 @@ two chats and a death, are for a nightly run, which is not set up yet.
 
 ## What the model found
 
-Three requests of the harness that today's drivers never answer, each a committed counterexample and an
-ignored test that fails against the driver. **None is fixed here.**
+Three requests of the harness that the drivers never answered, each a committed counterexample and a test
+that failed against the driver. One is fixed, in master; the two in Codex are not, and their tests are ignored
+until they are.
 
-- **ACP: a request from a session no chat has, read while a session is picked, is dropped unanswered**
-  (`driver-stray-while-picking`, L2). `route` answers such a request at once (-32601), unless some chat's
-  session is being picked: then it holds it in `early`, in case the pick makes its session known. Once no pick
-  is left, `early` is cleared, counted as unrouted, and the request is never answered, so the agent waits for
-  it for ever. Test: `a_request_from_a_session_no_chat_has_is_answered_while_a_session_is_picked` in
-  `crates/marmot-agent-acp/tests/driver.rs` (`--ignored`), which passes when the request comes outside a pick.
+- **ACP: a request from a session no chat has, read while a session is picked, was dropped unanswered**
+  (`driver-stray-while-picking`, L2). **Fixed in #122.** `route` answered such a request at once (-32601),
+  unless some chat's session was being picked: then it held it in `early`, in case the pick made its session
+  known. Once no pick was left, `early` was cleared, counted as unrouted, and the request never answered, so
+  the agent waited for it for ever. Now what is still held once no session is being picked is refused with
+  -32002, resource not found, as is such a request outside a pick (`unclaimed`); the configuration with
+  `StrayAsks` passes (`driver-stray`), and the defect `HeldDropped` puts the old way back. Test:
+  `a_request_from_a_session_no_chat_has_is_refused_as_not_found` in `crates/marmot-agent-acp/tests/driver.rs`.
 - **Codex: a request for a thread no chat has is never answered** (`driver-codex-stray`, L2). `route` refuses
   a call of a tool for no chat, and counts anything else as unrouted, approvals and questions included. Codex
   waits for a reply to each. With subagents off, a thread no chat has is one the driver left, or one Codex
@@ -183,7 +194,9 @@ One risk, resting on what an agent does after a restart, which no recording show
 again with the driver** (`driver-reask-after-restart`, S13). A new driver has forgotten the names it gave, so an
 agent that asks again about a tool call in a session taken up after a restart (Goose carries on a turn a restart
 cut off) gets `approval:{session}:{call}` again, an item id the chat has had. The passing configurations assume
-it does not (`ReaskAfterRestart` off).
+it does not (`ReaskAfterRestart` off), and that stays a trusted assumption: on 2026-11-23 the owner chose not to
+change the driver for it, so the code is left as it is, and the counterexample shows what the assumption rules
+out.
 
 ## Running
 
