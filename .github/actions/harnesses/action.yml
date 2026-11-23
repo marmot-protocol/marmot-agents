@@ -1,0 +1,48 @@
+# What the core's tests need to run the real Claude Code and Codex on the model double
+# (tools/model_double, D-127): Node with the Claude Code driver's packages, and Codex. For the
+# core's tests in ci.yml, and the coverage and mutation jobs in nightly.yml, which run them too.
+name: Harnesses
+description: Install Node, the Claude Code driver's packages and Codex, for the model-double scenarios.
+runs:
+  using: composite
+  steps:
+    - name: Install Node and the Claude Code driver's packages
+      # The Claude Code scenario on the model double (crates/marmot-agent/tests/claude.rs) runs the
+      # real driver and the Claude Code its SDK ships. The same Node as the TypeScript and move-over
+      # jobs in ci.yml: change the three together.
+      shell: bash
+      env:
+        NODE_VERSION: 24.22.3
+        NODE_SHA256: 4f2b175a6d53a5c617a80dba2676238a0688cef28c6da4eba35c7d844e66fcfb
+      run: |
+        set -euo pipefail
+        name="node-v${NODE_VERSION}-linux-x64"
+        curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+          --output "${RUNNER_TEMP}/${name}.tar.xz" "https://nodejs.org/dist/v${NODE_VERSION}/${name}.tar.xz"
+        echo "${NODE_SHA256}  ${RUNNER_TEMP}/${name}.tar.xz" | sha256sum --check
+        tar -xJf "${RUNNER_TEMP}/${name}.tar.xz" -C "${RUNNER_TEMP}"
+        echo "${RUNNER_TEMP}/${name}/bin" >> "${GITHUB_PATH}"
+        PATH="${RUNNER_TEMP}/${name}/bin:${PATH}" npm ci --prefix packages/claude-code
+
+    - name: Install Codex
+      # The Codex scenario on the model double (crates/marmot-agent/tests/codex.rs) runs the real
+      # `codex app-server`. To move to another release, change the version and the checksum
+      # together: the checksum is the sha256 of the release's
+      # codex-x86_64-unknown-linux-musl.tar.gz. Codex runs commands in bubblewrap, which needs the
+      # user namespaces Ubuntu 24.04 keeps from unprivileged programs unless this is switched off.
+      shell: bash
+      env:
+        CODEX_VERSION: 0.171.0
+        CODEX_SHA256: 01baa2e47809f8597be5b2f8abd4e4dfe3fb5bcb6e504c2fbaaad97056c15e8d
+      run: |
+        set -euo pipefail
+        name="codex-x86_64-unknown-linux-musl"
+        curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+          --output "${RUNNER_TEMP}/${name}.tar.gz" \
+          "https://github.com/openai/codex/releases/download/rust-v${CODEX_VERSION}/${name}.tar.gz"
+        echo "${CODEX_SHA256}  ${RUNNER_TEMP}/${name}.tar.gz" | sha256sum --check
+        mkdir -p "${RUNNER_TEMP}/codex"
+        tar -xzf "${RUNNER_TEMP}/${name}.tar.gz" -C "${RUNNER_TEMP}/codex"
+        mv "${RUNNER_TEMP}/codex/${name}" "${RUNNER_TEMP}/codex/codex"
+        echo "${RUNNER_TEMP}/codex" >> "${GITHUB_PATH}"
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

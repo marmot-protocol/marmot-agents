@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Checks the TLA+ models: every case must end as it says.
 
-    python3 tools/tla/check.py [--out DIR] [--model NAME] [--only NAME ...] [--except NAME ...]
-                               [--counterexamples]
+    python3 tools/tla/check.py [--out DIR] [--bounds small|larger] [--model NAME]
+                               [--only NAME ...] [--except NAME ...] [--counterexamples]
 
 Three models, each with its README: CoreLifecycle (formal/tla/README.md), SocketProtocol
 (formal/tla/SocketProtocol.md), whose cases are named `socket-...`, and DriverTransport
-(formal/tla/DriverTransport.md), whose cases are named `driver-...`. The cases:
+(formal/tla/DriverTransport.md), whose cases are named `driver-...`. The cases on the small
+bounds, the default, which CI runs on pull requests and in the merge queue:
 
 - the fair configurations (CoreLifecycle's, SocketProtocol's for each kind of connector, and
   DriverTransport's for each harness's shape), and those that let a send be refused or given up,
@@ -17,6 +18,10 @@ Three models, each with its README: CoreLifecycle (formal/tla/README.md), Socket
   catch its bug;
 - each reachability probe fails: the states the properties speak of are reached, so no pass is
   empty.
+
+With --bounds larger, CoreLifecycle's fair configuration on the larger bounds of
+formal/tla/README.md runs instead, safety and liveness apart, each of which must pass; the nightly
+workflow runs them. The other models have no larger bounds.
 
 Each case runs TLC through tools/tla/run.sh in a folder of its own under --out, which keeps its
 configuration and its log. A line per case gives the result and the state counts TLC reported.
@@ -325,7 +330,20 @@ CASES += [
     driver_probe("NeverFailed", PI),
     driver_probe("NeverStrayAnswered", f"{DT}.stray.cfg"),
 ]
-NAMES = [case.name for case in CASES]
+# The larger bounds (formal/tla/README.md, "Larger bounds"), for the nightly workflow: the fair
+# configuration with more in it, the other constants as there. Safety and liveness run apart, so
+# a liveness check that runs out of time or memory does not hide what safety found.
+TWO_ITEMS = {"Items": '{"t1", "s1"}', "MaxDowns": "2"}
+TWO_CHATS = {"Requests": '{"r1", "r2"}', "Items": '{"t1"}'}
+LIVENESS = {"INVARIANTS": None}
+LARGER = [
+    Case("larger-two-items", FAIR, PASS, {**TWO_ITEMS, **SAFETY}),
+    Case("larger-two-chats", FAIR, PASS, {**TWO_CHATS, **SAFETY}),
+    Case("larger-two-items-liveness", FAIR, PASS, {**TWO_ITEMS, **LIVENESS}),
+    Case("larger-two-chats-liveness", FAIR, PASS, {**TWO_CHATS, **LIVENESS}),
+]
+BOUNDS = {"small": CASES, "larger": LARGER}
+NAMES = [case.name for cases in BOUNDS.values() for case in cases]
 assert len(set(NAMES)) == len(NAMES), "case names must differ"
 
 
@@ -426,6 +444,8 @@ def schedule_text(case, cfg_text, log):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", type=Path, default=ROOT / "target" / "tla")
+    parser.add_argument("--bounds", choices=sorted(BOUNDS), default="small",
+                        help="the small bounds, every case (the default), or the larger ones")
     parser.add_argument("--model", choices=MODELS, help="run only this model's cases")
     parser.add_argument("--only", nargs="+", choices=NAMES, metavar="NAME",
                         help=f"run only these cases, from: {', '.join(NAMES)}")
@@ -437,7 +457,7 @@ def main():
 
     failed = []
     print(f"{'case':32} {'expected':18} {'result':18} {'distinct':>10} {'generated':>11} {'secs':>6}")
-    for case in CASES:
+    for case in BOUNDS[args.bounds]:
         if args.only and case.name not in args.only:
             continue
         if case.name in args.skip:
