@@ -4,7 +4,7 @@ Status: built and checked with TLC on small bounds, as
 [D-093](../../docs/decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top) and
 [the verification page](../../docs/design/verification.md) plan. The model, its bounds and its switches are
 internal and change as the work goes. Read on 2026-11-23 against master `d98d3d4`, with the fixes of branch
-`socket-lifetime`.
+`socket-lifetime`, and again for the bounded writes of branch `core-socket-backlog` the same day.
 
 `SocketProtocol.tla` models the local socket between the core and one connector: the hello, a request answered
 while events arrive, the core's patience for an answer, and a connection that goes and another that comes, one at
@@ -35,7 +35,7 @@ writes a counterexample.
 | `Tick` | The core's net for a control whose effect never shows (D-087) |
 | `Run`, `EndTurn(hold)`, `Release` | The harness runs the prompt and ends its turn, stopped when it has `r1`; the end settles what waits on it. Hermes may hold a quiet end and let it go later (`send_held`) |
 | `Drop` | The connection goes: the core restarts, or the socket breaks |
-| `GiveUp` | `ANSWER_WITHIN`: the core's 30 s for a request to be taken runs out, and it gives the connector up |
+| `GiveUp` | `ANSWER_WITHIN`: the core's 30 s for a request to be written and taken runs out, and it gives the connector up (D-138). A connector that stops reading, so the request is never wholly written, is one that does not take it in time; part of it may have reached it, so the request counts as in flight, as `Hand` has it |
 | (in `Drop`, `GiveUp`) | `ended`: the request waited on is refused as failed (a prompt is told as perhaps not delivered and never sent again, D-037, D-129), every control taken is settled as failed, every open item is closed (D-058, D-070). The connector forgets by its kind: Claude Code exits, and its query with it; OpenClaw cancels the run; Hermes's `core_gone` closes what was open on its side, drops a held end, and forgets what waited, while Hermes runs on |
 | `Restart` | A connector that exited is started again |
 

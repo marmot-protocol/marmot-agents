@@ -296,6 +296,11 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// turn, so when several are ready at once none waits behind the others for long, and the
     /// same inputs always give the same order, which a simulation replays.
     first: usize,
+    /// What the driver gave while a catch-up looked whether it had ended ([`Core::driver_ready`]):
+    /// one output at most, which the loop takes in the driver's turn.
+    early: Option<Output>,
+    /// Whether the driver has ended: the loop ends, and nothing more is read for it.
+    ended: bool,
     /// Faults put back for the simulator, to show its checks find them: none in use.
     #[cfg(feature = "sim-bugs")]
     bugs: Bugs,
@@ -377,6 +382,8 @@ impl<D: Driver, M: Side> Core<D, M> {
             drained: HashMap::new(),
             bounded: true,
             first: 0,
+            early: None,
+            ended: false,
             #[cfg(feature = "sim-bugs")]
             bugs: Bugs::default(),
         })
@@ -453,10 +460,21 @@ impl<D: Driver, M: Side> Core<D, M> {
             // driver's by its trait (D-058), the others lose nothing.
             let first = self.first;
             self.first = (first + 1) % WAITS;
+            // A driver a catch-up found ended is handed nothing more.
+            if self.ended {
+                break;
+            }
             let woke = {
                 let mut tick = pin!(clock.tick());
                 let mut retry = pin!(retry);
-                let mut driver = pin!(self.driver.next_event());
+                // What the driver gave while a catch-up looked comes first in the driver's turn.
+                let (early, driver) = (&mut self.early, &mut self.driver);
+                let mut driver = pin!(async move {
+                    match early.take() {
+                        Some(output) => Some(output),
+                        None => driver.next_event().await,
+                    }
+                });
                 let mut upload = pin!(uploads.recv());
                 let mut live = pin!(self.marmot.next(&mut events));
                 let mut stop = stop.as_mut();
@@ -695,7 +713,10 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// is left, the group is read on from its mark in the next turn of the core's loop
     /// ([`Core::behind`]). When MDK cannot be read, or a message in it cannot, the group waits to
     /// be read again from its mark; when it was read, it waits no more. A group with no mark
-    /// starts where [`Core::start_of`] says.
+    /// starts where [`Core::start_of`] says. When the driver has given something meanwhile, the
+    /// group is read on from its mark after the loop has taken it in its turn, so neither waits
+    /// behind the other for long; once the driver has ended, nothing more is read, and the next
+    /// driver reads on from the mark (D-139).
     async fn catch_up_group(&mut self, group: GroupKey) -> Result<(), Unsaved> {
         self.behind.remove(&group);
         let mark = match self.read.get(&group) {
@@ -714,7 +735,10 @@ impl<D: Driver, M: Side> Core<D, M> {
             return Ok(());
         };
         for (handed, message) in page.messages.into_iter().enumerate() {
-            if handed == READS {
+            // A driver that has ended is handed nothing more, and no mark moves past what it was
+            // never given: the core ends, and the next driver is given it, once (D-139). What it
+            // gave meanwhile is taken in its turn of the loop, and this group's turn comes after.
+            if handed == READS || self.driver_ready().await {
                 // The rest of the page is read again from the mark next turn.
                 self.read_through(&group);
                 self.behind.insert(group);
@@ -734,6 +758,27 @@ impl<D: Driver, M: Side> Core<D, M> {
             self.behind.insert(group);
         }
         Ok(())
+    }
+
+    /// Whether the driver has something for the loop, an output or its end, looked at without
+    /// waiting: its next event is asked for and dropped as soon as it is not ready, which the
+    /// trait allows (D-058). One output given meanwhile is kept for the loop, which takes it in
+    /// the driver's turn, and no more is asked for until it has. A connector whose connection
+    /// went, or that the core gave up, has ended once its socket says so.
+    async fn driver_ready(&mut self) -> bool {
+        if self.ended || self.early.is_some() {
+            return true;
+        }
+        let polled = {
+            let mut next = pin!(self.driver.next_event());
+            std::future::poll_fn(|cx| Poll::Ready(next.as_mut().poll(cx))).await
+        };
+        match polled {
+            Poll::Ready(Some(output)) => self.early = Some(output),
+            Poll::Ready(None) => self.ended = true,
+            Poll::Pending => return false,
+        }
+        true
     }
 
     /// Where a group with no mark starts, saved with the mark: what arrived by the time the core
@@ -1308,6 +1353,217 @@ mod tests {
             let next = self.answers.lock().unwrap().pop_front();
             next.unwrap_or(Err(FileFailed::Busy))
         }
+    }
+
+    /// A stand-in for MDK with one group, whose `messages` were stored while the core was down,
+    /// each read as nothing for the agent, and noted in `read`, by its place. Nothing arrives
+    /// live, and nothing is sent.
+    #[derive(Clone)]
+    struct Backlog {
+        agent: PubKey,
+        messages: u32,
+        read: Arc<Mutex<Vec<i64>>>,
+    }
+
+    impl Side for Backlog {
+        type Events = ();
+
+        fn agent(&self) -> &PubKey {
+            &self.agent
+        }
+
+        async fn next(&self, _events: &mut ()) -> Live {
+            std::future::pending().await
+        }
+
+        async fn publish_name(&self, _name: &str, _relays: &[String]) -> Result<(), NotNow> {
+            Ok(())
+        }
+
+        fn two_people(&self, _group: &GroupKey) -> Result<Option<Vec<PubKey>>, NotNow> {
+            Ok(None)
+        }
+
+        async fn incoming(&self, message: Message) -> Result<Option<Incoming>, NotNow> {
+            self.read.lock().unwrap().extend(message.order);
+            Ok(None)
+        }
+
+        fn invitations(&self) -> Vec<(GroupKey, Option<PubKey>)> {
+            Vec::new()
+        }
+
+        async fn decide(&self, _group: &GroupKey, _accept: bool) -> bool {
+            unreachable!("no invitations")
+        }
+
+        fn groups(&self) -> Result<Vec<GroupKey>, NotNow> {
+            Ok(vec![GroupKey::from("g")])
+        }
+
+        fn stored(&self, group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {
+            let messages: Vec<Message> = (1..=i64::from(self.messages))
+                .filter(|&order| order > after)
+                .take(limit)
+                .map(|order| Message {
+                    group: group.clone(),
+                    event: EventKey::from(format!("e{order}").as_str()),
+                    sender: PubKey::from("person"),
+                    sender_name: None,
+                    kind: 9,
+                    content: String::new(),
+                    tags: Vec::new(),
+                    recorded_at: 1,
+                    received_at: 1,
+                    order: Some(order),
+                })
+                .collect();
+            let last = messages.last().and_then(|m| m.order);
+            let more = messages.len() == limit;
+            Ok(Page {
+                messages,
+                last,
+                more,
+            })
+        }
+
+        async fn send(
+            &self,
+            _group: &GroupKey,
+            _what: &Sending,
+            _token: &crate::Token,
+        ) -> Result<EventKey, SendFailed> {
+            unreachable!("nothing is sent")
+        }
+
+        async fn send_file(
+            &self,
+            _group: &GroupKey,
+            _file: &crate::files::Outgoing,
+            _turn: Option<&marmot_agent_events::TurnId>,
+        ) -> Result<EventKey, FileFailed> {
+            unreachable!("no file reaches MDK")
+        }
+    }
+
+    /// A driver with `ready` files to send waiting, each for a chat the core does not know, which
+    /// it refuses; it counts the refusals it was told of. Then it waits for good.
+    struct Burst {
+        ready: u32,
+        told: Arc<Mutex<u32>>,
+    }
+
+    impl Driver for Burst {
+        fn harness(&self) -> marmot_agent_driver::Harness {
+            marmot_agent_driver::Harness {
+                name: "burst".into(),
+                version: None,
+            }
+        }
+
+        fn capabilities(&self) -> marmot_agent_driver::Capabilities {
+            marmot_agent_driver::Capabilities {
+                interrupt: false,
+                mid_turn: marmot_agent_driver::MidTurn::Queue,
+                sessions: marmot_agent_driver::Sessions::Core,
+                resume: false,
+                approvals: false,
+                files_in: marmot_agent_driver::FilesIn::None,
+                approval_commands: Vec::new(),
+            }
+        }
+
+        async fn prompt(&mut self, _prompt: marmot_agent_driver::Prompt) -> Result<(), Refusal> {
+            unreachable!("no prompt")
+        }
+
+        async fn answer(&mut self, _answer: marmot_agent_driver::Answer) -> Result<(), Refusal> {
+            unreachable!("no answer")
+        }
+
+        async fn control(&mut self, _control: marmot_agent_driver::Control) -> Result<(), Refusal> {
+            unreachable!("no control")
+        }
+
+        async fn next_event(&mut self) -> Option<Output> {
+            if self.ready == 0 {
+                return std::future::pending().await;
+            }
+            self.ready -= 1;
+            Some(Output::SendFile(SendFile {
+                id: format!("f{}", self.ready),
+                chat: marmot_agent_driver::ChatId::from("nowhere"),
+                path: PathBuf::from("/nowhere"),
+            }))
+        }
+
+        async fn file_sent(&mut self, _id: String, _result: Result<(), Refusal>) {
+            *self.told.lock().unwrap() += 1;
+        }
+    }
+
+    /// A core with `stored` messages waiting in its one group, and a driver with `ready` outputs
+    /// waiting, run until `stop`. What MDK was asked to read, by place, and how many of the
+    /// driver's outputs the core took.
+    async fn catch_up_with_a_burst(
+        stored: u32,
+        ready: u32,
+        stop: impl FnOnce(Arc<Mutex<Vec<i64>>>) -> std::pin::Pin<Box<dyn Future<Output = ()>>>,
+    ) -> (Vec<i64>, u32) {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = format!(
+            "home = \"/unused\"\nrelays = [\"wss://relay.invalid\"]\nowner = \"{}\"\n[connector]\n",
+            "ab".repeat(32)
+        );
+        let config = Config::parse(&settings).unwrap();
+        let read = Arc::new(Mutex::new(Vec::new()));
+        let side = Backlog {
+            agent: PubKey::from("agent"),
+            messages: stored,
+            read: read.clone(),
+        };
+        let told = Arc::new(Mutex::new(0));
+        let driver = Burst {
+            ready,
+            told: told.clone(),
+        };
+        let core = Core::new(side, driver, &config, Store::new(dir.path())).unwrap();
+        let live = Subscribed {
+            events: (),
+            since: 0,
+        };
+        core.run(live, stop(read.clone())).await.unwrap();
+        let read = read.lock().unwrap().clone();
+        let told = *told.lock().unwrap();
+        (read, told)
+    }
+
+    // What the driver gives while the core reads what was stored is taken in the loop's turns, as
+    // the rest of what is ready, not all of it first: a stop already there waits behind a few of
+    // a burst, not the whole of it. Each turn takes one thing at most, starting one further on.
+    #[tokio::test(start_paused = true)]
+    async fn a_burst_found_while_catching_up_waits_its_turns() {
+        let (_, told) = catch_up_with_a_burst(20, 50, |_| Box::pin(std::future::ready(()))).await;
+        assert!(
+            told <= WAITS as u32,
+            "{told} of the burst went before the stop"
+        );
+    }
+
+    // The catch-up that stopped for the driver's output reads on from its mark once the loop has
+    // taken it: every stored message is read, once and in order, and all of the burst is taken.
+    #[tokio::test(start_paused = true)]
+    async fn a_catch_up_stopped_for_the_driver_reads_on_from_its_mark() {
+        let (read, told) = catch_up_with_a_burst(20, 50, |read| {
+            Box::pin(async move {
+                while read.lock().unwrap().len() < 20 {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+        })
+        .await;
+        assert_eq!(read, (1..=20).collect::<Vec<i64>>());
+        assert_eq!(told, 50, "the whole burst");
     }
 
     /// Uploads a small file from a folder of its own to `side`, and says how it went and how long

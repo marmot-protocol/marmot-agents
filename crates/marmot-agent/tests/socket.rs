@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::connector::{self, Heard, Script, send};
+use common::connector::{self, Connection, Heard, Script, send};
 use common::{World, eventually};
 use marmot_agent::marmot::now;
 use marmot_agent::run::serve;
@@ -32,7 +32,7 @@ fn hello(token: &str) -> Value {
 }
 
 /// Connects, gives the hello, and gives back the core's answer to it.
-async fn connect(socket: &Path, token: &str) -> (Value, UnixStream) {
+async fn connect(socket: &Path, token: &str) -> (Value, Connection) {
     connector::connect(socket, hello(token)).await
 }
 
@@ -272,4 +272,99 @@ async fn a_connector_states_its_folder_and_is_given_each_chats() {
     );
     assert_eq!(seen[1]["chat"]["folder"], "/srv/work/a");
     assert_eq!(seen[2]["action"]["chat"]["folder"], "/srv/work/b");
+}
+
+// A connector that goes while the core hands it what was stored meanwhile takes with it only the
+// prompt it was given, which is told as perhaps not passed and never sent again (D-037, D-129).
+// The prompts after it were never tried: the core stops reading at it, and the next connector is
+// given them, each once, with no notice that they were not passed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn prompts_not_tried_when_a_connector_goes_go_to_the_next() {
+    use marmot_agent::GroupKey;
+    let world = World::new("name = \"Script\"\n[connector]\n").await;
+    world.runtime.start().await.unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let endpoint = Endpoint::in_home(home.path());
+    let (listener, token) = endpoint.listen().unwrap();
+    let (stop, stopped) = oneshot::channel::<()>();
+    let (marmot, config) = (world.marmot.clone(), world.config.clone());
+    let store = world.state.path().to_path_buf();
+    let served_token = token.clone();
+    let task = tokio::spawn(async move {
+        let stop = async {
+            let _ = stopped.await;
+        };
+        serve(marmot, &config, &store, listener, served_token, now(), stop).await
+    });
+
+    // A first connector joins the chat and answers, so the chat has its mark; then it goes.
+    let (_, stream) = connect(&endpoint.socket, &token).await;
+    let first = tokio::spawn(connector::run(
+        stream,
+        Script::Echo,
+        "first",
+        Heard::default(),
+    ));
+    let group = world
+        .runtime
+        .start_direct_conversation(&world.person, &world.agent)
+        .await
+        .unwrap();
+    let hex = world.joined(&group).await;
+    world
+        .runtime
+        .send_message(&world.person, &group, b"zero".to_vec())
+        .await
+        .unwrap();
+    world.words(&hex, "echo: zero").await;
+    first.abort();
+    let _ = first.await;
+
+    // Three prompts arrive while no connector is there, and are stored.
+    for text in ["one", "two", "three"] {
+        world
+            .runtime
+            .send_message(&world.person, &group, text.as_bytes().to_vec())
+            .await
+            .unwrap();
+    }
+    let key = GroupKey(hex.clone());
+    eventually(|| {
+        let page = world.marmot.stored(&key, 0, 1000).ok()?;
+        page.messages
+            .iter()
+            .any(|m| m.content == "three")
+            .then_some(())
+    })
+    .await;
+
+    // The next connector goes on the first prompt it is given.
+    let (_, stream) = connect(&endpoint.socket, &token).await;
+    let dropped = Heard::default();
+    connector::run(stream, Script::Drop, "dropped", dropped.clone()).await;
+    assert_eq!(*dropped.lock().unwrap(), ["one"]);
+
+    // The one after is given the two never tried, once each.
+    let (_, stream) = connect(&endpoint.socket, &token).await;
+    let heard = Heard::default();
+    let third = tokio::spawn(connector::run(stream, Script::Echo, "third", heard.clone()));
+    world.words(&hex, "echo: three").await;
+    assert_eq!(*heard.lock().unwrap(), ["two", "three"]);
+    let notices: Vec<String> = (world.items(&hex).into_iter())
+        .map(|(_, read)| read.item.event.header().text.clone())
+        .filter(|text| text.contains("passed to the agent"))
+        .collect();
+    assert_eq!(
+        notices,
+        [
+            "Your message may not have been passed to the agent: the connection to it was lost \
+          before it answered. It is not sent again."
+        ],
+        "only the prompt the connector was given is told of"
+    );
+
+    let _ = stop.send(());
+    task.await.unwrap().unwrap();
+    third.abort();
+    world.runtime.shutdown().await;
 }
