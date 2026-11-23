@@ -147,6 +147,9 @@ pub(crate) struct TurnNote {
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct TurnInfo {
     pub id: Option<String>,
+    /// The turn the person started: this one's own id, or, for a subagent's turn, at any depth,
+    /// the top-level turn's.
+    pub root_turn_id: Option<String>,
     pub status: Option<String>,
     pub error: Option<Message>,
     pub duration_ms: Option<u64>,
@@ -199,6 +202,24 @@ pub(crate) struct Item<'a> {
     pub namespace: Option<String>,
     pub content_items: Option<Vec<ContentItem>>,
     pub success: Option<bool>,
+    /// A subagent: what happened to it (`subAgentActivity`), the thread it runs in and its path;
+    /// or the threads a tool for subagents names (`collabAgentToolCall`), what it was asked, and
+    /// how each subagent stood.
+    #[serde(rename = "kind")]
+    pub activity: Option<String>,
+    pub agent_thread_id: Option<String>,
+    pub agent_path: Option<String>,
+    pub receiver_thread_ids: Option<Vec<String>>,
+    pub prompt: Option<String>,
+    pub agents_states: Option<std::collections::BTreeMap<String, AgentState>>,
+}
+
+/// How a subagent stood, as a tool for subagents last saw it.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+pub(crate) struct AgentState {
+    pub status: Option<String>,
+    pub message: Option<String>,
 }
 
 /// One part of what a client's own tool said back to Codex.
