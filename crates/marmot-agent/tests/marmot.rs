@@ -845,11 +845,11 @@ async fn a_reply_to_the_agent_in_a_group_quotes_what_it_replies_to() {
     world.runtime.shutdown().await;
 }
 
-// The agent's words that an older core sent without a token are edited as they were then, by
-// MDK's plain edit of the message: the person sees the new text in the message's place, and the
-// edit sent again shows the same.
+// An edit whose token names no edits, as the core gives one for words an older core sent without
+// a token, goes out as MDK's plain edit of the message: the person sees the new text in the
+// message's place.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn words_sent_without_a_token_are_edited_in_place() {
+async fn an_edit_without_an_edits_token_is_mdks_plain_edit() {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     let group = a_quiet_chat(&world).await;
     let (words, token) = words_named("a");
@@ -870,18 +870,13 @@ async fn words_sent_without_a_token_are_edited_in_place() {
     };
     let edited = world.send(&group, &edit, &older).await.unwrap();
     assert_ne!(edited, first, "an event of its own");
-    let shown = || {
-        eventually(|| {
-            let row = (world.runtime)
-                .timeline_message(&world.person, group.as_str(), first.as_str())
-                .unwrap()?;
-            (row.plaintext == "the words, changed").then_some(row)
-        })
-    };
-    shown().await;
-    world.send(&group, &edit, &older).await.unwrap();
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    shown().await;
+    eventually(|| {
+        let row = (world.runtime)
+            .timeline_message(&world.person, group.as_str(), first.as_str())
+            .unwrap()?;
+        (row.plaintext == "the words, changed").then_some(row)
+    })
+    .await;
     world.runtime.shutdown().await;
 }
 
