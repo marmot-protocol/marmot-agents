@@ -957,6 +957,8 @@ class Claude(Translator):
 
     def permission_request(self, m):
         tool, inp, opts = m.get("toolName"), m.get("input") or {}, m.get("options") or {}
+        # The SDK names each request in its options; the driver names one that came without (top level).
+        opts = {**opts, "requestId": opts.get("requestId", m.get("requestId"))}
         subject = opts.get("toolUseID")
         if tool == "AskUserQuestion":
             qs = [{"id": f"q{n}", "header": q.get("header"), "text": q.get("question"), "multiple": bool(q.get("multiSelect")),

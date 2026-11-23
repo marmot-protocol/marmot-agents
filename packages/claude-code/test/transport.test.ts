@@ -65,9 +65,11 @@ class FakeQuery implements QueryLike {
       await new Promise<void>((r) => (this.wake = r));
     }
   }
+  /** When set, `interrupt` answers only once it settles, as Claude Code can once the turn has stopped. */
+  interruptHold: Promise<unknown> | undefined;
   interrupt(): Promise<unknown> {
     this.interrupts += 1;
-    return Promise.resolve(undefined);
+    return this.interruptHold ?? Promise.resolve(undefined);
   }
   setPermissionMode(mode: string): Promise<void> {
     this.sets.push(`permission_mode=${mode}`);
@@ -387,6 +389,51 @@ test("an interrupt reaches Claude Code and settles on the event that ends the tu
   // With no turn running there is nothing to interrupt.
   const late = await core.request("control", { request: "i2", by: { id: "p1", name: "Alice" }, action: { type: "interrupt", turn: id } });
   assert.equal(((late["error"] as Json)["data"] as Json)["reason"], "nothing_to_do");
+  await done();
+});
+
+test("an interrupt is taken once Claude Code has it, not once Claude Code answers", async () => {
+  const { core, queries, done } = await start();
+  const { q, turn: id } = await turn(core, queries);
+  let answer!: (value: unknown) => void;
+  q.interruptHold = new Promise((r) => (answer = r));
+  const taken = core.request("control", { request: "i1", by: { id: "p1", name: "Alice" }, action: { type: "interrupt", turn: id } });
+  const first = await Promise.race([taken, new Promise((r) => setTimeout(() => r("still waiting"), 3000))]);
+  assert.deepEqual((first as Json)["result"], {});
+  assert.equal(q.interrupts, 1);
+  answer(undefined);
+  q.say({ ...DONE, subtype: "error_during_execution", is_error: true });
+  await until(() => core.event((e) => e["type"] === "turn" && e["state"] === "cancelled") !== undefined, "the turn's end");
+  assert.deepEqual(core.event((e) => e["type"] === "turn" && e["state"] === "cancelled")!["settles"], ["i1"]);
+  await done();
+});
+
+test("an interrupt Claude Code refuses at once is refused, and its turn's end settles nothing", async () => {
+  const { core, queries, done } = await start();
+  const { q, turn: id } = await turn(core, queries);
+  const no = Promise.reject(new Error("no"));
+  no.catch(() => undefined);
+  q.interruptHold = no;
+  const refused = await core.request("control", { request: "i1", by: { id: "p1", name: "Alice" }, action: { type: "interrupt", turn: id } });
+  assert.equal(((refused["error"] as Json)["data"] as Json)["reason"], "failed");
+  q.say(DONE);
+  await until(() => core.event((e) => e["type"] === "turn" && e["state"] === "done") !== undefined, "the turn's end");
+  assert.equal("settles" in core.event((e) => e["type"] === "turn" && e["state"] === "done")!, false);
+  await done();
+});
+
+test("two approvals Claude Code names no request for are two items, each answered on its own", async () => {
+  const { core, queries, done } = await start();
+  const { q } = await turn(core, queries);
+  const first = q.ask("Bash", BASH, { toolUseID: "t1" });
+  const second = q.ask("Bash", { command: "touch y" }, { toolUseID: "t2" });
+  const approvals = () => [...new Set(core.events.filter((e) => e["type"] === "approval").map((e) => e["item"] as string))];
+  await until(() => approvals().length === 2, "two approvals");
+  const [one, two] = approvals();
+  await core.request("answer", { request: "a2", item: two, by: { id: "p1", name: "Alice" }, given: { choice: "c1" } });
+  await core.request("answer", { request: "a1", item: one, by: { id: "p1", name: "Alice" }, given: { choice: "c0" } });
+  assert.deepEqual(await first, { behavior: "allow", updatedInput: BASH });
+  assert.equal((await second).behavior, "deny");
   await done();
 });
 
