@@ -1518,6 +1518,42 @@ async fn outliving() -> (Codex, Fake) {
     (codex, fake)
 }
 
+// A session being resumed can speak before Codex's reply to the resume: what it says is kept, and
+// shown once the reply makes it the chat's.
+#[tokio::test]
+async fn what_a_resumed_session_says_before_its_reply_is_kept() {
+    let (mut codex, mut fake) = connect().await;
+    let driver = tokio::spawn(async move {
+        let mut again = prompt("m-1", "where were we");
+        again.session = Some("th0".into());
+        codex.prompt(again).await.unwrap();
+        codex
+    });
+    let resume = fake.hear().await;
+    assert_eq!(resume["method"], "thread/resume");
+    fake.say(
+        json!({"method": "thread/settings/updated", "params": {"threadId": "th0",
+        "threadSettings": {"model": "m9"}}}),
+    )
+    .await;
+    fake.say(json!({"id": resume["id"], "result": {"thread": {"id": "th0"}}}))
+        .await;
+    fake.answer("turn/start", json!({"turn": {"id": "t1"}}))
+        .await;
+    let mut codex = driver.await.unwrap();
+    let shows_m9 = |e: &Emitted| match e.event.body() {
+        Body::Session(s) => {
+            (s.settings.iter()).any(|x| x.id == "model" && x.value.as_deref() == Some("m9"))
+        }
+        _ => false,
+    };
+    assert!(
+        within(&mut codex, shows_m9).await.is_some(),
+        "what the session said first is shown"
+    );
+    assert_eq!(codex.unrouted(), 0);
+}
+
 // Two Stops under way when a subagent's turn starts: the subagent is interrupted once, and each
 // Stop waits for it, so neither is settled while it runs.
 #[tokio::test]

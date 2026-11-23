@@ -19,14 +19,14 @@
 //! thread of its own on the connection, which the item that starts it names; the driver gives each
 //! subagent's thread a translator of its own, in the chat of the thread that started it. A message
 //! for a thread no chat knows yet is held until the item that names its thread arrives, since a
-//! subagent can speak first. Codex waits for a reply to each of its requests, so one for no chat
-//! is refused: at once, or, while a session is picked or a subagent started, once none is.
-//! Interrupting a turn does not stop Codex's subagents, so Stop interrupts every turn under the one
-//! it names, each parent before the subagents it started, and any whose start is read while it
-//! waits, once however many Stops wait for it; it is settled once, by the end of the last, or as
-//! failed by Codex's refusal to stop one that runs on. When the chat's session is replaced its
-//! subagents are interrupted, and their turns end there for a Stop that waits for them. A
-//! subagent's open items close then, and when Codex stops.
+//! subagent can speak first, as can a session being resumed. Codex waits for a reply to each of
+//! its requests, so one for no chat is refused: at once, or, while a session is picked or a
+//! subagent started, once none is. Interrupting a turn does not stop Codex's subagents, so Stop
+//! interrupts every turn under the one it names, each parent before the subagents it started, and
+//! any whose start is read while it waits, once however many Stops wait for it; it is settled once,
+//! by the end of the last, or as failed by Codex's refusal to stop one that runs on. When the
+//! chat's session is replaced its subagents are interrupted, and their turns end there for a Stop
+//! that waits for them. A subagent's open items close then, and when Codex stops.
 
 use crate::{
     Direction, SEND_FILE, Setup, Translator, collaboration_mode_list, initialize, initialized,
@@ -215,6 +215,9 @@ pub struct Codex {
     /// Subagents being started on Codex's older runtime, which names a subagent's thread only
     /// when the `spawnAgent` item completes: the thread starting each, and the item.
     spawning: HashSet<(String, String)>,
+    /// The sessions being resumed: each speaks before Codex's reply makes it its chat's, though
+    /// the chat has it already.
+    resuming: HashSet<String>,
     /// The last `seq` handed over in each chat's session: a subagent's events are numbered with
     /// the session's own (D-059, point 4).
     seq: HashMap<(ChatId, Option<String>), u64>,
@@ -281,6 +284,7 @@ impl Codex {
             held: VecDeque::new(),
             releasing: false,
             spawning: HashSet::new(),
+            resuming: HashSet::new(),
             seq: HashMap::new(),
             ready: VecDeque::new(),
             calls: HashMap::new(),
@@ -523,9 +527,11 @@ impl Codex {
                     let refused = Err(Refusal::new(Reason::Invalid));
                     self.queue(&tool_reply(&message["id"], &refused), None);
                 }
-                // A thread being picked, or a subagent's, can speak before what names it. A
-                // request is held only while something may still name its thread.
-                None if thread.is_some_and(|t| !self.owners.contains_key(t))
+                // A thread being picked, or a subagent's, can speak before what names it, as can
+                // a session being resumed. A request is held only while something may still name
+                // its thread.
+                None if thread
+                    .is_some_and(|t| !self.owners.contains_key(t) || self.resuming.contains(t))
                     && (!request || self.naming()) =>
                 {
                     self.hold(thread.unwrap_or_default(), line, &message);
@@ -1321,7 +1327,29 @@ impl Codex {
         if let Some(thread) = &reserved {
             self.owners.insert(thread.clone(), chat.clone());
         }
+        let resuming = session.map(String::from);
+        self.resuming.extend(resuming.clone());
         let picked = self.pick_now(chat, session, folder).await;
+        if let Some(thread) = resuming {
+            self.resuming.remove(&thread);
+            // What it said waits no longer: the reply made it the chat's, or Codex refused it.
+            if self.whose(&thread).is_none() {
+                let mut dropped = Vec::new();
+                self.held.retain(|h| {
+                    let keep = h.thread != thread;
+                    if !keep {
+                        dropped.push(h.request.clone());
+                    }
+                    keep
+                });
+                for request in dropped {
+                    self.unrouted += 1;
+                    if let Some(id) = request {
+                        self.refuse_unrouted(&id, Some(&thread));
+                    }
+                }
+            }
+        }
         if picked.is_err()
             && let Some(thread) = reserved
             && self.chats[chat].translator.session() != Some(thread.as_str())
