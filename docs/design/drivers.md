@@ -329,7 +329,11 @@ agent, with Codex's subagents on, shown flat in the chat of the turn that starte
 ([D-117](../decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them);
 threads of their own are [a proposal](subagents.md)). Each subagent's thread gets a translator of its own in its
 parent's chat, whose turns are `task` items and whose words name the `subagent` tool item that started it as
-`parent`; a message for a thread not yet named is held until the item that names it arrives. Codex does not stop
+`parent`; a message for a thread not yet named is held until the item that names it arrives. Codex waits for a
+reply to each of its requests, so one no chat takes is refused with an error, which Codex takes as a refusal: one
+the driver cannot show, one for a thread a chat left, and one for a thread never seen once no session is being
+picked and no subagent being started (an open `spawnAgent` item), since until then it may be a subagent's not
+yet named. Codex does not stop
 a subagent when its parent is interrupted, so Stop interrupts every running turn under the one it names, each
 parent before the subagents it started, and one whose start arrives while it waits, and is settled by the end of
 the last, or as failed by Codex's refusal to stop one that runs on. Item ids the driver makes up name a

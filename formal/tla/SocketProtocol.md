@@ -132,4 +132,4 @@ python3 tools/tla/check.py --model SocketProtocol   # its cases only
 tools/tla/run.sh formal/tla SocketProtocol.tla SocketProtocol.kept.cfg   # TLC on one configuration
 ```
 
-CI runs them with every other case but `CoreLifecycle`'s fair one, in the second `TLA+ models` job.
+CI runs them in a `TLA+ models` job of their own.

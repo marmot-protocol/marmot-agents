@@ -332,9 +332,13 @@ jobs:
       matrix:
         include:
           - part: fair
-            cases: --only fair
+            cases: --model CoreLifecycle --only fair
           - part: the other cases
-            cases: --except fair
+            cases: --model CoreLifecycle --except fair
+          - part: SocketProtocol
+            cases: --model SocketProtocol
+          - part: DriverTransport
+            cases: --model DriverTransport
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -353,7 +357,7 @@ jobs:
           path: ~/.cache/marmot-agents/tla
           key: tla2tools-936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
 
-      - name: The fair model passes, and every counterexample, defect and probe fails as stated
+      - name: The fair models pass, and every counterexample, defect and probe fails as stated
         env:
           TLC_WORKERS: "4"
         run: python3 tools/tla/check.py ${{ matrix.cases }}

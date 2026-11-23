@@ -7,8 +7,8 @@ on 2026-11-21. The property list, the models and the layers below are the plan; 
 change as the work goes. It comes from reading all the code after M3 and the M4 work in progress, and from how MDK
 tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules). Under
 [first, fix what is known](#first-fix-what-is-known), the behaviour the fixes made visible is provisional: built,
-and waiting for the owner. Of the models, `CoreLifecycle` is built (2026-11-22), and so is `SocketProtocol` (2026-11-23); the others
-are planned. The
+and waiting for the owner. Of the models, `CoreLifecycle` is built (2026-11-22), and so are `SocketProtocol` and
+`DriverTransport` (2026-11-23); the others are planned. The
 conformance suite's first phase, for the built-in drivers, is built (2026-11-22); its second, for the socket
 connectors, is designed. The core's sends went over to MDK 0.19.0's token-based sends on 2026-11-22, which ends
 the duplicate a restart could make; how often a send is tried is decided
@@ -225,6 +225,16 @@ fixed on 2026-11-21, each with a test that failed first.
   happens when it does ([`last-resort-refused`](../../formal/tla/counterexamples/last-resort-refused.json)) or
   when it is given up after its tries
   ([`last-resort-given-up`](../../formal/tla/counterexamples/last-resort-given-up.json)).
+- **Requests of the harness that are never answered** (L2). Found on 2026-11-23 by the TLA+ model
+  (`DriverTransport`), and each shown by a test that fails against the driver. The ACP driver held a request
+  from a session no chat has while a chat's session was picked, and dropped it unanswered once the pick was
+  done: **fixed in #122**, which refuses it with -32002 (resource not found); the model's ACP configuration with
+  such requests now passes, and the defect `HeldDropped` puts the old way back. The Codex driver never answered
+  a request for a thread no chat has, nor one it could not show (a question with two questions of one id, or
+  params it cannot read), and Codex waits for a reply to each: **fixed on 2026-11-23**, by refusing each with an
+  error, which Codex takes as a refusal; the defects `StrayUnanswered` and `UnshownUnanswered` put the old way
+  back. See
+  [the model's README](../../formal/tla/DriverTransport.md#what-the-model-found).
 - **Messages missing after an abrupt stop**, seen while building the importer: the next program on the same home
   sometimes never got later messages. This looks like MDK's, and goes to MDK as an issue. A related case was seen
   in the tests: right after a person makes a second group with the agent, messages between them sometimes do not
@@ -350,7 +360,7 @@ simulator scenario. A test checks that the model's actions and the code's still 
 | Model | What it covers | Owns | Status |
 | --- | --- | --- | --- |
 | `CoreLifecycle` | The conversation, the run loop, saving and crashing: requests pending and settled, items and versions, read marks, sessions | S1 to S4, S10, S12, L1 to L3 | Built, in [`formal/tla`](../../formal/tla/README.md): checked on small bounds on every pull request, with its counterexamples, defects and reachability probes. It found two gaps when a send is given up or refused in a live group (S2, L1, L2), since fixed and checked; see its README |
-| `DriverTransport` | One driver's side, for any harness: requests in flight, effects awaiting settlement, a dropped wait, a restart of the harness, two chats | S1, S5, S11, S13, L1, L2 | Planned |
+| `DriverTransport` | One driver's side, for any harness: requests in flight, effects awaiting settlement, a dropped wait, a restart of the harness, two chats | S1, S5, S11, S13, L1, L2 | Built, in [`formal/tla`](../../formal/tla/DriverTransport.md): Codex's, ACP's and Pi's shapes and two chats on one harness, checked on small bounds on every pull request, with a deliberate defect for each bug #118 and #122 fixed in what it models. It found three requests of the harness that were never answered, all fixed: ACP's, while a session is picked, in #122; two in Codex, on 2026-11-23; see its README |
 | `SocketProtocol` | The hello, a request answered while events arrive, a connector going and another coming, one at a time; for each kind of connector, what survives a connection | S11, L4 | Built, in [`formal/tla`](../../formal/tla/SocketProtocol.md): checked on small bounds on every pull request. It showed that a connector kept across connections must forget what the old core knew, and that a connector must answer a request once its harness has it, both fixed for Hermes and Claude Code; see its page |
 | `Gateways` | Small models of OpenClaw's approval vouching and Hermes's held turn end | S5, S6, S1 | Planned |
 

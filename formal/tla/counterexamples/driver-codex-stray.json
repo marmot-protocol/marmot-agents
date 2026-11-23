@@ -1,0 +1,33 @@
+{
+  "case": "driver-codex-stray",
+  "model": "DriverTransport",
+  "config": "DriverTransport.codex.cfg",
+  "breaks": "L2",
+  "what": "StrayUnanswered, the Codex driver until 2026-11-23: a request for a thread no chat has is counted as unrouted and never answered (only a call of the driver's tool is refused), so Codex waits for ever (L2).",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"Chats": ["c1"], "Asks": ["a1"], "Calls": ["k1"], "Answers": ["r1"], "Interrupts": ["r2"], "NewSessions": ["r3"], "MaxSessions": 5, "MaxPrompts": 2, "MaxDeaths": 1, "MaxEdits": 1, "PerChat": false, "SelfResolves": true, "Unshowable": false, "StrayAsks": true, "CallNamed": false, "CancelOnInterrupt": false, "ReaskAfterRestart": false, "FairDriver": true, "FairHarness": true, "Bug": "StrayUnanswered"},
+  "messages": [{"id": "r1", "kind": "answer"}, {"id": "r2", "kind": "interrupt"}, {"id": "r3", "kind": "new_session"}],
+  "steps": [
+    {"action": "HarnessAsks", "ask": "a1", "session": 0, "call": "k1", "shown": true},
+    {"action": "Pick", "chat": "c1", "writes": [{"c": "c1", "m": "open", "r": "prompt", "resume": 0}]},
+    {"action": "NewSession", "req": "r3", "outcome": "refused", "settles": [{"req": "r3", "how": "refused"}]},
+    {"action": "Route", "proc": "h", "reads": {"a": "a1", "m": "ask"}},
+    {"action": "HarnessReads", "proc": "h", "reads": {"c": "c1", "m": "open", "r": "prompt", "resume": 0}, "writes": [{"c": "c1", "m": "opened", "r": "prompt", "s": 1}]},
+    {"action": "Route", "proc": "h", "reads": {"c": "c1", "m": "opened", "r": "prompt", "s": 1}},
+    {"action": "Prompt", "chat": "c1", "writes": [{"m": "prompt", "s": 1}]},
+    {"action": "HarnessReads", "proc": "h", "reads": {"m": "prompt", "s": 1}, "writes": [{"m": "started", "n": 1, "s": 1}]},
+    {"action": "HarnessEdits", "session": 1},
+    {"action": "HarnessEndsTurn", "session": 1, "writes": [{"m": "ended", "n": 1, "s": 1}]},
+    {"action": "Route", "proc": "h", "reads": {"m": "started", "n": 1, "s": 1}},
+    {"action": "Route", "proc": "h", "reads": {"m": "edit", "s": 1}},
+    {"action": "Route", "proc": "h", "reads": {"m": "ended", "n": 1, "s": 1}},
+    {"action": "Prompt", "chat": "c1", "writes": [{"m": "prompt", "s": 1}]},
+    {"action": "HarnessReads", "proc": "h", "reads": {"m": "prompt", "s": 1}, "writes": [{"m": "started", "n": 2, "s": 1}]},
+    {"action": "Route", "proc": "h", "reads": {"m": "started", "n": 2, "s": 1}},
+    {"action": "Interrupt", "req": "r2", "outcome": "taken", "writes": [{"m": "interrupt", "n": 2, "s": 1}]},
+    {"action": "HarnessReads", "proc": "h", "reads": {"m": "interrupt", "n": 2, "s": 1}},
+    {"action": "HarnessEndsTurn", "session": 1, "writes": [{"m": "ended", "n": 2, "s": 1}]},
+    {"action": "Route", "proc": "h", "reads": {"m": "ended", "n": 2, "s": 1}, "settles": [{"req": "r2", "how": "effect"}]}
+  ],
+  "end": {"kind": "stutter"}
+}

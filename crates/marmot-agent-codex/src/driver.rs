@@ -19,7 +19,8 @@
 //! thread of its own on the connection, which the item that starts it names; the driver gives each
 //! subagent's thread a translator of its own, in the chat of the thread that started it. A message
 //! for a thread no chat knows yet is held until the item that names its thread arrives, since a
-//! subagent can speak first. Interrupting a turn does not stop Codex's subagents, so Stop
+//! subagent can speak first. Codex waits for a reply to each of its requests, so one for no chat
+//! is refused: at once, or, while a session is picked or a subagent started, once none is. Interrupting a turn does not stop Codex's subagents, so Stop
 //! interrupts every turn under the one it names, each parent before the subagents it started, and
 //! any whose start is read while it waits; it is settled once, by the end of the last, or as failed
 //! by Codex's refusal to stop one that runs on. When the chat's session is replaced its subagents
@@ -34,8 +35,8 @@ use marmot_agent_driver::{
     MidTurn, Output, Prompt, Reason, Refusal, RequestId, SendFile, Sessions,
 };
 use marmot_agent_events::{AgentEvent, Body, State};
-use serde_json::Value;
-use std::collections::{HashMap, VecDeque};
+use serde_json::{Value, json};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -164,6 +165,15 @@ impl Chat {
     }
 }
 
+/// A message for a thread no chat has had, held until something names the thread.
+struct Held {
+    thread: String,
+    line: String,
+    /// Codex's id, while the message is a request Codex waits for a reply to: none for a
+    /// notification, or once Codex says the request is resolved.
+    request: Option<Value>,
+}
+
 /// The Codex driver: one `codex app-server` process, serving every chat of one agent.
 pub struct Codex {
     reader: Reader,
@@ -195,11 +205,14 @@ pub struct Codex {
     starting: HashMap<i64, MessageId>,
     /// The prompts each running turn responds to.
     prompts: HashMap<(ChatId, String), Vec<MessageId>>,
-    /// Messages naming a thread no chat has had, with that thread, oldest first: a session being
-    /// picked, or a subagent, can speak before the message that names its thread.
-    held: VecDeque<(String, String)>,
+    /// Messages naming a thread no chat has had, oldest first: a session being picked, or a
+    /// subagent, can speak before the message that names its thread.
+    held: VecDeque<Held>,
     /// Held messages are being released.
     releasing: bool,
+    /// Subagents being started on Codex's older runtime, which names a subagent's thread only
+    /// when the `spawnAgent` item completes: the thread starting each, and the item.
+    spawning: HashSet<(String, String)>,
     /// The last `seq` handed over in each chat's session: a subagent's events are numbered with
     /// the session's own (D-059, point 4).
     seq: HashMap<(ChatId, Option<String>), u64>,
@@ -265,6 +278,7 @@ impl Codex {
             prompts: HashMap::new(),
             held: VecDeque::new(),
             releasing: false,
+            spawning: HashSet::new(),
             seq: HashMap::new(),
             ready: VecDeque::new(),
             calls: HashMap::new(),
@@ -489,6 +503,10 @@ impl Codex {
             let calls_tool = message["method"] == "item/tool/call" && message.get("id").is_some();
             let to = thread.and_then(|t| self.whose(t));
             let to = to.or_else(|| thread.and_then(|t| self.started_under(&message, t)));
+            if let (Some(_), Some(t)) = (&to, thread) {
+                self.spawns(t, &message);
+            }
+            let request = message.get("id").is_some();
             match to {
                 Some((chat, who)) => {
                     self.feed(&chat, who.as_deref(), Direction::In, line, Vec::new());
@@ -503,11 +521,20 @@ impl Codex {
                     let refused = Err(Refusal::new(Reason::Invalid));
                     self.queue(&tool_reply(&message["id"], &refused), None);
                 }
-                // A thread being picked, or a subagent's, can speak before what names it.
-                None if thread.is_some_and(|t| !self.owners.contains_key(t)) => {
-                    self.hold(thread.unwrap_or_default(), line);
+                // A thread being picked, or a subagent's, can speak before what names it. A
+                // request is held only while something may still name its thread.
+                None if thread.is_some_and(|t| !self.owners.contains_key(t))
+                    && (!request || self.naming()) =>
+                {
+                    self.hold(thread.unwrap_or_default(), line, &message);
                 }
-                None => self.unrouted += 1,
+                // Codex waits for a reply to its request, so one for no chat is refused.
+                None => {
+                    self.unrouted += 1;
+                    if request {
+                        self.refuse_unrouted(&message["id"], thread);
+                    }
+                }
             }
             self.release();
             return;
@@ -629,12 +656,90 @@ impl Codex {
         self.owners.insert(thread.to_string(), chat.clone());
     }
 
-    /// Holds a message for a thread no chat has had, until something names its thread.
-    fn hold(&mut self, thread: &str, line: &str) {
-        self.held.push_back((thread.to_string(), line.to_string()));
+    /// Holds a message for a thread no chat has had, until something names its thread. Codex's
+    /// word that it no longer waits for a request held here means that request needs no reply.
+    fn hold(&mut self, thread: &str, line: &str, message: &Value) {
+        if message["method"] == "serverRequest/resolved" {
+            let id = &message["params"]["requestId"];
+            for held in self.held.iter_mut().filter(|h| h.thread == thread) {
+                if held.request.as_ref() == Some(id) {
+                    held.request = None;
+                }
+            }
+        }
+        let request = (message.get("id").cloned()).filter(|_| message.get("method").is_some());
+        self.held.push_back(Held {
+            thread: thread.to_string(),
+            line: line.to_string(),
+            request,
+        });
         while self.held.len() > HELD {
-            self.held.pop_front();
+            let Some(held) = self.held.pop_front() else {
+                break;
+            };
             self.unrouted += 1;
+            if let Some(id) = held.request {
+                self.refuse_unrouted(&id, Some(&held.thread));
+            }
+        }
+    }
+
+    /// Whether something may still name a thread no chat knows yet: a session being picked, or a
+    /// subagent being started.
+    fn naming(&self) -> bool {
+        !self.spawning.is_empty() || self.chats.values().any(|c| c.translator.picking())
+    }
+
+    /// Follows the subagents a chat's thread is starting on Codex's older runtime: from the
+    /// `spawnAgent` item's start until it completes, or the thread's turn ends.
+    fn spawns(&mut self, thread: &str, message: &Value) {
+        let item = &message["params"]["item"];
+        let key = (
+            thread.to_string(),
+            item["id"].as_str().unwrap_or_default().to_string(),
+        );
+        match message["method"].as_str() {
+            Some("item/started")
+                if item["type"] == "collabAgentToolCall" && item["tool"] == "spawnAgent" =>
+            {
+                self.spawning.insert(key);
+            }
+            Some("item/completed") => {
+                self.spawning.remove(&key);
+            }
+            Some("turn/completed") => self.spawning.retain(|(t, _)| t != thread),
+            _ => {}
+        }
+    }
+
+    /// Refuses a request of Codex's that no chat takes, so Codex does not wait for it: invalid
+    /// params, naming the thread, as Codex's own server refuses what it cannot take. Codex takes
+    /// any error as a refusal (an approval denied, a question with no answers).
+    fn refuse_unrouted(&mut self, id: &Value, thread: Option<&str>) {
+        let mut error = json!({"code": -32602, "message": "Invalid params"});
+        if let Some(thread) = thread {
+            error["data"] = json!({"threadId": thread});
+        }
+        self.queue(&json!({"id": id, "error": error}).to_string(), None);
+    }
+
+    /// Once nothing may name a thread no chat knows yet, a request still held for one is refused.
+    /// What is held stays, in case its thread is named later; what Codex waits for does not.
+    fn let_go(&mut self) {
+        if self.releasing || self.naming() || !self.held.iter().any(|h| h.request.is_some()) {
+            return;
+        }
+        let mut refused = Vec::new();
+        self.held.retain(|h| match &h.request {
+            Some(id) => {
+                refused.push((id.clone(), h.thread.clone()));
+                false
+            }
+            None => true,
+        });
+        for (id, thread) in refused {
+            self.unrouted += 1;
+            self.refuse_unrouted(&id, Some(&thread));
         }
     }
 
@@ -645,11 +750,12 @@ impl Codex {
             return; // the release under way goes on with what is now named
         }
         self.releasing = true;
-        while let Some(at) = (self.held.iter()).position(|(t, _)| self.whose(t).is_some()) {
-            let (_, line) = self.held.remove(at).expect("a held message");
-            self.route(&line);
+        while let Some(at) = (self.held.iter()).position(|h| self.whose(&h.thread).is_some()) {
+            let held = self.held.remove(at).expect("a held message");
+            self.route(&held.line);
         }
         self.releasing = false;
+        self.let_go();
     }
 
     /// Codex calls the driver's own tool. A call to send a file goes to the core; any other is
@@ -818,6 +924,7 @@ impl Codex {
         if before != after && who.is_none() {
             if let Some(old) = before {
                 self.threads.remove(&old);
+                self.spawning.retain(|(t, _)| *t != old); // what it starts, nothing will name
                 self.let_subagents_go(chat); // its session has ended (D-070)
             }
             if let Some(new) = after {
@@ -870,6 +977,7 @@ impl Codex {
         threads.sort_by(|a, b| a.0.cmp(&b.0));
         for (thread, mut translator) in threads {
             self.subthreads.remove(&thread);
+            self.spawning.retain(|(t, _)| *t != thread); // what it starts, nothing will name
             if let Some(turn) = translator.turn().map(String::from) {
                 let id = self.id();
                 let action = Action::Interrupt {
@@ -1033,6 +1141,7 @@ impl Codex {
         self.requests.clear();
         self.starting.clear();
         self.held.clear();
+        self.spawning.clear();
         self.calls.clear(); // a reply has nobody to go to
         self.unwritten.clear(); // never written: nothing follows from them
         self.unflushed.clear();

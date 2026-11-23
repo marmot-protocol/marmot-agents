@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
-"""Checks the TLA+ models, CoreLifecycle and SocketProtocol: every case must end as it says.
+"""Checks the TLA+ models: every case must end as it says.
 
-    python3 tools/tla/check.py [--out DIR] [--model NAME] [--only NAME ...] [--counterexamples]
+    python3 tools/tla/check.py [--out DIR] [--model NAME] [--only NAME ...] [--except NAME ...]
+                               [--counterexamples]
 
-The cases (formal/tla/README.md and formal/tla/SocketProtocol.md list them):
+Three models, each with its README: CoreLifecycle (formal/tla/README.md), SocketProtocol
+(formal/tla/SocketProtocol.md), whose cases are named `socket-...`, and DriverTransport
+(formal/tla/DriverTransport.md), whose cases are named `driver-...`. The cases:
 
-- the fair configuration, and those that let a send be refused or given up, pass every property;
-- the unfair one, and the configurations that drop an assumption, fail as stated;
+- the fair configurations (CoreLifecycle's, SocketProtocol's for each kind of connector, and
+  DriverTransport's for each harness's shape), and those that let a send be refused or given up,
+  pass every property;
+- the unfair ones, the configurations that drop an assumption, and those that show what a model
+  found in the code and is not fixed yet, fail as stated;
 - each deliberate defect (`Bug`) fails the property it is named for: each check is shown to
   catch its bug;
 - each reachability probe fails: the states the properties speak of are reached, so no pass is
@@ -16,9 +22,9 @@ Each case runs TLC through tools/tla/run.sh in a folder of its own under --out, 
 configuration and its log. A line per case gives the result and the state counts TLC reported.
 
 A case that is a committed counterexample has its schedule made from TLC's trace by
-tools/tla/schedule.py, in the shared action names, and compared with the committed
-formal/tla/counterexamples/<name>.json: a schedule that changed fails the check. With
---counterexamples, the schedules are written again instead.
+tools/tla/schedule.py (tools/tla/schedule_driver.py for DriverTransport), in the model's action
+names, and compared with the committed formal/tla/counterexamples/<name>.json: a schedule that
+changed fails the check. With --counterexamples, the schedules are written again instead.
 """
 
 import argparse
@@ -33,12 +39,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from schedule import constants_of, named_steps_of, schedule_of  # noqa: E402
+import schedule_driver  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL_DIR = ROOT / "formal" / "tla"
 COUNTEREXAMPLES = MODEL_DIR / "counterexamples"
-MODEL = "CoreLifecycle"
-SOCKET = "SocketProtocol"
+CORE, SOCKET, DT = "CoreLifecycle", "SocketProtocol", "DriverTransport"
+MODELS = (CORE, SOCKET, DT)
 RUN = ROOT / "tools" / "tla" / "run.sh"
 
 PASS = "pass"
@@ -216,6 +223,108 @@ CASES += [
     probe("NeverHoldDropped", KEPT, "socket-NeverHoldDropped"),
     probe("NeverRunOnAfterDrop", KEPT, "socket-NeverRunOnAfterDrop"),
 ]
+
+# DriverTransport (formal/tla/DriverTransport.md): one driver's side, for any harness.
+CODEX, ACP, PI, CHATS = (f"{DT}.{shape}.cfg" for shape in ("codex", "acp", "pi", "chats"))
+ONE_ASK = {"Asks": '{"a1"}'}
+
+
+def driver(name, cfg, expected, changes=None, counterexample=None, what=None):
+    return Case(f"driver-{name}", cfg, expected, changes, counterexample, what)
+
+
+def driver_mutant(bug, prop, cfg, **more):
+    if prop in ("L1", "L2"):
+        changes = {"Bug": f'"{bug}"', "INVARIANTS": None, "PROPERTIES": prop, **more}
+        return driver(f"bug-{bug}", cfg, TEMPORAL, changes)
+    return driver(f"bug-{bug}", cfg, invariant(prop),
+                  {"Bug": f'"{bug}"', "INVARIANTS": prop, **SAFETY, **more})
+
+
+def driver_probe(name, cfg, label=None, **more):
+    return driver(f"reach-{label or name}", cfg, invariant(name),
+                  {"INVARIANTS": name, **SAFETY, **more})
+
+
+CASES += [
+    driver("codex", CODEX, PASS),
+    driver("acp", ACP, PASS),
+    driver("pi", PI, PASS),
+    driver("chats", CHATS, PASS),
+    driver("unfair", f"{DT}.unfair.cfg", TEMPORAL, {"PROPERTIES": "L1"},
+           counterexample="driver-unfair-harness-never-reads",
+           what="Without FairHarness, the harness never reads what the driver wrote: an interrupt "
+                "the driver took is written, and the turn it names never ends, so nothing settles "
+                "it (L1)."),
+    # A request from a session no chat has is answered (ACP's -32002, #122), also one held while
+    # a session was picked.
+    driver("stray", f"{DT}.stray.cfg", PASS),
+    driver("bug-HeldDropped", f"{DT}.stray.cfg", TEMPORAL,
+           {"Bug": '"HeldDropped"', "INVARIANTS": None, "PROPERTIES": "L2"},
+           counterexample="driver-stray-while-picking",
+           what="HeldDropped, the ACP driver before #122: the agent asks in a session no chat has "
+                "while a chat's session is being picked. The driver holds the request (`early`) "
+                "in case the pick makes its session known; once no pick is left it drops it, "
+                "unanswered, and the agent waits for ever (L2)."),
+    # A request for a thread no chat has, and one the driver cannot show, are refused at once
+    # by Codex's driver too (since 2026-11-23); the defects put the old way back.
+    driver("codex-stray", CODEX, PASS, {"StrayAsks": "TRUE", **ONE_ASK}),
+    driver("bug-StrayUnanswered", CODEX, TEMPORAL,
+           {"Bug": '"StrayUnanswered"', "StrayAsks": "TRUE", **ONE_ASK, "INVARIANTS": None,
+            "PROPERTIES": "L2"},
+           counterexample="driver-codex-stray",
+           what="StrayUnanswered, the Codex driver until 2026-11-23: a request for a thread no "
+                "chat has is counted as unrouted and never answered (only a call of the driver's "
+                "tool is refused), so Codex waits for ever (L2)."),
+    driver("codex-unshown", CODEX, PASS, {"Unshowable": "TRUE", **ONE_ASK}),
+    driver("bug-UnshownUnanswered-codex", CODEX, TEMPORAL,
+           {"Bug": '"UnshownUnanswered"', "Unshowable": "TRUE", **ONE_ASK, "INVARIANTS": None,
+            "PROPERTIES": "L2"},
+           counterexample="driver-codex-unshown",
+           what="UnshownUnanswered on Codex's shape, the Codex driver until 2026-11-23: a request "
+                "the driver cannot show (a question with two questions of one id, or params it "
+                "cannot read) is never answered, and nothing in the chat waits on it, so its turn "
+                "waits until someone interrupts it (L2)."),
+    driver("reask-after-restart", ACP, invariant("S13"),
+           {"ReaskAfterRestart": "TRUE", "INVARIANTS": "S13", **SAFETY},
+           counterexample="driver-reask-after-restart",
+           what="ACP, if the agent asks again about a tool call after it died and the session "
+                "was taken up again: the new driver has forgotten the names it gave, and names "
+                "the approval `approval:{session}:{call}` again, an item id the chat has had (S13). "
+                "It rests on what an agent does after a restart, which no recording shows."),
+    driver_mutant("AnswerAfterTurnEnd", "S11", PI),
+    driver_mutant("ResolvedIgnored", "S11", CODEX),
+    driver_mutant("ResolvedHeldRefused", "S11", CODEX, StrayAsks="TRUE", **ONE_ASK),
+    driver_mutant("SettleOnAnySession", "S1", ACP),
+    # Two new-session controls in one chat, and sessions for both.
+    driver_mutant("TwoNewSessions", "S1", PI, NewSessions='{"r3", "r4"}', MaxSessions="6"),
+    driver_mutant("OneItemPerCall", "S13", ACP),
+    # A repeat approval named as a first could be: it collides only with a call whose id is the
+    # first call's and the repeat's request joined, asked about first.
+    driver_mutant("RepeatLikeFirst", "S13", ACP, Asks='{"a1", "a2", "a3"}',
+                  Calls='{"k1", "k1:a2"}', MaxDeaths="0"),
+    driver_mutant("EscapedId", "S11", ACP),
+    driver_mutant("UnshownUnanswered", "L2", ACP),
+    driver_mutant("CallOnly", "S5", CHATS),
+    driver_mutant("TakeUnwritten", "S11", CODEX),
+    driver_mutant("LoseOnDrop", "L1", CODEX),
+    driver_probe("NeverAnswered", CODEX),
+    driver_probe("NeverAnswerRefused", CODEX),
+    driver_probe("NeverInterruptSettled", CODEX),
+    driver_probe("NeverNewSessionSettled", CODEX),
+    driver_probe("NeverResolved", CODEX),
+    driver_probe("NeverClosedAtTurnEnd", PI),
+    driver_probe("NeverLateReply", CODEX),
+    driver_probe("NeverRestarted", CODEX, "NeverRestarted-codex"),
+    driver_probe("NeverRestarted", PI, "NeverRestarted-pi"),
+    driver_probe("NeverTwoChats", CHATS),
+    driver_probe("NeverEditWhileNewSession", ACP),
+    driver_probe("NeverRepeatAsk", ACP),
+    driver_probe("NeverUnshownAnswered", ACP),
+    driver_probe("NeverCancelled", ACP),
+    driver_probe("NeverFailed", PI),
+    driver_probe("NeverStrayAnswered", f"{DT}.stray.cfg"),
+]
 NAMES = [case.name for case in CASES]
 assert len(set(NAMES)) == len(NAMES), "case names must differ"
 
@@ -280,12 +389,18 @@ SOCKET_MESSAGES = [{"id": "p1", "chat": "c1", "kind": "prompt"},
                    {"id": "r1", "chat": "c1", "kind": "control", "interrupts": "t1"}]
 
 
+def socket_schedule(log, constants):
+    """SocketProtocol names each step in a variable of its own; its chat is always the same."""
+    return {"messages": SOCKET_MESSAGES, **named_steps_of(log)}
+
+
+# How each model's trace becomes a schedule.
+SCHEDULES = {CORE: schedule_of, SOCKET: socket_schedule, DT: schedule_driver.schedule_of}
+
+
 def schedule_text(case, cfg_text, log):
     """The committed form of a counterexample: one JSON object, one step to a line."""
-    if case.model == SOCKET:
-        made = {"messages": SOCKET_MESSAGES, **named_steps_of(log)}
-    else:
-        made = schedule_of(log, constants_of(cfg_text))
+    made = SCHEDULES[case.model](log, constants_of(cfg_text))
     head = {
         "case": case.counterexample,
         "model": case.model,
@@ -311,12 +426,11 @@ def schedule_text(case, cfg_text, log):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", type=Path, default=ROOT / "target" / "tla")
+    parser.add_argument("--model", choices=MODELS, help="run only this model's cases")
     parser.add_argument("--only", nargs="+", choices=NAMES, metavar="NAME",
                         help=f"run only these cases, from: {', '.join(NAMES)}")
     parser.add_argument("--except", dest="skip", nargs="+", choices=NAMES, metavar="NAME",
                         default=[], help="run every case but these")
-    parser.add_argument("--model", choices=[MODEL, SOCKET],
-                        help="run only the cases of this model")
     parser.add_argument("--counterexamples", action="store_true",
                         help="write the committed counterexample schedules again")
     args = parser.parse_args()
@@ -343,8 +457,16 @@ def main():
         env = dict(os.environ)
         if case.expected != PASS:
             env["TLC_WORKERS"] = "1"
-        ran = subprocess.run([str(RUN), str(folder), f"{case.model}.tla", f"{case.model}.cfg"],
-                             capture_output=True, text=True, env=env)
+        # TLC checks liveness on a timer while it searches, so where it finds a temporal
+        # counterexample moves from run to run, and so does the order its search takes, which
+        # TLC's fingerprint function and seed, picked at random, decide. DriverTransport's
+        # committed ones are checked once, at the end, with both fixed, so their traces repeat;
+        # CoreLifecycle's and SocketProtocol's repeat as they are.
+        options = []
+        if case.model == DT and case.expected == TEMPORAL and case.counterexample:
+            options = ["-lncheck", "final", "-fp", "1", "-seed", "1"]
+        ran = subprocess.run([str(RUN), str(folder), f"{case.model}.tla", f"{case.model}.cfg",
+                              *options], capture_output=True, text=True, env=env)
         secs = time.monotonic() - began
         log = ran.stdout + ran.stderr
         (folder / "tlc.log").write_text(log)
