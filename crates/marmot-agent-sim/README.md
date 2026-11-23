@@ -112,7 +112,7 @@ With the `bugs` feature (which turns on `marmot-agent`'s `sim-bugs`), a schedule
 `save_after_send`, `retry_ambiguous_with_new_token` (a send whose outcome is not known is tried again under a new
 token, which MDK cannot know for the send it has), `settles_only_from_items`, `mark_from_live` (a live message moves
 the read mark to its place, as before MDK #3606, so one announced before a message stored earlier passes it). `tests/bugs.rs` shows the simulator finds
-each. No release has the feature: the release builds `-p marmot-agent` alone, and nothing outside this crate calls
+each. No release has the feature: the release builds `-p marmot-agent-program` alone, which depends on `marmot-agent` with `sim-bugs` off, and nothing outside this crate calls
 `Core::with_bugs`.
 
 ## Adding a family
