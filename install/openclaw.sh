@@ -225,20 +225,27 @@ harness_settings() {
 
 # Adds the plugin to the person's OpenClaw and points its channel at this agent's home.
 harness_connect() {
-    local config channel approvals enabled config_kept plugin_kept
+    local config channel approvals enabled
     if [ "$OPENCLAW_FOUND" -eq 0 ]; then
         say "would add the Marmot plugin to your OpenClaw, once it is installed"
         return 0
     fi
+    # What it changes is put back if it fails or is stopped before the channel is set (change_begin in
+    # lib.sh): OpenClaw's settings, and the old connector's plugin, which it replaces.
     config=$("$OPENCLAW" config file 2>/dev/null) || config=""
-    KEPT=""
-    [ -z "$config" ] || backup_file "$config"
-    config_kept=$KEPT
-    KEPT=""
-    [ -z "$OLD_PLUGIN" ] || backup_file "$OLD_PLUGIN"
-    plugin_kept=$KEPT
+    set --
+    if [ -n "$config" ]; then
+        backup_file "$config"
+        set -- file "$config" "$KEPT"
+    fi
+    if [ -n "$OLD_PLUGIN" ]; then
+        backup_file "$OLD_PLUGIN"
+        set -- "$@" folder "$OLD_PLUGIN" "$KEPT"
+    fi
+    change_begin "$@"
     channel=$("$NODE" -e 'process.stdout.write(JSON.stringify({ enabled: true, home: process.argv[1] }))' "$MA_HOME")
-    if ! put_plugin_in "$channel"; then put_back "$config" "$config_kept" "$plugin_kept"; fi
+    put_plugin_in "$channel"
+    change_end
     approvals=$(oc_get approvals.exec --json)
     # On is true or "auto"; only one that is off or not set is switched on.
     enabled=$(printf '%s' "$approvals" | json_field enabled)
@@ -273,23 +280,6 @@ put_plugin_in() {
     act "$OPENCLAW" plugins install --force --accept-capabilities "$MA_LIB/packages/openclaw/marmot-agent-openclaw.tgz" ||
         return 1
     act "$OPENCLAW" config set channels.marmot "$1" --strict-json
-}
-
-# After put_plugin_in failed: OpenClaw's settings file, and the old plugin's folder if one was replaced,
-# put back from the copies kept before, so OpenClaw is as it was and the old connector works again once
-# started. Stops the install either way, saying what to do.
-put_back() {
-    local config=$1 config_kept=$2 plugin_kept=$3 what="your OpenClaw's settings" ok=1
-    [ -z "$plugin_kept" ] || what="$what and its old plugin"
-    if [ -n "$config_kept" ]; then cp "$config_kept" "$config" || ok=0; fi
-    if [ -n "$plugin_kept" ]; then { rm -rf "$OLD_PLUGIN" && cp -R "$plugin_kept" "$OLD_PLUGIN"; } || ok=0; fi
-    local copies="the copies are $config_kept${plugin_kept:+ and $plugin_kept}"
-    if [ "$ok" -eq 1 ]; then
-        die "putting our plugin into your OpenClaw failed (above), so this put $what back as they were;" \
-            "$copies. Fix what failed and run this again, or go back to today's connector (docs/move.md)"
-    fi
-    die "putting our plugin into your OpenClaw failed (above), and so did putting $what back: copy" \
-        "$config_kept to $config${plugin_kept:+ and $plugin_kept to $OLD_PLUGIN} yourself (docs/move.md)"
 }
 
 # A top-level field of a JSON object on standard input, as JSON; nothing if it cannot be read.

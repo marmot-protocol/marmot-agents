@@ -317,6 +317,139 @@ backup_file() {
 }
 
 # ---------------------------------------------------------------------------------------------------
+# Changing a gateway's plugin
+#
+# Putting our plugin into a person's Hermes or OpenClaw, in place of the old connector's or not, must
+# not leave it with neither plugin set up to start. Before the first change, change_begin records in
+# the agent's folder the copies kept of what is about to change. While that record is there, a run that
+# fails, or is stopped by HUP, INT or TERM, puts those copies back before it ends (finish). A run after
+# one killed outright finds the record, finishes the change, and, should it fail, puts back what the
+# first run found, not copies of what the killed run left. change_end removes the record.
+
+# Starts a change, given what it changes as triples: file or folder, its path, and the copy kept of it,
+# empty for one that was not there (put back, it is taken away). A record a run before left is kept.
+change_begin() {
+    MA_CHANGE="$MA_AGENT_DIR/plugin-change"
+    local arg record=""
+    for arg in "$@"; do no_control "a path to put back" "$arg"; done
+    if [ "$DRY_RUN" -eq 1 ]; then
+        say "would note in $MA_CHANGE what to put back should this fail"
+        return 0
+    fi
+    if [ -f "$MA_CHANGE" ]; then
+        say "a run before this one stopped part way through changing your $HARNESS_TITLE's plugin; this one finishes it, and puts back what that run found if it fails"
+    else
+        while [ $# -ge 3 ]; do
+            record="$record$1	$2	$3
+"
+            shift 3
+        done
+        printf '%s' "$record" | put "$MA_CHANGE" 600
+    fi
+    MA_CHANGING=1
+}
+
+# Ends a change; one stopped before its record is gone is put back.
+change_end() {
+    [ "$DRY_RUN" -eq 1 ] || act rm -f "$MA_CHANGE"
+    MA_CHANGING=0
+}
+
+# Puts back what the record names, in its order; fails if any of it could not be put back.
+put_back_change() {
+    local kind path copy ok=0
+    while IFS='	' read -r kind path copy; do
+        case $kind in
+            file) put_back_file "$copy" "$path" || ok=1 ;;
+            folder) replace_dir "$copy" "$path" || ok=1 ;;
+        esac
+    done <"$MA_CHANGE"
+    return "$ok"
+}
+
+# After a change that did not end, its status given: what it changed put back, and the run ended,
+# saying what happened and what to do.
+change_put_back() {
+    local status=$1 kind path copy what="your $HARNESS_TITLE's settings" took="" copies="" how="" why again
+    while IFS='	' read -r kind path copy; do
+        if [ "$kind" = folder ] && [ -n "$copy" ]; then what="$what and its old plugin"; fi
+        if [ "$kind" = folder ] && [ -z "$copy" ]; then took=", and took our plugin out of it"; fi
+        [ -n "$copy" ] || continue
+        copies="${copies:+$copies, }$copy"
+        how="${how:+$how, }$copy to $path"
+    done <"$MA_CHANGE"
+    case $status in
+        129 | 130 | 143) why="the install was stopped" again="Run this again" ;;
+        *) why="putting our plugin into your $HARNESS_TITLE failed (above)" again="Run this again once what failed is fixed" ;;
+    esac
+    if put_back_change; then
+        rm -f "$MA_CHANGE"
+        printf 'error: %s\n' "$why, so this put $what back as they were$took${copies:+; the copies are $copies}. \
+$again, or go back to today's connector (docs/move.md)" >&2
+    elif [ -n "$how" ]; then
+        printf 'error: %s\n' "$why, and putting $what back failed too: copy $how yourself (docs/move.md). \
+$again after, and it puts back the same copies should it fail" >&2
+    else
+        printf 'error: %s\n' "$why, and putting $what back as they were failed too (above). $again" >&2
+    fi
+    return 0
+}
+
+# Puts a kept copy of a file in place of the file, or takes the file away given no copy. The copy is
+# written beside it and renamed into place, keeping the file's mode.
+# (Each function the exit trap runs ends with a status of its own: there, a bare return gives the status
+# the run ended with.)
+put_back_file() {
+    local copy=$1 file=$2
+    if [ -z "$copy" ]; then
+        act rm -f "$file" || return 1
+        return 0
+    fi
+    act cp "$copy" "$file.marmot-agent" || return 1
+    if [ -e "$file" ]; then act chmod "$(file_mode "$file")" "$file.marmot-agent" || return 1; fi
+    act mv -f "$file.marmot-agent" "$file"
+}
+
+# Puts a copy of folder FROM in place of folder TO, which need not be there, or takes TO away given no
+# FROM. The copy is made in the folder above the one that holds TO, where a gateway looking for its
+# plugins does not look (Hermes reads every folder beside its plugins, hidden ones too), and renamed into
+# place. A kill leaves the old folder or the new one, but for the moment between the two renames.
+replace_dir() {
+    local from=$1 to=$2 above new old
+    if [ "$DRY_RUN" -eq 1 ]; then
+        if [ -n "$from" ]; then say "would copy $from to $to"; else say "would remove $to"; fi
+        return 0
+    fi
+    above=$(dirname "$(dirname "$to")")
+    new="$above/.marmot-agent-$(basename "$to").new"
+    old="$above/.marmot-agent-$(basename "$to").old"
+    act rm -rf "$new" "$old" || return 1
+    act mkdir -p "$(dirname "$to")" || return 1
+    if [ -n "$from" ]; then act cp -R "$from" "$new" || return 1; fi
+    act swap_dir "$new" "$to" "$old" || return 1
+    act rm -rf "$old"
+}
+
+swap_dir() {
+    if [ -e "$2" ]; then mv "$2" "$3" || return 1; fi
+    if [ -e "$1" ]; then mv "$1" "$2"; fi
+}
+
+# What every run does as it ends, with its status: puts back a plugin change that did not end, and
+# removes what it staged.
+finish() {
+    local status=$1
+    set +e
+    trap '' HUP INT TERM
+    if [ "$status" -ne 0 ] && [ "${MA_CHANGING:-0}" -eq 1 ]; then
+        MA_CHANGING=0
+        change_put_back "$status"
+    fi
+    if [ -n "$MA_WORK" ]; then rm -rf "$MA_WORK"; fi
+    if [ "$MA_STAGED" -eq 1 ]; then rm -rf "$MA_STAGE"; fi
+}
+
+# ---------------------------------------------------------------------------------------------------
 # Paths
 
 # Prints the absolute path a path names, with links, `.` and `..` resolved as the system resolves them,
@@ -1235,8 +1368,11 @@ main() {
     set_paths
     check_harness
     # MA_STAGED says whether this run made the folder in MA_STAGE: a dry run names the installed one.
-    MA_WORK="" MA_STAGE="" MA_STAGED=0
-    trap 'if [ -n "$MA_WORK" ]; then rm -rf "$MA_WORK"; fi; if [ "$MA_STAGED" -eq 1 ]; then rm -rf "$MA_STAGE"; fi' EXIT
+    MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0
+    trap 'finish $?' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     if [ "$UNINSTALL" -eq 1 ]; then
         uninstall
         return 0
