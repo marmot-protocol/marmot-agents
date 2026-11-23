@@ -112,6 +112,10 @@ impl Again {
 struct Unsaved;
 
 /// What the core says when it stops because it could not save.
+/// How long, in seconds, the core waits to try publishing the agent's name again after its profile
+/// could not be read, at first and at most: twice as long after each try that fails.
+const NAME_AGAIN: (u64, u64) = (10, 600);
+
 const UNSAVED: &str = "the state file could not be written, so the core stopped";
 
 /// How many times a file is offered to MDK while MDK says it is busy, about half a minute in all.
@@ -259,6 +263,9 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// The core's clock, which never jumps, for how long a control has waited (D-087). Tokio's,
     /// which is the system's except in a simulation, whose clock is virtual.
     started: Instant,
+    /// When to try publishing the agent's name again, in seconds on the core's clock, and how
+    /// long the last wait was; `None` when nothing is left to publish.
+    name_again: Option<(u64, u64)>,
     /// When this core subscribed to MDK's live events ([`Subscribed`]), by the machine's clock,
     /// in whole seconds as MDK gives the time a message arrived; zero until it runs.
     since: u64,
@@ -361,6 +368,7 @@ impl<D: Driver, M: Side> Core<D, M> {
             folders,
             config: config.clone(),
             started: Instant::now(),
+            name_again: None,
             since: 0,
             behind: BTreeSet::new(),
             retry: HashMap::new(),
@@ -474,6 +482,9 @@ impl<D: Driver, M: Side> Core<D, M> {
             };
             match woke {
                 Woke::Tick => {
+                    if self.name_again.is_some_and(|(at, _)| self.clock() >= at) {
+                        self.publish_name().await;
+                    }
                     loop {
                         let acts = self.conversation.overdue(self.clock());
                         if acts.is_empty() {
@@ -586,12 +597,21 @@ impl<D: Driver, M: Side> Core<D, M> {
     }
 
     /// Publishes the agent's name from the settings in its profile, so people see it, keeping the
-    /// rest of the profile as it is. Nothing is published when the name is already right.
+    /// rest of the profile as it is. Nothing is published when the name is already right. When the
+    /// profile could not be read, or the name not published, it is tried again later, a little
+    /// later each time: never over a profile the core could not read (#139).
     async fn publish_name(&mut self) {
         let Some(name) = self.config.name.clone() else {
             return;
         };
-        self.marmot.publish_name(&name, &self.config.relays).await;
+        match self.marmot.publish_name(&name, &self.config.relays).await {
+            Ok(()) => self.name_again = None,
+            Err(NotNow) => {
+                let wait = (self.name_again)
+                    .map_or(NAME_AGAIN.0, |(_, wait)| (wait * 2).min(NAME_AGAIN.1));
+                self.name_again = Some((self.clock() + wait, wait));
+            }
+        }
     }
 
     /// Accepts an invitation from someone who may add the agent, and declines the rest. A group
@@ -1226,7 +1246,9 @@ mod tests {
             unreachable!("only files are sent")
         }
 
-        async fn publish_name(&self, _name: &str, _relays: &[String]) {}
+        async fn publish_name(&self, _name: &str, _relays: &[String]) -> Result<(), NotNow> {
+            Ok(())
+        }
 
         async fn incoming(&self, _message: Message) -> Result<Option<Incoming>, NotNow> {
             unreachable!("only files are sent")

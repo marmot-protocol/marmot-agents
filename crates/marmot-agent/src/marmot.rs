@@ -202,6 +202,8 @@ pub enum Fault {
     PlaceFails,
     /// MDK cannot give what it stored for a group, the next time the core reads it.
     StoredFails,
+    /// The relays cannot be read for the agent's profile, the next time the core reads it.
+    ProfileFails,
     /// MDK takes the send and keeps it queued this long before its engine takes it, as when the
     /// engine is held up: until then MDK says it is queued.
     Held(Duration),
@@ -215,7 +217,12 @@ impl Faults {
 
     /// The oldest fault for a send, one that is neither of the others.
     fn next_send(&self) -> Option<Fault> {
-        self.next(|f| !matches!(f, Fault::PlaceFails | Fault::StoredFails))
+        self.next(|f| {
+            !matches!(
+                f,
+                Fault::PlaceFails | Fault::StoredFails | Fault::ProfileFails
+            )
+        })
     }
 
     /// Keeps the send under `token` queued for `long`, from its first try.
@@ -688,8 +695,14 @@ pub trait Side: Clone + Send + Sync + 'static {
     /// The next live event. Dropping the wait loses nothing.
     fn next(&self, events: &mut Self::Events) -> impl Future<Output = Live> + Send;
 
-    /// Publishes the agent's name in its profile, unless it is already right.
-    fn publish_name(&self, name: &str, relays: &[String]) -> impl Future<Output = ()> + Send;
+    /// Publishes the agent's name in its profile, keeping the rest of it, unless the name is
+    /// already right. [`NotNow`] when the profile could not be read, so nothing was published
+    /// over it, or the name could not be published: the core tries again later.
+    fn publish_name(
+        &self,
+        name: &str,
+        relays: &[String],
+    ) -> impl Future<Output = Result<(), NotNow>> + Send;
 
     /// What a message is for the conversation, if anything; [`NotNow`] when that could not be
     /// told for a passing failure.
@@ -886,19 +899,31 @@ impl Side for Marmot {
         }
     }
 
-    async fn publish_name(&self, name: &str, relays: &[String]) {
+    async fn publish_name(&self, name: &str, relays: &[String]) -> Result<(), NotNow> {
         let relays = (relays.iter())
             .map(|r| cgka_traits::TransportEndpoint(r.clone()))
             .collect();
-        let current = self
-            .runtime
-            .fetch_current_user_profile_for_account_id(self.agent.as_str(), relays)
-            .await
-            .ok()
-            .flatten()
-            .unwrap_or_default();
+        let failed = (self.faults)
+            .next(|f| matches!(f, Fault::ProfileFails))
+            .is_some();
+        let current = if failed {
+            Err(())
+        } else {
+            self.runtime
+                .fetch_current_user_profile_for_account_id(self.agent.as_str(), relays)
+                .await
+                .map_err(drop)
+        };
+        // MDK's publisher reads the profile again and replaces its about, picture, NIP-05 and
+        // lightning address with those of the profile it is given: one made from nothing, for a
+        // read that failed, would wipe what others see. A read that found none on the relays
+        // that answered starts from nothing; MDK's own read keeps whatever it finds then.
+        let Ok(current) = current else {
+            return Err(NotNow);
+        };
+        let current = current.unwrap_or_default();
         if current.name.as_deref() == Some(name) && current.display_name.as_deref() == Some(name) {
-            return;
+            return Ok(());
         }
         let profile = marmot_app::UserProfileMetadata {
             name: Some(name.to_string()),
@@ -910,8 +935,10 @@ impl Side for Marmot {
             .publish_user_profile_using_account_relays(&self.label, profile)
             .await;
         if published.is_err() {
-            eprintln!("marmot-agent: the agent's name could not be published");
+            eprintln!("marmot-agent: the agent's name could not be published; trying again later");
+            return Err(NotNow);
         }
+        Ok(())
     }
 
     fn incoming(

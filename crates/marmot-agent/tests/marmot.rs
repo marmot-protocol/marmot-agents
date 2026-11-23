@@ -6,12 +6,69 @@ mod common;
 
 use common::{Echo, World, eventually};
 use marmot_agent::GroupKey;
+use marmot_agent::marmot::Fault;
 use marmot_agent::run::Store;
 use marmot_agent_events::State;
 use marmot_agent_events::body::Body;
 use marmot_app::MarmotAppEvent;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+// #139. When the agent's profile cannot be read as the core starts, the core publishes nothing
+// over it: MDK's publisher replaces the about, picture, NIP-05 and lightning address with those of
+// the profile it is given, so one made from nothing would wipe what others see. The core tries
+// again later, and publishes the name with the rest kept.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_profile_that_cannot_be_read_is_not_published_over() {
+    let world = World::new("name = \"Echo\"\n[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let before = marmot_app::UserProfileMetadata {
+        name: Some("Old name".into()),
+        about: Some("kept".into()),
+        picture: Some("https://example.invalid/agent.png".into()),
+        nip05: Some("agent@example.invalid".into()),
+        lud16: Some("agent@example.invalid".into()),
+        ..marmot_app::UserProfileMetadata::default()
+    };
+    world
+        .runtime
+        .publish_user_profile_using_account_relays(&world.marmot.label, before.clone())
+        .await
+        .unwrap();
+    // A second on, so the core's profile is newer than this one.
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    world.marmot.faults.push(Fault::ProfileFails);
+    let core = world.start(Echo::new(Arc::default()));
+    let relays = vec![cgka_traits::TransportEndpoint(world.relay.clone())];
+    let mut profile = None;
+    for _ in 0..60 {
+        let read = (world.runtime)
+            .fetch_current_user_profile_for_account_id(&world.agent, relays.clone())
+            .await
+            .unwrap()
+            .expect("a profile on the relay");
+        let named = read.name.as_deref() == Some("Echo");
+        profile = Some(read);
+        if named {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    let profile = profile.unwrap();
+    assert_eq!(
+        profile.name.as_deref(),
+        Some("Echo"),
+        "named on a later try"
+    );
+    assert_eq!(profile.display_name.as_deref(), Some("Echo"));
+    assert_eq!(
+        (profile.about, profile.picture, profile.nip05, profile.lud16),
+        (before.about, before.picture, before.nip05, before.lud16),
+        "the rest of the profile kept"
+    );
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
 
 // A person who owns the agent invites it to a direct chat and writes to it. The core accepts the
 // invitation, hands the message to the harness as a prompt, and the person receives the agent's

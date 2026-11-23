@@ -117,7 +117,9 @@ impl Side for Mdk {
         }
     }
 
-    async fn publish_name(&self, _name: &str, _relays: &[String]) {}
+    async fn publish_name(&self, _name: &str, _relays: &[String]) -> Result<(), NotNow> {
+        Ok(())
+    }
 
     async fn incoming(&self, message: Message) -> Result<Option<Incoming>, NotNow> {
         Ok(Some(Incoming::Heard(Heard {
