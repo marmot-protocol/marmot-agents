@@ -434,8 +434,10 @@ put_back_file() {
 
 # Puts a copy of folder FROM in place of folder TO, which need not be there, or takes TO away given no
 # FROM. The copy is made in the folder above the one that holds TO, where a gateway looking for its
-# plugins does not look (Hermes reads every folder beside its plugins, hidden ones too), and renamed into
-# place. A kill leaves the old folder or the new one, but for the moment between the two renames.
+# plugins does not look (Hermes reads every folder beside its plugins, hidden ones too), and put in
+# place by renaming. Where mv can exchange two folders in one step (GNU coreutils 9.5 and later, on a
+# file system that can), a kill leaves the old folder or the new one. Elsewhere, as on macOS, the old
+# one is moved aside first, and a kill between the two renames leaves neither (docs/move.md).
 replace_dir() {
     local from=$1 to=$2 above new old
     if [ "$DRY_RUN" -eq 1 ]; then
