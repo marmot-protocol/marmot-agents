@@ -283,6 +283,7 @@ impl Install {
     /// person allowed to invite it, as the installer's bootstrap does over its socket.
     async fn new(name: &str, label: &str) -> Self {
         storage_sqlite::relax_storage_for_test_process();
+        marmot_agent::marmot::start_sqlite();
         let relay = nostr_relay_builder::MockRelay::run().await.unwrap();
         let url = relay.url().await.to_string();
         let root = tempfile::tempdir().unwrap();

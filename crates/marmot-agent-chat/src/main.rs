@@ -107,6 +107,7 @@ async fn run(home: &str, options: &[String]) -> Result<(), String> {
         [flag, url] if flag == "--relay" => (url.clone(), None),
         _ => return Err("give --serve <port> or --relay <url>".into()),
     };
+    marmot_agent::marmot::start_sqlite();
     let account_home = AccountHome::open(home);
     let settings = MarmotAppConfig::default().with_allow_loopback_relay_endpoints(true);
     let app = MarmotApp::try_with_relays_and_account_home_and_config(

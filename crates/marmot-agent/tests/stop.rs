@@ -23,6 +23,7 @@ use tokio::task::JoinHandle;
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stop_during_start_up_ends_the_core() {
     storage_sqlite::relax_storage_for_test_process();
+    marmot_agent::marmot::start_sqlite();
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
     let relay = nostr_relay_builder::MockRelay::run().await.unwrap();
@@ -180,6 +181,7 @@ async fn connect(home: &Path, prompts: Prompts) -> JoinHandle<()> {
 /// harness has the message, and started again on the same home; the person writes again.
 async fn restarted_after(pause: Duration) {
     storage_sqlite::relax_storage_for_test_process();
+    marmot_agent::marmot::start_sqlite();
     let relay = relay().await;
     let url = relay.url().await.to_string();
     let dir = tempfile::tempdir().unwrap();
