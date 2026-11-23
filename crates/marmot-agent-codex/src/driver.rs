@@ -211,7 +211,7 @@ struct Held {
     thread: String,
     line: String,
     /// Codex's id, while the message is a request Codex waits for a reply to: none for a
-    /// notification, or once Codex says the request is resolved.
+    /// notification.
     request: Option<Value>,
 }
 
@@ -743,14 +743,17 @@ impl Codex {
     }
 
     /// Holds a message for a thread no chat has had, until something names its thread. Codex's
-    /// word that it no longer waits for a request held here means that request needs no reply.
+    /// word that it no longer waits for a request held here means that request needs no reply and
+    /// is not shown: both are let go, so no chat shows it as waiting until its turn ends.
     fn hold(&mut self, thread: &str, line: &str, message: &Value) {
         if message["method"] == "serverRequest/resolved" {
             let id = &message["params"]["requestId"];
-            for held in self.held.iter_mut().filter(|h| h.thread == thread) {
-                if held.request.as_ref() == Some(id) {
-                    held.request = None;
-                }
+            let before = self.held.len();
+            self.held
+                .retain(|h| h.thread != thread || h.request.as_ref() != Some(id));
+            if self.held.len() < before {
+                self.unrouted += 2;
+                return;
             }
         }
         let request = (message.get("id").cloned()).filter(|_| message.get("method").is_some());

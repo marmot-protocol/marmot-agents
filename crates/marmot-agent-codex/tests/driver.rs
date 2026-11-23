@@ -1600,6 +1600,52 @@ async fn what_a_resumed_session_says_before_its_reply_is_kept() {
     assert_eq!(codex.unrouted(), 0);
 }
 
+// A request a resumed session makes before the reply to the resume, which Codex then says is
+// resolved, waits for nobody: it is not shown as waiting once the reply makes the session the
+// chat's, and it is not refused either (#142).
+#[tokio::test]
+async fn a_request_resolved_before_a_resume_replies_is_not_shown() {
+    let (mut codex, mut fake) = connect().await;
+    let driver = tokio::spawn(async move {
+        let mut again = prompt("m-1", "where were we");
+        again.session = Some("th0".into());
+        codex.prompt(again).await.unwrap();
+        codex
+    });
+    let resume = fake.hear().await;
+    assert_eq!(resume["method"], "thread/resume");
+    fake.say(json!({"id": 7, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th0", "turnId": "t0", "itemId": "c", "command": "ls"}})).await;
+    fake.say(
+        json!({"method": "serverRequest/resolved", "params": {"threadId": "th0", "requestId": 7}}),
+    )
+    .await;
+    fake.say(json!({"id": resume["id"], "result": {"thread": {"id": "th0"}}}))
+        .await;
+    fake.answer("turn/start", json!({"turn": {"id": "t1"}}))
+        .await;
+    let mut codex = driver.await.unwrap();
+    fake.say(
+        json!({"method": "thread/settings/updated", "params": {"threadId": "th0",
+        "threadSettings": {"model": "m9"}}}),
+    )
+    .await;
+    let shows_m9 = |e: &Emitted| match e.event.body() {
+        Body::Session(s) => {
+            (s.settings.iter()).any(|x| x.id == "model" && x.value.as_deref() == Some("m9"))
+        }
+        _ => false,
+    };
+    let events = within(&mut codex, shows_m9).await.expect("the marker");
+    let waiting = events.iter().find(|e| {
+        matches!(e.event.body(), Body::Approval(_)) && e.event.header().state == State::Waiting
+    });
+    assert!(waiting.is_none(), "a resolved request is shown as waiting");
+    assert!(
+        !replied(&written(&mut fake), 7),
+        "a resolved request was answered"
+    );
+}
+
 // Two Stops under way when a subagent's turn starts: the turn and the subagent are each
 // interrupted once, and each Stop waits for both, so neither is settled while the subagent runs.
 #[tokio::test]
