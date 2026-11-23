@@ -544,7 +544,7 @@ fn first_question<'a>(
 /// the person and the agent are alone (D-041); in a group, the core hears only a message that
 /// mentions the agent or replies to it, a named group of two included.
 fn by_message(item: &Question, place: Place, agent: &str) -> String {
-    if item.questions().iter().any(|q| q.secret) && !place.two() {
+    if secret_where_others_read(item, place) {
         return "it asks for a secret, and others read this chat: answer it in the harness's \
                 terminal"
             .into();
@@ -555,6 +555,12 @@ fn by_message(item: &Question, place: Place, agent: &str) -> String {
     }
     let npub = marmot_app::npub_for_account_id(agent).unwrap_or_default();
     format!("{reply}; in a group it hears only one that mentions it, so start with nostr:{npub}")
+}
+
+/// Whether `item` asks for a secret in a chat others read, so it is answered in the harness's
+/// terminal instead.
+fn secret_where_others_read(item: &Question, place: Place) -> bool {
+    item.questions().iter().any(|q| q.secret) && !place.two()
 }
 
 /// Text from the chat as it may be printed: no control characters, so nothing received can move
@@ -659,8 +665,8 @@ fn lines_for(read: &Read, group: &str, agent: &str, place: Place, here: bool) ->
                 ));
             } else {
                 let by_message = by_message(question, place, agent);
-                // A secret goes to the terminal, in whichever chat.
-                if by_message.contains("terminal") {
+                // A secret goes to the terminal, from whichever chat.
+                if secret_where_others_read(question, place) {
                     lines.push(format!("    {by_message}"));
                 } else {
                     lines.push(how(by_message));
