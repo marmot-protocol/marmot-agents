@@ -112,6 +112,102 @@ async fn claude_code_on_the_model_double() {
     println!("the model double answered {asked} requests");
 }
 
+/// The cassette recorded from a real model for `one_turn`, by `record_claude_code_turn`.
+fn cassette() -> std::path::PathBuf {
+    model_double::repository().join("fixtures/cassettes/claude/approval.jsonl")
+}
+
+/// A turn replayed from a cassette recorded from a real model: the requests this Claude Code
+/// makes must still match the ones the recording was made from (`tools/model_double`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn claude_code_replays_a_recorded_turn() {
+    let double = Double::replay(&cassette()).await;
+    let work = demo();
+    one_turn(&Model::double(&double), work.path()).await;
+    let asked = double.all_answered().await;
+    println!("the cassette answered {asked} requests");
+}
+
+/// Records `one_turn` from a real model into a cassette, through the model double in a container
+/// that holds the key (`tools/model_double/README.md` says how to run it and what to do next).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs Docker, a model and its key"]
+async fn record_claude_code_turn() {
+    let setting = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("set {name}"));
+    let key = std::path::PathBuf::from(setting("MODEL_DOUBLE_KEY_FILE"));
+    let out = std::path::PathBuf::from(setting("MODEL_DOUBLE_OUT"));
+    let work = std::path::PathBuf::from(setting("MODEL_DOUBLE_DEMO"));
+    let sdk = model_double::repository()
+        .join("packages/claude-code/node_modules/@anthropic-ai/claude-agent-sdk/package.json");
+    let sdk: Value = serde_json::from_str(&std::fs::read_to_string(sdk).unwrap()).unwrap();
+    let version = sdk["claudeCodeVersion"].as_str().unwrap();
+    let harness = ("claude-code", version, "anthropic");
+    let upstream = setting("MODEL_DOUBLE_UPSTREAM");
+    let double = Double::record(
+        &key,
+        &upstream,
+        &setting("MODEL_DOUBLE_MODEL"),
+        &out,
+        harness,
+    )
+    .await;
+    one_turn(&Model::double(&double), &work).await;
+    let asked = double.all_answered().await;
+    println!("recorded {asked} requests");
+}
+
+/// A throwaway copy of the project the recordings are made in, `tools/record/demo`.
+fn demo() -> tempfile::TempDir {
+    let work = tempfile::tempdir().unwrap();
+    let from = model_double::repository().join("tools/record/demo");
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), work.path().join(entry.file_name())).unwrap();
+    }
+    work
+}
+
+/// One turn in `work`: a command asked for, approved once and run, and the turn done.
+async fn one_turn(model: &Model, work: &Path) {
+    let home = tempfile::tempdir().unwrap();
+    let world = World::new("name = \"Claude\"\n[connector]\n").await;
+    world.runtime.start().await.unwrap();
+    let (listener, token) = Endpoint::in_home(home.path()).listen().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let (marmot, config) = (world.marmot.clone(), world.config.clone());
+    let store = world.state.path().to_path_buf();
+    let serving = tokio::spawn(async move {
+        let stop = async {
+            let _ = stopped.await;
+        };
+        serve(marmot, &config, &store, listener, token, now(), stop).await
+    });
+    let mut claude = driver(home.path(), work, model);
+    let group = world
+        .runtime
+        .start_direct_conversation(&world.person, &world.agent)
+        .await
+        .unwrap();
+    let hex = world.joined(&group).await;
+    let chat = Chat {
+        world: &world,
+        group,
+        hex,
+        turn: TURN,
+    };
+    let asked = chat
+        .say("Run exactly this shell command and nothing else, in the foreground, then reply with the word done: `python3 greet.py`")
+        .await;
+    chat.approve("python3 greet.py").await;
+    let turn = chat.turn_for(&asked).await;
+    chat.turn_at(&turn, State::Done).await;
+    println!("approved, run and done");
+    let _ = stop.send(());
+    serving.await.unwrap().unwrap();
+    let _ = claude.kill().await;
+    world.runtime.shutdown().await;
+}
+
 async fn end_to_end(model: &Model) {
     let work = tempfile::tempdir().unwrap();
     let home = tempfile::tempdir().unwrap();

@@ -6,7 +6,8 @@ Usage:
 
 `<raw-dir>` holds one folder per harness (`codex`, `claude`, `hermes`, `openclaw`, `pi`), each with `*.jsonl`
 files as written by the recorders, and `acp`, which holds one such folder per ACP agent, such as
-`acp/opencode`. The same tree is written to `<out-dir>`. The script then scans its own output and exits with an error
+`acp/opencode`, and `cassettes`, which holds one folder per harness of the model double's cassettes
+(`tools/model_double`), each line scrubbed whole. The same tree is written to `<out-dir>`. The script then scans its own output and exits with an error
 if anything that looks private is left.
 
 What it does:
@@ -204,21 +205,26 @@ def main() -> int:
     maps = [tuple(m.split("=", 1)) for m in args.map]
     s = Scrubber(maps)
     problems = 0
-    for harness in ("codex", "claude", "hermes", "openclaw", "acp", "pi"):
+    for harness in ("codex", "claude", "hermes", "openclaw", "acp", "pi", "cassettes"):
         if not (args.raw / harness).is_dir():
             continue
-        pattern = "*/*.jsonl" if harness == "acp" else "*.jsonl"  # acp/<agent>/<scenario>.jsonl
+        # acp/<agent>/<scenario>.jsonl, cassettes/<harness>/<scenario>.jsonl
+        pattern = "*/*.jsonl" if harness in ("acp", "cassettes") else "*.jsonl"
         for src in sorted((args.raw / harness).glob(pattern)):
             rel = src.relative_to(args.raw / harness)
             (args.out / harness / rel.parent).mkdir(parents=True, exist_ok=True)
             lines = []
-            for line in src.read_text(encoding="utf-8").splitlines():
+            for line in filter(str.strip, src.read_text(encoding="utf-8").splitlines()):
                 rec = json.loads(line)
-                if harness == "acp":
+                if harness == "cassettes":
+                    # A cassette's line is not a message: the whole line is scrubbed and checked.
+                    rec = {"msg": s.walk(rec)}
+                elif harness == "acp":
                     rec["msg"] = s.acp(rec["msg"], rel.parts[0])
                 else:
                     rec["msg"] = getattr(s, harness)(rec["msg"])
-                lines.append(json.dumps(rec, ensure_ascii=False, sort_keys=False))
+                kept = rec["msg"] if harness == "cassettes" else rec
+                lines.append(json.dumps(kept, ensure_ascii=False, sort_keys=False))
                 for text in strings(rec["msg"]):
                     for word, _ in s.words:
                         if re.search(rf"(?<![A-Za-z0-9]){re.escape(word)}(?![A-Za-z0-9])", text):
