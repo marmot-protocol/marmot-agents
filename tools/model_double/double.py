@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """A model double: a local server that speaks the model providers' wire formats, so a real harness runs
-against it with only the model faked (a proposal in docs/design/verification.md, "A model double").
+against it with only the model faked (docs/design/verification.md, "A model double", and D-127).
 
 Usage:
     double.py scripted <script.json>

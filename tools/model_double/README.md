@@ -2,7 +2,7 @@
 
 A small local server that speaks the model providers' wire formats, so a real harness runs against it with
 only its model faked. Why, and what it proves, is in
-[`docs/design/verification.md`](../../docs/design/verification.md#11-a-model-double-a-proposal). It uses Python's
+[`docs/design/verification.md`](../../docs/design/verification.md#11-a-model-double). It uses Python's
 standard library and nothing else.
 
 | Format | Path | Harnesses |

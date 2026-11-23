@@ -1644,6 +1644,10 @@ jobs. Long checks run nightly or weekly: property tests at high counts, many sim
 fuzzing, mutation testing, and the scenarios against real harnesses. Those run on numes.ai's free models, with its
 key as a CI secret, in a workflow that pull requests cannot reach.
 
+Replaced in part by [D-127](#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key): the
+real-harness scenarios run in CI on the model double, and no model key is in CI at all. The 15-minute ceiling and
+the nightly and weekly checks stand.
+
 **Why.** A fast pull request keeps the work moving; the expensive checks still run every day. Keeping the key out
 of anything a pull request can trigger keeps it from code nobody reviewed.
 
@@ -2413,6 +2417,36 @@ a Welcome per member per subagent, and scatter one chat across groups. MDK does 
 [MLS subgroup branching](reference/subagents-prior-art.md#mls-subgroup-branching).
 
 Decided 2026-11-23. The project owner decided.
+
+## D-127 Real harnesses run in CI on the model double, with no model key
+
+**Decision.** The real harness programs are tested in CI against the model double
+([`tools/model_double`](../tools/model_double/README.md)), a local server that speaks the providers' wire formats,
+so only the model is fake:
+
+- **No model key is in CI at all**, on a pull request or nightly. A scenario that runs in CI uses the double,
+  scripted or replaying a committed cassette. This replaces the item of
+  [D-094](#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly) that ran the real-harness
+  scenarios nightly on numes.ai's free models with its key as a CI secret; the rest of D-094 stands.
+- **Codex's sandbox runs on the CI runner**: the job lifts Ubuntu's limit on unprivileged user namespaces, which
+  bubblewrap needs.
+- **Cassettes are recorded through numes, on a non-vendor model, for now**, on the owner's machine, with the double
+  in a container that has only the key file mounted, read-only. The double translates a harness's Anthropic
+  Messages or Responses request to Chat Completions, which is all numes serves.
+- **Replay reports a harness version newer than a cassette's, and does not fail on it.** A request the cassette
+  has no exchange for fails, whatever the version.
+- **A cassette older than 14 days is reported on a pull request**, as a warning that does not fail it, **and fails
+  the nightly run**, which opens an issue.
+- **The gateways (Hermes and OpenClaw) stay on scripted mode** until the matching rule ignores the timestamps and
+  session ids they put in a prompt; until then a cassette of theirs would never match.
+
+**Why.** Claude Code and Codex have no free model, and a key in CI can reach code nobody reviewed. The double runs
+the real harness on every pull request, with nothing to keep secret. Recording through a non-vendor model proves
+the wire formats and the harness's own loop, not the vendor model's choices; that is what these tests need. A
+newer harness should show its drift as a failing match, not as a forced re-record on every release; the age limit
+keeps a cassette from drifting unnoticed.
+
+Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
 
 ## D-128 A folder move whose session shows late still moves the chat
 

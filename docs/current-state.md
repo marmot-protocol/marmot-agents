@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-23, at `master` commit `60811d2`, through [D-128](decisions.md#d-128-a-folder-move-whose-session-shows-late-still-moves-the-chat) (D-127 is in an open pull request). A change that adds or replaces
+Brought up to date on 2026-11-23, at `master` commit `18f2d62`, through [D-128](decisions.md#d-128-a-folder-move-whose-session-shows-late-still-moves-the-chat). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -198,6 +198,9 @@ Decided, and not built: the core, the drivers, MDK and the apps each have their 
   mutation testing and privacy checks ([D-093](decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top)).
 - Recordings are of scripted scenarios only, scrubbed; Cursor's keep only its built-in commands ([D-085](decisions.md#d-085-cursor-recordings-keep-only-cursors-built-in-commands)).
 - CI on a pull request stays under 15 minutes; long checks run nightly ([D-094](decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)).
+- Real Claude Code and Codex run their scenarios in CI on the model double, with no model key in CI at all;
+  cassettes are recorded through numes by hand, a cassette older than 14 days is a warning on a pull request and
+  fails the nightly run, and the gateways stay scripted ([D-127](decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key)).
 - The Rust workspace builds with MDK's compiler and forbids unsafe code ([D-053](decisions.md#d-053-the-rust-workspace-builds-with-mdks-compiler-and-forbids-unsafe-code)).
 - Work follows `plan.md`; the builder decides what is internal and merges once CI passes and review left no
   blocker. Every commit is signed ([D-068](decisions.md#d-068-work-follows-the-plan-and-the-builder-decides-what-is-internal), [D-054](decisions.md#d-054-changes-arrive-as-small-signed-pull-requests-that-ci-checks)).
