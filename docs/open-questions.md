@@ -287,9 +287,11 @@ Codex and Claude Code can start subagents: agents of their own that work in para
 turn, and can ask for approval. The project owner wants a chat to show each one, and to let a person open it
 and see everything it does, like a thread inside the conversation.
 
-The current thinking, agreed in direction with the project owner on 2026-11-20, is a thread in the same group
-for each subagent: [subagents as threads](design/subagents.md), with the points to decide. What Codex sends for
-subagents is in [harness messages](reference/harness-messages.md#subagents).
+The current thinking, agreed in direction with the project owner on 2026-11-20 and sharpened on 2026-11-23, is a
+thread in the same group for each subagent, like a Slack thread, with a shortcut to the ones still running:
+[subagents as threads](design/subagents.md), with the points to decide. What Codex sends for subagents is in
+[harness messages](reference/harness-messages.md#subagents); what other products and the other harnesses do is
+in [subagents, threads and what others do](reference/subagents-prior-art.md).
 
 Until then, Codex's subagents are on and shown flat in the chat that started them, as Claude Code's are
 ([D-117](decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)). The
