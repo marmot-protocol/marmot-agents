@@ -1263,3 +1263,50 @@ async fn a_new_session_stops_the_old_ones_subagents() {
     assert_eq!(interrupt["params"]["turnId"], "st1");
     reading.abort();
 }
+
+/// Whether the driver wrote a reply to Codex's request `id` within half a second.
+async fn replied_to(fake: &mut Fake, id: i64) -> bool {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
+    while let Ok(Some(message)) = tokio::time::timeout_at(deadline, fake.heard.recv()).await {
+        if message["id"] == id && message.get("method").is_none() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Codex waits for a reply to each request it makes, so one nobody in a chat is asked about is
+/// answered at once, as a call of a tool the driver does not have is. Found by the
+/// `DriverTransport` model (`formal/tla`, case `codex-stray`): an approval for a thread no chat has
+/// is counted as unrouted and never answered. Not fixed here; ignored until it is.
+#[tokio::test]
+#[ignore = "found by DriverTransport (codex-stray): a request for a thread no chat has is never answered"]
+async fn a_request_for_a_thread_no_chat_has_is_answered() {
+    let (mut codex, mut fake) = running().await;
+    fake.say(json!({"id": 5, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th-other", "turnId": "t9", "itemId": "c", "command": "ls", "availableDecisions": ["accept", "cancel"]}})).await;
+    fake.say(turn("turn/completed", "completed")).await;
+    until(&mut codex, is_turn(State::Done)).await;
+    assert!(
+        replied_to(&mut fake, 5).await,
+        "the request for a thread no chat has was never answered"
+    );
+}
+
+/// A question the driver cannot show, such as one with two questions of one id, is answered at
+/// once, as a form the chat cannot show is declined. Found by the `DriverTransport` model
+/// (`formal/tla`, case `codex-unshown`): the driver leaves it unanswered, and the turn waits for
+/// it until someone interrupts. Not fixed here; ignored until it is.
+#[tokio::test]
+#[ignore = "found by DriverTransport (codex-unshown): a question the driver cannot show is never answered"]
+async fn a_question_the_driver_cannot_show_is_answered() {
+    let (mut codex, mut fake) = running().await;
+    fake.say(json!({"id": 6, "method": "item/tool/requestUserInput", "params": {"threadId": "th1", "turnId": "t1", "itemId": "call1", "questions": [
+        {"id": "q", "header": "One", "question": "First?", "isOther": true, "isSecret": false, "options": []},
+        {"id": "q", "header": "Two", "question": "Second?", "isOther": true, "isSecret": false, "options": []}]}})).await;
+    fake.say(turn("turn/completed", "completed")).await;
+    until(&mut codex, is_turn(State::Done)).await;
+    assert!(
+        replied_to(&mut fake, 6).await,
+        "the question the driver cannot show was never answered"
+    );
+}
