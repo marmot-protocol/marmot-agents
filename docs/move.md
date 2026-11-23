@@ -67,11 +67,19 @@ encryption state and its chats.
    plugin's own settings out of the gateway's (for OpenClaw, its socket, account and sender policy, which
    OpenClaw would refuse once the new plugin is in). The gateway may keep running while it does. Then
    restart the gateway. Without settings in the agent's folder, `--replace-plugin` stops before changing
-   anything. If putting the OpenClaw plugin in fails part way, the installer puts the gateway's settings
-   and the old plugin back from those copies before it stops, and says so; run it again once what failed
-   is fixed. A run that finds the new plugin in and the old plugin's settings still in the channel, which
-   OpenClaw then refuses to read or start with, takes those settings out of OpenClaw's settings file,
-   after keeping a copy of it.
+   anything. If putting the plugin in fails part way, or the installer is stopped (Ctrl-C, or a `TERM`), it
+   puts the gateway's settings and the old plugin back from those copies before it ends, and says so; run
+   it again once what failed is fixed. If it is killed outright, run it again: it finishes the move, and
+   if that run fails, it puts back what the gateway had before the first run, from the copies that run
+   kept (it notes them in `plugin-change` in the agent's folder until the move is done). Killed outright,
+   Hermes is left with the old plugin or the new one, each set up to start: the new one goes in by
+   renaming a full copy into place, and only the moment between moving the old one aside and renaming
+   the new one in has neither. OpenClaw is not, in two moments: after the old plugin's settings come
+   out and before the new plugin is in, and after it is in and before its settings are set, it starts
+   with neither until the installer runs again. OpenClaw refuses settings its installed plugin does not
+   take, so no order of its commands avoids that. A run that finds the new plugin in and the old plugin's
+   settings still in the channel, which OpenClaw then refuses to read or start with, takes those settings
+   out of OpenClaw's settings file, after keeping a copy of it.
 
 On its first start the core reads nothing already in a chat as a prompt, so it never runs an old prompt again.
 That also means a message sent to the agent between the import and that first start is not answered: keep the
@@ -170,17 +178,32 @@ address, and no systemd is touched: the import's service manager notes what it s
 `--no-service`.
 Each scenario passed 5 runs of 5, with `wn-agent` stopped at once after the person's last message.
 
+The installers' own tests (`install/test_install.py`, on stand-ins for Hermes and OpenClaw that keep their
+settings in files as the real ones do) stop a `--replace-plugin` run at each of its steps in turn, each call
+through which the script changes something, once by `TERM` and once by `KILL`. After each, the gateway has
+the old plugin or the new one set up to start, but for OpenClaw's two moments above; a run made to fail
+after a kill puts back what the gateway had before; and the run again finishes the move.
+
 Not proven yet: a move on a real machine, with systemd and the real harnesses.
 
 ## Going back
 
-If the OpenClaw installer said it could not put the gateway's settings and the old plugin back, do it from
-the copies it kept in the agent's folder (`~/.local/share/marmot-agent/agents/<name>/backups`): copy
-`openclaw.json.<time>` over OpenClaw's settings file (`openclaw config file` names it) and `marmot.<time>`
-over the old plugin's folder, as it says. The Hermes installer keeps the same kind of copies there
-(`config.yaml.<time>`, `.env.<time>` and `marmot.<time>`).
+First stop the core for good. The Hermes and OpenClaw installers run it as a service that is started again
+whenever it stops (`Restart=always` on Linux, `KeepAlive` on a Mac), so stopping it is not enough: remove the
+service with the installer, `install/hermes.sh --uninstall --name <name>` or the same with `openclaw.sh`
+(`<name>` is the agent's name, `hermes` or `openclaw` by default). That also takes our plugin and its
+settings out of the gateway. If you started the core yourself, with `marmot-agent run`, stop it.
 
-Before the core has run, delete the settings file and start the old services again. Once it has run, MDK has
-upgraded the store, which only goes forward: stop the core, put the backup in place of the home, and start the
-old services. Do that only if the agent has done nothing since, because an older store can reuse keys or run a
-prompt twice.
+Then put the gateway back as it was from the copies the installer kept in the agent's folder
+(`~/.local/share/marmot-agent/agents/<name>/backups`). Take the oldest of each, made before the move; a run
+after that may have kept more. For Hermes, copy `config.yaml.<time>` and `.env.<time>` over the files
+`hermes config path` and `hermes config env-path` name, and `marmot.<time>` to `plugins/marmot` beside
+`config.yaml`. For OpenClaw, copy `openclaw.json.<time>` over its settings file (`openclaw config file` names
+it) and `marmot.<time>` over the old plugin's folder. If an installer said it could not put them back
+itself, it named the copies and where they go.
+
+Before the core has run, delete the settings file and start the old services again, as the import said when
+it finished (`systemctl --user enable --now` each one it stopped, or on a Mac `launchctl enable` and
+`launchctl bootstrap`). Once it has run, MDK has upgraded the store, which only goes forward: put the backup in place of the home, and start
+the old services. Do that only if the agent has done nothing since, because an older store can reuse keys or
+run a prompt twice. Then restart the gateway.
