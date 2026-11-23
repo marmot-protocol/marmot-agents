@@ -1795,16 +1795,73 @@ class FilesFrom(unittest.TestCase):
                 self.assertIn("files_from in its settings lists the folders", out)
 
     def test_a_moved_gateway_leaves_a_files_from_the_person_wrote_otherwise(self):
-        """A line the installer cannot read for certain is the person's: it says how to add the folder."""
+        """Only the line the import wrote, with its comment directly above it, is changed. A line the
+        person wrote, or changed so it is no longer one the import writes, is theirs, even one in a single
+        line: it is left as it is, and the installer says how to add the folder."""
+        mine = {
+            "several lines": 'files_from = [\n  "/srv/mine",\n]',
+            "a trailing comma": 'files_from = ["/srv/mine",]',
+            "a comment after it": 'files_from = ["/srv/mine"]  # mine',
+            "no comment above, empty": "files_from = []",
+            "no comment above": 'files_from = ["/srv/mine"]',
+            "another comment above": '# Mine.\nfiles_from = ["/srv/mine"]',
+        }
+        for case, line in mine.items():
+            with self.subTest(case=case):
+                m = Machine(self)
+                self.hermes(m, {"cwd": str(m.dir / "projects"), "backend": "local"})
+                settings = self.moved(m, "hermes", "Hermes", [])
+                text = settings.read_text()
+                if case.startswith("no comment") or case.startswith("another"):
+                    text = text.replace(f"{self.IMPORTED}\n", "")
+                text = text.replace("files_from = []", line)
+                settings.write_text(text)
+                files, after, out = self.replace(m, "hermes")
+                self.assertEqual(files, tomllib.loads(text).get("files_from"))
+                self.assertEqual(after, text)
+                self.assertIn(f"add {m.dir / 'projects'}", out)
+
+    def test_a_moved_gateway_already_listing_its_folder_changes_nothing(self):
+        """The old connector may have let files be sent from the folder the gateway works in: it is
+        listed once, and the settings are left as the import wrote them."""
         m = Machine(self)
-        self.hermes(m, {"cwd": str(m.dir / "projects"), "backend": "local"})
-        settings = self.moved(m, "hermes", "Hermes", [])
-        mine = settings.read_text().replace("files_from = []", 'files_from = [\n  "/srv/mine",\n]')
-        settings.write_text(mine)
+        listed = [str(m.dir / "projects")]
+        self.hermes(m, {"cwd": listed[0], "backend": "local"})
+        before = self.moved(m, "hermes", "Hermes", listed).read_text()
         files, text, out = self.replace(m, "hermes")
-        self.assertEqual(files, ["/srv/mine"])
-        self.assertEqual(text, mine)
-        self.assertIn(f"add {m.dir / 'projects'}", out)
+        self.assertEqual((files, text), (listed, before))
+        self.assertIn(f"and {listed[0]}, where Hermes works", out)
+
+    def test_a_moved_gateway_that_works_elsewhere_now_lists_the_new_folder(self):
+        """The folder the installer added is its own while its comment stays above the line: run again
+        after the gateway has moved to another folder, it lists that one in its place."""
+        m = Machine(self)
+        old = [str(m.dir / "media")]
+        self.hermes(m, {"cwd": str(m.dir / "projects"), "backend": "local"})
+        self.moved(m, "hermes", "Hermes", old)
+        files, _, _ = self.replace(m, "hermes")
+        self.assertEqual(files, [*old, str(m.dir / "projects")])
+        (m.home / ".hermes/config.yaml").write_text(
+            json.dumps({"terminal": {"cwd": str(m.dir / "elsewhere"), "backend": "local"}}))
+        files, text, out = self.replace(m, "hermes")
+        self.assertEqual(files, [*old, str(m.dir / "elsewhere")], text)
+        self.assertTrue((m.dir / "elsewhere").is_dir())
+        self.assertIn(f"and {m.dir / 'elsewhere'}, where Hermes works", out)
+        again, text_again, _ = self.replace(m, "hermes")
+        self.assertEqual((again, text_again), (files, text))
+
+    def test_a_moved_gateway_folder_is_written_as_it_is_named(self):
+        """A folder's name is copied into the line as it is, whatever characters it holds."""
+        for name in ("R&D", "a\\b", "R&D\\&1"):
+            with self.subTest(name=name):
+                m = Machine(self)
+                old = [str(m.dir / "media")]
+                self.hermes(m, {"cwd": str(m.dir / name), "backend": "local"})
+                self.moved(m, "hermes", "Hermes", old)
+                files, text, _ = self.replace(m, "hermes")
+                self.assertEqual(files, [*old, str(m.dir / name)], text)
+                again, text_again, _ = self.replace(m, "hermes")
+                self.assertEqual((again, text_again), (files, text))
 
     @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
     def test_a_moved_openclaw_lists_its_workspace_beside_the_old_connectors(self):

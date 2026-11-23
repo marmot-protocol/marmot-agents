@@ -1400,32 +1400,84 @@ add_files_from() {
 }
 
 # An install moved over from today's connector lists the gateway's folder, chosen as for a fresh
-# install, after the old connector's media folders, which stay (D-119): in the files_from line the
-# import wrote, one line as `files_from = [...]`, whose comment above it is made to say so. Run again,
-# it finds the folder there and changes nothing (FILES_ALSO). A line written otherwise is the person's:
-# it is left as it is, and the summary says to add the folder (FILES_ADD).
+# install, after the old connector's media folders, which stay (D-119). Only the files_from line the
+# import wrote is changed, known by the comment the import puts directly above it, and only while it is
+# still one the import writes: one line, its strings separated by ", ". The import's comment is then
+# replaced by one that names the folder added, by which a run again knows the line as the installer's:
+# it changes nothing if the gateway works in that folder still (FILES_ALSO), and lists the new one in its
+# place if not. A files_from line the installer does not know as the import's or its own is the
+# person's: it is left as it is, and the summary says to add the folder (FILES_ADD). Every value is
+# copied as it is, never through a pattern.
 add_gateway_folder() {
-    local folder lines
+    local folder found status number base
     folder=$(toml_str "$FILES_FROM")
-    lines=$(grep -Ec '^[[:space:]]*files_from[[:space:]]*=' "$MA_SETTINGS")
-    if [ "$lines" -ne 1 ] || ! grep -Eq '^files_from = \[.*\]$' "$MA_SETTINGS"; then
-        FILES_ADD=1
-        return 0
-    fi
+    found=$(FOLDER=$folder MINE=$(gateway_folder_comment "") \
+        IMPORTED="# Only the folders the old connector let files be sent from; never the working folder." awk '
+        # How many TOML strings s is, basic or literal, each in one line, with ", " between them; -1 if
+        # it is not that. listed says whether one of them is FOLDER as it is written.
+        function strings(s,   i, n, c, q, from, count) {
+            n = length(s)
+            if (n == 0) return 0
+            for (i = 1; ; i += 2) {
+                q = substr(s, i, 1)
+                if (q != "\"" && q != "\047") return -1
+                for (from = i++; i <= n && (c = substr(s, i, 1)) != q; i++) if (q == "\"" && c == "\\") i++
+                if (i > n) return -1
+                count++
+                if (substr(s, from, i - from + 1) == ENVIRON["FOLDER"]) listed = 1
+                if (++i > n) return count
+                if (substr(s, i, 2) != ", ") return -1
+            }
+        }
+        /^[[:space:]]*\[/ { table = 1 }
+        /^[[:space:]]*files_from[[:space:]]*=/ { lines++; if (!table) { line = $0; above = prev; at = NR } }
+        { prev = $0 }
+        END {
+            open = "files_from = ["
+            if (lines != 1 || at == 0 || index(line, open) != 1 || substr(line, length(line)) != "]") {
+                print "other"; exit
+            }
+            list = substr(line, length(open) + 1, length(line) - length(open) - 1)
+            # The line the import wrote: the folder goes after its own.
+            if (above == ENVIRON["IMPORTED"]) {
+                if (strings(list) < 0) print "other"
+                else if (listed) print "same"
+                else { print "import"; print at; print open list }
+                exit
+            }
+            # The line this wrote before: the folder named in its comment is the last.
+            mine = ENVIRON["MINE"]
+            added = substr(above, length(mine) + 1)
+            if (index(above, mine) != 1 || strings(added) != 1) { print "other"; exit }
+            if (list == added) rest = ""
+            else if (substr(list, length(list) - length(added) - 1) == ", " added) {
+                rest = substr(list, 1, length(list) - length(added) - 2)
+                if (strings(rest) < 1) { print "other"; exit }
+            } else { print "other"; exit }
+            if (added == ENVIRON["FOLDER"]) { print "same"; exit }
+            print "mine"; print at; print open rest
+        }' "$MA_SETTINGS")
+    status=$(printf '%s\n' "$found" | sed -n 1p)
+    number=$(printf '%s\n' "$found" | sed -n 2p)
+    base=$(printf '%s\n' "$found" | sed -n 3p)
+    case $status in
+        import | mine) ;;
+        same) FILES_ALSO=1; return 0 ;;
+        *) FILES_ADD=1; return 0 ;;
+    esac
     FILES_ALSO=1
-    if grep -E '^files_from = \[.*\]$' "$MA_SETTINGS" | grep -qF "$folder"; then return 0; fi
-    say "adding $FILES_FROM to files_from in $MA_SETTINGS"
-    FOLDER=$folder COMMENT="# The folders the old connector let files be sent from, and the one $HARNESS_TITLE works in (D-119)." awk '
-        $0 == "# Only the folders the old connector let files be sent from; never the working folder." {
-            held = $0; next
-        }
-        /^files_from = \[.*\]$/ {
-            if (held != "") { print ENVIRON["COMMENT"]; held = "" }
-            sub(/\]$/, ($0 ~ /\[\]$/ ? "" : ", ") ENVIRON["FOLDER"] "]")
-            print; next
-        }
-        { if (held != "") { print held; held = "" } print }
-        END { if (held != "") print held }' "$MA_SETTINGS" | put "$MA_SETTINGS" 600
+    case $base in *\[) ;; *) base="$base, " ;; esac
+    say "listing $FILES_FROM in files_from in $MA_SETTINGS"
+    AT=$number COMMENT=$(gateway_folder_comment "$folder") LINE="$base$folder]" awk '
+        NR == ENVIRON["AT"] - 1 { print ENVIRON["COMMENT"]; next }
+        NR == ENVIRON["AT"] + 0 { print ENVIRON["LINE"]; next }
+        { print }' "$MA_SETTINGS" | put "$MA_SETTINGS" 600
+}
+
+# The comment add_gateway_folder puts above the files_from line it changes, naming the folder it added,
+# as a TOML string, at its end.
+gateway_folder_comment() {
+    printf '%s' "# The folders the old connector let files be sent from, then the one $HARNESS_TITLE works in, which the installer keeps (D-119): $1"
 }
 
 # The core opens the folders files_from lists when it starts, and one not there then allows nothing

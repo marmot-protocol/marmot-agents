@@ -152,9 +152,11 @@ The rule is that nobody may do more afterwards than the old install let them:
   the old media folders, which stay, as a fresh install finds it and under the same rules
   ([a gateway's files](design/drivers.md#a-gateways-files)): none when the gateway works in the whole home, in a
   sandbox, in or around its own media or state, in or around the agent's home or the import's backup of it,
-  or for more than one agent. It adds the folder to the one-line `files_from = [...]` the import wrote, once,
-  and says so; a `files_from` the person has written otherwise is left as it is, and the installer says to
-  add the folder
+  or for more than one agent. It adds the folder only to the `files_from` line the import wrote, known by the
+  import's comment directly above it, while that line is still a list of strings in one line, and says so.
+  The comment then names the folder added: a run again changes nothing, or lists the gateway's new folder in
+  its place if it has moved. A `files_from` line without either comment above it, or written otherwise, is
+  the person's: it is left as it is, and the installer says to add the folder
   ([D-119](decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)).
 
 Who may approve is the owner alone, the default

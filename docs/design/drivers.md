@@ -232,8 +232,12 @@ each file, as today's connectors turn it into `send_media`.
   never listed: they also hold the files people sent the gateway in any of its chats, on any platform.
   Settings kept from an earlier install that list no folder get the one found now; a `files_from` already
   there is left as it is, except that `--replace-plugin`, for an install moved over ([move](../move.md)), lists the gateway's folder,
-  found the same way, after the old connector's media folders in the `files_from` line the import wrote; a
-  line the person has written otherwise is left as it is, and the summary says to add the folder
+  found the same way, after the old connector's media folders in the `files_from` line the import wrote. It
+  changes only that line, known by the import's comment directly above it, and only while the line is still
+  one the import writes, a list of strings in one line; the import's comment then gives way to one that
+  names the folder added, so a run again changes nothing, or lists the gateway's new folder in place of that
+  one if it has moved. Any other `files_from` line is the person's, and left as it is: the summary says to
+  add the folder
   ([D-119](../decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)).
   The containers this project runs Hermes and OpenClaw in mount the work folder at its own path, so a path
   the agent names is the same for the core.
