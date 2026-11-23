@@ -94,6 +94,7 @@ by [GitHub Actions](.github/workflows/release.yml) from a version tag, and are n
 | You want | Read |
 | --- | --- |
 | The design in three minutes | [`docs/README.md`](docs/README.md) |
+| What is true of the system now | [`docs/current-state.md`](docs/current-state.md) |
 | What has been decided, and why | [`docs/decisions.md`](docs/decisions.md) |
 | What is still open | [`docs/open-questions.md`](docs/open-questions.md) |
 | How the parts fit together | [`docs/design/architecture.md`](docs/design/architecture.md) |

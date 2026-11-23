@@ -5,6 +5,8 @@ This is the record of what has been decided and why. It exists so that settled p
 - Add an entry when a decision is made. Give it the next number, the date, the decision and the reason.
 - Do not edit an old entry to change its meaning. Add a new entry that replaces it, and mark the old one
   "Replaced by D-0NN".
+- When an entry is added or replaces another, update [`current-state.md`](current-state.md) in the same change
+  ([D-114](#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 - A point that is not here is not decided. Proposals live in the `design/` documents and in
   [`open-questions.md`](open-questions.md).
 
@@ -1932,5 +1934,19 @@ among many inside them. Holding them to the shape of a driver led to coupling to
 OpenClaw's record of the path an agent named for a reply's file (`replyMediaSourceUrls`), which the plugin reads
 to send that file ([D-108](#d-108-how-an-agents-file-reaches-the-core-as-built)) and which OpenClaw's plugin SDK
 does not export.
+
+Decided 2026-11-23. The project owner decided.
+
+## D-114 A current-state page sits beside this record, and every new decision updates it
+
+**Decision.** [`current-state.md`](current-state.md) says, in one short page grouped by area, what is true of the
+system now, each line linking to the decisions behind it, and leaving out what a later decision replaced. It
+says which `master` commit it was last brought up to date at. This file stays the record: it says why, and where
+the two disagree, it wins. A change that adds a decision, or replaces one, updates `current-state.md` in the same
+change.
+
+**Why.** There are more than a hundred entries, many of them replaced in part, and a new agent or person should
+not have to read them all to learn what holds today. A page kept in step with each decision stays true without a
+separate effort to catch up.
 
 Decided 2026-11-23. The project owner decided.
