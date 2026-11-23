@@ -334,6 +334,29 @@ fn send(
         world.refused.push(dropped);
         return (Err(SendFailed::Refused { gone: false }), false);
     }
+    // MDK edits the event the edit's original token went under, and places an item's `e` tag
+    // itself (its `submit_tagged_edit_for_local_send`): it never reads the target the core names.
+    let (tags, edits) = match (edits, &token.edits) {
+        (Some(named), Some(original)) => {
+            let Some(kept) = world.tokens.get(&(chat, original.clone())) else {
+                let why = format!("an edit under a token MDK does not keep in c{chat}");
+                world.note(format!("Send(c{chat}): Refused, {why}"));
+                world.misshapen.push(why);
+                world.refused.push(dropped);
+                return (Err(SendFailed::Refused { gone: false }), false);
+            };
+            let target = kept.event.clone();
+            let tags = if carrier::edit_target(&tags) == Some(named.as_str()) {
+                let mut tags = carrier::but_target(&tags);
+                tags.push(vec!["e".into(), target.as_str().into()]);
+                tags
+            } else {
+                tags
+            };
+            (tags, Some(target))
+        }
+        (edits, _) => (tags, edits),
+    };
     let request = (kind, content.clone(), tags.clone(), edits.clone());
     if let Some(kept) = world.tokens.get(&(chat, token.mdk.clone())).cloned() {
         return (answer_again(world, chat, &kept, &request, dropped), false);
