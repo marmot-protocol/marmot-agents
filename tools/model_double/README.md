@@ -43,10 +43,11 @@ cp -r tools/record/demo "$work/demo"
 MODEL_DOUBLE_KEY_FILE=<key file> MODEL_DOUBLE_UPSTREAM=<OpenAI-compatible base URL> \
   MODEL_DOUBLE_MODEL=<model> MODEL_DOUBLE_OUT="$work/raw" MODEL_DOUBLE_DEMO="$work/demo" \
   cargo test -p marmot-agent --test claude record_claude_code_turn -- --ignored --nocapture
-mkdir -p "$work/scrub/claude" && cp "$work/raw/cassette.jsonl" "$work/scrub/claude/approval.jsonl"
+mkdir -p "$work/scrub/cassettes/claude"
+cp "$work/raw/cassette.jsonl" "$work/scrub/cassettes/claude/approval.jsonl"
 python3 tools/record/scrub.py "$work/scrub" "$work/clean" --map "$work/demo=/work/demo" --map "$HOME=/home/user"
-less "$work/clean/claude/approval.jsonl"   # read it all before committing
-cp "$work/clean/claude/approval.jsonl" fixtures/cassettes/claude/approval.jsonl
+less "$work/clean/cassettes/claude/approval.jsonl"   # read it all before committing
+cp "$work/clean/cassettes/claude/approval.jsonl" fixtures/cassettes/claude/approval.jsonl
 ```
 
 Only scripted scenarios, in a throwaway copy of `tools/record/demo`. A cassette holds no header, no key and no

@@ -8,6 +8,8 @@ import contextlib
 import datetime
 import io
 import json
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -279,6 +281,25 @@ class Served(unittest.TestCase):
         self.assertEqual(header["harness"], "h")
         self.assertEqual(exchanges, [{"key": {"kind": "main", "prompt": "Run `ls`", "after": 0, "last": "prompt"},
                                       "reply": [{"text": "hi"}]}])
+
+
+class Scrubbing(unittest.TestCase):
+    def test_the_recipe_in_the_readme_scrubs_a_cassette(self):
+        # The layout README.md's recipe uses: cassettes/<harness>/<scenario>.jsonl, scrubbed whole.
+        scrub = Path(__file__).parent.parent / "record" / "scrub.py"
+        with tempfile.TemporaryDirectory() as folder:
+            raw, clean = Path(folder) / "scrub", Path(folder) / "clean"
+            (raw / "cassettes" / "claude").mkdir(parents=True)
+            header = {"cassette": 1, "harness": "claude-code", "version": "0", "recorded": "2026-11-23"}
+            exchange = {"key": {"kind": "main", "prompt": f"Run it in {folder}/demo", "after": 0, "last": "prompt"},
+                        "reply": [{"text": "done"}]}
+            (raw / "cassettes" / "claude" / "approval.jsonl").write_text(
+                json.dumps(header) + "\n" + json.dumps(exchange) + "\n")
+            subprocess.run([sys.executable, scrub, raw, clean, "--map", f"{folder}/demo=/work/demo"],
+                           check=True, capture_output=True)
+            header_out, exchanges = double.load_cassette(clean / "cassettes" / "claude" / "approval.jsonl")
+        self.assertEqual(header_out, header)
+        self.assertEqual(exchanges[0]["key"]["prompt"], "Run it in /work/demo")
 
 
 class Staleness(unittest.TestCase):
