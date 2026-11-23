@@ -91,7 +91,9 @@ exactly one event that points back at it ([D-028](../decisions.md#d-028-an-answe
 - **If it had an effect, the edit that shows the effect.** The approval item becomes "Answered: Allow once, by
   Alice". The turn becomes "Interrupted by Alice". The session's settings show the new model.
 - **If it had none, a notice that says why**: not allowed, not supported by this harness, nothing to act on,
-  already answered, or failed.
+  already answered, or failed. One the agent cannot read is settled the same way: `not_supported` for an action
+  it does not know, as from an app newer than the agent, and `invalid` for anything else it cannot read
+  ([D-140](../decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused)).
 - **If the harness took a control and two minutes pass with nothing to show for it**, a notice with the reason
   `no_effect` ([D-087](../decisions.md#d-087-the-core-settles-a-request-whose-effect-never-shows)). An effect
   that shows later is still shown.
@@ -218,7 +220,10 @@ them to the right to prompt. The reason: a harness's slash commands are messages
 that stop a turn, start a session and switch the model. Someone who may prompt can type those. A stricter rule
 for the button than for the typed command would protect nothing.
 
-Someone without the right gets the "not allowed" notice, which is the refusal D-010 asks for.
+Someone without the right gets the "not allowed" notice, which is the refusal D-010 asks for. An event the
+agent cannot read cannot say which right it needs, so either right is enough to be told why it was not read, and
+someone with neither is told only "not allowed"
+([D-140](../decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused)).
 
 The folder is the one setting the core holds itself rather than the harness. For a coding harness the core adds
 `folder` to each session item, marked as needing the right to approve, and a `set` of it starts the chat's next
@@ -459,3 +464,4 @@ In the core:
 | A request to confirm a command is a question | [D-048](../decisions.md#d-048-a-request-to-confirm-a-command-is-a-question) |
 | A standing approval is an ordinary approval answer | [D-049](../decisions.md#d-049-a-standing-approval-is-an-ordinary-approval-answer) |
 | A chat can move a coding harness to another folder, by someone who may approve, from its next session | [D-101](../decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder) |
+| An answer or a control the agent cannot read is refused, as `not_supported` or `invalid`, after the right | [D-140](../decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused) |

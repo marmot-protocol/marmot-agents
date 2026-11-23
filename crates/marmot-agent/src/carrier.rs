@@ -817,14 +817,52 @@ pub fn request(agent: &PubKey, target: Option<&EventKey>, asked: &Asked, words: 
     }
 }
 
-/// An answer or a control read back: what it is about and what it asks. `None` when it is not one,
-/// or is for another agent (D-027).
-pub fn read_request(agent: &PubKey, tags: &[Vec<String>]) -> Option<(Option<EventKey>, Asked)> {
+/// The actions [`Asked`] holds, as its `action` tag names them.
+const ACTIONS: [&str; 6] = [
+    "choice",
+    "questions",
+    "interrupt",
+    "new_session",
+    "set",
+    "own",
+];
+
+/// Why an answer or a control for this agent could not be read (D-140).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unreadable {
+    /// It names an action the agent does not know.
+    UnknownAction,
+    /// It cannot be read as any action.
+    Invalid,
+}
+
+/// An answer or a control read back: what it is about, and what it asks or why that could not be
+/// read, so that the agent can still settle it (D-028, D-140). `None` when it is not for this
+/// agent: it names no agent, or another (D-027).
+pub fn read_request(
+    agent: &PubKey,
+    tags: &[Vec<String>],
+) -> Option<(Option<EventKey>, Result<Asked, Unreadable>)> {
     if value(tags, "p")? != agent.as_str() {
         return None;
     }
-    let asked = serde_json::from_str(value(tags, "details")?).ok()?;
+    let asked = match value(tags, "details") {
+        None => Err(Unreadable::Invalid),
+        Some(details) => read_asked(details),
+    };
     Some((value(tags, "e").map(EventKey::from), asked))
+}
+
+/// Read straight from the text, so that a field given twice is refused, as `Asked` refuses it;
+/// only a request that does not read is looked at again, to tell an unknown action from the rest.
+fn read_asked(details: &str) -> Result<Asked, Unreadable> {
+    serde_json::from_str(details).map_err(|_| {
+        let read: Option<serde_json::Value> = serde_json::from_str(details).ok();
+        match read.as_ref().and_then(|d| d.get("action")?.as_str()) {
+            Some(action) if !ACTIONS.contains(&action) => Unreadable::UnknownAction,
+            _ => Unreadable::Invalid,
+        }
+    })
 }
 
 /// The tags of the agent's words, a chat message (D-022): the turn they belong to, for a remark

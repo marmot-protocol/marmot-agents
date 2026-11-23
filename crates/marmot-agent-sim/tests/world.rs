@@ -195,7 +195,7 @@ fn an_answer_chooses_what_the_approval_offers() {
         let m = w.msgs[0].as_ref().expect("posted");
         let asked = carrier::read_request(&w.agent, &m.tags).map(|(_, asked)| asked);
         assert!(
-            matches!(&asked, Some(Asked::Choice { choice }) if choice == "allow"),
+            matches!(&asked, Some(Ok(Asked::Choice { choice })) if choice == "allow"),
             "{asked:?}"
         );
     });

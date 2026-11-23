@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-23, at `master` commit `42d7f1a`, through [D-139](decisions.md#d-139-prompts-a-driver-that-ended-was-never-given-wait-for-the-next-driver). A change that adds or replaces
+Brought up to date on 2026-11-23, at `master` commit `4b5c427`, through [D-140](decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -75,6 +75,8 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
 
 - An answer or a control is kind 1202. It is a request, settled by exactly one event from the agent: the edit
   that shows its effect, or a `refused` notice with a reason ([D-027](decisions.md#d-027-answers-and-controls-are-one-kind-of-event-kind-1202), [D-028](decisions.md#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it), [D-077](decisions.md#d-077-a-refused-notice-says-why-something-was-not-acted-on)).
+- One the core cannot read is refused too: `not_supported` for an action it does not know, `invalid` otherwise,
+  and `not_allowed` for someone with neither right ([D-140](decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused)).
 - A control whose effect never shows is settled by the core after two minutes, as `no_effect` ([D-087](decisions.md#d-087-the-core-settles-a-request-whose-effect-never-shows)).
 - Three shared controls, `interrupt`, `new_session` and `set`. Settings, actions and slash commands come from the
   harness, in the session item, filled in by the connector where the harness says nothing ([D-029](decisions.md#d-029-three-shared-controls-and-the-rest-comes-from-the-harness), [D-044](decisions.md#d-044-a-connector-supplies-what-its-harness-does-not-say),
