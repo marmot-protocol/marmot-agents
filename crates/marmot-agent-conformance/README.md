@@ -8,7 +8,10 @@ Status: phase one is built (2026-11-22): the suite, fakes for Codex, ACP and Pi,
 it, and deliberate faults that show each check catches its bug. Two reviews' findings are fixed (2026-11-22), and so
 is the Pi driver's stall on a Pi that stops reading (2026-11-22). Files the agent sends (`send_file`) are covered for
 Codex, Pi and the three ACP shapes (2026-11-22). Six suspicions from a read of the drivers' state machines were
-tested (2026-11-23): five were real and are fixed, below; Pi's compaction was not.
+tested (2026-11-23): five were real and are fixed, below; Pi's compaction was not (under "Not covered yet").
+A review of those fixes found four more, fixed the same day: an ACP approval repeated for one tool call could take
+the name of another's first, an ACP request id spelled with escapes was not found, two Pi new sessions asked for at
+once were both settled by the first, and Codex did not count a resolved request of another thread.
 Phase two, the socket connectors, is a design, below. Everything here is internal: it ships in no program.
 
 ## How it fits
@@ -86,7 +89,7 @@ The pipe between driver and harness holds 256 bytes each way, so a dropped wait 
 | --- | --- | --- | --- |
 | Codex | the stand-in in `crates/marmot-agent-codex/tests/driver.rs` | threads, turns, `commandExecution`, approvals, `requestUserInput`, the driver's `send_file` dynamic tool (`item/tool/call`, only on a thread started with it), steer, interrupt, settings, resume | one process for every chat |
 | ACP | the agent in `crates/marmot-agent-acp/tests/driver.rs` | sessions, prompts, tool calls, `request_permission` (with `#twice`, two at once for one tool call; with `#garbled`, one naming no tool call), `elicitation/create` (with `#garbled`, a form at a web address), a turn that goes on without what the client refused, cancel, config options, MCP servers over HTTP (`src/fake/mcp.rs` is the client: `initialize`, `tools/list`, `tools/call`) | **OpenCode**: `session/resume`; one tool server of a name for every session in a folder, the last handed over, the calling session named in `_meta["ai.opencode/sessionID"]`. **Goose**: `session/load` with a replay, sessions numbered by day, `activeRunId`, and after a crash a run of its own until cancelled; servers kept per session, the caller named in `_meta["agent-session-id"]`. **Cursor**: `session/load`, no name, `cursor/update_todos` naming only its tool call; servers kept per session, the caller not named. Each holds a cancelled turn open while its tool call is out. The driver is run with file sending switched on (`serve_files`, as `send_files = true` does) |
-| Pi | `crates/marmot-agent-pi/tests/fake_pi.py` | Pi's records, extension dialogs, the driver's `send_file` tool (only with the driver's extension loaded, asking in its dialog), steering, abort, a manual `compact` (`compaction_start`, then `compaction_end`, failed or not, then the response, as Pi 1.6.0 does; a session with nothing in it fails), a session's file written once it holds a message | one process per chat: the driver runs `src/fake/relay.py`, which connects its standard input and output to a socket the test serves, so each Pi is scripted in Rust |
+| Pi | `crates/marmot-agent-pi/tests/fake_pi.py` | Pi's records, extension dialogs, the driver's `send_file` tool (only with the driver's extension loaded, asking in its dialog), steering, abort, a session's file written once it holds a message | one process per chat: the driver runs `src/fake/relay.py`, which connects its standard input and output to a socket the test serves, so each Pi is scripted in Rust |
 
 The faults, set as `Knobs` and changeable between steps: frames written in pieces; replies late; replies after the
 notifications that follow from them and every other reply held back so a later one overtakes it; everything slow;
@@ -190,8 +193,10 @@ Not covered yet, and why:
 - **Codex's greeting** (`Codex::connect`) still waits for `initialize` with no limit. It runs before the core's loop, at
   start. Not changed here.
 - **Pi's start** waits up to `STARTUP_LIMIT` (60 s, fixed), so a Pi that never answers `get_state` is not run: too slow.
-- **The harness's own actions** (compacting) for Codex, **group chats** and **attachments**. Pi's compaction is
-  covered by `every_compaction_ends_and_the_next_is_taken` (`tests/pi.rs`), 2026-11-23.
+- **The harness's own actions** (compacting), **group chats** and **attachments**. That Pi ends every compaction it
+  starts with `compaction_end`, failed or not, before it responds, is read in `fixtures/recordings/pi/compact.jsonl`
+  and Pi 1.6.0's `AgentSession.compact`, not shown by a fake; the Pi driver's own tests
+  (`one_compaction_at_a_time_settled_by_its_own_end`) check what it does with both ends.
 - **Goose and Cursor** run only the scenarios where they differ from OpenCode.
 
 ## Running it

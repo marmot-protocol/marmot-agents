@@ -23,7 +23,8 @@ What a prompt does depends on its words:
 Setting the thinking level to "crash" makes the process exit before it responds. As Pi does, a
 setting changed to the value it has makes no `thinking_level_changed`.
 
-`compact` takes half a second, in the background, as a model call would.
+`compact` takes half a second, in the background, as a model call would, and fails on a session
+that holds no message yet: `compaction_end` says so, then the response refuses it.
 
 As Pi does, the fake writes a session's file (in `.fake-sessions` in the working folder) only once
 the session holds a message. `--version` prints a version. `--session <id>` resumes that session,
@@ -93,6 +94,13 @@ def keep_session():
 def compact(cmd):
     time.sleep(0.5)
     send({"type": "compaction_start", "reason": "manual"})
+    if not os.path.exists(os.path.join(".fake-sessions", state["session"])):
+        # As fixtures/recordings/pi/compact.jsonl shows: the end says it failed, then the refusal.
+        error = "Nothing to compact (session too small)"
+        send({"type": "compaction_end", "reason": "manual", "aborted": False, "willRetry": False,
+              "errorMessage": f"Compaction failed: {error}"})
+        respond(cmd, success=False, error=error)
+        return
     send({"type": "compaction_end", "reason": "manual", "result": {"summary": "s"}, "aborted": False,
           "willRetry": False})
     respond(cmd, data={"summary": "s"})

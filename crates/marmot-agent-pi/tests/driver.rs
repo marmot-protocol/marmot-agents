@@ -442,9 +442,20 @@ async fn an_answer_that_cannot_reach_pi_is_refused_and_never_shown_as_given() {
 #[tokio::test]
 async fn one_compaction_at_a_time_settled_by_its_own_end() {
     let (mut pi, _work) = start().await;
-    pi.prompt(prompt("c-1", "m-1", "hello")).await.unwrap();
-    let done = until(&mut pi, |e| is_turn(e, State::Done)).await;
-    let session = session_of(&done);
+    // A compaction of a session with nothing in it fails, and Pi says so with `compaction_end`
+    // before its refusal, as `fixtures/recordings/pi/compact.jsonl` shows: the failed end settles
+    // it, and only it, so the next is taken.
+    let fresh = Control {
+        request: "r-0".into(),
+        by: person(),
+        action: Action::NewSession {
+            chat: prompt("c-1", "m-0", "").chat,
+            session: None,
+        },
+    };
+    pi.control(fresh).await.unwrap();
+    let opened = until(&mut pi, |e| !e.settles.is_empty()).await;
+    let session = session_of(&opened);
     let compact = |request: &str| Control {
         request: request.into(),
         by: person(),
@@ -453,6 +464,30 @@ async fn one_compaction_at_a_time_settled_by_its_own_end() {
             id: "compact".into(),
         },
     };
+    pi.control(compact("r-f")).await.unwrap();
+    let failed = until(&mut pi, |e| !e.settles.is_empty()).await;
+    assert!(matches!(failed.event.body(), Body::Notice(_)));
+    assert!(
+        failed
+            .event
+            .header()
+            .item
+            .as_str()
+            .starts_with("compaction:")
+    );
+    assert_eq!(failed.event.header().state, State::Failed);
+    assert_eq!(failed.settles, vec!["r-f".into()]);
+    pi.prompt(prompt("c-1", "m-1", "hello")).await.unwrap();
+    loop {
+        let e = next(&mut pi).await;
+        assert!(
+            e.settles.is_empty(),
+            "the refusal after the end settles nothing"
+        );
+        if is_turn(&e, State::Done) {
+            break;
+        }
+    }
     pi.control(compact("r-1")).await.unwrap();
     // A second press while the first runs is refused: Pi would abort the first.
     let again = pi.control(compact("r-2")).await.unwrap_err();
