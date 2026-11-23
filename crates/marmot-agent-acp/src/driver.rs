@@ -130,8 +130,9 @@ pub struct Acp {
     starting: HashMap<String, MessageId>,
     /// The prompts each running turn responds to.
     prompts: HashMap<(ChatId, String), Vec<MessageId>>,
-    /// Messages naming a session no chat has yet, kept while a session is being picked.
-    early: Vec<String>,
+    /// Messages for a session no chat has yet, each with that session, as it was found by its
+    /// name or its tool call, kept while a session is being picked.
+    early: Vec<(String, String)>,
     /// Events read, and files asked to be sent, not yet handed to the core.
     ready: VecDeque<Output>,
     /// The agent has gone.
@@ -598,14 +599,14 @@ impl Acp {
                     }
                 }
             }
-            match &chat {
-                Some(chat) => self.feed(chat, Direction::In, line, Vec::new()),
+            match (&chat, &session) {
+                (Some(chat), _) => self.feed(chat, Direction::In, line, Vec::new()),
                 // A session being picked can speak before the reply that picks it.
-                None if session.is_some() && self.picking() => {
-                    self.early.push(line.to_string());
+                (None, Some(s)) if self.picking() => {
+                    self.early.push((s.clone(), line.to_string()));
                     return;
                 }
-                None => self.unrouted += 1,
+                (None, _) => self.unrouted += 1,
             }
             if let Some(id) = message.get("id") {
                 // A request no person answers: Cursor's to-do list is taken, anything else is
@@ -682,18 +683,18 @@ impl Acp {
         self.feed(&chat, Direction::In, line, settles);
         // What a session said before it was picked goes to it now; what names a session still
         // unknown waits while a session is being picked.
-        let (known, unknown): (Vec<String>, Vec<String>) = std::mem::take(&mut self.early)
+        let (known, unknown): (Vec<_>, Vec<_>) = std::mem::take(&mut self.early)
             .into_iter()
-            .partition(|line| session_of(line).is_some_and(|s| self.sessions.contains_key(&s)));
+            .partition(|(session, _)| self.sessions.contains_key(session));
         self.early = unknown;
-        for line in known {
+        for (_, line) in known {
             Box::pin(self.route(&line)).await;
         }
         // Once no session is being picked, what is still held names a session no chat has: it
         // is passed over, and a request among it answered, so the agent does not wait for ever.
         if !self.picking() {
             self.unrouted += self.early.len() as u64;
-            for line in std::mem::take(&mut self.early) {
+            for (_, line) in std::mem::take(&mut self.early) {
                 let message: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
                 if let Some(reply) = unclaimed(&message)
                     && self.write(&reply.to_string()).await.is_err()
@@ -865,12 +866,6 @@ fn unclaimed(message: &Value) -> Option<Value> {
         }
     };
     Some(reply)
-}
-
-/// The session a message from the agent names, if it names one.
-fn session_of(line: &str) -> Option<String> {
-    let message: Value = serde_json::from_str(line).ok()?;
-    message["params"]["sessionId"].as_str().map(String::from)
 }
 
 /// What the agent reads for a chat message, as Codex does (D-062): in a group the sender's name,

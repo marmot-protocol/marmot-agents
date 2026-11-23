@@ -659,3 +659,58 @@ async fn a_request_from_a_session_no_chat_has_is_refused_as_not_found() {
     }
     agent.await.unwrap();
 }
+
+/// What a session being picked says before the reply that picks it goes to its chat once the reply
+/// comes, whether it names its session or only a tool call of it. Here Cursor's to-do list, which
+/// names only its tool call, comes after that call and before the reply to `session/new`: it is
+/// the chat's plan, and taken.
+#[tokio::test]
+async fn a_message_naming_only_its_tool_call_before_the_session_is_picked_reaches_the_chat() {
+    let (mut acp, mut stand) = connected().await;
+    let agent = tokio::spawn(async move {
+        let wait = Duration::from_secs(5);
+        let new = stand.next().await;
+        assert_eq!(new["method"], "session/new");
+        stand
+            .update(
+                json!({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Plan",
+                            "kind": "other", "status": "completed"}),
+            )
+            .await;
+        stand
+            .send(
+                json!({"jsonrpc": "2.0", "id": 40, "method": "cursor/update_todos", "params": {
+                "toolCallId": "t1", "merge": false,
+                "todos": [{"id": "1", "content": "Read", "status": "in_progress"}]}}),
+            )
+            .await;
+        stand.reply(&new, json!({"sessionId": "s1"})).await;
+        let mut heard = Vec::new();
+        while heard.len() < 2 {
+            let next = tokio::time::timeout(wait, stand.next()).await;
+            heard.push(next.expect("the driver takes the list and prompts"));
+        }
+        let taken = heard
+            .iter()
+            .find(|m| m["id"] == 40)
+            .expect("the list is answered");
+        assert_eq!(taken["result"], json!({}));
+        let prompted = heard.iter().find(|m| m["method"] == "session/prompt");
+        let prompted = prompted.expect("the prompt").clone();
+        stand
+            .reply(&prompted, json!({"stopReason": "end_turn"}))
+            .await;
+        stand
+    });
+    acp.prompt(prompt("hello")).await.unwrap();
+    let mut planned = false;
+    loop {
+        let e = event(&mut acp).await;
+        planned |= matches!(e.event.body(), Body::Plan(_));
+        if matches!(e.event.body(), Body::Turn(_)) && e.event.header().state == State::Done {
+            break;
+        }
+    }
+    agent.await.unwrap();
+    assert!(planned, "the to-do list reaches the chat as its plan");
+}
