@@ -352,11 +352,13 @@ impl Protocol for Acp {
                 return;
             };
             let result = &frame["result"];
-            if frame.get("error").is_some() {
-                // The client could not take the request: the agent goes on without it.
+            if let Some(error) = frame.get("error") {
+                // The client could not take the request: the agent goes on without it, and says
+                // which error it was given, so a test can tell one from another.
                 if let Asked::Permission { session, .. } | Asked::Form { session } = &asked {
                     let session = session.clone();
-                    self.finish(&session, Some("not asked"), "end_turn", out);
+                    let words = format!("refused with {}", error["code"]);
+                    self.finish(&session, Some(&words), "end_turn", out);
                 }
                 return;
             }

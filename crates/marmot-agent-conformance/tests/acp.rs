@@ -312,11 +312,13 @@ async fn two_requests_for_one_tool_call_take_one_answer_each() {
 // the agent does not wait for ever: a permission request it cannot read (`#ask #garbled`, naming
 // no tool call), and a form at a web address, which the driver never offered to fill in (`#quiz
 // #garbled`). The official ACP library answers a request it cannot read with -32602, invalid
-// params. Each turn must end.
+// params, and so must the driver: the fake says in its words which error it was given. Each turn
+// must end.
 #[tokio::test]
 async fn a_request_the_driver_cannot_show_is_answered() {
     use marmot_agent_conformance::Run;
     use marmot_agent_conformance::run::turn_ended;
+    use marmot_agent_events::Body;
 
     for flavor in [Flavor::OpenCode, Flavor::Goose, Flavor::Cursor] {
         for (chat, words) in [("c-1", "#ask #garbled"), ("c-2", "#quiz #garbled")] {
@@ -327,6 +329,12 @@ async fn a_request_the_driver_cannot_show_is_answered() {
             }))
             .await
             .unwrap_or_else(|v| panic!("{flavor:?}, {words}: {v}"));
+            (run.wait("L2", "the agent's words on the refusal", |e| {
+                matches!(e.event.body(), Body::Message(_))
+                    && e.event.header().text.starts_with("refused with -32602:")
+            }))
+            .await
+            .unwrap_or_else(|v| panic!("{flavor:?}, {words}: refused with -32602: {v}"));
             run.end()
                 .await
                 .unwrap_or_else(|v| panic!("{flavor:?}, {words}: {v}"));
