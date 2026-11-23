@@ -1839,6 +1839,30 @@ exec {rm} "$@"
                 self.assertEqual(list(after), [f"marmot-agents-{harness}:latest"])
                 self.assertNotEqual(after, before)
 
+    def test_a_failed_upgrade_puts_back_the_gateway_plugin(self):
+        """Hermes and OpenClaw: an update of our plugin in the person's gateway that fails puts back the
+        plugin it found, with the core it found, and the next one puts in its own."""
+        for harness, plugin in (("hermes", ".hermes/plugins/marmot"), ("openclaw", ".openclaw/extensions/marmot")):
+            if harness == "openclaw" and not REAL_NODE:
+                continue
+            with self.subTest(harness=harness):
+                m = Machine(self)
+                older = m.dir / "older-core"
+                m.write(older, FAKE_CORE + "# an older core\n")
+                args = m.args(harness, "--binary", str(older))
+                m.run(harness, *args)
+                (m.home / plugin / "OLDER").write_text("an older file\n")
+                args = m.args(harness, "--binary", str(m.core))
+                failed = m.run(harness, *args, env={"FAKE_FAIL": "systemctl --user restart"}, check=False)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertTrue((m.home / plugin / "OLDER").exists(), failed.stderr)
+                self.assertIn("an older core", (m.home / ".local/bin/marmot-agent").read_text())
+                m.run(harness, *args)
+                self.assertFalse((m.home / plugin / "OLDER").exists())
+                self.assertEqual((m.home / ".local/bin/marmot-agent").read_text(), FAKE_CORE)
+                self.assertEqual(list((m.data / f"agents/{harness}/backups").glob("marmot.*")), [],
+                                 "no copy of our own plugin is kept once the update is done")
+
     def test_every_step(self):
         m = Machine(self)
         self.older(m)

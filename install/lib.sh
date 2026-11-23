@@ -340,8 +340,10 @@ backup_file() {
 # the latest run that found the old plugin and finished, or noted, its change.
 
 # Starts a change. Its first argument says whether it replaces the old connector's plugin (replace) or
-# not (add); then come pairs, file or folder and the path of one it changes. Each is copied first, and
-# one not there is taken away should the change be put back. A record a run before left is kept as it is.
+# not (add); then come pairs, file, folder or own and the path of one it changes, own being the folder of
+# our plugin as an earlier install put it in, which an update replaces. Each is copied first, and one not
+# there is taken away should the change be put back. The copy of our own plugin is removed once it is
+# not needed. A record a run before left is kept as it is.
 change_begin() {
     MA_CHANGE="$MA_AGENT_DIR/plugin-change"
     local why=$1 arg record=""
@@ -375,8 +377,28 @@ change_begin() {
 
 # Ends a change; one stopped before its record is gone is put back.
 change_end() {
-    [ "$DRY_RUN" -eq 1 ] || act rm -f "$MA_CHANGE"
+    local own
+    if [ "$DRY_RUN" -eq 0 ]; then
+        own=$(own_copies)
+        act rm -f "$MA_CHANGE"
+        drop_copies "$own"
+    fi
     MA_CHANGING=0
+}
+
+# The copies of our own plugin the record names, one a line.
+own_copies() {
+    awk -F '\t' '$1 == "own" && $3 != "" { print $3 }' "$MA_CHANGE"
+}
+
+# Removes the copies named, one a line, once the record that names them is gone.
+drop_copies() {
+    local copy
+    while IFS= read -r copy; do
+        [ -z "$copy" ] || rm -rf "$copy"
+    done <<EOF
+$1
+EOF
 }
 
 # Puts back what the record names, in its order; fails if any of it could not be put back.
@@ -385,7 +407,7 @@ put_back_change() {
     while IFS='	' read -r kind path copy; do
         case $kind in
             file) put_back_file "$copy" "$path" || ok=1 ;;
-            folder) replace_dir "$copy" "$path" || ok=1 ;;
+            folder | own) replace_dir "$copy" "$path" || ok=1 ;;
         esac
     done <"$MA_CHANGE"
     return "$ok"
@@ -394,20 +416,24 @@ put_back_change() {
 # After a change that did not end, its status given: what it changed put back, and the run ended,
 # saying what happened and what to do.
 change_put_back() {
-    local status=$1 kind path copy what="your $HARNESS_TITLE's settings" took="" copies="" how="" why again
+    local status=$1 kind path copy what="your $HARNESS_TITLE's settings" took="" copies="" how="" why again own
     while IFS='	' read -r kind path copy; do
         if [ "$kind" = folder ] && [ -n "$copy" ]; then what="$what and its old plugin"; fi
         if [ "$kind" = folder ] && [ -z "$copy" ]; then took=", and took our plugin out of it"; fi
+        if [ "$kind" = own ] && [ -n "$copy" ]; then what="$what and our plugin as it was"; fi
         [ -n "$copy" ] || continue
-        copies="${copies:+$copies, }$copy"
         how="${how:+$how, }$copy to $path"
+        [ "$kind" != own ] || continue
+        copies="${copies:+$copies, }$copy"
     done <"$MA_CHANGE"
+    own=$(own_copies)
     case $status in
         129 | 130 | 143) why="the install was stopped" again="Run this again" ;;
         *) why="putting our plugin into your $HARNESS_TITLE failed (above)" again="Run this again once what failed is fixed" ;;
     esac
     if put_back_change; then
         rm -f "$MA_CHANGE"
+        drop_copies "$own"
         printf 'error: %s\n' "$why, so this put $what back as they were$took${copies:+; the copies are $copies}. \
 $again, or go back to today's connector (docs/move.md)" >&2
     elif [ -n "$how" ]; then
