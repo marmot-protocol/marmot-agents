@@ -84,6 +84,11 @@ fn turns(events: &[AgentEvent]) -> Vec<(String, State)> {
 
 /// A translator with a session and a turn started by the prompt with id 2.
 fn started() -> (Translator, Vec<AgentEvent>) {
+    started_in("s1")
+}
+
+/// A translator with session `session` and a turn started by the prompt with id 2.
+fn started_in(session: &str) -> (Translator, Vec<AgentEvent>) {
     let mut acp = Translator::new();
     let mut events = Vec::new();
     for (direction, message) in [
@@ -100,7 +105,11 @@ fn started() -> (Translator, Vec<AgentEvent>) {
             r#"{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"s1","prompt":[]}}"#,
         ),
     ] {
-        events.extend(acp.feed(direction, message));
+        let message = message.replace(
+            r#""sessionId":"s1""#,
+            &format!(r#""sessionId":"{session}""#),
+        );
+        events.extend(acp.feed(direction, &message));
     }
     (acp, events)
 }
@@ -216,6 +225,77 @@ fn a_repeated_request_takes_no_name_a_first_could_have() {
                     "{kind}, {asked:?}: each reaches its own request"
                 );
             }
+        }
+    }
+}
+
+// A repeated request's name must not be one a tool call could have either: a tool item is named
+// `{session}:{tool call}`, and both are the agent's. Here the session is named like a repeat, so a
+// repeat named `{kind}+{request}:{session}:{tool call}` is the name of the tool call
+// `{session}:{tool call}` of that session; when that tool call is reported after the request, the
+// core would take the tool event for the request's. The request keeps its own item, and its answer
+// still reaches it.
+#[test]
+fn a_repeated_request_takes_no_name_a_tool_call_could_have() {
+    use marmot_agent_driver::{Answer, Given, Person, Reply};
+    let chosen = Given::Choice("c0".into());
+    let typed = Given::Questions(vec![Reply {
+        question: "q0".into(),
+        options: Vec::new(),
+        text: Some("Yes".into()),
+    }]);
+    type Request = fn(&str, &str) -> String;
+    let kinds: [(&str, Request, Given); 2] =
+        [("approval", permission, chosen), ("question", form, typed)];
+    for (kind, request, given) in kinds {
+        let session = format!("{kind}+7");
+        let in_session = |m: String| {
+            m.replace(
+                r#""sessionId":"s1""#,
+                &format!(r#""sessionId":"{session}""#),
+            )
+        };
+        let (mut acp, _) = started_in(&session);
+        let mut asked = Vec::new();
+        for id in ["5", "7"] {
+            for e in acp.feed(Direction::In, &in_session(request(id, "t"))) {
+                if matches!(e.body(), Body::Approval(_) | Body::Question(_)) {
+                    asked.push((id, e.header().item.clone()));
+                }
+            }
+        }
+        let tool = format!(
+            r#"{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"{session}","update":{{"sessionUpdate":"tool_call","toolCallId":"{session}:t","title":"Run","kind":"execute","status":"pending"}}}}}}"#
+        );
+        let tools: Vec<_> = acp
+            .feed(Direction::In, &tool)
+            .iter()
+            .filter(|e| matches!(e.body(), Body::Tool(_)))
+            .map(|e| e.header().item.clone())
+            .collect();
+        assert_eq!(tools.len(), 1, "{kind}: the tool call is reported");
+        for (id, item) in &asked {
+            assert!(
+                !tools.contains(item),
+                "{kind}: request {id}'s item {item} is the tool call's",
+                item = item.as_str()
+            );
+            let answer = Answer {
+                request: "r".into(),
+                item: item.clone(),
+                by: Person {
+                    id: "u-1".into(),
+                    name: "Alice".into(),
+                },
+                given: given.clone(),
+            };
+            let reply = acp.reply(&answer).expect("the item waits");
+            let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+            assert_eq!(
+                reply["id"].to_string(),
+                *id,
+                "{kind}: the answer reaches its request"
+            );
         }
     }
 }

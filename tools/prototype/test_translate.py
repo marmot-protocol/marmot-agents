@@ -346,11 +346,11 @@ class AcpTurns(unittest.TestCase):
     """A turn is the `session/prompt` that started it, and ends only with the reply to that prompt."""
 
     @staticmethod
-    def started():
+    def started(session="s1"):
         acp = translate.Acp()
         acp.feed({"dir": "out", "msg": {"jsonrpc": "2.0", "id": 1, "method": "session/new", "params": {"cwd": "/work/demo", "mcpServers": []}}})
-        acp.feed({"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"sessionId": "s1"}}})
-        acp.feed({"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "method": "session/prompt", "params": {"sessionId": "s1", "prompt": []}}})
+        acp.feed({"dir": "in", "msg": {"jsonrpc": "2.0", "id": 1, "result": {"sessionId": session}}})
+        acp.feed({"dir": "out", "msg": {"jsonrpc": "2.0", "id": 2, "method": "session/prompt", "params": {"sessionId": session, "prompt": []}}})
         return acp
 
     @staticmethod
@@ -390,6 +390,29 @@ class AcpTurns(unittest.TestCase):
                 items = [e["item"] for e in acp.events if e["type"] == kind]
                 self.assertEqual(len(set(items)), 3, (kind, asked, items))
                 self.assertTrue(all(i.startswith(f"{kind}:") or i.startswith(f"{kind}+") for i in items), items)
+
+    def test_a_repeated_request_takes_no_name_a_tool_call_could_have(self):
+        """A repeated request's name is not one a tool call, `{session}:{tool call}`, could have,
+        even in a session named like a repeat, with the tool call reported after the request. As
+        `a_repeated_request_takes_no_name_a_tool_call_could_have` in the ACP crate."""
+        approval = lambda s, call: {"method": "session/request_permission", "params": {
+            "sessionId": s, "toolCall": {"toolCallId": call},
+            "options": [{"optionId": "once", "name": "Allow once", "kind": "allow_once"}]}}
+        question = lambda s, call: {"method": "elicitation/create", "params": {
+            "mode": "form", "sessionId": s, "toolCallId": call, "message": "Questions",
+            "requestedSchema": {"type": "object", "properties": {"q0": {"type": "string", "title": "Pick"}}}}}
+        for kind, request in (("approval", approval), ("question", question)):
+            session = f"{kind}+7"
+            acp = self.started(session)
+            for rid in (5, 7):
+                acp.feed({"dir": "in", "msg": {"jsonrpc": "2.0", "id": rid, **request(session, "t")}})
+            acp.feed({"dir": "in", "msg": {"jsonrpc": "2.0", "method": "session/update", "params": {
+                "sessionId": session, "update": {"sessionUpdate": "tool_call", "toolCallId": f"{session}:t",
+                                                 "title": "Run", "kind": "execute", "status": "pending"}}}})
+            asked = {e["item"] for e in acp.events if e["type"] == kind}
+            tools = {e["item"] for e in acp.events if e["type"] == "tool"}
+            self.assertEqual((len(asked), len(tools)), (2, 1), (kind, asked, tools))
+            self.assertFalse(asked & tools, (kind, asked, tools))
 
 if __name__ == "__main__":
     unittest.main()

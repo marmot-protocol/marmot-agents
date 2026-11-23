@@ -1419,15 +1419,17 @@ class Acp(Translator):
     def fresh(self, kind, named, rid):
         """The item id for a request of `kind`, an approval or a question, named after `named`, its
         tool call. The agent may ask again for the same call, while the first waits or after: each
-        request is an item of its own. The first is `{kind}:{named}`; a later one is named after the
-        request as well and starts `{kind}+`, which no first can. No item id already used is taken
-        again. As `Translator::fresh` in the ACP crate."""
+        request is an item of its own. The first is `{kind}:{named}`. A later one is named after the
+        request alone, `{kind}+{key}`, with any `%` and `:` in the key written `%25` and `%3A`: it
+        holds no `:`, so it is no first, and no tool call's item, always `{session}:{tool call}`. No
+        item id already used is taken again. As `Translator::fresh` in the ACP crate."""
         taken = {e["item"] for e in self.events}
         first = f"{kind}:{named}"
         if first not in taken:
             return first
         key = json.dumps(rid, ensure_ascii=False, separators=(",", ":"))
-        names = (f"{kind}+{key}{f'+{n}' if n else ''}:{named}" for n in itertools.count())
+        key = key.replace("%", "%25").replace(":", "%3A")
+        names = (f"{kind}+{key}{f'+{n}' if n else ''}" for n in itertools.count())
         return next(name for name in names if name not in taken)
 
     def update_todos(self, method, p):
