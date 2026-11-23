@@ -15,8 +15,8 @@
 use crate::messages::{
     self, ApprovalReply, ApprovalRequest, ChangeKind as NativeChange, Elicitation, Envelope,
     ErrorNote, ErrorReply, Id, ItemNote, ListReply, Message as NativeMessage, PlanUpdated, Policy,
-    QuestionReply, Rerouted, Sandbox, ThreadSettingsUpdated, ThreadStarted, TokenUsageUpdated,
-    Tokens, TurnNote, UserInput,
+    QuestionReply, RequestResolved, Rerouted, Sandbox, ThreadSettingsUpdated, ThreadStarted,
+    TokenUsageUpdated, Tokens, TurnNote, UserInput,
 };
 use crate::send::{self, Setup};
 use marmot_agent_driver::{
@@ -336,6 +336,19 @@ impl Translator {
                     }
                     let settings = p.thread_settings.unwrap_or_default();
                     self.thread_settings(&settings, method, params, out);
+                }
+                "serverRequest/resolved" => {
+                    // Codex waits no longer, so no answer may reach it, even before the turn's
+                    // end closes the item. The item is left to close as it would.
+                    let Some(p) = self.read::<RequestResolved>(method, params) else {
+                        return;
+                    };
+                    if self.for_another_thread(p.thread_id.as_deref()) {
+                        return;
+                    }
+                    if let Some(id) = &p.request_id {
+                        self.asked.remove(id);
+                    }
                 }
                 _ => {}
             }

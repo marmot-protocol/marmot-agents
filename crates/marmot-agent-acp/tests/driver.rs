@@ -259,6 +259,12 @@ impl Stand {
             .await;
     }
 
+    /// Sends a message as the exact text given.
+    async fn send_text(&mut self, line: &str) {
+        self.out.write_all(line.as_bytes()).await.unwrap();
+        self.out.write_all(b"\n").await.unwrap();
+    }
+
     /// Asserts that the driver sends nothing for `millis` milliseconds.
     async fn hears_nothing(&mut self, millis: u64) {
         let next =
@@ -561,4 +567,46 @@ async fn a_session_request_never_answered_ends_the_connection() {
         "no session from the late reply"
     );
     assert!(acp.prompt(prompt_in("c-1", "m-2", None)).await.is_err());
+}
+
+/// A request id may be spelled with escapes: `"\u0061"` is the id `"a"`. The driver must know
+/// the request it showed, however its id was spelled, and answer it once, when the person does.
+#[tokio::test]
+async fn a_request_with_an_escaped_id_is_answered_once() {
+    let (mut acp, mut stand) = connected().await;
+    let agent = tokio::spawn(async move {
+        let new = stand.next().await;
+        stand.reply(&new, json!({"sessionId": "s1"})).await;
+        let _asked = stand.next().await;
+        stand.update(json!({"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "ls", "kind": "execute", "status": "pending", "rawInput": {"command": "ls"}})).await;
+        stand
+            .send_text(r#"{"jsonrpc":"2.0","id":"\u0061","method":"session/request_permission","params":{"sessionId":"s1","toolCall":{"toolCallId":"t1","title":"ls","kind":"execute","rawInput":{"command":"ls"}},"options":[{"optionId":"once","name":"Allow once","kind":"allow_once"}]}}"#)
+            .await;
+        let answered = stand.next().await;
+        assert_eq!(answered["id"], "a");
+        assert_eq!(
+            answered["result"],
+            json!({"outcome": {"outcome": "selected", "optionId": "once"}}),
+            "the request is answered as the person answered it"
+        );
+        stand.hears_nothing(500).await;
+        stand
+    });
+    acp.prompt(prompt("list the files")).await.unwrap();
+    let approval = loop {
+        let e = event(&mut acp).await;
+        if let Body::Approval(a) = e.event.body() {
+            break (e.event.header().item.clone(), a.choices[0].id.clone());
+        }
+    };
+    let answer = Answer {
+        request: RequestId::from("r-1"),
+        item: approval.0,
+        by: person(),
+        given: Given::Choice(approval.1),
+    };
+    acp.answer(answer).await.unwrap();
+    let answered = event(&mut acp).await;
+    assert_eq!(answered.settles, vec![RequestId::from("r-1")]);
+    agent.await.unwrap();
 }

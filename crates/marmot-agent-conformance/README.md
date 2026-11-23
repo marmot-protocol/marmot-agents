@@ -7,7 +7,11 @@ of its harness. A checker looks at every step and names the property a failure b
 Status: phase one is built (2026-11-22): the suite, fakes for Codex, ACP and Pi, the three built-in drivers run against
 it, and deliberate faults that show each check catches its bug. Two reviews' findings are fixed (2026-11-22), and so
 is the Pi driver's stall on a Pi that stops reading (2026-11-22). Files the agent sends (`send_file`) are covered for
-Codex, Pi and the three ACP shapes (2026-11-22).
+Codex, Pi and the three ACP shapes (2026-11-22). Six suspicions from a read of the drivers' state machines were
+tested (2026-11-23): five were real and are fixed, below; Pi's compaction was not (under "Not covered yet").
+A review of those fixes found four more, fixed the same day: an ACP approval repeated for one tool call could take
+the name of another's first, an ACP request id spelled with escapes was not found, two Pi new sessions asked for at
+once were both settled by the first, and Codex did not count a resolved request of another thread.
 Phase two, the socket connectors, is a design, below. Everything here is internal: it ships in no program.
 
 ## How it fits
@@ -59,6 +63,7 @@ Every driver runs these, but where the table under "What was run" says otherwise
 | `two_chats` | Chat 1 runs until interrupted while chat 2's harness asks for approval, which is given; then chat 1 is interrupted |
 | `answered_once` | Two chats, one approval allowed and one question answered the other way, then the same item answered again, which must be refused |
 | `answer_after_death` | The harness dies while its approval waits; the driver, not yet told, is given the answer, and must refuse it; the approval must close unanswered |
+| `answer_after_interrupt` | A turn is interrupted while its approval waits: the approval closes with the turn, and an answer given after that must be refused and never reach the harness. The Codex and Pi fakes hear a reply to what they no longer ask, as the real ones read it and drop it |
 | `dies_mid_turn` | The harness dies in the middle of a command; Pi's driver must start a new Pi for the next prompt |
 | `dies_with_requests_pending` | The harness dies as it reads an interrupt, before acting on it, after another chat's answer was settled; it must die, so a driver that never writes the interrupt checks nothing and fails |
 | `dropped_waits` | `two_chats` with every wait for an event dropped at the first point it would wait, and the harness writing in pieces |
@@ -69,6 +74,7 @@ Every driver runs these, but where the table under "What was run" says otherwise
 | `late_replies` | Every reply comes half a second late (for Pi, everything slow): a prompt in a new chat, which waits more than once, is still taken |
 | `restart` | A turn, a restart, a prompt naming the chat's session, a prompt naming none; then a restart in the middle of a turn |
 | `new_session` | A prompt naming the chat's session; a new session, settled by the new session; the next prompt goes to it, and not to the session named before; another chat naming the old one is refused |
+| `new_session_unnamed` | A setting changed and a new session asked for at once, naming no session, as the core does before it has seen the chat's (it names the one it saved), with the harness slow: the setting's edit of the current session comes after; only the new session may settle the request. A driver may refuse it |
 | `folder` | A chat moves the harness to another folder (D-101): a chat that chose none opens its session in the driver's own folder; a new session naming another folder is taken, settled by the new session, which opens there, and the next prompt goes to it; a chat with no session yet moves and its first session opens there; a third chat stays in the driver's folder; after a restart the moved session is taken up in its folder. Checked against the folder the fake heard (`cwd` on Codex's and ACP's session requests, the folder Pi's relay was started in), and reported as D-101 |
 | `send_file` | The agent sends a file with the driver's own tool (D-090): each request must name the chat whose harness asked, with its relative path made whole from that chat's folder (D-101), and how it went must reach that harness, and only it, as the tool's result. Two chats open sessions in the driver's folder, chat 2's last, so an agent that keeps one tool server for a folder's sessions (OpenCode) reaches the driver through chat 2's and only the call names chat 1's session; chat 1's file is sent. While it waits for the core's word, chat 1 prompts again: the prompt must return within a second, taken or refused, since the core cannot give the word until it does (S11; an agent awaiting its tool ends a cancelled turn only once the call comes back, and so does the fake). Then chat 2 moves to another folder, and two files are asked for at once, chat 2's there and chat 1's, both waiting, answered the other way round: chat 1's sent, chat 2's refused, and the core's words must reach chat 2's new session. Checked against what the fake heard as its tool's result, which must come without the driver being polled again. A driver that gives its harness no such tool (`Subject::sends_files`, false by default) must hand over no file; every built-in driver gives one |
 | `settings` | A setting changed, settled once |
@@ -82,7 +88,7 @@ The pipe between driver and harness holds 256 bytes each way, so a dropped wait 
 | Fake | From | Shapes | What differs |
 | --- | --- | --- | --- |
 | Codex | the stand-in in `crates/marmot-agent-codex/tests/driver.rs` | threads, turns, `commandExecution`, approvals, `requestUserInput`, the driver's `send_file` dynamic tool (`item/tool/call`, only on a thread started with it), steer, interrupt, settings, resume | one process for every chat |
-| ACP | the agent in `crates/marmot-agent-acp/tests/driver.rs` | sessions, prompts, tool calls, `request_permission`, `elicitation/create`, cancel, config options, MCP servers over HTTP (`src/fake/mcp.rs` is the client: `initialize`, `tools/list`, `tools/call`) | **OpenCode**: `session/resume`; one tool server of a name for every session in a folder, the last handed over, the calling session named in `_meta["ai.opencode/sessionID"]`. **Goose**: `session/load` with a replay, sessions numbered by day, `activeRunId`, and after a crash a run of its own until cancelled; servers kept per session, the caller named in `_meta["agent-session-id"]`. **Cursor**: `session/load`, no name, `cursor/update_todos` naming only its tool call; servers kept per session, the caller not named. Each holds a cancelled turn open while its tool call is out. The driver is run with file sending switched on (`serve_files`, as `send_files = true` does) |
+| ACP | the agent in `crates/marmot-agent-acp/tests/driver.rs` | sessions, prompts, tool calls, `request_permission` (with `#twice`, two at once for one tool call; with `#garbled`, one naming no tool call), `elicitation/create` (with `#garbled`, a form at a web address), a turn that goes on without what the client refused, cancel, config options, MCP servers over HTTP (`src/fake/mcp.rs` is the client: `initialize`, `tools/list`, `tools/call`) | **OpenCode**: `session/resume`; one tool server of a name for every session in a folder, the last handed over, the calling session named in `_meta["ai.opencode/sessionID"]`. **Goose**: `session/load` with a replay, sessions numbered by day, `activeRunId`, and after a crash a run of its own until cancelled; servers kept per session, the caller named in `_meta["agent-session-id"]`. **Cursor**: `session/load`, no name, `cursor/update_todos` naming only its tool call; servers kept per session, the caller not named. Each holds a cancelled turn open while its tool call is out. The driver is run with file sending switched on (`serve_files`, as `send_files = true` does) |
 | Pi | `crates/marmot-agent-pi/tests/fake_pi.py` | Pi's records, extension dialogs, the driver's `send_file` tool (only with the driver's extension loaded, asking in its dialog), steering, abort, a session's file written once it holds a message | one process per chat: the driver runs `src/fake/relay.py`, which connects its standard input and output to a socket the test serves, so each Pi is scripted in Rust |
 
 The faults, set as `Knobs` and changeable between steps: frames written in pieces; replies late; replies after the
@@ -108,8 +114,8 @@ nothing.
 | --- | --- | --- | --- |
 | Codex | all, `dies_at_every_step` (6) | `simple`, `approval_allowed`, `command` | all 21 that one harness for every chat can show |
 | ACP, OpenCode-shaped | all, `dies_at_every_step` (3) | `simple`, `approval_allowed` | `PromptTwice` and the five for files |
-| ACP, Goose-shaped | `two_chats`, `answered_once`, `answer_after_death`, `dies_mid_turn`, `restart`, `new_session`, `folder`, `send_file`, `dies_at_every_step` (3) | `simple`, `approval_allowed` | the five for files |
-| ACP, Cursor-shaped | `two_chats`, `answered_once`, `answer_after_death`, `restart`, `send_file`, `dies_at_every_step` (4) | `simple`, `approval_allowed` | the five for files |
+| ACP, Goose-shaped | `two_chats`, `answered_once`, `answer_after_death`, `answer_after_interrupt`, `dies_mid_turn`, `restart`, `new_session`, `new_session_unnamed`, `folder`, `send_file`, `dies_at_every_step` (3) | `simple`, `approval_allowed` | the five for files |
+| ACP, Cursor-shaped | `two_chats`, `answered_once`, `answer_after_death`, `answer_after_interrupt`, `restart`, `send_file`, `dies_at_every_step` (4) | `simple`, `approval_allowed` | the five for files |
 | Pi | all, `dies_at_every_step` (6) | `gate_allowed`, `command` | 13: those that turn on a harness for each chat, `TakeUnhanded`, `SwallowPrompt` and the five for files |
 
 The faults (`src/faults.rs`), each caught as the property it breaks, by the scenario named. Where more than one check
@@ -144,7 +150,7 @@ names the property, the test also requires the words of the check meant for the 
 alone (S5, OpenCode-shaped, where the token is the last chat's), by the session it names alone (L2, Cursor-shaped, which
 names none: the file never comes), and a relative path made whole from the driver's folder instead of the chat's (D-101).
 
-Five driver bugs were found, each fixed after its scenario failed:
+Ten driver bugs were found, each fixed after its scenario failed:
 
 - **The ACP driver took an answer the agent could no longer read** (`answer_after_death`). A request's message went to
   the writer task's queue and the request returned at once, then fed the translator, so an answer to an agent that had
@@ -165,12 +171,32 @@ Five driver bugs were found, each fixed after its scenario failed:
   the stopped Pi are dropped, as from any Pi the chat has let go. Shown to catch, besides the old driver: a driver that
   stops every chat's Pi, and one that refuses the request without stopping the Pi.
 
+- **Pi's driver took an answer to a question it had closed** (`answer_after_interrupt`, 2026-11-23). At a turn's end
+  the driver closes a waiting question, but it kept the dialog, so a later answer was written to Pi, which had
+  resolved the dialog itself on the abort (Pi 1.6.0's `createDialogPromise`) and drops a late reply; the answer was
+  never settled. Now a question closed with its turn takes no answer.
+- **The ACP and Pi drivers settled a new session by an edit of the old one** (`new_session_unnamed`, 2026-11-23).
+  A new session was settled by any running session item whose id differed from the one the core named; when the
+  core named none, an edit of the chat's current session, such as a setting's, settled it before the new session
+  came. Now the session the driver knows the chat is in comes first, as Codex's driver already checked.
+- **The ACP driver gave two permission requests for one tool call one item** (`two_requests_for_one_tool_call_take_one_answer_each`
+  in `tests/acp.rs`, 2026-11-23). The second edited the first's approval, and an answer went to whichever request
+  the driver found first. Now each request is an approval of its own; the first for a tool call keeps its name.
+- **The ACP driver never answered a permission or form it could not show** (`a_request_the_driver_cannot_show_is_answered`
+  in `tests/acp.rs`, 2026-11-23): one it could not read, or a form at a web address, which it never offers. The
+  agent waited for ever. Now it is refused with -32602, invalid params, as the official ACP library refuses a
+  request it cannot read. Not yet covered: a request naming a session no chat took, said while a session was being
+  picked, is still dropped unanswered.
+
 Not covered yet, and why:
 
 - **Codex's greeting** (`Codex::connect`) still waits for `initialize` with no limit. It runs before the core's loop, at
   start. Not changed here.
 - **Pi's start** waits up to `STARTUP_LIMIT` (60 s, fixed), so a Pi that never answers `get_state` is not run: too slow.
-- **The harness's own actions** (compacting), **group chats** and **attachments**.
+- **The harness's own actions** (compacting), **group chats** and **attachments**. That Pi ends every compaction it
+  starts with `compaction_end`, failed or not, before it responds, is read in `fixtures/recordings/pi/compact.jsonl`
+  and Pi 1.6.0's `AgentSession.compact`, not shown by a fake; the Pi driver's own tests
+  (`one_compaction_at_a_time_settled_by_its_own_end`) check what it does with both ends.
 - **Goose and Cursor** run only the scenarios where they differ from OpenCode.
 
 ## Running it

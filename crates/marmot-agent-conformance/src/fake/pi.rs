@@ -299,6 +299,14 @@ impl Protocol for Pi {
             "extension_ui_response" => {
                 let asked = self.run.as_ref().and_then(|r| r.asked.clone());
                 if asked.as_deref() != command["id"].as_str() {
+                    // A dialog Pi no longer waits on, such as one an abort resolved (Pi resolves
+                    // it with its default, says nothing, and drops the late reply). It reached
+                    // Pi all the same, so it is heard: no one's answer may come this late.
+                    heard.push(Heard::Answer {
+                        session: self.session.clone(),
+                        allow: None,
+                        text: command["value"].as_str().map(String::from),
+                    });
                     return;
                 }
                 if let Some(call) = self.run.as_mut().and_then(|r| r.file.take()) {

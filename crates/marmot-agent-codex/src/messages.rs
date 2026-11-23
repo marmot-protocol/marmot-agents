@@ -78,6 +78,15 @@ pub(crate) struct ThreadStarted {
     pub thread: Option<Settings>,
 }
 
+/// `serverRequest/resolved`: Codex no longer waits for the client's reply to one of its requests,
+/// because the client replied or because Codex settled it itself, as on an interrupt.
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub(crate) struct RequestResolved {
+    pub thread_id: Option<String>,
+    pub request_id: Option<Id>,
+}
+
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct ThreadSettingsUpdated {

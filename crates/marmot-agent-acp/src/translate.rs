@@ -151,10 +151,12 @@ pub struct Translator {
     open: Vec<(String, AgentEvent)>,
     /// Each session item's body as it was last sent.
     sessions: HashMap<String, Session>,
-    /// The client's requests not yet answered, by the id's JSON text.
+    /// The client's requests not yet answered, by the id's key (`key`).
     sent: HashMap<String, Sent>,
-    /// The agent's requests not yet answered, by the id's JSON text.
+    /// The agent's requests not yet answered, by the id's key (`key`).
     asked: HashMap<String, Asked_>,
+    /// Every item id an event was made for, so that no new item takes one already used.
+    items: HashSet<String>,
     /// The session being replayed by `session/load`, until the reply.
     loading: Option<String>,
     /// The id of the message or thinking being streamed.
@@ -172,7 +174,7 @@ pub struct Translator {
     commands: Vec<Command>,
     /// Items each turn made with no id of the agent's.
     counted: HashMap<Option<String>, u64>,
-    /// The id of the `session/prompt` that started the turn, as its JSON text.
+    /// The id of the `session/prompt` that started the turn, by its key (`key`).
     turn_request: Option<String>,
     /// Cursor's to-do list in this turn, as it last stood.
     todos: Vec<Value>,
@@ -206,6 +208,7 @@ impl Translator {
             sessions: HashMap::new(),
             sent: HashMap::new(),
             asked: HashMap::new(),
+            items: HashSet::new(),
             loading: None,
             buffer: None,
             streamed: HashMap::new(),
@@ -411,7 +414,7 @@ impl Translator {
         if let Some(id) = id {
             let owner = (self.session.clone(), self.turn.clone());
             self.sent.insert(
-                id.get().to_string(),
+                key(id),
                 Sent {
                     method: method.to_string(),
                     session: session.clone(),
@@ -424,7 +427,7 @@ impl Translator {
             "session/prompt" if self.turn.is_some() => {}
             "session/prompt" => {
                 self.turn = Some(format!("{}:{}", show(session.as_deref()), id_text(id)));
-                self.turn_request = id.map(|id| id.get().to_string());
+                self.turn_request = id.map(key);
                 self.cancelled = false;
                 let item = format!("turn:{}", show(self.turn.as_deref()));
                 let body = Body::Turn(Turn {
@@ -446,7 +449,7 @@ impl Translator {
         result: Option<&RawValue>,
         out: &mut Vec<AgentEvent>,
     ) {
-        let Some(asked) = id.and_then(|id| self.asked.remove(id.get())) else {
+        let Some(asked) = id.and_then(|id| self.asked.remove(&key(id))) else {
             return;
         };
         let item = match &asked {
@@ -953,7 +956,7 @@ impl Translator {
         params: &str,
         out: &mut Vec<AgentEvent>,
     ) {
-        let key = id.map(|id| id.get().to_string()).unwrap_or_default();
+        let key = id.map(key).unwrap_or_default();
         match method {
             "session/request_permission" => {
                 let Ok(p) = serde_json::from_str::<RequestPermissionRequest>(params) else {
@@ -981,7 +984,23 @@ impl Translator {
                     });
                     options.push((format!("c{n}"), o.option_id.0.to_string()));
                 }
-                let item = format!("approval:{subject}");
+                // An approval is named after its tool call. The agent may ask again for the same
+                // call, while the first waits or after: each request is an approval of its own, so
+                // each takes its own answer, named after the request as well and starting
+                // `approval+`, which no first, always `approval:`, can. No name already used is
+                // taken again, whatever the ids hold.
+                let first = format!("approval:{subject}");
+                let item = if self.items.contains(&first) {
+                    (0..)
+                        .map(|n| match n {
+                            0 => format!("approval+{key}:{subject}"),
+                            n => format!("approval+{key}+{n}:{subject}"),
+                        })
+                        .find(|name| !self.items.contains(name))
+                        .unwrap_or_default()
+                } else {
+                    first
+                };
                 let f = &p.tool_call.fields;
                 let command = f
                     .raw_input
@@ -1260,7 +1279,7 @@ impl Translator {
     }
 
     fn response(&mut self, m: &Envelope<'_>, out: &mut Vec<AgentEvent>) {
-        let id = m.id.map(|id| id.get().to_string()).unwrap_or_default();
+        let id = m.id.map(key).unwrap_or_default();
         let sent = self.sent.remove(&id);
         let method = sent.as_ref().map(|s| s.method.clone());
         let shown = show(method.as_deref());
@@ -1634,6 +1653,7 @@ impl Translator {
         let Ok(event) = AgentEvent::new(header, body, native) else {
             return;
         };
+        self.items.insert(item.to_string());
         let waiting = matches!(state, State::Running | State::Waiting);
         match self.open.iter().position(|(open, _)| open == item) {
             Some(at) if waiting => self.open[at].1 = event.clone(),
@@ -1657,7 +1677,7 @@ impl Translator {
         self.turn.as_deref()
     }
 
-    /// The id of the `session/prompt` that started the turn running, as its JSON text.
+    /// The id of the `session/prompt` that started the turn running, by its key (`key`).
     pub fn turn_request(&self) -> Option<&str> {
         self.turn_request.as_deref()
     }
@@ -1747,6 +1767,12 @@ impl Translator {
             .unwrap_or(false)
     }
 
+    /// Whether the agent's request with this id waits on an item of this translator's: one it
+    /// could read and show. The id is its JSON text as `serde_json` writes a parsed value.
+    pub fn waits_on(&self, id: &str) -> bool {
+        self.asked.contains_key(id)
+    }
+
     /// The replies that tell the agent nobody will answer the requests still waiting: what ACP
     /// asks of a client that cancels a turn.
     pub fn cancel_replies(&self) -> Vec<String> {
@@ -1831,6 +1857,13 @@ fn native(kind: &str, payload: &str) -> Native {
 /// A value the agent left out, written as the prototype writes it.
 fn show(value: Option<&str>) -> String {
     value.unwrap_or("None").to_string()
+}
+
+/// A JSON-RPC id as the key it is known by: its JSON text as `serde_json` writes it, so that one
+/// id spelled two ways, such as `"a"` and `"\u0061"`, is one key, and the driver, which writes ids
+/// from parsed values, finds it.
+fn key(id: &RawValue) -> String {
+    serde_json::from_str::<Value>(id.get()).map_or_else(|_| id.get().to_string(), |v| v.to_string())
 }
 
 /// A JSON-RPC id as a name: a string as it is, a number as it is written.

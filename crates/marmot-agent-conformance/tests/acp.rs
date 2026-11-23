@@ -129,7 +129,7 @@ marmot_agent_conformance::with_scenarios!(conformance!(OpenCode));
 // own, in Cursor's to-do list, and in how each keeps the driver's tool server and names the session
 // that calls it: they run the scenarios that reach those, and the answer to an agent that has gone. The rest go through the same code as OpenCode's.
 conformance!(Goose:
-    run: [two_chats, answered_once, answer_after_death, dies_mid_turn, restart, new_session, folder, send_file];
+    run: [two_chats, answered_once, answer_after_death, answer_after_interrupt, dies_mid_turn, restart, new_session, new_session_unnamed, folder, send_file];
     left_out: [
         one_turn,
         dies_with_requests_pending,
@@ -144,7 +144,7 @@ conformance!(Goose:
 );
 
 conformance!(Cursor:
-    run: [two_chats, answered_once, answer_after_death, restart, send_file];
+    run: [two_chats, answered_once, answer_after_death, answer_after_interrupt, restart, send_file];
     left_out: [
         one_turn,
         dies_mid_turn,
@@ -156,6 +156,7 @@ conformance!(Cursor:
         stops_reading,
         late_replies,
         new_session,
+        new_session_unnamed,
         folder,
         settings,
     ]
@@ -247,6 +248,96 @@ async fn the_file_faults_are_caught() {
                 fault.caught_as(&found),
                 "{flavor:?}, {fault:?}: not caught as it should be: {found:?}"
             );
+        }
+    }
+}
+
+// An agent asks twice for one tool call, both requests waiting at once (`#ask #twice`): nothing in
+// ACP stops it. Each request is its own approval, and takes its own answer, once: answered the
+// other way round, the first allowed and the second refused, each reaches its own request (S5),
+// and the first answered again is refused (S1).
+#[tokio::test]
+async fn two_requests_for_one_tool_call_take_one_answer_each() {
+    use marmot_agent_conformance::Run;
+    use marmot_agent_conformance::fake::Heard;
+    use marmot_agent_conformance::run::{turn_ended, waiting};
+
+    for flavor in [Flavor::OpenCode, Flavor::Goose, Flavor::Cursor] {
+        let mut run = Run::start(subject(flavor)).await;
+        let m = (run.prompt("c-1", "#ask #twice").await.unwrap()).expect("the prompt is taken");
+        let first = (run.wait("L2", "the first approval", waiting).await)
+            .unwrap_or_else(|v| panic!("{flavor:?}: {v}"));
+        let item = first.event.header().item.clone();
+        let second = run
+            .wait("L2", "the second approval", |e| {
+                waiting(e) && e.event.header().item != item
+            })
+            .await
+            .unwrap_or_else(|v| panic!("{flavor:?}: {v}"));
+        let (_, refused) = run.answer(&second, false).await.unwrap();
+        refused.unwrap_or_else(|r| panic!("{flavor:?}: the second answer was refused: {r:?}"));
+        let (_, allowed) = run.answer(&first, true).await.unwrap();
+        allowed.unwrap_or_else(|r| panic!("{flavor:?}: the first answer was refused: {r:?}"));
+        (run.wait("L2", "the turn's end", |e| {
+            turn_ended(e) && e.prompts.contains(&m)
+        }))
+        .await
+        .unwrap_or_else(|v| panic!("{flavor:?}: {v}"));
+        let (_, again) = run.answer(&first, true).await.unwrap();
+        assert!(
+            again.is_err(),
+            "{flavor:?}: the first approval took two answers"
+        );
+        run.end()
+            .await
+            .unwrap_or_else(|v| panic!("{flavor:?}: {v}"));
+        let answers: Vec<(Option<bool>, Option<String>)> = (run.subject.fake().heard().iter())
+            .filter_map(|h| match h {
+                Heard::Answer { allow, text, .. } => Some((*allow, text.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            answers,
+            vec![
+                (Some(false), Some("request 2".into())),
+                (Some(true), Some("request 1".into())),
+            ],
+            "{flavor:?}: each answer reaches its own request"
+        );
+    }
+}
+
+// A request of the agent's that the driver cannot show is answered all the same, as an error, so
+// the agent does not wait for ever: a permission request it cannot read (`#ask #garbled`, naming
+// no tool call), and a form at a web address, which the driver never offered to fill in (`#quiz
+// #garbled`). The official ACP library answers a request it cannot read with -32602, invalid
+// params, and so must the driver: the fake says in its words which error it was given. Each turn
+// must end.
+#[tokio::test]
+async fn a_request_the_driver_cannot_show_is_answered() {
+    use marmot_agent_conformance::Run;
+    use marmot_agent_conformance::run::turn_ended;
+    use marmot_agent_events::Body;
+
+    for flavor in [Flavor::OpenCode, Flavor::Goose, Flavor::Cursor] {
+        for (chat, words) in [("c-1", "#ask #garbled"), ("c-2", "#quiz #garbled")] {
+            let mut run = Run::start(subject(flavor)).await;
+            let m = (run.prompt(chat, words).await.unwrap()).expect("the prompt is taken");
+            (run.wait("L2", "the turn's end", |e| {
+                turn_ended(e) && e.prompts.contains(&m)
+            }))
+            .await
+            .unwrap_or_else(|v| panic!("{flavor:?}, {words}: {v}"));
+            (run.wait("L2", "the agent's words on the refusal", |e| {
+                matches!(e.event.body(), Body::Message(_))
+                    && e.event.header().text.starts_with("refused with -32602:")
+            }))
+            .await
+            .unwrap_or_else(|v| panic!("{flavor:?}, {words}: refused with -32602: {v}"));
+            run.end()
+                .await
+                .unwrap_or_else(|v| panic!("{flavor:?}, {words}: {v}"));
         }
     }
 }
