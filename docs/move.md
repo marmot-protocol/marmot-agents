@@ -97,9 +97,11 @@ encryption state and its chats.
    start with, takes those settings out of OpenClaw's settings file, after keeping a copy of it
    ([D-119](decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)).
 
-On its first start the core reads nothing already in a chat as a prompt, so it never runs an old prompt again.
+On its first start the core reads nothing stored in a chat by the second it subscribed to MDK as a prompt, so it
+never runs an old prompt again.
 A message sent to the agent while neither program ran, which the old connector never read, may or may not be
-answered: the core takes it as a prompt only if it reaches the agent after the second the core started in
+answered: the core takes it as a prompt only if it reaches the agent after the second the core subscribed to MDK
+in; one received through that second is history
 ([D-111](decisions.md#d-111-a-group-the-core-has-never-read-starts-after-what-arrived-before-the-core-did)).
 Keep the gap short, and ask again afterwards if no answer comes.
 

@@ -300,12 +300,13 @@ pub async fn invited(folder: &str, label: &str) -> Invited {
         }
     }
     assert!(stored > 0, "the old connector stored the person's message");
-    for _ in 0..120 {
-        if stored == sent {
-            break;
-        }
+    // A wall-clock limit: a read of the old connector can itself be slow.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while stored != sent && std::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        stored = copies().await;
+        stored = tokio::time::timeout_at(deadline.into(), copies())
+            .await
+            .unwrap_or(stored);
     }
     assert_eq!(
         stored, sent,
