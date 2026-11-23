@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-23, at `master` commit `a027ab2`, through [D-116](decisions.md#d-116-a-gateways-plugin-swap-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill). A change that adds or replaces
+Brought up to date on 2026-11-23, at `master` commit `d0b1b10`, through [D-128](decisions.md#d-128-a-folder-move-whose-session-shows-late-still-moves-the-chat) (D-117 and D-121 to D-127 are in open pull requests). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -48,6 +48,10 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   MDK's edit, kind 1009, carrying the whole item with a higher version ([D-023](decisions.md#d-023-one-kind-carries-every-agent-item), [D-030](decisions.md#d-030-a-session-is-an-item-the-eleventh-type), [D-025](decisions.md#d-025-an-agent-item-is-updated-with-an-edit), [D-112](decisions.md#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by)).
 - The tags are fixed, and the message that started a turn is `started_by` ([D-076](decisions.md#d-076-the-tags-of-kinds-1201-and-1202), [D-112](decisions.md#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by)). The old shapes
   of 1201 and 1202 are not kept ([D-051](decisions.md#d-051-kinds-1201-and-1202-take-the-new-shape-and-the-old-one-is-not-kept)).
+- The core's own notices carry `seq` from 1, and a `refused` notice about a message names it with `started_by`.
+  An item begun under the temporary kind, or whose first event disappeared, goes on as a new kind 1201 event;
+  one whose first event was deleted gets a `failed` notice. The agent's words settle at most what fits MDK's
+  limit on a chat message's tags, and their turn settles the rest ([D-120](decisions.md#d-120-the-choices-made-in-moving-to-kinds-1201-and-1202-as-built)).
 - Each item carries a type from the shared vocabulary, a plain rendering and the harness's native payload, and
   everything the agent does is passed through: reasoning, tools, results, plans ([D-007](decisions.md#d-007-one-shared-event-vocabulary), [D-059](decisions.md#d-059-eight-points-about-what-an-agent-event-carries), [D-008](decisions.md#d-008-pass-everything-through)).
 - Two exceptions to the native payload: a secret question no longer waiting carries none, and the core leaves
@@ -101,6 +105,13 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   activity it sends ([D-113](decisions.md#d-113-hermes-and-openclaw-are-channel-plugins-with-a-narrower-contract-than-a-driver)).
   Python for Hermes, TypeScript for OpenClaw
   ([D-005](decisions.md#d-005-which-driver-each-harness-gets), [D-003](decisions.md#d-003-the-boundary-to-other-languages-is-a-local-socket)).
+- The contract in `design/drivers.md` holds as written: sessions are always the gateway's own; no `folder` in the
+  hello and no `send_file` tool from the core; everything the gateway hands its channel is passed through, at
+  the gateway's own verbosity, so Hermes shows no `tool` items; controls go only as the gateway's typed
+  commands; the gateway's own check is opened so the core's counts; an internal the plugin relies on may be
+  watched by the end-to-end scenario ([D-118](decisions.md#d-118-the-channel-plugin-contract-is-accepted-as-written)). The socket's chat section, for the gateways' message tools,
+  is not designed, so OpenClaw's message tool is offered no actions
+  ([Q-32](open-questions.md#q-32-what-does-the-sockets-chat-section-carry)).
 - The core decides who may prompt and approve; the gateway allows what the core lets through ([D-084](decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)).
 - What they send and how they behave was accepted from M3; OpenClaw's `/model status` may show the masked key
   ([D-092](decisions.md#d-092-the-choices-made-while-building-m3-are-accepted), [D-088](decisions.md#d-088-openclaws-model-status-may-show-the-masked-model-key)).
@@ -149,6 +160,10 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   first, and prints the paths needed to undo it ([D-089](decisions.md#d-089-an-install-moves-over-by-importing-its-account-home-in-place), [D-095](decisions.md#d-095-the-import-prints-the-paths-it-needs-to-undo-a-move)).
 - A gateway's plugin change is put back if the installer fails or is stopped, and a re-run after a kill always
   finishes or puts it back; a few named moments after a kill leave neither plugin working until then ([D-116](decisions.md#d-116-a-gateways-plugin-swap-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)).
+- A gateway install moves over with its installer's `--replace-plugin`. The OpenClaw installer finishes a
+  half-done move by editing OpenClaw's settings file itself, after a copy; the gateway's conversation starts
+  fresh in each chat. `--replace-plugin` is to list the gateway's work folder in `files_from`, as a fresh
+  install does; it does not yet ([D-119](decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)).
 
 ## Verification and how the work runs
 

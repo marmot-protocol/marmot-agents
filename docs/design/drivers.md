@@ -21,8 +21,10 @@ That a chat can move a coding harness to another folder is decided
 [a chat's folder](#a-chats-folder), is built; the `folders` list, the account home and what a move does are
 decided ([D-104](../decisions.md#d-104-how-a-chats-folder-works-as-built)), and the setting's name and refusals
 are provisional. That Hermes and OpenClaw are channel plugins, with a narrower contract than a driver, is decided
-([D-113](../decisions.md#d-113-hermes-and-openclaw-are-channel-plugins-with-a-narrower-contract-than-a-driver));
-the contract itself, in [channel plugins](#channel-plugins), is a proposal until the owner accepts it.
+([D-113](../decisions.md#d-113-hermes-and-openclaw-are-channel-plugins-with-a-narrower-contract-than-a-driver)),
+and so is the contract itself, in [channel plugins](#channel-plugins), as written
+([D-118](../decisions.md#d-118-the-channel-plugin-contract-is-accepted-as-written)), except the socket's chat
+section, which is not designed.
 
 ## What a driver does
 
@@ -228,6 +230,9 @@ each file, as today's connectors turn it into `send_media`.
   one agent; the settings and the summary then say how to name one. The media caches are never listed: they
   also hold the files people sent the gateway in any of its chats, on any platform. Settings kept from an
   earlier install that list no folder get the one found now; a `files_from` already there is left as it is.
+  `--replace-plugin` is to list the gateway's folder too, as a fresh install does
+  ([D-119](../decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation));
+  it does not yet, since the import always writes a `files_from` line, which is then left as it is.
   The containers this project runs Hermes and OpenClaw in mount the work folder at its own path, so a path
   the agent names is the same for the core.
 
@@ -577,9 +582,10 @@ passing them on is a later step); no approval commands.
 ## Channel plugins
 
 That Hermes and OpenClaw are channel plugins, with a narrower contract than a driver, is decided
-([D-113](../decisions.md#d-113-hermes-and-openclaw-are-channel-plugins-with-a-narrower-contract-than-a-driver)).
-The contract below is a proposal until the owner accepts it. It was drawn on 2026-11-23 from what the two plugins
-do at that day's `master`.
+([D-113](../decisions.md#d-113-hermes-and-openclaw-are-channel-plugins-with-a-narrower-contract-than-a-driver)),
+and so is the contract below, as written
+([D-118](../decisions.md#d-118-the-channel-plugin-contract-is-accepted-as-written)). It was drawn on 2026-11-23
+from what the two plugins do at that day's `master`.
 
 A channel plugin runs inside a messaging gateway as one of its channels, beside the gateway's others, and
 connects to the core over [the socket](socket-protocol.md#the-messages-as-built). The gateway owns the
@@ -675,7 +681,8 @@ The seven flags, and where each plugin stands:
 What a channel plugin needs that a driver does not is the socket's chat section, for the gateway's own message
 tools ([D-020](../decisions.md#d-020-the-socket-speaks-agent-control-v3-with-a-clean-cutover),
 [D-042](../decisions.md#d-042-an-agent-may-act-in-its-own-chat-and-may-not-change-a-group-or-the-account)). It is
-not designed yet, so OpenClaw's message tool is offered no actions.
+not designed yet ([Q-32](../open-questions.md#q-32-what-does-the-sockets-chat-section-carry)), so OpenClaw's
+message tool is offered no actions.
 
 ### Relying on a gateway's internals
 
@@ -767,8 +774,9 @@ the translator reads in use what it was tested on:
 Its capabilities: it can interrupt; a message sent during a turn waits (`queue`); OpenClaw picks the sessions
 (`own`), and they outlive a restart, in its state folder; approvals come to the chat; no files yet. Its
 approval commands are `/approve`, `/exec`, `/elevated` and `/elev` anywhere in a message, and `/config`,
-`/debug`, `/bash`, `!`, `/allowlist`, `/acp`, `/codex`, `/mcp` and `/plugins` at the start. All of this is
-provisional, for the owner's review.
+`/debug`, `/bash`, `!`, `/allowlist`, `/acp`, `/codex`, `/mcp` and `/plugins` at the start. These are as
+[the contract's table](#channel-plugins) has them, accepted with it
+([D-118](../decisions.md#d-118-the-channel-plugin-contract-is-accepted-as-written)).
 
 ## The Hermes plugin
 

@@ -13,7 +13,8 @@ The core speaks the driver section now, with the fields in [the messages, as bui
 the trait's shapes ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)), accepted at the
 end of M2 ([D-081](../decisions.md#d-081-the-socket-messages-as-built-are-accepted)). One request of the chat
 section, `send_file`, is built and is a proposal until the owner accepts it. Not designed: the other requests of
-the chat section, and administration ([Q-05](../open-questions.md#q-05-how-is-the-agent-administered)).
+the chat section ([Q-32](../open-questions.md#q-32-what-does-the-sockets-chat-section-carry)), and
+administration ([Q-05](../open-questions.md#q-05-how-is-the-agent-administered)).
 
 Every message as built is described exactly by a JSON Schema made from the core's own types,
 [`fixtures/socket/schema.json`](../../fixtures/socket/schema.json), with an example of each in

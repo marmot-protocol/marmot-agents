@@ -1812,7 +1812,9 @@ Decided 2026-11-22. The project owner decided.
   whole home, holds or lies in the agents' data, or holds or lies in a gateway's home or media cache, or when
   Hermes runs its commands in a sandbox, or OpenClaw's Marmot chats may go to more than one agent. A folder that
   lies inside OpenClaw's state folder, as its default workspace does, is allowed. A `files_from` already in the
-  settings is never changed by a re-run.
+  settings is never changed by a re-run. (Replaced in part by
+  [D-119](#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation):
+  `--replace-plugin` adds the gateway's folder to the line the import wrote.)
 - **Media caches stay out.** Hermes's and OpenClaw's media caches are never allowed, since they also hold files
   people sent the gateway in any of its chats, on any platform.
 
@@ -1987,6 +1989,143 @@ import has already stopped the old services. Doing the swap any other way for Op
 plugin from `plugins.load.paths`, would go around OpenClaw's own install command, against
 [D-006](#d-006-prefer-official-interfaces-and-libraries). Putting settings back on a failed fresh install or update
 is the same protection, and costs nothing more.
+
+Decided 2026-11-23. The project owner decided.
+
+## D-118 The channel-plugin contract is accepted as written
+
+**Decision.** The contract in [channel plugins](design/drivers.md#channel-plugins), drawn on 2026-11-23 from
+what the Hermes and OpenClaw plugins do at that day's `master`, is accepted as written. It holds every
+channel plugin to what the core needs from every connector on the socket, and leaves to the gateway what
+[D-113](#d-113-hermes-and-openclaw-are-channel-plugins-with-a-narrower-contract-than-a-driver) says it owns.
+In particular:
+
+- **Sessions are always the gateway's own.** A channel plugin states `sessions` as `own`; the core never names
+  a session in a prompt to it, and `new_session` asks the gateway for one in its own way.
+- **No folder and no tool from the core.** A channel plugin states no `folder` in its hello, so the core offers
+  no `folder` setting for its chats, and the gateway keeps the workspace it manages
+  ([D-101](#d-101-a-chat-can-move-a-coding-harness-to-another-folder)). The core gives its agent no `send_file`
+  tool: the agent sends a file in the gateway's own way, and the plugin turns that into the core's `send_file`
+  ([D-108](#d-108-how-an-agents-file-reaches-the-core-as-built)).
+- **Passing everything through means what the gateway hands its channel.** For a channel plugin,
+  [D-008](#d-008-pass-everything-through) is met by passing through everything the gateway hands the channel,
+  at the gateway's own setting for how much tool activity it sends, which the installers leave alone
+  ([D-105](#d-105-which-gateway-settings-the-installers-change)). Hermes hands formatted lines, so its tool
+  activity shows as commentary messages and never as `tool` items.
+- **Controls go only as the gateway's typed commands**, from the person who sent them. A setting the gateway has
+  no command for is refused. What the gateway does not report as data, the plugin fills in from its own
+  knowledge of the gateway ([D-044](#d-044-a-connector-supplies-what-its-harness-does-not-say)).
+- **The gateway's own check is opened, so the core's counts**
+  ([D-084](#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)). For Hermes,
+  `install/hermes.sh` sets `MARMOT_ALLOW_ALL_USERS=true` in Hermes's settings and puts the earlier value back on
+  `--uninstall`, and the plugin answers an approval card or a question as the person whose answer the core
+  sent. For OpenClaw, the installer sets no allow-list; the plugin hands OpenClaw an open policy with every
+  message it delivers (`dmPolicy` and `groupPolicy` `open`, `allowFrom` `*`), and answers OpenClaw's question
+  whether a sender may approve (`authorizeActorAction`) with yes only for a sender the core has vouched for. A
+  plugin's list of typed commands that need the right to approve is its own, complete for the gateway version
+  it was read in.
+- **A gateway's internals.** Where a plugin uses something the gateway does not publish, the gateway's
+  reference page lists it with the version it was read in, and a test fails when it changes. That test may be
+  the end-to-end scenario against the real gateway, which runs on demand and must pass before a milestone
+  closes. Two Hermes internals have no such test yet, `COMMAND_REGISTRY` with `_is_gateway_available` and
+  `resolve_gateway_clarify` ([what the plugin relies on](reference/hermes-messages.md)); they are a known gap,
+  closed by having the Hermes scenario check that its session item lists commands and ask one question.
+
+Not decided: the socket's chat section, which the gateways' own message tools need
+([Q-32](open-questions.md#q-32-what-does-the-sockets-chat-section-carry)). Until it is designed, OpenClaw's
+message tool is offered no actions.
+
+**Why.** The contract was written from what both plugins do, and both pass their tests and their end-to-end
+scenarios on it, so accepting it as written settles what is built. Each point follows from the gateway owning
+the conversation: its sessions, its workspace and its way of sending a file are already there, and a second
+of each from the core would compete with the gateway's. Hermes gives a platform only formatted lines, so `tool`
+items would have to be guessed back out of text. The gateways' typed commands are the one way in that they
+publish for controls. A test of the plugin's own package runs against a fake gateway, so only a run inside the
+real one can see an internal change.
+
+Decided 2026-11-23. The project owner decided.
+
+## D-119 How a gateway install moves over: its work folder, a half-done OpenClaw move, a fresh conversation
+
+**Decision.** Three points about moving a Hermes or OpenClaw install of today's connectors over
+([D-089](#d-089-an-install-moves-over-by-importing-its-account-home-in-place),
+[move](move.md)):
+
+- **`--replace-plugin` lists the gateway's work folder in `files_from`**, as a fresh install does
+  ([a gateway's files](design/drivers.md#a-gateways-files)): the folder the installer finds for that gateway,
+  under the same rules, and none in the same cases. It is added beside the old connector's folders the import
+  wrote, not in their place, and only to the line the import wrote, marked by the import's comment and then by the installer's, which
+  names the folder it added; a re-run changes nothing while the gateway works there, and puts the new folder
+  in its place if the gateway has moved; a `files_from` the person wrote is left alone, and the installer says what to add. A folder
+  that holds or lies inside the moved account's home, or the import's backup of it, is never added. (These
+  details were decided 2026-11-23 by the builder, under the project owner's instruction to decide minor
+  points.)
+- **The installer edits `openclaw.json` itself to finish a half-done move.** A move stopped after our plugin went
+  into OpenClaw and before the old plugin's settings came out of its `marmot` channel leaves an OpenClaw that
+  refuses to read or change any of its settings, or to start, so its own commands cannot finish the move. When
+  a run of `install/openclaw.sh` finds settings in `channels.marmot` that our plugin does not take, and OpenClaw
+  refuses `config get channels.marmot` naming that channel, it keeps a copy of OpenClaw's settings file (the one
+  `openclaw config file` names) in the agent's `backups` folder, and takes those settings out of the file itself,
+  leaving `enabled` and `home`, which our plugin takes. It does so only for a file that is plain JSON, and
+  writes the new file beside it, then moves it into place. Everywhere else the installers change a gateway's
+  settings only through the gateway's own commands.
+- **The gateway's conversation starts fresh after a move.** The new plugin names a chat by the core's own id
+  for it ([D-036](#d-036-the-ids-a-connector-sees-are-the-cores-own)), not by the group, so what Hermes or
+  OpenClaw kept of a chat's conversation stays with the old name, and nothing carries it over. The chat itself,
+  and everything said in it, stays where it was.
+
+At `master` commit `e923d4e` the first point is not built yet: the import always writes a `files_from` line, the
+old connector's media folders or none, and the installer leaves a `files_from` line it finds as it is. The other
+two are built.
+
+**Why.** A moved agent should be able to send the files a freshly installed one can, or the move takes something
+away; the folder is found by the same rules, which keep out the home and the gateway's media cache. Finishing a
+half-done move is the only way out of a state OpenClaw cannot leave on its own commands, and the copy kept first
+makes it undoable; this is the exception to building on the gateway's official interface
+([D-006](#d-006-prefer-official-interfaces-and-libraries)). Carrying the old conversation over would mean giving
+the plugin the group's id, or a map from it, which D-036 keeps from every connector.
+
+Decided 2026-11-23. The project owner decided.
+
+## D-120 The choices made in moving to kinds 1201 and 1202, as built
+
+**Decision.** Five points built with [D-112](#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by)
+on 2026-11-22 are accepted, as [kinds 1201 and 1202](design/agent-kinds.md#accepted-with-the-move-to-mdk) and
+`crates/marmot-agent/src/conversation.rs` and `carrier.rs` have them:
+
+- **A notice the core makes carries `seq` from 1.** A `refused` or `failed` notice of the core's own carries as
+  its `seq` the highest its chat's items have shown, or 1 when they have shown none, since MDK reads a `seq`
+  only from 1. It sorts after what came before it.
+- **An item begun under the temporary kinds carries on as a new kind 1201 event.** A state file from a core that
+  sent items under the temporary kind of
+  [D-069](#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind) is taken up once: MDK
+  applies no edit to such an event, so each item's next version goes out as a new kind 1201 event, the item's
+  first from then on, with its version going on rising. The agent's words, chat messages then too, are edited as
+  before. What the state file kept of forgotten items is dropped. A state file that holds an item or a notice
+  already handed to MDK in the old shape is refused, and the core does not start, since MDK keeps that try's
+  token bound to the old event and would refuse it in the new shape, though it may have gone out.
+- **A first event that disappeared is sent again; one that was deleted is not.** In a chat whose messages
+  disappear, MDK forgets an item's first event and its token, and refuses an edit of it. The core then sends
+  that version as a new kind 1201 event, the item's first from then on, under the same item id and with its
+  version going on rising; the chat is told of no failure. The agent's words whose message disappeared go out as
+  a new message. A first event that someone deleted, or that never reached the group, is not sent again: that
+  version is dropped with a `failed` notice.
+- **The agent's words settle at most what MDK takes in a chat message.** MDK takes a chat message with at most
+  64 tags, of at most 16 KB in all, and does not export those numbers; the core keeps them itself, and a test
+  against MDK checks them. So the agent's words carry as many `settles` as fit beside their `turn` and, for a
+  remark, their `phase`: 62 for a remark with a short turn id, 63 for words without `phase`, fewer only when the
+  16 KB is reached first. Their turn's next versions settle the rest. An item is held only to its shape and
+  64 KB.
+- **A refused notice about a message names it with `started_by`.** The core's `refused` notice about a chat
+  message it did not act on, a prompt from someone without the right or one the driver refused, names that
+  message with the tag a turn names its message with, `started_by`.
+
+The other additions on that page, built on 2026-11-21 and 2026-11-22, stay proposals.
+
+**Why.** Each follows from what MDK does now: it reads `seq` from 1, it cannot edit an event in the old shape or
+one it has forgotten, and it caps a chat message's tags. A disappearing chat is working as meant, so a gone first
+event is no failure to report, while a deleted one is someone's choice, which the core does not undo. A notice
+about a message uses the name MDK gave that tag.
 
 Decided 2026-11-23. The project owner decided.
 

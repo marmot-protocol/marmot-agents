@@ -9,7 +9,9 @@ The core has sent these kinds on MDK since. How an agent event travels was decid
 ([the carrier](event-carrier.md), D-022 to D-027); the exact tags were not. This page fixes them, from what the
 first end-to-end test (M1 of the [plan](../plan.md)) sent and read back, under the temporary kinds of
 [D-069](../decisions.md#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind). The code
-that writes and reads them is `crates/marmot-agent/src/carrier.rs`. The section
+that writes and reads them is `crates/marmot-agent/src/carrier.rs`. What was
+[accepted with the move to MDK](#accepted-with-the-move-to-mdk) is decided
+([D-120](../decisions.md#d-120-the-choices-made-in-moving-to-kinds-1201-and-1202-as-built)). The section
 [provisional additions](#provisional-additions) is a proposal, built and waiting for the owner.
 
 ## What M1 showed
@@ -57,6 +59,37 @@ A notice the core makes itself, to say why an answer, a control or a message was
 type `notice` with the kind `refused`, a `reason` such as `not_allowed` or `busy`, and a `settles` tag for the
 request it answers.
 
+## Accepted with the move to MDK
+
+Built on 2026-11-22 with the move to MDK's kinds, and accepted by the owner on 2026-11-23
+([D-120](../decisions.md#d-120-the-choices-made-in-moving-to-kinds-1201-and-1202-as-built)).
+
+- **The agent's words settle at most what MDK takes in a chat message** (2026-11-22). MDK takes a chat message
+  with at most 64 tags, of at most 16 KB in all, and does not export those numbers; kind 1201 and its edits are
+  held only to their shape and 64 KB. So the agent's words carry as many `settles` as fit beside their `turn`
+  and, for a remark, their `phase`: 62 for a remark with a short turn id, 63 without `phase`, fewer only when
+  the 16 KB is reached first. Their turn's next versions settle the rest. The core keeps MDK's two numbers
+  itself (`carrier.rs`), and a test against MDK checks them.
+- **A place in the session for the core's own notices** (2026-11-22). MDK reads a `seq` only from 1, so a
+  notice the core makes itself (`refused`, `failed`) carries the highest `seq` its chat's items have shown, or 1
+  when they have shown none, not 0 as before: it sorts after what came before it.
+- **A notice about a message names it with `started_by`** (2026-11-22). The core's `refused` notice about a chat
+  message it did not act on, a prompt from someone without the right or one the driver refused, names that
+  message with the tag a turn names its message with, now `started_by`.
+- **An item whose first event has disappeared** (2026-11-22). In a chat whose messages disappear, an item's
+  first event can go while the item goes on, as a session's does. MDK then refuses an edit of it, as it no
+  longer has the event nor the token it went under. The core sends that version as a new kind 1201 event
+  instead, the item's first from then on, with its version going on rising; the chat is told of no failure. The
+  agent's words whose message has disappeared go out as a new message, as when their message was removed. An
+  item's first event that someone deleted, or that never reached the group, is not sent again: that version is
+  dropped with a `failed` notice, as before.
+- **An item begun under the temporary kind** (2026-11-22). A state file from a core that sent items under the
+  temporary kind of D-069 is taken up once: MDK applies no edit to such an event, so each of its items' next
+  version goes out as a new kind 1201 event, the item's first from then on, with its version going on rising. What
+  the state file kept of forgotten items is dropped. A state file that holds an item or a notice already handed
+  to MDK in the old shape is refused, and the core does not start: MDK keeps that try's token bound to the old
+  event and would refuse it in the new shape, though it may have gone out. No core that sent the temporary kind was released.
+
 ## Provisional additions
 
 Built on 2026-11-21 while fixing the known gaps of [testing and verification](verification.md). These are
@@ -70,11 +103,6 @@ Built on 2026-11-21 while fixing the known gaps of [testing and verification](ve
 - **At most 200 `settles` on one event.** An item's version, or the agent's words, that would settle more goes
   out as several versions of the same item, the same and numbered on, each settling at most 200; words leave the
   rest to their turn's next versions. So every event that settles fits in 64 KB.
-- **The agent's words settle at most what MDK takes in a chat message** (2026-11-22). MDK takes a chat message
-  with at most 64 tags, of at most 16 KB in all, and does not export those numbers; kind 1201 and its edits are
-  held only to their shape and 64 KB. So the agent's words carry as many `settles` as fit beside their `turn`
-  and `phase`: 62 with a short turn id, fewer with a long one. Their turn's next versions settle the rest, as
-  above. The core keeps MDK's two numbers itself (`carrier.rs`), and a test against MDK checks them.
 - **`no_effect`.** An answer the driver took whose item stopped waiting without naming it is settled at once by a
   `refused` notice with the reason `no_effect`, not left pending until the driver stops.
 - **`failed` for a send MDK refuses.** A send MDK will not take, and is not an edit of words that were removed, is
@@ -104,26 +132,6 @@ Built on 2026-11-21 while fixing the known gaps of [testing and verification](ve
   dropped send, a `failed` notice takes its place, settling what it settled. The core's `failed` notices carry no
   session. Each of these is the last: if MDK refuses it too, as in a group that is gone, nothing more is sent for
   it.
-
-- **A place in the session for the core's own notices** (2026-11-22). MDK reads a `seq` only from 1, so a
-  notice the core makes itself (`refused`, `failed`) carries the highest `seq` its chat's items have shown, or 1
-  when they have shown none, not 0 as before: it sorts after what came before it.
-- **A notice about a message names it with `started_by`** (2026-11-22). The core's `refused` notice about a chat
-  message it did not act on, a prompt from someone without the right or one the driver refused, names that
-  message with the tag a turn names its message with, now `started_by`.
-- **An item whose first event has disappeared** (2026-11-22). In a chat whose messages disappear, an item's
-  first event can go while the item goes on, as a session's does. MDK then refuses an edit of it, as it no
-  longer has the event nor the token it went under. The core sends that version as a new kind 1201 event
-  instead, the item's first from then on, with its version going on rising; the chat is told of no failure. The
-  agent's words whose message has disappeared go out as a new message, as when their message was removed. An
-  item's first event that someone deleted, or that never reached the group, is not sent again: that version is
-  dropped with a `failed` notice, as before.
-- **An item begun under the temporary kind** (2026-11-22). A state file from a core that sent items under the
-  temporary kind of D-069 is taken up once: MDK applies no edit to such an event, so each of its items' next
-  version goes out as a new kind 1201 event, the item's first from then on, with its version going on rising. What
-  the state file kept of forgotten items is dropped. A state file that holds an item already handed to MDK in the
-  old shape is refused, and the core does not start: MDK keeps that try's token bound to the old event and would
-  refuse it in the new shape, though it may have gone out. No core that sent the temporary kind was released.
 
 ## Updating an item
 
@@ -188,7 +196,7 @@ MDK issue 3612; none of it holds up the core.
 - Expose items, with their latest version, to the apps.
 - Let a chat message carry up to 200 `settles` tags, as an item can. MDK still caps a chat message at 64 tags and
   16 KB of them. **Not done**, and no longer needed for the core to work: the agent's words now carry only as
-  many as fit, and their turn settles the rest (see the provisional additions above).
+  many as fit, and their turn settles the rest (see what was accepted with the move to MDK, above).
 
 ## Decided
 
@@ -198,3 +206,5 @@ MDK issue 3612; none of it holds up the core.
    ([D-077](../decisions.md#d-077-a-refused-notice-says-why-something-was-not-acted-on)).
 3. The agent's remarks during a turn do not alert
    ([D-078](../decisions.md#d-078-the-agents-remarks-during-a-turn-do-not-alert)).
+4. What was [accepted with the move to MDK](#accepted-with-the-move-to-mdk)
+   ([D-120](../decisions.md#d-120-the-choices-made-in-moving-to-kinds-1201-and-1202-as-built)).
