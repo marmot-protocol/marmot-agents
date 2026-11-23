@@ -1089,7 +1089,7 @@ async fn upload(
     let read = tokio::task::spawn_blocking(move || folders.read(&path)).await;
     let outgoing = read.map_err(|_| Refusal::new(Reason::Failed))??;
     let mut wait = Duration::from_millis(100);
-    for _ in 0..FILE_BUSY_TRIES {
+    for tried in 1..=FILE_BUSY_TRIES {
         match marmot.send_file(group, &outgoing, turn.as_ref()).await {
             Ok(_) => return Ok(()),
             Err(FileFailed::Busy) => {}
@@ -1102,8 +1102,10 @@ async fn upload(
                 });
             }
         }
-        tokio::time::sleep(wait).await;
-        wait = (wait * 2).min(Duration::from_secs(10));
+        if tried < FILE_BUSY_TRIES {
+            tokio::time::sleep(wait).await;
+            wait = (wait * 2).min(Duration::from_secs(10));
+        }
     }
     Err(Refusal {
         reason: Reason::Busy,
@@ -1165,5 +1167,144 @@ pub async fn serve(
                 return running.await;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::keys::{EventKey, PubKey};
+    use crate::marmot::Page;
+    use std::sync::Mutex;
+
+    /// A stand-in for MDK that answers each file it is offered with the next of `answers`, and
+    /// counts the offers. It does nothing else.
+    #[derive(Clone)]
+    struct Uploads {
+        agent: PubKey,
+        answers: Arc<Mutex<VecDeque<Result<EventKey, FileFailed>>>>,
+        offers: Arc<Mutex<u32>>,
+    }
+
+    impl Uploads {
+        fn answering(answers: Vec<Result<EventKey, FileFailed>>) -> Self {
+            Self {
+                agent: PubKey::from("agent"),
+                answers: Arc::new(Mutex::new(answers.into())),
+                offers: Arc::default(),
+            }
+        }
+
+        fn offers(&self) -> u32 {
+            *self.offers.lock().unwrap()
+        }
+    }
+
+    impl Side for Uploads {
+        type Events = ();
+
+        fn agent(&self) -> &PubKey {
+            &self.agent
+        }
+
+        async fn next(&self, _events: &mut ()) -> Live {
+            unreachable!("only files are sent")
+        }
+
+        async fn publish_name(&self, _name: &str, _relays: &[String]) {}
+
+        async fn incoming(&self, _message: Message) -> Result<Option<Incoming>, NotNow> {
+            unreachable!("only files are sent")
+        }
+
+        fn invitations(&self) -> Vec<(GroupKey, Option<PubKey>)> {
+            Vec::new()
+        }
+
+        async fn decide(&self, _group: &GroupKey, _accept: bool) -> bool {
+            unreachable!("only files are sent")
+        }
+
+        fn groups(&self) -> Result<Vec<GroupKey>, NotNow> {
+            Ok(Vec::new())
+        }
+
+        fn stored(&self, _group: &GroupKey, _after: i64, _limit: usize) -> Result<Page, NotNow> {
+            unreachable!("only files are sent")
+        }
+
+        async fn send(
+            &self,
+            _group: &GroupKey,
+            _what: &Sending,
+            _token: &crate::Token,
+        ) -> Result<EventKey, SendFailed> {
+            unreachable!("only files are sent")
+        }
+
+        async fn send_file(
+            &self,
+            _group: &GroupKey,
+            _file: &crate::files::Outgoing,
+            _turn: Option<&marmot_agent_events::TurnId>,
+        ) -> Result<EventKey, FileFailed> {
+            *self.offers.lock().unwrap() += 1;
+            let next = self.answers.lock().unwrap().pop_front();
+            next.unwrap_or(Err(FileFailed::Busy))
+        }
+    }
+
+    /// Uploads a small file from a folder of its own to `side`, and says how it went and how long
+    /// it took on tokio's clock.
+    async fn upload_to(side: &Uploads) -> (Result<(), Refusal>, Duration) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.txt");
+        std::fs::write(&path, "hello").unwrap();
+        let folders = Folders::new(&[dir.path().to_path_buf()], None);
+        let started = Instant::now();
+        let result = upload(side, folders, path, &GroupKey::from("g"), None).await;
+        (result, started.elapsed())
+    }
+
+    // A file MDK is busy for is offered again, a little later each time, until MDK takes it: it
+    // goes out once (D-090).
+    #[tokio::test(start_paused = true)]
+    async fn a_file_mdk_is_busy_for_is_offered_again_until_taken() {
+        let side = Uploads::answering(vec![
+            Err(FileFailed::Busy),
+            Err(FileFailed::Busy),
+            Ok(EventKey::from("e1")),
+        ]);
+        let (result, took) = upload_to(&side).await;
+        assert!(result.is_ok());
+        assert_eq!(side.offers(), 3);
+        assert_eq!(took, Duration::from_millis(300), "100 ms, then 200 ms");
+    }
+
+    // MDK busy all along: the file is given up as busy, after about half a minute of tries, and
+    // not waited for after the last one.
+    #[tokio::test(start_paused = true)]
+    async fn a_file_mdk_stays_busy_for_is_given_up_as_busy() {
+        let side = Uploads::answering(Vec::new());
+        let (result, took) = upload_to(&side).await;
+        let refusal = result.expect_err("given up");
+        assert_eq!(refusal.reason, Reason::Busy);
+        assert_eq!(side.offers(), FILE_BUSY_TRIES);
+        assert!(
+            took < Duration::from_secs(35),
+            "no wait after the last try: {took:?}"
+        );
+    }
+
+    // Any other failure may have come after MDK took the file, so it is not offered again: that
+    // could post it twice. The refusal says it failed, and names no path (D-071).
+    #[tokio::test(start_paused = true)]
+    async fn a_file_whose_send_failed_is_not_offered_again() {
+        let side = Uploads::answering(vec![Err(FileFailed::Failed), Ok(EventKey::from("e1"))]);
+        let (result, _) = upload_to(&side).await;
+        let refusal = result.expect_err("failed");
+        assert_eq!(refusal.reason, Reason::Failed);
+        assert!(!refusal.detail.unwrap_or_default().contains('/'));
+        assert_eq!(side.offers(), 1);
     }
 }
