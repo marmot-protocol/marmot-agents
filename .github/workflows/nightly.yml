@@ -1,0 +1,271 @@
+name: Nightly
+
+# The long checks (D-094, D-115), on master once a night and by hand: the simulator on many new
+# seeds, TLC on larger bounds, a coverage report, and the places kept for mutation testing and
+# the model-double scenarios. Nothing here gates a pull request; a job that fails opens an issue,
+# or adds to the one it opened before.
+#
+# Rules for this file, as for ci.yml: every action is pinned to a commit and every downloaded
+# tool to a version and a checksum, the token can only read except in the job that writes issues,
+# and no job uses a secret. No job sets RUSTFLAGS.
+on:
+  schedule:
+    # 03:17 UTC, off the hour, when the runners are quieter.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
+jobs:
+  simulator:
+    name: Simulator on new seeds
+    runs-on: ubuntu-24.04
+    # 200 runs of each gate family take about 10 s once built.
+    timeout-minutes: 90
+    env:
+      MARMOT_AGENT_SIM_RUNS: "5000"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/rust
+        with:
+          # CI's simulator cache, read only: the same release build.
+          cache: rust-simulator
+
+      - name: Build the simulator's tests
+        run: cargo test --locked --release -p marmot-agent-sim --all-features --no-run
+
+      - name: The gate's families on a seed no run has used
+        # The run's id is new each night and is the seed: a failure's capsule names it, and
+        # `MARMOT_AGENT_SIM_SEED` with it runs the same schedules again.
+        env:
+          MARMOT_AGENT_SIM_SEED: ${{ github.run_id }}
+        run: |
+          echo "Seed ${MARMOT_AGENT_SIM_SEED}, ${MARMOT_AGENT_SIM_RUNS} runs of each family." | tee -a "${GITHUB_STEP_SUMMARY}"
+          timeout --kill-after=30s 75m cargo test --locked --release -p marmot-agent-sim --all-features --test seeds
+
+      - name: Keep the schedules and capsules
+        # Each failure leaves a capsule that replays it (crates/marmot-agent-sim/README.md); a run
+        # that hung or panicked leaves its schedule. A run that passes leaves nothing.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: simulator-capsules
+          path: target/tmp/marmot-agent-sim/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  models:
+    name: TLA+ models on larger bounds
+    runs-on: ubuntu-24.04
+    # formal/tla/README.md, "Larger bounds": the fair configuration with two items and two
+    # downs, and with two chats, safety and liveness apart. The runner has 4 processors and
+    # 16 GB, of which TLC takes 12.
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Java
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Cache the TLC jar
+        # Keyed by the checksum tools/tla/run.sh pins, which checks the jar again on every run.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/marmot-agents/tla
+          key: tla2tools-936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
+
+      - name: Every larger configuration passes
+        env:
+          TLC_WORKERS: "4"
+          TLC_HEAP: 12g
+        run: python3 tools/tla/check.py --bounds larger
+
+      - name: Keep TLC's logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tlc-larger-bounds
+          path: target/tla/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  coverage:
+    name: Coverage report
+    runs-on: ubuntu-24.04
+    # A report only: no threshold, nothing fails on a number. The workspace's tests, the
+    # simulator's at their normal count, built with LLVM's instrumentation.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/rust
+        with:
+          # Only the registry and MDK's sources are of use from it: the instrumented build is
+          # its own.
+          cache: rust-test-rest
+
+      - name: Install cargo-llvm-cov
+        # A tool CI runs, not a dependency of the code. It uses llvm-tools-preview, which
+        # rust-toolchain.toml installs, and it keeps the flags in .cargo/config.toml. To move to
+        # another release, change the version and the checksum together: the checksum is the
+        # `digest` of this file on the release page of taiki-e/cargo-llvm-cov.
+        env:
+          LLVM_COV_VERSION: 0.9.1
+          LLVM_COV_SHA256: b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a
+        run: |
+          set -euo pipefail
+          name=cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz
+          url="https://github.com/taiki-e/cargo-llvm-cov/releases/download/v${LLVM_COV_VERSION}/${name}"
+          mkdir -p "${RUNNER_TEMP}/llvm-cov"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/${name}" "${url}"
+          echo "${LLVM_COV_SHA256}  ${RUNNER_TEMP}/${name}" | sha256sum --check
+          tar -xzf "${RUNNER_TEMP}/${name}" -C "${RUNNER_TEMP}/llvm-cov"
+          echo "${RUNNER_TEMP}/llvm-cov" >> "${GITHUB_PATH}"
+
+      - name: The workspace's tests, instrumented
+        run: |
+          cargo llvm-cov --version
+          cargo llvm-cov --locked --workspace --all-features --no-report
+
+      - name: The report
+        run: |
+          cargo llvm-cov report --html --output-dir target/coverage
+          cargo llvm-cov report --lcov --output-path target/coverage/lcov.info
+          cargo llvm-cov report --summary-only | tee target/coverage/summary.txt
+
+      - name: Keep the report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage
+          path: target/coverage/
+          retention-days: 30
+
+  mutants:
+    name: Mutation testing (off)
+    # Switched off: it does not fit a night. On 2026-11-23 cargo-mutants 27.1.0 listed 1,649
+    # mutants in the core (`cargo mutants --list -p marmot-agent`), and each needs the core's test
+    # programs built again and about three minutes of the core's tests: days, not hours. To switch
+    # it on, give it a slice that fits, such as one shard a night (`--shard "$((day % 64))/64"`
+    # with `day` the day of the year, about 26 mutants) or the files a model follows, then set
+    # the repository variable NIGHTLY_MUTANTS to `true` (Settings, Secrets and variables,
+    # Actions, Variables).
+    if: vars.NIGHTLY_MUTANTS == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/rust
+        with:
+          cache: rust-test-core
+
+      - name: Install cargo-mutants
+        # A tool CI runs, not a dependency of the code. To move to another release, change the
+        # version and the checksum together: the checksum is the `digest` of this file on the
+        # release page of sourcefrog/cargo-mutants.
+        env:
+          MUTANTS_VERSION: 27.1.0
+          MUTANTS_SHA256: dfe6dc37d0342c891d2829b5a695aa57c2d0edecef7e7d0399a30cc6e206411e
+        run: |
+          set -euo pipefail
+          name=cargo-mutants-x86_64-unknown-linux-gnu.tar.gz
+          url="https://github.com/sourcefrog/cargo-mutants/releases/download/v${MUTANTS_VERSION}/${name}"
+          mkdir -p "${RUNNER_TEMP}/mutants"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/${name}" "${url}"
+          echo "${MUTANTS_SHA256}  ${RUNNER_TEMP}/${name}" | sha256sum --check
+          tar -xzf "${RUNNER_TEMP}/${name}" -C "${RUNNER_TEMP}/mutants"
+          echo "${RUNNER_TEMP}/mutants" >> "${GITHUB_PATH}"
+
+      - name: The core's mutants
+        run: cargo mutants --package marmot-agent --all-features --in-place --no-shuffle --output target
+
+      - name: Keep what survived
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants
+          path: target/mutants.out/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # The model-double scenarios go here: each harness against a model double instead of a real
+  # model, which another piece of work is building. They need no key, so they belong in this
+  # workflow and, once they are fast enough, in the merge queue's gate (ci.yml). When they land,
+  # add their job here, after the Rust setup (./.github/actions/rust, cache rust-test-core), and
+  # add it to the report's `needs`.
+
+  report:
+    name: Open an issue for each job that failed
+    # Only the night's own run reports: a run started by hand is watched by whoever started it.
+    if: always() && github.event_name == 'schedule'
+    needs:
+      - simulator
+      - models
+      - coverage
+      - mutants
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or add to one issue per failed job
+        # The issue holds the job's name, the run's link, the commit and the date, and nothing
+        # from the logs: they stay behind the link, as CI printed them.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NEEDS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          title_of() {
+            case "$1" in
+              simulator) echo "Simulator on new seeds" ;;
+              models) echo "TLA+ models on larger bounds" ;;
+              coverage) echo "Coverage report" ;;
+              mutants) echo "Mutation testing" ;;
+              *) echo "$1" ;;
+            esac
+          }
+          day="$(date -u +%Y-%m-%d)"
+          for job in $(jq -r 'to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key' <<< "${NEEDS}"); do
+            title="Nightly: $(title_of "${job}") failed"
+            body="The nightly job \`$(title_of "${job}")\` failed on ${day}, at commit ${SHA}: ${RUN_URL}"
+            number="$(gh issue list --state open --search "\"${title}\" in:title" --json number,title \
+              --jq "map(select(.title == \"${title}\")) | first | .number // empty")"
+            if [ -n "${number}" ]; then
+              gh issue comment "${number}" --body "${body}"
+              echo "Added to #${number}: ${title}"
+            else
+              gh issue create --title "${title}" --body "${body}
+
+          This issue is opened by .github/workflows/nightly.yml, which adds a comment each night the job fails again. Close it once the job passes."
+              echo "Opened: ${title}"
+            fi
+          done
