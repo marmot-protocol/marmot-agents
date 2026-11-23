@@ -14,7 +14,8 @@ as the first line of its output. It answers:
 - OpenAI Responses, `POST …/responses`, as Codex sends them;
 - OpenAI Chat Completions, `POST …/chat/completions`, as OpenCode, Goose, Pi, Hermes and OpenClaw send them;
 - `GET …/models`, a list with one model, `scripted`;
-- `GET /_double/log`, what it was asked, as keys (below), and whether each was answered.
+- `GET /_double/log`, what it was asked, as keys (below), and whether each was answered (with each request's
+  whole body too, given `--keep-bodies`).
 
 Every request is read into one neutral form, whatever its format: the conversation as user, assistant and
 tool messages, and whether tools were offered. A reply is neutral too, a list of parts (`{"text": …}`,
@@ -23,9 +24,9 @@ tool messages, and whether tools were offered. A reply is neutral too, a list of
 What identifies a request, its key, is loose on purpose, so a new harness version still matches:
 
 - `kind`: `main` when the request offers tools, `side` when it offers none (a title, a summary, a check);
-- `prompt`: the text of the last user message that is a person's prompt, with the blocks a harness wraps
-  around it (`<system-reminder>…</…>`, `<environment_context>…</…>` and any other tagged block) removed and
-  its spaces collapsed;
+- `prompt`: the text of the last user messages, those since the model last spoke or a tool's results came,
+  with the blocks a harness wraps around a person's words (`<system-reminder>…</…>`, `<environment_context>…</…>`
+  and any other tagged block) removed and spaces collapsed;
 - `after`: how many model replies the conversation already holds since that prompt;
 - `last`: what the model is answering: `prompt`, or `results:` and the names of the tools whose results came.
 
@@ -35,7 +36,8 @@ Modes:
 
 - scripted: the script says what the model does. `{"prompts": [{"when": "<words in the prompt>",
   "replies": [[part, …], …]}], "side": [part, …]}`: the first entry whose `when` is in the prompt answers, its
-  reply number `after`; a side request gets `side` (`ok` if none). With `--save`, what it answered is written
+  reply number `after` (or its last, for any later one, when the entry has `"repeat": true`); a side request
+  gets `side` (`ok` if none). With `--save`, what it answered is written
   as a cassette too.
 - replay: a cassette answers. A request matches the exchange with the same `kind`, `prompt` and `after`; if
   its `last` differs, or no exchange matches, it is refused with status 400 and logged as unmatched.
@@ -185,7 +187,13 @@ def key_of(fmt: str, body: Json) -> Json:
         if messages[i].role == "user" and prompt_text(messages[i].text):
             at = i
             break
-    prompt = prompt_text(messages[at].text) if at is not None else ""
+    prompt = ""
+    if at is not None:
+        # The person's words and what a harness puts beside them, before or after, in messages of their own.
+        first = at
+        while first > 0 and messages[first - 1].role == "user":
+            first -= 1
+        prompt = " ".join(t for t in (prompt_text(m.text) for m in messages[first : at + 1]) if t)
     later = messages[at + 1 :] if at is not None else messages
     after = sum(1 for m in later if m.role == "assistant")
     last = "prompt"
@@ -511,6 +519,8 @@ class Scripted:
                 replies = entry["replies"]
                 if key["after"] < len(replies):
                     return replies[key["after"]]
+                if entry.get("repeat"):
+                    return replies[-1]
                 raise Unmatched(f"the script has {len(replies)} replies for {entry['when']!r}")
         raise Unmatched("no entry of the script is in the prompt")
 
@@ -564,6 +574,8 @@ class Server(http.server.ThreadingHTTPServer):
     def __init__(self, port: int, mode: Any, save: Cassette | None, dump: Path | None = None) -> None:
         super().__init__(("127.0.0.1", port), Handler)
         self.dump = dump
+        self.keep_bodies = False
+        self.verbose = False
         self.mode = mode
         self.save = save
         self.log: list[Json] = []
@@ -613,6 +625,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             (self.server.dump / f"{n:03d}-{fmt}.json").write_bytes(raw)
         key = key_of(fmt, body)
         entry = {"format": fmt, **key}
+        if self.server.keep_bodies:
+            entry["body"] = raw.decode("utf-8", "replace")
         try:
             parts = self.server.mode.answer(fmt, key, body)
         except Unmatched as e:
@@ -631,6 +645,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send(502, "application/json", json.dumps({"error": {"message": "upstream failed"}}))
         with self.server.lock:
             self.server.log.append(entry)
+        if self.server.verbose:
+            print(f"model double: answered {json.dumps(key)}", file=sys.stderr, flush=True)
         if self.server.save is not None:
             self.server.save.keep(key, parts)
         kind, text = WRITERS[fmt](parts, body)
@@ -650,6 +666,8 @@ def main() -> None:
     parser.add_argument("--key-file", type=Path)
     parser.add_argument("--model")
     parser.add_argument("--dump", type=Path, help="write each request's body to this folder, to study it")
+    parser.add_argument("--verbose", action="store_true", help="print each request's key as it is answered")
+    parser.add_argument("--keep-bodies", action="store_true", help="put each request's whole body in the log")
     args = parser.parse_args()
 
     header = {"cassette": 1, "harness": args.harness, "version": args.version,
@@ -668,6 +686,8 @@ def main() -> None:
         mode = Record(args.upstream, args.key_file, args.model)
         save = Cassette(args.file, header)
     server = Server(args.port, mode, save, args.dump)
+    server.keep_bodies = args.keep_bodies
+    server.verbose = args.verbose
     print(f"http://127.0.0.1:{server.server_address[1]}", flush=True)
     try:
         server.serve_forever()

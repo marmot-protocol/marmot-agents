@@ -28,6 +28,15 @@ pub fn repository() -> PathBuf {
 impl Double {
     /// A double that answers as `script` says (the script's form is in `double.py`).
     pub async fn scripted(script: &Value) -> Self {
+        Self::scripted_with(script, &[]).await
+    }
+
+    /// A scripted double that keeps each request's whole body, for `bodies`.
+    pub async fn scripted_keeping_bodies(script: &Value) -> Self {
+        Self::scripted_with(script, &["--keep-bodies"]).await
+    }
+
+    async fn scripted_with(script: &Value, args: &[&str]) -> Self {
         let files = tempfile::tempdir().unwrap();
         let path = files.path().join("script.json");
         std::fs::write(&path, script.to_string()).unwrap();
@@ -35,8 +44,18 @@ impl Double {
         command
             .arg(repository().join("tools/model_double/double.py"))
             .arg("scripted")
-            .arg(&path);
+            .arg(&path)
+            .args(args);
         Self::start(command, files).await
+    }
+
+    /// The whole body of each model request (not a model list) the harness made, oldest first,
+    /// from a double that keeps them.
+    pub async fn bodies(&self) -> Vec<String> {
+        let log = self.log().await;
+        log.iter()
+            .map(|e| e["body"].as_str().expect("kept bodies").to_string())
+            .collect()
     }
 
     /// A double that answers from the cassette at `cassette`, and refuses any request it holds no
@@ -102,6 +121,11 @@ impl Double {
     }
 
     async fn start(mut command: Command, files: tempfile::TempDir) -> Self {
+        // With MODEL_DOUBLE_VERBOSE set, it prints each request's key as it answers, to see what a
+        // harness asked when a scenario fails.
+        if std::env::var_os("MODEL_DOUBLE_VERBOSE").is_some() {
+            command.arg("--verbose");
+        }
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

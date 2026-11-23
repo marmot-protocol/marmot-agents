@@ -43,6 +43,13 @@ class Keys(unittest.TestCase):
         self.assertEqual(double.key_of("anthropic", body),
                          {"kind": "main", "prompt": "Run `ls`", "after": 1, "last": "results:Bash"})
 
+    def test_context_beside_the_prompt_is_part_of_it(self):
+        body = {"tools": [{"type": "function"}], "messages": [
+            {"role": "user", "content": "Run `ls`"},
+            {"role": "user", "content": "Sender: someone"},
+        ]}
+        self.assertEqual(double.key_of("chat", body)["prompt"], "Run `ls` Sender: someone")
+
     def test_a_request_with_no_tools_is_a_side_one(self):
         body = anthropic({"role": "user", "content": "Write a title"}, tools=False)
         self.assertEqual(double.key_of("anthropic", body)["kind"], "side")
