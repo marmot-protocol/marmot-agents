@@ -81,27 +81,12 @@ use for each:
 `partial_answer`, are settled by D-059 and tested with hand-written messages in
 [`crates/marmot-agent-codex/tests/cases.rs`](../crates/marmot-agent-codex/tests/cases.rs).
 
-**Fields only the prototype has, from Hermes and OpenClaw.** The crate does not have them, so the core passes
-over them. Each is for the connector that produces it to bring up. On 2026-11-23 the socket's schema check
-found that only OpenClaw still sends any, the ones in
-[`fixtures/socket/passed-over.json`](../fixtures/socket/passed-over.json), which its tests allow and no
-others: neither `command` nor `reason` on an approval, nor the eight notice kinds, is sent by any connector
-now, and Hermes sends none of the table. Those Claude Code had (`model` on a turn, `cost_usd` in its usage,
-`patch` and `parent` on a tool, `tool` on an approval, `usage` on a task, `attempt` on a retry, `parent` on
-reasoning) were left out on 2026-11-21, when its expected events were written: every event in
-[`fixtures/recordings/claude/expected`](../fixtures/recordings/claude/expected) is read by the item types with
-nothing passed over. An edit's change is now the crate's `changes`, with a diff built from Claude Code's hunks.
-The values are still in the native message.
-
-| Item | Field | From |
-| --- | --- | --- |
-| `turn` | `model` | OpenClaw |
-| `message` | `sent_with` | OpenClaw |
-| `tool` | `action`, `target`, `called_through`, `subject` | OpenClaw |
-| `approval` | `answer_via`, `command`, `reason`, `expires_at_ms`, `subject_inferred` | Hermes, OpenClaw |
-| `approval`, `question` | `native` on each choice: the text to type. The page says a choice carries a label and an effect, "nothing more" | Hermes, OpenClaw |
-| `notice` | Eight more kinds: `runtime`, `activity`, `progress`, `refused`, `steered`, `new_session`, `stopped`, `directive`. A `command` field | Hermes, OpenClaw |
-| `error` | `subject` | OpenClaw |
+**Fields only the prototype had, from Hermes and OpenClaw**, such as `model` on a turn, `native` on an
+approval's choices or a `command` on a notice, are gone. OpenClaw was the last to send any, and stopped
+([D-115](decisions.md#d-115-the-sockets-schema-is-made-from-the-cores-own-types-and-checks-this-repositorys-connectors)):
+on 2026-11-23 every event in every `expected/` folder under [`fixtures/recordings`](../fixtures/recordings) is
+what the socket's schema admits, and the connectors' tests allow no field it does not. The values are still in
+the native message. A field one of them is to carry again comes back as a change to the item types.
 
 A task's `kind` is the harness's own word in the prototype, `local_bash` or `subagent` for Claude Code. The
 crate takes it as text, since the page names `kind` and does not list its values.

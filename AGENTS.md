@@ -269,8 +269,7 @@ MARMOT_AGENT_WRITE_SOCKET=1 cargo test -p marmot-agent --lib socket::corpus
 
 The Claude Code and OpenClaw packages and the Hermes plugin check themselves against both files in their own
 tests, so a change on one side only fails one of them. A field a connector sends that the core's types do not
-hold fails too, unless `fixtures/socket/passed-over.json` lists it as an open question
-([Q-01](docs/open-questions.md#q-01-what-exactly-is-in-an-agent-event)).
+hold fails too.
 
 The core links MDK, whose markdown parser is written in Odin and needs one exact Odin release to build. Install
 it once with `bash tools/odin/install.sh <absolute folder>`, which checks its checksum, and set `ODIN` to the

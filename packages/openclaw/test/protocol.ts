@@ -66,40 +66,14 @@ function focused(def: string, value: unknown): string[] | undefined {
   return undefined;
 }
 
-/**
- * Fields a connector puts in an item's body that the core's types do not hold yet, each an open question
- * (Q-01): `fixtures/socket/passed-over.json`. The core passes over them; the checks allow them and no
- * others.
- */
-const passedOver = (JSON.parse(readFileSync(new URL("passed-over.json", folder), "utf8")) as { fields: { type: string; field: string }[] }).fields;
-
-/** The event without the fields passed over for its type. */
-export function withoutPassedOver(event: Json): Json {
-  const copy = structuredClone(event);
-  const drop = (value: unknown, path: string[]): void => {
-    const [first, ...rest] = path;
-    if (first === undefined) return;
-    if (first === "[]") {
-      if (Array.isArray(value)) for (const v of value) drop(v, rest);
-    } else if (typeof value === "object" && value !== null && first in value) {
-      if (rest.length > 0) drop((value as Json)[first], rest);
-      else delete (value as Json)[first];
-    }
-  };
-  for (const { type, field } of passedOver) if (copy["type"] === type) drop(copy["body"], field.replace(/\[\]/g, ".[]").split("."));
-  return copy;
-}
-
-/** What is wrong with an event the connector sends, as the core reads it, beyond what is passed over. */
+/** What is wrong with an event the connector sends, as the core reads it. */
 export function eventProblems(event: unknown): string[] {
-  return problems("EventParams", withoutPassedOver(JSON.parse(JSON.stringify(event)) as Json));
+  return problems("EventParams", JSON.parse(JSON.stringify(event)) as Json);
 }
 
-/** What is wrong with a whole `event` message, as the core reads it: its params without the fields the core passes over. */
+/** What is wrong with a whole `event` message, as the core reads it. */
 export function eventMessageProblems(message: Json): string[] {
-  const copy = JSON.parse(JSON.stringify(message)) as Json;
-  copy["params"] = withoutPassedOver(copy["params"] as Json);
-  return problems("FromConnector", copy);
+  return problems("FromConnector", JSON.parse(JSON.stringify(message)) as Json);
 }
 
 /** Fails unless `value` is a `def` of the schema. */

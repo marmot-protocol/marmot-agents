@@ -313,10 +313,8 @@ the eight words above) and, if it likes, a `detail` for the chat.
 `title`, `text`, `body`, and `session`, `turn` and `native` when there are any), with three more fields: `chat`,
 the chat it belongs to; `prompts`, on a turn; and `settles`, the requests whose effect it shows. The connector
 leaves out `harness` and `seq`: the core fills them in. The core passes over a field its types do not know,
-so it never reaches the chat; the schema admits none, so a connector's tests catch one. The few the
-connectors send today are listed, each an open question
-([Q-01](../open-questions.md#q-01-what-exactly-is-in-an-agent-event)), in
-[`passed-over.json`](../../fixtures/socket/passed-over.json).
+so it never reaches the chat; the schema admits none, so a connector's tests catch one. The connectors here
+send none.
 
 **`send_file`**, a request from the connector, provisional: the agent sends a file to the chat.
 

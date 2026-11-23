@@ -117,67 +117,6 @@ fn the_committed_schema_is_the_one_the_types_make() {
     committed("schema.json", &schema());
 }
 
-/// Whether the schema names the field at `path` under `node`, in any of its branches.
-fn names(schema: &Value, node: &Value, path: &[&str]) -> bool {
-    let mut node = node;
-    while let Some(name) = node["$ref"].as_str() {
-        node = &schema["$defs"][name.trim_start_matches("#/$defs/")];
-    }
-    let Some((first, rest)) = path.split_first() else {
-        return true;
-    };
-    let branches = ["anyOf", "oneOf", "allOf"]
-        .iter()
-        .filter_map(|k| node[*k].as_array())
-        .flatten();
-    if branches.into_iter().any(|b| names(schema, b, path)) {
-        return true;
-    }
-    match *first {
-        "[]" => node
-            .get("items")
-            .is_some_and(|items| names(schema, items, rest)),
-        field => node["properties"]
-            .get(field)
-            .is_some_and(|f| names(schema, f, rest)),
-    }
-}
-
-// What a connector sends that the types do not hold is listed, each an open question (Q-01), and
-// the checks in the other languages allow only those. One the types come to hold comes off the list.
-#[test]
-fn what_the_core_passes_over_is_not_in_its_types() {
-    let schema = schema();
-    let text = std::fs::read_to_string(Path::new(FOLDER).join("passed-over.json")).unwrap();
-    let listed: Value = serde_json::from_str(&text).unwrap();
-    let fields = listed["fields"].as_array().unwrap();
-    assert!(!fields.is_empty());
-    for entry in fields {
-        let (kind, field) = (
-            entry["type"].as_str().unwrap(),
-            entry["field"].as_str().unwrap(),
-        );
-        let def: String = kind
-            .split('_')
-            .map(|w| w[..1].to_uppercase() + &w[1..])
-            .collect();
-        let body = &schema["$defs"][&def];
-        assert!(body.is_object(), "{kind} is not an item type");
-        let path = field.replace("[]", ".[]");
-        let path: Vec<&str> = path.split('.').filter(|p| !p.is_empty()).collect();
-        assert!(
-            !names(&schema, body, &path),
-            "the types hold {kind}'s {field} now: take it off fixtures/socket/passed-over.json, and \
-             out of Q-01 in docs/open-questions.md"
-        );
-        // The field's parent is one the types hold, so the path is not mistyped.
-        assert!(
-            names(&schema, body, &path[..path.len() - 1]),
-            "{kind}'s {field}"
-        );
-    }
-}
-
 // ------------------------------------------------------------------------------ examples
 
 /// One example: a name, which side sends it, and the message.

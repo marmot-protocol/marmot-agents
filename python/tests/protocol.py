@@ -158,36 +158,9 @@ def focused(definition: str, value) -> list[str]:
 
 # -- what the plugin sends: an event, as it goes to the core
 
-PASSED_OVER = json.loads((FOLDER / "passed-over.json").read_text(encoding="utf-8"))["fields"]
-
-
-def without_passed_over(event: dict) -> dict:
-    """The event without the fields `fixtures/socket/passed-over.json` lists for its type: fields a
-    connector sends that the core's types do not hold yet, each an open question (Q-01)."""
-    event = copy.deepcopy(event)
-    for entry in PASSED_OVER:
-        if entry["type"] == event.get("type"):
-            drop(event.get("body"), entry["field"].replace("[]", ".[]").split("."))
-    return event
-
-
-def drop(value, path: list[str]) -> None:
-    if not path:
-        return
-    first, rest = path[0], path[1:]
-    if first == "[]":
-        for item in value if isinstance(value, list) else []:
-            drop(item, rest)
-    elif isinstance(value, dict) and first in value:
-        if rest:
-            drop(value[first], rest)
-        else:
-            del value[first]
-
-
 def event_problems(event: dict) -> list[str]:
-    """What is wrong with an event the plugin sends, as the core reads it, beyond what is passed over."""
-    return problems("EventParams", without_passed_over(event))
+    """What is wrong with an event the plugin sends, as the core reads it."""
+    return problems("EventParams", event)
 
 
 # -- what the plugin reads

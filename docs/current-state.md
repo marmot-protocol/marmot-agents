@@ -114,7 +114,7 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
 - A connector speaks only in agent events. The core does the shared work, gives it ids of its own, and gives
   each connector its own token ([D-034](decisions.md#d-034-the-core-does-the-shared-work-and-a-connector-speaks-only-in-agent-events), [D-036](decisions.md#d-036-the-ids-a-connector-sees-are-the-cores-own), [D-038](decisions.md#d-038-each-connector-has-its-own-token)).
 - A JSON Schema and examples made from the core's own types (`fixtures/socket`) check that the three connectors
-  here send and read only what the core does; the core itself stays lenient, and OpenClaw stops sending the
+  here send and read only what the core does; the core itself stays lenient, and OpenClaw no longer sends the
   fields the core passes over ([D-115](decisions.md#d-115-the-sockets-schema-is-made-from-the-cores-own-types-and-checks-this-repositorys-connectors)).
 
 ## Files
