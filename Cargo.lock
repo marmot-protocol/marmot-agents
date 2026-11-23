@@ -3056,6 +3056,7 @@ dependencies = [
  "marmot-agent-events",
  "marmot-app",
  "nostr-relay-builder",
+ "serde_json",
  "tokio",
 ]
 

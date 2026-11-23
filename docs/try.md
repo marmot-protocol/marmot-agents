@@ -57,9 +57,15 @@ the `odin` program in that folder, as "Verification" in [`AGENTS.md`](../AGENTS.
    Run `touch hello.txt` in the shell.
    ```
 
-Each of the agent's items shows on one line, again each time it changes. When it asks, type `:allow` (once)
-or `:deny`, or `:choose` one of the choices shown; answer a question with `:answer <text>` or `:pick` an option. `:stop` interrupts a turn, `:new` starts a new session, and `:set <setting> <value>` changes one of
-the session's settings. A message that starts with a slash goes to Codex as typed.
+Each of the agent's items shows on one line, again each time it changes, starting with its chat's label, which
+names the group and the agent in it. When it asks, type `:allow` or `:deny` when one choice allows or denies, or
+`:choose` one of the choices shown; answer a question with `:answer <text>` or `:pick` an option, or, when it says so,
+with a plain message. In a group, the agent hears only a message that mentions it, so start that one with the
+`nostr:` address the client shows; a secret is typed only in a chat of you and the agent alone, and otherwise in the
+harness's terminal. The shortcuts answer in the chat you talk in; an item from another chat says how it is answered
+there, and `:chat <label>` switches to that chat and shows again what waits in it. `:stop` interrupts a turn, `:new`
+starts a new session, and `:set <setting> <value>` changes one of the session's settings. A message that starts
+with a slash goes to Codex as typed.
 
 The relay keeps nothing when the client stops, so start again from step 2 with fresh folders.
 
