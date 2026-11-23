@@ -7,16 +7,22 @@
 //! sends answers and controls as kind 1202 (D-076). How to try the core with it is in
 //! `docs/try.md`.
 //!
+//! Each line from a chat starts with the chat's label, and the shortcuts answer only in the chat
+//! being talked in, so a waiting item from another chat shows how to switch to it instead.
+//!
 //! Typed lines are messages, sent exactly as typed, slash commands included (D-031). Lines that
 //! start with `:` are for this client:
 //!
 //! ```text
 //! :invite <key>          start a direct chat with the agent
 //! :group <name> <key>    make a named group with the agent in it
-//! :allow   :deny         answer the latest approval waiting in this chat, allowing once
+//! :chat <label>          talk in the chat whose lines start with that label
+//! :allow   :deny         answer the latest approval waiting in this chat with its one choice
+//!                        that allows, or denies; with more than one, :choose
 //! :choose <id>           answer it with the choice of that id
 //! :answer <text>         answer the question waiting in this chat with text
 //! :pick <id>             answer it with the option of that id
+//!                        (a question answered by a plain message takes neither: type it)
 //! :stop                  interrupt the running turn
 //! :new                   start a new session
 //! :set <id> <value>      change one of the session's settings
@@ -28,7 +34,9 @@ use marmot_account::AccountHome;
 use marmot_agent::carrier::{self, Asked, AskedReply, EDIT_KIND, ITEM_KIND, Read};
 use marmot_agent::{EventKey, PubKey};
 use marmot_agent_events::State;
-use marmot_agent_events::body::{Body, Choice, Effect};
+use marmot_agent_events::body::{
+    AnswerVia, Approval, Asked as AskedOne, Body, Choice, Effect, Question,
+};
 use marmot_app::{
     AccountSetupRequest, MarmotApp, MarmotAppConfig, MarmotAppEvent, MarmotAppRuntime,
 };
@@ -201,9 +209,24 @@ impl Client {
                 println!("· group made; address the agent by writing nostr:{npub}");
                 Ok(())
             }
-            [":allow"] => self.approve(|c| c.effect == Effect::Allow).await,
-            [":deny"] => self.approve(|c| c.effect == Effect::Deny).await,
-            [":choose", id] => self.approve(|c| c.id == *id).await,
+            [":chat", label] => {
+                let (group, agent) = self.items.chat(label)?;
+                let group = hex::decode(&group).map_err(|_| "not a chat")?;
+                self.chat = Some((GroupId::new(group), PubKey(agent)));
+                println!("· talking in {label}");
+                Ok(())
+            }
+            [":allow"] => self.approve(|a| only(a, Effect::Allow)).await,
+            [":deny"] => self.approve(|a| only(a, Effect::Deny)).await,
+            [":choose", id] => {
+                let id = id.to_string();
+                self.approve(move |a| {
+                    (a.choices.iter())
+                        .find(|c| c.id == id)
+                        .ok_or_else(|| "no such choice".to_string())
+                })
+                .await
+            }
             [":answer", ..] => {
                 let text = line.trim_start_matches(":answer").trim().to_string();
                 self.answer(None, Some(text)).await
@@ -231,9 +254,11 @@ impl Client {
         }
     }
 
-    /// Answers the latest approval waiting in this chat with the first choice `wanted` picks. The
-    /// first choice that allows is "Allow once"; a standing one comes after it.
-    async fn approve(&mut self, wanted: impl Fn(&Choice) -> bool) -> Result<(), String> {
+    /// Answers the latest approval waiting in this chat with the choice `wanted` picks from it.
+    async fn approve(
+        &mut self,
+        wanted: impl Fn(&Approval) -> Result<&Choice, String>,
+    ) -> Result<(), String> {
         let (target, choice) = {
             let (target, seen) = self
                 .waiting(|b| matches!(b, Body::Approval(_)))
@@ -241,11 +266,7 @@ impl Client {
             let Body::Approval(approval) = seen.read.item.event.body() else {
                 unreachable!()
             };
-            let choice = approval
-                .choices
-                .iter()
-                .find(|c| wanted(c))
-                .ok_or("no such choice")?;
+            let choice = wanted(approval)?;
             (target.clone(), choice.clone())
         };
         let asked = Asked::Choice { choice: choice.id };
@@ -262,10 +283,7 @@ impl Client {
             let Body::Question(item) = seen.read.item.event.body() else {
                 unreachable!()
             };
-            let asked = item
-                .questions()
-                .first()
-                .ok_or("the question asks nothing")?;
+            let asked = first_question(item)?;
             (target.clone(), asked.id.clone(), asked.secret)
         };
         if secret {
@@ -292,11 +310,7 @@ impl Client {
     fn waiting(&self, kind: impl Fn(&Body) -> bool) -> Option<(&EventKey, &Seen)> {
         let (group, agent) = self.chat.as_ref()?;
         let group = hex::encode(group.as_slice());
-        (self.items.known.iter())
-            .filter(|(_, s)| s.group == group && s.sender == agent.as_str())
-            .filter(|(_, s)| s.read.item.event.header().state == State::Waiting)
-            .filter(|(_, s)| kind(s.read.item.event.body()))
-            .max_by_key(|(_, s)| s.order)
+        self.items.waiting(&group, agent.as_str(), kind)
     }
 
     async fn ask(
@@ -319,11 +333,15 @@ impl Client {
             return;
         }
         let name = clean(message.sender_display_name.as_deref().unwrap_or("agent"));
+        let group = hex::encode(message.group_id.as_slice());
         if message.kind == CHAT {
-            println!("{name}: {}", clean(&message.plaintext));
+            println!(
+                "{} {name}: {}",
+                chat_label(&group),
+                clean(&message.plaintext)
+            );
             return;
         }
-        let group = hex::encode(message.group_id.as_slice());
         let row = |first: &str| {
             let row = self
                 .runtime
@@ -335,7 +353,9 @@ impl Client {
                 tags: row.tags,
             })
         };
-        for line in self.items.arrived(&message, row) {
+        let selected = (self.chat.as_ref()).map(|(g, a)| (hex::encode(g.as_slice()), a.as_str()));
+        let selected = selected.as_ref().map(|(g, a)| (g.as_str(), *a));
+        for line in self.items.arrived(&message, selected, row) {
             println!("{line}");
         }
     }
@@ -348,6 +368,7 @@ impl Items {
     fn arrived(
         &mut self,
         message: &marmot_app::ReceivedMessage,
+        selected: Option<(&str, &str)>,
         row: impl FnOnce(&str) -> Option<Row>,
     ) -> Vec<String> {
         // Only to know which item changed: what it now is comes from MDK's row of it, which
@@ -372,17 +393,83 @@ impl Items {
         {
             return Vec::new();
         }
-        let lines = lines_for(&read);
+        let group = hex::encode(message.group_id.as_slice());
+        let here = selected == Some((group.as_str(), row.sender.as_str()));
+        let lines = lines_for(&read, &group, here);
         self.arrived += 1;
         let seen = Seen {
             read,
-            group: hex::encode(message.group_id.as_slice()),
+            group,
             sender: row.sender,
             order: self.arrived,
         };
         self.known.insert(first, seen);
         lines
     }
+
+    /// The chat whose label is `label`, as its group's hex id, and the agent that sent its
+    /// latest item.
+    fn chat(&self, label: &str) -> Result<(String, String), String> {
+        (self.known.values())
+            .filter(|s| chat_label(&s.group) == label)
+            .max_by_key(|s| s.order)
+            .map(|s| (s.group.clone(), s.sender.clone()))
+            .ok_or_else(|| format!("no chat {label} has shown an item"))
+    }
+
+    /// The latest item waiting in `group` from `agent`, of the type `kind` picks.
+    fn waiting(
+        &self,
+        group: &str,
+        agent: &str,
+        kind: impl Fn(&Body) -> bool,
+    ) -> Option<(&EventKey, &Seen)> {
+        (self.known.iter())
+            .filter(|(_, s)| s.group == group && s.sender == agent)
+            .filter(|(_, s)| s.read.item.event.header().state == State::Waiting)
+            .filter(|(_, s)| kind(s.read.item.event.body()))
+            .max_by_key(|(_, s)| s.order)
+    }
+}
+
+/// A short name for a chat, from its group's hex id: its first eight digits.
+fn chat_label(group: &str) -> String {
+    group.chars().take(8).collect()
+}
+
+/// The one choice of `approval` with `effect`. With more than one, such as Goose's "allow always"
+/// listed before "allow once", none: which is meant is the person's to say with `:choose`.
+fn only(approval: &Approval, effect: Effect) -> Result<&Choice, String> {
+    let does = match effect {
+        Effect::Allow => "allows",
+        Effect::Deny => "denies",
+    };
+    let mut matching = approval.choices.iter().filter(|c| c.effect == effect);
+    match (matching.next(), matching.next()) {
+        (Some(choice), None) => Ok(choice),
+        (None, _) => Err(format!("no choice {does}")),
+        (Some(_), Some(_)) => {
+            let ids: Vec<String> = (approval.choices.iter())
+                .filter(|c| c.effect == effect)
+                .map(|c| format!("{} ({})", clean(&c.id), clean(&c.label)))
+                .collect();
+            Err(format!(
+                "more than one choice {does}: :choose one of {}",
+                ids.join(", ")
+            ))
+        }
+    }
+}
+
+/// The question an answer by request answers: the item's first. A question answered by a plain
+/// message takes no request: the harness waits for the person's next message.
+fn first_question(item: &Question) -> Result<&AskedOne, String> {
+    if item.answer_via() == AnswerVia::Message {
+        return Err("this question is answered by a plain message: type your answer".into());
+    }
+    item.questions()
+        .first()
+        .ok_or_else(|| "the question asks nothing".to_string())
 }
 
 /// Text from the chat as it may be printed: no control characters, so nothing received can move
@@ -394,9 +481,10 @@ fn clean(text: &str) -> String {
         .collect()
 }
 
-/// The lines for an item's latest version: its type and state, title and plain rendering, and for
-/// one that waits, what can be answered.
-fn lines_for(read: &Read) -> Vec<String> {
+/// The lines for an item's latest version: its chat's label, its type and state, title and plain
+/// rendering, and for one that waits, what can be answered. The shortcuts are offered only `here`,
+/// in the chat being talked in, where they answer; elsewhere, how to switch to its chat.
+fn lines_for(read: &Read, group: &str, here: bool) -> Vec<String> {
     let event = &read.item.event;
     let header = event.header();
     let kind = match event.body() {
@@ -423,7 +511,8 @@ fn lines_for(read: &Read) -> Vec<String> {
         text.push('…');
     }
     let title = clean(&header.title);
-    let mut lines = vec![format!("  [{kind} · {state}] {title}: {text}")];
+    let chat = chat_label(group);
+    let mut lines = vec![format!("{chat} [{kind} · {state}] {title}: {text}")];
     if header.state != State::Waiting {
         return lines;
     }
@@ -434,23 +523,50 @@ fn lines_for(read: &Read) -> Vec<String> {
                 .iter()
                 .map(|c| format!("{} ({})", clean(&c.label), clean(&c.id)))
                 .collect();
-            lines.push(format!(
-                "    :allow, :deny or :choose <id>: {}",
-                choices.join(", ")
-            ));
+            if here {
+                let shortcuts: Vec<&str> = [
+                    (only(approval, Effect::Allow).is_ok()).then_some(":allow"),
+                    (only(approval, Effect::Deny).is_ok()).then_some(":deny"),
+                    Some(":choose <id>"),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
+                lines.push(format!(
+                    "    {}: {}",
+                    shortcuts.join(", "),
+                    choices.join(", ")
+                ));
+            } else {
+                lines.push(format!("    choices: {}", choices.join(", ")));
+            }
         }
         Body::Question(question) => {
+            let by_message = question.answer_via() == AnswerVia::Message;
             for asked in question.questions() {
                 let secret = if asked.secret { " (secret)" } else { "" };
                 lines.push(format!("    ? {}{secret}", clean(&asked.text)));
                 for option in &asked.options {
                     let (id, label) = (clean(&option.id), clean(&option.label));
-                    lines.push(format!("      :pick {id}  {label}"));
+                    if here && !by_message {
+                        lines.push(format!("      :pick {id}  {label}"));
+                    } else {
+                        lines.push(format!("      - {label}"));
+                    }
                 }
             }
-            lines.push("    :answer <text> answers the first question".into());
+            if here && by_message {
+                lines.push("    reply with a plain message: the agent takes your next one".into());
+            } else if here {
+                lines.push("    :answer <text> answers the first question".into());
+            }
         }
         _ => {}
+    }
+    if !here && matches!(event.body(), Body::Approval(_) | Body::Question(_)) {
+        lines.push(format!(
+            "    in another chat: :chat {chat} to answer it there"
+        ));
     }
     lines
 }
@@ -510,6 +626,174 @@ mod tests {
 
     struct ReceivedVersion(marmot_app::ReceivedMessage);
 
+    const CHAT_A: u8 = 0xa1;
+    const CHAT_B: u8 = 0xb2;
+
+    /// The first version of `event`, sent by `sender` to the chat whose group id is all `chat`.
+    fn first_of(id: &str, sender: &str, chat: u8, event: AgentEvent) -> ReceivedVersion {
+        let item = Item {
+            event,
+            version: 1,
+            first: None,
+            started_by: None,
+            settles: Vec::new(),
+        };
+        let out = carrier::item(&item).unwrap();
+        ReceivedVersion(marmot_app::ReceivedMessage {
+            group_id: GroupId::new(vec![chat; 16]),
+            ..version(id, sender, 1, None).0
+        })
+        .with(out)
+    }
+
+    impl ReceivedVersion {
+        fn with(mut self, out: carrier::Outgoing) -> Self {
+            self.0.plaintext = out.content;
+            self.0.kind = out.kind;
+            self.0.tags = out.tags;
+            self
+        }
+    }
+
+    /// The waiting event of `kind` in a recording's expected events, as the driver makes it.
+    fn recorded(path: &str, kind: &str) -> AgentEvent {
+        let path = format!(
+            "{}/../../fixtures/recordings/{path}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let text = std::fs::read_to_string(&path).unwrap();
+        (text.lines())
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+            .find(|e| e["type"] == kind && e["state"] == "waiting")
+            .map(|e| serde_json::from_value(e).unwrap())
+            .unwrap_or_else(|| panic!("no waiting {kind} in {path}"))
+    }
+
+    fn group_hex(chat: u8) -> String {
+        hex::encode([chat; 16])
+    }
+
+    /// Takes in `received` as the chat shows it, with chat A and its agent selected.
+    fn shown_in_a(items: &mut Items, received: &ReceivedVersion) -> Vec<String> {
+        let selected = group_hex(CHAT_A);
+        items.arrived(&received.0, Some((&selected, AGENT)), |_| {
+            Some(received.row())
+        })
+    }
+
+    // #140. Every line names the chat it is from, and only an item in the chat being talked in
+    // offers the shortcuts, which answer that chat's item: with two chats, the approval the
+    // shortcuts answer is the one shown with them, even when another chat's came after it.
+    #[test]
+    fn the_shortcuts_are_offered_only_for_the_chat_they_answer_in() {
+        let mut items = Items::default();
+        let approval = recorded("acp/goose/expected/approval_allowed.jsonl", "approval");
+        let in_a = first_of("ea", AGENT, CHAT_A, approval.clone());
+        let in_b = first_of("eb", AGENT, CHAT_B, approval);
+        let lines_a = shown_in_a(&mut items, &in_a);
+        let lines_b = shown_in_a(&mut items, &in_b);
+        let (label_a, label_b) = (
+            chat_label(&group_hex(CHAT_A)),
+            chat_label(&group_hex(CHAT_B)),
+        );
+        assert_ne!(label_a, label_b);
+        assert!(lines_a[0].starts_with(&label_a), "{lines_a:?}");
+        assert!(lines_b[0].starts_with(&label_b), "{lines_b:?}");
+        assert!(lines_a.iter().any(|l| l.contains(":choose")), "{lines_a:?}");
+        assert!(
+            !lines_b.iter().any(|l| l.contains(":choose")),
+            "{lines_b:?}"
+        );
+        assert!(lines_b.iter().any(|l| l.contains(":chat")), "{lines_b:?}");
+        let (answered, _) = (items.waiting(&group_hex(CHAT_A), AGENT, |b| {
+            matches!(b, Body::Approval(_))
+        }))
+        .expect("chat A's approval waits");
+        assert_eq!(answered, &EventKey::from("ea"));
+    }
+
+    // #140. `:chat` selects a chat by the label its lines show, with the agent that sent its
+    // items.
+    #[test]
+    fn a_chat_is_selected_by_its_label() {
+        let mut items = Items::default();
+        let approval = recorded("acp/goose/expected/approval_allowed.jsonl", "approval");
+        shown_in_a(&mut items, &first_of("eb", AGENT, CHAT_B, approval));
+        let label = chat_label(&group_hex(CHAT_B));
+        assert_eq!(
+            items.chat(&label),
+            Ok((group_hex(CHAT_B), AGENT.to_string()))
+        );
+        assert!(items.chat("ffff").is_err());
+    }
+
+    // #137. Goose lists a standing approval before the one-time one, and both allow: `:allow`
+    // picks neither, and asks for `:choose`. With one choice that allows, it takes that one.
+    #[test]
+    fn allow_refuses_when_more_than_one_choice_allows() {
+        let event = recorded("acp/goose/expected/approval_allowed.jsonl", "approval");
+        let Body::Approval(approval) = event.body() else {
+            panic!("an approval")
+        };
+        assert!(
+            approval
+                .choices
+                .iter()
+                .filter(|c| c.effect == Effect::Allow)
+                .count()
+                > 1
+        );
+        let refused = only(approval, Effect::Allow).expect_err("two choices allow");
+        assert!(refused.contains(":choose"), "{refused}");
+        let mut one = approval.clone();
+        one.choices.retain(|c| c.id != "c0" && c.id != "c3");
+        assert_eq!(only(&one, Effect::Allow).map(|c| c.id.as_str()), Ok("c1"));
+        assert_eq!(only(&one, Effect::Deny).map(|c| c.id.as_str()), Ok("c2"));
+        let item = first_of("ea", AGENT, CHAT_A, event.clone());
+        let lines = shown_in_a(&mut Items::default(), &item);
+        assert!(!lines.iter().any(|l| l.contains(":allow")), "{lines:?}");
+    }
+
+    // #141. The recorded Codex question is answered by a plain message: the chat says so, offers
+    // neither `:answer` nor `:pick`, and both refuse it.
+    #[test]
+    fn a_question_answered_by_a_message_asks_for_a_message() {
+        let event = recorded("codex/expected/question.jsonl", "question");
+        let Body::Question(question) = event.body() else {
+            panic!("a question")
+        };
+        assert_eq!(question.answer_via(), AnswerVia::Message);
+        let item = first_of("eq", AGENT, CHAT_A, event.clone());
+        let lines = shown_in_a(&mut Items::default(), &item);
+        assert!(
+            lines.iter().any(|l| l.contains("plain message")),
+            "{lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.contains(":pick") || l.contains(":answer")),
+            "{lines:?}"
+        );
+        let refused = first_question(question).expect_err("answered by a message");
+        assert!(refused.contains("plain message"), "{refused}");
+    }
+
+    // A question answered by request still offers both.
+    #[test]
+    fn a_question_answered_by_request_offers_answer_and_pick() {
+        let event = recorded("claude/expected/question.jsonl", "question");
+        let Body::Question(question) = event.body() else {
+            panic!("a question")
+        };
+        assert_eq!(question.answer_via(), AnswerVia::Request);
+        let item = first_of("eq", AGENT, CHAT_A, event.clone());
+        let lines = shown_in_a(&mut Items::default(), &item);
+        assert!(lines.iter().any(|l| l.contains(":answer")), "{lines:?}");
+        assert!(first_question(question).is_ok());
+    }
+
     impl ReceivedVersion {
         /// The row MDK would keep for the item, if this were its latest version from its
         /// sender.
@@ -537,10 +821,13 @@ mod tests {
     fn an_edit_before_its_first_event_is_held() {
         let mut items = Items::default();
         let edit = version("e2", AGENT, 2, Some("e1"));
-        assert!(items.arrived(&edit.0, |_| None).is_empty(), "nothing yet");
+        assert!(
+            items.arrived(&edit.0, None, |_| None).is_empty(),
+            "nothing yet"
+        );
         assert!(shown(&items).is_empty());
         let first = version("e1", AGENT, 1, None);
-        let lines = items.arrived(&first.0, |id| (id == "e1").then(|| edit.row()));
+        let lines = items.arrived(&first.0, None, |id| (id == "e1").then(|| edit.row()));
         assert_eq!(lines.len(), 1);
         assert_eq!(shown(&items), [(AGENT.to_string(), 2)]);
     }
@@ -551,10 +838,17 @@ mod tests {
         let mut items = Items::default();
         let first = version("e1", AGENT, 1, None);
         let forged = version("e9", STRANGER, 5, Some("e1"));
-        assert!(items.arrived(&forged.0, |_| None).is_empty(), "nothing yet");
-        items.arrived(&first.0, |_| Some(first.row()));
+        assert!(
+            items.arrived(&forged.0, None, |_| None).is_empty(),
+            "nothing yet"
+        );
+        items.arrived(&first.0, None, |_| Some(first.row()));
         assert_eq!(shown(&items), [(AGENT.to_string(), 1)]);
-        assert!(items.arrived(&forged.0, |_| Some(first.row())).is_empty());
+        assert!(
+            items
+                .arrived(&forged.0, None, |_| Some(first.row()))
+                .is_empty()
+        );
         assert_eq!(shown(&items), [(AGENT.to_string(), 1)]);
     }
 }

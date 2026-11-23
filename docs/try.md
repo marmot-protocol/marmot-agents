@@ -56,9 +56,12 @@ compiler that MDK uses: see "Verification" in [`AGENTS.md`](../AGENTS.md).
    Run `touch hello.txt` in the shell.
    ```
 
-Each of the agent's items shows on one line, again each time it changes. When it asks, type `:allow` (once)
-or `:deny`, or `:choose` one of the choices shown; answer a question with `:answer <text>` or `:pick` an option. `:stop` interrupts a turn, `:new` starts a new session, and `:set <setting> <value>` changes one of
-the session's settings. A message that starts with a slash goes to Codex as typed.
+Each of the agent's items shows on one line, again each time it changes, starting with its chat's label. When it
+asks, type `:allow` or `:deny` when one choice allows or denies, or `:choose` one of the choices shown; answer a
+question with `:answer <text>` or `:pick` an option, or, when it says so, with a plain message. The shortcuts answer in
+the chat you talk in; `:chat <label>` switches to another. `:stop` interrupts a turn, `:new` starts a new session, and
+`:set <setting> <value>` changes one of the session's settings. A message that starts with a slash goes to Codex as
+typed.
 
 The relay keeps nothing when the client stops, so start again from step 2 with fresh folders.
 
