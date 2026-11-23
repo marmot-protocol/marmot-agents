@@ -25,7 +25,7 @@
 //!   (D-136).
 
 use crate::activity::{self, FullActivity};
-use crate::carrier::{self, Asked, Item, SETTLES_MAX};
+use crate::carrier::{self, Asked, Item, SETTLES_MAX, Unreadable};
 use crate::chat_folder::{FOLDER, FolderRule, LABEL};
 use crate::keys::{EventKey, GroupKey, PubKey};
 use crate::rights::{Right, Rights, needed_for};
@@ -109,8 +109,8 @@ pub struct HeardRequest {
     pub age_secs: u64,
     /// The first event of the item it acts on, when it names one.
     pub target: Option<EventKey>,
-    /// What it asks.
-    pub asked: Asked,
+    /// What it asks, or why it could not be read.
+    pub asked: Result<Asked, Unreadable>,
 }
 
 /// Something the program running the core is to do.
@@ -720,7 +720,23 @@ impl Conversation {
         }
         // The right comes first: someone without it is told only that, and nothing of the item
         // the request names, whether it exists, waits or was answered (S6).
-        let right = match &heard.asked {
+        let asked = match &heard.asked {
+            Ok(asked) => asked.clone(),
+            // What cannot be read cannot say which right it needs, and every action needs one of
+            // the two: either is enough to be told why it was not read (D-032, D-140).
+            Err(unreadable) => {
+                let holds = |right| self.rights.allows(&heard.author, right);
+                if !holds(Right::Prompt) && !holds(Right::Approve) {
+                    return self.not_allowed(&heard, &chat, Right::Prompt);
+                }
+                let reason = match unreadable {
+                    Unreadable::UnknownAction => Reason::NotSupported,
+                    Unreadable::Invalid => Reason::Invalid,
+                };
+                return self.refuse_now(&heard, &chat, Refusal::new(reason));
+            }
+        };
+        let right = match &asked {
             Asked::Choice { .. } => Right::Approve,
             // A folder changes what the agent can touch (D-101).
             Asked::Set { setting, .. } if self.moves_folder(setting) => Right::Approve,
@@ -728,13 +744,7 @@ impl Conversation {
             _ => Right::Prompt,
         };
         if !self.rights.allows(&heard.author, right) {
-            let notice = self.notice(&heard.chat.group, &chat, "not_allowed", not_allowed(right));
-            return vec![self.send_notice(
-                &heard.chat.group,
-                notice,
-                None,
-                vec![heard.event.clone()],
-            )];
+            return self.not_allowed(&heard, &chat, right);
         }
         let target = heard
             .target
@@ -743,7 +753,7 @@ impl Conversation {
         if heard.target.is_some() && target.is_none() {
             return self.refuse_now(&heard, &chat, Refusal::new(Reason::UnknownItem));
         }
-        let answering = matches!(heard.asked, Asked::Choice { .. } | Asked::Questions { .. });
+        let answering = matches!(asked, Asked::Choice { .. } | Asked::Questions { .. });
         let answers = target.clone().filter(|_| answering);
         let target = target.map(|key| self.saved.items[&key].clone());
         // One that points at an item acts only while the item is live, and an answer only while
@@ -767,13 +777,12 @@ impl Conversation {
         let target = target.map(|record| record.last);
         let by = self.person(&heard.author, heard.author_name.clone());
         let request = RequestId(self.make_id("r"));
-        let act = match self.translate(&heard, &chat, target.as_ref(), &request, by) {
+        let act = match self.translate(&heard, &asked, &chat, target.as_ref(), &request, by) {
             Ok(act) => act,
             Err(refusal) => return self.refuse_now(&heard, &chat, refusal),
         };
-        let moving =
-            matches!(&heard.asked, Asked::Set { setting, .. } if self.moves_folder(setting));
-        let new_session = matches!(heard.asked, Asked::NewSession) || moving;
+        let moving = matches!(&asked, Asked::Set { setting, .. } if self.moves_folder(setting));
+        let new_session = matches!(asked, Asked::NewSession) || moving;
         let folder = match &act {
             Act::Control(Control {
                 action: Action::NewSession { chat, .. },
@@ -801,6 +810,7 @@ impl Conversation {
     fn translate(
         &self,
         heard: &HeardRequest,
+        asked: &Asked,
         chat: &Chat,
         target: Option<&AgentEvent>,
         request: &RequestId,
@@ -819,7 +829,7 @@ impl Conversation {
                 .or_else(|| self.saved.sessions.get(&chat.id.0).cloned())
                 .ok_or(Refusal::new(Reason::NothingToDo))
         };
-        Ok(match &heard.asked {
+        Ok(match asked {
             Asked::Choice { choice } => {
                 let target = target.filter(|t| matches!(t.body(), Body::Approval(_)));
                 let target = target.ok_or(Refusal::new(Reason::UnknownItem))?;
@@ -2070,6 +2080,13 @@ impl Conversation {
         };
         let notice = self.notice(&pending.group, &chat, reason, text);
         vec![self.send_notice(&pending.group, notice, None, vec![pending.event])]
+    }
+
+    /// Settles a request from someone without `right` with the `not_allowed` notice, which says
+    /// nothing else (S6).
+    fn not_allowed(&mut self, heard: &HeardRequest, chat: &Chat, right: Right) -> Vec<Act> {
+        let notice = self.notice(&heard.chat.group, chat, "not_allowed", not_allowed(right));
+        vec![self.send_notice(&heard.chat.group, notice, None, vec![heard.event.clone()])]
     }
 
     fn refuse_now(&mut self, heard: &HeardRequest, chat: &Chat, refusal: Refusal) -> Vec<Act> {

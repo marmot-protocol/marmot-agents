@@ -2,7 +2,7 @@
 //! in a group, and what the driver does, are handed to the conversation, and the acts it answers
 //! with are checked.
 
-use marmot_agent::carrier::{self, Asked, AskedReply, Item};
+use marmot_agent::carrier::{self, Asked, AskedReply, Item, Unreadable};
 use marmot_agent::chat_folder::FolderRule;
 use marmot_agent::conversation::EFFECT_LIMIT_SECS;
 use marmot_agent::{
@@ -102,7 +102,7 @@ fn request(
         author_name: format!("{author} name"),
         age_secs: 1,
         target: target.map(EventKey::from),
-        asked,
+        asked: Ok(asked),
     }
 }
 
@@ -926,8 +926,158 @@ fn a_request_is_read_only_by_its_agent() {
     assert_eq!(out.kind, carrier::REQUEST_KIND);
     let (target, read) = carrier::read_request(&agent, &out.tags).unwrap();
     assert_eq!(target, Some(EventKey::from("es")));
-    assert!(read == asked);
+    assert!(read == Ok(asked));
     assert!(carrier::read_request(&PubKey::from("other"), &out.tags).is_none());
+}
+
+// A request for this agent that it cannot read is still a request, so the agent can settle it:
+// an action it does not know is unknown, and anything else it cannot read is invalid. One that
+// names no agent, or another, is not for it (D-027, D-140).
+#[test]
+fn a_request_the_agent_cannot_read_is_still_heard() {
+    let agent = PubKey::from(AGENT);
+    let tags = |details: Option<&str>| {
+        let mut tags = vec![vec!["p".to_string(), AGENT.to_string()]];
+        tags.extend(details.map(|d| vec!["details".to_string(), d.to_string()]));
+        tags.push(vec!["e".to_string(), "es".to_string()]);
+        tags
+    };
+    let read = |details| carrier::read_request(&agent, &tags(details));
+    assert_eq!(
+        read(Some(r#"{"action":"rewind","to":"e1"}"#)),
+        Some((Some(EventKey::from("es")), Err(Unreadable::UnknownAction)))
+    );
+    for invalid in [
+        None,
+        Some("not json"),
+        Some(r#"{"setting":"model"}"#),
+        Some(r#"{"action":"set","setting":"model"}"#),
+        Some(r#"{"action":7}"#),
+        Some(r#"["set"]"#),
+    ] {
+        assert_eq!(
+            read(invalid),
+            Some((Some(EventKey::from("es")), Err(Unreadable::Invalid))),
+            "{invalid:?}"
+        );
+    }
+    let mut no_agent = tags(Some("not json"));
+    no_agent.remove(0);
+    assert_eq!(carrier::read_request(&agent, &no_agent), None);
+    assert_eq!(
+        carrier::read_request(&PubKey::from("other"), &tags(Some("not json"))),
+        None
+    );
+}
+
+// Every action the agent reads is one it knows, so none of them is taken for an unknown one.
+#[test]
+fn every_action_the_agent_reads_is_known() {
+    let agent = PubKey::from(AGENT);
+    for asked in [
+        Asked::Choice { choice: "a".into() },
+        Asked::Questions {
+            questions: Vec::new(),
+        },
+        Asked::Interrupt,
+        Asked::NewSession,
+        Asked::Set {
+            setting: "s".into(),
+            value: "v".into(),
+        },
+        Asked::Own {
+            id: "compact".into(),
+        },
+    ] {
+        let out = carrier::request(&agent, None, &asked, "words");
+        let (_, read) = carrier::read_request(&agent, &out.tags).unwrap();
+        assert!(read == Ok(asked.clone()), "{asked:?}");
+        let mut bad = out.tags.clone();
+        let details = bad.iter_mut().find(|t| t[0] == "details").unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&details[1]).unwrap();
+        value["choice"] = serde_json::json!(7);
+        value["questions"] = serde_json::json!(7);
+        value["setting"] = serde_json::json!(7);
+        value["id"] = serde_json::json!(7);
+        details[1] = value.to_string();
+        let (_, read) = carrier::read_request(&agent, &bad).unwrap();
+        // Extra fields are let through, as serde does; a wrong one is invalid, never unknown.
+        assert_ne!(read.err(), Some(Unreadable::UnknownAction), "{asked:?}");
+    }
+}
+
+fn unreadable(event: &str, author: &str, why: Unreadable) -> HeardRequest {
+    HeardRequest {
+        asked: Err(why),
+        ..request(direct(), event, author, Some("e-ap"), Asked::Interrupt)
+    }
+}
+
+// An answer or a control the agent cannot read is settled, not left pending: with `not_supported`
+// for an action it does not know and `invalid` for one it cannot read, once, and only after the
+// right: someone who holds neither right is told only that (D-028, D-032, D-140).
+#[test]
+fn a_request_the_agent_cannot_read_is_refused() {
+    let (mut talk, prompt) = started();
+    sent(
+        &mut talk,
+        &prompt.chat.id.0,
+        event("ap", State::Waiting, approval()),
+        "e-ap",
+    );
+    let unknown = unreadable("r1", OWNER, Unreadable::UnknownAction);
+    let (_, _, item) = the_item(&mut talk, |t| t.asked(unknown.clone()));
+    assert!(is_refused(&item, "not_supported"));
+    assert_eq!(item.settles, vec![EventKey::from("r1")]);
+    assert!(talk.asked(unknown).is_empty(), "settled once");
+    let (_, _, item) = the_item(&mut talk, |t| {
+        t.asked(unreadable("r2", FRIEND, Unreadable::Invalid))
+    });
+    assert!(is_refused(&item, "invalid"));
+    assert_eq!(item.settles, vec![EventKey::from("r2")]);
+    let (_, _, item) = the_item(&mut talk, |t| {
+        t.asked(unreadable("r3", STRANGER, Unreadable::UnknownAction))
+    });
+    assert!(is_refused(&item, "not_allowed"));
+    assert_eq!(item.settles, vec![EventKey::from("r3")]);
+    // Late, it points at nothing and is dropped, as any request is.
+    let mut late = unreadable("r4", OWNER, Unreadable::Invalid);
+    late.target = None;
+    late.age_secs = 6 * 60;
+    assert!(talk.asked(late).is_empty());
+    // The approval still waits for its answer.
+    let answer = request(
+        direct(),
+        "r5",
+        OWNER,
+        Some("e-ap"),
+        Asked::Choice {
+            choice: "allow".into(),
+        },
+    );
+    assert!(matches!(talk.asked(answer).as_slice(), [Act::Answer(_)]));
+}
+
+// Someone who may only approve may send what the agent cannot read: either right is enough to be
+// told why it was not acted on (D-032, D-140).
+#[test]
+fn either_right_is_enough_to_hear_why_a_request_was_not_read() {
+    let approver = PubKey::from("approver-key");
+    let mut talk = Conversation::new(
+        PubKey::from(AGENT),
+        "codex",
+        Rights {
+            owner: PubKey::from(OWNER),
+            prompt: Who::Owner,
+            approve: Who::People(vec![approver.clone()]),
+        },
+        capabilities(),
+        Saved::default(),
+    );
+    let (_, _, item) = the_item(&mut talk, |t| {
+        t.asked(unreadable("r1", approver.as_str(), Unreadable::Invalid))
+    });
+    assert!(is_refused(&item, "invalid"));
 }
 
 // A request that points at an item acts only while that item is live: a new session aimed at a

@@ -2817,3 +2817,21 @@ next event without waiting, before each message it reads. A connection that goes
 prompt is written still has that one prompt told as not passed. Issue #135.
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
+
+## D-140 An answer or a control the agent cannot read is refused
+
+**Decision.** A kind 1202 event that names the agent and that the core cannot read is settled with a `refused`
+notice ([D-077](#d-077-a-refused-notice-says-why-something-was-not-acted-on)), as any other request is
+([D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)): with the reason
+`not_supported` when its `action` is one the core does not know, and `invalid` when it has no details, or details
+that are not an action, or an action whose fields are missing or of the wrong type. The right still comes first. An
+event that cannot be read cannot say which right it needs, and every action needs one of the two
+([D-032](#d-032-every-action-needs-one-of-two-rights)), so someone who holds neither is told `not_allowed` and
+nothing else; someone who holds either is told why it was not read. As for any request, each event is settled
+once, and one that names no item and is more than five minutes old is dropped. An event that names no agent, or
+another, is not for this one, and the agent says nothing ([D-027](#d-027-answers-and-controls-are-one-kind-of-event-kind-1202)).
+
+**Why.** The core used to drop such an event with no reply, so the sender's app showed the press as pending for
+good. An app newer than the core will send actions the core does not know, and the reason lets it say so.
+
+Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
