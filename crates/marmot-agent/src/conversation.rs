@@ -232,11 +232,6 @@ pub struct Saved {
     /// chat that chose none works in the driver's own folder.
     #[serde(default)]
     folders: BTreeMap<String, PathBuf>,
-    /// The latest moves the core settled for want of an effect before their new session showed
-    /// (D-087), oldest first: a session item that shows one later still makes its folder the
-    /// chat's, since the harness then works there (D-101).
-    #[serde(default)]
-    late_moves: VecDeque<LateMove>,
     /// Every item sent and not yet forgotten, by the core's name for it.
     items: BTreeMap<String, Record>,
     /// The order finished items were finished in, oldest first, so the oldest are forgotten.
@@ -387,17 +382,12 @@ impl Sending {
     }
 }
 
-/// A move to a folder the core settled before its new session showed.
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-struct LateMove {
-    request: String,
+/// A new session the core settled for want of an effect before it showed (D-087): one that shows
+/// later is still the chat's, in the folder it was started in (D-101).
+struct Late {
     chat: String,
-    folder: PathBuf,
+    folder: Option<PathBuf>,
 }
-
-/// How many late moves are kept. A move's session shows minutes late at most, so only the latest
-/// few could still show.
-const LATE_MOVES: usize = 16;
 
 /// Where a forgotten item stood: enough for its next version to follow on.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -424,10 +414,14 @@ struct Pending {
     chat: String,
     /// For a new session: the driver took it, so the chat's saved session is not named again.
     new_session: bool,
-    /// For a new session that moves the chat to a folder: the folder, the chat's once the new
-    /// session shows (D-101).
+    /// For a new session: the folder the driver was handed to start it in, `None` for the
+    /// driver's own; the chat's once the new session shows (D-101).
     #[serde(default)]
     folder: Option<PathBuf>,
+    /// For a new session that moves the chat to another folder: a session the driver starts for
+    /// a prompt meanwhile starts there too (D-101).
+    #[serde(default)]
+    moves: bool,
     /// For an answer: the item it answers, so a second answer to it is refused.
     #[serde(default)]
     answers: Option<String>,
@@ -466,6 +460,9 @@ pub struct Conversation {
     saved: Saved,
     /// Chats the driver has taken a prompt or a new session for since it started (D-065).
     taken: HashSet<String>,
+    /// The new sessions the driver took and the core settled before they showed, by request,
+    /// until each shows or the driver stops: only a running driver can still show one.
+    late: HashMap<String, Late>,
     /// The core's id for each prompt, back to its event, so a turn can name what started it.
     messages: HashMap<String, EventKey>,
     seen: HashSet<EventKey>,
@@ -499,6 +496,7 @@ impl Conversation {
             folders: None,
             saved,
             taken: HashSet::new(),
+            late: HashMap::new(),
             messages: HashMap::new(),
             seen: HashSet::new(),
             seen_order: VecDeque::new(),
@@ -523,11 +521,6 @@ impl Conversation {
                 self.saved.sessions.remove(&chat);
             }
         }
-        // So is a move that may yet show late: one no longer allowed moves nothing.
-        (self.saved.late_moves).retain(|m| {
-            let still = (m.folder.to_str()).and_then(|f| rule.check(f, rule.default_folder()).ok());
-            still.as_ref() == Some(&m.folder)
-        });
         self.folders = Some(rule);
         self
     }
@@ -572,6 +565,7 @@ impl Conversation {
         // Requests first, so an answer whose item closes now is settled as failed (D-070), not
         // by the net for an item that stopped waiting.
         let mut acts = Vec::new();
+        self.late.clear();
         let pending: Vec<String> = self.saved.pending.keys().cloned().collect();
         for request in pending {
             acts.extend(self.refuse(&request, Refusal::new(Reason::Failed)));
@@ -725,7 +719,7 @@ impl Conversation {
             Act::Control(Control {
                 action: Action::NewSession { chat, .. },
                 ..
-            }) if moving => chat.folder.clone(),
+            }) => chat.folder.clone(),
             _ => None,
         };
         self.saved.pending.insert(
@@ -736,6 +730,7 @@ impl Conversation {
                 chat: chat.id.0,
                 new_session,
                 folder,
+                moves: moving,
                 answers,
                 deadline: None,
             },
@@ -895,20 +890,16 @@ impl Conversation {
         let Some(request) = late else {
             return Vec::new();
         };
-        // A move the harness makes after all still moves the chat: it is kept, to be known when
-        // its session shows (D-101).
+        // A new session the harness starts after all is still the chat's, in its folder: it is
+        // kept, to be known when it shows (D-101).
         if let Some(pending) = self.saved.pending.get(&request)
-            && let Some(folder) = pending.folder.clone()
+            && pending.new_session
         {
-            let chat = pending.chat.clone();
-            if self.saved.late_moves.len() >= LATE_MOVES {
-                self.saved.late_moves.pop_front();
-            }
-            (self.saved.late_moves).push_back(LateMove {
-                request: request.clone(),
-                chat,
-                folder,
-            });
+            let late = Late {
+                chat: pending.chat.clone(),
+                folder: pending.folder.clone(),
+            };
+            self.late.insert(request.clone(), late);
         }
         self.settle_pending(&request, "no_effect", NO_EFFECT.into())
     }
@@ -1631,31 +1622,37 @@ impl Conversation {
     /// has shown: a session the driver starts for a prompt meanwhile starts there (D-101).
     fn moving_to(&self, chat: &str) -> Option<PathBuf> {
         (self.saved.pending.values())
-            .filter(|p| p.chat == chat && p.deadline.is_some())
+            .filter(|p| p.chat == chat && p.moves && p.deadline.is_some())
             .find_map(|p| p.folder.clone())
     }
 
-    /// A session item that shows the effect of a move makes the move's folder the chat's, as the
-    /// session item makes the session the chat's: both are saved together, and a move the harness
-    /// refuses changes neither (D-101). So does one that shows after the core settled the move for
-    /// want of an effect (D-087): the harness works in the new folder then, and the chat's files
-    /// come from the folder it works in.
+    /// A session item that shows a new session makes the folder it was started in the chat's, as
+    /// it makes the session the chat's: both are saved together, and a new session the harness
+    /// refuses changes neither (D-101). So does one that shows after the core settled it for want
+    /// of an effect (D-087): the harness works there then, and the chat's files come from the
+    /// folder it works in. Each is the chat's in the order the driver shows them, so a late move
+    /// followed by a plain new session leaves the chat where the plain one runs. Any other item
+    /// that names a late one ends the wait for it.
     fn moved(&mut self, chat: &str, emitted: &Emitted) {
-        if !matches!(emitted.event.body(), Body::Session(_)) {
-            return;
-        }
+        let session = matches!(emitted.event.body(), Body::Session(_));
         for request in &emitted.settles {
-            if let Some(pending) = self.saved.pending.get_mut(&request.0)
-                && pending.chat == chat
-                && let Some(folder) = pending.folder.take()
-            {
-                self.saved.folders.insert(chat.to_string(), folder);
-            } else if let Some(at) = (self.saved.late_moves.iter())
-                .position(|m| m.request == request.0 && m.chat == chat)
-            {
-                let late = self.saved.late_moves.remove(at).expect("found");
-                self.saved.folders.insert(chat.to_string(), late.folder);
-            }
+            let started_in = match self.saved.pending.get(&request.0) {
+                Some(p) if p.chat == chat && p.new_session => Some(p.folder.clone()),
+                Some(_) => None,
+                None => match self.late.get(&request.0) {
+                    Some(late) if late.chat == chat => {
+                        self.late.remove(&request.0).map(|l| l.folder)
+                    }
+                    _ => None,
+                },
+            };
+            let Some(folder) = started_in.filter(|_| session && self.folders.is_some()) else {
+                continue;
+            };
+            match folder {
+                Some(folder) => self.saved.folders.insert(chat.to_string(), folder),
+                None => self.saved.folders.remove(chat),
+            };
         }
     }
 
