@@ -444,8 +444,16 @@ def main():
         env = dict(os.environ)
         if case.expected != PASS:
             env["TLC_WORKERS"] = "1"
-        ran = subprocess.run([str(RUN), str(folder), f"{case.model}.tla", f"{case.model}.cfg"],
-                             capture_output=True, text=True, env=env)
+        # TLC checks liveness on a timer while it searches, so where it finds a temporal
+        # counterexample moves from run to run, and so does the order its search takes, which
+        # TLC's fingerprint function and seed, picked at random, decide. DriverTransport's
+        # committed ones are checked once, at the end, with both fixed, so their traces repeat;
+        # CoreLifecycle's repeat as they are.
+        options = []
+        if case.model == "DriverTransport" and case.expected == TEMPORAL and case.counterexample:
+            options = ["-lncheck", "final", "-fp", "1", "-seed", "1"]
+        ran = subprocess.run([str(RUN), str(folder), f"{case.model}.tla", f"{case.model}.cfg",
+                              *options], capture_output=True, text=True, env=env)
         secs = time.monotonic() - began
         log = ran.stdout + ran.stderr
         (folder / "tlc.log").write_text(log)

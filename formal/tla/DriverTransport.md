@@ -96,7 +96,10 @@ the harness's requests are bounded, so they end.
 ## Configurations and results
 
 Checked on 2026-11-23 with TLC v1.7.4 (Java 21, in the pinned image) by `tools/tla/check.py`, as `CoreLifecycle`
-is: the cases that must pass on 4 workers, those that must fail on one. The small bounds, every pull request:
+is: the cases that must pass on 4 workers, those that must fail on one. A committed counterexample that breaks
+a liveness property is found with liveness checked once, at the end of the search, and TLC's fingerprint
+function and seed fixed (`-lncheck final -fp 1 -seed 1`): otherwise TLC checks liveness on a timer, in an order
+its random fingerprint function decides, and the trace moves from run to run. The small bounds, every pull request:
 **one harness request or two, one answer `r1`, one interrupt `r2`, one new-session control `r3`, two prompts,
 one death of a harness process, one session item shown again unasked (none in Pi's shape), and up to five
 sessions.** Each configuration says how it differs.
@@ -107,10 +110,10 @@ sessions.** Each configuration says how it differs.
 | `driver-acp` | `DriverTransport.acp.cfg` (one chat, two requests for one tool call) | every property holds | 297,609 | |
 | `driver-pi` | `DriverTransport.pi.cfg` (two chats, a Pi each, one request) | every property holds | 179,931 | |
 | `driver-chats` | `DriverTransport.chats.cfg` (two chats on one agent, two requests, no death or new session) | every property holds | 22,203 | |
-| `driver-unfair` | `DriverTransport.unfair.cfg` (Codex's, one request, no `FairHarness`) | L1 fails | 6,556 | [`driver-unfair-harness-never-reads`](counterexamples/driver-unfair-harness-never-reads.json) |
-| `driver-stray-while-picking` | `DriverTransport.stray.cfg` (ACP's, one request, `StrayAsks`) | L2 fails | 13,918 | [`driver-stray-while-picking`](counterexamples/driver-stray-while-picking.json) |
-| `driver-codex-stray` | Codex's, one request, `StrayAsks` | L2 fails | 14,289 | [`driver-codex-stray`](counterexamples/driver-codex-stray.json) |
-| `driver-codex-unshown` | Codex's, one request, `Unshowable` | L2 fails | 13,813 | [`driver-codex-unshown`](counterexamples/driver-codex-unshown.json) |
+| `driver-unfair` | `DriverTransport.unfair.cfg` (Codex's, one request, no `FairHarness`) | L1 fails | 46,152 | [`driver-unfair-harness-never-reads`](counterexamples/driver-unfair-harness-never-reads.json) |
+| `driver-stray-while-picking` | `DriverTransport.stray.cfg` (ACP's, one request, `StrayAsks`) | L2 fails | 63,559 | [`driver-stray-while-picking`](counterexamples/driver-stray-while-picking.json) |
+| `driver-codex-stray` | Codex's, one request, `StrayAsks` | L2 fails | 77,757 | [`driver-codex-stray`](counterexamples/driver-codex-stray.json) |
+| `driver-codex-unshown` | Codex's, one request, `Unshowable` | L2 fails | 59,754 | [`driver-codex-unshown`](counterexamples/driver-codex-unshown.json) |
 | `driver-reask-after-restart` | ACP's, `ReaskAfterRestart`, safety only | S13 fails | 79,366 | [`driver-reask-after-restart`](counterexamples/driver-reask-after-restart.json) |
 
 The counterexamples are schedules in this model's action names, made from TLC's traces by
@@ -144,8 +147,8 @@ Pi), `NeverFailed` (a control settled as failed). On two chats: `NeverTwoChats` 
 With `StrayAsks`: `NeverStrayAnswered` (a request from a session no chat has is answered). All sixteen are
 reached within 2,300 distinct states.
 
-All 35 DriverTransport cases take about 5½ minutes with 4 workers here, on a machine busy with other work (the
-Codex shape 2 minutes, ACP's 1, Pi's 50 s, two chats 10 s, every failing case under 10 s); CI runs them on every
+All 35 DriverTransport cases take 3½ to 5½ minutes with 4 workers here, on a machine busy with other work (the
+Codex shape 1 to 2 minutes, ACP's and Pi's under 1 each, two chats 10 s, every failing case under 15 s); CI runs them on every
 pull request in a job of their own (`--model DriverTransport`), beside `CoreLifecycle`'s two, under D-094's 15
 minutes.
 

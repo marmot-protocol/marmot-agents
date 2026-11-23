@@ -15,14 +15,23 @@
     {"action": "NewSession", "req": "r3", "outcome": "refused", "settles": [{"req": "r3", "how": "refused"}]},
     {"action": "HarnessReads", "proc": "h", "reads": {"c": "c1", "m": "open", "r": "prompt", "resume": 0}, "writes": [{"c": "c1", "m": "opened", "r": "prompt", "s": 1}]},
     {"action": "Route", "proc": "h", "reads": {"c": "c1", "m": "opened", "r": "prompt", "s": 1}},
-    {"action": "HarnessEdits", "session": 1},
     {"action": "Prompt", "chat": "c1", "writes": [{"m": "prompt", "s": 1}]},
+    {"action": "HarnessEdits", "session": 1},
     {"action": "Route", "proc": "h", "reads": {"m": "edit", "s": 1}},
     {"action": "HarnessReads", "proc": "h", "reads": {"m": "prompt", "s": 1}, "writes": [{"m": "started", "n": 1, "s": 1}]},
-    {"action": "HarnessAsks", "ask": "a1", "session": 1, "call": "k1", "shown": true},
+    {"action": "HarnessEndsTurn", "session": 1, "writes": [{"m": "ended", "n": 1, "s": 1}]},
     {"action": "Route", "proc": "h", "reads": {"m": "started", "n": 1, "s": 1}},
-    {"action": "Interrupt", "req": "r2", "outcome": "taken", "writes": [{"m": "interrupt", "n": 1, "s": 1}]},
-    {"action": "Route", "proc": "h", "reads": {"a": "a1", "m": "ask"}}
+    {"action": "Route", "proc": "h", "reads": {"m": "ended", "n": 1, "s": 1}},
+    {"action": "Prompt", "chat": "c1", "writes": [{"m": "prompt", "s": 1}]},
+    {"action": "HarnessReads", "proc": "h", "reads": {"m": "prompt", "s": 1}, "writes": [{"m": "started", "n": 2, "s": 1}]},
+    {"action": "Route", "proc": "h", "reads": {"m": "started", "n": 2, "s": 1}},
+    {"action": "HarnessAsks", "ask": "a1", "session": 1, "call": "k1", "shown": true},
+    {"action": "HarnessResolves", "ask": "a1"},
+    {"action": "Route", "proc": "h", "reads": {"a": "a1", "m": "ask"}},
+    {"action": "Route", "proc": "h", "reads": {"a": "a1", "m": "resolved"}},
+    {"action": "Interrupt", "req": "r2", "outcome": "taken", "writes": [{"m": "interrupt", "n": 2, "s": 1}]},
+    {"action": "Answer", "req": "r1", "outcome": "refused", "settles": [{"req": "r1", "how": "refused"}]},
+    {"action": "HarnessReads", "proc": "h", "reads": {"m": "interrupt", "n": 2, "s": 1}}
   ],
   "end": {"kind": "stutter"}
 }

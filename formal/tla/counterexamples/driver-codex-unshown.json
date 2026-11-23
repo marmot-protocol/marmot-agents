@@ -10,8 +10,8 @@
   "steps": [
     {"action": "NewSession", "req": "r3", "outcome": "taken", "old_session": 0, "writes": [{"c": "c1", "m": "open", "r": "r3", "resume": 0}]},
     {"action": "HarnessReads", "proc": "h", "reads": {"c": "c1", "m": "open", "r": "r3", "resume": 0}, "writes": [{"c": "c1", "m": "opened", "r": "r3", "s": 1}]},
-    {"action": "Route", "proc": "h", "reads": {"c": "c1", "m": "opened", "r": "r3", "s": 1}, "settles": [{"req": "r3", "how": "effect"}]},
     {"action": "HarnessEdits", "session": 1},
+    {"action": "Route", "proc": "h", "reads": {"c": "c1", "m": "opened", "r": "r3", "s": 1}, "settles": [{"req": "r3", "how": "effect"}]},
     {"action": "Prompt", "chat": "c1", "writes": [{"m": "prompt", "s": 1}]},
     {"action": "Route", "proc": "h", "reads": {"m": "edit", "s": 1}},
     {"action": "HarnessReads", "proc": "h", "reads": {"m": "prompt", "s": 1}, "writes": [{"m": "started", "n": 1, "s": 1}]},
