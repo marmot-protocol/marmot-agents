@@ -37,16 +37,26 @@ file mounted, read-only; the harness runs as usual and talks to it on the loopba
 Completions only, so the double translates an Anthropic Messages or Responses request to Chat Completions, sends
 it on unstreamed, and writes the reply back in the harness's format.
 
+It needs Docker, Node 24, the Claude Code driver's packages (`npm ci --prefix packages/claude-code`; the test reads
+the Claude Code version from them before it starts anything), a model at an OpenAI-compatible endpoint, and its
+key in a file.
+
 ```sh
 work=$(mktemp -d)
 cp -r tools/record/demo "$work/demo"
 MODEL_DOUBLE_KEY_FILE=<key file> MODEL_DOUBLE_UPSTREAM=<OpenAI-compatible base URL> \
   MODEL_DOUBLE_MODEL=<model> MODEL_DOUBLE_OUT="$work/raw" MODEL_DOUBLE_DEMO="$work/demo" \
-  cargo test -p marmot-agent --test claude record_claude_code_turn -- --ignored --nocapture
+  cargo test -p marmot-agent --test claude record_claude_code_turn -- --exact --ignored --nocapture
 mkdir -p "$work/scrub/cassettes/claude"
 cp "$work/raw/cassette.jsonl" "$work/scrub/cassettes/claude/approval.jsonl"
 python3 tools/record/scrub.py "$work/scrub" "$work/clean" --map "$work/demo=/work/demo" --map "$HOME=/home/user"
-less "$work/clean/cassettes/claude/approval.jsonl"   # read it all before committing
+```
+
+The scrubber writes its output even when it finds something, and then exits 1: that output must not be
+committed. Go on only if it exits 0, and read the cassette whole even then; a clean exit is not proof.
+
+```sh
+less "$work/clean/cassettes/claude/approval.jsonl"   # read it all
 cp "$work/clean/cassettes/claude/approval.jsonl" fixtures/cassettes/claude/approval.jsonl
 ```
 
@@ -57,11 +67,12 @@ request body: only each request's key and the model's reply.
 
 `check_cassettes.py` reports every cassette older than 14 days and every harness with a release newer than the
 one a cassette was recorded with. It needs no key. A pull request runs it offline, and its findings are
-warnings that do not fail it; the nightly run adds `--strict`, which exits 1 on any finding, and opens an
+warnings that do not fail it. The nightly run is to add `--strict`, which exits 1 on any finding, and open an
 issue with the output
-([D-127](../../docs/decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key)).
+([D-127](../../docs/decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key)); that
+workflow is not built yet. A folder that is not there is an error, exit 2, in either.
 
 ```sh
 python3 tools/model_double/check_cassettes.py fixtures/cassettes --offline   # as a pull request runs it
-python3 tools/model_double/check_cassettes.py fixtures/cassettes --strict    # as the nightly run does
+python3 tools/model_double/check_cassettes.py fixtures/cassettes --strict    # as the nightly run will
 ```

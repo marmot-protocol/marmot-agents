@@ -423,7 +423,8 @@ these names.
 Status: decided ([D-127](../decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key), 2026-11-23): real harnesses run in CI on the double, with no model key in CI;
 cassettes are recorded through numes on a non-vendor model; replay reports a newer harness version and does not
 fail on it; a cassette older than 14 days is a warning on a pull request and fails the nightly run; the gateways
-stay scripted. Claude Code and Codex run on it; the matching rule and the formats' details are internal.
+stay scripted. Claude Code and Codex run on it; the nightly run that fails on age is not built yet; the matching
+rule and the formats' details are internal.
 
 The scenarios against real harnesses need a signed-in harness or a model key, so they never run on a pull request,
 and Codex and Claude Code have no free model. The model double runs the **real harness program** against a
@@ -485,7 +486,8 @@ failing scenario, and the fix is in one file. Scripts drift with the scenarios t
 **Staleness.** `tools/model_double/check_cassettes.py` reports each cassette older than 14 days, and each harness
 whose latest release (npm) is newer than the version a cassette was recorded with. It needs no key. A pull
 request runs it offline, in the Recordings job, and each finding is a warning that does not fail it. The nightly
-run adds `--strict`, which exits 1 on a finding, and opens an issue with the output. The replay test prints the
+run is to add `--strict`, which exits 1 on a finding, and open an issue with the output; that workflow is not
+built yet, so until it is, a cassette's age fails nothing. The replay test prints the
 Claude Code version when it differs from the cassette's, and does not fail on it: failing would make every pull
 request that bumps a harness re-record, which needs a key. A request the cassette has no exchange for still fails.
 

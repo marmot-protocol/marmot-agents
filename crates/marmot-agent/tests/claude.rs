@@ -10,10 +10,10 @@
 //! twice. On the model double (`tools/model_double`), Claude Code is the real one and only its
 //! model is scripted: it needs Node 24 and `npm ci` run in `packages/claude-code`, and no key or
 //! sign-in, so it always runs. On a signed-in Claude Code and its real model, it runs only when
-//! asked for:
+//! asked for, by name, so the ignored recording tests below do not run with it:
 //!
 //! ```sh
-//! cargo test -p marmot-agent --test claude -- --ignored --nocapture
+//! cargo test -p marmot-agent --test claude claude_code_end_to_end -- --exact --ignored --nocapture
 //! ```
 
 mod common;
