@@ -580,6 +580,25 @@ fn an_approval_closed_at_the_turns_end_takes_no_answer() {
     assert_eq!(late.unwrap_err().reason, Reason::NotWaiting);
 }
 
+// Codex resolves a request itself, as it does on an interrupt (`approval_unanswered`: the turn
+// completes, and the request is marked resolved), and says so with `serverRequest/resolved`. An
+// answer after that would reach a Codex that no longer waits for it, whatever came first.
+#[test]
+fn an_approval_codex_resolved_takes_no_answer() {
+    let mut translator = Translator::new();
+    let asked = translator.feed(
+        Direction::In,
+        r#"{"id": 0, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "c", "command": "ls"}}"#,
+    );
+    let resolved = translator.feed(
+        Direction::In,
+        r#"{"method": "serverRequest/resolved", "params": {"threadId": "th1", "requestId": 0}}"#,
+    );
+    assert!(resolved.is_empty(), "nothing new reaches the chat");
+    let late = translator.reply(&answer(&asked[0], Given::Choice("c0".into())));
+    assert_eq!(late.unwrap_err().reason, Reason::NotWaiting);
+}
+
 fn turn_started(translator: &mut Translator) {
     translator.feed(
         Direction::In,
