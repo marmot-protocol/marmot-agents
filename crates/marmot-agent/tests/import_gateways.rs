@@ -475,7 +475,7 @@ impl Install {
                 .filter(|m| m.sender == self.agent)
         };
         let turns: Vec<String> = sent(ITEM_KIND)
-            .filter_map(|m| carrier::read_item(&m.plaintext, &m.tags))
+            .filter_map(|m| carrier::read_item(ITEM_KIND, &m.plaintext, &m.tags))
             .filter(|r| matches!(r.item.event.body(), Body::Turn(_)))
             .filter(|r| r.item.started_by.as_ref() == Some(prompt))
             .filter_map(|r| {
