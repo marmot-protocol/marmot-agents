@@ -84,8 +84,20 @@ struct Sim<'a> {
     broken: Option<Failure>,
 }
 
-/// Runs a schedule from the start, on a fresh runtime with a paused clock.
+/// Runs a schedule from the start, on a fresh runtime with a paused clock. A schedule that names a
+/// chat or a message it does not have ([`Schedule::check`]) fails at once, as the property
+/// `schedule`, before anything runs.
 pub fn run(schedule: &Schedule) -> Report {
+    if let Err(bad) = schedule.check() {
+        return Report {
+            failure: Some(Failed {
+                failure: fail("schedule", &bad.detail),
+                step: bad.step,
+            }),
+            trace: Vec::new(),
+            stats: Stats::default(),
+        };
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .start_paused(true)

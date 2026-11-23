@@ -27,7 +27,8 @@ pub mod world;
 
 pub use capsule::{Capsule, shrink, write_schedule};
 pub use schedule::{
-    Action, BugSet, Family, Faults, Outcome, Posted, ReadStep, RunName, Schedule, What, generate,
+    Action, BadReference, BugSet, Family, Faults, Outcome, Posted, ReadStep, RunName, Schedule,
+    What, generate,
 };
 pub use sim::{Report, run};
 

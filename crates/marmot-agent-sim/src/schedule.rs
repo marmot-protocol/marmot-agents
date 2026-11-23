@@ -1,8 +1,10 @@
 //! What a run does: its name, the messages people post, and the steps, each named as the
 //! shared vocabulary names it (`docs/design/verification.md`), so a model's trace can later drive
 //! a run. A schedule is plain data: it is written to a file before it runs, kept in a failure
-//! capsule, and cut down by the shrinker. Any list of steps is a valid schedule: a step that
-//! makes no sense where it falls, such as a restart while the core runs, does nothing.
+//! capsule, and cut down by the shrinker. Any list of steps that names only the chats and
+//! messages the schedule has is a valid schedule: a step that makes no sense where it falls, such
+//! as a restart while the core runs, does nothing. One that names what the schedule lacks fails
+//! the run ([`Schedule::check`]).
 
 use crate::rng::{Rng, hash, mix};
 use serde::{Deserialize, Serialize};
@@ -455,6 +457,75 @@ pub struct Schedule {
     pub messages: Vec<Posted>,
     /// The steps, in order.
     pub steps: Vec<Action>,
+}
+
+impl Schedule {
+    /// Whether every chat and message the schedule names is one it has, and each step that hears
+    /// a message names it as the vocabulary does (`Hear` for a prompt, `Ask` for an answer or a
+    /// control). A run of a schedule that fails this fails at once, naming the step, so one written
+    /// by hand with a wrong number cannot pass without doing what it was written to check. A step
+    /// that makes no sense where it falls is still valid: this checks only what it names.
+    pub fn check(&self) -> Result<(), BadReference> {
+        let chats = usize::from(self.chats);
+        for (msg, posted) in self.messages.iter().enumerate() {
+            if usize::from(posted.chat) >= chats {
+                return Err(BadReference {
+                    step: None,
+                    detail: format!(
+                        "m{msg} is posted to c{}, and the schedule has {chats} chats",
+                        posted.chat
+                    ),
+                });
+            }
+        }
+        for (step, action) in self.steps.iter().enumerate() {
+            let bad = |detail: String| {
+                Err(BadReference {
+                    step: Some(step),
+                    detail: format!("step {step}, {action:?}: {detail}"),
+                })
+            };
+            match *action {
+                Action::Invite { chat } if usize::from(chat) >= chats => {
+                    return bad(format!("the schedule has {chats} chats, so no c{chat}"));
+                }
+                Action::Store { msg }
+                | Action::Hear { msg }
+                | Action::Ask { msg }
+                | Action::Reannounce { msg }
+                    if msg >= self.messages.len() =>
+                {
+                    return bad(format!(
+                        "the schedule has {} messages, so no m{msg}",
+                        self.messages.len()
+                    ));
+                }
+                Action::Hear { msg } if self.messages[msg].is_request() => {
+                    return bad(format!("m{msg} is an answer or a control: Ask hears it"));
+                }
+                Action::Ask { msg } if !self.messages[msg].is_request() => {
+                    return bad(format!("m{msg} is a prompt: Hear hears it"));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A chat or message a schedule names and does not have ([`Schedule::check`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BadReference {
+    /// The step that names it; `None` for a message posted to a chat the schedule lacks.
+    pub step: Option<usize>,
+    /// What is wrong, naming the step, the chat or the message.
+    pub detail: String,
+}
+
+impl fmt::Display for BadReference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.detail)
+    }
 }
 
 /// How often each kind of fault step is generated, against the weights of ordinary steps.
