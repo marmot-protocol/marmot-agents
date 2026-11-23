@@ -31,14 +31,18 @@ being replaced by what is designed here, not extended.
 
 1. [`docs/README.md`](docs/README.md): the design in three minutes.
 2. [`docs/plan.md`](docs/plan.md): what is being built, in what order, and how the work runs.
-3. [`docs/decisions.md`](docs/decisions.md): what is decided. Treat every entry as settled.
-4. [`docs/open-questions.md`](docs/open-questions.md): what is not decided.
+3. [`docs/current-state.md`](docs/current-state.md): what is true of the system now, in five minutes, with a link
+   to the decision behind each line.
+4. [`docs/decisions.md`](docs/decisions.md): the record of what is decided, and why. Read the entries you need.
+   Treat every entry as settled.
+5. [`docs/open-questions.md`](docs/open-questions.md): what is not decided.
 
 ## Where to go
 
 | Task | Start here |
 | --- | --- |
 | See what to build next | `docs/plan.md` |
+| See what is true of the system now | `docs/current-state.md`, then the decisions it links to |
 | Try the core by hand | `docs/try.md`, then `crates/marmot-agent-chat` |
 | Understand how the parts fit | `docs/design/architecture.md` |
 | Work on what agents send to the chat | `docs/design/event-model.md`, then `docs/design/event-carrier.md` |
@@ -162,6 +166,9 @@ Those are things to preserve, not rules to copy.
 
 - **A decision made in conversation is not real until it is in `docs/decisions.md`.** Add it in the same change
   as the work it affects, with the date and the reason.
+- **A change that adds or replaces a decision updates `docs/current-state.md` in the same change**: the line it
+  changes, its link, and the commit the page was brought up to date at
+  ([D-114](docs/decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 - **Never change the meaning of an old entry.** Add a new one and mark the old one as replaced.
 - **When a question is settled, move it** from `docs/open-questions.md` to `docs/decisions.md`.
 - **Every design page states its status** at the top: what on it is decided and what is a proposal. Keep that
