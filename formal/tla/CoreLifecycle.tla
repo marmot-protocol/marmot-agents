@@ -726,7 +726,7 @@ S2 ==
                 sv.outbox[k].i = i /\ sv.outbox[k].v > Last(iposts[i]).v
 
 \* S3: an item's versions rise by one, and every later version names its first event (D-025,
-\* D-069). A version MDK refused, or that the core gave up after MDK dropped its tries, is a
+\* D-112). A version MDK refused, or that the core gave up after MDK dropped its tries, is a
 \* gap; nothing else is (S3Told below checks that the chat is told of each gap). The first event
 \* is the first one posted.
 S3 ==

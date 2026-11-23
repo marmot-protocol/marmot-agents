@@ -3,7 +3,7 @@
 //! - [`conversation`]: what the core does with each message, answer, control and agent event,
 //!   with no connection to anything, so every rule can be tested alone.
 //! - [`rights`]: who may prompt and who may approve.
-//! - [`carrier`]: how items, answers and controls travel in a group, for now (D-069).
+//! - [`carrier`]: how items, answers and controls travel in a group (D-076, D-112).
 //! - [`marmot`]: the Marmot side, through MDK.
 //! - [`run`]: the program loop that joins MDK, a driver and the conversation.
 //! - [`socket`]: a driver that is a separate program, on the local socket.

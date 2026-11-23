@@ -6,7 +6,9 @@ to [D-026](../decisions.md#d-026-an-agent-item-is-at-most-64-kb). Who applies th
 specification yet, and all of it has to be agreed there
 ([Q-03](../open-questions.md#q-03-where-are-the-event-kinds-specified)). The exact tags are in
 [kinds 1201 and 1202](agent-kinds.md) ([D-076](../decisions.md#d-076-the-tags-of-kinds-1201-and-1202)). What
-the core cuts beyond the two steps under "the size limit" is provisional, as noted there.
+the core cuts beyond the two steps under "the size limit" is provisional, as noted there. MDK carries all of it
+since 2026-11-22 (MDK pull request 3613), and the core sends it
+([D-112](../decisions.md#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by)).
 
 [The event model](event-model.md) says what an agent event means: a set of item types, each with a state. This page
 says how one travels through a Marmot group: what kind of event it is, what it contains, and how an item that
@@ -96,9 +98,9 @@ The agent decides, per event, whether it should alert people
 | A turn that failed | Yes |
 | Everything else: tool calls, reasoning, plans, tasks, notices, a turn starting or finishing normally | No |
 
-MDK already treats 1201 and 1202 as their own class of event that triggers no alert, so "no" is today's
-behaviour. The waiting approval is the case that needs adding. It matters because Codex and Claude Code wait for
-an answer with no time limit.
+MDK alerts this way since 2026-11-22: for a version of an item that is a waiting approval or question, or a
+failed turn, once each, and for nothing else of kind 1201 or 1202. The waiting approval matters because Codex and
+Claude Code wait for an answer with no time limit.
 
 A failed turn arrives as an edit of the turn item. Edits are otherwise silent, so this is the one edit that
 alerts.
@@ -124,7 +126,7 @@ points at that first event. This is the mechanism Marmot already has for changin
 - **Only the agent that created an item can edit it.** Edits already require the same author.
 - **The row stays where the item first appeared.** Edits already work this way.
 
-Edits need three additions to do this. All three are changes to the specification.
+Edits need three additions to do this. All three are changes to the specification, and MDK has built all three.
 
 | Addition | Why |
 | --- | --- |

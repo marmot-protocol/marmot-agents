@@ -244,3 +244,166 @@ fn an_answer_sees_an_approval_that_landed_while_no_core_looked() {
         assert_eq!(target, Some(landed));
     });
 }
+
+// The simulated MDK takes only an item MDK reads, as MDK checks one it is sent: a version with no
+// place in its session (`seq` 0, which the core's own notices once carried) is refused, and S3
+// fails on it, where the simulator used to store whatever the core sent.
+#[test]
+fn an_item_mdk_cannot_read_is_refused_and_fails_s3() {
+    use marmot_agent::marmot::{SendFailed, Side};
+    use marmot_agent::{Sending, Token};
+    use marmot_agent_sim::side::SimSide;
+    paused(async || {
+        let w = world(&[What::Prompt { approval: false }]);
+        let group = w.chats[0].group.clone();
+        let agent = w.agent.clone();
+        let side = SimSide {
+            world: std::sync::Arc::new(std::sync::Mutex::new(w)),
+            notify: Default::default(),
+            agent,
+        };
+        let notice = |seq| {
+            let header = Header {
+                seq,
+                ..header("core-1", State::Done)
+            };
+            let body = Body::Notice(Notice {
+                kind: NoticeKind::Refused,
+                duration_ms: None,
+                reason: Some("not_allowed".into()),
+            });
+            Sending::Item {
+                key: "notice/core-1".into(),
+                item: Box::new(Item {
+                    event: AgentEvent::new(header, body, None).expect("no secret"),
+                    version: 1,
+                    first: None,
+                    started_by: None,
+                    settles: Vec::new(),
+                }),
+            }
+        };
+        let token = |mdk: &str| Token {
+            send: mdk.into(),
+            mdk: mdk.into(),
+            edits: None,
+            tried_at: None,
+        };
+        assert!(side.send(&group, &notice(1), &token("a")).await.is_ok());
+        assert!(oracle::safety(&side.world.lock().expect("not poisoned")).is_none());
+        let refused = side.send(&group, &notice(0), &token("b")).await;
+        assert_eq!(refused, Err(SendFailed::Refused { gone: false }));
+        let world = side.world.lock().expect("not poisoned");
+        let failure = oracle::safety(&world).expect("a failure");
+        assert_eq!(failure.property, "S3");
+    });
+}
+
+/// An approval, as the agent sends it: version `version` of item `item`, in `state`.
+fn approval(
+    item: &str,
+    state: State,
+    version: u64,
+    first: Option<&marmot_agent::EventKey>,
+) -> Item {
+    Item {
+        event: AgentEvent::new(
+            header(item, state),
+            Body::Approval(Approval {
+                subject: None,
+                choices: vec![Choice {
+                    id: "allow".into(),
+                    label: "Allow".into(),
+                    effect: Effect::Allow,
+                }],
+                answer: None,
+            }),
+            None,
+        )
+        .expect("no secret"),
+        version,
+        first: first.cloned(),
+        started_by: None,
+        settles: Vec::new(),
+    }
+}
+
+// The old person answered the latest approval whose latest version they saw, waiting or not:
+// once later versions were read as items, an approval that stopped waiting after another began
+// to was answered, which the harness refused as no longer waiting.
+#[test]
+fn an_answer_is_for_the_latest_approval_still_waiting() {
+    paused(async || {
+        let mut w = world(&[]);
+        let sent = |w: &mut World, item: &Item| {
+            let out = carrier::item(item).expect("fits");
+            let edits = out.edits().map(marmot_agent::EventKey::from);
+            let row = w.store_sent(0, out.kind, out.content, out.tags, edits);
+            w.keep(row)
+        };
+        let a = sent(&mut w, &approval("appr-a", State::Waiting, 1, None));
+        let b = sent(&mut w, &approval("appr-b", State::Waiting, 1, None));
+        sent(&mut w, &approval("appr-a", State::Cancelled, 2, Some(&a)));
+        w.posted.push(Posted {
+            chat: 0,
+            what: What::Answer,
+        });
+        w.msgs.push(None);
+        let tags = w.post(0).expect("posted").tags.clone();
+        let target = carrier::read_request(&w.agent, &tags).and_then(|(t, _)| t);
+        assert_eq!(target, Some(b));
+    });
+}
+
+// The old MDK edited the event an edit's `e` tag named. MDK edits the event the edit's original
+// token went under, and places the `e` tag itself: a core that named the token of another item's
+// first event edited that item in MDK, while the simulator stored a right edit and S3 passed.
+#[test]
+fn an_edit_edits_what_its_original_token_went_under() {
+    use marmot_agent::marmot::Side;
+    use marmot_agent::{Sending, Token};
+    use marmot_agent_sim::side::SimSide;
+    paused(async || {
+        let w = world(&[]);
+        let group = w.chats[0].group.clone();
+        let agent = w.agent.clone();
+        let side = SimSide {
+            world: std::sync::Arc::new(std::sync::Mutex::new(w)),
+            notify: Default::default(),
+            agent,
+        };
+        let token = |mdk: &str, edits: Option<&str>| Token {
+            send: mdk.into(),
+            mdk: mdk.into(),
+            edits: edits.map(Into::into),
+            tried_at: None,
+        };
+        let send = async |item: Item, token: Token| {
+            let key = format!("{}/{}", item.event.header().item.as_str(), item.version);
+            let what = Sending::Item {
+                key,
+                item: Box::new(item),
+            };
+            side.send(&group, &what, &token).await.expect("sent")
+        };
+        let a = send(
+            approval("appr-a", State::Waiting, 1, None),
+            token("a", None),
+        )
+        .await;
+        send(
+            approval("appr-b", State::Waiting, 1, None),
+            token("b", None),
+        )
+        .await;
+        let edit = approval("appr-a", State::Waiting, 2, Some(&a));
+        send(edit, token("a2", Some("a"))).await;
+        assert!(oracle::safety(&side.world.lock().expect("not poisoned")).is_none());
+        // Version 3 of A, under B's token.
+        let edit = approval("appr-a", State::Cancelled, 3, Some(&a));
+        send(edit, token("a3", Some("b"))).await;
+        let world = side.world.lock().expect("not poisoned");
+        let failure = oracle::safety(&world).expect("a failure");
+        assert_eq!(failure.property, "S3", "{failure:?}");
+    });
+}

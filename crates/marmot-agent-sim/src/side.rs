@@ -261,9 +261,10 @@ fn send(
     };
     // What MDK would store, as the real Marmot side builds it.
     let built = match what {
-        Sending::Item { item, .. } => {
-            carrier::item(item).map(|out| (out.kind, out.content, out.tags, None))
-        }
+        Sending::Item { item, .. } => carrier::item(item).map(|out| {
+            let edits = out.edits().map(EventKey::from);
+            (out.kind, out.content, out.tags, edits)
+        }),
         Sending::Words {
             edit: Some(target),
             text,
@@ -325,6 +326,36 @@ fn send(
         world.refused.push(dropped);
         world.note(format!("Send(c{chat}): Refused, too large"));
         return (Err(SendFailed::Refused { gone: false }), false);
+    };
+    if let Some(why) = misshapen(what, kind, &tags, token) {
+        let why = format!("{why} in c{chat}");
+        world.note(format!("Send(c{chat}): Refused, {why}"));
+        world.misshapen.push(why);
+        world.refused.push(dropped);
+        return (Err(SendFailed::Refused { gone: false }), false);
+    }
+    // MDK edits the event the edit's original token went under, and places an item's `e` tag
+    // itself (its `submit_tagged_edit_for_local_send`): it never reads the target the core names.
+    let (tags, edits) = match (edits, &token.edits) {
+        (Some(named), Some(original)) => {
+            let Some(kept) = world.tokens.get(&(chat, original.clone())) else {
+                let why = format!("an edit under a token MDK does not keep in c{chat}");
+                world.note(format!("Send(c{chat}): Refused, {why}"));
+                world.misshapen.push(why);
+                world.refused.push(dropped);
+                return (Err(SendFailed::Refused { gone: false }), false);
+            };
+            let target = kept.event.clone();
+            let tags = if carrier::edit_target(&tags) == Some(named.as_str()) {
+                let mut tags = carrier::but_target(&tags);
+                tags.push(vec!["e".into(), target.as_str().into()]);
+                tags
+            } else {
+                tags
+            };
+            (tags, Some(target))
+        }
+        (edits, _) => (tags, edits),
     };
     let request = (kind, content.clone(), tags.clone(), edits.clone());
     if let Some(kept) = world.tokens.get(&(chat, token.mdk.clone())).cloned() {
@@ -428,4 +459,97 @@ fn dropped_try(world: &mut World, send: &str, dropped: RefusedSend) -> SendFaile
         world.refused.push(dropped);
     }
     SendFailed::Rejected
+}
+
+/// Why MDK would refuse an item the core sends, as its own checks do (its `submit_custom_event`
+/// for a first version, and `submit_tagged_edit_for_local_send` for a later one): tags MDK does
+/// not read as an item, or a later version with no token for its first event to name. `None`
+/// for anything else.
+fn misshapen(what: &Sending, kind: u64, tags: &[Vec<String>], token: &Token) -> Option<String> {
+    let Sending::Item { item, .. } = what else {
+        return None;
+    };
+    let name = format!("{} v{}", item.event.header().item.as_str(), item.version);
+    let edit = kind == EDIT;
+    // A first event is checked as it is sent; an edit without the `e` MDK places itself, as the
+    // real Marmot side hands it over.
+    let own = if edit {
+        carrier::but_target(tags)
+    } else {
+        tags.to_vec()
+    };
+    if let Err(error) = cgka_traits::agent_events::validate_agent_item_tags(&own) {
+        return Some(format!("{name}: {error}"));
+    }
+    if edit != item.first.is_some() || (edit && token.edits.is_none()) {
+        return Some(format!("{name}: not an edit of its first event"));
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use marmot_agent::carrier::Item;
+    use marmot_agent_events::body::{StartedBy, Turn};
+    use marmot_agent_events::{AgentEvent, Header, State};
+
+    fn version(first: Option<&str>) -> Sending {
+        let header = Header {
+            harness: "sim".into(),
+            session: Some("s1".into()),
+            turn: Some("t1".into()),
+            item: "t1".into(),
+            seq: 1,
+            state: State::Running,
+            title: "Turn".into(),
+            text: "turn".into(),
+        };
+        let body = Body::Turn(Turn {
+            started_by: StartedBy::User,
+            duration_ms: None,
+            usage: None,
+        });
+        Sending::Item {
+            key: "t1".into(),
+            item: Box::new(Item {
+                event: AgentEvent::new(header, body, None).expect("no secret"),
+                version: if first.is_some() { 2 } else { 1 },
+                first: first.map(EventKey::from),
+                started_by: None,
+                settles: Vec::new(),
+            }),
+        }
+    }
+
+    // MDK refuses a first event that carries an `e` tag, which is an edit's target for MDK to
+    // place; an edit's own `e` is MDK's, and is not checked as the item's.
+    #[test]
+    fn a_first_event_is_checked_with_every_tag_it_carries() {
+        let token = |edits: Option<&str>| Token {
+            send: "a".into(),
+            mdk: "a".into(),
+            edits: edits.map(Into::into),
+            tried_at: None,
+        };
+        let first = version(None);
+        let Sending::Item { item, .. } = &first else {
+            unreachable!()
+        };
+        let out = carrier::item(item).expect("fits");
+        assert_eq!(misshapen(&first, out.kind, &out.tags, &token(None)), None);
+        let mut tags = out.tags.clone();
+        tags.push(vec!["e".into(), "0".repeat(64)]);
+        assert!(misshapen(&first, out.kind, &tags, &token(None)).is_some());
+
+        let edit = version(Some(&"1".repeat(64)));
+        let Sending::Item { item, .. } = &edit else {
+            unreachable!()
+        };
+        let out = carrier::item(item).expect("fits");
+        assert_eq!(
+            misshapen(&edit, out.kind, &out.tags, &token(Some("a"))),
+            None
+        );
+    }
 }

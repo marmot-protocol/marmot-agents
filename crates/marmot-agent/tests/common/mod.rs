@@ -6,7 +6,7 @@
 pub mod connector;
 
 use cgka_traits::GroupId;
-use marmot_agent::carrier::{self, Asked, ITEM_KIND, Read};
+use marmot_agent::carrier::{self, Asked, EDIT_KIND, ITEM_KIND, Read};
 use marmot_agent::config::Config;
 use marmot_agent::marmot::{self, Marmot, Subscribed};
 use marmot_agent::run::{Core, Store};
@@ -297,11 +297,18 @@ impl World {
         group_hex
     }
 
-    /// What the agent sent to a group, of one kind, as the person has it, oldest first.
+    /// What the agent sent to a group, of one kind, as the person has it, oldest first. For
+    /// [`ITEM_KIND`], the items' later versions too, which are MDK's edits of their first events,
+    /// and with them any edits of the agent's words.
     pub fn sent_by_agent(&self, group_hex: &str, kind: u64) -> Vec<AppMessageRecord> {
+        let kinds = if kind == ITEM_KIND {
+            vec![ITEM_KIND, EDIT_KIND]
+        } else {
+            vec![kind]
+        };
         let query = AppMessageQuery {
             group_id_hex: Some(group_hex.to_string()),
-            kinds: Some(vec![kind]),
+            kinds: Some(kinds),
             limit: Some(500),
         };
         self.runtime
@@ -313,13 +320,23 @@ impl World {
     }
 
     /// Every version of every agent item in a group, read back, oldest first, each with the id
-    /// of its own event.
+    /// of its own event. A later version counts, as MDK has it, only once its first event is
+    /// there, from the same sender.
     pub fn items(&self, group_hex: &str) -> Vec<(EventKey, carrier::Read)> {
-        self.sent_by_agent(group_hex, ITEM_KIND)
-            .into_iter()
+        let rows = self.sent_by_agent(group_hex, ITEM_KIND);
+        let firsts: std::collections::HashMap<&str, &str> = (rows.iter())
+            .filter(|m| m.kind == ITEM_KIND)
+            .map(|m| (m.message_id_hex.as_str(), m.sender.as_str()))
+            .collect();
+        (rows.iter())
             .filter_map(|m| {
-                let read = carrier::read_item(&m.plaintext, &m.tags)?;
-                Some((EventKey(m.message_id_hex), read))
+                let read = carrier::read_item(m.kind, &m.plaintext, &m.tags)?;
+                if let Some(first) = &read.item.first
+                    && firsts.get(first.as_str()) != Some(&m.sender.as_str())
+                {
+                    return None;
+                }
+                Some((EventKey(m.message_id_hex.clone()), read))
             })
             .collect()
     }

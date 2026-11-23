@@ -376,7 +376,7 @@ fn session_item(approve_sandbox: bool) -> body::Session {
 // ------------------------------------------------------------------------------------- items
 
 // An item's first version is sent as it is; each later one names the first and has a higher
-// version, until MDK takes edits (D-069).
+// version, as MDK's edit of it (D-025, D-112).
 #[test]
 fn an_items_later_versions_name_its_first() {
     let (mut talk, prompt) = started();
@@ -654,21 +654,114 @@ fn a_stop_closes_items_and_settles_requests() {
 
 // ----------------------------------------------------------------------------------- carrier
 
-// An item read back from its event is the item that was sent.
+// An event id, as MDK reads one: 64 hex characters.
+fn hex_id(n: u8) -> EventKey {
+    EventKey(format!("{n:02x}").repeat(32))
+}
+
+// An item read back from its event is the item that was sent. Its first version is kind 1201;
+// a later one is MDK's edit, kind 1009, whose one `e` tag names the first event (D-025, D-076),
+// and the message that started the turn is `started_by`, MDK's name for it (D-112).
 #[test]
 fn an_item_survives_the_carrier() {
-    let item = Item {
+    let first = Item {
+        event: event("cmd", State::Running, turn()),
+        version: 1,
+        first: None,
+        started_by: Some(hex_id(2)),
+        settles: vec![hex_id(3)],
+    };
+    let later = Item {
         event: event("cmd", State::Done, turn()),
         version: 3,
-        first: Some(EventKey::from("e-first")),
-        started_by: Some(EventKey::from("e-prompt")),
-        settles: vec![EventKey::from("r1")],
+        first: Some(hex_id(1)),
+        ..first.clone()
     };
-    let out = carrier::item(&item).unwrap();
-    assert_eq!(out.kind, carrier::ITEM_KIND);
-    let read = carrier::read_item(&out.content, &out.tags).unwrap();
-    assert!(read.item == item);
-    assert_eq!(read.left_out, carrier::LeftOut::default());
+    for (item, kind) in [(&first, carrier::ITEM_KIND), (&later, carrier::EDIT_KIND)] {
+        let out = carrier::item(item).unwrap();
+        assert_eq!(out.kind, kind);
+        let named: Vec<_> = (out.tags.iter()).filter(|t| t[0] == "e").collect();
+        assert_eq!(
+            named.len(),
+            usize::from(item.first.is_some()),
+            "one `e`, on an edit"
+        );
+        assert_eq!(out.edits(), item.first.as_ref().map(|f| f.as_str()));
+        let started = (out.tags.iter()).find(|t| t[0] == "started_by");
+        assert_eq!(started.map(|t| t[1].as_str()), Some(hex_id(2).as_str()));
+        let read = carrier::read_item(out.kind, &out.content, &out.tags).unwrap();
+        assert!(read.item == *item);
+        assert_eq!(read.left_out, carrier::LeftOut::default());
+    }
+    // Neither the agent's words nor an edit of them is an item, nor an item of another kind.
+    let out = carrier::item(&first).unwrap();
+    assert!(carrier::read_item(9, &out.content, &out.tags).is_none());
+    assert!(carrier::read_item(carrier::EDIT_KIND, "words", &[]).is_none());
+}
+
+// Every event the carrier writes is one MDK reads as it sends it: an item's first version, a
+// later one with MDK's own `e` tag taken off, the stand-in for one too large, and an answer or
+// a control (D-076).
+#[test]
+fn mdk_reads_every_event_the_carrier_writes() {
+    use cgka_traits::agent_events::{AgentRequest, validate_agent_item_tags};
+    let first = Item {
+        event: event("call", State::Waiting, approval()),
+        version: 1,
+        first: None,
+        started_by: Some(hex_id(2)),
+        settles: vec![hex_id(3)],
+    };
+    let huge = Body::Approval(body::Approval {
+        subject: None,
+        choices: (0..2000)
+            .map(|n| Choice {
+                id: format!("choice-{n}-{}", "x".repeat(40)),
+                label: "Allow".into(),
+                effect: Effect::Allow,
+            })
+            .collect(),
+        answer: None,
+    });
+    let cases = [
+        first.clone(),
+        Item {
+            version: 2,
+            first: Some(hex_id(1)),
+            ..first.clone()
+        },
+        Item {
+            event: event("call", State::Waiting, huge),
+            ..first.clone()
+        },
+    ];
+    for (item, kind) in cases.iter().zip(["approval", "approval", "notice"]) {
+        let out = carrier::item(item).unwrap();
+        let read = validate_agent_item_tags(&out.tags_but_target()).unwrap();
+        assert_eq!(read.version, item.version);
+        assert_eq!(read.item_type, kind);
+        assert_eq!(
+            read.alerts(),
+            kind == "approval",
+            "a waiting approval alerts (D-024)"
+        );
+        assert_eq!(read.settles, vec![hex_id(3).0]);
+        assert_eq!(read.started_by_message_id_hex, Some(hex_id(2).0));
+    }
+    let stand_in = carrier::item(&cases[2]).unwrap();
+    assert!(
+        stand_in
+            .tags
+            .iter()
+            .any(|t| t[0] == "cut" && t[1] == "item")
+    );
+    let agent = PubKey("ab".repeat(32));
+    let out = carrier::request(&agent, Some(&hex_id(1)), &Asked::Interrupt, "Stop");
+    assert_eq!(out.kind, carrier::REQUEST_KIND);
+    let read = AgentRequest::from_tags(&out.tags).unwrap();
+    assert_eq!(read.agent_pubkey_hex, agent.0);
+    assert_eq!(read.item_message_id_hex, Some(hex_id(1).0));
+    assert_eq!(read.action, "interrupt");
 }
 
 // Over 64 KB, the native message is left out first, then the output is cut, keeping its start
@@ -705,7 +798,7 @@ fn an_item_over_the_limit_loses_its_native_message_then_output() {
     };
     let out = carrier::item(&item).unwrap();
     assert!(out.size() <= carrier::LIMIT, "{}", out.size());
-    let read = carrier::read_item(&out.content, &out.tags).unwrap();
+    let read = carrier::read_item(out.kind, &out.content, &out.tags).unwrap();
     assert!(read.item.event.native().is_none());
     assert_eq!(read.left_out.output, Some(output.len()));
     assert!(read.left_out.native.is_some());
@@ -809,7 +902,7 @@ fn a_large_diff_and_escaped_output_are_cut_to_fit() {
     };
     let out = carrier::item(&item).unwrap();
     assert!(out.size() <= carrier::LIMIT, "{}", out.size());
-    let read = carrier::read_item(&out.content, &out.tags).unwrap();
+    let read = carrier::read_item(out.kind, &out.content, &out.tags).unwrap();
     assert_eq!(read.left_out.diffs, 1);
     assert!(read.left_out.output.is_some());
 }
@@ -1472,7 +1565,7 @@ fn every_item_is_cut_to_fit() {
             "case {case}: {}",
             on_the_wire(&out)
         );
-        let read = carrier::read_item(&out.content, &out.tags).expect("reads back");
+        let read = carrier::read_item(out.kind, &out.content, &out.tags).expect("reads back");
         let (sent, got) = (item.event.header(), read.item.event.header());
         assert_eq!(
             (got.item.as_str(), got.seq, got.state),
@@ -1645,7 +1738,7 @@ fn a_session_keeps_every_command_name_and_hint() {
     let item = commands_item(800, 12, 8, 40);
     let out = carrier::item(&item).unwrap();
     assert!(on_the_wire(&out) <= carrier::LIMIT, "{}", on_the_wire(&out));
-    let read = carrier::read_item(&out.content, &out.tags).unwrap();
+    let read = carrier::read_item(out.kind, &out.content, &out.tags).unwrap();
     let (Body::Session(sent), Body::Session(got)) = (item.event.body(), read.item.event.body())
     else {
         panic!("not a session")
@@ -1685,7 +1778,7 @@ fn a_plan_of_thousands_of_steps_fits_with_few_cut_tags() {
     assert!(on_the_wire(&out) <= carrier::LIMIT, "{}", on_the_wire(&out));
     assert!(cut_tags(&out) <= 8, "{} cut tags", cut_tags(&out));
     assert!(started.elapsed().as_secs() < 5, "fitting took too long");
-    let read = carrier::read_item(&out.content, &out.tags).unwrap();
+    let read = carrier::read_item(out.kind, &out.content, &out.tags).unwrap();
     assert!(matches!(read.item.event.body(), Body::Plan(_)));
 }
 
@@ -1697,7 +1790,7 @@ fn an_item_that_cannot_fit_is_sent_as_a_stand_in() {
     let item = commands_item(3000, 40, 20, 0);
     let out = carrier::item(&item).unwrap();
     assert!(on_the_wire(&out) <= carrier::LIMIT, "{}", on_the_wire(&out));
-    let read = carrier::read_item(&out.content, &out.tags).unwrap();
+    let read = carrier::read_item(out.kind, &out.content, &out.tags).unwrap();
     assert!(
         matches!(read.item.event.body(), Body::Notice(_)),
         "a stand-in, not a session with commands missing"
@@ -1738,7 +1831,7 @@ fn an_item_that_settles_very_many_is_never_over_the_limit() {
     let out = carrier::item(&item).expect("fits");
     assert!(on_the_wire(&out) <= carrier::LIMIT, "{}", on_the_wire(&out));
     assert_eq!(
-        carrier::read_item(&out.content, &out.tags)
+        carrier::read_item(out.kind, &out.content, &out.tags)
             .unwrap()
             .item
             .settles
@@ -1781,7 +1874,7 @@ fn a_session_keeps_its_descriptions_when_leaving_out_the_native_message_is_enoug
     )
     .unwrap();
     let out = carrier::item(&item).unwrap();
-    let read = carrier::read_item(&out.content, &out.tags).unwrap();
+    let read = carrier::read_item(out.kind, &out.content, &out.tags).unwrap();
     assert!(read.left_out.native.is_some());
     let Body::Session(got) = read.item.event.body() else {
         panic!("not a session")
@@ -1818,7 +1911,7 @@ fn a_thinned_plan_counts_what_was_cut_of_every_step_it_kept() {
         settles: Vec::new(),
     };
     let out = carrier::item(&item).unwrap();
-    let read = carrier::read_item(&out.content, &out.tags).unwrap();
+    let read = carrier::read_item(out.kind, &out.content, &out.tags).unwrap();
     let Body::Plan(got) = read.item.event.body() else {
         panic!("not a plan")
     };
@@ -1860,7 +1953,7 @@ fn the_output_is_cut_before_other_text() {
     };
     let out = carrier::item(&item).unwrap();
     assert!(on_the_wire(&out) <= carrier::LIMIT);
-    let read = carrier::read_item(&out.content, &out.tags).unwrap();
+    let read = carrier::read_item(out.kind, &out.content, &out.tags).unwrap();
     let Body::Tool(got) = read.item.event.body() else {
         panic!("not a tool")
     };
@@ -1923,7 +2016,8 @@ fn an_event_that_settles_very_many_spreads_them_over_versions() {
     assert!(failed_at_the_end(&mut talk).is_empty());
 }
 
-// The agent's words carry at most what one event can; the turn's next versions settle the rest.
+// The agent's words carry at most what MDK takes in a chat message, 64 tags of 16 KB in all,
+// with their turn and phase; the turn's next versions settle the rest.
 #[test]
 fn words_that_settle_very_many_leave_the_rest_to_the_turn() {
     let (mut talk, prompt) = started();
@@ -1941,17 +2035,92 @@ fn words_that_settle_very_many_leave_the_rest_to_the_turn() {
     said.settles = requests;
     let acts = talk.emitted(said);
     let mut settled = Vec::new();
+    let mut words = 0;
     for (_, what) in sends(&talk, acts) {
         let settles = match what {
-            Sending::Words { settles, .. } => settles,
+            Sending::Words {
+                settles,
+                turn,
+                remark,
+                ..
+            } => {
+                // MDK takes a chat message with at most 64 tags, of at most 16 KB in all.
+                let tags = carrier::words_tags(turn.as_ref(), remark, &settles);
+                let bytes: usize = tags.iter().flatten().map(String::len).sum();
+                assert!(
+                    tags.len() <= 64 && bytes <= 16 * 1024,
+                    "MDK takes the words"
+                );
+                words = settles.len();
+                settles
+            }
             Sending::Item { item, .. } => item.settles,
         };
         assert!(settles.len() <= carrier::SETTLES_MAX);
         settled.extend(settles);
     }
+    assert!(words > 0, "the words settle what they can");
     settled.sort();
     settled.dedup();
     assert_eq!(settled.len(), 450);
+    assert!(failed_at_the_end(&mut talk).is_empty());
+}
+
+// What fits on the words is sized by what their `settles` tags carry, each request's event id,
+// not by the core's shorter key for it: with a long turn, fewer fit, and the turn settles the rest.
+#[test]
+fn words_settle_what_fits_by_the_requests_events() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let long = "t".repeat(12 * 1024);
+    let in_long_turn = |event: AgentEvent| {
+        let mut header = event.header().clone();
+        header.turn = Some(long.as_str().into());
+        AgentEvent::new(header, event.body().clone(), None).unwrap()
+    };
+    sent(
+        &mut talk,
+        &chat,
+        in_long_turn(event("t1", State::Running, turn())),
+        "e-t1",
+    );
+    let requests: Vec<_> = (0..60)
+        .map(|n| interrupt_taken(&mut talk, &format!("{n:064x}")))
+        .collect();
+    let mut said = emitted(&chat, in_long_turn(words(State::Done)));
+    said.settles = requests;
+    let acts = talk.emitted(said);
+    let mut settled = Vec::new();
+    let mut words = 0;
+    for (_, what) in sends(&talk, acts) {
+        let settles = match what {
+            Sending::Words {
+                settles,
+                turn,
+                remark,
+                ..
+            } => {
+                let tags = carrier::words_tags(turn.as_ref(), remark, &settles);
+                let bytes: usize = tags.iter().flatten().map(String::len).sum();
+                assert!(
+                    tags.len() <= 64 && bytes <= 16 * 1024,
+                    "MDK takes the words: {} tags, {bytes} bytes",
+                    tags.len()
+                );
+                words = settles.len();
+                settles
+            }
+            Sending::Item { item, .. } => item.settles,
+        };
+        settled.extend(settles);
+    }
+    assert!(
+        words > 0 && words < 60,
+        "the words settle what fits: {words}"
+    );
+    settled.sort();
+    settled.dedup();
+    assert_eq!(settled.len(), 60);
     assert!(failed_at_the_end(&mut talk).is_empty());
 }
 
@@ -2031,6 +2200,198 @@ fn a_send_keeps_its_token_until_mdk_drops_a_try() {
         "the edit names the first message"
     );
     assert_ne!(edit.mdk, retry.mdk, "and is a send of its own");
+}
+
+// An item's later version is MDK's edit of its first event, which names the token that event
+// went under, as an edit of the agent's words does (D-025, D-109).
+#[test]
+fn a_later_version_names_the_token_its_first_event_went_under() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let group = direct().group;
+    talk.emitted(emitted(&chat, event("cmd", State::Running, turn())));
+    let (first, what) = talk.next_send(&group).unwrap();
+    assert!(matches!(&what, Sending::Item { item, .. } if item.first.is_none()));
+    assert_eq!(first.edits, None, "a first event edits nothing");
+    talk.sent(&format!("{chat}/cmd"), hex_id(1));
+    talk.emitted(emitted(&chat, event("cmd", State::Done, turn())));
+    let (later, what) = talk.next_send(&group).unwrap();
+    let Sending::Item { item, .. } = what else {
+        panic!("not an item")
+    };
+    assert_eq!((item.version, item.first), (2, Some(hex_id(1))));
+    assert_eq!(
+        later.edits.as_ref(),
+        Some(&first.mdk),
+        "the edit names the first event"
+    );
+    assert_ne!(later.mdk, first.mdk, "and is a send of its own");
+}
+
+// In a chat whose messages disappear, an item's first event can be gone while the item goes on,
+// and MDK refuses an edit of it. The version goes out as a new first event, under the same name,
+// and the versions after it edit that one; the item's version goes on rising. Kept across a
+// restart, so it is saved before it is sent. The agent's words whose message is gone go out as
+// a new message.
+#[test]
+fn a_version_whose_first_event_is_gone_goes_out_as_a_new_first_event() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let group = direct().group;
+    talk.emitted(emitted(&chat, event("cmd", State::Running, turn())));
+    let _ = talk.next_send(&group).unwrap();
+    talk.sent(&format!("{chat}/cmd"), hex_id(1));
+    let mut running = event("cmd", State::Running, turn());
+    running = AgentEvent::new(
+        Header {
+            text: "still running".into(),
+            ..running.header().clone()
+        },
+        turn(),
+        None,
+    )
+    .unwrap();
+    talk.emitted(emitted(&chat, running));
+    let (edit, what) = talk.next_send(&group).unwrap();
+    assert!(matches!(&what, Sending::Item { item, .. } if item.first == Some(hex_id(1))));
+
+    talk.first_gone(&edit.send);
+    let mut talk = conversation(talk.saved().clone());
+    let (anew, what) = talk.next_send(&group).unwrap();
+    let Sending::Item { item, .. } = what else {
+        panic!("not an item")
+    };
+    assert_eq!((item.version, &item.first, &anew.edits), (2, &None, &None));
+    assert_eq!(carrier::item(&item).unwrap().kind, carrier::ITEM_KIND);
+    assert_eq!(anew.send, edit.send, "the same send");
+    talk.sent(&format!("{chat}/cmd"), hex_id(2));
+
+    talk.emitted(emitted(&chat, event("cmd", State::Done, turn())));
+    let (last, what) = talk.next_send(&group).unwrap();
+    let Sending::Item { item, .. } = what else {
+        panic!("not an item")
+    };
+    assert_eq!((item.version, item.first), (3, Some(hex_id(2))));
+    assert_eq!(
+        last.edits.as_ref(),
+        Some(&anew.mdk),
+        "names the new first event"
+    );
+
+    talk.sent(&format!("{chat}/cmd"), hex_id(3));
+    talk.emitted(emitted(&chat, words(State::Running)));
+    talk.sent(&format!("{chat}/w1"), hex_id(4));
+    let mut changed = emitted(&chat, words(State::Done));
+    changed.event = AgentEvent::new(
+        Header {
+            text: "other words".into(),
+            ..changed.event.header().clone()
+        },
+        changed.event.body().clone(),
+        None,
+    )
+    .unwrap();
+    talk.emitted(changed);
+    let (edit, what) = talk.next_send(&group).unwrap();
+    assert!(matches!(what, Sending::Words { edit: Some(_), .. }));
+    talk.first_gone(&edit.send);
+    let (_, what) = talk.next_send(&group).unwrap();
+    assert!(
+        matches!(what, Sending::Words { edit: None, .. }),
+        "a new message"
+    );
+}
+
+// A state file from before kind 1201, whose items' first events went out under a temporary kind
+// no edit applies to (D-069): an item's next version goes out as a new first event, of kind 1201,
+// and its version goes on rising. The agent's words were chat messages then too, and are still
+// edited.
+#[test]
+fn an_item_from_before_kind_1201_goes_on_as_a_new_first_event() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let group = direct().group;
+    sent(
+        &mut talk,
+        &chat,
+        event("cmd", State::Running, turn()),
+        "e-old",
+    );
+    talk.emitted(emitted(&chat, words(State::Running)));
+    talk.sent(&format!("{chat}/w1"), EventKey::from("e-words"));
+    let mut before = serde_json::to_value(talk.saved()).unwrap();
+    before.as_object_mut().unwrap().remove("kind_1201");
+    let mut talk = conversation(serde_json::from_value(before).unwrap());
+
+    let mut running = event("cmd", State::Running, turn());
+    running = AgentEvent::new(
+        Header {
+            text: "still running".into(),
+            ..running.header().clone()
+        },
+        turn(),
+        None,
+    )
+    .unwrap();
+    talk.emitted(emitted(&chat, running));
+    let (token, what) = talk.next_send(&group).unwrap();
+    let Sending::Item { item, .. } = what else {
+        panic!("not an item")
+    };
+    assert_eq!((item.version, &item.first, &token.edits), (2, &None, &None));
+    assert_eq!(carrier::item(&item).unwrap().kind, carrier::ITEM_KIND);
+    talk.sent(&format!("{chat}/cmd"), hex_id(5));
+
+    let mut changed = emitted(&chat, words(State::Done));
+    changed.event = AgentEvent::new(
+        Header {
+            text: "other words".into(),
+            ..changed.event.header().clone()
+        },
+        changed.event.body().clone(),
+        None,
+    )
+    .unwrap();
+    talk.emitted(changed);
+    let (_, what) = talk.next_send(&group).unwrap();
+    let edits = EventKey::from("e-words");
+    assert!(matches!(what, Sending::Words { edit: Some(e), .. } if e == edits));
+    talk.sent(&format!("{chat}/w1"), edits);
+
+    // Taken up once: after a restart, the new first event is the one the next version names.
+    let mut talk = conversation(talk.saved().clone());
+    talk.emitted(emitted(&chat, event("cmd", State::Done, turn())));
+    let (_, what) = talk.next_send(&group).unwrap();
+    assert!(matches!(what, Sending::Item { item, .. } if item.first == Some(hex_id(5))));
+}
+
+// A notice of the core's own has a place in its session from 1, as MDK reads an item (D-059):
+// the last its chat showed, so it sorts after what came before it.
+#[test]
+fn a_notice_of_the_cores_own_has_a_place_mdk_takes() {
+    let mut talk = conversation(Saved::default());
+    let mut mention = heard(group(), "e1", STRANGER, "delete everything");
+    mention.mentions_agent = true;
+    let (_, _, item) = the_item(&mut talk, |t| t.heard(mention));
+    assert!(is_refused(&item, "not_allowed"));
+    assert_eq!(item.event.header().seq, 1, "with nothing shown before it");
+
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let shown = AgentEvent::new(
+        Header {
+            seq: 7,
+            ..event("cmd", State::Running, turn()).header().clone()
+        },
+        turn(),
+        None,
+    )
+    .unwrap();
+    sent(&mut talk, &chat, shown, "e-cmd");
+    let typed = heard(direct(), "e2", STRANGER, "hello");
+    let (_, _, item) = the_item(&mut talk, |t| t.heard(typed));
+    assert!(is_refused(&item, "not_allowed"));
+    assert_eq!(item.event.header().seq, 7);
 }
 
 // When MDK refuses an edit of the agent's words, the turn's version queued to settle what the

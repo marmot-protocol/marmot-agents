@@ -1,9 +1,10 @@
 # Trying the core
 
 Status: describes what is built today: Codex built in, and Claude Code through the socket (M1 and M2 of the
-[plan](plan.md)). Agent items travel under a temporary kind
-until MDK takes the new shape ([D-069](decisions.md#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind)),
-so no White Noise app shows them yet. A terminal client plays the person instead.
+[plan](plan.md)). Agent items travel as kinds 1201 and 1202
+([D-112](decisions.md#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by)), which
+MDK carries since 2026-11-22; a White Noise app shows them only once it is built on that MDK. A terminal client
+plays the person instead.
 
 Everything runs on one machine, with nothing else needed but a signed-in `codex`. To install an agent as a
 service of your account instead, use a script in `install/`, as the [README](../README.md#installing-an-agent)

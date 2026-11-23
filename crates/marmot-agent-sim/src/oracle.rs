@@ -5,7 +5,7 @@
 use crate::schedule::What;
 use crate::world::{CHAT, EDIT, Row, World};
 use marmot_agent::EventKey;
-use marmot_agent::carrier::{self, ITEM_KIND};
+use marmot_agent::carrier;
 use marmot_agent::conversation::EFFECT_LIMIT_SECS;
 use marmot_agent_events::State;
 use marmot_agent_events::body::Body;
@@ -43,9 +43,9 @@ struct Version<'a> {
 
 fn versions(world: &World) -> Vec<Version<'_>> {
     (world.rows.iter())
-        .filter(|r| r.from_agent && r.kind == ITEM_KIND)
+        .filter(|r| r.from_agent)
         .filter_map(|row| {
-            let read = carrier::read_item(&row.content, &row.tags)?;
+            let read = carrier::read_item(row.kind, &row.content, &row.tags)?;
             let header = read.item.event.header();
             Some(Version {
                 row,
@@ -70,16 +70,17 @@ fn settling(world: &World) -> Vec<(&Row, Vec<EventKey>)> {
     (world.rows.iter())
         .filter(|r| r.from_agent)
         .filter_map(|row| {
-            let settles: Vec<EventKey> = if row.kind == ITEM_KIND {
-                carrier::read_item(&row.content, &row.tags)?.item.settles
-            } else if row.kind == CHAT {
-                (row.tags.iter())
-                    .filter(|t| t.len() >= 2 && t[0] == "settles")
-                    .map(|t| EventKey(t[1].clone()))
-                    .collect()
-            } else {
-                Vec::new()
-            };
+            let settles: Vec<EventKey> =
+                if let Some(read) = carrier::read_item(row.kind, &row.content, &row.tags) {
+                    read.item.settles
+                } else if row.kind == CHAT {
+                    (row.tags.iter())
+                        .filter(|t| t.len() >= 2 && t[0] == "settles")
+                        .map(|t| EventKey(t[1].clone()))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
             (!settles.is_empty()).then_some((row, settles))
         })
         .collect()
@@ -148,7 +149,7 @@ fn s1(world: &World) -> Option<Failure> {
     let net: BTreeSet<EventKey> = (versions(world).into_iter())
         .filter(|v| v.notice.as_deref() == Some("no_effect"))
         .flat_map(|v| {
-            carrier::read_item(&v.row.content, &v.row.tags)
+            carrier::read_item(v.row.kind, &v.row.content, &v.row.tags)
                 .map(|r| r.item.settles)
                 .unwrap_or_default()
         })
@@ -171,6 +172,9 @@ fn s1(world: &World) -> Option<Failure> {
 /// S3: an item's versions rise by one, skipping only versions MDK refused, and every later
 /// version names its first event; the agent's words go out as a new message once.
 fn s3(world: &World) -> Option<Failure> {
+    if let Some(why) = world.misshapen.first() {
+        return Some(fail("S3", format!("MDK could not take {why}")));
+    }
     let refused: BTreeSet<(usize, String, u64)> = (world.refused.iter())
         .filter_map(|r| r.item.clone().map(|(id, v)| (r.chat, id, v)))
         .collect();
@@ -323,7 +327,10 @@ fn s5(world: &World) -> Option<Failure> {
             said.insert(text.as_str(), (chat, e.item.as_str()));
         }
     }
-    let words = (world.rows.iter()).filter(|r| r.from_agent && (r.kind == CHAT || r.kind == EDIT));
+    let words = (world.rows.iter()).filter(|r| {
+        let item = carrier::read_item(r.kind, &r.content, &r.tags).is_some();
+        r.from_agent && (r.kind == CHAT || r.kind == EDIT) && !item
+    });
     for row in words {
         let Some(&(chat, item)) = said.get(row.content.as_str()) else {
             continue;

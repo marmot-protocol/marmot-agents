@@ -8,7 +8,7 @@ from a seed, and checks the properties after every step.
 
 | Real | Simulated |
 | --- | --- |
-| The run loop, the conversation, the outbox, the save points, the state file on disk (in `/dev/shm` when there is one), the carrier that writes and reads items | MDK, behind the core's `marmot::Side` trait: storage with insert order, read a page at a time after a place as MDK's `messages_after_insert_order` gives it, live events in any order and sometimes again (MDK #3606), invitations, sends and their outcomes, the token MDK keeps each send under (a send tried again under it gets the same event, or the same drop, and posts nothing), reads of what arrived |
+| The run loop, the conversation, the outbox, the save points, the state file on disk (in `/dev/shm` when there is one), the carrier that writes and reads items | MDK, behind the core's `marmot::Side` trait: storage with insert order, read a page at a time after a place as MDK's `messages_after_insert_order` gives it, live events in any order and sometimes again (MDK #3606), invitations, sends and their outcomes, the checks MDK makes of an item it is sent, the token MDK keeps each send under (a send tried again under it gets the same event, or the same drop, and posts nothing), reads of what arrived |
 | The `no_effect` net, retries, how many dropped tries give a send up: production values, on a virtual clock | The harness, behind a `Driver`: sessions, turns, approvals, words, the effects of controls |
 
 Not simulated: MDK's own failures beyond what the core can tell apart (busy, outcome unknown, refused, dropped
@@ -25,7 +25,7 @@ emitted (`src/oracle.rs`).
 | Id | Checked | How |
 | --- | --- | --- |
 | S1 | every step | Each request is settled at most once, only in its own chat, and never by the `no_effect` net when the harness showed its effect before the net could first fire: 119 s after it took the request, which is when the driver answered the core (after a `Slow` move's time) and the core set its deadline, since the core waits `EFFECT_LIMIT_SECS` (120 s) on a clock of whole seconds and looks on a 10 s tick |
-| S3 | every step | Each item's stored versions rise by one from v1, skipping only versions MDK refused (before the first stored one too); every later version names the first; the agent's words go out as a new message once |
+| S3 | every step | Each item's stored versions rise by one from v1, skipping only versions MDK refused (before the first stored one too); every later version is an edit naming the first; MDK's reading of an item (`cgka_traits::agent_events`) takes every version the core sends, and the simulated MDK refuses one it would not; the agent's words go out as a new message once |
 | S4 | every step | No prompt reaches the harness twice, across every crash |
 | S5 | every step | A chat id stands for one chat; an item, the agent's words and a settle reach only their own chat, and an edit of the agent's words edits their own message there |
 | S10 | every step | What reaches the harness from a chat comes in storage order, each message once: a prompt by its text, an answer or a control as the request message the core read last, which it hands on before reading another |

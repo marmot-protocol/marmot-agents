@@ -1226,7 +1226,9 @@ edit only to a chat message or a comment. Waiting for MDK would hold up the firs
 is better specified for MDK after that test than before it. A version per item is what ordered edits need
 anyway ([the carrier](design/event-carrier.md)), so only the carrying is temporary.
 
-Decided 2026-11-21.
+Decided 2026-11-21. Replaced by
+[D-112](#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by): MDK took the new
+shape, and the switch was made.
 
 ## D-070 A restart closes the turn as interrupted
 
@@ -1886,3 +1888,24 @@ in a rare case (no mark, at start) is better than acting on history. The project
 recommendation.
 
 Decided 2026-11-22. The project owner decided.
+
+## D-112 The core sends kinds 1201, 1202 and edits, and a turn's message is `started_by`
+
+**Decision.** MDK takes the new shape of kinds 1201 and 1202 (MDK pull request 3613), so the core uses it, in
+place of the temporary kinds of
+[D-069](#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind):
+
+- **An item's first version** is a kind 1201 event, and **each later version** is MDK's edit of it, kind 1009,
+  carrying the whole item with a higher `v` ([D-025](#d-025-an-agent-item-is-updated-with-an-edit)). Both go
+  through MDK's token-based sends ([D-109](#d-109-how-the-cores-sends-survive-a-crash-as-built)); an edit names
+  the token the first event went under, and MDK places its `e` tag from it.
+- **One tag is renamed, by MDK:** on kind 1201 and its edits, the chat message that started the turn is
+  `["started_by", <id>]`, not `e`. An edit of an item carries every tag of the item and exactly one `e`, its
+  target, which a turn's `e` would have repeated. Kind 1202 keeps its `e`, the first event of the item it acts on.
+  What each tag carries is as [D-076](#d-076-the-tags-of-kinds-1201-and-1202) says.
+- **Answers and controls** are kind 1202 events.
+
+**Why.** D-069 said the switch is made in one place when MDK is ready, and MDK is. D-076 lets MDK rename a tag to
+fit its conventions: an edit's `e` is MDK's own, and a second one on the same event would be ambiguous.
+
+Decided 2026-11-22. MDK made the rename, which D-076 allows.

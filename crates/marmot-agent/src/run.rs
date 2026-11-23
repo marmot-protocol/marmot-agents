@@ -68,6 +68,12 @@ pub const REJECTED_TRIES: u32 = 10;
 const TRIED_WITHOUT_TOKENS: &str = "the state file was left by an older marmot-agent with sends \
     that may have gone out; move it away to start afresh";
 
+/// Why the core does not start on a state file whose outbox has an item handed to MDK by a core
+/// from before kind 1201: MDK keeps that try's token bound to the event in the old shape, and
+/// refuses it in the new one, though it may have gone out. No such core was released.
+const TRIED_BEFORE_KIND_1201: &str = "the state file was left by an older marmot-agent, from \
+    before kind 1201, with an agent item that may have gone out; move it away to start afresh";
+
 /// How many stored rows the core reads from MDK at a time.
 const PAGE: usize = 100;
 
@@ -319,6 +325,9 @@ impl<D: Driver, M: Side> Core<D, M> {
         let kept = store.load()?;
         if kept.conversation.tried_without_tokens() {
             return Err(TRIED_WITHOUT_TOKENS.into());
+        }
+        if kept.conversation.tried_before_kind_1201() {
+            return Err(TRIED_BEFORE_KIND_1201.into());
         }
         let mut conversation = Conversation::new(
             marmot.agent().clone(),
@@ -930,6 +939,11 @@ impl<D: Driver, M: Side> Core<D, M> {
                 }
                 Err(failed) => match self.bug_new_token(&token.send, failed) {
                     SendFailed::Refused { gone } => self.give_up(&token.send, gone)?,
+                    SendFailed::FirstGone => {
+                        // Saved before the send is tried again, as a new first event or message.
+                        self.conversation.first_gone(&token.send);
+                        self.save()?;
+                    }
                     SendFailed::Forgotten => {
                         // MDK's own words can name a group, so they are not printed (D-071).
                         eprintln!(

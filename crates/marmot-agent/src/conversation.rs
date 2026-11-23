@@ -21,7 +21,7 @@
 //! - a chat of a coding harness has a folder, set by someone who may approve, that applies from
 //!   its next session (D-101).
 
-use crate::carrier::{Asked, Item, SETTLES_MAX};
+use crate::carrier::{self, Asked, Item, SETTLES_MAX};
 use crate::chat_folder::{FOLDER, FolderRule, LABEL};
 use crate::keys::{EventKey, GroupKey, PubKey};
 use crate::rights::{Right, Rights, needed_for};
@@ -189,8 +189,9 @@ pub struct Token {
     /// gives back the event MDK made of it, and nothing goes out twice. A new one only once MDK
     /// dropped a try of it ([`Conversation::rejected`]).
     pub mdk: String,
-    /// For an edit of the agent's words: the token MDK took their first message under, which
-    /// the edit names. `None` when an older core sent that message, without one.
+    /// For a later version of an item, or an edit of the agent's words: the token MDK took the
+    /// first event under, which the edit names. `None` when an older core sent that message,
+    /// without one.
     pub edits: Option<String>,
     /// When the send was first handed to MDK under [`Token::mdk`], in seconds since 1970: MDK
     /// lets go of a token with the message it made, once a group's messages disappear, so a
@@ -252,9 +253,44 @@ pub struct Saved {
     /// holds for the sends of the state file before.
     #[serde(default)]
     salt: String,
+    /// Whether the items' first events went out as kind 1201, which MDK edits. A state file from
+    /// before has `false`: its items' first events went out under a temporary kind (D-069, replaced
+    /// by D-112), which MDK does not edit, so the next version of each goes out as a first event
+    /// again.
+    #[serde(default)]
+    kind_1201: bool,
 }
 
 impl Saved {
+    /// Takes up a state file whose items' first events went out under the temporary kind of
+    /// D-069, which no edit applies to: each item's next version goes out as a new kind 1201
+    /// event, the first of the item in the chat from then on. The agent's words were chat
+    /// messages then too, and are edited as before. Where forgotten items stood is forgotten.
+    fn move_to_kind_1201(&mut self) {
+        for record in self.items.values_mut() {
+            if !matches!(record.last.body(), Body::Message(_)) {
+                record.first = None;
+                record.first_token = None;
+            }
+        }
+        for queued in &mut self.outbox {
+            if let Sending::Item { item, .. } = &mut queued.what {
+                item.first = None;
+            }
+        }
+        self.forgotten.clear();
+        self.kind_1201 = true;
+    }
+
+    /// Whether a core from before kind 1201 wrote this with an item, or a notice, it handed to
+    /// MDK: MDK keeps that try's token bound to the event in the old shape, so tried again in the
+    /// new one it is refused, though it may have gone out. Items queued and never handed to MDK
+    /// are taken up ([`Saved::move_to_kind_1201`]).
+    pub fn tried_before_kind_1201(&self) -> bool {
+        !self.kind_1201
+            && (self.outbox.iter()).any(|q| q.attempted && matches!(q.what, Sending::Item { .. }))
+    }
+
     /// Whether a core from before MDK kept tokens wrote this: it has sends it handed to MDK,
     /// without a token, and no salt. Under a token now, any of them could go out a second time.
     pub fn tried_without_tokens(&self) -> bool {
@@ -279,8 +315,9 @@ struct Record {
     chat: String,
     /// The item's first event, once it was sent.
     first: Option<EventKey>,
-    /// The token MDK took the first event under, for the agent's words: an edit of them names
-    /// it. `None` for words an older core sent, which MDK took without a token.
+    /// The token MDK took the first event under: an edit of it, a later version of an item or of
+    /// the agent's words, names it. `None` for words an older core sent, which MDK took without
+    /// a token.
     #[serde(default)]
     first_token: Option<String>,
     version: u64,
@@ -433,6 +470,9 @@ impl Conversation {
     ) -> Self {
         if saved.salt.is_empty() {
             saved.salt = salt();
+        }
+        if !saved.kind_1201 {
+            saved.move_to_kind_1201();
         }
         Self {
             agent,
@@ -927,8 +967,17 @@ impl Conversation {
                 let mut held = std::mem::take(&mut record.held);
                 let first_words = record.first.is_none()
                     && !(self.saved.outbox.iter()).any(|q| q.what.key() == key);
+                let remark = message.phase == Some(marmot_agent_events::body::Phase::Commentary);
                 let settles = if first_words {
-                    by_turn = held.split_off(held.len().min(SETTLES_MAX));
+                    // As many as MDK takes in a chat message, sized by the event ids their tags
+                    // carry; the turn carries the rest. What is no longer pending settles nothing.
+                    held.retain(|r| (self.saved.pending.get(r)).is_some_and(|p| p.group == group));
+                    let events: Vec<EventKey> = held
+                        .iter()
+                        .map(|r| self.saved.pending[r].event.clone())
+                        .collect();
+                    let fit = carrier::words_settles_fit(header.turn.as_ref(), remark, &events);
+                    by_turn = held.split_off(fit);
                     take_pending(&mut self.saved.pending, &group, &held)
                 } else {
                     by_turn = held;
@@ -938,7 +987,7 @@ impl Conversation {
                     key: key.clone(),
                     text,
                     turn: header.turn.clone(),
-                    remark: message.phase == Some(marmot_agent_events::body::Phase::Commentary),
+                    remark,
                     edit: record.first.clone(),
                     settles,
                 });
@@ -1105,6 +1154,33 @@ impl Conversation {
     /// gone, nothing takes its place, so nothing loops. Everything is queued for the same group.
     pub fn refused(&mut self, token: &str, gone: bool) {
         self.dropped(token, gone, NOT_DELIVERED);
+    }
+
+    /// MDK refused the send named `token`, an edit, because the first event it names is gone:
+    /// the group's messages disappeared since it went, and MDK did not take this edit. The
+    /// agent's words go out as a new message, as when their message was removed
+    /// ([`Conversation::refused`]). An item's version goes out as a new first event, under the
+    /// same name, and every version after it edits that one: the item has no first event in the
+    /// chat until it goes. Its version goes on rising. The caller saves this before the send is
+    /// tried again.
+    pub fn first_gone(&mut self, token: &str) {
+        let Some(queued) = self.saved.outbox.iter().find(|q| q.token == token) else {
+            return;
+        };
+        if matches!(queued.what, Sending::Words { .. }) {
+            self.dropped(token, true, NOT_DELIVERED);
+            return;
+        }
+        let key = queued.what.key().to_string();
+        if let Some(record) = self.saved.items.get_mut(&key) {
+            record.first = None;
+            record.first_token = None;
+        }
+        for queued in (self.saved.outbox.iter_mut()).filter(|q| q.what.key() == key) {
+            if let Sending::Item { item, .. } = &mut queued.what {
+                item.first = None;
+            }
+        }
     }
 
     /// The send named `token` is given up without knowing whether it went out: MDK no longer
@@ -1304,11 +1380,12 @@ impl Conversation {
         let record = self.saved.items.get(what.key());
         let mut edits = None;
         if let Some(first) = record.and_then(|r| r.first.clone()) {
+            // An edit names the token its first event went under.
+            edits = record.and_then(|r| r.first_token.clone());
             match &mut what {
                 Sending::Item { item, .. } => item.first = Some(first),
                 Sending::Words { edit, settles, .. } => {
                     *edit = Some(first);
-                    edits = record.and_then(|r| r.first_token.clone());
                     // Never: words carry what they settle only when they are the first message.
                     settles.clear();
                 }
@@ -1710,12 +1787,20 @@ impl Conversation {
 
     /// A notice the core makes up: why something was not acted on.
     fn notice(&mut self, _group: &GroupKey, chat: &Chat, reason: &str, text: String) -> AgentEvent {
+        // A place in the session from 1, as MDK takes it (D-059): with the last its chat showed,
+        // so a client that orders a second's items by it shows the notice after them.
+        let seq = (self.saved.items.values())
+            .filter(|r| r.chat == chat.id.0)
+            .map(|r| r.last.header().seq)
+            .max()
+            .unwrap_or(0)
+            .max(1);
         let header = Header {
             harness: self.harness.clone(),
             session: self.saved.sessions.get(&chat.id.0).cloned(),
             turn: None,
             item: ItemId(self.make_id("core")),
-            seq: 0,
+            seq,
             state: State::Done,
             title: "Not acted on".into(),
             text,

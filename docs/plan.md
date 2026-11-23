@@ -21,7 +21,8 @@ a driver per harness, and agent activity as durable items that are edited as the
   ([what must not be lost](reference/current-connectors.md#things-the-new-design-must-not-lose)).
 - **An existing install moves over** keeping its identity, its keys, its encryption state and its groups
   ([D-089](decisions.md#d-089-an-install-moves-over-by-importing-its-account-home-in-place)).
-- **MDK carries the new shape of kinds 1201 and 1202**, and its old connector code is deleted.
+- **MDK carries the new shape of kinds 1201 and 1202**, and its old connector code is deleted. The first half is
+  done: MDK carries it since 2026-11-22, and the core sends it ([D-112](decisions.md#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by)).
 
 ## Milestones
 
@@ -53,6 +54,7 @@ No app is involved, and MDK is used as it is today.
   update travels as a new event with the item's id and a higher version
   ([D-069](decisions.md#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind)). The
   agent's words are chat messages, as decided. Switching to 1201, 1202 and edits is one change in one place.
+  Made on 2026-11-22 ([D-112](decisions.md#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by)).
 - **A test client, `marmot-agent-chat`.** A terminal program that plays the person: it makes an account and a
   group, invites the agent, sends messages, shows each item as it changes, answers approvals and questions, and
   sends controls. How it shows each item type is a reference for the apps.
@@ -93,7 +95,8 @@ Known gaps are issues #63, #64 and #68.
 Everything on the list above that M1 to M3 did not already do: moving installs over (`marmot-agent import`,
 built: [how](move.md)), installers and releases,
 an agent sending a file ([D-090](decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)), sends that
-survive a crash, catching up after being offline, and the switch to MDK's 1201 and 1202 once MDK has them.
+survive a crash, catching up after being offline, and the switch to MDK's 1201 and 1202 once MDK has them (done
+on 2026-11-22: [D-112](decisions.md#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by)).
 Also before the swap: a chat can move a coding harness to another folder
 ([D-101](decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder)), and the installers connect to the
 harness the person already has, on Linux and macOS
@@ -156,7 +159,7 @@ These are the project owner's to arrange. This repository does not change MDK.
 | When | What | Where |
 | --- | --- | --- |
 | Now | Remove the QUIC preview stack ([D-067](decisions.md#d-067-the-quic-preview-stack-is-removed)) | MDK, the Marmot specification, the apps |
-| After M1 | Kinds 1201 and 1202 in the new shape: items with versioned edits, answers and controls, who is alerted. The specification comes from here | MDK, the Marmot specification |
+| After M1 | Kinds 1201 and 1202 in the new shape: items with versioned edits, answers and controls, who is alerted. The specification comes from here. Done in MDK on 2026-11-22 (MDK pull request 3613); not yet in the specification | MDK, the Marmot specification |
 | After that | White Noise shows agent items ([Q-20](open-questions.md#q-20-what-do-the-apps-need)) | The apps |
 | At the swap | Delete the old connectors, their installers and their release workflows | MDK |
 

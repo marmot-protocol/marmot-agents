@@ -1,9 +1,9 @@
 //! The Marmot side: what arrives in the agent's groups, turned into what the conversation takes,
 //! and what the conversation sends, handed to MDK (D-002).
 //!
-//! MDK is used as it is today, so an agent item, an answer and a control travel under the
-//! temporary kinds of [`carrier`] (D-069). The agent's words are chat messages carrying their
-//! turn (D-022).
+//! An agent item goes out as kind 1201 and its later versions as MDK's edits of it, and an answer
+//! or a control comes in as kind 1202, as [`carrier`] writes and reads them (D-076). The agent's
+//! words are chat messages carrying their turn (D-022).
 
 use crate::carrier::{self, REQUEST_KIND};
 use crate::config::Config;
@@ -385,6 +385,10 @@ impl Marmot {
                     // MDK answers a token it took with what it made of it, before it looks at
                     // the group: so it never took this one, and the group is going or gone.
                     Ok(None) if group_ended(&error) => SendFailed::Refused { gone: false },
+                    // Nor this edit: it checks the token before the first event the edit names.
+                    Ok(None) if token.edits.is_some() && first_gone(&error) => {
+                        SendFailed::FirstGone
+                    }
                     _ => send_failed(&error),
                 });
             }
@@ -408,9 +412,28 @@ impl Marmot {
         let accepted = match what {
             Sending::Item { item, .. } => {
                 let out = carrier::item(item).map_err(|_| too_large())?;
-                (self.runtime)
-                    .submit_custom_event(label, id, out.kind, out.tags, out.content, mdk)
-                    .await?
+                if out.edits().is_none() {
+                    (self.runtime)
+                        .submit_custom_event(label, id, out.kind, out.tags, out.content, mdk)
+                        .await?
+                } else {
+                    // A later version is MDK's edit of the first event, which MDK names from the
+                    // token that event went under; the core sent every first event under one.
+                    let original = token.edits.clone().ok_or_else(|| {
+                        AppError::InvalidAppMessagePayload("no token for the first event".into())
+                    })?;
+                    let tags = out.tags_but_target();
+                    (self.runtime)
+                        .submit_tagged_edit_for_local_send(
+                            label,
+                            id,
+                            original,
+                            out.content,
+                            tags,
+                            mdk,
+                        )
+                        .await?
+                }
             }
             Sending::Words {
                 edit: Some(target),
@@ -742,6 +765,11 @@ pub enum SendFailed {
     /// MDK keeps it under its token, queued, and its engine has not taken it yet: it is tried
     /// again soon under the same token, which MDK answers from what it keeps.
     Pending,
+    /// It was an edit, and MDK no longer has the event it edits, nor the token that event went
+    /// under: the group's messages disappeared since it went. MDK did not take this edit. A
+    /// later version of an item then goes out as a new first event, and the agent's words as a
+    /// new message.
+    FirstGone,
     /// It was first tried so long ago that its group's messages have disappeared since, and
     /// MDK no longer knows its token: it may have gone out, and tried again it could go out
     /// twice. It is given up, and the chat told it may not have been delivered.
@@ -764,6 +792,19 @@ fn group_ended(error: &AppError) -> bool {
         error,
         AppError::GroupDisbanding(_)
             | AppError::Storage(cgka_traits::storage::StorageError::NotFound)
+    )
+}
+
+/// Whether MDK refused an edit because it no longer has the first event it names, nor the token
+/// that event went under: MDK forgets a token with its event once the group's messages disappear.
+/// Not an event someone deleted, or one that never reached the group, which MDK refuses as an
+/// edit target ([`AppError::InvalidEditTarget`]).
+fn first_gone(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::InvalidAppMessagePayload(why)
+            if why == "original local send was not found"
+                || why == "original local message is unavailable"
     )
 }
 

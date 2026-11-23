@@ -31,19 +31,19 @@ sha2 = "0.10"
 rustix = { version = "1", features = ["fs"] }
 # MDK, as a library (D-002). The revision moves together with the [patch] entries in the workspace
 # Cargo.toml and tools/odin/install.sh.
-marmot-app = { git = "https://github.com/marmot-protocol/mdk.git", rev = "7f7dcc6ca272a55fa93f1ebdbcd4fe7c4bb855dc" }
-marmot-account = { git = "https://github.com/marmot-protocol/mdk.git", rev = "7f7dcc6ca272a55fa93f1ebdbcd4fe7c4bb855dc" }
-cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "7f7dcc6ca272a55fa93f1ebdbcd4fe7c4bb855dc" }
+marmot-app = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
+marmot-account = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
+cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
 
 [dev-dependencies]
 # MDK's test relay, and its storage settings for tests.
 nostr-relay-builder = "0.44"
-storage-sqlite = { git = "https://github.com/marmot-protocol/mdk.git", rev = "7f7dcc6ca272a55fa93f1ebdbcd4fe7c4bb855dc", features = ["test-support"] }
+storage-sqlite = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8", features = ["test-support"] }
 tempfile = "3"
 # The import test runs today's connector, wn-agent, from MDK at the same revision, and speaks to
 # its socket.
-agent-connector = { git = "https://github.com/marmot-protocol/mdk.git", rev = "7f7dcc6ca272a55fa93f1ebdbcd4fe7c4bb855dc" }
-agent-control = { git = "https://github.com/marmot-protocol/mdk.git", rev = "7f7dcc6ca272a55fa93f1ebdbcd4fe7c4bb855dc" }
+agent-connector = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
+agent-control = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
 # The Claude Code scenario runs the driver as a program.
 tokio = { version = "1", features = ["process", "test-util"] }
 

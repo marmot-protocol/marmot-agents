@@ -4,7 +4,7 @@
 //! and [`crate::driver::SimDriver`]; the oracles read it and nothing of the core.
 
 use crate::schedule::{Faults, Outcome, Posted, ReadStep, What};
-use marmot_agent::carrier::{self, Asked, ITEM_KIND, REQUEST_KIND};
+use marmot_agent::carrier::{self, Asked, REQUEST_KIND};
 use marmot_agent::marmot::{Live, Message};
 use marmot_agent::{EventKey, GroupKey, PubKey};
 use marmot_agent_driver::{
@@ -21,9 +21,8 @@ use tokio::time::Instant;
 
 /// The kind of a chat message.
 pub const CHAT: u64 = 9;
-/// The kind the simulated MDK gives an edit of the agent's words. Not a kind MDK uses: an edit
-/// only needs to be told apart here.
-pub const EDIT: u64 = 1_000_009;
+/// The kind of an edit, MDK's: of the agent's words, or an item's later version.
+pub const EDIT: u64 = carrier::EDIT_KIND;
 
 /// One thing that happened, at a time on the virtual clock.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -360,6 +359,10 @@ pub struct World {
     pub landings: Vec<Landing>,
     /// Sends MDK refused, and sends the core gave up after its tries.
     pub refused: Vec<RefusedSend>,
+    /// The item sends MDK could not take, as its own checks of an item would refuse them: tags it
+    /// does not read, or a later version with no token for its first event, or under one MDK does
+    /// not keep. The core never makes one (S3).
+    pub misshapen: Vec<String>,
     /// What MDK keeps under each token, by chat and token, across the core's crashes.
     pub tokens: BTreeMap<(usize, String), Kept>,
     /// For each send, by chat and the core's name for it, how many of its tries MDK dropped.
@@ -415,6 +418,7 @@ impl World {
             crashed: false,
             landings: Vec::new(),
             refused: Vec::new(),
+            misshapen: Vec::new(),
             tokens: BTreeMap::new(),
             drops: BTreeMap::new(),
             harness: Harness::default(),
@@ -571,25 +575,38 @@ impl World {
         self.msgs[msg].as_mut()
     }
 
-    /// The first event of the latest approval the agent sent to a chat.
+    /// The first event of the latest approval the agent sent to a chat that waits, as its latest
+    /// version shows; with none waiting, of the latest approval, which the person's app may not
+    /// yet know stopped waiting.
     fn latest_approval(&self, chat: usize) -> Option<EventKey> {
-        let mut firsts: BTreeMap<String, EventKey> = BTreeMap::new();
-        let mut latest = None;
+        // Each approval by its item: when its first event was stored, the event, and its latest
+        // version and whether that waits.
+        let mut approvals: BTreeMap<String, (i64, EventKey, u64, bool)> = BTreeMap::new();
         for row in self.rows.iter().filter(|r| r.chat == chat && r.from_agent) {
-            if row.kind != ITEM_KIND {
-                continue;
-            }
-            let Some(read) = carrier::read_item(&row.content, &row.tags) else {
+            let Some(read) = carrier::read_item(row.kind, &row.content, &row.tags) else {
                 continue;
             };
+            if !matches!(read.item.event.body(), Body::Approval(_)) {
+                continue;
+            }
             let id = read.item.event.header().item.as_str().to_string();
             let first = read.item.first.clone().unwrap_or_else(|| row.event.clone());
-            firsts.entry(id.clone()).or_insert(first);
-            if matches!(read.item.event.body(), Body::Approval(_)) {
-                latest = Some(id);
+            let version = read.item.version;
+            let waits = read.item.event.header().state == State::Waiting;
+            let seen = approvals
+                .entry(id)
+                .or_insert((row.order, first, version, waits));
+            if version > seen.2 {
+                (seen.2, seen.3) = (version, waits);
             }
         }
-        latest.and_then(|id| firsts.get(&id).cloned())
+        let latest = |waiting: bool| {
+            (approvals.values())
+                .filter(|a| a.3 || !waiting)
+                .max_by_key(|a| a.0)
+                .map(|a| a.1.clone())
+        };
+        latest(true).or_else(|| latest(false))
     }
 
     /// MDK stores a message (`Store`). One for a chat not yet accepted waits for it.
@@ -1394,9 +1411,7 @@ enum BodyKind {
 
 /// A short, private-free description of a stored row, for the trace.
 pub fn describe(row: &Row) -> String {
-    if row.kind == ITEM_KIND
-        && let Some(read) = carrier::read_item(&row.content, &row.tags)
-    {
+    if let Some(read) = carrier::read_item(row.kind, &row.content, &row.tags) {
         let h = read.item.event.header();
         return format!(
             "c{} {} v{} {}",

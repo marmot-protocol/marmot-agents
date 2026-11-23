@@ -273,6 +273,126 @@ async fn a_send_tried_again_under_its_token_goes_out_once() {
     world.runtime.shutdown().await;
 }
 
+// An item's later version reaches the person as MDK's edit of its first event (D-025): MDK's row
+// for the item holds its latest version, and the version tried again under its token goes out
+// once. A waiting approval alerts the person; its closing version, and the agent's remark during
+// a turn, do not (D-024, D-078).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_items_later_version_is_mdks_edit_of_its_first_event() {
+    use marmot_agent::carrier::{self, EDIT_KIND, ITEM_KIND, Item};
+    use marmot_agent::{Sending, Token};
+    use marmot_agent_events::body::{Approval, Choice, Effect};
+    use marmot_agent_events::{AgentEvent, Header};
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let group = a_quiet_chat(&world).await;
+    (world.marmot.app)
+        .set_local_notifications_enabled(&world.person, true)
+        .unwrap();
+    let mut alerts = world.runtime.subscribe_notifications().unwrap();
+    let approval = |state: State, version: u64, first: Option<marmot_agent::EventKey>| {
+        let header = Header {
+            harness: "codex".into(),
+            session: Some("s1".into()),
+            turn: Some("t1".into()),
+            item: "call1".into(),
+            seq: 3,
+            state,
+            title: "Allow this command?".into(),
+            text: "Allow `ls`?".into(),
+        };
+        let body = Body::Approval(Approval {
+            subject: None,
+            choices: vec![Choice {
+                id: "allow".into(),
+                label: "Allow once".into(),
+                effect: Effect::Allow,
+            }],
+            answer: None,
+        });
+        Sending::Item {
+            key: "call1".into(),
+            item: Box::new(Item {
+                event: AgentEvent::new(header, body, None).unwrap(),
+                version,
+                first,
+                started_by: None,
+                settles: Vec::new(),
+            }),
+        }
+    };
+    let token = |mdk: &str, edits: Option<&str>| Token {
+        send: mdk.into(),
+        mdk: mdk.into(),
+        edits: edits.map(Into::into),
+        tried_at: None,
+    };
+    let first = (world.send(
+        &group,
+        &approval(State::Waiting, 1, None),
+        &token("v1", None),
+    ))
+    .await
+    .unwrap();
+    let alert = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            let update = alerts.recv().await.expect("notifications");
+            if update.account_id_hex == world.person {
+                return update;
+            }
+        }
+    })
+    .await
+    .expect("the waiting approval alerts the person");
+    assert_eq!(alert.message_id_hex.as_deref(), Some(first.as_str()));
+
+    let later = approval(State::Done, 2, Some(first.clone()));
+    let edit = world.send(&group, &later, &token("v2", Some("v1"))).await;
+    let edit = edit.unwrap();
+    assert_ne!(edit, first, "an event of its own");
+    let remark = Sending::Words {
+        key: "w".into(),
+        text: "Looking around".into(),
+        turn: Some("t1".into()),
+        remark: true,
+        edit: None,
+        settles: Vec::new(),
+    };
+    world
+        .send(&group, &remark, &token("w", None))
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    let again = world.send(&group, &later, &token("v2", Some("v1"))).await;
+    assert_eq!(again, Ok(edit.clone()), "the same edit");
+
+    let kinds = |kind: u64| sent_by_core(&world, &group, kind);
+    assert_eq!(kinds(ITEM_KIND).len(), 1);
+    let edits = kinds(EDIT_KIND);
+    assert_eq!(edits.len(), 1, "the later version went out once");
+    let named: Vec<_> = (edits[0].tags.iter()).filter(|t| t[0] == "e").collect();
+    assert_eq!(named, vec![&vec!["e".to_string(), first.0.clone()]]);
+    let row = eventually(|| {
+        let row = (world.runtime)
+            .timeline_message(&world.person, group.as_str(), first.as_str())
+            .unwrap()?;
+        (row.agent_item.as_ref()?.version == 2).then_some(row)
+    })
+    .await;
+    assert_eq!(row.kind, ITEM_KIND, "one row, at the first event");
+    let read = carrier::read_item(row.kind, &row.plaintext, &row.tags).unwrap();
+    assert_eq!(read.item.event.header().state, State::Done);
+    let quiet = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let update = alerts.recv().await.expect("notifications");
+            if update.account_id_hex == world.person {
+                return update;
+            }
+        }
+    });
+    assert!(quiet.await.is_err(), "nothing more alerts");
+    world.runtime.shutdown().await;
+}
+
 /// Waits until just after a whole second starts, so what follows at once falls in that second.
 async fn at_a_new_second() {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
@@ -478,5 +598,137 @@ async fn a_send_older_than_its_groups_messages_is_not_sent_again() {
         .map(|m| m.plaintext)
         .collect();
     assert!(!texts.contains(&"words forgotten".to_string()));
+    world.runtime.shutdown().await;
+}
+
+// In a chat whose messages disappear, an item's first event can be gone while the item goes on.
+// MDK then refuses an edit of it, as it no longer has the event nor the token it went under, and
+// says so: the core is told the first event is gone, apart from any other refusal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_edit_of_a_first_event_that_disappeared_is_told_apart() {
+    use marmot_agent::carrier::Item;
+    use marmot_agent::marmot::SendFailed;
+    use marmot_agent::{Sending, Token};
+    use marmot_agent_events::body::{StartedBy, Turn};
+    use marmot_agent_events::{AgentEvent, Header};
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let group = a_quiet_chat(&world).await;
+    (world.runtime)
+        .update_message_retention(&world.person, &group_id(&group), 60)
+        .await
+        .unwrap();
+    let keep = || {
+        let record = world.marmot.app.group(&world.marmot.label, group.as_str());
+        record
+            .ok()
+            .flatten()
+            .map(|r| r.message_retention.disappearing_message_secs)
+    };
+    eventually(|| (keep() == Some(60)).then_some(())).await;
+    let session = |version: u64, first: Option<marmot_agent::EventKey>| {
+        let header = Header {
+            harness: "codex".into(),
+            session: Some("s1".into()),
+            turn: Some("t1".into()),
+            item: "t1".into(),
+            seq: version,
+            state: State::Running,
+            title: "Turn".into(),
+            text: format!("version {version}"),
+        };
+        let body = Body::Turn(Turn {
+            started_by: StartedBy::User,
+            duration_ms: None,
+            usage: None,
+        });
+        Sending::Item {
+            key: "t1".into(),
+            item: Box::new(Item {
+                event: AgentEvent::new(header, body, None).unwrap(),
+                version,
+                first,
+                started_by: None,
+                settles: Vec::new(),
+            }),
+        }
+    };
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    let now = now.unwrap().as_secs();
+    let token = |mdk: &str, edits: Option<&str>| Token {
+        send: mdk.into(),
+        mdk: mdk.into(),
+        edits: edits.map(Into::into),
+        tried_at: Some(now),
+    };
+    let first = (world.send(&group, &session(1, None), &token("v1", None)))
+        .await
+        .unwrap();
+    // The first event's time comes: MDK's sweep takes the clock it is given.
+    let later = (now + 3600) * 1000;
+    let mut gone = false;
+    for _ in 0..100 {
+        (world.marmot.runtime)
+            .sweep_expired_retention(&world.marmot.label, later)
+            .await
+            .unwrap();
+        gone = (world.marmot.runtime)
+            .timeline_message(&world.marmot.label, group.as_str(), first.as_str())
+            .unwrap()
+            .is_none();
+        if gone {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    assert!(gone, "the first event disappeared");
+    let edit = session(2, Some(first.clone()));
+    let sent = world.send(&group, &edit, &token("v2", Some("v1"))).await;
+    assert_eq!(sent, Err(SendFailed::FirstGone));
+    world.runtime.shutdown().await;
+}
+
+// The agent's words carry as many `settles` as MDK takes in a chat message, with their turn and
+// phase, and no more: the numbers the core keeps for MDK's limits, which MDK does not export, are
+// MDK's. A long turn leaves room for fewer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_agents_words_settle_as_many_as_mdk_takes() {
+    use marmot_agent::marmot::SendFailed;
+    use marmot_agent::{EventKey, Sending, Token, carrier};
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let group = a_quiet_chat(&world).await;
+    let requests: Vec<EventKey> = (0..300)
+        .map(|n| EventKey::from(format!("{n:064x}").as_str()))
+        .collect();
+    for (name, turn) in [("short", "t1".to_string()), ("long", "t".repeat(12 * 1024))] {
+        let turn = Some(marmot_agent_events::TurnId(turn));
+        let fit = carrier::words_settles_fit(turn.as_ref(), true, &requests);
+        assert!(fit > 0 && fit < carrier::WORDS_TAGS_MAX, "{name}: {fit}");
+        for (count, takes) in [(fit, true), (fit + 1, false)] {
+            let words = Sending::Words {
+                key: format!("{name}{count}"),
+                text: format!("words {name} {count}"),
+                turn: turn.clone(),
+                remark: true,
+                edit: None,
+                settles: requests[..count].to_vec(),
+            };
+            let token = Token {
+                send: format!("{name}{count}"),
+                mdk: format!("token {name} {count}"),
+                edits: None,
+                tried_at: None,
+            };
+            let sent = world.send(&group, &words, &token).await;
+            if takes {
+                assert!(sent.is_ok(), "{name}: {count} taken: {sent:?}");
+            } else {
+                assert_eq!(
+                    sent,
+                    Err(SendFailed::Refused { gone: false }),
+                    "{name}: {count}"
+                );
+            }
+        }
+    }
     world.runtime.shutdown().await;
 }
