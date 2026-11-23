@@ -61,11 +61,13 @@ impl Endpoint {
         let folder = self.socket.parent().expect("the socket is in a folder");
         std::fs::create_dir_all(folder)?;
         private_folder(folder)?;
+        // The token first: a connector that finds the socket must find the token beside it.
+        let token = self.token()?;
         if self.socket.exists() {
             std::fs::remove_file(&self.socket)?;
         }
         let listener = UnixListener::bind(&self.socket)?;
-        Ok((listener, self.token()?))
+        Ok((listener, token))
     }
 
     /// The token: 32 random bytes as hex. A file that holds anything else, empty included, is
