@@ -178,6 +178,7 @@ impl World {
     /// As [`World::new`], with a Blossom server that takes `delay` to accept each file.
     pub async fn with_slow_files(settings: &str, delay: std::time::Duration) -> Self {
         storage_sqlite::relax_storage_for_test_process();
+        marmot_agent::marmot::start_sqlite();
         let home = tempfile::tempdir().unwrap();
         let relay = relay().await;
         let url = relay.url().await.to_string();

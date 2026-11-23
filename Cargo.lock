@@ -3011,6 +3011,7 @@ dependencies = [
  "marmot-agent-pi",
  "marmot-app",
  "nostr-relay-builder",
+ "rusqlite",
  "rustix",
  "schemars 1.2.3",
  "serde",

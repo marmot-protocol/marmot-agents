@@ -29,6 +29,7 @@ const CHAT: u64 = 9;
 /// long as the app or a runtime made from it lives, so a second core on the same home is refused
 /// here, and the two never write over each other's state, which lives in the same home.
 pub fn open(config: &Config) -> Result<(AccountHome, MarmotApp, MarmotAppRuntime), String> {
+    start_sqlite();
     let home = AccountHome::open(&config.home);
     let base = if config.white_noise {
         MarmotAppConfig::white_noise()
@@ -45,6 +46,25 @@ pub fn open(config: &Config) -> Result<(AccountHome, MarmotApp, MarmotAppRuntime
     .map_err(|_| "the account home could not be opened; is another core running on it?")?;
     let runtime = MarmotAppRuntime::new(app.clone());
     Ok((home, app, runtime))
+}
+
+/// Starts SQLite, and SQLCipher with it, on this thread, once in the process. Call it before
+/// anything in the process opens a database through MDK.
+///
+/// SQLite marks itself started before SQLCipher's own start has run, outside any lock. A second
+/// thread that opens and keys a database in that moment finds SQLCipher not started, and MDK
+/// reports "An error occurred with PRAGMA key or rekey. PRAGMA key requires a key of one or more
+/// characters" (SQLCipher 4.17, issue #96). So only the first databases a process opens, from
+/// several threads at once, can fail, and more often the busier the machine. One connection
+/// opened here first, behind a `Once`, runs both starts to the end before any other thread can
+/// open one.
+pub fn start_sqlite() {
+    static START: std::sync::Once = std::sync::Once::new();
+    START.call_once(|| {
+        // A database in memory needs no file and no key. Should it fail, MDK's own open reports
+        // why.
+        let _ = rusqlite::Connection::open_in_memory();
+    });
 }
 
 /// The home's one identity: one agent identity per core (D-072).

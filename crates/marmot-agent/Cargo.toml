@@ -34,6 +34,9 @@ rustix = { version = "1", features = ["fs"] }
 marmot-app = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
 marmot-account = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
 cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
+# MDK's SQLite, which is SQLCipher, started on one thread before MDK opens a database
+# (`marmot::start_sqlite`). The version is MDK's, so it is the same library.
+rusqlite = { version = "0.40.1", default-features = false }
 
 [dev-dependencies]
 # The socket's JSON Schema, made from its message types (`fixtures/socket/schema.json`), with the

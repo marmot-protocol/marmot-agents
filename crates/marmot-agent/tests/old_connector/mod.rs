@@ -107,6 +107,7 @@ pub async fn serve() {
         return;
     };
     storage_sqlite::relax_storage_for_test_process();
+    marmot_agent::marmot::start_sqlite();
     let mut config = agent_connector::AgentConnectorConfig::new(&home);
     config.relays = vec![relay];
     config.allow_loopback_relays = true;
@@ -195,6 +196,7 @@ pub struct Invited {
 /// `old_connector` test is what runs it.
 pub async fn invited(folder: &str, label: &str) -> Invited {
     storage_sqlite::relax_storage_for_test_process();
+    marmot_agent::marmot::start_sqlite();
     let relay = nostr_relay_builder::MockRelay::run().await.unwrap();
     let url = relay.url().await.to_string();
     let root = tempfile::tempdir().unwrap();
