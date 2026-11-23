@@ -2497,18 +2497,22 @@ Decided 2026-11-23 by the builder, under the project owner's instruction to deci
 [D-094](#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly):
 
 - **Pull request**, aimed at under 10 minutes: formatting, Clippy, the workspace's tests with the conformance
-  suite, the simulator at its normal count, and the TypeScript, Python, install-script, recording and document
+  suite and the real Claude Code and Codex on the model double
+  ([D-127](#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key)), the simulator at its normal count, and the TypeScript, Python, install-script, recording and document
   checks. The TLA+ models run on small bounds only when the core or the models changed, which a step of CI's own
   finds with `git diff`.
 - **Merge queue** (GitHub's, on `master`), aimed at under 30 minutes: all of the pull-request tier whatever
   changed, the simulator at 200 runs, and the tests that need Docker and no key or sign-in. A push to `master`
   runs the same, so `master` stays checked.
-- **Nightly**: the simulator on new seeds, TLC on larger bounds, and a coverage report; mutation testing when a
-  slice of it fits. A failed job opens an issue, or adds to the one it opened.
+- **Nightly**: the simulator on new seeds, TLC on larger bounds, a coverage report, a 64th of the core's mutants
+  (by the day of the year), and the model double's cassettes against their age and the harnesses' releases, which
+  fails the night as D-127 says. A failed job opens an issue, or adds to the one it opened, with what the job
+  found when it found something: the mutants missed, the cassettes due.
 
 One job, `CI passed`, needs every job of the first two tiers and is the only check the `master` ruleset requires:
 it fails when a job failed or was cancelled, and a job left out by its tier or the path rule counts as passed. CI
-uses no third-party action and no secret; build caches are written only from `master`.
+uses no third-party action and no secret. Build caches are written by a push to `master` and by a run started by
+hand on its own branch; a pull request and the merge queue read `master`'s and write none.
 
 **Why.** A pull request gets its answer fast, and the slower checks still run before anything reaches `master`,
 on the code as it will be merged. One required check means the ruleset need not change when a job is added.
