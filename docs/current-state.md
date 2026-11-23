@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-23, at `master` commit `e923d4e`, through [D-115](decisions.md#d-115-the-sockets-schema-is-made-from-the-cores-own-types-and-checks-this-repositorys-connectors). A change that adds or replaces
+Brought up to date on 2026-11-23, at `master` commit `a027ab2`, through [D-116](decisions.md#d-116-a-gateways-plugin-swap-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -146,6 +146,8 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   [D-084](decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)).
 - An install moves over with `marmot-agent import`, which uses the old account home in place, backs it up
   first, and prints the paths needed to undo it ([D-089](decisions.md#d-089-an-install-moves-over-by-importing-its-account-home-in-place), [D-095](decisions.md#d-095-the-import-prints-the-paths-it-needs-to-undo-a-move)).
+- A gateway's plugin change is put back if the installer fails or is stopped, and a re-run after a kill always
+  finishes or puts it back; a few named moments after a kill leave neither plugin working until then ([D-116](decisions.md#d-116-a-gateways-plugin-swap-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)).
 
 ## Verification and how the work runs
 

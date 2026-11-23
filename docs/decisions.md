@@ -1971,3 +1971,22 @@ they mostly carry is already in the session item.
 
 Decided 2026-11-23. The project owner decided.
 
+## D-116 A gateway's plugin swap is put back on failure, and finished by a re-run after a kill
+
+**Decision.** When an install script changes a gateway's plugin (`--replace-plugin`, a fresh install or an
+update of Hermes or OpenClaw), it first writes down the copies it took of what it changes. If the run fails, or is
+stopped with TERM, INT or HUP, it puts those copies back. After a SIGKILL, which no script can catch, running the
+installer again always either finishes the change or puts it back; the record stays until the core's service is
+running. At a few named moments a SIGKILL can leave the gateway with neither plugin working until the installer
+runs again: they are listed in [the move](move.md), and the install tests stop each swap at every step to check
+that this is all. Two of them are OpenClaw's own: its `plugins install` refuses settings for a plugin it does not
+have, so no order of its commands avoids them. The record is given up by `--uninstall`.
+
+**Why.** A swap that fails or is stopped must not leave a person's gateway without a working plugin, while the
+import has already stopped the old services. Doing the swap any other way for OpenClaw, such as loading our
+plugin from `plugins.load.paths`, would go around OpenClaw's own install command, against
+[D-006](#d-006-prefer-official-interfaces-and-libraries). Putting settings back on a failed fresh install or update
+is the same protection, and costs nothing more.
+
+Decided 2026-11-23. The project owner decided.
+

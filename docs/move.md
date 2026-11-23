@@ -5,8 +5,9 @@ Status: describes `marmot-agent import` as built
 [the tests](#what-is-proven) show of it. How the old
 allow-lists become the new settings, who becomes the owner unasked, `files_from` (and the core refusing to
 start when one overlaps the home), `--leave-running`, what the import does with a home that holds several
-identities, and the moments in which an installer killed outright may leave a gateway with no plugin that works
-until it runs again, are proposals until the project owner accepts them.
+identities, are proposals until the project owner accepts them. That an installer killed outright may leave a
+gateway with no plugin that works until it runs again, at the moments named below, is decided
+([D-116](decisions.md#d-116-a-gateways-plugin-swap-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)).
 
 One of today's connectors (installed by MDK's `install-*-marmot.sh`) moves to the core without anyone inviting
 the agent again. The core uses the old account home where it is, so the agent keeps its identity, its keys, its
