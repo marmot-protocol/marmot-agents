@@ -323,6 +323,14 @@ impl SocketDriver {
         })
     }
 
+    /// Numbers each session's events after `last`, the number each reached before this
+    /// connection: a session goes on across connections, and an app orders a second's items by
+    /// their numbers, so a later event must never take an earlier one's (D-059).
+    pub fn numbered_after(mut self, last: HashMap<String, u64>) -> Self {
+        self.seq = last;
+        self
+    }
+
     /// Changes how long the connector has to take or refuse a request.
     pub fn answer_within(mut self, limit: Duration) -> Self {
         self.answer_within = limit;

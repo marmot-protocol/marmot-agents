@@ -262,6 +262,20 @@ pub struct Saved {
 }
 
 impl Saved {
+    /// The last number each session's events reached, by session (`""` for events that name
+    /// none), as far as the items kept show it. A driver whose numbering starts again, as a
+    /// connector's does on each connection, goes on from there (D-059).
+    pub fn last_numbers(&self) -> HashMap<String, u64> {
+        let mut last = HashMap::new();
+        for record in self.items.values() {
+            let header = record.last.header();
+            let session = header.session.as_ref().map(|s| s.as_str().to_string());
+            let at = last.entry(session.unwrap_or_default()).or_insert(0);
+            *at = header.seq.max(*at);
+        }
+        last
+    }
+
     /// Takes up a state file whose items' first events went out under the temporary kind of
     /// D-069, which no edit applies to: each item's next version goes out as a new kind 1201
     /// event, the first of the item in the chat from then on. The agent's words were chat

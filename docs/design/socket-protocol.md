@@ -91,10 +91,11 @@ A connection opens with one request from the connector.
 | `token` | The credential. See [who may connect](#who-may-connect) |
 | `capabilities` | What the harness can do. See [capabilities](#capabilities) |
 
-The core replies with its own version and the agent's display name. It refuses a protocol version it does not
-support, or a connector too old for it, with an error that names the version it needs. That part comes from
-[issue 11](https://github.com/marmot-protocol/marmot-agents/issues/11): drivers that run as separate programs
-can fall behind the core, and this makes that easy to see.
+The core replies with its own version and the agent's display name. It refuses a protocol it does not speak
+with an error that names the one it does. Drivers that run as separate programs can fall behind the core
+([issue 11](https://github.com/marmot-protocol/marmot-agents/issues/11)), and this makes that easy to see. A
+change a connector must follow changes the protocol's name; the core reads the connector's own version but does
+not check it, since no release of a connector is too old for it yet.
 
 **One connection is one agent.** The token decides which. Each harness install is its own agent
 ([D-035](../decisions.md#d-035-each-harness-install-is-its-own-identity-with-its-own-sessions)).
@@ -215,7 +216,8 @@ harness apply to the Rust trait, whose flags are the seven in D-058, not the row
 | What happens | What the core does |
 | --- | --- |
 | The connection drops during a turn | Closes the turn and every open item, with the reason. The chat shows the turn as interrupted |
-| The connector comes back | Takes a new hello. Nothing is replayed |
+| The connector comes back | Takes a new hello. Nothing is replayed. A connector that outlived the connection, as a gateway's plugin does, starts from what the new core knows: it sends nothing more of the items that were open, and names none of the requests the old core settled |
+| The connector has not taken a request after 30 seconds | Refuses it as failed and gives the connector up, as for a drop. So a connector answers once its harness has the request, never once its effect shows |
 | A prompt was sent and no response came before the drop | Reports it as not delivered. It is never sent again |
 | An answer or a control was taken and nothing settled it before the drop | Settles it with a notice that it failed ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)) |
 | An event names an unknown turn or session | Accepts it. A harness can produce work outside a turn |
@@ -313,7 +315,9 @@ the eight words above) and, if it likes, a `detail` for the chat.
 **`event`**, a notification: an agent event as `marmot-agent-events` writes it (`item`, `type`, `state`,
 `title`, `text`, `body`, and `session`, `turn` and `native` when there are any), with three more fields: `chat`,
 the chat it belongs to; `prompts`, on a turn; and `settles`, the requests whose effect it shows. The connector
-leaves out `harness` and `seq`: the core fills them in. The core passes over a field its types do not know,
+leaves out `harness` and `seq`: the core fills them in, numbering each session's events on from the last
+number it kept for the session, so a session that goes on across connections never numbers a later event
+before an earlier one. The core passes over a field its types do not know,
 so it never reaches the chat; the schema admits none, so a connector's tests catch one. The connectors here
 send none.
 

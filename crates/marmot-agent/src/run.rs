@@ -1149,6 +1149,9 @@ pub async fn serve(
                 continue;
             }
         };
+        // A session goes on across connectors, and so do its numbers.
+        let last = Store::new(store).load()?.conversation.last_numbers();
+        let driver = driver.numbered_after(last);
         // Each core reads what it did not hear live from storage, from the program's start.
         let live = Subscribed {
             events: marmot.runtime.subscribe(),

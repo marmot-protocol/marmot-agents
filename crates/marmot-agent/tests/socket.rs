@@ -128,6 +128,26 @@ async fn a_connector_on_the_socket_drives_the_agent() {
         ("second-turn1".to_string(), State::Done),
     ];
     eventually(|| (turns() == want).then_some(())).await;
+    // Both connectors work in session `s1`, which goes on across them, and so do its numbers: an app
+    // orders a second's items by them, so the second connector's must come after the first's (D-059).
+    let seqs = |connector: &str| -> Vec<u64> {
+        (world.items(&hex).into_iter())
+            .filter(|(_, read)| {
+                read.item
+                    .event
+                    .header()
+                    .item
+                    .as_str()
+                    .starts_with(connector)
+            })
+            .map(|(_, read)| read.item.event.header().seq)
+            .collect()
+    };
+    let (before, after) = (seqs("first-"), seqs("second-"));
+    assert!(
+        after.iter().min() > before.iter().max(),
+        "the first connector's numbers {before:?}, the second's {after:?}"
+    );
 
     let _ = stop.send(());
     task.await.unwrap().unwrap();
