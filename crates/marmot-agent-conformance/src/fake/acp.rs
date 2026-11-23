@@ -298,17 +298,30 @@ impl Acp {
                 // nothing in ACP stops it, and each request takes its own answer.
                 let twice = text.contains("#twice");
                 for n in 1..=(1 + u8::from(twice)) {
-                    let params = json!({"sessionId": session,
+                    let mut params = json!({"sessionId": session,
                         "toolCall": {"toolCallId": call, "title": format!("echo {text}"), "kind": "execute",
                             "rawInput": {"command": format!("echo {text}")}},
                         "options": [{"optionId": "once", "name": "Allow once", "kind": "allow_once"},
                                     {"optionId": "reject", "name": "Reject", "kind": "reject_once"}]});
+                    if text.contains("#garbled") {
+                        // A request the client cannot read: it names no tool call.
+                        params.as_object_mut().map(|p| p.remove("toolCall"));
+                    }
                     let asked = Asked::Permission {
                         session: session.to_string(),
                         of_two: twice.then_some(n),
                     };
                     self.ask("session/request_permission", params, asked, out);
                 }
+            }
+            Script::Quiz if text.contains("#garbled") => {
+                // A form of a kind the client never offered to fill in: one at a web address.
+                let params = json!({"mode": "url", "sessionId": session, "message": "Sign in",
+                    "elicitationId": fresh("elicit"), "url": "https://example.invalid/sign-in"});
+                let asked = Asked::Form {
+                    session: session.to_string(),
+                };
+                self.ask("elicitation/create", params, asked, out);
             }
             Script::Quiz => {
                 let params = json!({"mode": "form", "sessionId": session, "message": "Questions",
@@ -339,6 +352,14 @@ impl Protocol for Acp {
                 return;
             };
             let result = &frame["result"];
+            if frame.get("error").is_some() {
+                // The client could not take the request: the agent goes on without it.
+                if let Asked::Permission { session, .. } | Asked::Form { session } = &asked {
+                    let session = session.clone();
+                    self.finish(&session, Some("not asked"), "end_turn", out);
+                }
+                return;
+            }
             match asked {
                 Asked::Todos => {}
                 Asked::Permission { session, of_two } => {

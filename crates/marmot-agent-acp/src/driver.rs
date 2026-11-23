@@ -608,12 +608,19 @@ impl Acp {
             }
             if let Some(id) = message.get("id") {
                 // A request no person answers: Cursor's to-do list is taken, anything else is
-                // refused, so the agent does not wait for ever.
+                // refused, so the agent does not wait for ever. That includes a permission or a
+                // form the translator could not read or show, such as a form at a web address,
+                // which the driver never offers: refused as the official library refuses a
+                // request it cannot read.
+                let shown = (chat.as_ref())
+                    .and_then(|c| self.translator(c))
+                    .is_some_and(|t| t.waits_on(&id.to_string()));
                 let reply = match method {
+                    "session/request_permission" | "elicitation/create" if shown => None,
                     "session/request_permission" | "elicitation/create"
                         if chat_known(&message, &self.sessions) =>
                     {
-                        None
+                        Some(unreadable(id))
                     }
                     "cursor/update_todos" => {
                         Some(json!({"jsonrpc": "2.0", "id": id, "result": {}}))
@@ -823,6 +830,12 @@ impl Acp {
         self.starting.clear();
         self.early.clear();
     }
+}
+
+/// The error for a request of the agent's that the driver cannot take: invalid params, as the
+/// official library answers one it cannot read.
+fn unreadable(id: &Value) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32602, "message": "Invalid params"}})
 }
 
 /// Whether the session a message from the agent names belongs to a chat.

@@ -1758,6 +1758,12 @@ impl Translator {
             .unwrap_or(false)
     }
 
+    /// Whether the agent's request with this id, as its JSON text, waits on an item of this
+    /// translator's: one it could read and show.
+    pub fn waits_on(&self, id: &str) -> bool {
+        self.asked.contains_key(id)
+    }
+
     /// The replies that tell the agent nobody will answer the requests still waiting: what ACP
     /// asks of a client that cancels a turn.
     pub fn cancel_replies(&self) -> Vec<String> {

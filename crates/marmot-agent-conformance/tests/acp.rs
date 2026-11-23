@@ -307,3 +307,29 @@ async fn two_requests_for_one_tool_call_take_one_answer_each() {
         );
     }
 }
+
+// A request of the agent's that the driver cannot show is answered all the same, as an error, so
+// the agent does not wait for ever: a permission request it cannot read (`#ask #garbled`, naming
+// no tool call), and a form at a web address, which the driver never offered to fill in (`#quiz
+// #garbled`). The official ACP library answers a request it cannot read with -32602, invalid
+// params. Each turn must end.
+#[tokio::test]
+async fn a_request_the_driver_cannot_show_is_answered() {
+    use marmot_agent_conformance::Run;
+    use marmot_agent_conformance::run::turn_ended;
+
+    for flavor in [Flavor::OpenCode, Flavor::Goose, Flavor::Cursor] {
+        for (chat, words) in [("c-1", "#ask #garbled"), ("c-2", "#quiz #garbled")] {
+            let mut run = Run::start(subject(flavor)).await;
+            let m = (run.prompt(chat, words).await.unwrap()).expect("the prompt is taken");
+            (run.wait("L2", "the turn's end", |e| {
+                turn_ended(e) && e.prompts.contains(&m)
+            }))
+            .await
+            .unwrap_or_else(|v| panic!("{flavor:?}, {words}: {v}"));
+            run.end()
+                .await
+                .unwrap_or_else(|v| panic!("{flavor:?}, {words}: {v}"));
+        }
+    }
+}
