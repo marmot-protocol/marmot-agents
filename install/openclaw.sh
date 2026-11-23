@@ -230,22 +230,16 @@ harness_connect() {
         say "would add the Marmot plugin to your OpenClaw, once it is installed"
         return 0
     fi
-    # What it changes is put back if it fails or is stopped before the channel is set (change_begin in
-    # lib.sh): OpenClaw's settings, and the old connector's plugin, which it replaces.
+    # What it changes is put back if the install fails or is stopped before the core is started
+    # (change_begin in lib.sh): OpenClaw's settings, and the old connector's plugin, which it replaces.
     config=$("$OPENCLAW" config file 2>/dev/null) || config=""
-    set --
-    if [ -n "$config" ]; then
-        backup_file "$config"
-        set -- file "$config" "$KEPT"
-    fi
-    if [ -n "$OLD_PLUGIN" ]; then
-        backup_file "$OLD_PLUGIN"
-        set -- "$@" folder "$OLD_PLUGIN" "$KEPT"
-    fi
+    set -- add
+    [ -z "$OLD_PLUGIN" ] || set -- replace
+    [ -z "$config" ] || set -- "$@" file "$config"
+    [ -z "$OLD_PLUGIN" ] || set -- "$@" folder "$OLD_PLUGIN"
     change_begin "$@"
     channel=$("$NODE" -e 'process.stdout.write(JSON.stringify({ enabled: true, home: process.argv[1] }))' "$MA_HOME")
     put_plugin_in "$channel"
-    change_end
     approvals=$(oc_get approvals.exec --json)
     # On is true or "auto"; only one that is off or not set is switched on.
     enabled=$(printf '%s' "$approvals" | json_field enabled)

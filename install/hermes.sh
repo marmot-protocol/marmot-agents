@@ -101,28 +101,22 @@ harness_settings() {
 }
 
 # Adds the plugin to the person's Hermes and points its platform at this agent's home. What it changes is
-# put back if it fails or is stopped before the end (change_begin in lib.sh): Hermes's settings, and the
-# old connector's plugin, which it replaces, or, where there was none, ours. Nothing changes before ours
-# is in, and ours starts on the old plugin's settings too: Hermes reads a platform's extra over its other
-# settings (gateway/config.py), and the old one's names this home. Everyone is let through only once
-# ours is in, so the old plugin is never left with that.
+# put back if the install fails or is stopped before the core is started (change_begin in lib.sh):
+# Hermes's settings, and the old connector's plugin, which it replaces, or, where there was none, ours.
+# Nothing changes before ours is in, and ours starts on the old plugin's settings too: Hermes reads a
+# platform's extra over its other settings (gateway/config.py), and the old one's names this home.
+# Everyone is let through only once ours is in, so the old plugin is never left with that.
 harness_connect() {
     if [ -z "$PLUGIN" ]; then
         say "would add the Marmot plugin to your Hermes, once it is installed and set up"
         return 0
     fi
-    backup_file "$HERMES_CONFIG"
-    set -- file "$HERMES_CONFIG" "$KEPT"
-    if [ -n "$HERMES_ENV" ]; then
-        backup_file "$HERMES_ENV"
-        set -- "$@" file "$HERMES_ENV" "$KEPT"
-    fi
-    if [ "$OLD_PLUGIN" -eq 1 ]; then
-        backup_file "$PLUGIN"
-        set -- "$@" folder "$PLUGIN" "$KEPT"
-    elif [ ! -e "$PLUGIN" ]; then
-        set -- "$@" folder "$PLUGIN" ""
-    fi
+    local why=add
+    [ "$OLD_PLUGIN" -eq 0 ] || why=replace
+    set -- "$why" file "$HERMES_CONFIG"
+    [ -z "$HERMES_ENV" ] || set -- "$@" file "$HERMES_ENV"
+    # Our own plugin, in already, is not put back: only the old one, or none.
+    if [ "$OLD_PLUGIN" -eq 1 ] || [ ! -e "$PLUGIN" ]; then set -- "$@" folder "$PLUGIN"; fi
     change_begin "$@"
     say "adding the Marmot plugin to your Hermes"
     replace_dir "$MA_LIB/python/marmot_hermes" "$PLUGIN"
@@ -142,7 +136,6 @@ harness_connect() {
         fi
         act "$HERMES" config set MARMOT_ALLOW_ALL_USERS true
     fi
-    change_end
 }
 
 harness_summary() {

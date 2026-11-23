@@ -296,9 +296,11 @@ check_version() {
 
 # Keeps a copy of a file of the person's own, such as a gateway's configuration, in the agent's folder,
 # readable by its owner only, before the install changes it. KEPT names the copy, or is empty when none
-# was made. A copy made earlier in the same second is kept too: the new one gets a number after it.
+# was made. A copy made earlier in the same second is kept too: the new one gets a number after it. The
+# copy is made under a hidden name and renamed once whole, so a run killed part way leaves none half made
+# under a name that says it is a copy.
 backup_file() {
-    local file=$1 copy base n=1
+    local file=$1 copy base n=1 making
     KEPT=""
     [ -e "$file" ] || return 0
     copy="$MA_AGENT_DIR/backups/$(basename "$file").$(date -u +%Y%m%dT%H%M%SZ)"
@@ -309,9 +311,11 @@ backup_file() {
     private_dir "$MA_AGENT_DIR/backups"
     base=$copy
     while [ -e "$copy" ]; do n=$((n + 1)) && copy="$base.$n"; done
-    (umask 077 && cp -R "$file" "$copy")
-    chmod -R go-rwx "$copy"
-    # shellcheck disable=SC2034 # read by the harness's script
+    making="$MA_AGENT_DIR/backups/.copying"
+    rm -rf "$making"
+    (umask 077 && cp -R "$file" "$making")
+    chmod -R go-rwx "$making"
+    mv "$making" "$copy"
     KEPT=$copy
     say "kept a copy of $file in $copy"
 }
@@ -320,32 +324,50 @@ backup_file() {
 # Changing a gateway's plugin
 #
 # Putting our plugin into a person's Hermes or OpenClaw, in place of the old connector's or not, must
-# not leave it with neither plugin set up to start. Before the first change, change_begin records in
-# the agent's folder the copies kept of what is about to change. While that record is there, a run that
-# fails, or is stopped by HUP, INT or TERM, puts those copies back before it ends (finish). A run after
-# one killed outright finds the record, finishes the change, and, should it fail, puts back what the
-# first run found, not copies of what the killed run left. change_end removes the record.
+# not leave it with neither plugin set up to start. Before the first change, change_begin keeps a copy
+# of what is about to change and records the copies in the agent's folder. While that record is there,
+# a run that fails, or is stopped by HUP, INT or TERM, puts those copies back before it ends (finish). A
+# run after one killed outright finds the record, takes no copies of its own, finishes the change, and,
+# should it fail, puts back what the first run found, not what the killed run left. The change is done
+# once the core that our plugin connects to is set up as a service and started (main), as the old
+# connector's services are stopped by then: change_end then removes the record. --uninstall removes it
+# too, so a move given up is not put back over the gateway later.
+#
+# Replacing the old connector's plugin, the copies are also listed in backups/before-move, which a
+# person going back to that connector puts back (docs/move.md). It lists what the gateway had before
+# the latest run that found the old plugin and finished, or noted, its change.
 
-# Starts a change, given what it changes as triples: file or folder, its path, and the copy kept of it,
-# empty for one that was not there (put back, it is taken away). A record a run before left is kept.
+# Starts a change. Its first argument says whether it replaces the old connector's plugin (replace) or
+# not (add); then come pairs, file or folder and the path of one it changes. Each is copied first, and
+# one not there is taken away should the change be put back. A record a run before left is kept as it is.
 change_begin() {
     MA_CHANGE="$MA_AGENT_DIR/plugin-change"
-    local arg record=""
+    local why=$1 arg record=""
+    shift
     for arg in "$@"; do no_control "a path to put back" "$arg"; done
     if [ "$DRY_RUN" -eq 1 ]; then
+        while [ $# -ge 2 ]; do
+            backup_file "$2"
+            shift 2
+        done
         say "would note in $MA_CHANGE what to put back should this fail"
         return 0
     fi
     if [ -f "$MA_CHANGE" ]; then
         say "a run before this one stopped part way through changing your $HARNESS_TITLE's plugin; this one finishes it, and puts back what that run found if it fails"
-    else
-        while [ $# -ge 3 ]; do
-            record="$record$1	$2	$3
-"
-            shift 3
-        done
-        printf '%s' "$record" | put "$MA_CHANGE" 600
+        MA_CHANGING=1
+        return 0
     fi
+    while [ $# -ge 2 ]; do
+        backup_file "$2"
+        record="$record$1	$2	$KEPT
+"
+        shift 2
+    done
+    # The list first: should this be killed before the record, nothing has changed yet, and the next
+    # run lists its own copies.
+    if [ "$why" = replace ]; then printf '%s' "$record" | put "$MA_AGENT_DIR/backups/before-move" 600; fi
+    printf '%s' "$record" | put "$MA_CHANGE" 600
     MA_CHANGING=1
 }
 
@@ -1427,6 +1449,9 @@ main() {
         if [ "$OS" = Linux ]; then systemd_units; else launchd_agents; fi
         start_services
     fi
+    # A change to the gateway's plugin is done once the core it connects to is set up to start, and
+    # started unless --no-start or --no-service said not to.
+    if [ "$MA_CHANGING" -eq 1 ]; then change_end; fi
     summary
 }
 
