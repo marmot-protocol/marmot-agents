@@ -52,7 +52,8 @@ use tokio::process::{Child, Command};
 type Reader = Lines<BufReader<Box<dyn AsyncRead + Unpin + Send>>>;
 
 /// How long one of the core's requests waits for Codex before the driver gives up on it: to read
-/// what the driver writes, to pick a session, or to answer a request before it.
+/// what the driver writes, to pick a session, or to answer a request before it; and how long
+/// start-up waits for Codex to reply to its greeting.
 const PATIENCE: Duration = Duration::from_secs(60);
 type Writer = Box<dyn AsyncWrite + Unpin + Send>;
 
@@ -337,9 +338,14 @@ impl Codex {
         let id = codex.id();
         codex.queue(&initialize(id), None);
         codex.flush().await?;
+        // A Codex that never replies fails start-up, so the program can end and be started again.
+        let deadline = tokio::time::Instant::now() + PATIENCE;
         let reply = loop {
-            let line = codex.reader.next_line().await?;
-            let Some(line) = line else {
+            let read = tokio::time::timeout_at(deadline, codex.reader.next_line()).await;
+            let Ok(line) = read else {
+                return Err(io::Error::other("codex app-server did not reply in time"));
+            };
+            let Some(line) = line? else {
                 return Err(io::Error::other("codex app-server ended before it replied"));
             };
             let message: Value = serde_json::from_str(&line).unwrap_or(Value::Null);

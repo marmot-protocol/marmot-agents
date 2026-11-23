@@ -985,6 +985,32 @@ async fn a_refused_start_and_the_setup_print_no_path() {
     }
 }
 
+// A Codex that never replies to the greeting fails start-up after a minute, as an ACP agent does,
+// so the program can end and be started again rather than wait for ever (#133).
+#[tokio::test(start_paused = true)]
+async fn a_codex_that_never_replies_fails_to_start_in_time() {
+    let (driver_side, fake_side) = duplex(1 << 16);
+    let (from_driver, _to_driver) = tokio::io::split(fake_side);
+    let (driver_reads, driver_writes) = tokio::io::split(driver_side);
+    let codex = tokio::spawn(Codex::connect(
+        driver_reads,
+        driver_writes,
+        Setup::new("/w"),
+    ));
+    let mut lines = BufReader::new(from_driver).lines();
+    let hello: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+    assert_eq!(hello["method"], "initialize");
+    let began = tokio::time::Instant::now();
+    let waited = tokio::time::timeout(std::time::Duration::from_secs(120), codex).await;
+    let error = waited
+        .expect("start-up gave up within two minutes")
+        .unwrap()
+        .err()
+        .expect("start-up failed");
+    assert!(began.elapsed() >= std::time::Duration::from_secs(60));
+    assert!(error.to_string().contains("in time"), "{error}");
+}
+
 // -- subagents (D-117)
 
 /// A subagent's turn, under the person's turn `t1`.
