@@ -205,13 +205,48 @@ impl Translator {
     }
 
     /// The item that gave a subagent its work, and what that work is, as its next turn shows them.
-    /// Nothing for a translator that follows the chat's session.
-    pub fn given_work(&mut self, subject: &str, description: Option<&str>) {
-        if let Some(sub) = self.subagent.as_mut() {
-            sub.subject = Some(subject.to_string());
-            if let Some(description) = description.filter(|d| !d.is_empty()) {
-                sub.description = Some(description.to_string());
-            }
+    /// A task already running with no subject, because its turn started before the item that
+    /// names it came, takes them now: the events returned show it. Nothing for a translator that
+    /// follows the chat's session.
+    pub fn given_work(&mut self, subject: &str, description: Option<&str>) -> Vec<AgentEvent> {
+        let mut out = Vec::new();
+        let Some(sub) = self.subagent.as_mut() else {
+            return out;
+        };
+        sub.subject = Some(subject.to_string());
+        if let Some(description) = description.filter(|d| !d.is_empty()) {
+            sub.description = Some(description.to_string());
+        }
+        let sub = sub.clone();
+        let item = self.turn_item(self.turn.as_deref());
+        let Some(prev) = self.open_event(&item) else {
+            return out;
+        };
+        let Body::Task(task) = prev.body() else {
+            return out;
+        };
+        if task.subject.is_some() {
+            return out; // it works for what it was given first; the next turn for this
+        }
+        let native = prev.native().cloned();
+        let body = Body::Task(Task {
+            kind: task.kind.clone(),
+            description: task.description.clone().or(sub.description.clone()),
+            subject: sub.subject.map(Into::into),
+        });
+        let text = sub.description.unwrap_or_default();
+        let title = "Subagent working";
+        self.emit(&mut out, &item, body, State::Running, title, &text, native);
+        out
+    }
+
+    /// An item id the translator makes up, numbered by the events it has made. A subagent's
+    /// names its thread too: each translator of a chat counts from 0, and the chat keys every
+    /// item by its id (D-117). The chat's own stay as they were.
+    fn made_up(&self, kind: &str) -> String {
+        match (&self.subagent, &self.session) {
+            (Some(_), Some(thread)) => format!("{kind}:{thread}:{}", self.made),
+            _ => format!("{kind}:{}", self.made),
         }
     }
 
@@ -447,7 +482,7 @@ impl Translator {
             "item/tool/call" => {}
             "turn/plan/updated" => self.plan(method, params, out),
             "thread/compacted" => {
-                let item = format!("compaction:{}", self.made);
+                let item = self.made_up("compaction");
                 let body = Body::Notice(notice(NoticeKind::Compaction));
                 let native = native(method, params);
                 self.emit(
@@ -464,7 +499,7 @@ impl Translator {
                 let Some(p) = self.read::<Rerouted>(method, params) else {
                     return;
                 };
-                let item = format!("model:{}", self.made);
+                let item = self.made_up("model");
                 let text = format!(
                     "{} to {}",
                     show(p.from_model.as_deref()),
@@ -490,7 +525,7 @@ impl Translator {
                 let Some(p) = self.read::<NativeMessage>(method, params) else {
                     return;
                 };
-                let item = format!("warning:{}", self.made);
+                let item = self.made_up("warning");
                 let body = Body::Notice(notice(NoticeKind::Warning));
                 let text = p.message.unwrap_or_default();
                 let native = native(method, params);
@@ -500,7 +535,7 @@ impl Translator {
                 let Some(p) = self.read::<ErrorNote>(method, params) else {
                     return;
                 };
-                let item = format!("error:{}", self.made);
+                let item = self.made_up("error");
                 let text = p.error.and_then(|e| e.message).unwrap_or_default();
                 let body = Body::Error(Error {
                     will_retry: p.will_retry,
@@ -1377,7 +1412,7 @@ impl Translator {
                 return;
             };
             // Numbered like every item the driver names, not by request id, which Codex reuses.
-            let item = format!("error:{}", self.made);
+            let item = self.made_up("error");
             let body = Body::Error(Error {
                 request: method.clone(),
                 code: e.code,

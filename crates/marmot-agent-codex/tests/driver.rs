@@ -1005,12 +1005,27 @@ async fn a_thread_started_under_a_chats_thread_is_its_subagent() {
     .await;
     fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
         .await;
+    // The item that names it comes after its turn has started: the task takes it as its subject.
+    fake.say(started_by("a1", "sub1")).await;
     fake.say(json!({"method": "item/completed", "params": {"threadId": "sub1", "turnId": "st1",
         "item": {"type": "agentMessage", "id": "w1", "text": "found it", "phase": "final_answer"}}}))
         .await;
     fake.say(sub_turn("turn/completed", "sub1", "st1", "completed"))
         .await;
     let events = until(&mut codex, is_task(State::Done)).await;
+    let tasks: Vec<_> = (events.iter())
+        .filter_map(|e| match e.event.body() {
+            Body::Task(t) => Some((e.event.header().state, t.subject.clone())),
+            _ => None,
+        })
+        .collect();
+    let a1 = Some("a1".into());
+    assert_eq!(tasks.first(), Some(&(State::Running, None)), "{tasks:?}");
+    assert!(
+        tasks.contains(&(State::Running, a1.clone())),
+        "the open task is given its subject: {tasks:?}"
+    );
+    assert_eq!(tasks.last(), Some(&(State::Done, a1)), "{tasks:?}");
     for e in &events {
         let header = e.event.header();
         assert_eq!(e.chat, Some("c-1".into()));
@@ -1067,4 +1082,67 @@ async fn a_stop_codex_refuses_for_a_subagent_waits_for_the_rest() {
         .collect();
     assert_eq!(settling.len(), 1, "settled once");
     assert!(matches!(settling[0].event.body(), Body::Turn(_)));
+}
+
+/// The parent's item that starts a subagent in `thread`, on Codex's newer runtime.
+fn started_by(item: &str, thread: &str) -> Value {
+    let started = json!({"type": "subAgentActivity", "id": item, "kind": "started",
+        "agentThreadId": thread, "agentPath": "/root/a"});
+    json!({"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1",
+        "item": started}})
+}
+
+// Each translator in a chat numbers the items it makes up from 0; two subagents' warnings and
+// errors are still four items, not two.
+#[tokio::test]
+async fn two_subagents_warnings_and_errors_are_items_of_their_own() {
+    let (mut codex, mut fake) = running().await;
+    fake.say(started_by("a1", "sub1")).await;
+    fake.say(started_by("a2", "sub2")).await;
+    for thread in ["sub1", "sub2"] {
+        fake.say(json!({"method": "warning", "params": {"threadId": thread, "message": "w"}}))
+            .await;
+        fake.say(json!({"method": "error", "params": {"threadId": thread,
+            "error": {"message": "e"}, "willRetry": false}}))
+            .await;
+    }
+    let mut items = std::collections::HashSet::new();
+    let mut count = 0;
+    while count < 4 {
+        let e = until(&mut codex, |e| {
+            matches!(e.event.body(), Body::Notice(_) | Body::Error(_))
+        })
+        .await;
+        items.insert(e.last().unwrap().event.header().item.as_str().to_string());
+        count += 1;
+    }
+    assert_eq!(items.len(), 4, "{items:?}");
+}
+
+// Threads named by one item, which spoke before it, have what they said shown in the order it
+// came, not thread by thread.
+#[tokio::test]
+async fn what_threads_said_before_they_were_named_keeps_its_order() {
+    let (mut codex, mut fake) = running().await;
+    let said = |thread: &str, id: &str| {
+        json!({"method": "item/completed", "params": {"threadId": thread, "turnId": "x",
+            "item": {"type": "agentMessage", "id": id, "text": id, "phase": "final_answer"}}})
+    };
+    fake.say(said("subB", "b1")).await;
+    fake.say(said("subA", "a1")).await;
+    fake.say(said("subB", "b2")).await;
+    fake.say(said("subA", "a2")).await;
+    let spawn = json!({"type": "collabAgentToolCall", "id": "c1", "tool": "spawnAgent",
+        "status": "completed", "receiverThreadIds": ["subA", "subB"], "prompt": "look"});
+    fake.say(
+        json!({"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1",
+        "item": spawn}}),
+    )
+    .await;
+    let mut words = Vec::new();
+    while words.len() < 4 {
+        let e = until(&mut codex, |e| matches!(e.event.body(), Body::Message(_))).await;
+        words.push(e.last().unwrap().event.header().text.clone());
+    }
+    assert_eq!(words, ["b1", "a1", "b2", "a2"]);
 }

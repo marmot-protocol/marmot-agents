@@ -181,6 +181,8 @@ pub struct Codex {
     /// Messages naming a thread no chat has had, with that thread, oldest first: a session being
     /// picked, or a subagent, can speak before the message that names its thread.
     held: VecDeque<(String, String)>,
+    /// Held messages are being released.
+    releasing: bool,
     /// The last `seq` handed over in each chat's session: a subagent's events are numbered with
     /// the session's own (D-059, point 4).
     seq: HashMap<(ChatId, Option<String>), u64>,
@@ -245,6 +247,7 @@ impl Codex {
             starting: HashMap::new(),
             prompts: HashMap::new(),
             held: VecDeque::new(),
+            releasing: false,
             seq: HashMap::new(),
             ready: VecDeque::new(),
             calls: HashMap::new(),
@@ -574,8 +577,11 @@ impl Codex {
                 continue;
             }
             let c = self.chats.get_mut(chat).expect("a chat that was fed");
-            if let Some(t) = c.subagents.get_mut(&thread) {
-                t.given_work(&item, description.as_deref());
+            let shown = (c.subagents.get_mut(&thread))
+                .map(|t| t.given_work(&item, description.as_deref()))
+                .unwrap_or_default();
+            for event in shown {
+                self.ready_event(chat, event, Vec::new(), true, None);
             }
         }
     }
@@ -601,21 +607,17 @@ impl Codex {
     }
 
     /// What a thread said before it was named goes to it now, before anything it says next, in
-    /// the order it came. What names a thread still unknown waits.
+    /// the order it came, across every thread now named. What names a thread still unknown waits.
     fn release(&mut self) {
-        while let Some(thread) = (self.held.iter())
-            .map(|(thread, _)| thread)
-            .find(|t| self.whose(t).is_some())
-            .cloned()
-        {
-            let (now, later): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut self.held)
-                .into_iter()
-                .partition(|(t, _)| *t == thread);
-            self.held = later;
-            for (_, line) in now {
-                self.route(&line);
-            }
+        if self.releasing {
+            return; // the release under way goes on with what is now named
         }
+        self.releasing = true;
+        while let Some(at) = (self.held.iter()).position(|(t, _)| self.whose(t).is_some()) {
+            let (_, line) = self.held.remove(at).expect("a held message");
+            self.route(&line);
+        }
+        self.releasing = false;
     }
 
     /// Codex calls the driver's own tool. A call to send a file goes to the core; any other is
