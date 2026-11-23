@@ -109,9 +109,8 @@ A top-level `task` item is in the main chat and carries none of them. A subagent
 with the same tags ([D-122](../decisions.md#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar)). The
 whole shape is in [subagents as threads](subagents.md#how-it-travels).
 
-Left for MDK to settle: an edit already uses `e` for its target, so it cannot also carry the parent `e`. The
-recommendation is that an edit carries no thread tags and takes its thread from its target, since an item never
-moves. MDK also has to take a parent `e` on an item's first event, which it refuses today, and to say whether a
+An edit already uses `e` for its target, so it cannot also carry the parent `e`; it repeats the root tags `E`, `K`
+and `P` and carries no lowercase ones ([D-133](../decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags)). Left for MDK to settle: MDK also has to take a parent `e` on an item's first event, which it refuses today, and to say whether a
 `p` naming the event's own author is a mention ([what MDK has to do](subagents.md#what-mdk-has-to-do)).
 
 ## Provisional additions

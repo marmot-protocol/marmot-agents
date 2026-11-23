@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-23, at `master` commit `0a7ba23`, through [D-129](decisions.md#d-129-a-prompt-whose-answer-a-dropped-connection-lost-is-told-as-perhaps-not-delivered). A change that adds or replaces
+Brought up to date on 2026-11-23, at `master` commit `5cc09ee`, through [D-133](decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags) (D-130 to D-132 are in open pull requests). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -110,8 +110,8 @@ Decided, and not built: the core, the drivers, MDK and the apps each have their 
 
 - Where a harness tells subagents apart, each subagent is a thread in the agent's own group. Its row is its
   `task` item; its items carry NIP-22's tags, uppercase for the top-level subagent's `task` item and lowercase
-  for the immediate parent's; its words are kind 1111 comments. What an edit carries of the thread tags is left
-  for MDK to settle ([D-121](decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them), [D-122](decisions.md#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar)).
+  for the immediate parent's; its words are kind 1111 comments. An edit repeats the root tags
+  ([D-133](decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags), [D-121](decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them), [D-122](decisions.md#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar)).
 - The agent's comments in its own threads do not alert. The app shows a running bar of open `task` items, lifts
   waiting approvals into it, and folds finished threads ([D-122](decisions.md#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar)).
 - Stop in the main chat stops every subagent the agent started, even after its turn; Stop in a thread stops that

@@ -2260,7 +2260,7 @@ subagent's thread.
 ([D-112](#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by)), so it cannot also
 carry NIP-22's parent `e`. Recommended: an edit carries no thread tags and takes its thread from its target, since
 an item never moves. That would be an exception to D-112's "an edit of an item carries every tag of the item",
-for the thread tags alone.
+for the thread tags alone. (Settled by [D-133](#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags): an edit repeats the root tags.)
 
 **What MDK has to do**, as read at `6f6b427`:
 
@@ -2481,3 +2481,20 @@ may run it (the `prompt-in-flight` counterexample of `formal/tla/SocketProtocol.
 two apart, so "not delivered" would be wrong when the agent then answers.
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
+
+## D-133 An edit of an item in a subagent's thread repeats the thread's root tags
+
+**Decision.** An edit (kind 1009) of an item in a subagent's thread carries the thread's root tags again, `E`, `K`
+and `P`, with the same values as the item's first event, beside the `e` MDK places for its target. It carries no
+lowercase parent tags, since an edit's `e` is its target
+([D-112](#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by)). This settles the
+point [D-121](#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them) left
+open for MDK, in place of the recommendation there that an edit carry no thread tags.
+
+**Why.** Someone added to the group after an item's first event cannot read that event, so an edit that carries
+no thread tags cannot be placed in its thread; repeating the root tags lets a late joiner place it
+([D-124](#d-124-what-keeps-subagents-reliable-closes-harnesses-that-do-not-tell-them-apart-and-late-joiners)) and
+changes nothing for anyone else. MDK, which places items in threads, asked for this.
+
+Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points, on MDK's
+request.
