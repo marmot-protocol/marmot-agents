@@ -1728,6 +1728,150 @@ class FilesFrom(unittest.TestCase):
         _, second, _ = self.settings(m, "hermes")
         self.assertEqual(first, second)
 
+    # The line `marmot-agent import` writes above the old connector's media folders (import/mod.rs).
+    IMPORTED = "# Only the folders the old connector let files be sent from; never the working folder."
+
+    def moved(self, m: Machine, harness: str, title: str, listed: list) -> Path:
+        """An install of today's connector moved over, its settings as the import wrote them, with the
+        old connector's media folders in `files_from`; and that connector's plugin in the gateway."""
+        if harness == "hermes":
+            old = m.home / ".hermes/plugins/marmot"
+            old.mkdir(parents=True)
+            (old / "plugin.yaml").write_text("name: marmot\ndescription: the old connector's\n")
+        else:
+            old = m.home / ".openclaw/extensions/marmot"
+            old.mkdir(parents=True)
+            (old / "package.json").write_text(json.dumps({"name": "@marmot-protocol/openclaw-marmot"}))
+        old_home, settings = Boundaries.imported(m, harness, title)
+        text = settings.read_text().replace("\n[connector]\n", "")
+        line = "files_from = [" + ", ".join(json.dumps(str(f)) for f in listed) + "]"
+        settings.write_text(f"{text}{self.IMPORTED}\n{line}\n\n[connector]\n")
+        if harness == "openclaw":
+            channel = {"enabled": True, "home": str(old_home), "socketPath": f"{old_home}/dev/wn-agent.sock"}
+            config = json.loads((m.home / ".openclaw/openclaw.json").read_text())
+            (m.home / ".openclaw/openclaw.json").write_text(json.dumps({**config, "channels": {"marmot": channel}}))
+        return settings
+
+    def replace(self, m: Machine, harness: str) -> tuple:
+        out = m.run(harness, *m.args(harness, "--binary", str(m.core), "--no-service", "--replace-plugin")).stdout
+        text = (m.data / f"agents/{harness}/settings.toml").read_text()
+        return tomllib.loads(text).get("files_from"), text, out
+
+    def test_a_moved_gateway_lists_its_folder_beside_the_old_connectors(self):
+        """`--replace-plugin` lists the gateway's folder as a fresh install does (D-119), after the old
+        connector's media folders, which stay; a run again lists it once."""
+        for listed in ([], ["{dir}/media"], ["{dir}/media", "{dir}/more"]):
+            with self.subTest(listed=listed):
+                m = Machine(self)
+                old = [f.format(dir=m.dir) for f in listed]
+                self.hermes(m, {"cwd": str(m.dir / "projects"), "backend": "local"})
+                self.moved(m, "hermes", "Hermes", old)
+                files, text, out = self.replace(m, "hermes")
+                self.assertEqual(files, [*old, str(m.dir / "projects")], text)
+                self.assertTrue((m.dir / "projects").is_dir(), "the core opens the folder when it starts")
+                self.assertNotIn(self.IMPORTED, text, "the import's comment says what is listed no longer")
+                self.assertIn(f"and {m.dir / 'projects'}, where Hermes works", out)
+                again, text_again, _ = self.replace(m, "hermes")
+                self.assertEqual(again, files)
+                self.assertEqual(text_again, text)
+
+    def test_a_moved_gateway_in_its_home_or_a_sandbox_lists_only_the_old_folders(self):
+        """The same exclusions as a fresh install: then the old connector's folders are all there is. The
+        agent's home stays where the old connector had it, out of the agents' data, and a folder that holds
+        or lies in it is not listed either, or the core would not start; nor one that holds or lies in the
+        backup of it the import took, which the import leaves out of files_from too."""
+        backup = "~/.marmot-agents/hermes.backup-20261122T000000Z"  # as Boundaries.imported names it
+        for terminal in ({"cwd": "."}, {"cwd": "/srv/projects", "backend": "docker"}, {"cwd": "~/.hermes/cache"},
+                         {"cwd": "~/.marmot-agents/hermes/work"}, {"cwd": "~/.marmot-agents"},
+                         {"cwd": backup}, {"cwd": f"{backup}/work"}):
+            with self.subTest(terminal=terminal):
+                m = Machine(self)
+                self.hermes(m, terminal)
+                settings = self.moved(m, "hermes", "Hermes", [str(m.dir / "media")])
+                before = settings.read_text()
+                files, text, out = self.replace(m, "hermes")
+                self.assertEqual(files, [str(m.dir / "media")])
+                self.assertEqual(text, before)
+                self.assertIn("files_from in its settings lists the folders", out)
+
+    def test_a_moved_gateway_leaves_a_files_from_the_person_wrote_otherwise(self):
+        """Only the line the import wrote, with its comment directly above it, is changed. A line the
+        person wrote, or changed so it is no longer one the import writes, is theirs, even one in a single
+        line: it is left as it is, and the installer says how to add the folder."""
+        mine = {
+            "several lines": 'files_from = [\n  "/srv/mine",\n]',
+            "a trailing comma": 'files_from = ["/srv/mine",]',
+            "a comment after it": 'files_from = ["/srv/mine"]  # mine',
+            "no comment above, empty": "files_from = []",
+            "no comment above": 'files_from = ["/srv/mine"]',
+            "another comment above": '# Mine.\nfiles_from = ["/srv/mine"]',
+        }
+        for case, line in mine.items():
+            with self.subTest(case=case):
+                m = Machine(self)
+                self.hermes(m, {"cwd": str(m.dir / "projects"), "backend": "local"})
+                settings = self.moved(m, "hermes", "Hermes", [])
+                text = settings.read_text()
+                if case.startswith("no comment") or case.startswith("another"):
+                    text = text.replace(f"{self.IMPORTED}\n", "")
+                text = text.replace("files_from = []", line)
+                settings.write_text(text)
+                files, after, out = self.replace(m, "hermes")
+                self.assertEqual(files, tomllib.loads(text).get("files_from"))
+                self.assertEqual(after, text)
+                self.assertIn(f"add {m.dir / 'projects'}", out)
+
+    def test_a_moved_gateway_already_listing_its_folder_changes_nothing(self):
+        """The old connector may have let files be sent from the folder the gateway works in: it is
+        listed once, and the settings are left as the import wrote them."""
+        m = Machine(self)
+        listed = [str(m.dir / "projects")]
+        self.hermes(m, {"cwd": listed[0], "backend": "local"})
+        before = self.moved(m, "hermes", "Hermes", listed).read_text()
+        files, text, out = self.replace(m, "hermes")
+        self.assertEqual((files, text), (listed, before))
+        self.assertIn(f"and {listed[0]}, where Hermes works", out)
+
+    def test_a_moved_gateway_that_works_elsewhere_now_lists_the_new_folder(self):
+        """The folder the installer added is its own while its comment stays above the line: run again
+        after the gateway has moved to another folder, it lists that one in its place."""
+        m = Machine(self)
+        old = [str(m.dir / "media")]
+        self.hermes(m, {"cwd": str(m.dir / "projects"), "backend": "local"})
+        self.moved(m, "hermes", "Hermes", old)
+        files, _, _ = self.replace(m, "hermes")
+        self.assertEqual(files, [*old, str(m.dir / "projects")])
+        (m.home / ".hermes/config.yaml").write_text(
+            json.dumps({"terminal": {"cwd": str(m.dir / "elsewhere"), "backend": "local"}}))
+        files, text, out = self.replace(m, "hermes")
+        self.assertEqual(files, [*old, str(m.dir / "elsewhere")], text)
+        self.assertTrue((m.dir / "elsewhere").is_dir())
+        self.assertIn(f"and {m.dir / 'elsewhere'}, where Hermes works", out)
+        again, text_again, _ = self.replace(m, "hermes")
+        self.assertEqual((again, text_again), (files, text))
+
+    def test_a_moved_gateway_folder_is_written_as_it_is_named(self):
+        """A folder's name is copied into the line as it is, whatever characters it holds."""
+        for name in ("R&D", "a\\b", "R&D\\&1"):
+            with self.subTest(name=name):
+                m = Machine(self)
+                old = [str(m.dir / "media")]
+                self.hermes(m, {"cwd": str(m.dir / name), "backend": "local"})
+                self.moved(m, "hermes", "Hermes", old)
+                files, text, _ = self.replace(m, "hermes")
+                self.assertEqual(files, [*old, str(m.dir / name)], text)
+                again, text_again, _ = self.replace(m, "hermes")
+                self.assertEqual((again, text_again), (files, text))
+
+    @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
+    def test_a_moved_openclaw_lists_its_workspace_beside_the_old_connectors(self):
+        m = Machine(self)
+        self.openclaw(m, {"agents": {"defaults": {"workspace": str(m.dir / "theirs")}}})
+        self.moved(m, "openclaw", "OpenClaw", [str(m.dir / "media")])
+        files, text, out = self.replace(m, "openclaw")
+        self.assertEqual(files, [str(m.dir / "media"), str(m.dir / "theirs")], out)
+        self.assertTrue((m.dir / "theirs").is_dir())
+
 
 class Wrappers(unittest.TestCase):
     """The scripts that start a harness's container check its mounts again, and wait for the core."""

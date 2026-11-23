@@ -162,8 +162,8 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   finishes or puts it back; a few named moments after a kill leave neither plugin working until then ([D-116](decisions.md#d-116-a-gateways-plugin-swap-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)).
 - A gateway install moves over with its installer's `--replace-plugin`. The OpenClaw installer finishes a
   half-done move by editing OpenClaw's settings file itself, after a copy; the gateway's conversation starts
-  fresh in each chat. `--replace-plugin` is to list the gateway's work folder in `files_from`, as a fresh
-  install does; it does not yet ([D-119](decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)).
+  fresh in each chat. `--replace-plugin` lists the gateway's work folder in `files_from` beside the old
+  connector's folders, in the line the import wrote ([D-119](decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)).
 
 ## Verification and how the work runs
 
