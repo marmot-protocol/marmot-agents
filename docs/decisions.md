@@ -2025,7 +2025,9 @@ In particular:
 - **A gateway's internals.** Where a plugin uses something the gateway does not publish, the gateway's
   reference page lists it with the version it was read in, and a test fails when it changes. That test may be
   the end-to-end scenario against the real gateway, which runs on demand and must pass before a milestone
-  closes.
+  closes. Two Hermes internals have no such test yet, `COMMAND_REGISTRY` with `_is_gateway_available` and
+  `resolve_gateway_clarify` ([what the plugin relies on](reference/hermes-messages.md)); they are a known gap,
+  closed by having the Hermes scenario check that its session item lists commands and ask one question.
 
 Not decided: the socket's chat section, which the gateways' own message tools need
 ([Q-32](open-questions.md#q-32-what-does-the-sockets-chat-section-carry)). Until it is designed, OpenClaw's
