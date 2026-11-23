@@ -732,3 +732,178 @@ async fn the_agents_words_settle_as_many_as_mdk_takes() {
     }
     world.runtime.shutdown().await;
 }
+
+/// A stand-in harness that keeps every prompt it is handed, and says nothing.
+struct Listener {
+    prompts: Arc<std::sync::Mutex<Vec<marmot_agent_driver::Prompt>>>,
+}
+
+impl marmot_agent_driver::Driver for Listener {
+    fn harness(&self) -> marmot_agent_driver::Harness {
+        marmot_agent_driver::Harness {
+            name: "listener".into(),
+            version: None,
+        }
+    }
+
+    fn capabilities(&self) -> marmot_agent_driver::Capabilities {
+        marmot_agent_driver::Capabilities {
+            interrupt: false,
+            mid_turn: marmot_agent_driver::MidTurn::Queue,
+            sessions: marmot_agent_driver::Sessions::Core,
+            resume: false,
+            approvals: false,
+            files_in: marmot_agent_driver::FilesIn::None,
+            approval_commands: Vec::new(),
+        }
+    }
+
+    async fn prompt(
+        &mut self,
+        prompt: marmot_agent_driver::Prompt,
+    ) -> Result<(), marmot_agent_driver::Refusal> {
+        self.prompts.lock().unwrap().push(prompt);
+        Ok(())
+    }
+
+    async fn answer(
+        &mut self,
+        _answer: marmot_agent_driver::Answer,
+    ) -> Result<(), marmot_agent_driver::Refusal> {
+        Ok(())
+    }
+
+    async fn control(
+        &mut self,
+        _control: marmot_agent_driver::Control,
+    ) -> Result<(), marmot_agent_driver::Refusal> {
+        Ok(())
+    }
+
+    async fn next_event(&mut self) -> Option<marmot_agent_driver::Output> {
+        std::future::pending().await
+    }
+}
+
+// In a group, a reply to the agent's message is for the agent (D-075): the core reads the message
+// it quotes from MDK's storage, and hands the harness the quote's text and author as the core's
+// own ids, never an event id or a key (D-036). A message in the group that addresses nobody is not
+// a prompt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_reply_to_the_agent_in_a_group_quotes_what_it_replies_to() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let prompts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let core = world.start(Listener {
+        prompts: prompts.clone(),
+    });
+    let named = world
+        .runtime
+        .create_group(
+            &world.person,
+            "Team",
+            std::slice::from_ref(&world.agent),
+            None,
+        )
+        .await
+        .unwrap()
+        .operation
+        .expect("the group is made");
+    let group = GroupKey(world.joined(&named).await);
+    let (mut words, token) = words_named("a");
+    if let marmot_agent::Sending::Words { text, .. } = &mut words {
+        *text = "the agent's earlier words".into();
+    }
+    let agents = world.send(&group, &words, &token).await.unwrap();
+    eventually(|| {
+        (world.runtime)
+            .timeline_message(&world.person, group.as_str(), agents.as_str())
+            .unwrap()
+    })
+    .await;
+
+    world
+        .runtime
+        .send_message(&world.person, &named, b"lunch, anyone?".to_vec())
+        .await
+        .unwrap();
+    world
+        .runtime
+        .reply_to_message(&world.person, &named, agents.as_str(), "about that")
+        .await
+        .unwrap();
+    let prompt = eventually(|| prompts.lock().unwrap().first().cloned()).await;
+    assert_eq!(prompt.text, "about that");
+    let quoted = prompt.reply_to.expect("the quote");
+    assert_eq!(quoted.text, "the agent's earlier words");
+    assert_ne!(quoted.author.id, prompt.sender.id, "the agent wrote it");
+    assert_ne!(quoted.message.0, agents.0, "the core's own id");
+    assert!(!quoted.author.id.0.contains(&world.agent), "not a key");
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    assert_eq!(prompts.lock().unwrap().len(), 1, "only the reply");
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
+// An edit whose token names no edits, as the core gives one for words an older core sent without
+// a token, goes out as MDK's plain edit of the message: the person sees the new text in the
+// message's place.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_edit_without_an_edits_token_is_mdks_plain_edit() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let group = a_quiet_chat(&world).await;
+    let (words, token) = words_named("a");
+    let first = world.send(&group, &words, &token).await.unwrap();
+    let edit = marmot_agent::Sending::Words {
+        key: "a".into(),
+        text: "the words, changed".into(),
+        turn: Some("t1".into()),
+        remark: true,
+        edit: Some(first.clone()),
+        settles: Vec::new(),
+    };
+    let older = marmot_agent::Token {
+        send: "a/2".into(),
+        mdk: "token a/2".into(),
+        edits: None,
+        tried_at: None,
+    };
+    let edited = world.send(&group, &edit, &older).await.unwrap();
+    assert_ne!(edited, first, "an event of its own");
+    eventually(|| {
+        let row = (world.runtime)
+            .timeline_message(&world.person, group.as_str(), first.as_str())
+            .unwrap()?;
+        (row.plaintext == "the words, changed").then_some(row)
+    })
+    .await;
+    world.runtime.shutdown().await;
+}
+
+// An invitation from someone who may not add the agent is declined: the agent never joins the
+// group, and the invitation waits no more (D-010).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_invitation_from_someone_not_allowed_is_declined() {
+    let mut world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.config.owner = marmot_agent::PubKey("ab".repeat(32));
+    world.runtime.start().await.unwrap();
+    let group = world
+        .runtime
+        .start_direct_conversation(&world.person, &world.agent)
+        .await
+        .unwrap();
+    let group = GroupKey(hex::encode(group.as_slice()));
+    eventually(|| {
+        let waiting = world.marmot.invitations();
+        waiting.iter().any(|(g, _)| *g == group).then_some(())
+    })
+    .await;
+    let core = world.start(Echo::new(Arc::new(AtomicUsize::new(0))));
+    eventually(|| world.marmot.invitations().is_empty().then_some(())).await;
+    assert!(
+        !world.marmot.groups().unwrap().contains(&group),
+        "not joined"
+    );
+    core.stop().await;
+    world.runtime.shutdown().await;
+}

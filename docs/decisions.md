@@ -1990,3 +1990,20 @@ is the same protection, and costs nothing more.
 
 Decided 2026-11-23. The project owner decided.
 
+## D-128 A folder move whose session shows late still moves the chat
+
+**Decision.** A new session the core settled with `no_effect` because nothing showed within two minutes
+([D-087](#d-087-the-core-settles-a-request-whose-effect-never-shows)) still counts when its session item shows
+later: the chat takes that session, and for a folder move ([D-101](#d-101-a-chat-can-move-a-coding-harness-to-another-folder),
+[D-104](#d-104-how-a-chats-folder-works-as-built)) the folder it was asked in, so files come from where the
+harness works. Every new session records the folder it was asked in, a plain one the chat's folder at the time,
+and the chat takes each in the order the driver shows their sessions. The core keeps such late ones only while
+the driver runs. The person is still told `no_effect` at two minutes, and the session item shows the new folder
+when it comes. The request is settled once, by the `no_effect` notice; the late session settles nothing more.
+
+**Why.** Otherwise the harness works in one folder while the chat's files come from another, which is what the
+folder rules exist to prevent. Only a running driver can still show a late session, so nothing is kept across a
+restart.
+
+Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
+

@@ -133,6 +133,7 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   session there. Hermes and OpenClaw keep their own workspace ([D-101](decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder)).
 - The owner's `folders` setting lists where chats may work: the install folder by default, `~` for the home's
   folders, `/` for anywhere. Never the agent's own home ([D-104](decisions.md#d-104-how-a-chats-folder-works-as-built)).
+- A folder move whose session shows after the two-minute settle still moves the chat ([D-128](decisions.md#d-128-a-folder-move-whose-session-shows-late-still-moves-the-chat)).
 
 ## Installers and the move
 

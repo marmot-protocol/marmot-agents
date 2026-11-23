@@ -173,7 +173,14 @@ sequenceDiagram
   on, and the core tells the driver once it is done. The core offers the file to MDK again only while MDK says
   it is busy, which it says only before it has taken the file, for about half a minute. Any other failure is
   reported as `failed` and not tried again, since MDK may have sent the file anyway, and a post cannot be
-  taken back.
+  taken back. Known limit: a file is sent without a token, because MDK's token form of an upload carries no
+  tags, so the file would lose its turn ([MDK issue 3610](https://github.com/marmot-protocol/mdk/issues/3610)).
+  The core keeps nothing of a file on disk while it sends it. A core that stops or crashes during an upload
+  sends nothing again when it starts, so a file goes out at most once, but nobody learns whether it went: the
+  harness's call gets no answer, and its turn is closed as interrupted
+  ([D-070](../decisions.md#d-070-a-restart-closes-the-turn-as-interrupted)). If the harness, or a person, asks
+  for the file again, it may go out twice. Once MDK's token form takes tags, the core can keep a file's send on
+  disk under a token, as it does every other send, and finish it after a restart.
 - **What people see.** The file arrives as a chat message carrying the attachment and the turn's tag, as the
   agent's words do ([D-022](../decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)), and alerts
   like an answer. The tool call shows as a `tool` item. A refused file shows as the core's refused notice
@@ -252,7 +259,14 @@ OpenClaw keep the workspace they manage. Built 2026-11-22; what other programs a
 - **It applies from the next session, so setting it starts one.** The core hands the driver a new session for
   the chat, with the new folder on the chat (`Chat::folder`). The folder is the chat's once the new
   session's item shows, which settles the `set`: the folder and the session are saved together, and a new
-  session the driver or the harness refuses moves nothing. A session the driver starts for a prompt meanwhile
+  session the driver or the harness refuses moves nothing. Every new session works this way, a plain one in
+  the folder the chat had when it was asked for, and the chat takes each folder in the order the driver
+  shows their sessions. A new session that shows only after the core settled it for want of
+  an effect ([D-087](../decisions.md#d-087-the-core-settles-a-request-whose-effect-never-shows)) still
+  counts, so a late move still moves the chat, since the harness works there then: the person was told
+  `no_effect` at two minutes, and the session item shows the new folder later
+  ([D-128](../decisions.md#d-128-a-folder-move-whose-session-shows-late-still-moves-the-chat)). The core keeps such late
+  ones only while the driver runs, since only a running driver can still show one. A session the driver starts for a prompt meanwhile
   starts in the new folder. Every prompt after names the folder, and the driver starts the chat's next session
   there, or takes up its session there after a restart. A chat that chose none is named no folder, and works in the driver's own.
 - **Each driver:** Codex gives the folder as `cwd` on `thread/start` and `thread/resume`; an ACP agent as

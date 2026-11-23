@@ -4,6 +4,7 @@
 
 use marmot_agent::carrier::{self, Asked, AskedReply, Item};
 use marmot_agent::chat_folder::FolderRule;
+use marmot_agent::conversation::EFFECT_LIMIT_SECS;
 use marmot_agent::{
     Act, Conversation, EventKey, GroupKey, Heard, HeardQuote, HeardRequest, PubKey, Rights, Saved,
     Sending, Where, Who,
@@ -569,6 +570,78 @@ fn a_secret_answer_is_refused_in_a_group() {
     let (_, _, item) = the_item(&mut talk, |t| t.asked(answer));
     assert!(is_refused(&item, "not_supported"));
     assert!(!item.event.header().text.contains("hunter2"));
+}
+
+// A question of several parts, answered from the chat by someone who may prompt, reaches the
+// driver as one answer to the item, with each part's choices and text as given, in order; a secret
+// part is taken in a two-person chat (D-041). A second answer to it is refused (D-028).
+#[test]
+fn a_question_of_several_parts_is_answered_at_once() {
+    let (mut talk, prompt) = started();
+    let part = |id: &str, options: &[&str], secret: bool| body::Asked {
+        id: id.into(),
+        header: None,
+        text: format!("{id}?"),
+        options: (options.iter())
+            .map(|o| body::Offered {
+                id: (*o).into(),
+                label: o.to_uppercase(),
+                description: None,
+            })
+            .collect(),
+        multiple: options.len() > 1,
+        allow_text: true,
+        secret,
+    };
+    let parts = vec![
+        part("colour", &["red", "blue", "green"], false),
+        part("name", &[], false),
+        part("token", &[], true),
+    ];
+    let question = body::Question::new(body::AnswerVia::Request, None, parts).unwrap();
+    let waiting = event("q", State::Waiting, Body::Question(question));
+    sent(&mut talk, &prompt.chat.id.0, waiting, "e-q");
+    let reply = |question: &str, options: &[&str], text: Option<&str>| AskedReply {
+        question: question.into(),
+        options: options.iter().map(|o| (*o).into()).collect(),
+        text: text.map(Into::into),
+    };
+    let answer = |event: &str| {
+        request(
+            direct(),
+            event,
+            FRIEND,
+            Some("e-q"),
+            Asked::Questions {
+                questions: vec![
+                    reply("colour", &["red", "green"], None),
+                    reply("name", &[], Some("Ada")),
+                    reply("token", &[], Some("s3cret")),
+                ],
+            },
+        )
+    };
+    let Ok([Act::Answer(given)]) = <[Act; 1]>::try_from(talk.asked(answer("r1"))) else {
+        panic!("not one answer")
+    };
+    assert_eq!(given.item.as_str(), "q");
+    let Given::Questions(replies) = &given.given else {
+        panic!("not answers to questions")
+    };
+    let replies: Vec<_> = (replies.iter())
+        .map(|r| (r.question.as_str(), r.options.clone(), r.text.as_deref()))
+        .collect();
+    assert_eq!(
+        replies,
+        vec![
+            ("colour", vec!["red".to_string(), "green".to_string()], None),
+            ("name", Vec::new(), Some("Ada")),
+            ("token", Vec::new(), Some("s3cret")),
+        ]
+    );
+    assert!(talk.requested(&given.request, Ok(()), 0).is_empty());
+    let (_, _, again) = the_item(&mut talk, |t| t.asked(answer("r2")));
+    assert!(is_refused(&again, "already_answered"));
 }
 
 // A setting the session item marks needs the right to approve; others need the right to
@@ -3020,6 +3093,110 @@ fn a_move_is_the_chats_only_once_its_session_shows() {
     assert_eq!(talk.chosen_folder(&chat), None);
     let prompt = the_prompt(talk.heard(heard(direct(), "e3", OWNER, "still here?")));
     assert_eq!(prompt.chat.folder, None);
+}
+
+// A move whose new session shows only after the core settled it for want of an effect (D-087) is
+// still the chat's then: the harness works in the new folder, so the chat's folder, which its
+// files come from, and its session item, show that folder, and not the one it left. The effect
+// settles nothing more. Only the running driver can show it, so nothing of it is saved.
+#[test]
+fn a_move_whose_session_shows_late_is_still_the_chats() {
+    let place = layout();
+    let mut talk = moving(&place, None, Saved::default());
+    let chat = the_prompt(talk.heard(heard(direct(), "e1", OWNER, "hello")))
+        .chat
+        .id;
+    let _ = sent(
+        &mut talk,
+        &chat.0,
+        session_event("s1", "th1", State::Running),
+        "es1",
+    );
+    let (control, _, _) = the_new_session(talk.asked(set_folder("r1", OWNER, None, "a")));
+    assert!(talk.requested(&control.request, Ok(()), 0).is_empty());
+    let (_, _, overdue) = the_item(&mut talk, |t| t.overdue(EFFECT_LIMIT_SECS));
+    assert!(is_refused(&overdue, "no_effect"));
+    assert_eq!(talk.chosen_folder(&chat), None, "not moved yet");
+
+    let mut late = emitted(&chat.0, session_event("s2", "th2", State::Running));
+    late.settles = vec![control.request.clone()];
+    let (_, _, item) = the_item(&mut talk, |t| t.emitted(late));
+    assert!(item.settles.is_empty(), "settled already");
+    assert_eq!(
+        folder_shown(&item).and_then(|s| s.value),
+        Some(place.work.join("a").display().to_string()),
+    );
+    assert_eq!(talk.chosen_folder(&chat), Some(place.work.join("a")));
+    let prompt = the_prompt(talk.heard(heard(direct(), "e2", OWNER, "where now?")));
+    assert_eq!(prompt.chat.folder, Some(place.work.join("a")));
+}
+
+// A new session that names no folder starts where the chat works, and is the chat's there when it
+// shows, even after a late move's session (D-087, D-101): a driver that hears of the late move
+// while it starts the plain one shows the moved session first and the plain one after, and the
+// chat then works where the plain one runs, not in the folder the late move named. So for a chat
+// in the driver's own folder and for one that chose a folder.
+#[test]
+fn a_new_session_after_a_late_move_keeps_its_own_folder() {
+    let place = layout();
+    let start = |chose: bool| {
+        if chose {
+            let (talk, chat) = moved(&place);
+            (talk, chat, Some(place.work.join("a")), "deeper")
+        } else {
+            let mut talk = moving(&place, None, Saved::default());
+            let chat = the_prompt(talk.heard(heard(direct(), "e1", OWNER, "hello")))
+                .chat
+                .id;
+            let _ = sent(
+                &mut talk,
+                &chat.0,
+                session_event("s1", "th1", State::Running),
+                "es1",
+            );
+            (talk, chat, None, "a")
+        }
+    };
+    for chose in [false, true] {
+        let (mut talk, chat, before, to) = start(chose);
+        let (moving, _, _) = the_new_session(talk.asked(set_folder("r-move", OWNER, None, to)));
+        assert!(talk.requested(&moving.request, Ok(()), 0).is_empty());
+        let (_, _, overdue) = the_item(&mut talk, |t| t.overdue(EFFECT_LIMIT_SECS));
+        assert!(is_refused(&overdue, "no_effect"));
+
+        let plain = request(direct(), "r-new", OWNER, None, Asked::NewSession);
+        let plain = match <[Act; 1]>::try_from(talk.asked(plain)) {
+            Ok([Act::Control(control)]) => control,
+            other => panic!("not one control: {other:?}"),
+        };
+        let Action::NewSession {
+            chat: sent_chat, ..
+        } = &plain.action
+        else {
+            panic!("not a new session")
+        };
+        assert_eq!(sent_chat.folder, before, "chose: {chose}");
+        assert!(
+            talk.requested(&plain.request, Ok(()), EFFECT_LIMIT_SECS)
+                .is_empty()
+        );
+
+        let mut late = emitted(&chat.0, session_event("s-late", "th-late", State::Running));
+        late.settles = vec![moving.request.clone()];
+        let _ = the_item(&mut talk, |t| t.emitted(late));
+        let mut fresh = emitted(&chat.0, session_event("s-new", "th-new", State::Running));
+        fresh.settles = vec![plain.request.clone()];
+        let (_, _, item) = the_item(&mut talk, |t| t.emitted(fresh));
+        let runs_in = before.clone().unwrap_or_else(|| place.work.clone());
+        assert_eq!(
+            folder_shown(&item).and_then(|s| s.value),
+            Some(runs_in.display().to_string()),
+            "chose: {chose}"
+        );
+        assert_eq!(talk.chosen_folder(&chat), before, "chose: {chose}");
+        let prompt = the_prompt(talk.heard(heard(direct(), "e9", OWNER, "where now?")));
+        assert_eq!(prompt.chat.folder, before, "chose: {chose}");
+    }
 }
 
 // A saved folder is checked again when the core starts: one the owner no longer allows is the
