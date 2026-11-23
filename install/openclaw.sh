@@ -23,6 +23,9 @@ OUR_PACKAGE=marmot-agent-openclaw
 # chat, whose session keys hold ":marmot:", and no others. Without forwarding, an approval waits unseen
 # (docs/reference/openclaw-messages.md).
 OUR_APPROVALS='{"enabled":true,"mode":"session","sessionFilter":[":marmot:"]}'
+# The settings our plugin's channel takes (packages/openclaw/openclaw.plugin.json); OpenClaw refuses any
+# other in channels.marmot while our plugin is in.
+OUR_CHANNEL_KEYS="enabled home"
 
 harness_check() {
     # What harness_connect reads, also when a dry run goes on without OpenClaw.
@@ -42,6 +45,7 @@ harness_check() {
         return 0
     fi
     say "found OpenClaw $version at $OPENCLAW"
+    finish_half_done_move
     openclaw_files_from
     # One OpenClaw serves one agent: its marmot channel names one agent's home.
     local home
@@ -69,6 +73,50 @@ harness_check() {
                 "--replace-plugin to put ours in its place; a copy of the old one is kept in the agent's folder."
         fi
     fi
+}
+
+# A move stopped part way, after our plugin went in and before the old plugin's settings came out of its
+# channel, leaves an OpenClaw that refuses to read or change any of its settings, or to start. With the
+# old plugin in, OpenClaw takes them, and harness_connect takes them out with OpenClaw's own command; here
+# they come out of the settings file itself, after a copy of it is kept. Only those OpenClaw names in its
+# refusal, and only from a file that is plain JSON.
+finish_half_done_move() {
+    local config leftovers refusal
+    config=$("$OPENCLAW" config file 2>/dev/null) || return 0
+    [ -f "$config" ] || return 0
+    leftovers=$(channel_leftovers "$config")
+    [ -n "$leftovers" ] || return 0
+    if refusal=$("$OPENCLAW" config get channels.marmot 2>&1); then return 0; fi
+    case $refusal in *channels.marmot*) ;; *) return 0 ;; esac
+    if [ "$DRY_RUN" -eq 1 ]; then
+        say "would take $leftovers out of channels.marmot in $config, which OpenClaw refuses with our plugin in"
+        return 0
+    fi
+    backup_file "$config"
+    # shellcheck disable=SC2016 # read by node
+    "$NODE" -e '
+        const fs = require("fs"), [file, ours] = process.argv.slice(1);
+        const c = JSON.parse(fs.readFileSync(file, "utf8")), channel = c.channels.marmot;
+        for (const k of Object.keys(channel)) if (!ours.split(" ").includes(k)) delete channel[k];
+        const next = `${file}.marmot-agent`;
+        fs.writeFileSync(next, JSON.stringify(c, null, 2) + "\n", { mode: fs.statSync(file).mode & 0o777 });
+        fs.renameSync(next, file);' "$config" "$OUR_CHANNEL_KEYS" ||
+        die "could not take $leftovers out of channels.marmot in $config: take them out yourself, then run this again"
+    say "took $leftovers out of channels.marmot in $config: a move stopped part way left them, and OpenClaw refuses them with our plugin in"
+}
+
+# The settings in the marmot channel of OpenClaw's settings file that our plugin does not take, sorted
+# and joined by commas; nothing if there are none, or the file is not plain JSON.
+channel_leftovers() {
+    # shellcheck disable=SC2016 # read by node
+    "$NODE" -e '
+        try {
+          const c = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))?.channels?.marmot;
+          if (c && typeof c === "object" && !Array.isArray(c)) {
+            const ours = process.argv[2].split(" ");
+            process.stdout.write(Object.keys(c).filter((k) => !ours.includes(k)).sort().join(", "));
+          }
+        } catch {}' "$1" "$OUR_CHANNEL_KEYS" 2>/dev/null || true
 }
 
 # A value of OpenClaw's settings, as JSON with --json; nothing if it is not set.
@@ -177,19 +225,20 @@ harness_settings() {
 
 # Adds the plugin to the person's OpenClaw and points its channel at this agent's home.
 harness_connect() {
-    local config channel approvals enabled
+    local config channel approvals enabled config_kept plugin_kept
     if [ "$OPENCLAW_FOUND" -eq 0 ]; then
         say "would add the Marmot plugin to your OpenClaw, once it is installed"
         return 0
     fi
     config=$("$OPENCLAW" config file 2>/dev/null) || config=""
+    KEPT=""
     [ -z "$config" ] || backup_file "$config"
+    config_kept=$KEPT
+    KEPT=""
     [ -z "$OLD_PLUGIN" ] || backup_file "$OLD_PLUGIN"
-    # Installing a plugin enables it too.
-    say "adding the Marmot plugin to your OpenClaw"
-    act "$OPENCLAW" plugins install --force --accept-capabilities "$MA_LIB/packages/openclaw/marmot-agent-openclaw.tgz"
+    plugin_kept=$KEPT
     channel=$("$NODE" -e 'process.stdout.write(JSON.stringify({ enabled: true, home: process.argv[1] }))' "$MA_HOME")
-    act "$OPENCLAW" config set channels.marmot "$channel" --strict-json
+    if ! put_plugin_in "$channel"; then put_back "$config" "$config_kept" "$plugin_kept"; fi
     approvals=$(oc_get approvals.exec --json)
     # On is true or "auto"; only one that is off or not set is switched on.
     enabled=$(printf '%s' "$approvals" | json_field enabled)
@@ -207,6 +256,40 @@ harness_connect() {
         printf '%s\n' "$approvals" | put "$MA_AGENT_DIR/openclaw-approvals" 600
     fi
     act "$OPENCLAW" config set approvals.exec "$OUR_APPROVALS" --strict-json
+}
+
+# Takes the old plugin's channel out, puts our plugin in, and points its channel at this agent's home,
+# given as JSON. Fails at the first of these that fails.
+put_plugin_in() {
+    # The old plugin's channel has settings ours does not take (its socket, account and who may write).
+    # OpenClaw checks the whole of its settings against the installed plugin's schema before it reads or
+    # changes any, so once ours is in, it would refuse to do anything: take them out first, while the old
+    # plugin still accepts what is left. The copy kept before has them.
+    if [ -n "$OLD_PLUGIN" ] && [ -n "$(oc_get channels.marmot)" ]; then
+        act "$OPENCLAW" config unset channels.marmot || return 1
+    fi
+    # Installing a plugin enables it too.
+    say "adding the Marmot plugin to your OpenClaw"
+    act "$OPENCLAW" plugins install --force --accept-capabilities "$MA_LIB/packages/openclaw/marmot-agent-openclaw.tgz" ||
+        return 1
+    act "$OPENCLAW" config set channels.marmot "$1" --strict-json
+}
+
+# After put_plugin_in failed: OpenClaw's settings file, and the old plugin's folder if one was replaced,
+# put back from the copies kept before, so OpenClaw is as it was and the old connector works again once
+# started. Stops the install either way, saying what to do.
+put_back() {
+    local config=$1 config_kept=$2 plugin_kept=$3 what="your OpenClaw's settings" ok=1
+    [ -z "$plugin_kept" ] || what="$what and its old plugin"
+    if [ -n "$config_kept" ]; then cp "$config_kept" "$config" || ok=0; fi
+    if [ -n "$plugin_kept" ]; then { rm -rf "$OLD_PLUGIN" && cp -R "$plugin_kept" "$OLD_PLUGIN"; } || ok=0; fi
+    local copies="the copies are $config_kept${plugin_kept:+ and $plugin_kept}"
+    if [ "$ok" -eq 1 ]; then
+        die "putting our plugin into your OpenClaw failed (above), so this put $what back as they were;" \
+            "$copies. Fix what failed and run this again, or go back to today's connector (docs/move.md)"
+    fi
+    die "putting our plugin into your OpenClaw failed (above), and so did putting $what back: copy" \
+        "$config_kept to $config${plugin_kept:+ and $plugin_kept to $OLD_PLUGIN} yourself (docs/move.md)"
 }
 
 # A top-level field of a JSON object on standard input, as JSON; nothing if it cannot be read.

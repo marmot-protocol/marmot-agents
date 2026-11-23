@@ -167,7 +167,9 @@ Every name above can be changed when installing (`MARMOT_HOME`, `MARMOT_AGENT_LA
   (`resolve_relays` in `crates/agent-connector/src/bootstrap.rs`). The import refuses such an install, since
   the core needs relays.
 - **Files `wn-agent` may send** come only from its `--media-allowed-root` folders, which may be repeated. With
-  none, it sends no file. The installers set none.
+  none, it sends no file. The terminal harnesses' installers set none. At MDK commit `7f7dcc6` (read on
+  2026-11-22), the Hermes and OpenClaw installers set one, `dev/outbound-media` in the home
+  (`MARMOT_OUTBOUND_MEDIA_DIR`), which the import leaves out, being inside the home.
 - **The invite allow-list** is `dev/agent-allowlist/<account id>.json` in the home: `account_id_hex`,
   `invite_policy` (`deny`, `allowlist`, `any_authenticated_direct` or `any_authenticated`, `allowlist` by
   default) and `welcomer_account_ids_hex`, which must be there. A damaged record, or one naming another account,
