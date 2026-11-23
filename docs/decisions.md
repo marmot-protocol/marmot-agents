@@ -111,12 +111,22 @@ rule in the MDK connectors, "never expose reasoning or tool output", does not ap
 
 **Why.** The goal is to be true to what the agent is doing and give people the full picture.
 
+Narrowed for the pilot by
+[D-136](#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group):
+everything is still passed through, but outside the owner's two-person chat with the agent only to the groups the
+owner lists.
+
 ## D-009 Groups are first-class, and every member sees agent activity
 
 **Decision.** An agent in a group with several people is a first-class case, not an afterthought. Everyone in the
 group sees the agent's activity and its details.
 
 **Why.** People want to share an agent, for example one agent at home that answers a whole household.
+
+Narrowed for the pilot by
+[D-136](#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group):
+every member of a group sees the agent's words, its turns, what it asks and its errors; its full activity only
+when the owner lists the group.
 
 ## D-010 The owner sets who may prompt and who may approve
 
@@ -2673,5 +2683,61 @@ a list from systemd and show it to the import. Failing closed keeps the agent sa
 value keeps the person from losing access they meant to give. Matching OpenClaw's accounts only on literal
 settings, rather than reproducing how OpenClaw and the plugin fill paths in, keeps the import from widening
 rights where it would have reproduced them wrong.
+
+Decided 2026-11-23. The project owner decided.
+
+## D-136 For the pilot, the agent's full activity goes only to the owner's two-person chat, unless the owner lists the group
+
+**Decision.** For the pilot, the agent's full activity, everything beyond its words, goes only to the owner's
+two-person chat with the agent. Every other chat, a group or someone else's two-person chat with the agent, is sent
+what the people in it need to follow the agent and to answer it:
+
+| Item | Sent to every chat? | Why |
+| --- | --- | --- |
+| `message`, the agent's own | Yes | Its words to the people there ([D-022](#d-022-the-agents-words-are-ordinary-chat-messages)) |
+| `turn` | Yes | Its start and end show the agent working, and how the turn ended |
+| `approval` and `question`, a subagent's too | Yes | Someone in the chat answers them ([D-010](#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)) |
+| `error` | Yes | It says why the agent stopped, or did not do what was asked |
+| `session` | Yes | It says what can be set and done, which the controls people send need ([D-029](#d-029-three-shared-controls-and-the-rest-comes-from-the-harness)) |
+| `reasoning`, `tool`, `plan`, `task` | Only with full activity | How the agent works |
+| `notice` from the harness | Only with full activity | About that work: compaction, a retry, a warning, a model change, a command's output |
+| `message` of a subagent, with a `parent` | Only with full activity | A subagent's words are part of its work, not the agent's words to the chat ([D-117](#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)) |
+
+The core's own notices, which say why something a person sent was not acted on or was not delivered, go to the
+chat they concern, as do the files the agent sends
+([D-077](#d-077-a-refused-notice-says-why-something-was-not-acted-on),
+[D-097](#d-097-what-stands-in-for-a-send-that-is-dropped),
+[D-090](#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)).
+
+The owner turns full activity on for a group in the settings file, as `full_activity = ["<group id>", ...]`,
+MDK's group id in hex, or for every chat as `full_activity = "all"`. None is listed by default. As with every
+setting, a change takes effect when the core starts again, and there is no turning it on from the chat
+([D-073](#d-073-standing-settings-live-in-a-configuration-file)). The setting's name and shape are provisional.
+
+The core applies the rule, the same for every harness and gateway; a driver or a channel plugin never decides
+what reaches whom ([D-004](#d-004-four-layers-with-drivers-behind-one-trait)). A chat is the owner's two-person
+chat when MDK marks it direct, no name and two accounts, and the owner writes in it; the core notes this each
+time a message or a request arrives from a chat, and keeps it across a restart. An item the chat is not sent is
+still kept by the core, so a Stop there still stops a subagent the chat is not shown
+([D-117](#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)), and what it
+settles is settled by the next version of its turn, or else of the chat's session, so the person who asked sees
+the request settled by what came of it
+([D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)). An item a chat was
+already sent goes on to it until it closes.
+
+This narrows [D-008](#d-008-pass-everything-through) and
+[D-009](#d-009-groups-are-first-class-and-every-member-sees-agent-activity) for the pilot, settles
+[Q-11](open-questions.md#q-11-what-keeps-sensitive-output-from-spreading) for the pilot and narrows
+[Q-12](open-questions.md#q-12-how-many-events-is-too-many). It answers issue 152.
+
+**Why.** Reasoning and tool output can hold secrets from the owner's machine, and everything sent to a group
+stays in every member's history. Only the owner prompts by default, and should see what the agent does before
+anyone else does. The people in a group need the agent's answers and what they can answer, not its working. A
+client that hides tool rows does not withhold them, so the core holds them back before anything reaches a relay.
+
+What the builder chose, and the owner has not yet seen: the exact list above, `session` and `error` among what
+every chat is sent, and the setting's name and shape. Until the core next hears from the owner's two-person chat,
+a third person the owner adds to it is sent what the owner is (inferred from how MDK marks a chat direct; not
+tested against MDK).
 
 Decided 2026-11-23. The project owner decided.

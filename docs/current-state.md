@@ -5,14 +5,15 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-23, at `master` commit `c02ca81`, through [D-135](decisions.md#d-135-the-import-gives-owner-only-rights-where-it-cannot-tell-the-old-sender-policy-and-names-what-to-check). A change that adds or replaces
+Brought up to date on 2026-11-23, at `master` commit `c02ca81`, through [D-136](decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
 
 - Connectors that put AI agent harnesses into Marmot group chats, built here, not in MDK ([D-001](decisions.md#d-001-connectors-live-in-this-repository)).
 - The main user controls their own agents from the phone, with as much control as at the terminal; sharing an
-  agent with a group is first-class, and every member sees its activity ([D-017](decisions.md#d-017-who-this-is-for), [D-011](decisions.md#d-011-full-control-from-the-phone), [D-009](decisions.md#d-009-groups-are-first-class-and-every-member-sees-agent-activity)).
+  agent with a group is first-class, and every member sees what it says and asks; for the pilot, its full activity
+  only when the owner lists the group ([D-017](decisions.md#d-017-who-this-is-for), [D-011](decisions.md#d-011-full-control-from-the-phone), [D-009](decisions.md#d-009-groups-are-first-class-and-every-member-sees-agent-activity), [D-136](decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)).
 - Claude Code, Codex, OpenCode, Pi, Goose, Cursor, Hermes and OpenClaw are all supported, and more will come;
   outside developers may write connectors later ([D-013](decisions.md#d-013-keep-every-current-connector-and-expect-more), [D-080](decisions.md#d-080-cursor-is-driven-through-acp), [D-014](decisions.md#d-014-outside-developers-can-write-connectors-later)).
 - MIT licence, public repository ([D-019](decisions.md#d-019-mit-licence-public-repository)).
@@ -26,7 +27,7 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
 - One agent identity per core process, with one harness, one account home and one settings file. Each harness
   install is its own contact, and each chat has its own session ([D-072](decisions.md#d-072-one-agent-identity-per-core-process-until-the-swap), [D-035](decisions.md#d-035-each-harness-install-is-its-own-identity-with-its-own-sessions)).
 - One settings file, read at start, sets the account home, relays, owner, rights, who may invite it, the
-  harness and the agent's name. There is no administration over the socket or from the chat ([D-073](decisions.md#d-073-standing-settings-live-in-a-configuration-file),
+  harness, the agent's name, and which groups are sent its full activity ([D-136](decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)). There is no administration over the socket or from the chat ([D-073](decisions.md#d-073-standing-settings-live-in-a-configuration-file),
   [D-079](decisions.md#d-079-the-settings-name-the-agent)).
 - The core reads each group from its own mark. A group it has never read starts after what arrived before the
   core did. A group MDK cannot read for a moment is read again, backing off to 10 s ([D-111](decisions.md#d-111-a-group-the-core-has-never-read-starts-after-what-arrived-before-the-core-did), [D-106](decisions.md#d-106-the-core-keeps-reading-again-a-group-mdk-cannot-read-for-a-moment)).
@@ -55,6 +56,11 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   limit on a chat message's tags, and their turn settles the rest ([D-120](decisions.md#d-120-the-choices-made-in-moving-to-kinds-1201-and-1202-as-built)).
 - Each item carries a type from the shared vocabulary, a plain rendering and the harness's native payload, and
   everything the agent does is passed through: reasoning, tools, results, plans ([D-007](decisions.md#d-007-one-shared-event-vocabulary), [D-059](decisions.md#d-059-eight-points-about-what-an-agent-event-carries), [D-008](decisions.md#d-008-pass-everything-through)).
+- For the pilot, that full activity goes only to the owner's two-person chat with the agent, and to the groups
+  the owner lists as `full_activity` in the settings, or every chat with `"all"`. Every other chat is sent the
+  agent's words, its turns, its approvals and questions, a subagent's too, its errors and its session; not its
+  reasoning, tools, plans, tasks, notices or a subagent's words. The core applies it, and settles what an item it
+  holds back settles by the item's turn ([D-136](decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)).
 - Two exceptions to the native payload: a secret question no longer waiting carries none, and the core leaves
   it out of an item over 64 KB, then cuts the output. A driver never cuts anything ([D-056](decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting), [D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb),
   [D-057](decisions.md#d-057-the-core-applies-the-64-kb-limit)).

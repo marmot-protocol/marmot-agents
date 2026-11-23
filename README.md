@@ -53,7 +53,10 @@ published, leave it out: the script then downloads `marmot-agent` from the lates
 or arm64 or macOS on Apple silicon, and checks it against the release's `SHA256SUMS`; until then that download
 fails. The script makes the agent's identity and prints its public key, for you to
 invite it from White Noise, and runs it as a service of your account: systemd `--user` on Linux, launchd on
-macOS. Only you may prompt it or approve what it does until you change its settings. The core runs the coding
+macOS. Only you may prompt it or approve what it does until you change its settings. Its reasoning, tools, plans and
+notices go only to your two-person chat with it: a group is sent its words, its turns, what it asks and its
+errors, unless you list the group's id as `full_activity` in its settings, or set `full_activity = "all"`
+([D-136](docs/decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)). The core runs the coding
 harnesses as you, in the work folder (`--cwd`), which must not hold the agents' folder. Pi asks nobody before a
 tool runs, so it acts with your rights, as when you run it yourself; `pi.sh --container` runs it in a throwaway
 container instead, for a boundary, and `goose.sh --container` does the same for Goose. A container runs on a

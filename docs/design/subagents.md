@@ -198,9 +198,12 @@ harness that is killed reports nothing. Two rules cover it:
 
 ### 5. Volume
 
-Every subagent's events go to every member, as everything an agent does does
+Every subagent's events go to every member of a chat that is sent the agent's full activity, as everything an
+agent does does
 ([D-009](../decisions.md#d-009-groups-are-first-class-and-every-member-sees-agent-activity),
-[Q-12](../open-questions.md#q-12-how-many-events-is-too-many)). An MLS application message is encrypted once
+[Q-12](../open-questions.md#q-12-how-many-events-is-too-many)). For the pilot, any other chat is sent only a
+subagent's approvals and questions
+([D-136](../decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)). An MLS application message is encrypted once
 for the whole group, not once per member, so the cost is each device downloading and storing it, not the agent
 encrypting it many times. No subagent volume has been measured; in one developer's Claude Code use,
 background-task messages were about 7 per turn.

@@ -2,7 +2,8 @@
 
 Status: draft 0. The principles are decided
 ([D-007](../decisions.md#d-007-one-shared-event-vocabulary),
-[D-008](../decisions.md#d-008-pass-everything-through)). Everything else on this page is a proposal: the item
+[D-008](../decisions.md#d-008-pass-everything-through)), and so is which chats are sent which types for the pilot
+([D-136](../decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)). Everything else on this page is a proposal: the item
 types, the fields and the rules. It is no longer a guess, though. A prototype applies it to 123 recorded sessions
 with Codex, Claude Code, Hermes and OpenClaw, and every native message either becomes an agent event or is
 deliberately not sent.
@@ -53,6 +54,12 @@ prototype produces it for all four harnesses. What that showed is in
 
 A command, a file edit and a web search are all the `tool` type, told apart by `kind`. One harness reports them
 as separate things and the other as one generic tool call; a single type with a kind fits both.
+
+**Not every chat is sent every type.** For the pilot, the owner's two-person chat with the agent, and the groups
+the owner lists, are sent everything. Every other chat is sent `turn`, the agent's own `message`, `approval`,
+`question`, `error` and `session`; not `reasoning`, `tool`, `plan`, `task`, a harness's `notice`, nor a
+subagent's `message`. The core decides, not the driver, which produces every event as before
+([D-136](../decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)).
 
 ## An agent event
 
