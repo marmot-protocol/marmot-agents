@@ -25,7 +25,7 @@ use marmot_agent_driver::{
 use marmot_agent_events::body::{
     Action, AnswerVia, Answered, Approval, ApprovalAnswer, Asked, Change, ChangeKind, Choice,
     Effect, Error, Message, Notice, NoticeKind, Offered, Phase, Plan, PlanEntry, PlanEntryState,
-    Question, Reasoning, Session, Setting, StartedBy, Tool, ToolKind, Turn, Usage,
+    Question, Reasoning, Session, Setting, StartedBy, Task, Tool, ToolKind, Turn, Usage,
 };
 use marmot_agent_events::{AgentEvent, Body, Header, Native, State};
 use serde::Deserialize;
@@ -113,14 +113,36 @@ struct Sent {
     owner: (Option<String>, Option<String>),
 }
 
+/// What a translator that follows a subagent's thread shows it as (D-117): in the chat of the turn
+/// that started it, in that chat's session and under the turn the person started, each of its
+/// turns a `task` item, and its words naming the item that gave it its work.
+#[derive(Clone, Default)]
+struct Subagent {
+    /// The chat's session, which every event names.
+    session: Option<String>,
+    /// The item that gave the subagent its work, as the chat shows it: what started it, or what
+    /// gave it more.
+    subject: Option<String>,
+    /// What it is for: its path, or what it was asked.
+    description: Option<String>,
+    /// The turn the person started that its last turn ran under: what it says between turns
+    /// belongs to.
+    root: Option<String>,
+}
+
 /// Turns the messages of one chat's Codex session into agent events.
 ///
 /// A translator follows one Codex thread at a time: the chat's session, which the client picks with
-/// `thread/start` or `thread/resume` and can replace. One connection can carry several threads, and
-/// it is the transport's job to give each translator only its own thread's messages. One that names
-/// another thread makes no event here and is counted ([`Translator::other_threads`]).
+/// `thread/start` or `thread/resume` and can replace, or a subagent's thread
+/// ([`Translator::subagent`]). One connection can carry several threads, and it is the transport's
+/// job to give each translator only its own thread's messages. One that names another thread makes
+/// no event here and is counted ([`Translator::other_threads`]).
 #[derive(Default)]
 pub struct Translator {
+    /// Set when the thread followed is a subagent's.
+    subagent: Option<Subagent>,
+    /// For each of a subagent's turns, the turn the person started (`rootTurnId`).
+    roots: HashMap<String, String>,
     /// Every event made so far. Some made-up item ids use it.
     made: u64,
     /// Events made in each session, for each event's `seq`.
@@ -167,6 +189,76 @@ impl Translator {
     /// A translator for a new connection.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A translator for a subagent's `thread`, shown in the chat whose session is `session`
+    /// (D-117). It never picks a session: the thread is the subagent's from the start.
+    pub fn subagent(thread: &str, session: Option<&str>) -> Self {
+        Self {
+            session: Some(thread.to_string()),
+            subagent: Some(Subagent {
+                session: session.map(String::from),
+                ..Subagent::default()
+            }),
+            ..Self::default()
+        }
+    }
+
+    /// The item that gave a subagent its work, and what that work is, as its next turn shows them.
+    /// A task already running with no subject, because its turn started before the item that
+    /// names it came, takes them now: the events returned show it. Nothing for a translator that
+    /// follows the chat's session.
+    pub fn given_work(&mut self, subject: &str, description: Option<&str>) -> Vec<AgentEvent> {
+        let mut out = Vec::new();
+        let Some(sub) = self.subagent.as_mut() else {
+            return out;
+        };
+        sub.subject = Some(subject.to_string());
+        if let Some(description) = description.filter(|d| !d.is_empty()) {
+            sub.description = Some(description.to_string());
+        }
+        let sub = sub.clone();
+        let item = self.turn_item(self.turn.as_deref());
+        let Some(prev) = self.open_event(&item) else {
+            return out;
+        };
+        let Body::Task(task) = prev.body() else {
+            return out;
+        };
+        if task.subject.is_some() {
+            return out; // it works for what it was given first; the next turn for this
+        }
+        let native = prev.native().cloned();
+        let body = Body::Task(Task {
+            kind: task.kind.clone(),
+            description: task.description.clone().or(sub.description.clone()),
+            subject: sub.subject.map(Into::into),
+        });
+        let text = sub.description.unwrap_or_default();
+        let title = "Subagent working";
+        self.emit(&mut out, &item, body, State::Running, title, &text, native);
+        out
+    }
+
+    /// An item id the translator makes up, numbered by the events it has made. A subagent's
+    /// names its thread too: each translator of a chat counts from 0, and the chat keys every
+    /// item by its id (D-117). The chat's own stay as they were.
+    fn made_up(&self, kind: &str) -> String {
+        match (&self.subagent, &self.session) {
+            (Some(_), Some(thread)) => format!("{kind}:{thread}:{}", self.made),
+            _ => format!("{kind}:{}", self.made),
+        }
+    }
+
+    /// Whether the thread followed is a subagent's.
+    pub fn is_subagent(&self) -> bool {
+        self.subagent.is_some()
+    }
+
+    /// For a subagent's running turn, the turn the person started, which its events name.
+    pub fn root_turn(&self) -> Option<&str> {
+        let turn = self.turn.as_deref()?;
+        Some(self.roots.get(turn).map_or(turn, String::as_str))
     }
 
     /// Methods Codex sent that the driver has no rule for, in the order they came. A newer Codex
@@ -229,15 +321,20 @@ impl Translator {
     pub fn harness_stopped(&mut self) -> Vec<AgentEvent> {
         let mut out = Vec::new();
         self.close_open_items(&mut out, false);
-        let turn_item = format!("turn:{}", show(self.turn.as_deref()));
+        let turn_item = self.turn_item(self.turn.as_deref());
         if let Some(prev) = self.open_event(&turn_item) {
             let body = prev.body().clone();
+            let title = if self.subagent.is_some() {
+                "Subagent stopped"
+            } else {
+                "Interrupted"
+            };
             self.emit(
                 &mut out,
                 &turn_item,
                 body,
                 State::Cancelled,
-                "Interrupted",
+                title,
                 "The harness stopped before the turn finished.",
                 None,
             );
@@ -385,7 +482,7 @@ impl Translator {
             "item/tool/call" => {}
             "turn/plan/updated" => self.plan(method, params, out),
             "thread/compacted" => {
-                let item = format!("compaction:{}", self.made);
+                let item = self.made_up("compaction");
                 let body = Body::Notice(notice(NoticeKind::Compaction));
                 let native = native(method, params);
                 self.emit(
@@ -402,7 +499,7 @@ impl Translator {
                 let Some(p) = self.read::<Rerouted>(method, params) else {
                     return;
                 };
-                let item = format!("model:{}", self.made);
+                let item = self.made_up("model");
                 let text = format!(
                     "{} to {}",
                     show(p.from_model.as_deref()),
@@ -428,7 +525,7 @@ impl Translator {
                 let Some(p) = self.read::<NativeMessage>(method, params) else {
                     return;
                 };
-                let item = format!("warning:{}", self.made);
+                let item = self.made_up("warning");
                 let body = Body::Notice(notice(NoticeKind::Warning));
                 let text = p.message.unwrap_or_default();
                 let native = native(method, params);
@@ -438,7 +535,7 @@ impl Translator {
                 let Some(p) = self.read::<ErrorNote>(method, params) else {
                     return;
                 };
-                let item = format!("error:{}", self.made);
+                let item = self.made_up("error");
                 let text = p.error.and_then(|e| e.message).unwrap_or_default();
                 let body = Body::Error(Error {
                     will_retry: p.will_retry,
@@ -457,7 +554,11 @@ impl Translator {
         let Some(p) = self.read::<TurnNote>(method, params) else {
             return;
         };
-        self.turn = p.turn.and_then(|t| t.id);
+        let turn = p.turn.unwrap_or_default();
+        self.turn = turn.id;
+        if let Some(sub) = self.subagent.clone() {
+            return self.subagent_started(sub, turn.root_turn_id, method, params, out);
+        }
         // The oldest request that starts a turn started this one. With none, Codex started it.
         let started_by = if self.starts.is_empty() {
             StartedBy::Agent
@@ -488,6 +589,9 @@ impl Translator {
         // completed. Anything else open will never report again.
         let completed = turn.status.as_deref() == Some("completed");
         self.close_open_items(out, completed);
+        if self.subagent.is_some() {
+            return self.subagent_ended(turn, method, params, out);
+        }
         let (state, title) = match turn.status.as_deref() {
             Some("interrupted") => (State::Cancelled, "Interrupted"),
             Some("failed") => (State::Failed, "Failed"),
@@ -542,9 +646,11 @@ impl Translator {
                     Some("commentary") => Some(Phase::Commentary),
                     _ => None,
                 };
+                // A subagent's words name the item that gave it its work (D-117).
+                let parent = (self.subagent.as_ref()).and_then(|s| s.subject.clone());
                 let body = Body::Message(Message {
                     phase,
-                    ..Message::default()
+                    parent: parent.map(Into::into),
                 });
                 let text = it.text.clone().unwrap_or_default();
                 self.emit(out, &iid, body, State::Done, "Message", &text, native());
@@ -783,8 +889,135 @@ impl Translator {
                 let title = "Viewing an image";
                 self.emit(out, &iid, Body::Tool(tool), state, title, &text, native());
             }
+            Some("subAgentActivity") => {
+                // Codex's newer runtime: a subagent started, given more work, or ended. What the
+                // subagent does is its own thread's, which the transport shows here (D-117).
+                let (doing, done) = match it.activity.as_deref() {
+                    Some("started") => ("Starting a subagent", "Started a subagent"),
+                    Some("interacted") => {
+                        ("Giving a subagent more work", "Gave a subagent more work")
+                    }
+                    Some("completed") => ("A subagent finished", "A subagent finished"),
+                    Some("interrupted") => ("A subagent was stopped", "A subagent was stopped"),
+                    _ => ("Subagent activity", "Subagent activity"),
+                };
+                let state = running_or(State::Done);
+                let title = if started { doing } else { done };
+                let tool = tool(ToolKind::Subagent, "subAgentActivity");
+                let text = it.agent_path.unwrap_or_default();
+                self.emit(out, &iid, Body::Tool(tool), state, title, &text, native());
+            }
+            Some("collabAgentToolCall") => {
+                // A tool for subagents: on the older runtime the one that starts them, and on
+                // both the one that waits for them.
+                let name = it.tool.clone().unwrap_or_default();
+                let (kind, doing, done) = collab_tool(&name);
+                let state = if started {
+                    State::Running
+                } else {
+                    match it.status.as_deref() {
+                        Some("failed") => State::Failed,
+                        Some("interrupted") => State::Cancelled,
+                        _ => State::Done,
+                    }
+                };
+                let mut tool = tool(kind, &name);
+                if let Some(prompt) = it.prompt.clone().filter(|p| !p.is_empty()) {
+                    tool.input = Some(json!({"prompt": prompt}));
+                }
+                if !started {
+                    let said: Vec<String> = (it.agents_states.iter().flatten())
+                        .filter_map(|(_, s)| s.message.clone())
+                        .collect();
+                    tool.output = (!said.is_empty()).then(|| said.join("\n"));
+                }
+                let title = if started { doing } else { done };
+                let text = it.prompt.unwrap_or_default();
+                self.emit(out, &iid, Body::Tool(tool), state, title, &text, native());
+            }
             _ => self.unknown.push(native_kind.clone()),
         }
+    }
+
+    // -- a subagent's turns
+
+    /// The item a turn is shown as: the turn itself, or, for a subagent, its task (D-117).
+    fn turn_item(&self, turn: Option<&str>) -> String {
+        if self.subagent.is_some() {
+            format!("task:{}", show(turn))
+        } else {
+            format!("turn:{}", show(turn))
+        }
+    }
+
+    /// A subagent's turn starts: it is shown as a task, under the turn the person started.
+    fn subagent_started(
+        &mut self,
+        sub: Subagent,
+        root: Option<String>,
+        method: &str,
+        params: &str,
+        out: &mut Vec<AgentEvent>,
+    ) {
+        if let (Some(turn), Some(root)) = (&self.turn, root) {
+            self.roots.insert(turn.clone(), root.clone());
+            if let Some(sub) = self.subagent.as_mut() {
+                sub.root = Some(root);
+            }
+        }
+        let item = self.turn_item(self.turn.as_deref());
+        let body = Body::Task(Task {
+            kind: "subagent".into(),
+            description: sub.description.clone(),
+            subject: sub.subject.map(Into::into),
+        });
+        let text = sub.description.unwrap_or_default();
+        let native = native(method, params);
+        self.emit(
+            out,
+            &item,
+            body,
+            State::Running,
+            "Subagent working",
+            &text,
+            native,
+        );
+    }
+
+    /// A subagent's turn ends, and its task with it.
+    fn subagent_ended(
+        &mut self,
+        turn: messages::TurnInfo,
+        method: &str,
+        params: &str,
+        out: &mut Vec<AgentEvent>,
+    ) {
+        let (state, title) = match turn.status.as_deref() {
+            Some("interrupted") => (State::Cancelled, "Subagent stopped"),
+            Some("failed") => (State::Failed, "Subagent failed"),
+            _ => (State::Done, "Subagent finished"),
+        };
+        let item = self.turn_item(turn.id.as_deref());
+        let body = match self.open_event(&item) {
+            Some(prev) => prev.body().clone(),
+            None => {
+                let sub = self.subagent.clone().unwrap_or_default();
+                Body::Task(Task {
+                    kind: "subagent".into(),
+                    description: sub.description,
+                    subject: sub.subject.map(Into::into),
+                })
+            }
+        };
+        let text = (turn.error.and_then(|e| e.message))
+            .or_else(|| self.subagent.as_ref().and_then(|s| s.description.clone()))
+            .unwrap_or_default();
+        if let Some(id) = &turn.id {
+            self.usage.remove(&Some(id.clone()));
+        }
+        let native = native(method, params);
+        self.emit(out, &item, body, state, title, &text, native);
+        self.turn = None; // nothing that follows belongs to this turn
     }
 
     // -- approvals and questions
@@ -1179,7 +1412,7 @@ impl Translator {
                 return;
             };
             // Numbered like every item the driver names, not by request id, which Codex reuses.
-            let item = format!("error:{}", self.made);
+            let item = self.made_up("error");
             let body = Body::Error(Error {
                 request: method.clone(),
                 code: e.code,
@@ -1338,6 +1571,9 @@ impl Translator {
             }],
             commands: Vec::new(),
         };
+        if self.subagent.is_some() {
+            return; // a subagent's thread is no session of the chat's (D-117)
+        }
         let sid = show(self.session.as_deref());
         let item = format!("session:{sid}");
         if self.sessions.get(&item) == Some(&session) {
@@ -1521,6 +1757,14 @@ impl Translator {
         native: Option<Native>,
     ) {
         self.made += 1;
+        // A subagent's events are the chat's: in its session, under the turn the person started.
+        let (session, turn) = match &self.subagent {
+            Some(sub) => {
+                let root = turn.map(|t| self.roots.get(&t).cloned().unwrap_or(t));
+                (sub.session.clone(), root.or(sub.root.clone()))
+            }
+            None => (session, turn),
+        };
         let seq = self.seq.entry(session.clone()).or_default();
         *seq += 1;
         let header = Header {
@@ -1707,6 +1951,41 @@ fn change_kind(kind: NativeChange) -> Option<ChangeKind> {
         Some("update") => Some(ChangeKind::Update),
         Some("delete") => Some(ChangeKind::Delete),
         _ => None,
+    }
+}
+
+/// A tool for subagents: whether it hands one work, and how it is titled while running and once
+/// done.
+fn collab_tool(name: &str) -> (ToolKind, &'static str, &'static str) {
+    match name {
+        "spawnAgent" => (
+            ToolKind::Subagent,
+            "Starting a subagent",
+            "Started a subagent",
+        ),
+        "sendInput" | "sendMessage" | "followupTask" => (
+            ToolKind::Subagent,
+            "Giving a subagent more work",
+            "Gave a subagent more work",
+        ),
+        "resumeAgent" => (
+            ToolKind::Subagent,
+            "Resuming a subagent",
+            "Resumed a subagent",
+        ),
+        "wait" => (
+            ToolKind::Other,
+            "Waiting for subagents",
+            "Waited for subagents",
+        ),
+        "closeAgent" => (ToolKind::Other, "Closing a subagent", "Closed a subagent"),
+        "interruptAgent" => (ToolKind::Other, "Stopping a subagent", "Stopped a subagent"),
+        "listAgents" => (ToolKind::Other, "Listing subagents", "Listed subagents"),
+        _ => (
+            ToolKind::Other,
+            "Using a subagent tool",
+            "Used a subagent tool",
+        ),
     }
 }
 

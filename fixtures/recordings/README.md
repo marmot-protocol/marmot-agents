@@ -112,9 +112,11 @@ in the recording machine's Codex history.
 | `subagent_interrupt` | The parent's turn is interrupted while the subagent runs a command |
 | `subagent_continue` | A later turn sends more work to the same subagent |
 
-They are in a folder of their own because neither the prototype nor the Codex driver translates subagents yet:
-how a chat shows them is being designed
-([Q-30](../../docs/open-questions.md#q-30-how-does-a-chat-show-an-agents-subagents)). What they show is in
+They are in a folder of their own, with no `expected/` events, because the prototype follows one thread and
+does not translate them. The Codex driver shows them flat in the chat that started them
+([D-117](../../docs/decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)),
+and the driver conformance suite plays four of them back through it (`replays_subagent_recordings` in
+`crates/marmot-agent-conformance/tests/codex.rs`). What they show is in
 [harness messages](../../docs/reference/harness-messages.md#subagents).
 
 ## Hermes

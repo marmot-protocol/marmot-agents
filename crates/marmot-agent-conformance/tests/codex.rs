@@ -5,8 +5,10 @@ use marmot_agent_conformance::fake::{
     Fake, Pending, Progress, Protocol, Replay, Tap, codex, injector,
 };
 use marmot_agent_conformance::faults::{self, Fault};
-use marmot_agent_conformance::{Subject, scenarios};
+use marmot_agent_conformance::run::{turn_ended, waiting};
+use marmot_agent_conformance::{Run, Subject, scenarios, subagents};
 use marmot_agent_driver::ChatId;
+use marmot_agent_events::State;
 use std::path::Path;
 
 /// The pipe between driver and harness holds this many bytes each way, so a long message is
@@ -89,6 +91,33 @@ macro_rules! conformance {
 
 marmot_agent_conformance::with_scenarios!(conformance!(OnFake::default()));
 
+// Codex starts subagents: each scenario for them, one test each. This is the one list of them: a
+// scenario added to `src/subagents.rs` is added here too.
+macro_rules! subagent_scenarios {
+    ($($name:ident),* $(,)?) => {
+        $(
+            #[tokio::test]
+            async fn $name() {
+                let found = subagents::$name(OnFake::default()).await;
+                found.unwrap_or_else(|v| panic!("{v}"));
+            }
+        )*
+    };
+}
+
+subagent_scenarios!(
+    subagent_in_its_parents_chat,
+    subagent_speaks_first,
+    nested_subagents,
+    subagent_asks_for_approval,
+    stop_stops_every_subagent,
+    stop_after_the_turn_has_ended,
+    stop_stops_nested_subagents,
+    dies_with_subagents_running,
+    new_session_with_subagents_running,
+    restart_with_subagents_running,
+);
+
 #[tokio::test]
 async fn dies_at_every_step() {
     let found = scenarios::dies_at_every_step(OnFake::default).await;
@@ -115,6 +144,59 @@ async fn replays_recordings() {
         found.unwrap_or_else(|v| panic!("{name}: {v}"));
         let left = progress.left();
         assert_eq!(left, 0, "{name}: {left} recorded messages never played");
+    }
+}
+
+// Every recording of subagents that one prompt makes, its approvals allowed as recorded, played
+// back through the driver: every recorded message is played, nothing is routed nowhere but
+// Codex's own bookkeeping, and the chat shows each subagent flat, as the fake's do (D-117).
+#[tokio::test]
+async fn replays_subagent_recordings() {
+    for (name, count) in [
+        ("subagent.jsonl", 1),
+        ("subagent_v1.jsonl", 1),
+        ("subagent_nested.jsonl", 2),
+        ("subagent_approval.jsonl", 1),
+    ] {
+        let progress = std::sync::Arc::new(Progress::default());
+        let subject = OnFake {
+            recording: Some(recording(&format!("subagents/{name}"))),
+            progress: progress.clone(),
+            ..OnFake::default()
+        };
+        let mut run = Run::start(subject).await;
+        let m = run.prompt("c-1", "as recorded").await.unwrap().unwrap();
+        loop {
+            let e = (run.until("L2", "the recorded turn's end", |e| {
+                waiting(e) || (turn_ended(e) && e.prompts.contains(&m))
+            }))
+            .await
+            .unwrap_or_else(|v| panic!("{name}: {v}"));
+            if !waiting(&e) {
+                break;
+            }
+            run.answer(&e, true).await.unwrap().1.unwrap();
+        }
+        run.drain(std::time::Duration::from_millis(100)).await;
+        run.check.all_settled();
+        run.ok().unwrap_or_else(|v| panic!("{name}: {v}"));
+        assert_eq!(progress.left(), 0, "{name}: recorded messages never played");
+        let found = subagents::shown_flat(&run.seen, "c-1", count, State::Done);
+        found.unwrap_or_else(|v| panic!("{name}: {v}"));
+        // What is routed nowhere is what names no thread, after Codex's greeting: the account,
+        // rate limits and remote control. (The recorder's moderation notes name a redacted
+        // thread, and are held as a thread not yet named.)
+        let text = recording(&format!("subagents/{name}"));
+        let threadless = (text.lines())
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .skip_while(|r| r["msg"]["id"] != 1 || r["dir"] != "in")
+            .filter(|r| r["dir"] == "in" && r["msg"].get("method").is_some())
+            .filter(|r| {
+                let p = &r["msg"]["params"];
+                p["threadId"].is_null() && p["thread"]["id"].is_null()
+            })
+            .count() as u64;
+        assert_eq!(run.driver.unrouted(), threadless, "{name}");
     }
 }
 

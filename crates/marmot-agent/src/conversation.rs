@@ -1608,14 +1608,22 @@ impl Conversation {
             .map(|(key, _)| key.clone())
     }
 
-    /// The chat's running turn, for an interrupt that names no item.
+    /// The chat's running turn, for an interrupt that names no item. Once the turn has ended, the
+    /// turn of the newest work still running beside it, such as a subagent's task (D-117).
     fn open_turn(&self, chat: &str) -> Option<TurnId> {
-        self.saved
-            .items
-            .values()
-            .filter(|r| r.chat == chat && r.open() && matches!(r.last.body(), Body::Turn(_)))
-            .max_by_key(|r| r.last.header().seq)
-            .and_then(|r| r.last.header().turn.clone())
+        let newest = |task: bool| {
+            (self.saved.items.values())
+                .filter(|r| r.chat == chat && r.open())
+                .filter(|r| match r.last.body() {
+                    Body::Turn(_) => !task,
+                    Body::Task(_) => task,
+                    _ => false,
+                })
+                .filter(|r| r.last.header().turn.is_some())
+                .max_by_key(|r| r.last.header().seq)
+                .and_then(|r| r.last.header().turn.clone())
+        };
+        newest(false).or_else(|| newest(true))
     }
 
     /// The folder a move the driver took is starting `chat`'s new session in, before the session

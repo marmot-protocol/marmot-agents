@@ -1,5 +1,13 @@
 //! A fake `codex app-server`, grown from the stand-in in the Codex driver's tests: JSON-RPC over
 //! lines, in the shapes `fixtures/recordings/codex` holds. One process serves every thread.
+//!
+//! It starts subagents as `fixtures/recordings/codex/subagents` shows them: each a thread of its
+//! own on the same connection, named by an item of the turn that starts it, with no
+//! `thread/started`, and with every turn naming the turn the person started (`rootTurnId`). On the
+//! older runtime the subagent's turn starts before the item that names it ends, so it speaks
+//! first. Interrupting a turn leaves its subagents running, and its wait for them is never ended.
+//! A word in the prompt asks for one ([`Spawn`]); what the subagent does is the prompt's other
+//! words, as for any turn.
 
 use super::{Heard, Outbox, Protocol, Script, file_for, fresh};
 use serde_json::{Value, json};
@@ -19,10 +27,52 @@ pub type Shared = Arc<Mutex<Store>>;
 
 struct Turn {
     id: String,
+    /// The turn the person started, for a subagent's turn; its own id for one the driver started.
+    root: String,
     text: String,
     steered: Vec<String>,
     /// The command it runs, if any.
     command: Option<String>,
+    /// The item that waits for its subagents, while it does, and the subagents it waits for.
+    wait: Option<String>,
+    children: Vec<String>,
+}
+
+/// What a prompt asks of a subagent, by a word in its text. The subagent's own prompt is the text
+/// without that word, so its other words say what it does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Spawn {
+    /// `#spawn`: one subagent, on Codex's newer runtime (`subAgentActivity`); the turn waits for
+    /// it, then answers.
+    Wait,
+    /// `#spawn1`: the same on the older runtime (`collabAgentToolCall`), where the subagent's turn
+    /// starts before the item that names it is complete.
+    Older,
+    /// `#nest`: a subagent that starts one of its own, and waits for it.
+    Nest,
+    /// `#outlive`: a subagent the turn does not wait for: the turn ends while it works.
+    Outlive,
+}
+
+impl Spawn {
+    /// What `text` asks for, and the subagent's own prompt.
+    fn of(text: &str) -> Option<(Self, String)> {
+        let words = [
+            ("#spawn1", Spawn::Older, ""),
+            ("#spawn", Spawn::Wait, ""),
+            ("#nest", Spawn::Nest, "#spawn"),
+            ("#outlive", Spawn::Outlive, ""),
+        ];
+        let (word, spawn, then) = words.into_iter().find(|(w, ..)| text.contains(w))?;
+        Some((spawn, text.replacen(word, then, 1)))
+    }
+}
+
+/// A subagent's thread: the thread that started it, and its path, as Codex names one.
+struct Sub {
+    parent: String,
+    path: String,
+    older: bool,
 }
 
 enum Asked {
@@ -42,6 +92,10 @@ enum Asked {
 pub struct Codex {
     store: Shared,
     threads: HashMap<String, Option<Turn>>,
+    /// Each subagent's thread.
+    subs: HashMap<String, Sub>,
+    /// Each thread's last turn, running or not: what a subagent's end is reported in.
+    last_turn: HashMap<String, String>,
     asked: HashMap<i64, Asked>,
     /// Requests Codex resolved itself, as at a turn's end, with the thread that asked.
     resolved: HashMap<i64, String>,
@@ -54,14 +108,27 @@ impl Codex {
         Self {
             store,
             threads: HashMap::new(),
+            subs: HashMap::new(),
+            last_turn: HashMap::new(),
             asked: HashMap::new(),
             resolved: HashMap::new(),
             next_request: 0,
         }
     }
 
-    fn turn_mark(thread: &str, turn: &str, status: &str) -> Value {
-        json!({"threadId": thread, "turn": {"id": turn, "items": [], "status": status, "error": null}})
+    fn turn_mark(thread: &str, turn: &str, root: &str, status: &str) -> Value {
+        json!({"threadId": thread, "turn": {"id": turn, "rootTurnId": root, "items": [],
+            "status": status, "error": null}})
+    }
+
+    /// The thread a person's chat has: a subagent's is its parent's, at any depth. A fake reports
+    /// what it heard in the session the chat knows.
+    fn root_of(&self, thread: &str) -> String {
+        let mut thread = thread.to_string();
+        while let Some(sub) = self.subs.get(&thread) {
+            thread = sub.parent.clone();
+        }
+        thread
     }
 
     fn command(thread: &str, turn: &str, item: &str, command: &str, status: &str) -> Value {
@@ -111,9 +178,117 @@ impl Codex {
             self.resolved.insert(id, thread.to_string());
             out.say(json!({"method": "serverRequest/resolved", "params": {"threadId": thread, "requestId": id}}));
         }
+        out.say(json!({"method": "turn/completed",
+            "params": Self::turn_mark(thread, &turn.id, &turn.root, status)}));
+        if self.subs.contains_key(thread) {
+            self.sub_ended(thread, status, out);
+        }
+    }
+
+    /// A subagent's turn has ended. On the newer runtime its parent's thread says so, in the
+    /// parent's last turn, even one that has ended; a parent that waits for it, and for no other,
+    /// goes on and answers.
+    fn sub_ended(&mut self, thread: &str, status: &str, out: &mut Outbox) {
+        let sub = &self.subs[thread];
+        let (parent, path, older) = (sub.parent.clone(), sub.path.clone(), sub.older);
+        let parent_turn = self.last_turn.get(&parent).cloned().unwrap_or_default();
+        if !older {
+            let kind = if status == "completed" {
+                "completed"
+            } else {
+                "interrupted"
+            };
+            let item = json!({"type": "subAgentActivity", "id": fresh("subagent-ended"),
+                "kind": kind, "agentThreadId": thread, "agentPath": path, "model": null,
+                "reasoningEffort": null});
+            for method in ["item/started", "item/completed"] {
+                out.say(json!({"method": method, "params": {"threadId": parent,
+                    "turnId": parent_turn, "item": item}}));
+            }
+        }
+        let Some(Some(turn)) = self.threads.get_mut(&parent) else {
+            return; // its turn has ended: nothing waits
+        };
+        turn.children.retain(|c| c != thread);
+        let Some(wait) = turn.wait.clone().filter(|_| turn.children.is_empty()) else {
+            return;
+        };
+        turn.wait = None;
+        let receivers: Vec<&str> = if older { vec![thread] } else { vec![] };
         out.say(
-            json!({"method": "turn/completed", "params": Self::turn_mark(thread, &turn.id, status)}),
+            json!({"method": "item/completed", "params": {"threadId": parent,
+            "turnId": parent_turn, "item": {"type": "collabAgentToolCall", "id": wait,
+            "tool": "wait", "status": "completed", "senderThreadId": parent,
+            "receiverThreadIds": receivers, "prompt": null}}}),
         );
+        self.finish(&parent, "ok", "completed", out);
+    }
+
+    /// The turn starts a subagent, which works on `prompt`, and waits for it unless it is to
+    /// outlive the turn.
+    fn spawn(&mut self, thread: &str, turn: &str, spawn: Spawn, prompt: &str, out: &mut Outbox) {
+        let child = fresh("thread");
+        let item = fresh("call");
+        let parent_path = self
+            .subs
+            .get(thread)
+            .map_or("/root".into(), |s| s.path.clone());
+        let path = format!("{parent_path}/{}", fresh("agent"));
+        let root = (self.threads.get(thread).and_then(Option::as_ref))
+            .map_or(turn.to_string(), |t| t.root.clone());
+        let older = spawn == Spawn::Older;
+        let sub = Sub {
+            parent: thread.to_string(),
+            path: path.clone(),
+            older,
+        };
+        self.subs.insert(child.clone(), sub);
+        self.threads.insert(child.clone(), None);
+        let child_turn = fresh("turn");
+        let started = json!({"method": "turn/started",
+            "params": Self::turn_mark(&child, &child_turn, &root, "inProgress")});
+        let active = json!({"method": "thread/status/changed",
+            "params": {"threadId": child, "status": {"type": "active", "activeFlags": []}}});
+        let note = |method: &str, item: Value| json!({"method": method, "params": {"threadId": thread, "turnId": turn, "item": item}});
+        if older {
+            let call = |status: &str, receivers: Vec<&str>| {
+                json!({"type": "collabAgentToolCall", "id": item, "tool": "spawnAgent",
+                    "status": status, "senderThreadId": thread, "receiverThreadIds": receivers,
+                    "prompt": prompt, "model": null, "reasoningEffort": null})
+            };
+            out.say(note("item/started", call("inProgress", vec![])));
+            // The subagent speaks before the item that names it is complete.
+            out.say(active);
+            out.say(started);
+            out.say(note(
+                "item/completed",
+                call("completed", vec![child.as_str()]),
+            ));
+        } else {
+            let activity = json!({"type": "subAgentActivity", "id": item, "kind": "started",
+                "agentThreadId": child, "agentPath": path, "model": "m1", "reasoningEffort": "low"});
+            out.say(note("item/started", activity.clone()));
+            out.say(active);
+            out.say(note("item/completed", activity));
+            out.say(started);
+        }
+        if spawn == Spawn::Outlive {
+            self.finish(thread, "ok", "completed", out);
+        } else {
+            let wait = fresh("call");
+            let receivers: Vec<&str> = if older { vec![child.as_str()] } else { vec![] };
+            out.say(note(
+                "item/started",
+                json!({"type": "collabAgentToolCall", "id": wait,
+                "tool": "wait", "status": "inProgress", "senderThreadId": thread,
+                "receiverThreadIds": receivers, "prompt": null}),
+            ));
+            if let Some(Some(t)) = self.threads.get_mut(thread) {
+                t.wait = Some(wait);
+                t.children.push(child.clone());
+            }
+        }
+        self.run_turn(&child, &child_turn, &root, prompt, out);
     }
 
     fn ask(&mut self, method: &str, params: Value, asked: Asked, out: &mut Outbox) {
@@ -125,22 +300,37 @@ impl Codex {
 
     fn start_turn(&mut self, id: &Value, thread: &str, text: &str, out: &mut Outbox) {
         let turn = fresh("turn");
-        out.reply(json!({"id": id, "result": {"turn": {"id": turn, "items": [], "status": "inProgress", "error": null}}}));
-        out.say(
-            json!({"method": "turn/started", "params": Self::turn_mark(thread, &turn, "inProgress")}),
+        out.reply(
+            json!({"id": id, "result": {"turn": {"id": turn, "rootTurnId": turn,
+            "items": [], "status": "inProgress", "error": null}}}),
         );
+        out.say(json!({"method": "turn/started",
+            "params": Self::turn_mark(thread, &turn, &turn, "inProgress")}));
+        self.run_turn(thread, &turn, &turn, text, out);
+    }
+
+    /// A turn Codex has said started does what its text asks.
+    fn run_turn(&mut self, thread: &str, turn: &str, root: &str, text: &str, out: &mut Outbox) {
         let mut running = Turn {
-            id: turn.clone(),
+            id: turn.to_string(),
+            root: root.to_string(),
             text: text.to_string(),
             steered: Vec::new(),
             command: None,
+            wait: None,
+            children: Vec::new(),
         };
+        self.last_turn.insert(thread.to_string(), turn.to_string());
+        if let Some((spawn, prompt)) = Spawn::of(text) {
+            self.threads.insert(thread.to_string(), Some(running));
+            return self.spawn(thread, turn, spawn, &prompt, out);
+        }
         let script = Script::of(text);
         if matches!(script, Script::Ask | Script::Sleep | Script::Die) {
             let item = fresh("exec");
             out.say(Self::command(
                 thread,
-                &turn,
+                turn,
                 &item,
                 &format!("echo {text}"),
                 "inProgress",
@@ -149,8 +339,14 @@ impl Codex {
         }
         let command = running.command.clone();
         self.threads.insert(thread.to_string(), Some(running));
+        // A subagent's words say they are its own.
+        let words = if self.subs.contains_key(thread) {
+            "sub"
+        } else {
+            "ok"
+        };
         match script {
-            Script::Reply => self.finish(thread, "ok", "completed", out),
+            Script::Reply => self.finish(thread, words, "completed", out),
             Script::File if !self.store.lock().unwrap().send_file.contains(thread) => {
                 self.finish(thread, "no send_file tool", "completed", out);
             }
@@ -215,7 +411,7 @@ impl Protocol for Codex {
                 Asked::Approval { thread } => {
                     let allow = result["decision"] == "accept";
                     heard.push(Heard::Answer {
-                        session: thread.clone(),
+                        session: self.root_of(&thread),
                         allow: Some(allow),
                         text: None,
                     });
@@ -228,7 +424,7 @@ impl Protocol for Codex {
                         .as_str()
                         .map(String::from);
                     heard.push(Heard::Answer {
-                        session: thread.clone(),
+                        session: self.root_of(&thread),
                         allow: None,
                         text: text.clone(),
                     });
@@ -240,7 +436,7 @@ impl Protocol for Codex {
                         .as_str()
                         .unwrap_or_default();
                     heard.push(Heard::FileResult {
-                        session: thread.clone(),
+                        session: self.root_of(&thread),
                         sent: result["success"] == true,
                         text: text.to_string(),
                     });
@@ -336,7 +532,7 @@ impl Protocol for Codex {
                 }
                 out.reply(json!({"id": id, "result": {}}));
                 heard.push(Heard::Control {
-                    session: Some(thread.clone()),
+                    session: Some(self.root_of(&thread)),
                     what: "interrupt".into(),
                 });
                 self.finish(&thread, "stopped", "interrupted", out);

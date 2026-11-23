@@ -14,7 +14,7 @@ use marmot_agent_driver::{
     Prompt, Reason, Refusal, Sessions,
 };
 use marmot_agent_events::body::{
-    self, Approval, Body, Choice, Effect, Message, NoticeKind, Setting, StartedBy, Turn,
+    self, Approval, Body, Choice, Effect, Message, NoticeKind, Setting, StartedBy, Task, Turn,
 };
 use marmot_agent_events::{AgentEvent, Header, SessionId, State};
 use std::path::PathBuf;
@@ -3263,5 +3263,78 @@ fn a_send_given_up_unknown_says_it_may_not_have_gone() {
             .header()
             .text
             .contains("may not have been delivered")
+    );
+}
+
+// ------------------------------------------------------------------------------- subagents
+
+fn subagent_task() -> Body {
+    Body::Task(Task {
+        kind: "subagent".into(),
+        description: Some("/root/a".into()),
+        subject: Some("a1".into()),
+    })
+}
+
+// A subagent's work, shown in its parent's chat, is the chat's like any item: a core that stopped
+// while it ran closes it when it starts again (D-070, D-117).
+#[test]
+fn a_restart_closes_a_subagents_open_items() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(&mut talk, &chat, event("t1", State::Done, turn()), "e-t1");
+    sent(
+        &mut talk,
+        &chat,
+        event("task:st1", State::Running, subagent_task()),
+        "e-task",
+    );
+    let saved = talk.saved().clone();
+
+    let mut restarted = conversation(saved);
+    let acts = restarted.recover();
+    let items = items_of(&restarted, acts);
+    assert!(
+        items
+            .iter()
+            .any(|i| i.first == Some(EventKey::from("e-task"))
+                && i.event.header().state == State::Cancelled),
+        "the subagent's task closed"
+    );
+}
+
+// After the agent's turn has ended, a Stop that names no item stops what still works beside it,
+// such as a subagent: the turn its task names (D-029, D-117). With nothing working, nothing is
+// sent to the driver.
+#[test]
+fn a_stop_after_the_turn_stops_what_still_works() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(&mut talk, &chat, event("t1", State::Done, turn()), "e-t1");
+    sent(
+        &mut talk,
+        &chat,
+        event("task:st1", State::Running, subagent_task()),
+        "e-task",
+    );
+    let stop = request(direct(), "r1", OWNER, None, Asked::Interrupt);
+    let acts = talk.asked(stop);
+    assert!(
+        matches!(acts.as_slice(), [Act::Control(c)]
+            if matches!(&c.action, Action::Interrupt { turn } if turn.as_str() == "t1")),
+        "{acts:?}"
+    );
+
+    sent(
+        &mut talk,
+        &chat,
+        event("task:st1", State::Cancelled, subagent_task()),
+        "e-task2",
+    );
+    let stop = request(direct(), "r2", OWNER, None, Asked::Interrupt);
+    let acts = talk.asked(stop);
+    assert!(
+        !acts.iter().any(|a| matches!(a, Act::Control(_))),
+        "{acts:?}"
     );
 }

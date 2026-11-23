@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-23, at `master` commit `d0b1b10`, through [D-128](decisions.md#d-128-a-folder-move-whose-session-shows-late-still-moves-the-chat) (D-117 and D-121 to D-127 are in open pull requests). A change that adds or replaces
+Brought up to date on 2026-11-23, at `master` commit `c5c41be`, through [D-128](decisions.md#d-128-a-folder-move-whose-session-shows-late-still-moves-the-chat) (D-121 to D-127 are in open pull requests). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -91,6 +91,11 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
 - Codex: native, in Rust, on `codex app-server`, with types of its own. One translator per thread; a working
   folder and a narrow sandbox by default; sessions kept so they resume ([D-055](decisions.md#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own), [D-060](decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes), [D-061](decisions.md#d-061-a-codex-session-starts-in-a-working-folder-with-a-safe-sandbox-unless-configured), [D-062](decisions.md#d-062-what-codex-reads-for-a-chat-message),
   [D-063](decisions.md#d-063-codex-keeps-a-session-so-it-can-be-resumed), [D-064](decisions.md#d-064-the-codex-driver-declines-an-mcp-servers-form-until-forms-are-designed)).
+- Codex's subagents are on, and shown flat in the chat that started them: a `subagent` tool item, a `subagent`
+  task for each of its turns, its words naming that tool item as `parent`. Stop stops the agent and every
+  subagent under its turn, settled once when the last has ended, or as failed if one Codex refused to stop runs
+  on; a Stop naming no item, after the turn, stops what still works beside it; a new session stops the old one's
+  subagents ([D-117](decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)).
 - Pi: native, in Rust, on `pi --mode rpc`, with types of its own, running the person's own `pi` by default
   ([D-086](decisions.md#d-086-the-pi-driver-reads-pis-rpc-messages-with-types-of-its-own), [D-102](decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has), [D-092](decisions.md#d-092-the-choices-made-while-building-m3-are-accepted)).
 - OpenCode, Goose and Cursor: the ACP driver in the core ([D-005](decisions.md#d-005-which-driver-each-harness-gets), [D-080](decisions.md#d-080-cursor-is-driven-through-acp), [D-092](decisions.md#d-092-the-choices-made-while-building-m3-are-accepted)).

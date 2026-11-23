@@ -3,7 +3,9 @@
 Status: a proposal, for [Q-30](../open-questions.md#q-30-how-does-a-chat-show-an-agents-subagents). Nothing on
 this page is decided. The direction was agreed with the project owner on 2026-11-20; the points to decide are
 listed [at the end](#to-decide). Some would be exceptions to, or new entries beside, decisions already made,
-and say so.
+and say so. Meanwhile Codex's subagents are shown flat in the chat that started them
+([D-117](../decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)),
+and the Codex transport of point 8 is built for that.
 
 An agent can start subagents: agents of its own that work on part of a task, in parallel, and can start
 subagents in turn. Codex and Claude Code both do. This page proposes how a chat shows them: each subagent as a

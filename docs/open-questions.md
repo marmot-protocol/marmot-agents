@@ -291,6 +291,10 @@ The current thinking, agreed in direction with the project owner on 2026-11-20, 
 for each subagent: [subagents as threads](design/subagents.md), with the points to decide. What Codex sends for
 subagents is in [harness messages](reference/harness-messages.md#subagents).
 
+Until then, Codex's subagents are on and shown flat in the chat that started them, as Claude Code's are
+([D-117](decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)). The
+Codex transport that threads need, point 8 of the proposal, is built with it.
+
 ### Q-29 What does the Codex driver do with a thread no chat asked for?
 
 A Codex translator follows the thread its chat picked, and the transport routes each thread's messages to its
@@ -298,11 +302,13 @@ translator ([D-060](decisions.md#d-060-a-codex-translator-follows-one-thread-and
 starts a thread by itself for each subagent. The recordings of 2026-11-20 show it: the subagent's messages name
 its own thread and no `thread/started` announces it. An item in the parent's turn names the thread, and each of
 its turns names the top-level turn in `rootTurnId`
-([harness messages](reference/harness-messages.md#subagents)). D-060 does not say where the transport sends
-them. Given to the parent's translator, they would be dropped and counted; and an approval from a subagent
-must be answered by someone, or the subagent waits. The project owner wants them shown in the
-parent's chat; how is [Q-30](#q-30-how-does-a-chat-show-an-agents-subagents). Whether any other thread can
-arrive unasked is not known.
+([harness messages](reference/harness-messages.md#subagents)). A subagent's thread is now settled: it gets a translator of its own in the
+chat of the thread that started it, and is shown there flat
+([D-117](decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)). What
+is left open is any other thread no chat asked for. Whether one can arrive is not known; Codex's schema names
+threads it starts for a review, a compaction and memory consolidation. Today the transport holds a message for a
+thread it has never seen, in case something names that thread next, and lets the oldest go, counted, once more
+than 512 are held.
 
 ## The repository and the move from MDK
 

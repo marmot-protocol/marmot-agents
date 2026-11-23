@@ -1992,6 +1992,44 @@ is the same protection, and costs nothing more.
 
 Decided 2026-11-23. The project owner decided.
 
+## D-117 Codex's subagents are switched on, and shown flat in the chat that started them
+
+**Decision.** The Codex driver no longer switches Codex's subagents off. Until a subagent has a thread of its own
+([Q-30](open-questions.md#q-30-how-does-a-chat-show-an-agents-subagents)), its work is shown flat in the chat of
+the turn that started it, as Claude Code's subagents already are. Nothing is added to the event vocabulary:
+
+- The item that starts a subagent, or gives it more work, is a `tool` item of kind `subagent`. Each turn of the
+  subagent's is a `task` item of kind `subagent`, whose `subject` is that tool item. Its other items (commands,
+  edits, approvals, questions, plans) are shown as the agent's own are, and its words are messages whose
+  `parent` is the tool item. All of them are in the chat's session, under the turn the person started.
+- An approval or a question from a subagent waits in the chat, and is answered there as the agent's own are.
+- Stop in the chat stops the agent's turn and every subagent under it, including one still working after the
+  agent's turn has ended, and is settled once, when the last of them has ended
+  ([D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it),
+  [D-029](#d-029-three-shared-controls-and-the-rest-comes-from-the-harness)). A subagent whose turn starts while
+  the Stop waits is stopped too. If Codex refuses to stop one that then runs on, the Stop is settled as failed, by
+  that refusal. A Stop that names no item, once the agent's turn has ended, stops what is still working beside it:
+  the turn its newest open `task` names.
+- When the chat's session is replaced, its subagents still working are stopped, since Codex does not stop them
+  with it. Every open subagent item closes as cancelled when Codex stops, when the chat's session ends, and when
+  the core restarts ([D-070](#d-070-a-restart-closes-the-turn-as-interrupted)).
+
+How the transport does it is internal, and is point 8 of [subagents as threads](design/subagents.md#to-decide):
+each subagent's thread has a translator of its own, in the chat of the thread that started it; a message for a
+thread not known yet is held until the item that names that thread arrives, since a subagent can speak first;
+and the transport interrupts the subagents itself, since Codex does not, following `rootTurnId` and the links
+Codex gives between threads (`agentThreadId`, `receiverThreadIds`, and `parentThreadId` from Codex 0.171.0).
+This stands beside [D-060](#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes): a translator
+still follows one thread. It answers [Q-29](open-questions.md#q-29-what-does-the-codex-driver-do-with-a-thread-no-chat-asked-for)
+for a subagent's thread.
+
+**Why.** Codex's subagents were switched off only because nothing showed them, and an approval from one would
+have had nowhere to go. Shown flat, they need nothing new from the apps, the event model or MDK, and the
+transport this needs is the one threads will build on. Codex does not stop a subagent when its parent is
+interrupted (recorded), so Stop would otherwise leave work running that the chat can no longer stop.
+
+Decided 2026-11-23. The project owner decided.
+
 ## D-118 The channel-plugin contract is accepted as written
 
 **Decision.** The contract in [channel plugins](design/drivers.md#channel-plugins), drawn on 2026-11-23 from
@@ -2145,4 +2183,3 @@ folder rules exist to prevent. Only a running driver can still show a late sessi
 restart.
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
-
