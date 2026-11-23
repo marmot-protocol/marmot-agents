@@ -3,7 +3,8 @@
 //! what arrived after is read, once, in storage order (L3, S10), whatever order MDK stored and
 //! announced them in. A group with a mark is read from it, whatever MDK announces. MDK is a
 //! scripted stand-in here, so the order things are stored in, when they arrived and when they are
-//! announced are the test's to choose; the real core runs on it.
+//! announced are the test's to choose; the real core runs on it. Publishing the agent's name, which
+//! goes on beside all this, holds none of it up.
 
 use marmot_agent::config::Config;
 use marmot_agent::files::Outgoing;
@@ -41,11 +42,27 @@ struct Storage {
     first_ok: usize,
 }
 
+/// How a try at publishing the agent's name goes.
+#[derive(Clone, Copy)]
+enum Naming {
+    Fails,
+    Hangs,
+}
+
+/// The tries at publishing the agent's name: how the next go, the rest working, and when each
+/// was made.
+#[derive(Default)]
+struct Names {
+    next: std::collections::VecDeque<Naming>,
+    tries: Vec<tokio::time::Instant>,
+}
+
 /// A stand-in MDK with one accepted group, whose storage the test fills.
 #[derive(Clone)]
 struct Mdk {
     agent: PubKey,
     storage: Arc<Mutex<Storage>>,
+    names: Arc<Mutex<Names>>,
 }
 
 impl Mdk {
@@ -53,7 +70,19 @@ impl Mdk {
         Self {
             agent: PubKey(format!("a9{:062x}", 1)),
             storage: Arc::default(),
+            names: Arc::default(),
         }
+    }
+
+    /// The next tries at publishing the agent's name go as `tries` say; the rest work.
+    fn naming(&self, tries: &[Naming]) {
+        self.names.lock().unwrap().next.extend(tries);
+    }
+
+    /// When each try at publishing the agent's name was made, from `start`.
+    fn name_tries(&self, start: tokio::time::Instant) -> Vec<Duration> {
+        let names = self.names.lock().unwrap();
+        names.tries.iter().map(|at| *at - start).collect()
     }
 
     /// Stores a message from the owner, next in storage order, that arrived in second `arrived`,
@@ -117,7 +146,18 @@ impl Side for Mdk {
         }
     }
 
-    async fn publish_name(&self, _name: &str, _relays: &[String]) {}
+    async fn publish_name(&self, _name: &str, _relays: &[String]) -> Result<(), NotNow> {
+        let next = {
+            let mut names = self.names.lock().unwrap();
+            names.tries.push(tokio::time::Instant::now());
+            names.next.pop_front()
+        };
+        match next {
+            None => Ok(()),
+            Some(Naming::Fails) => Err(NotNow),
+            Some(Naming::Hangs) => std::future::pending().await,
+        }
+    }
 
     async fn incoming(&self, message: Message) -> Result<Option<Incoming>, NotNow> {
         Ok(Some(Incoming::Heard(Heard {
@@ -251,8 +291,25 @@ impl Running {
     /// Starts the core on `mdk` with the state in `state`, subscribed in second `since`, with a
     /// harness that takes `slow` to take each prompt.
     fn start_in(mdk: Mdk, state: tempfile::TempDir, since: u64, slow: Option<Duration>) -> Self {
+        Self::start_with(mdk, state, since, slow, "")
+    }
+
+    /// Starts the core on `mdk`, as [`Running::start`] does, with the agent named `name`.
+    fn start_named(mdk: Mdk, name: &str) -> Self {
+        let name = format!("name = \"{name}\"\n");
+        Self::start_with(mdk, tempfile::tempdir().unwrap(), SINCE, None, &name)
+    }
+
+    /// As [`Running::start_in`], with `more` at the top of the settings.
+    fn start_with(
+        mdk: Mdk,
+        state: tempfile::TempDir,
+        since: u64,
+        slow: Option<Duration>,
+        more: &str,
+    ) -> Self {
         let settings = format!(
-            "home = \"/unused\"\nrelays = [\"wss://relay.invalid\"]\nowner = \"{}\"\n[connector]\n",
+            "{more}home = \"/unused\"\nrelays = [\"wss://relay.invalid\"]\nowner = \"{}\"\n[connector]\n",
             owner().as_str()
         );
         let config = Config::parse(&settings).unwrap();
@@ -466,5 +523,35 @@ async fn a_long_catch_up_lets_a_stop_through() {
     prompts.extend(core.prompts());
     let expected: Vec<String> = (0..60).map(|n| n.to_string()).collect();
     assert_eq!(prompts, expected);
+    core.stop().await;
+}
+
+// Review of #139. Publishing the agent's name waits on the relays, which can take long or never
+// answer: it goes on beside the chats, so a prompt is read meanwhile, and a stop ends it.
+#[tokio::test(start_paused = true)]
+async fn a_name_that_takes_long_to_publish_holds_up_no_prompt() {
+    let mdk = Mdk::new();
+    mdk.naming(&[Naming::Hangs]);
+    let core = Running::start_named(mdk.clone(), "Echo");
+    let hello = mdk.store("hello", SINCE + 1);
+    core.announce(hello);
+    core.settle().await;
+    assert_eq!(core.prompts(), ["hello"]);
+    core.stop().await;
+}
+
+// A try that fails is made again 10 s later, then twice as long each time, until one works; then
+// no more are made.
+#[tokio::test(start_paused = true)]
+async fn a_name_that_cannot_be_published_is_tried_again_later_each_time() {
+    let mdk = Mdk::new();
+    mdk.naming(&[Naming::Fails, Naming::Fails, Naming::Fails]);
+    let start = tokio::time::Instant::now();
+    let core = Running::start_named(mdk.clone(), "Echo");
+    tokio::time::sleep(Duration::from_secs(1000)).await;
+    let tries: Vec<u64> = (mdk.name_tries(start).iter())
+        .map(|t| t.as_secs())
+        .collect();
+    assert_eq!(tries, [0, 10, 30, 70]);
     core.stop().await;
 }

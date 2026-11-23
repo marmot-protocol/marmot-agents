@@ -114,6 +114,11 @@ struct Unsaved;
 /// What the core says when it stops because it could not save.
 const UNSAVED: &str = "the state file could not be written, so the core stopped";
 
+/// How long the core waits to try publishing the agent's name again after a try that failed, at
+/// first and at most: twice as long after each.
+const NAME_WAIT: Duration = Duration::from_secs(10);
+const NAME_WAIT_MAX: Duration = Duration::from_secs(600);
+
 /// How many times a file is offered to MDK while MDK says it is busy, about half a minute in all.
 const FILE_BUSY_TRIES: u32 = 10;
 
@@ -413,7 +418,11 @@ impl<D: Driver, M: Side> Core<D, M> {
         mut events: M::Events,
         stop: impl Future<Output = ()>,
     ) -> Result<(), Unsaved> {
-        self.publish_name().await;
+        // The agent's name goes out beside everything else, as a task the core ends when it stops.
+        let _naming = (self.config.name.clone()).map(|name| {
+            let (marmot, relays) = (self.marmot.clone(), self.config.relays.clone());
+            Ending(tokio::spawn(publish_name(marmot, name, relays)))
+        });
         // What a stopped core left queued goes first, then what it left open is closed.
         self.flush_all().await?;
         let recovered = self.conversation.recover();
@@ -583,15 +592,6 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// Seconds on the core's clock.
     fn clock(&self) -> u64 {
         self.started.elapsed().as_secs()
-    }
-
-    /// Publishes the agent's name from the settings in its profile, so people see it, keeping the
-    /// rest of the profile as it is. Nothing is published when the name is already right.
-    async fn publish_name(&mut self) {
-        let Some(name) = self.config.name.clone() else {
-            return;
-        };
-        self.marmot.publish_name(&name, &self.config.relays).await;
     }
 
     /// Accepts an invitation from someone who may add the agent, and declines the rest. A group
@@ -1085,6 +1085,28 @@ fn unix_now() -> u64 {
     now.map_or(0, |d| d.as_secs())
 }
 
+/// Publishes the agent's name in its profile, so people see it, keeping the rest of the profile as
+/// it is; nothing when the name is already right. A try that fails, as when the profile could not
+/// be read, is made again 10 s later, and twice as long after each one that fails, up to 10
+/// minutes: never over a profile the core could not read (#139). It runs as a task of its own, as
+/// a read of the relays can take long, and ends when it is done or the core stops.
+async fn publish_name<M: Side>(marmot: M, name: String, relays: Vec<String>) {
+    let mut wait = NAME_WAIT;
+    while marmot.publish_name(&name, &relays).await.is_err() {
+        tokio::time::sleep(wait).await;
+        wait = (wait * 2).min(NAME_WAIT_MAX);
+    }
+}
+
+/// A task that ends when this is dropped.
+struct Ending(tokio::task::JoinHandle<()>);
+
+impl Drop for Ending {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// Reads a file from the allowed folders and sends it to `group`. It is offered to MDK again only
 /// while MDK says it is busy, which MDK says only before it has taken the file. Any other failure
 /// may have come after MDK took it, such as a wait for MDK that ran out while the send went on, so
@@ -1226,7 +1248,9 @@ mod tests {
             unreachable!("only files are sent")
         }
 
-        async fn publish_name(&self, _name: &str, _relays: &[String]) {}
+        async fn publish_name(&self, _name: &str, _relays: &[String]) -> Result<(), NotNow> {
+            Ok(())
+        }
 
         async fn incoming(&self, _message: Message) -> Result<Option<Incoming>, NotNow> {
             unreachable!("only files are sent")

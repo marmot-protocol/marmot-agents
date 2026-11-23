@@ -92,7 +92,9 @@ impl Side for SimSide {
         }
     }
 
-    async fn publish_name(&self, _name: &str, _relays: &[String]) {}
+    async fn publish_name(&self, _name: &str, _relays: &[String]) -> Result<(), NotNow> {
+        Ok(())
+    }
 
     async fn incoming(&self, message: Message) -> Result<Option<Incoming>, NotNow> {
         let mut world = lock(&self.world);
