@@ -1765,6 +1765,45 @@ async fn a_new_session_during_a_stop_of_a_subagent_settles_it_by_its_end() {
     assert_eq!(settling[0].event.header().state, State::Cancelled);
 }
 
+// The end of an older turn, read late while `t1` runs for `m-1`, is that turn's: it does not take
+// `m-1` from `t1`, nor settle a Stop of `t1`, and `t1`'s own end still carries `m-1` (#143).
+#[tokio::test]
+async fn a_late_end_of_an_older_turn_keeps_the_running_turns_prompts() {
+    let (mut codex, mut fake) = running().await;
+    until(&mut codex, is_turn(State::Running)).await;
+    let driver = tokio::spawn(async move {
+        codex.control(stop_t1()).await.unwrap();
+        codex
+    });
+    let interrupt = fake.hear().await;
+    assert_eq!(interrupt["method"], "turn/interrupt");
+    let mut codex = driver.await.unwrap();
+    fake.say(json!({"id": interrupt["id"], "result": {}})).await;
+    let old = json!({"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t0",
+        "items": [], "status": "completed", "error": null}}});
+    fake.say(old).await;
+    let events = until(&mut codex, is_turn(State::Done)).await;
+    let late = events.last().unwrap();
+    assert_eq!(
+        late.event.header().turn.as_ref().map(|t| t.as_str()),
+        Some("t0")
+    );
+    assert!(late.prompts.is_empty(), "{:?}", late.prompts);
+    assert!(
+        !events.iter().any(settles_r1),
+        "settled by another turn's end"
+    );
+    fake.say(turn("turn/completed", "interrupted")).await;
+    let events = until(&mut codex, is_turn(State::Cancelled)).await;
+    let end = events.last().unwrap();
+    assert_eq!(
+        end.event.header().turn.as_ref().map(|t| t.as_str()),
+        Some("t1")
+    );
+    assert_eq!(end.prompts, ["m-1".into()]);
+    assert!(settles_r1(end), "the Stop is settled by its turn's end");
+}
+
 // The end of an older turn of that subagent, read late, does not settle the Stop: only the end of
 // the turn it stops does (#143).
 #[tokio::test]
