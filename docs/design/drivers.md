@@ -336,9 +336,12 @@ picked and no subagent being started (an open `spawnAgent` item), since until th
 yet named. Codex does not stop
 a subagent when its parent is interrupted, so Stop interrupts every running turn under the one it names, each
 parent before the subagents it started, and one whose start arrives while it waits, and is settled by the end of
-the last, or as failed by Codex's refusal to stop one that runs on. Item ids the driver makes up name a
+the last, or as failed by Codex's refusal to stop one that runs on. A turn is interrupted once however many
+Stops wait for it: a later Stop joins the interrupt already sent. Item ids the driver makes up name a
 subagent's thread, since every translator of a chat counts from 0. When the chat's session is replaced, its
-subagents are interrupted; their open items close then, and when Codex stops. Every session it starts gets the driver's `send_file` tool
+subagents are interrupted; their open items close then, and when Codex stops. One that a Stop is waiting for
+is followed until Codex says whether it stopped, which settles the Stop, and its items close then
+([D-132](../decisions.md#d-132-a-stop-waiting-for-a-subagent-is-settled-by-codex-after-a-new-session)). Every session it starts gets the driver's `send_file` tool
 ([sending a file](#sending-a-file)); a call becomes a `tool` item, of kind `other`, like any tool. A
 request waits for Codex at most a minute in all, to read what the driver writes, to pick a session, or for a
 request before it; a Codex that has not read or answered by then has stopped working, and the connection ends,

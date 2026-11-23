@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-23, at `master` commit `ff445e2`, through [D-133](decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags) (D-130 and D-132 are in open pull requests). A change that adds or replaces
+Brought up to date on 2026-11-23, at `master` commit `ff445e2`, through [D-133](decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags) (D-130 is in an open pull request). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -98,6 +98,8 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   subagent under its turn, settled once when the last has ended, or as failed if one Codex refused to stop runs
   on; a Stop naming no item, after the turn, stops what still works beside it; a new session stops the old one's
   subagents ([D-117](decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)).
+  One a Stop waits for then is followed until Codex says whether it stopped, which settles the Stop
+  ([D-132](decisions.md#d-132-a-stop-waiting-for-a-subagent-is-settled-by-codex-after-a-new-session)).
 - The Codex driver refuses, with Codex's own error codes, every request of Codex's that no chat takes: one it
   cannot show, one for a thread a chat left, and one for a thread never seen once no session is being picked and
   no subagent started ([D-131](decisions.md#d-131-the-codex-driver-refuses-a-request-of-codexs-that-no-chat-takes)).
