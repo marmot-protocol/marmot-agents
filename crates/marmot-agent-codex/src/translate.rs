@@ -42,6 +42,15 @@ pub enum Direction {
     Out,
 }
 
+/// Codex's requests the driver asks someone in the chat about, or answers itself.
+const REQUESTS: &[&str] = &[
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "item/permissions/requestApproval",
+    "item/tool/requestUserInput",
+    "mcpServer/elicitation/request",
+];
+
 /// Messages Codex sends that never become an event of their own. Some still change what the
 /// driver knows: the settings, the thread, the tokens a turn used (rule 11 of the event model).
 pub const NOT_SENT: &[&str] = &[
@@ -268,8 +277,8 @@ impl Translator {
     }
 
     /// Replies to send to Codex at once, which nobody is asked for: a form the chat cannot show is
-    /// declined, so Codex does not wait for it. The driver sends each and feeds it back, as it does
-    /// every message it sends.
+    /// declined, and a request the driver cannot show refused, so Codex does not wait for it. The
+    /// driver sends each and feeds it back, as it does every message it sends.
     pub fn take_replies(&mut self) -> Vec<String> {
         std::mem::take(&mut self.outbox)
     }
@@ -385,6 +394,37 @@ impl Translator {
     }
 
     fn codex_sent(&mut self, m: &Envelope<'_>, out: &mut Vec<AgentEvent>) {
+        let replies = self.outbox.len();
+        self.codex_said(m, out);
+        // Codex waits for a reply to each of its requests, and takes an error as a refusal: an
+        // approval denied, a question with no answers, a form declined. So a request nobody in
+        // the chat is asked about, and that the driver did not answer itself, is refused at once:
+        // one it cannot show (a question with two questions of one id, params it cannot read) as
+        // invalid, one of a kind it has no rule for as unknown. A call of the driver's own tool is
+        // the transport's to answer.
+        let (Some(method), Some(id)) = (m.method.as_deref(), &m.id) else {
+            return;
+        };
+        let params = m.params.map_or("{}", RawValue::get);
+        let thread = named_thread(params);
+        let other = thread.is_some() && self.session.is_some() && thread != self.session;
+        if method == "item/tool/call"
+            || other
+            || self.asked.contains_key(id)
+            || self.outbox.len() > replies
+        {
+            return;
+        }
+        let error = if REQUESTS.contains(&method) {
+            json!({"code": -32602, "message": "Invalid params"})
+        } else {
+            json!({"code": -32601, "message": "Method not found"})
+        };
+        self.outbox
+            .push(json!({"id": id, "error": error}).to_string());
+    }
+
+    fn codex_said(&mut self, m: &Envelope<'_>, out: &mut Vec<AgentEvent>) {
         let Some(method) = m.method.as_deref() else {
             return self.response(m, out);
         };
@@ -1275,8 +1315,8 @@ impl Translator {
         text: &str,
         native: Option<Native>,
     ) {
-        // Two questions with one id could not be answered apart. The request stays unanswered
-        // here; the native message is still the harness's own.
+        // Two questions with one id could not be answered apart. The request is refused, as one
+        // the driver cannot show (`codex_sent`).
         let Ok(question) = Question::new(AnswerVia::Request, subject, asked) else {
             self.unknown
                 .push("a question with two questions of one id".into());

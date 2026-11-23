@@ -1264,49 +1264,167 @@ async fn a_new_session_stops_the_old_ones_subagents() {
     reading.abort();
 }
 
-/// Whether the driver wrote a reply to Codex's request `id` within half a second.
-async fn replied_to(fake: &mut Fake, id: i64) -> bool {
+/// The driver's reply to Codex's request `id`, if it wrote one within half a second.
+async fn reply_to(fake: &mut Fake, id: i64) -> Option<Value> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(500);
     while let Ok(Some(message)) = tokio::time::timeout_at(deadline, fake.heard.recv()).await {
         if message["id"] == id && message.get("method").is_none() {
-            return true;
+            return Some(message);
         }
     }
-    false
+    None
 }
 
-/// Codex waits for a reply to each request it makes, so one nobody in a chat is asked about is
-/// answered at once, as a call of a tool the driver does not have is. Found by the
-/// `DriverTransport` model (`formal/tla`, case `codex-stray`): an approval for a thread no chat has
-/// is counted as unrouted and never answered. Not fixed here; ignored until it is.
+/// The error a request for a thread no chat has is refused with.
+fn no_chat_has(thread: &str) -> Value {
+    json!({"code": -32602, "message": "Invalid params", "data": {"threadId": thread}})
+}
+
+/// Codex waits for a reply to each request it makes, and treats an error as a refusal (an approval
+/// denied, a question with no answers), so one no chat is asked about is refused at once, as a
+/// call of a tool the driver does not have is. Found by the `DriverTransport` model
+/// (`formal/tla`, case `codex-stray`): an approval for a thread no chat has was counted as
+/// unrouted and never answered.
 #[tokio::test]
-#[ignore = "found by DriverTransport (codex-stray): a request for a thread no chat has is never answered"]
 async fn a_request_for_a_thread_no_chat_has_is_answered() {
     let (mut codex, mut fake) = running().await;
+    let reading = tokio::spawn(async move {
+        until(&mut codex, is_turn(State::Done)).await;
+        codex
+    });
     fake.say(json!({"id": 5, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th-other", "turnId": "t9", "itemId": "c", "command": "ls", "availableDecisions": ["accept", "cancel"]}})).await;
+    let reply = reply_to(&mut fake, 5).await;
+    let reply = reply.expect("the request for a thread no chat has was never answered");
+    assert_eq!(reply["error"], no_chat_has("th-other"));
     fake.say(turn("turn/completed", "completed")).await;
-    until(&mut codex, is_turn(State::Done)).await;
-    assert!(
-        replied_to(&mut fake, 5).await,
-        "the request for a thread no chat has was never answered"
-    );
+    let codex = reading.await.unwrap();
+    assert_eq!(codex.unrouted(), 1);
 }
 
-/// A question the driver cannot show, such as one with two questions of one id, is answered at
-/// once, as a form the chat cannot show is declined. Found by the `DriverTransport` model
-/// (`formal/tla`, case `codex-unshown`): the driver leaves it unanswered, and the turn waits for
-/// it until someone interrupts. Not fixed here; ignored until it is.
+/// A request for a thread the chat has left, when its session was replaced, is refused at once
+/// too: nothing will name it again.
 #[tokio::test]
-#[ignore = "found by DriverTransport (codex-unshown): a question the driver cannot show is never answered"]
+async fn a_request_for_a_thread_the_chat_left_is_answered() {
+    let (mut codex, mut fake) = running().await;
+    fake.say(turn("turn/completed", "completed")).await;
+    until(&mut codex, is_turn(State::Done)).await;
+    let fresh = Control {
+        request: "r2".into(),
+        by: alice(),
+        action: Action::NewSession {
+            chat: prompt("m-0", "").chat,
+            session: Some("th1".into()),
+        },
+    };
+    let driver = tokio::spawn(async move {
+        codex.control(fresh).await.unwrap();
+        codex
+    });
+    let start = fake.hear().await;
+    assert_eq!(start["method"], "thread/start");
+    let mut codex = driver.await.unwrap();
+    fake.say(json!({"id": start["id"], "result": {"thread": {"id": "th2"}, "model": "m1"}}))
+        .await;
+    let reading = tokio::spawn(async move { until(&mut codex, |_| false).await });
+    fake.say(json!({"id": 7, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "c", "command": "ls"}})).await;
+    let reply = reply_to(&mut fake, 7).await;
+    reading.abort();
+    let reply = reply.expect("the request for the thread the chat left was never answered");
+    assert_eq!(reply["error"], no_chat_has("th1"));
+}
+
+/// While a subagent is being started (Codex's older runtime names its thread only when the
+/// `spawnAgent` item completes), a request for a thread not known yet is held: it may be the
+/// subagent's. Once the spawn is done, the subagent's request is the chat's, and one for a thread
+/// still unknown is refused.
+#[tokio::test]
+async fn a_request_held_while_a_subagent_starts_is_answered_once_it_has() {
+    let (mut codex, mut fake) = running().await;
+    let (shown, mut asked) = mpsc::unbounded_channel();
+    let reading = tokio::spawn(async move {
+        until(&mut codex, |e| {
+            let waits = matches!(e.event.body(), Body::Approval(_))
+                && e.event.header().state == State::Waiting;
+            if waits {
+                shown
+                    .send(e.event.header().item.as_str().to_string())
+                    .unwrap();
+            }
+            false
+        })
+        .await
+    });
+    let spawn = |status: &str, threads: Value| {
+        let item = json!({"type": "collabAgentToolCall", "id": "c1", "tool": "spawnAgent",
+            "status": status, "receiverThreadIds": threads, "prompt": "look"});
+        let method = if status == "completed" {
+            "item/completed"
+        } else {
+            "item/started"
+        };
+        json!({"method": method, "params": {"threadId": "th1", "turnId": "t1", "item": item}})
+    };
+    fake.say(spawn("inProgress", json!([]))).await;
+    let asks = |id: i64, thread: &str| json!({"id": id, "method": "item/commandExecution/requestApproval", "params": {"threadId": thread, "turnId": "st1", "itemId": "c", "command": "ls"}});
+    fake.say(asks(8, "subA")).await;
+    fake.say(asks(9, "th-other")).await;
+    assert!(
+        reply_to(&mut fake, 9).await.is_none(),
+        "held while the spawn is under way"
+    );
+    fake.say(spawn("completed", json!(["subA"]))).await;
+    let reply = reply_to(&mut fake, 9).await;
+    let reply = reply.expect("the request still for no chat was never answered");
+    assert_eq!(reply["error"], no_chat_has("th-other"));
+    let item = asked
+        .recv()
+        .await
+        .expect("the subagent's request waits in the chat");
+    assert_eq!(item, "approval:st1:8");
+    assert!(asked.try_recv().is_err(), "and only it");
+    reading.abort();
+}
+
+/// The error a request the driver cannot show is refused with.
+fn cannot_show() -> Value {
+    json!({"code": -32602, "message": "Invalid params"})
+}
+
+/// A question the driver cannot show, such as one with two questions of one id, is refused at
+/// once, as a form the chat cannot show is declined. Found by the `DriverTransport` model
+/// (`formal/tla`, case `codex-unshown`): the driver left it unanswered, and the turn waited for
+/// it until someone interrupted.
+#[tokio::test]
 async fn a_question_the_driver_cannot_show_is_answered() {
     let (mut codex, mut fake) = running().await;
+    let reading = tokio::spawn(async move { until(&mut codex, is_turn(State::Done)).await });
     fake.say(json!({"id": 6, "method": "item/tool/requestUserInput", "params": {"threadId": "th1", "turnId": "t1", "itemId": "call1", "questions": [
         {"id": "q", "header": "One", "question": "First?", "isOther": true, "isSecret": false, "options": []},
         {"id": "q", "header": "Two", "question": "Second?", "isOther": true, "isSecret": false, "options": []}]}})).await;
+    let reply = reply_to(&mut fake, 6).await;
+    let reply = reply.expect("the question the driver cannot show was never answered");
+    assert_eq!(reply["error"], cannot_show());
     fake.say(turn("turn/completed", "completed")).await;
-    until(&mut codex, is_turn(State::Done)).await;
-    assert!(
-        replied_to(&mut fake, 6).await,
-        "the question the driver cannot show was never answered"
+    reading.await.unwrap();
+}
+
+/// So is an approval whose params the driver cannot read, and a request of a kind it has no rule
+/// for, as an unknown method.
+#[tokio::test]
+async fn a_request_the_driver_cannot_read_is_answered() {
+    let (mut codex, mut fake) = running().await;
+    let reading = tokio::spawn(async move { until(&mut codex, is_turn(State::Done)).await });
+    fake.say(json!({"id": 10, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "c", "command": ["not", "text"]}})).await;
+    let reply = reply_to(&mut fake, 10).await;
+    let reply = reply.expect("the approval the driver cannot read was never answered");
+    assert_eq!(reply["error"], cannot_show());
+    fake.say(json!({"id": 11, "method": "item/something/new", "params": {"threadId": "th1", "turnId": "t1"}})).await;
+    let reply = reply_to(&mut fake, 11).await;
+    let reply = reply.expect("the request of an unknown kind was never answered");
+    assert_eq!(
+        reply["error"],
+        json!({"code": -32601, "message": "Method not found"})
     );
+    fake.say(turn("turn/completed", "completed")).await;
+    reading.await.unwrap();
 }
