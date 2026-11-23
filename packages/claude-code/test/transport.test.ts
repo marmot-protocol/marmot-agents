@@ -408,6 +408,21 @@ test("an interrupt is taken once Claude Code has it, not once Claude Code answer
   await done();
 });
 
+test("a turn that ends on its own before Claude Code refuses a taken interrupt settles nothing", async () => {
+  const { core, queries, done } = await start();
+  const { q, turn: id } = await turn(core, queries);
+  let refuse!: (error: Error) => void;
+  q.interruptHold = new Promise((_, reject) => (refuse = reject));
+  const taken = await core.request("control", { request: "i1", by: ALICE, action: { type: "interrupt", turn: id } });
+  assert.deepEqual(taken["result"], {});
+  // The turn finished as it would have: the interrupt had no effect, and the core settles it (D-087).
+  q.say(DONE);
+  await until(() => core.event((e) => e["type"] === "turn" && e["state"] === "done") !== undefined, "the turn's end");
+  assert.equal("settles" in core.event((e) => e["type"] === "turn" && e["state"] === "done")!, false);
+  refuse(new Error("no"));
+  await done();
+});
+
 test("an interrupt Claude Code refuses at once is refused, and its turn's end settles nothing", async () => {
   const { core, queries, done } = await start();
   const { q, turn: id } = await turn(core, queries);
@@ -422,16 +437,19 @@ test("an interrupt Claude Code refuses at once is refused, and its turn's end se
   await done();
 });
 
-test("two approvals Claude Code names no request for are two items, each answered on its own", async () => {
+test("two approvals Claude Code names no request for, or an empty one, are two items, each answered on its own", async () => {
   const { core, queries, done } = await start();
   const { q } = await turn(core, queries);
   const first = q.ask("Bash", BASH, { toolUseID: "t1" });
-  const second = q.ask("Bash", { command: "touch y" }, { toolUseID: "t2" });
+  const second = q.ask("Bash", { command: "touch y" }, { toolUseID: "t2", requestId: "" });
   const approvals = () => [...new Set(core.events.filter((e) => e["type"] === "approval").map((e) => e["item"] as string))];
   await until(() => approvals().length === 2, "two approvals");
   const [one, two] = approvals();
-  await core.request("answer", { request: "a2", item: two, by: { id: "p1", name: "Alice" }, given: { choice: "c1" } });
-  await core.request("answer", { request: "a1", item: one, by: { id: "p1", name: "Alice" }, given: { choice: "c0" } });
+  const answers = [
+    await core.request("answer", { request: "a2", item: two, by: { id: "p1", name: "Alice" }, given: { choice: "c1" } }),
+    await core.request("answer", { request: "a1", item: one, by: { id: "p1", name: "Alice" }, given: { choice: "c0" } }),
+  ];
+  assert.deepEqual(answers.map((a) => a["result"]), [{}, {}]);
   assert.deepEqual(await first, { behavior: "allow", updatedInput: BASH });
   assert.equal((await second).behavior, "deny");
   await done();

@@ -628,7 +628,12 @@ export class Connector {
       };
       take(chat.byItem, event.item);
       const open = event.state === "running" || event.state === "waiting";
-      if (event.type === "turn" && !open) take(chat.byTurn, event.turn);
+      if (event.type === "turn" && !open) {
+        // An interrupt is settled only by a turn's end that shows it: a turn that finished on its own
+        // first was not stopped by it, and the core settles it as having no effect (D-087).
+        if (event.state === "cancelled") take(chat.byTurn, event.turn);
+        else if (event.turn !== undefined) chat.byTurn.delete(event.turn);
+      }
       if (event.type === "session") {
         const values = settingValues(event.body);
         const shown = (s: PendingSet) => s.session === event.session && values.get(s.setting) === s.value;
