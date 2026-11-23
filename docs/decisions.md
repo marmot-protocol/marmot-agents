@@ -2054,8 +2054,9 @@ Decided 2026-11-23. The project owner decided.
 - **`--replace-plugin` lists the gateway's work folder in `files_from`**, as a fresh install does
   ([a gateway's files](design/drivers.md#a-gateways-files)): the folder the installer finds for that gateway,
   under the same rules, and none in the same cases. It is added beside the old connector's folders the import
-  wrote, not in their place, and only to the line the import wrote, which a re-run leaves as it is once the
-  folder is there; a `files_from` the person wrote is left alone, and the installer says what to add. A folder
+  wrote, not in their place, and only to the line the import wrote, marked by the import's comment and then by the installer's, which
+  names the folder it added; a re-run changes nothing while the gateway works there, and puts the new folder
+  in its place if the gateway has moved; a `files_from` the person wrote is left alone, and the installer says what to add. A folder
   that holds or lies inside the moved account's home, or the import's backup of it, is never added. (These
   details were decided 2026-11-23 by the builder, under the project owner's instruction to decide minor
   points.)
