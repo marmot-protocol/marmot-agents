@@ -18,6 +18,9 @@ encryption state and its chats.
 
 ## Steps
 
+There is no release of `marmot-agent` yet: build it from a checkout first, as the
+[README](../README.md#installing-an-agent) says, and give the installer `--from-source` in step 3.
+
 1. See what the import would do. It reads the home, its services and its allow-lists, and changes nothing:
 
    ```sh

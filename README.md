@@ -29,19 +29,29 @@ what it is doing, approve what it asks, and control it as fully as you could at 
 ## Installing an agent
 
 Each harness has an install script in [`install/`](install): `codex.sh`, `claude-code.sh`, `opencode.sh`,
-`cursor.sh`, `goose.sh`, `pi.sh`, `openclaw.sh` and `hermes.sh`. They work the same on Linux and on macOS. A
-script never installs the harness: it uses the one you already have, set up with your own model and sign-in
+`cursor.sh`, `goose.sh`, `pi.sh`, `openclaw.sh` and `hermes.sh`. They work the same on Linux, on x86_64 or
+arm64, and on macOS with Apple silicon. Intel Macs are not supported: the Odin compiler the core needs to build
+has no pinned release for them, and there is no release of the core for them. A script never installs the
+harness: it uses the one you already have, set up with your own model and sign-in
 ([D-102](docs/decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)). Codex, Claude
 Code, OpenCode, Cursor, Goose and Pi must be on your `PATH`; Hermes and OpenClaw installed, as `hermes` and
-`openclaw`. If one is missing, the script says how to get it and stops. Then, from a checkout of this
-repository:
+`openclaw`. If one is missing, the script says how to get it and stops.
+
+**There is no release yet**, so for now build `marmot-agent` from a checkout of this repository. You need Rust,
+from [rustup](https://rustup.rs) (the pinned compiler installs itself on the first build), a C toolchain (on
+macOS, Xcode's command-line tools), and the exact Odin release MDK's markdown parser is built with, which
+`tools/odin/install.sh` downloads and checks. Then, from the checkout:
 
 ```sh
-install/codex.sh --owner <your public key, hex or npub>
+bash tools/odin/install.sh "$HOME/.local/share/marmot-odin"    # once; the folder must be absolute
+export ODIN="$HOME/.local/share/marmot-odin/odin"
+install/codex.sh --from-source --owner <your public key, hex or npub>
 ```
 
-The script downloads `marmot-agent` from the latest release and checks it against the release's `SHA256SUMS`
-(`--from-source` builds it here instead). It makes the agent's identity and prints its public key, for you to
+`--from-source` builds the core here, which takes a while the first time, and installs it. Once a release is
+published, leave it out: the script then downloads `marmot-agent` from the latest release, for Linux on x86_64
+or arm64 or macOS on Apple silicon, and checks it against the release's `SHA256SUMS`; until then that download
+fails. The script makes the agent's identity and prints its public key, for you to
 invite it from White Noise, and runs it as a service of your account: systemd `--user` on Linux, launchd on
 macOS. Only you may prompt it or approve what it does until you change its settings. The core runs the coding
 harnesses as you, in the work folder (`--cwd`), which must not hold the agents' folder. Pi asks nobody before a
@@ -52,9 +62,9 @@ model endpoint you bring, and there is no default: give `--model-url <url>`, an 
 which is mounted into the container, read when the harness starts, and never copied; the work folder must not
 hold it. The script stops without them, and refuses them without `--container`: your own Pi or Goose uses the
 model it is set up with. Goose runs in its own default mode, which asks nothing; `--goose-mode approve` makes it
-ask in the chat before each tool. Containers need Linux and Docker; this project's own tests run every harness
-that way. Hermes and OpenClaw keep the folder they work in; their installers let the agent send the files in
-it (`files_from` in its settings), unless it is your whole home or holds the files people sent the gateway,
+ask in the chat before each tool. Containers need Linux and Docker, and Goose's needs x86_64. Hermes and
+OpenClaw keep the folder they work in; their installers let the agent send the files in it (`files_from` in its
+settings), unless it is your whole home or holds the files people sent the gateway,
 and then say how to name one. Whatever the
 work folder, the agent never sends a file from its own account home, which holds its keys, unless you allow
 it in its settings
@@ -74,7 +84,8 @@ identity in the old home, and makes no new one.
 
 - `--dry-run` shows every file and command the script would write and run, and does nothing.
 - Running the script again updates `marmot-agent` and the service, and keeps the agent's settings and
-  identity. A `--cwd` or `--model-key` given again replaces the old one, and nothing else in the settings.
+  identity. Until there is a release, give it `--from-source` each time. A `--cwd` or `--model-key` given
+  again replaces the old one, and nothing else in the settings.
 - `--uninstall` stops and removes the service, and keeps the agent's folder.
 - `--no-service` sets up no service; run the agent with the `start` script in its folder (and `connector`, for
   Claude Code), which the service would run.
