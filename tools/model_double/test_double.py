@@ -318,6 +318,21 @@ class Staleness(unittest.TestCase):
             "unknown: no release lookup for hermes; check it by hand",
         ])
 
+    def test_it_fails_only_when_asked_to(self):
+        # A pull request reports what it finds; the nightly run, with --strict, fails on it.
+        script = Path(__file__).parent / "check_cassettes.py"
+        with tempfile.TemporaryDirectory() as folder:
+            header = {"cassette": 1, "harness": "claude-code", "version": "0", "recorded": "2026-11-01"}
+            (Path(folder) / "a.jsonl").write_text(json.dumps(header) + "\n")
+            run = [sys.executable, script, folder, "--offline", "--today", "2026-11-23"]
+            report = subprocess.run(run, capture_output=True, text=True)
+            strict = subprocess.run(run + ["--strict"], capture_output=True, text=True)
+            fresh = subprocess.run(run[:-1] + ["2026-11-02", "--strict"], capture_output=True, text=True)
+        self.assertEqual(report.returncode, 0)
+        self.assertIn("stale: a.jsonl", report.stdout)
+        self.assertEqual((strict.returncode, strict.stdout), (1, report.stdout))
+        self.assertEqual((fresh.returncode, fresh.stdout), (0, ""))
+
     def test_versions(self):
         self.assertTrue(check_cassettes.newer("2.1.330", "2.1.326"))
         self.assertTrue(check_cassettes.newer("0.172.0", "0.171.0"))

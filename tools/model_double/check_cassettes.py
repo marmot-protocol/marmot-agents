@@ -2,7 +2,7 @@
 """Reports the model double's cassettes that are due to be recorded again.
 
 Usage:
-    check_cassettes.py <folder> [--max-age DAYS] [--offline] [--today YYYY-MM-DD]
+    check_cassettes.py <folder> [--max-age DAYS] [--offline] [--strict] [--today YYYY-MM-DD]
 
 It reads the first line of every `*.jsonl` under `<folder>` (`{"cassette": 1, "harness", "version",
 "recorded"}`), and reports:
@@ -11,8 +11,9 @@ It reads the first line of every `*.jsonl` under `<folder>` (`{"cassette": 1, "h
 - a harness with a release newer than the version a cassette was recorded with, looked up in the npm registry
   (unless `--offline`). A harness it has no lookup for is reported once, so the list stays complete.
 
-It prints one line per finding, and exits 1 when there is any, so a nightly job can open an issue with the
-output. It needs no key: the lookups are public. It uses the standard library only.
+It prints one line per finding. It exits 0 whatever it finds, so a pull request is told and not held up,
+and with `--strict` exits 1 when it finds any, so a nightly job fails and can open an issue with the output.
+It needs no key: the lookups are public. It uses the standard library only.
 """
 
 from __future__ import annotations
@@ -81,12 +82,13 @@ def main() -> int:
     ap.add_argument("folder", type=Path)
     ap.add_argument("--max-age", type=int, default=14)
     ap.add_argument("--offline", action="store_true", help="do not look up releases")
+    ap.add_argument("--strict", action="store_true", help="exit 1 when anything is found")
     ap.add_argument("--today", type=datetime.date.fromisoformat, default=datetime.date.today())
     args = ap.parse_args()
     found = check(args.folder, args.today, args.max_age, None if args.offline else npm_latest)
     for line in found:
         print(line)
-    return 1 if found else 0
+    return 1 if found and args.strict else 0
 
 
 if __name__ == "__main__":

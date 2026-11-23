@@ -56,8 +56,12 @@ request body: only each request's key and the model's reply.
 ## Staleness
 
 `check_cassettes.py` reports every cassette older than 14 days and every harness with a release newer than the
-one a cassette was recorded with. It needs no key, so a nightly job can run it and open an issue.
+one a cassette was recorded with. It needs no key. A pull request runs it offline, and its findings are
+warnings that do not fail it; the nightly run adds `--strict`, which exits 1 on any finding, and opens an
+issue with the output
+([D-127](../../docs/decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key)).
 
 ```sh
-python3 tools/model_double/check_cassettes.py fixtures/cassettes
+python3 tools/model_double/check_cassettes.py fixtures/cassettes --offline   # as a pull request runs it
+python3 tools/model_double/check_cassettes.py fixtures/cassettes --strict    # as the nightly run does
 ```
