@@ -20,8 +20,9 @@ bounds, the default, which CI runs on pull requests and in the merge queue:
   empty.
 
 With --bounds larger, CoreLifecycle's fair configuration on the larger bounds of
-formal/tla/README.md runs instead, safety and liveness apart, each of which must pass; the nightly
-workflow runs them. The other models have no larger bounds.
+formal/tla/README.md runs instead, safety only, which must pass; the nightly workflow runs it.
+--bounds larger-liveness checks the liveness properties on the same bounds, which did not finish
+in two hours on a CI runner, so it is run by hand. The other models have no larger bounds.
 
 Each case runs TLC through tools/tla/run.sh in a folder of its own under --out, which keeps its
 configuration and its log. A line per case gives the result and the state counts TLC reported.
@@ -330,19 +331,21 @@ CASES += [
     driver_probe("NeverFailed", PI),
     driver_probe("NeverStrayAnswered", f"{DT}.stray.cfg"),
 ]
-# The larger bounds (formal/tla/README.md, "Larger bounds"), for the nightly workflow: the fair
-# configuration with more in it, the other constants as there. Safety and liveness run apart, so
-# a liveness check that runs out of time or memory does not hide what safety found.
+# The larger bounds (formal/tla/README.md, "Larger bounds"): CoreLifecycle's fair configuration
+# with more in it, the other constants as there. Safety, for the nightly workflow, and liveness,
+# which takes hours there, apart.
 TWO_ITEMS = {"Items": '{"t1", "s1"}', "MaxDowns": "2"}
 TWO_CHATS = {"Requests": '{"r1", "r2"}', "Items": '{"t1"}'}
 LIVENESS = {"INVARIANTS": None}
 LARGER = [
     Case("larger-two-items", FAIR, PASS, {**TWO_ITEMS, **SAFETY}),
     Case("larger-two-chats", FAIR, PASS, {**TWO_CHATS, **SAFETY}),
+]
+LARGER_LIVENESS = [
     Case("larger-two-items-liveness", FAIR, PASS, {**TWO_ITEMS, **LIVENESS}),
     Case("larger-two-chats-liveness", FAIR, PASS, {**TWO_CHATS, **LIVENESS}),
 ]
-BOUNDS = {"small": CASES, "larger": LARGER}
+BOUNDS = {"small": CASES, "larger": LARGER, "larger-liveness": LARGER_LIVENESS}
 NAMES = [case.name for cases in BOUNDS.values() for case in cases]
 assert len(set(NAMES)) == len(NAMES), "case names must differ"
 
@@ -445,7 +448,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", type=Path, default=ROOT / "target" / "tla")
     parser.add_argument("--bounds", choices=sorted(BOUNDS), default="small",
-                        help="the small bounds, every case (the default), or the larger ones")
+                        help="the small bounds, every case (the default), or the larger ones: "
+                             "safety, or liveness")
     parser.add_argument("--model", choices=MODELS, help="run only this model's cases")
     parser.add_argument("--only", nargs="+", choices=NAMES, metavar="NAME",
                         help=f"run only these cases, from: {', '.join(NAMES)}")
@@ -455,15 +459,14 @@ def main():
                         help="write the committed counterexample schedules again")
     args = parser.parse_args()
 
+    chosen = [case for case in BOUNDS[args.bounds]
+              if (not args.only or case.name in args.only) and case.name not in args.skip
+              and (not args.model or case.model == args.model)]
+    if not chosen:
+        raise SystemExit(f"no case of --bounds {args.bounds} is chosen")
     failed = []
     print(f"{'case':32} {'expected':18} {'result':18} {'distinct':>10} {'generated':>11} {'secs':>6}")
-    for case in BOUNDS[args.bounds]:
-        if args.only and case.name not in args.only:
-            continue
-        if case.name in args.skip:
-            continue
-        if args.model and case.model != args.model:
-            continue
+    for case in chosen:
         folder = args.out / case.name
         if folder.exists():
             shutil.rmtree(folder)

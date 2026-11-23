@@ -188,8 +188,11 @@ over before it was stored is dropped, then stored). All seventeen are reached wi
 
 **Larger bounds**, safety only, on the same day with 8 workers and a 6 GB heap, the other constants as in the fair
 configuration, before the sends took MDK's tokens. Liveness at these sizes did not finish in 15 minutes with a 2 GB
-heap. Both, safety and liveness apart, are now `check.py --bounds larger`, which the nightly workflow runs with 4
-workers and a 12 GB heap (`.github/workflows/nightly.yml`); the times below are from before the tokens:
+heap. Safety at these bounds is now `check.py --bounds larger`, which the nightly workflow runs with 4 workers and a
+12 GB heap (`.github/workflows/nightly.yml`); on 2026-11-23, with the tokens, each case passed in about 8½ minutes
+here with 4 workers (18,810,701 and 23,999,651 distinct states). Liveness is `check.py --bounds larger-liveness`,
+run by hand: on a CI runner (4 processors, 12 GB heap) it had not finished after 1½ hours. The times below are from
+before the tokens:
 
 | Bounds | Distinct states | Time |
 | --- | ---: | ---: |
@@ -253,7 +256,8 @@ python3 tools/tla/check.py --model CoreLifecycle   # this model's cases
 python3 tools/tla/check.py --only fair     # one case
 python3 tools/tla/check.py --counterexamples   # writes the committed schedules again, from TLC's traces
 tools/tla/run.sh formal/tla CoreLifecycle.tla CoreLifecycle.fair.cfg   # TLC on one configuration
-python3 tools/tla/check.py --bounds larger # the larger bounds, safety and liveness apart, as nightly
+python3 tools/tla/check.py --bounds larger # the larger bounds, safety only, as the nightly run
+python3 tools/tla/check.py --bounds larger-liveness   # their liveness, which takes hours
 ```
 
 `tools/tla/run.sh` downloads TLC v1.7.4 (the release MDK pins, with the same SHA-256) into

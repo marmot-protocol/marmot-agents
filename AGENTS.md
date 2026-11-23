@@ -370,8 +370,8 @@ python3 tools/tla/check.py   # the fair models pass; every counterexample, delib
                              # checksum, by tools/tla/run.sh
 ```
 
-The nightly workflow runs `python3 tools/tla/check.py --bounds larger`, the larger bounds in
-`formal/tla/README.md`, which take longer than a pull request may.
+The nightly workflow runs `python3 tools/tla/check.py --bounds larger`, safety on the larger bounds in
+`formal/tla/README.md`, which takes longer than a pull request may.
 
 For a change to a diagram, which CI does not check:
 
