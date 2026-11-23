@@ -3,9 +3,9 @@
   "model": "DriverTransport",
   "config": "DriverTransport.stray.cfg",
   "breaks": "L2",
-  "what": "ACP: the agent asks in a session no chat has while a chat's session is being picked. The driver holds the request (`early`) in case the pick makes its session known; once no pick is left it drops it, unanswered, and the agent waits for ever (L2). Outside a pick the driver answers it at once (-32601).",
+  "what": "HeldDropped, the ACP driver before #122: the agent asks in a session no chat has while a chat's session is being picked. The driver holds the request (`early`) in case the pick makes its session known; once no pick is left it drops it, unanswered, and the agent waits for ever (L2).",
   "generated_by": "python3 tools/tla/check.py --counterexamples",
-  "constants": {"Chats": ["c1"], "Asks": ["a1"], "Calls": ["k1"], "Answers": ["r1"], "Interrupts": ["r2"], "NewSessions": ["r3"], "MaxSessions": 5, "MaxPrompts": 2, "MaxDeaths": 1, "MaxEdits": 1, "PerChat": false, "SelfResolves": false, "Unshowable": true, "UnshownAnswered": true, "StrayAsks": true, "StrayAnswered": true, "CallNamed": true, "CancelOnInterrupt": true, "ReaskAfterRestart": false, "FairDriver": true, "FairHarness": true, "Bug": "none"},
+  "constants": {"Chats": ["c1"], "Asks": ["a1"], "Calls": ["k1"], "Answers": ["r1"], "Interrupts": ["r2"], "NewSessions": ["r3"], "MaxSessions": 5, "MaxPrompts": 2, "MaxDeaths": 1, "MaxEdits": 1, "PerChat": false, "SelfResolves": false, "Unshowable": true, "UnshownAnswered": true, "StrayAsks": true, "StrayAnswered": true, "CallNamed": true, "CancelOnInterrupt": true, "ReaskAfterRestart": false, "FairDriver": true, "FairHarness": true, "Bug": "HeldDropped"},
   "messages": [{"id": "r1", "kind": "answer"}, {"id": "r2", "kind": "interrupt"}, {"id": "r3", "kind": "new_session"}],
   "steps": [
     {"action": "HarnessAsks", "ask": "a1", "session": 0, "call": "k1", "shown": true},

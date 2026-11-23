@@ -256,14 +256,18 @@ CASES += [
            what="Without FairHarness, the harness never reads what the driver wrote: an interrupt "
                 "the driver took is written, and the turn it names never ends, so nothing settles "
                 "it (L1)."),
+    # A request from a session no chat has is answered (ACP's -32002, #122), also one held while
+    # a session was picked.
+    driver("stray", f"{DT}.stray.cfg", PASS),
+    driver("bug-HeldDropped", f"{DT}.stray.cfg", TEMPORAL,
+           {"Bug": '"HeldDropped"', "INVARIANTS": None, "PROPERTIES": "L2"},
+           counterexample="driver-stray-while-picking",
+           what="HeldDropped, the ACP driver before #122: the agent asks in a session no chat has "
+                "while a chat's session is being picked. The driver holds the request (`early`) "
+                "in case the pick makes its session known; once no pick is left it drops it, "
+                "unanswered, and the agent waits for ever (L2)."),
     # What the model found in today's code (DriverTransport.md, "What the model found"). Each is
     # a committed counterexample and an ignored test that fails, until the code is fixed.
-    driver("stray-while-picking", f"{DT}.stray.cfg", TEMPORAL, {"PROPERTIES": "L2"},
-           counterexample="driver-stray-while-picking",
-           what="ACP: the agent asks in a session no chat has while a chat's session is being "
-                "picked. The driver holds the request (`early`) in case the pick makes its "
-                "session known; once no pick is left it drops it, unanswered, and the agent waits "
-                "for ever (L2). Outside a pick the driver answers it at once (-32601)."),
     driver("codex-stray", CODEX, TEMPORAL,
            {"StrayAsks": "TRUE", "StrayAnswered": "FALSE", **ONE_ASK, "INVARIANTS": None,
             "PROPERTIES": "L2"},

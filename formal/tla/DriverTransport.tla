@@ -5,7 +5,7 @@
 (* (approvals and questions) and who answers them, a dropped wait, a       *)
 (* harness that dies and starts again, and two chats on one harness.       *)
 (*                                                                         *)
-(* It follows the built-in drivers as of master d98d3d4 (#118):            *)
+(* It follows the built-in drivers as of master c5c41be (#122):           *)
 (* crates/marmot-agent-codex, crates/marmot-agent-acp and                  *)
 (* crates/marmot-agent-pi, behind the trait in crates/marmot-agent-driver. *)
 (* A configuration picks the harness's shape: one process for every chat   *)
@@ -39,8 +39,8 @@ CONSTANTS
     UnshownAnswered,\* the driver answers at once what it cannot show (ACP's -32602, Codex's
                     \* declined form)
     StrayAsks,      \* the harness can ask in a session no chat has (session 0)
-    StrayAnswered,  \* the driver answers at once a request from a session no chat has, when it
-                    \* is not picking a session (ACP's -32601)
+    StrayAnswered,  \* the driver answers a request from a session no chat has: at once when no
+                    \* session is being picked, and else once none is (ACP's -32002, #122)
     CallNamed,      \* an approval's item is named after its session and tool call (ACP), not
                     \* after the request (Codex, Pi)
     CancelOnInterrupt, \* the driver answers each waiting request as cancelled before it
@@ -66,6 +66,9 @@ Bugs == {"none",
                                \* driver did before #118
          "UnshownUnanswered",  \* L2: a request the driver cannot show is never answered, as
                                \* ACP's driver did before #118
+         "HeldDropped",        \* L2: a request from a session no chat has, held while a session
+                               \* is picked, is dropped unanswered once none is, as ACP's driver
+                               \* did before #122
          "CallOnly",           \* S5: an approval's item is named after its tool call alone, so
                                \* two chats' approvals can share a name
          "TakeUnwritten",      \* S11: an answer is taken, and shown as given, when the harness
@@ -320,7 +323,8 @@ Prompt(c) ==
 \* The reply that picks a session: the chat is in it from now on, and its session item shows
 \* it. That item settles each new-session control waiting in the chat whose old session it is
 \* not (`ready_event`, `Effect::NewSession`). Requests held while a session was picked that name
-\* a session still unknown are dropped once no session is being picked (`early`).
+\* a session still unknown are answered once no session is being picked (`early`, #122), or,
+\* where the driver answers no such request (Codex), dropped.
 RouteOpened(p, msg) ==
     LET c == msg.c
         s == msg.s
@@ -328,6 +332,8 @@ RouteOpened(p, msg) ==
         settles == {e.r : e \in matched}
         picking2 == [picking EXCEPT ![c] = "none"]
         stillPicking == \E d \in Chats : picking2[d] # "none"
+        released == IF stillPicking THEN {} ELSE early
+        refused == IF StrayAnswered /\ Bug # "HeldDropped" THEN released ELSE {}
     IN
     /\ dSess' = [dSess EXCEPT ![c] = s]
     /\ picking' = picking2
@@ -336,9 +342,10 @@ RouteOpened(p, msg) ==
     /\ how' = Settled(settles, LAMBDA r : IF hCreator[s] = r THEN "effect" ELSE "wrong")
     /\ cSess' = [cSess EXCEPT ![c] = s]
     /\ hadSess' = [hadSess EXCEPT ![c] = @ \cup {s}]
-    /\ early' = IF stillPicking THEN early ELSE {}
-    /\ droppedEarly' = IF stillPicking THEN droppedEarly ELSE droppedEarly \cup early
-    /\ UNCHANGED <<harnessVars, toH, up, dTurn, dAsk, names, cancelling, rq, seenItems,
+    /\ early' = early \ released
+    /\ toH' = [toH EXCEPT ![p] = AppendAll(toH[p], refused, LAMBDA a : Reply(a, "refuse"))]
+    /\ droppedEarly' = droppedEarly \cup (released \ refused)
+    /\ UNCHANGED <<harnessVars, up, dTurn, dAsk, names, cancelling, rq, seenItems,
                    seenTurns, issued, stopRead, late, misrouted, unwrittenTake>>
 
 RouteStarted(p, msg) ==
@@ -354,8 +361,8 @@ RouteStarted(p, msg) ==
 \* A request of the harness. In a chat, and shown, it is an item that waits (and, while ACP
 \* cancels the turn, it is answered as cancelled at once); in a chat and not shown, it is
 \* answered at once (ACP's -32602, Codex's declined form). From a session no chat has, it is
-\* held while a session is picked, and otherwise answered at once (ACP's -32601), or not at all
-\* (Codex: `unrouted`).
+\* held while a session is picked, and otherwise answered at once (ACP's -32002, #122), or not at
+\* all (Codex: `unrouted`).
 RouteAsk(p, msg) ==
     LET a == msg.a
         c == ChatOf(p, hAsk[a].s)
