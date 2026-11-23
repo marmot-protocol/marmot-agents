@@ -1950,3 +1950,24 @@ not have to read them all to learn what holds today. A page kept in step with ea
 separate effort to catch up.
 
 Decided 2026-11-23. The project owner decided.
+
+## D-115 The socket's schema is made from the core's own types, and checks this repository's connectors
+
+**Decision.** Every socket message is written and read through types in the core
+(`crates/marmot-agent/src/socket/wire.rs`). A JSON Schema and a set of example messages are generated from those
+types and committed (`fixtures/socket`), and the Claude Code driver, the OpenClaw plugin and the Hermes plugin each
+check against them that what they send is what the core reads, and that they read only what the core sends. The
+schema admits no field the types do not name: it is strict for checking this repository's connectors. The core
+itself stays as lenient as the socket was before ([D-081](#d-081-the-socket-messages-as-built-are-accepted)): it
+passes over fields it does not know and reads each field it needs on its own. The OpenClaw plugin stops sending
+the 13 body fields the core passes over (listed in `fixtures/socket/passed-over.json`), rather than the event
+model gaining them; until it does, the checks allow exactly those.
+
+**Why.** Each capability was added by hand in four places, and each client was tested only against its own fake
+of the core, so the four could drift apart without a test failing. Making the description from the core's types
+means it cannot fall behind them. Keeping the core lenient changes nothing for a connector it took before; the
+strictness belongs in the check, not in what the core refuses. The 13 fields reach no chat today, and the model
+they mostly carry is already in the session item.
+
+Decided 2026-11-23. The project owner decided.
+
