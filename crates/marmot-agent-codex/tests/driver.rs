@@ -979,3 +979,92 @@ async fn a_refused_start_and_the_setup_print_no_path() {
         assert!(printed.contains("-32600"), "{printed}");
     }
 }
+
+// -- subagents (D-117)
+
+/// A subagent's turn, under the person's turn `t1`.
+fn sub_turn(method: &str, thread: &str, turn: &str, status: &str) -> Value {
+    json!({"method": method, "params": {"threadId": thread, "turn": {"id": turn,
+        "rootTurnId": "t1", "items": [], "status": status, "error": null}}})
+}
+
+fn is_task(state: State) -> impl Fn(&Emitted) -> bool {
+    move |e| matches!(e.event.body(), Body::Task(_)) && e.event.header().state == state
+}
+
+// From Codex 0.171.0 a subagent's thread can be announced with the thread that started it
+// (`parentThreadId`) and no item naming it: it is shown in the chat of its parent all the same.
+#[tokio::test]
+async fn a_thread_started_under_a_chats_thread_is_its_subagent() {
+    let (mut codex, mut fake) = running().await;
+    until(&mut codex, is_turn(State::Running)).await;
+    fake.say(
+        json!({"method": "thread/started", "params": {"thread": {"id": "sub1",
+        "parentThreadId": "th1"}}}),
+    )
+    .await;
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    fake.say(json!({"method": "item/completed", "params": {"threadId": "sub1", "turnId": "st1",
+        "item": {"type": "agentMessage", "id": "w1", "text": "found it", "phase": "final_answer"}}}))
+        .await;
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "completed"))
+        .await;
+    let events = until(&mut codex, is_task(State::Done)).await;
+    for e in &events {
+        let header = e.event.header();
+        assert_eq!(e.chat, Some("c-1".into()));
+        assert_eq!(header.session.as_ref().map(|s| s.as_str()), Some("th1"));
+        assert_eq!(header.turn.as_ref().map(|t| t.as_str()), Some("t1"));
+    }
+    let said = events.iter().any(|e| e.event.header().text == "found it");
+    assert!(said, "the subagent's words reach the chat");
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e.event.body(), Body::Session(_))),
+        "a subagent's thread is no session of the chat"
+    );
+    assert_eq!(codex.unrouted(), 0);
+}
+
+// Stop interrupts the turn and its subagent's turn. Codex refusing the subagent's leaves the Stop
+// waiting only for the turn, whose end settles it.
+#[tokio::test]
+async fn a_stop_codex_refuses_for_a_subagent_waits_for_the_rest() {
+    let (mut codex, mut fake) = running().await;
+    let started = json!({"type": "subAgentActivity", "id": "a1", "kind": "started",
+        "agentThreadId": "sub1", "agentPath": "/root/a"});
+    fake.say(
+        json!({"method": "item/completed", "params": {"threadId": "th1", "turnId": "t1",
+        "item": started}}),
+    )
+    .await;
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    until(&mut codex, is_task(State::Running)).await;
+    let stop = Control {
+        request: "r1".into(),
+        by: alice(),
+        action: Action::Interrupt { turn: "t1".into() },
+    };
+    let driver = tokio::spawn(async move {
+        codex.control(stop).await.unwrap();
+        codex
+    });
+    let first = fake.hear().await;
+    let second = fake.hear().await;
+    assert_eq!(first["params"]["threadId"], "th1", "the parent first");
+    assert_eq!(second["params"]["threadId"], "sub1");
+    let mut codex = driver.await.unwrap();
+    fake.say(json!({"id": second["id"], "error": {"code": -32600, "message": "no"}}))
+        .await;
+    fake.say(json!({"id": first["id"], "result": {}})).await;
+    fake.say(turn("turn/completed", "interrupted")).await;
+    let events = until(&mut codex, is_turn(State::Cancelled)).await;
+    let settling: Vec<&Emitted> = (events.iter())
+        .filter(|e| e.settles.contains(&"r1".into()))
+        .collect();
+    assert_eq!(settling.len(), 1, "settled once");
+    assert!(matches!(settling[0].event.body(), Body::Turn(_)));
+}

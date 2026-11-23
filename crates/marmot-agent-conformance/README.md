@@ -83,11 +83,37 @@ Every driver runs these, but where the table under "What was run" says otherwise
 
 The pipe between driver and harness holds 256 bytes each way, so a dropped wait can fall in the middle of a write.
 
+### Subagents
+
+A driver whose harness starts subagents also runs the scenarios in `src/subagents.rs` (Codex's, today; D-117).
+The fake reads four more words: `#spawn` starts one subagent on Codex's newer runtime and waits for it, `#spawn1`
+the same on the older runtime, whose subagent's turn starts before the item that names it is complete, `#nest` a
+subagent that starts one of its own, and `#outlive` a subagent the turn does not wait for. The prompt's other
+words say what the subagent does, as for any turn. The checks are that the chat shows each subagent flat: a
+`subagent` tool item, a `subagent` task naming it, the subagent's words naming it as `parent`, all in the chat's
+one session.
+
+| Scenario | What happens |
+| --- | --- |
+| `subagent_in_its_parents_chat` | A subagent's work reaches the chat of the turn that started it, and not another chat served meanwhile |
+| `subagent_speaks_first` | The older runtime: what the subagent says before the item that names it is held, and shown |
+| `nested_subagents` | A subagent's subagent is shown too, named by the item of the subagent that started it |
+| `subagent_asks_for_approval` | A subagent's approval waits in the chat, and the answer reaches the subagent |
+| `stop_stops_every_subagent` | Stop while the agent waits for a subagent: both stop, and the Stop is settled once, by the last to end |
+| `stop_after_the_turn_has_ended` | Stop naming the agent's ended turn stops the subagent still working under it |
+| `stop_stops_nested_subagents` | Stop stops the agent, its subagent and that subagent's subagent, each parent first |
+| `dies_with_subagents_running` | The harness dies while two subagents work: every item closes (S2) |
+| `new_session_with_subagents_running` | A new session while a subagent of the old one works: its items close (D-070) |
+| `restart_with_subagents_running` | A restart while a subagent works: the next prompt takes the session up, and nothing of the old subagent is shown |
+
+`replays_subagent_recordings` plays four of `fixtures/recordings/codex/subagents` back through the Codex driver,
+with the same checks.
+
 ## The fakes
 
 | Fake | From | Shapes | What differs |
 | --- | --- | --- | --- |
-| Codex | the stand-in in `crates/marmot-agent-codex/tests/driver.rs` | threads, turns, `commandExecution`, approvals, `requestUserInput`, the driver's `send_file` dynamic tool (`item/tool/call`, only on a thread started with it), steer, interrupt, settings, resume | one process for every chat |
+| Codex | the stand-in in `crates/marmot-agent-codex/tests/driver.rs` | threads, turns, `commandExecution`, approvals, `requestUserInput`, the driver's `send_file` dynamic tool (`item/tool/call`, only on a thread started with it), steer, interrupt, settings, resume, subagents (`subAgentActivity`, `collabAgentToolCall`, `rootTurnId`; an interrupt leaves a turn's subagents running) | one process for every chat |
 | ACP | the agent in `crates/marmot-agent-acp/tests/driver.rs` | sessions, prompts, tool calls, `request_permission` (with `#twice`, two at once for one tool call; with `#garbled`, one naming no tool call), `elicitation/create` (with `#garbled`, a form at a web address), a turn that goes on without what the client refused, cancel, config options, MCP servers over HTTP (`src/fake/mcp.rs` is the client: `initialize`, `tools/list`, `tools/call`) | **OpenCode**: `session/resume`; one tool server of a name for every session in a folder, the last handed over, the calling session named in `_meta["ai.opencode/sessionID"]`. **Goose**: `session/load` with a replay, sessions numbered by day, `activeRunId`, and after a crash a run of its own until cancelled; servers kept per session, the caller named in `_meta["agent-session-id"]`. **Cursor**: `session/load`, no name, `cursor/update_todos` naming only its tool call; servers kept per session, the caller not named. Each holds a cancelled turn open while its tool call is out. The driver is run with file sending switched on (`serve_files`, as `send_files = true` does) |
 | Pi | `crates/marmot-agent-pi/tests/fake_pi.py` | Pi's records, extension dialogs, the driver's `send_file` tool (only with the driver's extension loaded, asking in its dialog), steering, abort, a session's file written once it holds a message | one process per chat: the driver runs `src/fake/relay.py`, which connects its standard input and output to a socket the test serves, so each Pi is scripted in Rust |
 
