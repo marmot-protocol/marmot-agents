@@ -852,16 +852,19 @@ does, and feeds it to the chat's translator:
   call Hermes gives a platform for it, by the question's id, and is closed only once Hermes has taken the
   answer. A request to confirm a typed command is answered by typing the answer, as a person would.
 - For Hermes a control is a typed command. Interrupt types `/stop` in the turn's chat as its sender, new
-  session types `/new`, and setting the model types `/model <id>`, after which, once Hermes says it switched,
-  the plugin asks Hermes for the session's model. No other setting can be changed from the chat yet. A
+  session types `/new`, and setting the model types `/model <id>`, after which, once Hermes says it switched
+  (or, for `/model reset`, that it cleared the override), the plugin asks Hermes for the session's model. No other setting can be changed from the chat yet. A
   session's name gives its sender, so after a restart too a new session is asked for as the sender whose
   session it is. A control is taken once Hermes has the command, not once Hermes answers it: the core waits
   only 30 seconds for a request to be taken, and the plugin takes the core's requests one at a time.
 - The event that shows an answer's or a control's effect names it: the approval's or question's next edit,
   the end of the interrupted turn, the end of the old session once Hermes has replaced it (or the new session,
-  when the old one was not shown since the plugin started), or the session item that shows the new model.
-  When Hermes refuses `/new` or `/model`, its reply, which the chat sees as command output, settles the
-  request (provisional; before, the request was refused with Hermes's words). An answer Hermes did not take can
+  when the old one was not shown since the plugin started), or the session item that shows the model read
+  after Hermes took the change. When Hermes refuses `/new` or `/model`, its reply, which the chat sees as
+  command output, settles the request (provisional; before, the request was refused with Hermes's words).
+  When Hermes first asks to confirm the command, its question is not the outcome: its reply to the answer
+  is. One reset settles one request, so a second new session for a session whose reset is still on its way
+  is refused as `busy` (provisional). An answer Hermes did not take can
   be given again.
 - The plugin keeps one connector while Hermes runs, across connections to the core. When a connection goes,
   that core closes the items open in the chat and settles the requests it handed over

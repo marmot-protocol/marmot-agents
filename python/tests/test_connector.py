@@ -542,6 +542,88 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.feed(said("Unknown model `x`.", self.hermes.typed[-1][2], notify=True))
         self.assertEqual(self.of("notice")[-1]["settles"], ["r-2"])
 
+    async def test_a_reset_hermes_asks_to_confirm_is_settled_by_the_session_it_replaced(self):
+        """Hermes asks before a reset (`fixtures/recordings/hermes/new_session.jsonl`): a confirm card, then
+        its words again as the reply to the command. That reply is a question, not the outcome; the
+        reset that follows the answer settles the request."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), said("Hi.", "m-1", notify=True), complete("m-1"))
+        session = self.of("session")[0]["session"]
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "new_session", "chat": CHAT, "session": session}})
+        typed = self.hermes.typed[-1]
+        asking = "⚠️ **Confirm /new**\n\nThis starts a fresh session."
+        self.feed(started(typed[2], "/new"),
+                  hook("send_slash_confirm", chat_id="c-1", title="/new", message=asking,
+                       session_key="agent:main:marmot:dm:c-1:u-1", confirm_id="k-1", metadata=None),
+                  said(asking, typed[2], notify=True), complete(typed[2]))
+        self.assertEqual([e for e in self.sent if "settles" in e], [])
+        await self.connector.serve("answer", {"request": "r-2", "item": "confirm:k-1", "by": ALICE,
+                                              "given": {"questions": [{"question": "q0", "options": ["o0"]}]}})
+        approve = self.hermes.typed[-1]
+        self.assertEqual(approve[3], "/approve")
+        self.feed(started(approve[2], "/approve"), said("✨ Session reset! Starting fresh.", approve[2], notify=True),
+                  complete(approve[2]))
+        settled = [(e["item"], e["state"], e["settles"]) for e in self.sent if "settles" in e]
+        self.assertEqual(settled, [("confirm:k-1", "done", ["r-2"]), (f"session:{session}", "done", ["r-1"])])
+
+    async def test_a_model_switch_hermes_asks_to_confirm_is_settled_by_the_model_it_shows(self):
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), *model_settings(model="m"), complete("m-1"))
+        session = self.of("session")[-1]["session"]
+        self.hermes.read_model = lambda: self.feed(*model_settings(model="n"))
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "set", "session": session, "setting": "model", "value": "n"}})
+        typed = self.hermes.typed[-1]
+        asking = "⚠️ **Confirm /model**\n\nThis model costs more."
+        self.feed(hook("send_slash_confirm", chat_id="c-1", title="/model", message=asking,
+                       session_key="agent:main:marmot:dm:c-1:u-1", confirm_id="k-2", metadata=None),
+                  said(asking, typed[2], notify=True))
+        self.assertEqual([e for e in self.sent if "settles" in e], [])
+        await self.connector.serve("answer", {"request": "r-2", "item": "confirm:k-2", "by": ALICE,
+                                              "given": {"questions": [{"question": "q0", "options": ["o0"]}]}})
+        approve = self.hermes.typed[-1]
+        self.feed(said("Model switched to `n`\nProvider: Custom endpoint", approve[2], notify=True))
+        await asyncio.sleep(0)
+        shown = self.of("session")[-1]
+        self.assertEqual((shown["text"], shown["settles"]), ("Model: n, Provider: custom", ["r-1"]))
+
+    async def test_a_second_reset_while_one_is_on_its_way_is_refused(self):
+        """One reset settles one request: a second `/new` for the same session waits for the first."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), said("Hi.", "m-1", notify=True), complete("m-1"))
+        session = self.of("session")[0]["session"]
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "new_session", "chat": CHAT, "session": session}})
+        with self.assertRaises(Refusal) as busy:
+            await self.connector.serve("control", {"request": "r-2", "by": ALICE, "action": {
+                "type": "new_session", "chat": CHAT, "session": session}})
+        self.assertEqual(busy.exception.reason, "busy")
+        self.assertEqual([t[3] for t in self.hermes.typed].count("/new"), 1)
+
+    async def test_a_model_reset_is_settled_by_the_model_hermes_then_shows(self):
+        """`/model reset` succeeds with other words (`fixtures/recordings/hermes/model_switch.jsonl`), and
+        a model Hermes names after a switch may be spelt otherwise than asked: the model read after either
+        settles the request."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), *model_settings(model="n"), complete("m-1"))
+        session = self.of("session")[-1]["session"]
+        self.hermes.read_model = lambda: self.feed(*model_settings(model="m"))
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "set", "session": session, "setting": "model", "value": "reset"}})
+        self.feed(said("Session model override cleared — now using `m` (the channel/global default). "
+                       "Conversation history kept.", self.hermes.typed[-1][2], notify=True))
+        await asyncio.sleep(0)
+        self.assertEqual(self.hermes.model_reads, [("c-1", "u-1")])
+        shown = self.of("session")[-1]
+        self.assertEqual((shown["text"], shown["settles"]), ("Model: m, Provider: custom", ["r-1"]))
+        self.hermes.read_model = lambda: self.feed(*model_settings(model="vendor/n"))
+        await self.connector.serve("control", {"request": "r-2", "by": ALICE, "action": {
+            "type": "set", "session": session, "setting": "model", "value": "n"}})
+        self.feed(said("Model switched to `vendor/n`", self.hermes.typed[-1][2], notify=True))
+        await asyncio.sleep(0)
+        self.assertEqual(self.of("session")[-1]["settles"], ["r-2"])
+
     async def test_what_is_not_offered_is_refused(self):
         with self.assertRaises(Refusal) as refused:
             await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
