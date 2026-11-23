@@ -9,7 +9,7 @@ import { createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { eventProblems, problems } from "./protocol.ts";
+import { eventMessageProblems, problems } from "./protocol.ts";
 
 registerHooks({
   resolve(specifier, context, next) {
@@ -52,7 +52,7 @@ async function fakeCore(dir: string) {
         const m = JSON.parse(buffered.slice(0, at)) as Json;
         buffered = buffered.slice(at + 1);
         lines.push(m);
-        const found = m["method"] === "event" ? eventProblems(m["params"]) : problems("FromConnector", m);
+        const found = m["method"] === "event" ? eventMessageProblems(m) : problems("FromConnector", m);
         for (const p of found) invalid.push(`from the plugin: ${p}`);
         const reply = (body: Json) => {
           const answer = { jsonrpc: "2.0", id: m["id"], ...body };

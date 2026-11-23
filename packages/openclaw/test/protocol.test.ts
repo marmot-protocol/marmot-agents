@@ -9,6 +9,18 @@ import { test } from "node:test";
 import { Translator, type Line } from "../src/translate.ts";
 import { assertValid, eventProblems, examples } from "./protocol.ts";
 
+test("this package's checker is the Claude Code package's, past its opening comment", () => {
+  const body = (file: URL) => {
+    const text = readFileSync(file, "utf8");
+    return text.slice(text.indexOf("\nimport "));
+  };
+  assert.equal(
+    body(new URL("./protocol.ts", import.meta.url)),
+    body(new URL("../../claude-code/test/protocol.ts", import.meta.url)),
+    "packages/openclaw/test/protocol.ts and packages/claude-code/test/protocol.ts differ: change both",
+  );
+});
+
 test("every example of the socket's messages is what the schema says", () => {
   assert.ok(examples.length > 0);
   for (const e of examples) assertValid(e.from === "core" ? "FromCore" : "FromConnector", e.message, e.name);

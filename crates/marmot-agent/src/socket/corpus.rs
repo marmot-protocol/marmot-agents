@@ -43,18 +43,26 @@ fn schema() -> Value {
         "$defs": definitions,
     });
     close(&mut schema, false);
+    // A hello names the one protocol the core speaks: any other is refused (D-020).
+    schema["$defs"]["HelloParams"]["properties"]["protocol"]["const"] = PROTOCOL.into();
     schema
 }
 
 /// Admits no field an object does not name: `unevaluatedProperties` on every object schema with
-/// properties, except one that is a branch of another's `oneOf`, `anyOf` or `allOf`, whose fields
-/// count as the parent's.
+/// properties, and on every object with none (an empty struct), except one that is a branch of
+/// another's `oneOf`, `anyOf` or `allOf`, whose fields count as the parent's. A schema with no
+/// `type`, such as a native payload, is any JSON value and stays open.
 fn close(schema: &mut Value, branch: bool) {
     let Some(object) = schema.as_object_mut() else {
         return;
     };
     let named = object.contains_key("properties");
-    if named && !branch && !object.contains_key("additionalProperties") {
+    let object_type = object.get("type").is_some_and(|t| {
+        t == "object"
+            || t.as_array()
+                .is_some_and(|ts| ts.iter().any(|t| t == "object"))
+    });
+    if (named || object_type) && !branch && !object.contains_key("additionalProperties") {
         object.insert("unevaluatedProperties".into(), false.into());
     }
     for (key, value) in object.iter_mut() {

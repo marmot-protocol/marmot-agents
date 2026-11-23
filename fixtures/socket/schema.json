@@ -611,7 +611,8 @@
     },
     "Taken": {
       "type": "object",
-      "description": "The empty result of a request taken."
+      "description": "The empty result of a request taken.",
+      "unevaluatedProperties": false
     },
     "ErrorMessage": {
       "type": "object",
@@ -826,7 +827,8 @@
       "properties": {
         "protocol": {
           "type": "string",
-          "description": "`marmot.agent-control.v3` (D-020)."
+          "description": "`marmot.agent-control.v3` (D-020).",
+          "const": "marmot.agent-control.v3"
         },
         "connector": {
           "$ref": "#/$defs/Connector",
@@ -1534,7 +1536,8 @@
     },
     "Reasoning": {
       "type": "object",
-      "description": "The agent's thinking. It carries nothing beyond the event's `text`."
+      "description": "The agent's thinking. It carries nothing beyond the event's `text`.",
+      "unevaluatedProperties": false
     },
     "Tool": {
       "type": "object",

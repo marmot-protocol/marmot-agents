@@ -95,6 +95,13 @@ export function eventProblems(event: unknown): string[] {
   return problems("EventParams", withoutPassedOver(JSON.parse(JSON.stringify(event)) as Json));
 }
 
+/** What is wrong with a whole `event` message, as the core reads it: its params without the fields the core passes over. */
+export function eventMessageProblems(message: Json): string[] {
+  const copy = JSON.parse(JSON.stringify(message)) as Json;
+  copy["params"] = withoutPassedOver(copy["params"] as Json);
+  return problems("FromConnector", copy);
+}
+
 /** Fails unless `value` is a `def` of the schema. */
 export function assertValid(def: "FromCore" | "FromConnector" | "EventParams", value: unknown, what: string): void {
   assert.deepEqual(problems(def, value), [], `${what} is not what the core's types say: ${JSON.stringify(value)}`);

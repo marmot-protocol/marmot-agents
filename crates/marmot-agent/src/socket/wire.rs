@@ -14,7 +14,8 @@ use marmot_agent_driver as driver;
 use serde::{Deserialize, Serialize};
 
 /// The version of JSON-RPC every message names (D-033).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub enum JsonRpc {
     /// JSON-RPC 2.0.
@@ -25,7 +26,8 @@ pub enum JsonRpc {
 
 /// The id of a connector's request: a number or text, as JSON-RPC allows. The core's own requests
 /// are numbered.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum Id {
@@ -38,7 +40,8 @@ pub enum Id {
 // --------------------------------------------------------------------------- from the core
 
 /// A request from the core (D-058).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct CoreRequestMessage {
     /// Always `2.0`.
@@ -52,7 +55,8 @@ pub struct CoreRequestMessage {
 
 /// What the core asks a connector to do. Each is answered as soon as the connector has taken it or
 /// refused it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 pub enum CoreRequest {
@@ -65,7 +69,8 @@ pub enum CoreRequest {
 }
 
 /// A message for the agent. A slash command is one too: it is passed exactly as typed (D-031).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct PromptParams {
     /// The core's id for the message.
@@ -87,7 +92,8 @@ pub struct PromptParams {
 }
 
 /// A chat (D-036).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct Chat {
     /// The core's id for the chat.
@@ -103,7 +109,8 @@ pub struct Chat {
 }
 
 /// A person (D-036).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct Person {
     /// The core's id for the person.
@@ -113,7 +120,8 @@ pub struct Person {
 }
 
 /// A file sent with a prompt.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct Attachment {
     /// Where the core wrote the file.
@@ -125,7 +133,8 @@ pub struct Attachment {
 }
 
 /// The message a prompt replies to.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct Quoted {
     /// The core's id for the message replied to.
@@ -138,7 +147,8 @@ pub struct Quoted {
 
 /// A person's answer to an approval or a question. It goes to the harness's own answer call
 /// (D-028).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct AnswerParams {
     /// The core's id for this answer, which the event that shows its effect names in `settles`.
@@ -152,7 +162,8 @@ pub struct AnswerParams {
 }
 
 /// What an answer holds, by the ids the item offered.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Given {
@@ -164,7 +175,8 @@ pub enum Given {
 
 /// The answer to one question, as it is delivered to the harness. For a secret question it holds
 /// the secret (D-041).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct Reply {
     /// The id of the question.
@@ -176,7 +188,8 @@ pub struct Reply {
 }
 
 /// Something a person does unprompted (D-029).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct ControlParams {
     /// The core's id for this control, which the event that shows its effect names in `settles`.
@@ -188,7 +201,8 @@ pub struct ControlParams {
 }
 
 /// What a control does.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlAction {
@@ -224,7 +238,8 @@ pub enum ControlAction {
 }
 
 /// The core's answer to a hello it took.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct WelcomeMessage {
     /// Always `2.0`.
@@ -236,7 +251,8 @@ pub struct WelcomeMessage {
 }
 
 /// What the core says of itself and the agent, in answer to a hello.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct Welcome {
     /// The core.
@@ -246,7 +262,8 @@ pub struct Welcome {
 }
 
 /// The core's release.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct CoreVersion {
     /// Its version.
@@ -254,7 +271,8 @@ pub struct CoreVersion {
 }
 
 /// The agent's display name.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct AgentName {
     /// The name.
@@ -288,7 +306,8 @@ pub enum ConnectorRequest {
 }
 
 /// A connector's hello. One connection is one agent, and the token says which (D-035, D-038).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct HelloParams {
     /// `marmot.agent-control.v3` (D-020).
@@ -308,7 +327,8 @@ pub struct HelloParams {
 }
 
 /// A connector's name and release version.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct Connector {
     /// The name.
@@ -318,7 +338,8 @@ pub struct Connector {
 }
 
 /// A harness's name and version.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct Harness {
     /// The name, such as `claude-code`. Nothing above a driver acts on it.
@@ -335,7 +356,8 @@ impl From<Harness> for driver::Harness {
 }
 
 /// What a harness can do (D-058).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct Capabilities {
     /// Whether a running turn can be stopped.
@@ -400,7 +422,8 @@ impl From<Capabilities> for driver::Capabilities {
 }
 
 /// What a harness does with a prompt that arrives while a turn is running.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum MidTurn {
@@ -413,7 +436,8 @@ pub enum MidTurn {
 }
 
 /// Who picks the session a prompt goes to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Sessions {
@@ -424,7 +448,8 @@ pub enum Sessions {
 }
 
 /// Which attachments a prompt may carry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum FilesIn {
@@ -437,7 +462,8 @@ pub enum FilesIn {
 }
 
 /// A typed command that needs the right to approve.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct ApprovalCommand {
     /// The command as typed, such as `/approve`.
@@ -447,7 +473,8 @@ pub struct ApprovalCommand {
 }
 
 /// Where in a message a typed command counts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Position {
@@ -458,7 +485,8 @@ pub enum Position {
 }
 
 /// A file the agent asks the core to send to a chat (D-090; a proposal).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct SendFileParams {
     /// The core's id for the chat.
@@ -536,7 +564,8 @@ impl schemars::JsonSchema for ConnectorEvent {
 pub const CORE_FILLS: [&str; 2] = ["harness", "seq"];
 
 /// What an `event` carries beyond the agent event (D-058).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct EventExtras {
     /// The core's id for the chat the event belongs to, whenever the connector knows it.
@@ -554,7 +583,8 @@ pub struct EventExtras {
 
 /// A request taken: the connector's answer to a request of the core's, and the core's answer to a
 /// file sent.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct TakenMessage {
     /// Always `2.0`.
@@ -566,12 +596,14 @@ pub struct TakenMessage {
 }
 
 /// The empty result of a request taken.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct Taken {}
 
 /// A request refused.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct ErrorMessage {
     /// Always `2.0`.
@@ -587,7 +619,8 @@ pub struct ErrorMessage {
 /// A refusal has the code `-32000`, the reason as its message, and `data`. A hello the core refuses
 /// has no `data`: `-32001` for another protocol version, `-32002` for a token that is not this
 /// agent's, `-32600` or `-32602` for a hello it cannot read.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct RpcError {
     /// The code.
@@ -600,7 +633,8 @@ pub struct RpcError {
 }
 
 /// Why a request was refused, and in words for the chat or the agent.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub struct Refused {
     /// Why.
@@ -612,7 +646,8 @@ pub struct Refused {
 }
 
 /// The reasons a request may be refused. Only the core refuses with `not_allowed` (D-090).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Reason {

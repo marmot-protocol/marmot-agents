@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { CAPABILITIES, Connector, type ConnectorOptions, type CoreEvent, type Port, type RunInput } from "../src/connector.ts";
 import { fitEvent } from "../src/fit.ts";
 import { CoreConnection, MAX_MESSAGE, notificationSize, Refusal } from "../src/socket.ts";
-import { coreRequests, eventProblems, problems, tracked, unknownReads } from "./protocol.ts";
+import { coreRequests, eventMessageProblems, eventProblems, problems, tracked, unknownReads } from "./protocol.ts";
 
 type Json = Record<string, unknown>;
 type Callback = (...args: unknown[]) => unknown;
@@ -135,7 +135,7 @@ afterEach(() => {
 
 function check(def: "FromCore" | "FromConnector", m: unknown, what: string): void {
   const event = def === "FromConnector" && (m as Json)["method"] === "event";
-  const found = event ? eventProblems((m as Json)["params"]) : problems(def, m);
+  const found = event ? eventMessageProblems(m as Json) : problems(def, m);
   for (const p of found) invalid.push(`${what}: ${p}`);
 }
 

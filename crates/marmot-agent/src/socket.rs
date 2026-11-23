@@ -264,35 +264,33 @@ impl SocketDriver {
             let _ = write_line(&mut writer, &refuse(-32002, "not this agent's token")).await;
             return Err(HelloError::Token);
         }
-        let hello = match wire::HelloParams::deserialize(params) {
-            Ok(hello) => hello,
-            Err(_) => {
-                let what = if wire::Capabilities::deserialize(&params["capabilities"]).is_err() {
-                    "capabilities missing or invalid"
-                } else if params
-                    .get("folder")
-                    .is_some_and(|f| !(f.is_null() || f.is_string()))
-                {
-                    "folder is not a whole path"
-                } else {
-                    "the hello's connector or harness is missing or invalid"
-                };
-                let _ = write_line(&mut writer, &refuse(-32602, what)).await;
-                return Err(HelloError::NotHello);
-            }
+        // Read field by field, as before the schema: the schema checks what this repository's
+        // connectors send, and the core stays as lenient as it was with what it can do without.
+        let Ok(capabilities) = wire::Capabilities::deserialize(&params["capabilities"]) else {
+            let refusal = refuse(-32602, "capabilities missing or invalid");
+            let _ = write_line(&mut writer, &refusal).await;
+            return Err(HelloError::NotHello);
         };
+        let capabilities = Capabilities::from(capabilities);
         // Optional: a connector whose harness keeps a workspace of its own states none (D-101).
-        let folder = match hello.folder {
-            None => None,
-            Some(folder) if Path::new(&folder).is_absolute() => Some(PathBuf::from(folder)),
+        let folder = match params.get("folder") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(folder)) if Path::new(folder).is_absolute() => {
+                Some(PathBuf::from(folder))
+            }
             Some(_) => {
                 let refusal = refuse(-32602, "folder is not a whole path");
                 let _ = write_line(&mut writer, &refusal).await;
                 return Err(HelloError::NotHello);
             }
         };
-        let capabilities = Capabilities::from(hello.capabilities);
-        let harness = Harness::from(hello.harness);
+        let harness = Harness {
+            name: params["harness"]["name"]
+                .as_str()
+                .unwrap_or("connector")
+                .to_string(),
+            version: params["harness"]["version"].as_str().map(String::from),
+        };
         let welcome = wire::WelcomeMessage {
             jsonrpc: wire::JsonRpc::V2,
             id,
@@ -407,14 +405,13 @@ impl SocketDriver {
             return None;
         }
         let id = envelope.id.clone().filter(|id| !id.is_null())?;
-        let params = envelope
+        // Each field on its own, so a chat that can be read still gets the refusal's notice when
+        // the path cannot.
+        let params: Value = envelope
             .params
             .as_ref()
-            .and_then(|raw| serde_json::from_str::<wire::SendFileParams>(raw.get()).ok())
-            .unwrap_or(wire::SendFileParams {
-                chat: String::new(),
-                path: String::new(),
-            });
+            .and_then(|raw| serde_json::from_str(raw.get()).ok())
+            .unwrap_or(Value::Null);
         let key = id.to_string();
         if self.files.contains_key(&key) {
             // The same id again, while the first is unanswered: refused, and not sent.
@@ -424,8 +421,8 @@ impl SocketDriver {
         self.files.insert(key.clone(), id);
         Some(SendFile {
             id: key,
-            chat: marmot_agent_driver::ChatId(params.chat),
-            path: params.path.into(),
+            chat: params["chat"].as_str().unwrap_or_default().into(),
+            path: params["path"].as_str().unwrap_or_default().into(),
         })
     }
 
@@ -455,20 +452,18 @@ impl SocketDriver {
         }
         let mut fields: BTreeMap<String, Box<RawValue>> =
             serde_json::from_str(envelope.params.as_ref()?.get()).ok()?;
-        // What the event follows from, read through its type; the rest is the event itself. One
-        // given as `null` is read as left out.
-        let extras: serde_json::Map<String, Value> = ["chat", "prompts", "settles"]
-            .into_iter()
-            .filter_map(|field| {
-                let value: Value = serde_json::from_str(fields.remove(field)?.get()).ok()?;
-                (!value.is_null()).then(|| (field.to_string(), value))
-            })
-            .collect();
-        let wire::EventExtras {
-            chat,
-            prompts,
-            settles,
-        } = wire::EventExtras::deserialize(Value::Object(extras)).ok()?;
+        // What the event follows from, each field on its own and as lenient as before the schema:
+        // one the core cannot read is left out, and the event is still read.
+        let text = |raw: Option<Box<RawValue>>| -> Option<String> {
+            serde_json::from_str(raw?.get()).ok()
+        };
+        let ids = |raw: Option<Box<RawValue>>| -> Vec<String> {
+            raw.and_then(|raw| serde_json::from_str(raw.get()).ok())
+                .unwrap_or_default()
+        };
+        let chat = text(fields.remove("chat"));
+        let prompts = ids(fields.remove("prompts"));
+        let settles = ids(fields.remove("settles"));
         for filled in wire::CORE_FILLS {
             fields.remove(filled);
         }
