@@ -112,11 +112,12 @@ impl Again {
 struct Unsaved;
 
 /// What the core says when it stops because it could not save.
-/// How long, in seconds, the core waits to try publishing the agent's name again after its profile
-/// could not be read, at first and at most: twice as long after each try that fails.
-const NAME_AGAIN: (u64, u64) = (10, 600);
-
 const UNSAVED: &str = "the state file could not be written, so the core stopped";
+
+/// How long the core waits to try publishing the agent's name again after a try that failed, at
+/// first and at most: twice as long after each.
+const NAME_WAIT: Duration = Duration::from_secs(10);
+const NAME_WAIT_MAX: Duration = Duration::from_secs(600);
 
 /// How many times a file is offered to MDK while MDK says it is busy, about half a minute in all.
 const FILE_BUSY_TRIES: u32 = 10;
@@ -263,9 +264,6 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// The core's clock, which never jumps, for how long a control has waited (D-087). Tokio's,
     /// which is the system's except in a simulation, whose clock is virtual.
     started: Instant,
-    /// When to try publishing the agent's name again, in seconds on the core's clock, and how
-    /// long the last wait was; `None` when nothing is left to publish.
-    name_again: Option<(u64, u64)>,
     /// When this core subscribed to MDK's live events ([`Subscribed`]), by the machine's clock,
     /// in whole seconds as MDK gives the time a message arrived; zero until it runs.
     since: u64,
@@ -368,7 +366,6 @@ impl<D: Driver, M: Side> Core<D, M> {
             folders,
             config: config.clone(),
             started: Instant::now(),
-            name_again: None,
             since: 0,
             behind: BTreeSet::new(),
             retry: HashMap::new(),
@@ -421,7 +418,11 @@ impl<D: Driver, M: Side> Core<D, M> {
         mut events: M::Events,
         stop: impl Future<Output = ()>,
     ) -> Result<(), Unsaved> {
-        self.publish_name().await;
+        // The agent's name goes out beside everything else, as a task the core ends when it stops.
+        let _naming = (self.config.name.clone()).map(|name| {
+            let (marmot, relays) = (self.marmot.clone(), self.config.relays.clone());
+            Ending(tokio::spawn(publish_name(marmot, name, relays)))
+        });
         // What a stopped core left queued goes first, then what it left open is closed.
         self.flush_all().await?;
         let recovered = self.conversation.recover();
@@ -482,9 +483,6 @@ impl<D: Driver, M: Side> Core<D, M> {
             };
             match woke {
                 Woke::Tick => {
-                    if self.name_again.is_some_and(|(at, _)| self.clock() >= at) {
-                        self.publish_name().await;
-                    }
                     loop {
                         let acts = self.conversation.overdue(self.clock());
                         if acts.is_empty() {
@@ -594,24 +592,6 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// Seconds on the core's clock.
     fn clock(&self) -> u64 {
         self.started.elapsed().as_secs()
-    }
-
-    /// Publishes the agent's name from the settings in its profile, so people see it, keeping the
-    /// rest of the profile as it is. Nothing is published when the name is already right. When the
-    /// profile could not be read, or the name not published, it is tried again later, a little
-    /// later each time: never over a profile the core could not read (#139).
-    async fn publish_name(&mut self) {
-        let Some(name) = self.config.name.clone() else {
-            return;
-        };
-        match self.marmot.publish_name(&name, &self.config.relays).await {
-            Ok(()) => self.name_again = None,
-            Err(NotNow) => {
-                let wait = (self.name_again)
-                    .map_or(NAME_AGAIN.0, |(_, wait)| (wait * 2).min(NAME_AGAIN.1));
-                self.name_again = Some((self.clock() + wait, wait));
-            }
-        }
     }
 
     /// Accepts an invitation from someone who may add the agent, and declines the rest. A group
@@ -1103,6 +1083,28 @@ impl<D: Driver, M: Side> Core<D, M> {
 fn unix_now() -> u64 {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
     now.map_or(0, |d| d.as_secs())
+}
+
+/// Publishes the agent's name in its profile, so people see it, keeping the rest of the profile as
+/// it is; nothing when the name is already right. A try that fails, as when the profile could not
+/// be read, is made again 10 s later, and twice as long after each one that fails, up to 10
+/// minutes: never over a profile the core could not read (#139). It runs as a task of its own, as
+/// a read of the relays can take long, and ends when it is done or the core stops.
+async fn publish_name<M: Side>(marmot: M, name: String, relays: Vec<String>) {
+    let mut wait = NAME_WAIT;
+    while marmot.publish_name(&name, &relays).await.is_err() {
+        tokio::time::sleep(wait).await;
+        wait = (wait * 2).min(NAME_WAIT_MAX);
+    }
+}
+
+/// A task that ends when this is dropped.
+struct Ending(tokio::task::JoinHandle<()>);
+
+impl Drop for Ending {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// Reads a file from the allowed folders and sends it to `group`. It is offered to MDK again only

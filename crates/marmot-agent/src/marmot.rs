@@ -204,6 +204,10 @@ pub enum Fault {
     StoredFails,
     /// The relays cannot be read for the agent's profile, the next time the core reads it.
     ProfileFails,
+    /// The relays that answer hold no profile for the agent, the next time the core reads it.
+    ProfileMissing,
+    /// The agent's profile is read, and the next publish of its name fails.
+    NameFails,
     /// MDK takes the send and keeps it queued this long before its engine takes it, as when the
     /// engine is held up: until then MDK says it is queued.
     Held(Duration),
@@ -215,12 +219,21 @@ impl Faults {
         self.next.lock().expect("never poisoned").push_back(fault);
     }
 
-    /// The oldest fault for a send, one that is neither of the others.
+    /// Whether every fault pushed has been met.
+    pub fn is_empty(&self) -> bool {
+        self.next.lock().expect("never poisoned").is_empty()
+    }
+
+    /// The oldest fault for a send, one that is none of the others.
     fn next_send(&self) -> Option<Fault> {
         self.next(|f| {
             !matches!(
                 f,
-                Fault::PlaceFails | Fault::StoredFails | Fault::ProfileFails
+                Fault::PlaceFails
+                    | Fault::StoredFails
+                    | Fault::ProfileFails
+                    | Fault::ProfileMissing
+                    | Fault::NameFails
             )
         })
     }
@@ -903,25 +916,25 @@ impl Side for Marmot {
         let relays = (relays.iter())
             .map(|r| cgka_traits::TransportEndpoint(r.clone()))
             .collect();
-        let failed = (self.faults)
-            .next(|f| matches!(f, Fault::ProfileFails))
-            .is_some();
-        let current = if failed {
-            Err(())
-        } else {
-            self.runtime
+        let read = (self.faults).next(|f| matches!(f, Fault::ProfileFails | Fault::ProfileMissing));
+        let current = match read {
+            Some(Fault::ProfileFails) => Err(()),
+            Some(_) => Ok(None),
+            None => self
+                .runtime
                 .fetch_current_user_profile_for_account_id(self.agent.as_str(), relays)
                 .await
-                .map_err(drop)
+                .map_err(drop),
         };
-        // MDK's publisher reads the profile again and replaces its about, picture, NIP-05 and
-        // lightning address with those of the profile it is given: one made from nothing, for a
-        // read that failed, would wipe what others see. A read that found none on the relays
-        // that answered starts from nothing; MDK's own read keeps whatever it finds then.
-        let Ok(current) = current else {
+        // MDK's publisher replaces the profile's about, picture, NIP-05 and lightning address
+        // with those of the profile it is given, so the name is published only over a profile
+        // read here. A read that fails, or finds none on the relays that answered, is no
+        // profile: MDK's read says `None` so that a caller does not publish a partial one over
+        // what it could not confirm. The agent's first profile is published when its identity
+        // is made, so one that has none to read waits until the relays give it.
+        let Ok(Some(current)) = current else {
             return Err(NotNow);
         };
-        let current = current.unwrap_or_default();
         if current.name.as_deref() == Some(name) && current.display_name.as_deref() == Some(name) {
             return Ok(());
         }
@@ -930,10 +943,14 @@ impl Side for Marmot {
             display_name: Some(name.to_string()),
             ..current
         };
-        let published = self
-            .runtime
-            .publish_user_profile_using_account_relays(&self.label, profile)
-            .await;
+        let published = match (self.faults).next(|f| matches!(f, Fault::NameFails)) {
+            Some(_) => Err(()),
+            None => (self.runtime)
+                .publish_user_profile_using_account_relays(&self.label, profile)
+                .await
+                .map(drop)
+                .map_err(drop),
+        };
         if published.is_err() {
             eprintln!("marmot-agent: the agent's name could not be published; trying again later");
             return Err(NotNow);

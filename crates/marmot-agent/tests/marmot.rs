@@ -14,12 +14,33 @@ use marmot_app::MarmotAppEvent;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-// #139. When the agent's profile cannot be read as the core starts, the core publishes nothing
-// over it: MDK's publisher replaces the about, picture, NIP-05 and lightning address with those of
-// the profile it is given, so one made from nothing would wipe what others see. The core tries
-// again later, and publishes the name with the rest kept.
+// #139. MDK's publisher replaces the about, picture, NIP-05 and lightning address of the agent's
+// profile with those of the profile it is given, so the core publishes the agent's name only over
+// a profile it has read: when the read fails, finds no profile, or the publish fails, the profile
+// on the relay stays as it was, and the core tries again later, publishing the name with the rest
+// kept.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_profile_that_cannot_be_read_is_not_published_over() {
+    the_name_waits_out(Fault::ProfileFails).await;
+}
+
+// MDK's read says `None` when the relays hold no fresh profile, so that a caller does not publish
+// a partial one over what it could not confirm: the core waits for a read that finds it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_read_that_finds_no_profile_publishes_nothing_over_it() {
+    the_name_waits_out(Fault::ProfileMissing).await;
+}
+
+// The read works and the publish fails: it is tried again later, from a new read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_name_whose_publish_failed_is_published_on_a_later_try() {
+    the_name_waits_out(Fault::NameFails).await;
+}
+
+/// Publishes a full profile for the agent under another name, starts the core with `fault`
+/// waiting for its first try, and checks that the relay shows that profile unchanged once the
+/// fault is met, and the agent's name with the rest kept after a later try.
+async fn the_name_waits_out(fault: Fault) {
     let world = World::new("name = \"Echo\"\n[codex]\ncwd = \"/unused\"\n").await;
     world.runtime.start().await.unwrap();
     let before = marmot_app::UserProfileMetadata {
@@ -37,24 +58,25 @@ async fn a_profile_that_cannot_be_read_is_not_published_over() {
         .unwrap();
     // A second on, so the core's profile is newer than this one.
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    world.marmot.faults.push(Fault::ProfileFails);
+    world.marmot.faults.push(fault);
     let core = world.start(Echo::new(Arc::default()));
-    let relays = vec![cgka_traits::TransportEndpoint(world.relay.clone())];
-    let mut profile = None;
+    // The first try meets the fault, and the next is 10 s later.
+    eventually(|| world.marmot.faults.is_empty().then_some(())).await;
+    let kept = agent_profile(&world).await;
+    let as_published = marmot_app::UserProfileMetadata {
+        created_at: 0,
+        source_relays: Vec::new(),
+        ..kept.clone()
+    };
+    assert_eq!(as_published, before, "nothing published over it");
+    let mut profile = kept;
     for _ in 0..60 {
-        let read = (world.runtime)
-            .fetch_current_user_profile_for_account_id(&world.agent, relays.clone())
-            .await
-            .unwrap()
-            .expect("a profile on the relay");
-        let named = read.name.as_deref() == Some("Echo");
-        profile = Some(read);
-        if named {
+        if profile.name.as_deref() == Some("Echo") {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        profile = agent_profile(&world).await;
     }
-    let profile = profile.unwrap();
     assert_eq!(
         profile.name.as_deref(),
         Some("Echo"),
@@ -68,6 +90,16 @@ async fn a_profile_that_cannot_be_read_is_not_published_over() {
     );
     core.stop().await;
     world.runtime.shutdown().await;
+}
+
+/// The agent's profile as the relay holds it.
+async fn agent_profile(world: &World) -> marmot_app::UserProfileMetadata {
+    let relays = vec![cgka_traits::TransportEndpoint(world.relay.clone())];
+    (world.runtime)
+        .fetch_current_user_profile_for_account_id(&world.agent, relays)
+        .await
+        .unwrap()
+        .expect("a profile on the relay")
 }
 
 // A person who owns the agent invites it to a direct chat and writes to it. The core accepts the
