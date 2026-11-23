@@ -77,6 +77,9 @@ OpenAI's protocol crates nor `codex-codes`. The Cursor row is replaced by
 [D-080](#d-080-cursor-is-driven-through-acp): Cursor goes through the ACP driver. What the Pi driver builds on
 is replaced by [D-086](#d-086-the-pi-driver-reads-pis-rpc-messages-with-types-of-its-own): Pi's records read
 with types of its own, not `pi-codes`.
+The Hermes and OpenClaw rows are extended by
+[D-113](#d-113-hermes-and-openclaw-are-channel-plugins-with-a-narrower-contract-than-a-driver): each plugin is a
+channel plugin, with a narrower contract than a driver.
 
 ## D-006 Prefer official interfaces and libraries
 
@@ -1909,3 +1912,25 @@ place of the temporary kinds of
 fit its conventions: an edit's `e` is MDK's own, and a second one on the same event would be ambiguous.
 
 Decided 2026-11-22. MDK made the rename, which D-076 allows.
+
+## D-113 Hermes and OpenClaw are channel plugins, with a narrower contract than a driver
+
+**Decision.** The Hermes and OpenClaw connectors are a kind of connector of their own: **channel plugins**. A
+channel plugin runs inside a messaging gateway as one of its channels and connects to the core over the socket,
+as the Claude Code driver does. Its contract is narrower than a driver's. It promises what the core needs from
+every connector, and leaves to the gateway what the gateway owns: the conversation's sessions, its media, its own
+allow-lists, and its own setting for how much tool activity it sends. The contract is written in
+[channel plugins](design/drivers.md#channel-plugins).
+
+This extends the Hermes and OpenClaw rows of [D-005](#d-005-which-driver-each-harness-gets), which stand: each
+is its own plugin, over the socket. The layers of [D-004](#d-004-four-layers-with-drivers-behind-one-trait)
+stand, and so does [D-084](#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through): the
+core decides who may prompt and who may approve.
+
+**Why.** Hermes and OpenClaw are messaging gateways in their own right, and the Marmot plugin is one channel
+among many inside them. Holding them to the shape of a driver led to coupling to their internals, such as
+OpenClaw's record of the path an agent named for a reply's file (`replyMediaSourceUrls`), which the plugin reads
+to send that file ([D-108](#d-108-how-an-agents-file-reaches-the-core-as-built)) and which OpenClaw's plugin SDK
+does not export.
+
+Decided 2026-11-23. The project owner decided.

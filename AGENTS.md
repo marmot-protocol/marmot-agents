@@ -16,8 +16,10 @@ drives a built-in driver or serves a local socket; `marmot-agent-chat`, a termin
 `marmot-agent-sim`, a deterministic simulator that runs the real core against a simulated MDK and a scripted
 driver, with faults, from a seed; and `marmot-agent-conformance`, the suite every driver must pass, on scriptable
 fakes of the harnesses.
-Over the socket connect `packages/claude-code`, the Claude Code driver, `packages/openclaw`, the OpenClaw plugin,
-and `python/marmot_hermes`, the Hermes plugin; the plugins run inside their gateways, in containers. Each driver
+Over the socket connect `packages/claude-code`, the Claude Code driver, and two **channel plugins**,
+`packages/openclaw` for OpenClaw and `python/marmot_hermes` for Hermes, which run inside those gateways as one of
+their channels, with a narrower contract than a driver
+([D-113](docs/decisions.md#d-113-hermes-and-openclaw-are-channel-plugins-with-a-narrower-contract-than-a-driver)). Each driver
 has a scenario that runs it end to end against the real harness on MDK's test relay. What is built next, and in what order, is in
 [`docs/plan.md`](docs/plan.md). The core program is called `marmot-agent`
 ([D-050](docs/decisions.md#d-050-the-core-program-is-called-marmot-agent)). Everything else is design and
@@ -44,6 +46,7 @@ being replaced by what is designed here, not extended.
 | Work on how a chat shows subagents | `docs/design/subagents.md`, then `fixtures/recordings/codex/subagents` |
 | Work on the boundary to TypeScript and Python programs | `docs/design/socket-protocol.md` |
 | Add or change a harness driver | `docs/design/drivers.md`, then `docs/reference/harness-interfaces.md` |
+| See what a channel plugin must and need not do | `docs/design/drivers.md` ("Channel plugins"), then the gateway's reference page |
 | Check what today's MDK connectors do | `docs/reference/current-connectors.md` |
 | See how T3 Code, Buzz and ACP solve this | `docs/reference/prior-art.md` |
 | See what Codex, Claude Code and Pi really send | `docs/reference/harness-messages.md`, then `fixtures/recordings/` |
@@ -80,8 +83,9 @@ being replaced by what is designed here, not extended.
 - Each harness has a **driver**: it speaks the harness's own interface and translates to shared Marmot agent
   events.
 - Rust drivers (Codex, Pi, ACP) are built into the core behind one trait; Cursor uses the ACP one. The Claude
-  Code driver is a TypeScript program; Hermes and OpenClaw are plugins inside those runtimes. All three connect
-  to the core over a **local socket**.
+  Code driver is a TypeScript program. Hermes and OpenClaw are messaging gateways, and connect through a
+  **channel plugin** inside each: the gateway keeps its sessions, media, allow-lists and tool verbosity, and the
+  core still decides who may prompt and approve. All three connect to the core over a **local socket**.
 - Every agent event carries an item type from a shared vocabulary, a plain rendering, and the harness's native
   payload.
 
@@ -113,7 +117,8 @@ These are recorded as
 Each rule links to its decision. Do not work around one; if you think it is wrong, say so and propose a
 replacement entry.
 
-- Drivers never decide who may prompt or approve, and never touch keys, groups or relays. The core does
+- Drivers and channel plugins never decide who may prompt or approve, and never touch keys, groups or relays.
+  The core does
   ([D-004](docs/decisions.md#d-004-four-layers-with-drivers-behind-one-trait),
   [D-010](docs/decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve)).
 - Nothing above a driver depends on which harness is behind it

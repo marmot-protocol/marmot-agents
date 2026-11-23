@@ -33,6 +33,10 @@ Each harness has a **driver**. A driver talks to one harness in that harness's o
 built into the core. Others are separate programs, because the harness's official interface exists only in
 TypeScript or Python; those connect to the core over a **local socket**.
 
+Hermes and OpenClaw are messaging gateways, with their own users, chats and sessions. For them the connector is
+a **channel plugin**: one more channel inside the gateway, over the same socket, with a narrower contract than a
+driver. The gateway keeps its sessions and media; the core still decides who may talk to the agent.
+
 Four layers sit between a harness and the chat. Two are written per harness, two are written once.
 
 <picture>
@@ -73,8 +77,8 @@ broad coverage cheaply; a harness gets its own driver only when it matters enoug
 | Pi | Native, Rust | Inside the core |
 | Goose, OpenCode, Cursor, other ACP agents | ACP, Rust | Inside the core |
 | Claude Code | Native, TypeScript | Separate program, over the socket |
-| Hermes | Its own plugin, Python | Inside Hermes, over the socket |
-| OpenClaw | Its own plugin, TypeScript | Inside OpenClaw, over the socket |
+| Hermes | Channel plugin, Python | Inside Hermes, over the socket |
+| OpenClaw | Channel plugin, TypeScript | Inside OpenClaw, over the socket |
 
 Details and reasons are in [`design/drivers.md`](design/drivers.md).
 
@@ -113,15 +117,15 @@ exist so that nobody, human or agent, has to redo the research behind a decision
 `crates/` holds four crates so far: `marmot-agent-events`, the agent event and its item types;
 `marmot-agent-driver`, the trait a driver implements; `marmot-agent-codex`, the Codex driver; and
 `marmot-agent`, the core, being built. `packages/claude-code` is the Claude Code driver and `python/` the Hermes
-plugin; the rest of the table is the planned shape, so that the code lands in the right place. The core program is called `marmot-agent`
+channel plugin; the rest of the table is the planned shape, so that the code lands in the right place. The core program is called `marmot-agent`
 ([D-050](decisions.md#d-050-the-core-program-is-called-marmot-agent)), and the Codex driver is built first
 ([D-052](decisions.md#d-052-the-codex-driver-is-built-first)).
 
 | Path | Holds |
 | --- | --- |
 | `crates/` | The Rust core, the driver trait, the Rust drivers (Codex, Pi, ACP), and the core's simulator |
-| `packages/` | TypeScript: the Claude Code driver, the OpenClaw plugin, a socket client |
-| `python/` | The Hermes plugin |
+| `packages/` | TypeScript: the Claude Code driver, the OpenClaw channel plugin |
+| `python/` | The Hermes channel plugin |
 | `docs/` | Design, decisions and reference |
 | `fixtures/recordings/` | Real harness sessions, recorded message by message |
 | `tools/record/` | The recorders, the scrubber and the structure inventory |
