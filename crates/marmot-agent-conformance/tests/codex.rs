@@ -91,7 +91,8 @@ macro_rules! conformance {
 
 marmot_agent_conformance::with_scenarios!(conformance!(OnFake::default()));
 
-// Codex starts subagents: each scenario for them, one test each.
+// Codex starts subagents: each scenario for them, one test each. This is the one list of them: a
+// scenario added to `src/subagents.rs` is added here too.
 macro_rules! subagent_scenarios {
     ($($name:ident),* $(,)?) => {
         $(
@@ -101,12 +102,6 @@ macro_rules! subagent_scenarios {
                 found.unwrap_or_else(|v| panic!("{v}"));
             }
         )*
-
-        #[test]
-        fn every_subagent_scenario_is_run() {
-            let run = [$(stringify!($name)),*];
-            assert_eq!(run.as_slice(), subagents::ALL);
-        }
     };
 }
 

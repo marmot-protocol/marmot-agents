@@ -18,37 +18,6 @@ use marmot_agent_events::{Body, State};
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// Every scenario here, by name, for a test that runs them all.
-pub const ALL: &[&str] = &[
-    "subagent_in_its_parents_chat",
-    "subagent_speaks_first",
-    "nested_subagents",
-    "subagent_asks_for_approval",
-    "stop_stops_every_subagent",
-    "stop_after_the_turn_has_ended",
-    "stop_stops_nested_subagents",
-    "dies_with_subagents_running",
-    "new_session_with_subagents_running",
-    "restart_with_subagents_running",
-];
-
-/// Runs the scenario called `name`.
-pub async fn run<S: Subject>(name: &str, subject: S) -> Result<(), Violation> {
-    match name {
-        "subagent_in_its_parents_chat" => subagent_in_its_parents_chat(subject).await,
-        "subagent_speaks_first" => subagent_speaks_first(subject).await,
-        "nested_subagents" => nested_subagents(subject).await,
-        "subagent_asks_for_approval" => subagent_asks_for_approval(subject).await,
-        "stop_stops_every_subagent" => stop_stops_every_subagent(subject).await,
-        "stop_after_the_turn_has_ended" => stop_after_the_turn_has_ended(subject).await,
-        "stop_stops_nested_subagents" => stop_stops_nested_subagents(subject).await,
-        "dies_with_subagents_running" => dies_with_subagents_running(subject).await,
-        "new_session_with_subagents_running" => new_session_with_subagents_running(subject).await,
-        "restart_with_subagents_running" => restart_with_subagents_running(subject).await,
-        other => panic!("no subagent scenario called {other}"),
-    }
-}
-
 const FLAT: &str = "D-117";
 
 fn taken<T>(result: Result<T, marmot_agent_driver::Refusal>, what: &str) -> Result<T, Violation> {
