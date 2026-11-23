@@ -101,10 +101,19 @@ fn a_step_naming_a_message_the_schedule_lacks_fails_the_run_before_it_starts() {
             Action::Hear { msg: 1 },
         ],
     );
-    let (property, step, detail) = failed(&schedule).expect("the run fails");
-    assert_eq!((property.as_str(), step), ("schedule", Some(2)));
-    assert!(detail.contains("m1"), "{detail}");
-    assert!(schedule.check().is_err());
+    let report = run(&schedule);
+    let failure = report.failure.expect("the run fails");
+    assert_eq!(
+        (failure.failure.property.as_str(), failure.step),
+        ("schedule", Some(2))
+    );
+    assert!(
+        failure.failure.detail.contains("m1"),
+        "{}",
+        failure.failure.detail
+    );
+    assert!(report.trace.is_empty(), "{:?}", report.trace);
+    assert_eq!(report.stats.steps, 0);
 }
 
 #[test]
@@ -127,10 +136,11 @@ fn an_invitation_to_a_chat_the_schedule_lacks_fails_the_run() {
     assert!(detail.contains("c1"), "{detail}");
 }
 
-// A step that hears a message is `Ask` for an answer or a control and `Hear` for a prompt, as
-// the shared vocabulary names them; one named the other way was written for another message.
+// Review of #148. `Hear` and `Ask` both hear the message they name, whose kind decides what it
+// is, so a step that names a prompt `Ask`, or an answer `Hear`, still does what it was written to:
+// only a missing chat or message is skipped, and only that fails the check.
 #[test]
-fn a_step_that_hears_a_message_by_the_wrong_name_fails_the_run() {
+fn a_step_that_hears_a_message_by_either_name_is_valid() {
     let answer = Posted {
         chat: 0,
         what: What::Answer,
@@ -144,8 +154,7 @@ fn a_step_that_hears_a_message_by_the_wrong_name_fails_the_run() {
             messages,
             vec![Action::Invite { chat: 0 }, Action::Store { msg: 0 }, step],
         );
-        let (property, step, _) = failed(&schedule).expect("the run fails");
-        assert_eq!((property.as_str(), step), ("schedule", Some(2)));
+        assert_eq!(schedule.check(), Ok(()), "{step:?}");
     }
 }
 

@@ -44,7 +44,9 @@ pub struct Failed {
     /// The property.
     #[serde(flatten)]
     pub failure: Failure,
-    /// The step after which it was found; `None` in the fair part at the end.
+    /// The step after which it was found; `None` in the fair part at the end. For a schedule that
+    /// fails [`Schedule::check`], rejected before any step runs, the step that names what the
+    /// schedule lacks, or `None` when a message is posted to a chat it lacks.
     pub step: Option<usize>,
 }
 

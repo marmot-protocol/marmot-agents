@@ -171,32 +171,16 @@ pub fn shrink(schedule: &Schedule, report: &Report, budget: usize) -> (Schedule,
     (best, best_report)
 }
 
-/// The message a step names.
-fn named(action: &Action) -> Option<usize> {
-    match action {
-        Action::Store { msg }
-        | Action::Hear { msg }
-        | Action::Ask { msg }
-        | Action::Reannounce { msg } => Some(*msg),
-        _ => None,
-    }
-}
-
 /// The schedule without message `msg`, the later ones numbered one less; `None` when a step names
 /// it.
 fn without_message(schedule: &Schedule, msg: usize) -> Option<Schedule> {
-    if schedule.steps.iter().any(|a| named(a) == Some(msg)) {
+    if schedule.steps.iter().any(|a| a.message() == Some(msg)) {
         return None;
     }
     let mut out = schedule.clone();
     out.messages.remove(msg);
-    for step in &mut out.steps {
-        if let Action::Store { msg: m }
-        | Action::Hear { msg: m }
-        | Action::Ask { msg: m }
-        | Action::Reannounce { msg: m } = step
-            && *m > msg
-        {
+    for m in out.steps.iter_mut().filter_map(Action::message_mut) {
+        if *m > msg {
             *m -= 1;
         }
     }

@@ -394,6 +394,24 @@ pub enum Action {
     Stop,
 }
 
+impl Action {
+    /// The message the step names, by its place in [`Schedule::messages`], if it names one.
+    pub fn message(&self) -> Option<usize> {
+        { *self }.message_mut().copied()
+    }
+
+    /// The message the step names, to number it again.
+    pub(crate) fn message_mut(&mut self) -> Option<&mut usize> {
+        match self {
+            Action::Store { msg }
+            | Action::Hear { msg }
+            | Action::Ask { msg }
+            | Action::Reannounce { msg } => Some(msg),
+            _ => None,
+        }
+    }
+}
+
 /// Bugs to put back, for the tests that show the simulator finds each.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BugSet {
@@ -460,11 +478,12 @@ pub struct Schedule {
 }
 
 impl Schedule {
-    /// Whether every chat and message the schedule names is one it has, and each step that hears
-    /// a message names it as the vocabulary does (`Hear` for a prompt, `Ask` for an answer or a
-    /// control). A run of a schedule that fails this fails at once, naming the step, so one written
-    /// by hand with a wrong number cannot pass without doing what it was written to check. A step
-    /// that makes no sense where it falls is still valid: this checks only what it names.
+    /// Whether every chat and message the schedule names is one it has: the world skips a step
+    /// that names what is missing. A run of a schedule that fails this fails at once, naming the
+    /// step, so one written by hand with a wrong number cannot pass without doing what it was
+    /// written to check. A step that makes no sense where it falls is still valid, and so is one
+    /// that hears a prompt by `Ask` or an answer by `Hear`: both hear the message they name, whose
+    /// own kind says what it is.
     pub fn check(&self) -> Result<(), BadReference> {
         let chats = usize::from(self.chats);
         for (msg, posted) in self.messages.iter().enumerate() {
@@ -485,28 +504,18 @@ impl Schedule {
                     detail: format!("step {step}, {action:?}: {detail}"),
                 })
             };
-            match *action {
-                Action::Invite { chat } if usize::from(chat) >= chats => {
-                    return bad(format!("the schedule has {chats} chats, so no c{chat}"));
-                }
-                Action::Store { msg }
-                | Action::Hear { msg }
-                | Action::Ask { msg }
-                | Action::Reannounce { msg }
-                    if msg >= self.messages.len() =>
-                {
-                    return bad(format!(
-                        "the schedule has {} messages, so no m{msg}",
-                        self.messages.len()
-                    ));
-                }
-                Action::Hear { msg } if self.messages[msg].is_request() => {
-                    return bad(format!("m{msg} is an answer or a control: Ask hears it"));
-                }
-                Action::Ask { msg } if !self.messages[msg].is_request() => {
-                    return bad(format!("m{msg} is a prompt: Hear hears it"));
-                }
-                _ => {}
+            if let Action::Invite { chat } = *action
+                && usize::from(chat) >= chats
+            {
+                return bad(format!("the schedule has {chats} chats, so no c{chat}"));
+            }
+            if let Some(msg) = action.message()
+                && msg >= self.messages.len()
+            {
+                return bad(format!(
+                    "the schedule has {} messages, so no m{msg}",
+                    self.messages.len()
+                ));
             }
         }
         Ok(())

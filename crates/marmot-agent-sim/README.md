@@ -55,10 +55,9 @@ harness finishes its turns, a send that lands late lands, and the clock runs. By
 A run also fails, with its schedule and trace, when the core's task panics, ends when no stop, driver end or failed
 save explains it, or does not end cleanly after the last stop.
 
-A schedule written by hand, or kept in a capsule, that names a chat or a message it does not have, or hears a message
-by the wrong name (`Hear` for a prompt, `Ask` for an answer or a control), fails at once as the property `schedule`,
-naming the step, before anything runs: the world would otherwise skip that step, and the run could pass without doing
-what it was written to check. Every generated schedule names only what it has.
+A schedule written by hand, or kept in a capsule, that names a chat or a message it does not have fails at once as the
+property `schedule`, naming the step, before anything runs: the world would otherwise skip that step, and the run could
+pass without doing what it was written to check. Every generated schedule names only what it has.
 
 ## Families
 
