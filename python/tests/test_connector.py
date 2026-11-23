@@ -8,9 +8,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from marmot_hermes.connector import Connector
 from marmot_hermes.core import PROTOCOL, CoreConnection, Refusal, Refused
+from protocol import Reads, core_requests, event_problems, problems, unknown_reads
 
 CHAT = {"id": "c-1", "group": False, "name": "Alice"}
 GROUP = {"id": "c-2", "group": True, "name": "Family"}
@@ -87,15 +89,36 @@ def model_settings(user="u-1", model="m"):
 
 
 class Connected(unittest.IsolatedAsyncioTestCase):
+    """The connector, served the core's requests and sending its events. Each request the tests serve
+    as the core's, and each event the connector sends, is checked against the core's own schema
+    (`fixtures/socket`); what is not as the core's types say is kept in `invalid`, which every test ends
+    by finding empty."""
+
     async def asyncSetUp(self):
         self.hermes = FakeHermes()
         self.sent = []
+        self.invalid = []
         self.folder = tempfile.TemporaryDirectory()
         self.sessions = Path(self.folder.name) / "sessions.json"
-        self.connector = Connector(self.hermes, self.sent.append, generations=self.sessions, hold=0.05)
+        serve = Connector.serve
+
+        async def checked(connector, method, params):
+            message = {"jsonrpc": "2.0", "id": 1, "method": method, "params": json.loads(json.dumps(params))}
+            self.invalid += [f"a {method} as the core's: {p}" for p in problems("FromCore", message)]
+            return await serve(connector, method, params)
+
+        patch = mock.patch.object(Connector, "serve", checked)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.connector = Connector(self.hermes, self.send, generations=self.sessions, hold=0.05)
+
+    def send(self, event):
+        self.invalid += [f"an event: {p}" for p in event_problems(json.loads(json.dumps(event)))]
+        self.sent.append(event)
 
     async def asyncTearDown(self):
         self.folder.cleanup()
+        self.assertEqual(self.invalid, [], "every message either way is as the core's types say")
 
     def feed(self, *lines, chat="c-1"):
         for line in lines:
@@ -211,7 +234,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(fresh, session)
         # A plugin started again names the new session as before: the count is kept.
         self.assertEqual(json.loads(self.sessions.read_text()), {"dm:c-1:u-1": 2})
-        again = Connector(FakeHermes(), self.sent.append, generations=self.sessions, hold=0)
+        again = Connector(FakeHermes(), self.send, generations=self.sessions, hold=0)
         again.record(started("m-9"), "c-1")
         self.assertEqual(self.sent[-1]["session"], fresh)
 
@@ -224,8 +247,8 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.of("notice")[-1]["body"], {"kind": "warning"})
 
     async def test_ids_do_not_repeat_after_a_restart(self):
-        first = Connector(FakeHermes(), self.sent.append, hold=0)
-        second = Connector(FakeHermes(), self.sent.append, hold=0)
+        first = Connector(FakeHermes(), self.send, hold=0)
+        second = Connector(FakeHermes(), self.send, hold=0)
         for connector in (first, second):
             connector.record(started("m-1"), "c-1")
             connector.record(said("Hi."), "c-1")
@@ -322,7 +345,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.feed(started("m-a", chat="c-2", user="u-1", chat_type="group"), complete("m-a"), chat="c-2")
         session = self.of("session")[0]["session"]
         # The plugin starts again, and Bob asks for a new session of Alice's before she says anything.
-        self.connector = Connector(self.hermes, self.sent.append, generations=self.sessions, hold=0)
+        self.connector = Connector(self.hermes, self.send, generations=self.sessions, hold=0)
         self.sent.clear()
 
         def answer(text, message_id, reply="⛔ /new is admin-only here."):
@@ -424,6 +447,36 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(Refusal) as invalid:
             await self.connector.serve("prompt", {"message": "m-1"})
         self.assertEqual(invalid.exception.reason, "invalid")
+        # That prompt is not one the core sends, on purpose.
+        self.assertEqual(len(self.invalid), 4)
+        self.invalid.clear()
+
+
+    async def test_the_plugin_reads_nothing_from_the_cores_requests_that_the_core_does_not_send(self):
+        """Every request of the core's in `fixtures/socket/examples.json`, served with every field read
+        recorded: each must be one the core sends."""
+        order = ["prompt", "answer", "control"]
+        requests = sorted(core_requests(), key=lambda r: order.index(r[1]))
+        self.assertEqual({r[1] for r in requests}, set(order))
+        for n, (name, method, params) in enumerate(requests):
+            if method == "answer":
+                # Hermes asks, and the example answers what it asked: the item is the plugin's own id.
+                if "questions" in params["given"]:
+                    self.feed(hook("send_clarify", chat_id="c-1", question="Which?", choices=["Hello", "Hi"],
+                                   clarify_id=f"q{n}", session_key="agent:main:marmot:dm:c-1"))
+                    params["item"] = self.of("question")[-1]["item"]
+                else:
+                    self.feed(card(f"rq{n}", "rm -rf /work/x"))
+                    params["item"] = self.of("approval")[-1]["item"]
+            reads = Reads()
+            try:
+                await asyncio.wait_for(self.connector.serve(method, reads.track(params)), 1)
+            except (Refusal, asyncio.TimeoutError):
+                pass
+            definition = method[0].upper() + method[1:] + "Params"
+            with self.subTest(example=name):
+                self.assertTrue(reads.paths, "nothing was read")
+                self.assertEqual(unknown_reads(definition, reads), [], "read, and never sent by the core")
 
 
 class Socket(unittest.IsolatedAsyncioTestCase):
