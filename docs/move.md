@@ -126,7 +126,7 @@ it, is where it was.
 | The relays on the old service's command line | `relays`, and `allow_loopback_relays` |
 | The one person the old install let both invite and prompt the agent | `owner`; otherwise give `--owner` |
 | The rest of the invite allow-list | `invite` |
-| Who may write to the agent: a terminal harness's `WN_*_ALLOWED_SENDERS_HEX`, Hermes's `MARMOT_ALLOWED_USERS` or OpenClaw's `senderPolicy` | `prompt` |
+| Who may write to the agent: a terminal harness's `WN_*_ALLOWED_SENDERS_HEX`, Hermes's `MARMOT_ALLOWED_USERS` or the `senderPolicy` of OpenClaw's account on this home | `prompt` |
 | The folders `wn-agent` could send files from (`--media-allowed-root`) | `files_from`; none when it had none |
 | The harness | `[codex]`, `[pi]`, `[acp]` for OpenCode and Goose, or `[connector]` |
 | The harness's program, `WN_<HARNESS>_BIN`, as the installer found it | `program` in `[codex]` and `[pi]`, the first word of `command` in `[acp]`; not for Claude Code, whose driver runs the Claude Code that comes with it |
@@ -135,7 +135,9 @@ The rule is that nobody may do more afterwards than the old install let them:
 
 - The settings are read as the old programs ran with them: a systemd unit as systemd itself has it loaded
   (asked through `busctl --user`, so every drop-in, continued line and `UnsetEnvironment=` counts), with the
-  files its `EnvironmentFile=` lines name, and each list parsed as the old program parsed it. A unit whose
+  files its `EnvironmentFile=` lines name, read as systemd reads them (quotes inside a bare value kept, a
+  value running on over a line's end inside quotes or after a backslash, `#` a comment only at a line's
+  start, `export A=1` setting nothing), and each list parsed as the old program parsed it. A unit whose
   command line has `$` references, which systemd fills in only as it starts the service, one that names an
   environment file by a pattern or needs one that cannot be read, and one whose files changed since systemd
   read them, stop the import: make it plain, run `systemctl --user daemon-reload`, restart it, and import
@@ -145,7 +147,25 @@ The rule is that nobody may do more afterwards than the old install let them:
 - Where a list is kept in several places, such as the harness service and `dev/wn-<harness>.env`, only the
   people on all of them may prompt.
 - Where what the old install allowed cannot be read for certain, such as a Hermes `config.yaml` with its own
-  allow-list, or OpenClaw's list in the gateway's environment, only the owner may prompt.
+  allow-list, or OpenClaw's list in the gateway's environment, only the owner may prompt. Where the old
+  settings may have applied, the import names each, with its value as written, under "Only the owner may
+  prompt now" and in its next steps: check them, and widen `prompt` in the settings by hand to keep one
+  ([D-135](decisions.md#d-135-the-import-gives-owner-only-rights-where-it-cannot-tell-the-old-sender-policy-and-names-what-to-check)).
+- For OpenClaw, the import reads the sender policy of the account MDK's plugin ran on this home. With
+  `channels.marmot.accounts`, each named account runs on its own settings, and a `senderPolicy` at the
+  channel's root applies to none of them; without, the root is the one account. An account ran on this home
+  when its `socketPath` is the old connector's socket and its `accountIdHex`, if any, is the agent's, both
+  written out: a socket or identity from a `${...}` reference, no `socketPath`, a relative one, a path that
+  may lead to this home's socket, or an `$include` in the settings, means that account may have run on this
+  home. If no account did, several did or may have, or the account has no `senderPolicy` of its own, only
+  the owner may prompt, and the import names the policies of just those accounts, or the gateway's
+  environment settings for one with no policy of its own.
+- In a systemd environment file, a line that systemd has read otherwise by version (one after a comment
+  ending in a backslash, or a backslash in double quotes before anything but `"`, `\` or the line's end), or
+  one such as `export WN_CODEX_ALLOWED_SENDERS_HEX=…` that systemd leaves out, makes that name unsure. An
+  unsure sender list lets only the owner prompt; an unsure relay list or other setting the import reads stops
+  the import, as a doubtful unit does. So does an environment file holding a NUL byte, which systemd refuses
+  whole.
 - The owner may always prompt, approve and invite. So the import makes someone the owner only if the old
   install let exactly that one person both invite and prompt the agent; otherwise it asks for `--owner`, and
   says what the named owner may now do that they could not before. The same key given once in hex and once

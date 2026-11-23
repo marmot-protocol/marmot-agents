@@ -16,8 +16,13 @@
 //! user manager, as in the tests) are the unit's files read here, as systemd merges them; what
 //! that reading cannot settle, such as a specifier other than `%h`, makes the service doubtful.
 //! Either way, a command line with `$` references, which systemd fills in only as it starts the
-//! service, an environment file named by a pattern, and one that cannot be read, make it doubtful
-//! too. A doubtful service on the home stops the import: it never guesses how a service ran.
+//! service, an environment file named by a pattern, one that cannot be read, and one systemd
+//! refuses whole for a NUL byte in it, make it doubtful too. A doubtful service on the home stops the import: it never guesses how a service ran.
+//!
+//! An environment file is read as systemd reads it, not as a shell would ([`environment_file`]).
+//! A name it sets in a way systemd has read otherwise by version is unsure: a sender list, which
+//! then lets only the owner prompt, with the line named to check (D-135); any other setting the
+//! import reads makes the service doubtful.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -64,6 +69,336 @@ pub struct Service {
     pub env: Vec<(String, String)>,
     /// Why how it ran cannot be read for certain, when it cannot, in words.
     pub doubt: Option<String>,
+    /// Names its environment files set in a way systemd reads otherwise by version, so what
+    /// they held as it ran is not known.
+    pub unsure: Vec<Unsure>,
+}
+
+/// A name an environment file sets in a way systemd reads otherwise by version.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Unsure {
+    /// Its name, such as `WN_CODEX_ALLOWED_SENDERS_HEX`.
+    pub name: String,
+    /// The file.
+    pub file: String,
+    /// The line or lines that set it, as written.
+    pub written: String,
+}
+
+/// Whether `name` holds who may write to an old harness or plugin. Such a name read unsurely
+/// lets only the owner prompt; any other the import reads makes the service doubtful.
+pub fn is_sender_list(name: &str) -> bool {
+    name.ends_with("_ALLOWED_SENDERS_HEX")
+        || [
+            "WN_OPENCODE_ADMIN_HEX",
+            "MARMOT_ALLOWED_USERS",
+            "MARMOT_ALLOW_ALL_USERS",
+        ]
+        .contains(&name)
+}
+
+/// What an `EnvironmentFile=` sets.
+pub struct EnvironmentFile {
+    /// Each name and its value, as systemd sets them, in the order each first appears.
+    pub vars: Vec<(String, String)>,
+    /// Names systemd may set otherwise, each with its lines as written, in the same order.
+    pub unsure: Vec<(String, String)>,
+}
+
+/// Reads an `EnvironmentFile=` as systemd reads it (`parse_env_file_internal` in systemd's
+/// `env-file.c`, as in 254 and later): one assignment may run over several lines, inside quotes
+/// or after a backslash; quotes inside a bare value are kept; `#` and `;` start a comment only
+/// at a line's start; a line whose name is not a name, such as `export A=1`, sets nothing.
+///
+/// A name is unsure, and its value left out, where an older systemd read it otherwise: a line
+/// after a comment ending in a backslash, which systemd before 254 took as comment too, and a
+/// backslash in double quotes before anything but `"`, `\` or the line's end, which older ones
+/// took off. So is the name a line such as `export A=1` meant, which systemd leaves out.
+pub fn environment_file(text: &str) -> EnvironmentFile {
+    let now = final_values(text, false);
+    let before = final_values(text, true);
+    let mut names: Vec<&String> = Vec::new();
+    for name in now.iter().chain(&before).map(|(n, _)| n) {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    fn find<'a>(list: &'a [(String, Final)], name: &str) -> Option<&'a Final> {
+        list.iter().find(|(n, _)| n == name).map(|(_, f)| f)
+    }
+    let mut read = EnvironmentFile {
+        vars: Vec::new(),
+        unsure: Vec::new(),
+    };
+    for name in names {
+        let (a, b) = (find(&now, name), find(&before, name));
+        fn sure(f: Option<&Final>) -> Option<&Option<String>> {
+            f.and_then(|f| (!f.versioned).then_some(&f.value))
+        }
+        match (sure(a), sure(b)) {
+            (Some(Some(x)), Some(Some(y))) if x == y => {
+                read.vars.push((name.clone(), x.clone()));
+            }
+            _ => {
+                let (start, end) = a.or(b).map(|f| f.span).unwrap_or_default();
+                read.unsure
+                    .push((name.clone(), text[start..end].to_string()));
+            }
+        }
+    }
+    read
+}
+
+/// The last assignment of a name in one reading.
+struct Final {
+    /// Its value; none for a line that meant the name but is not one, such as `export A=1`.
+    value: Option<String>,
+    /// Whether an older systemd read its value otherwise.
+    versioned: bool,
+    /// Where it is in the text.
+    span: (usize, usize),
+}
+
+/// Each name's last assignment, in the order each first appears. `before_254` takes a line after
+/// a comment ending in a backslash as comment too.
+fn final_values(text: &str, before_254: bool) -> Vec<(String, Final)> {
+    let mut out: Vec<(String, Final)> = Vec::new();
+    let mut put = |name: &str, last: Final| match out.iter_mut().find(|(n, _)| n == name) {
+        Some((_, f)) => *f = last,
+        None => out.push((name.to_string(), last)),
+    };
+    for entry in entries(text, before_254) {
+        if valid_name(&entry.key) {
+            put(
+                &entry.key,
+                Final {
+                    value: Some(entry.value),
+                    versioned: entry.versioned,
+                    span: entry.span,
+                },
+            );
+        } else if let Some(meant) = entry
+            .key
+            .split_whitespace()
+            .last()
+            .filter(|w| valid_name(w))
+        {
+            put(
+                meant,
+                Final {
+                    value: None,
+                    versioned: true,
+                    span: entry.span,
+                },
+            );
+        }
+    }
+    out
+}
+
+/// A name as systemd takes one: letters, digits and `_`, not starting with a digit.
+fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+/// One assignment as read.
+struct Entry {
+    key: String,
+    value: String,
+    versioned: bool,
+    span: (usize, usize),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum State {
+    PreKey,
+    Key,
+    PreValue,
+    Value,
+    ValueEscape,
+    Single,
+    Double,
+    DoubleEscape,
+    Comment,
+    CommentEscape,
+}
+
+/// systemd's reading, state for state. Whitespace is space, tab and both line ends, and a line
+/// ends at `\n` or `\r`.
+fn entries(text: &str, before_254: bool) -> Vec<Entry> {
+    use State::*;
+    let space = |c: char| matches!(c, ' ' | '\t' | '\n' | '\r');
+    let newline = |c: char| matches!(c, '\n' | '\r');
+    let mut out = Vec::new();
+    let mut state = PreKey;
+    let (mut key, mut value) = (String::new(), String::new());
+    // Where trailing whitespace starts, to be cut off.
+    let (mut key_space, mut value_space): (Option<usize>, Option<usize>) = (None, None);
+    let mut versioned = false;
+    let mut start = 0;
+    let mut push = |key: &mut String,
+                    key_space: Option<usize>,
+                    value: &mut String,
+                    value_space: Option<usize>,
+                    versioned: bool,
+                    span: (usize, usize)| {
+        if let Some(at) = key_space {
+            key.truncate(at);
+        }
+        if let Some(at) = value_space {
+            value.truncate(at);
+        }
+        out.push(Entry {
+            key: std::mem::take(key),
+            value: std::mem::take(value),
+            versioned,
+            span,
+        });
+    };
+    for (i, c) in text.char_indices() {
+        match state {
+            PreKey => {
+                if c == '#' || c == ';' {
+                    state = Comment;
+                } else if !space(c) {
+                    state = Key;
+                    key_space = None;
+                    key.clear();
+                    value.clear();
+                    versioned = false;
+                    start = i;
+                    key.push(c);
+                }
+            }
+            Key => {
+                if newline(c) {
+                    state = PreKey;
+                    key.clear();
+                } else if c == '=' {
+                    state = PreValue;
+                    value_space = None;
+                } else {
+                    if !space(c) {
+                        key_space = None;
+                    } else if key_space.is_none() {
+                        key_space = Some(key.len());
+                    }
+                    key.push(c);
+                }
+            }
+            PreValue => {
+                if newline(c) {
+                    state = PreKey;
+                    push(&mut key, key_space, &mut value, None, versioned, (start, i));
+                } else if c == '\'' {
+                    state = Single;
+                } else if c == '"' {
+                    state = Double;
+                } else if c == '\\' {
+                    state = ValueEscape;
+                } else if !space(c) {
+                    state = Value;
+                    value.push(c);
+                }
+            }
+            Value => {
+                if newline(c) {
+                    state = PreKey;
+                    push(
+                        &mut key,
+                        key_space,
+                        &mut value,
+                        value_space,
+                        versioned,
+                        (start, i),
+                    );
+                } else if c == '\\' {
+                    state = ValueEscape;
+                    value_space = None;
+                } else {
+                    if !space(c) {
+                        value_space = None;
+                    } else if value_space.is_none() {
+                        value_space = Some(value.len());
+                    }
+                    value.push(c);
+                }
+            }
+            ValueEscape => {
+                state = Value;
+                // A backslash before a line's end joins the lines.
+                if !newline(c) {
+                    value.push(c);
+                }
+            }
+            Single => {
+                if c == '\'' {
+                    state = PreValue;
+                } else {
+                    value.push(c);
+                }
+            }
+            Double => {
+                if c == '"' {
+                    state = PreValue;
+                } else if c == '\\' {
+                    state = DoubleEscape;
+                } else {
+                    value.push(c);
+                }
+            }
+            DoubleEscape => {
+                state = Double;
+                if matches!(c, '"' | '\\' | '`' | '$') {
+                    value.push(c);
+                } else if c != '\n' {
+                    value.push('\\');
+                    value.push(c);
+                }
+                if !matches!(c, '"' | '\\' | '\n') {
+                    versioned = true;
+                }
+            }
+            Comment => {
+                if c == '\\' {
+                    state = CommentEscape;
+                } else if newline(c) {
+                    state = PreKey;
+                }
+            }
+            CommentEscape => {
+                state = if newline(c) && !before_254 {
+                    PreKey
+                } else {
+                    Comment
+                };
+            }
+        }
+    }
+    match state {
+        Value => push(
+            &mut key,
+            key_space,
+            &mut value,
+            value_space,
+            versioned,
+            (start, text.len()),
+        ),
+        PreValue | ValueEscape | Single | Double | DoubleEscape => {
+            push(
+                &mut key,
+                key_space,
+                &mut value,
+                None,
+                versioned,
+                (start, text.len()),
+            );
+        }
+        _ => {}
+    }
+    out
 }
 
 /// Paths, keys and relay addresses stay out of logs (D-071): only the shape is shown.
@@ -75,6 +410,7 @@ impl std::fmt::Debug for Service {
             .field("args", &self.args.len())
             .field("env", &self.env.len())
             .field("doubt", &self.doubt.is_some())
+            .field("unsure", &self.unsure.len())
             .finish_non_exhaustive()
     }
 }
@@ -465,6 +801,7 @@ fn built(name: &str, file: &Path, loaded: &Loaded, mut doubts: Vec<String>) -> O
         );
     }
     let mut env = Vec::new();
+    let mut unsure = Vec::new();
     for assignment in &loaded.environment {
         if let Some((k, v)) = assignment.split_once('=') {
             set(&mut env, k, v);
@@ -477,9 +814,26 @@ fn built(name: &str, file: &Path, loaded: &Loaded, mut doubts: Vec<String>) -> O
             continue;
         }
         match fs::read_to_string(path) {
+            // systemd refuses a whole file holding a NUL (`read_full_stream_full` in its
+            // `fileio.c`): the service then did not start, or with `-` ran without the file.
+            Ok(text) if text.contains('\0') => doubts.push(format!(
+                "its environment file {path} holds a NUL byte, for which systemd refuses the \
+                 whole file"
+            )),
             Ok(text) => {
-                for (k, v) in crate::import::env_file(&text) {
+                let read = environment_file(&text);
+                for (k, v) in read.vars {
                     set(&mut env, &k, &v);
+                    unsure.retain(|u: &Unsure| u.name != k);
+                }
+                for (name, written) in read.unsure {
+                    env.retain(|(k, _)| *k != name);
+                    unsure.retain(|u| u.name != name);
+                    unsure.push(Unsure {
+                        name,
+                        file: path.clone(),
+                        written,
+                    });
                 }
             }
             Err(e) if *optional && e.kind() == std::io::ErrorKind::NotFound => {}
@@ -489,7 +843,20 @@ fn built(name: &str, file: &Path, loaded: &Loaded, mut doubts: Vec<String>) -> O
     for unset in &loaded.unset_environment {
         match unset.split_once('=') {
             Some((k, v)) => env.retain(|(name, value)| !(name == k && value == v)),
-            None => env.retain(|(name, _)| name != unset),
+            None => {
+                env.retain(|(name, _)| name != unset);
+                unsure.retain(|u| &u.name != unset);
+            }
+        }
+    }
+    // Only the sender lists, which then let only the owner prompt, may be unsure.
+    for u in &unsure {
+        if !is_sender_list(&u.name) && (u.name.starts_with("MARMOT_") || u.name.starts_with("WN_"))
+        {
+            doubts.push(format!(
+                "its environment file {} sets `{}` in a way systemd reads otherwise by version",
+                u.file, u.name
+            ));
         }
     }
     doubts.dedup();
@@ -501,6 +868,7 @@ fn built(name: &str, file: &Path, loaded: &Loaded, mut doubts: Vec<String>) -> O
         args,
         env,
         doubt: (!doubts.is_empty()).then(|| doubts.join("; ")),
+        unsure,
     })
 }
 
@@ -520,8 +888,9 @@ fn runs_on(service: &Service, home: &Path) -> bool {
         .into_iter()
         .chain(service.env("MARMOT_HOME").map(str::to_string))
         .collect();
+    let unsure = service.unsure.iter().any(|u| u.name == "MARMOT_HOME");
     named.iter().any(|h| same_place(Path::new(h), home))
-        || (service.role != Role::Other && named.iter().any(|h| h.contains('$')))
+        || (service.role != Role::Other && (unsure || named.iter().any(|h| h.contains('$'))))
 }
 
 fn same_place(a: &Path, b: &Path) -> bool {
@@ -815,6 +1184,7 @@ fn read_plist(file: &Path, text: &str) -> Option<Service> {
         args,
         env,
         doubt: None,
+        unsure: Vec::new(),
     })
 }
 
@@ -904,6 +1274,124 @@ mod tests {
             words(r"/bin/wn-agent --home /h/with\ space 'single quoted'"),
             ["/bin/wn-agent", "--home", "/h/with space", "single quoted"]
         );
+    }
+
+    /// The cases as systemd 257 read them, run with `systemd-run --user -p EnvironmentFile=`.
+    #[test]
+    fn an_environment_file_is_read_as_systemd_reads_it() {
+        let text = concat!(
+            "A=a\"b\"c\n",           // quotes inside a bare value are kept
+            "B=\"x\nC=y\"\n",        // a quoted value goes on over the line's end
+            "D=d # not a comment\n", // `#` starts a comment only at a line's start
+            "; I=i\n",               // `;` starts one too
+            "export E=e\n",          // not a name: systemd leaves it out
+            "F=f\\\ng\n",            // a backslash at the end goes on to the next line
+            "G = \"q\" r \n",        // spaces around `=` and between parts go
+            "H='s\\n'\"t\\\"u\"\n",  // single quotes keep a backslash; double take it off `"`
+            "  J=j  \n",             // spaces around a line go
+            "K=\"l1\\\nl2\"\n",      // a line goes on inside double quotes too
+            "L\n",                   // no `=`: nothing
+            "M=\n",                  // an empty value
+            "N=1\r\n",               // CR ends a line
+            "N=2\n",                 // the last one counts
+            "O=\"open",              // unclosed at the end: kept as it is
+        );
+        let read = environment_file(text);
+        let vars: Vec<(&str, &str)> = read
+            .vars
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(
+            vars,
+            [
+                ("A", "a\"b\"c"),
+                ("B", "x\nC=y"),
+                ("D", "d # not a comment"),
+                ("F", "fg"),
+                ("G", "qr"),
+                ("H", "s\\nt\"u"),
+                ("J", "j"),
+                ("K", "l1l2"),
+                ("M", ""),
+                ("N", "2"),
+                ("O", "open"),
+            ]
+        );
+        // `export E` is not a name, so systemd sets nothing; whoever wrote it meant `E`.
+        assert_eq!(read.unsure.len(), 1);
+        assert_eq!(read.unsure[0].0, "E");
+        assert!(read.unsure[0].1.contains("export E=e"));
+    }
+
+    /// systemd before 254 went on from a comment ending in a backslash into the next line, and
+    /// older ones took a backslash in double quotes off other characters than today's do. A name
+    /// such a line sets is unsure, with the line as written.
+    #[test]
+    fn a_line_systemd_reads_otherwise_by_version_is_unsure() {
+        let read = environment_file("# a comment \\\nW=1\nX=\"a\\$b\"\nY=plain\n");
+        let names: Vec<&str> = read.unsure.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(names, ["W", "X"]);
+        assert!(read.unsure[0].1.contains("W=1"), "{:?}", read.unsure[0]);
+        assert!(
+            read.unsure[1].1.contains("X=\"a\\$b\""),
+            "{:?}",
+            read.unsure[1]
+        );
+        assert!(read.vars.contains(&("Y".into(), "plain".into())));
+        // An escaped backslash before the line's end does not go on.
+        let read = environment_file("# a comment \\\\\nW=1\n");
+        assert!(read.unsure.is_empty());
+    }
+
+    /// A service whose environment file sets a sender list unsurely is not doubtful: the list
+    /// is unsure, and the import lets only the owner prompt. Any other setting the import reads
+    /// makes it doubtful.
+    #[test]
+    fn an_unsure_line_marks_its_name() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("wn-codex.service");
+        let vars = root.path().join("vars.env");
+        fs::write(
+            &file,
+            format!(
+                "[Service]\nEnvironment=WN_CODEX_ALLOWED_SENDERS_HEX=aa\nEnvironmentFile={}\nExecStart=/x/wn-codex\n",
+                vars.display()
+            ),
+        )
+        .unwrap();
+        fs::write(&vars, "# old \\\nWN_CODEX_ALLOWED_SENDERS_HEX=bb\n").unwrap();
+        let unit = read(&file, root.path(), &mut Offline);
+        assert_eq!(unit.doubt, None);
+        assert_eq!(unit.env("WN_CODEX_ALLOWED_SENDERS_HEX"), None);
+        assert_eq!(unit.unsure.len(), 1);
+        assert_eq!(unit.unsure[0].name, "WN_CODEX_ALLOWED_SENDERS_HEX");
+        assert!(unit.unsure[0].written.contains("=bb"));
+        // A later file that sets it plainly settles it.
+        let again = root.path().join("again.env");
+        fs::write(&again, "WN_CODEX_ALLOWED_SENDERS_HEX=cc\n").unwrap();
+        let text = fs::read_to_string(&file).unwrap().replace(
+            "ExecStart",
+            &format!("EnvironmentFile={}\nExecStart", again.display()),
+        );
+        fs::write(&file, text).unwrap();
+        let unit = read(&file, root.path(), &mut Offline);
+        assert!(unit.unsure.is_empty());
+        assert_eq!(unit.env("WN_CODEX_ALLOWED_SENDERS_HEX"), Some("cc"));
+        // The relays are not a sender list: the service is doubtful.
+        fs::write(&vars, "export MARMOT_RELAYS=ws://a\n").unwrap();
+        fs::write(&again, "").unwrap();
+        let unit = read(&file, root.path(), &mut Offline);
+        assert!(
+            unit.doubt
+                .as_deref()
+                .is_some_and(|d| d.contains("MARMOT_RELAYS")),
+            "{:?}",
+            unit.doubt
+        );
+        // Nor is a name the import never reads.
+        fs::write(&vars, "export OTHER=1\n").unwrap();
+        assert_eq!(read(&file, root.path(), &mut Offline).doubt, None);
     }
 
     #[test]
