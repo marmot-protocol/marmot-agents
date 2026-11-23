@@ -1,0 +1,32 @@
+{
+  "case": "driver-reask-after-restart",
+  "model": "DriverTransport",
+  "config": "DriverTransport.acp.cfg",
+  "breaks": "S13",
+  "what": "ACP, if the agent asks again about a tool call after it died and the session was taken up again: the new driver has forgotten the names it gave, and names the approval `approval:{session}:{call}` again, an item id the chat has had (S13). It rests on what an agent does after a restart, which no recording shows.",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"Chats": ["c1"], "Asks": ["a1", "a2"], "Calls": ["k1"], "Answers": ["r1"], "Interrupts": ["r2"], "NewSessions": ["r3"], "MaxSessions": 5, "MaxPrompts": 2, "MaxDeaths": 1, "MaxEdits": 1, "PerChat": false, "SelfResolves": false, "Unshowable": true, "UnshownAnswered": true, "StrayAsks": false, "StrayAnswered": true, "CallNamed": true, "CancelOnInterrupt": true, "ReaskAfterRestart": true, "FairDriver": true, "FairHarness": true, "Bug": "none"},
+  "messages": [{"id": "r1", "kind": "answer"}, {"id": "r2", "kind": "interrupt"}, {"id": "r3", "kind": "new_session"}],
+  "steps": [
+    {"action": "Pick", "chat": "c1", "writes": [{"c": "c1", "m": "open", "r": "prompt", "resume": 0}]},
+    {"action": "HarnessReads", "proc": "h", "reads": {"c": "c1", "m": "open", "r": "prompt", "resume": 0}, "writes": [{"c": "c1", "m": "opened", "r": "prompt", "s": 1}]},
+    {"action": "Route", "proc": "h", "reads": {"c": "c1", "m": "opened", "r": "prompt", "s": 1}},
+    {"action": "Prompt", "chat": "c1", "writes": [{"m": "prompt", "s": 1}]},
+    {"action": "HarnessReads", "proc": "h", "reads": {"m": "prompt", "s": 1}, "writes": [{"m": "started", "n": 1, "s": 1}]},
+    {"action": "Route", "proc": "h", "reads": {"m": "started", "n": 1, "s": 1}},
+    {"action": "HarnessAsks", "ask": "a1", "session": 1, "call": "k1", "shown": true},
+    {"action": "Route", "proc": "h", "reads": {"a": "a1", "m": "ask"}},
+    {"action": "HarnessDies", "proc": "h"},
+    {"action": "Route", "proc": "h", "reads": {"m": "eof"}},
+    {"action": "Restart"},
+    {"action": "Pick", "chat": "c1", "writes": [{"c": "c1", "m": "open", "r": "prompt", "resume": 1}]},
+    {"action": "HarnessReads", "proc": "h", "reads": {"c": "c1", "m": "open", "r": "prompt", "resume": 1}, "writes": [{"c": "c1", "m": "opened", "r": "prompt", "s": 1}]},
+    {"action": "Route", "proc": "h", "reads": {"c": "c1", "m": "opened", "r": "prompt", "s": 1}},
+    {"action": "Prompt", "chat": "c1", "writes": [{"m": "prompt", "s": 1}]},
+    {"action": "HarnessReads", "proc": "h", "reads": {"m": "prompt", "s": 1}, "writes": [{"m": "started", "n": 2, "s": 1}]},
+    {"action": "Route", "proc": "h", "reads": {"m": "started", "n": 2, "s": 1}},
+    {"action": "HarnessAsks", "ask": "a2", "session": 1, "call": "k1", "shown": true},
+    {"action": "Route", "proc": "h", "reads": {"a": "a2", "m": "ask"}}
+  ],
+  "end": {"kind": "violation"}
+}

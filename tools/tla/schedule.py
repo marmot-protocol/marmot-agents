@@ -88,7 +88,10 @@ class Reader:
                 if self.peek() == ",":
                     self.take()
             self.take("}")
-            return frozenset(items)
+            try:
+                return frozenset(items)
+            except TypeError:  # a set of records (DriverTransport's): kept in TLC's order
+                return tuple(items)
         if tok == "[":
             self.take()
             fields = {}

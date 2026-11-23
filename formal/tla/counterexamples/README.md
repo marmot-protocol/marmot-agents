@@ -1,16 +1,18 @@
 # Counterexamples
 
-The files of [`SocketProtocol`](../SocketProtocol.md) are [at the end](#socketprotocol). The rest are
-`CoreLifecycle`'s.
+One file per configuration that must fail, each a schedule in its model's action names: `CoreLifecycle`'s,
+which are the shared names of [the verification plan](../../../docs/design/verification.md); `SocketProtocol`'s
+([below](#socketprotocol)); and `DriverTransport`'s, whose files start `driver-` ([below](#drivertransport)).
+Nothing here is written by hand: `python3 tools/tla/check.py --counterexamples` runs TLC, reads its trace, and
+writes each file with `tools/tla/schedule.py` (`tools/tla/schedule_driver.py` for `DriverTransport`). Without the
+flag, `check.py` makes each schedule again and fails if it is not the committed one, so a schedule cannot drift
+from the model. TLC prints a trace without the actions' arguments; `schedule.py` reads them, and the outcome of
+each send, from what changed between one state and the next.
 
-One file per configuration that must fail, each a schedule in the shared action names of
-[the verification plan](../../../docs/design/verification.md). Nothing here is written by hand:
-`python3 tools/tla/check.py --counterexamples` runs TLC, reads its trace, and writes each file with
-`tools/tla/schedule.py`. Without the flag, `check.py` makes each schedule again and fails if it is not the
-committed one, so a schedule cannot drift from the model. TLC prints a trace without the actions' arguments;
-`schedule.py` reads them, and the outcome of each send, from what changed between one state and the next.
-
-All are on the small bounds of [the model's README](../README.md#configurations-and-results).
+All are on the small bounds of their model's page: [`CoreLifecycle`](../README.md#configurations-and-results),
+[`SocketProtocol`](../SocketProtocol.md#configurations-and-results) and
+[`DriverTransport`](../DriverTransport.md#configurations-and-results). The rest of this page, up to
+[`SocketProtocol`](#socketprotocol), is about `CoreLifecycle`'s.
 
 ## The format
 
@@ -88,3 +90,34 @@ prompt `p1`, whose turn is `t1`, and one control `r1`, an interrupt of it.
 | [`kept-connector-remembers`](kept-connector-remembers.json) | S2 | With `NoReset`, the Hermes plugin before the fix: the connection goes while the turn runs, the core closes it as cut short, and the turn's end that Hermes sends after it reconnects changes it to done |
 | [`answer-on-effect`](answer-on-effect.json) | S11 | With `AnswerOnEffect`: the connector holds the interrupt's answer until the turn stops, and the core gives up a connector that was there and working |
 | [`prompt-in-flight`](prompt-in-flight.json) | `UndeliveredNotRun` | The accepted limit of D-037: the connection goes before the core reads the prompt's answer, so the chat is told it may not have been delivered, and the harness runs it |
+
+## DriverTransport
+
+The same head (`case`, `model`, `config`, `breaks`, `what`, `constants`, `end`), with the core's requests as
+`messages` (`{"id": "r1", "kind": "answer"}`, `interrupt` or `new_session`), and steps in
+[the model's](../DriverTransport.md#what-is-modelled) action names, each with what it did:
+
+- `Route(proc, reads)` and `DropWait(proc, reads)`: the driver reads the next line from a harness process
+  (`h`, the one for every chat, or a chat's own Pi); `HarnessReads(proc, reads)`: the harness reads the next
+  line the driver wrote. A line is `{"m": ...}` with its fields: `open` (a session to open, `resume` 0 for a new
+  one, `r` the request it is for, or `prompt`), `opened`, `prompt`, `started`, `ended`, `ask`, `resolved`,
+  `reply` (`how`: `answer`, `cancel` or `refuse`), `interrupt`, `edit`, `eof`.
+- `HarnessAsks(ask, session, call, shown)` (session 0 is a session no chat has), `HarnessResolves(ask)`,
+  `HarnessEndsTurn(session)`, `HarnessEdits(session)`, `HarnessDies(proc)`.
+- `Pick(chat)`, `Prompt(chat)`, `Spawn(chat)`, `Restart`.
+- `Answer(req, outcome, ask)`, `Interrupt(req, outcome)`, `NewSession(req, outcome, old_session)`, where the
+  outcome is `taken` or `refused`.
+
+A step lists the lines it wrote (`writes`) and the requests it settled (`settles`, each with how: `effect`,
+`refused`, `failed`, or `wrong`, by an event that does not show its effect).
+
+| File | Breaks | What it shows |
+| --- | --- | --- |
+| [`driver-unfair-harness-never-reads`](driver-unfair-harness-never-reads.json) | L1 | Without `FairHarness`: an interrupt is taken and written, and the harness never reads it, so the turn never ends and nothing settles it |
+| [`driver-stray-while-picking`](driver-stray-while-picking.json) | L2 | Found in the ACP driver: a request from a session no chat has, read while a chat's session is picked, is held (`early`) and dropped unanswered once the pick is done |
+| [`driver-codex-stray`](driver-codex-stray.json) | L2 | Found in the Codex driver: a request for a thread no chat has is never answered |
+| [`driver-codex-unshown`](driver-codex-unshown.json) | L2 | Found in the Codex driver: a request it cannot show is never answered, and nothing in the chat waits on it |
+| [`driver-reask-after-restart`](driver-reask-after-restart.json) | S13 | With `ReaskAfterRestart`: after a restart, ACP's driver names an approval for a tool call it named before, as the chat has seen |
+
+Driving the code with them is step 5, as for `CoreLifecycle`'s: the conformance suite's fake harnesses would
+play the `Harness…` steps, and the driver take the others.

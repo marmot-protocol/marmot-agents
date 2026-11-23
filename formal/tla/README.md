@@ -1,7 +1,5 @@
 # CoreLifecycle: a TLA+ model of the core
 
-The socket between the core and a connector is a model of its own, [`SocketProtocol`](SocketProtocol.md).
-
 Status: built and checked with TLC on small bounds, as
 [D-093](../../docs/decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top) and
 [the verification page](../../docs/design/verification.md) plan. The model, its bounds and its switches are
@@ -9,6 +7,10 @@ internal and change as the work goes. Read on 2026-11-22 against master `74b56d6
 `conversation.rs` `refused` on branch `dropped-sends` the same day, and for its review round 1, and again for
 the sends under MDK 0.19.0's tokens on branch `crash-safe-sends` the same day, which took the lookup's place, and
 again for the reading by insertion order of MDK #3606 on branch `mdk-insertion-paging` the same day.
+
+This folder holds three models: `CoreLifecycle`, the core, which this page is about; `SocketProtocol`, the socket
+between the core and a connector, which [its own page](SocketProtocol.md) is about; and `DriverTransport`, one
+driver's side, which [its own page](DriverTransport.md) is about. All three are checked by `tools/tla/check.py`.
 
 `CoreLifecycle.tla` models the core between MDK and one driver: requests pending and settled, items and their
 versions, read marks, sessions, the outbox, saves and crashes. It owns S1, S2, S3, S4, S10, S12 and L1 to L3 for
@@ -195,7 +197,8 @@ with more memory, which is not set up yet:
 
 All of `check.py` takes about 10 minutes here with 4 workers (the fair and give-up configurations take about 3½
 each, since live messages are taken in any order); CI runs it on every pull request with 4 workers, in two
-jobs side by side: the fair model (`--only fair`) and every other case (`--except fair`), each under D-094's
+jobs side by side: the fair model (`--model CoreLifecycle --only fair`) and every other case
+(`--model CoreLifecycle --except fair`), each under D-094's
 15 minutes. For
 review round 1 it took 24 minutes, on a machine busy with the simulator and the Rust tests at the same time. The
 larger bounds were not run again for the fix: no send is refused or given up in them.
@@ -244,7 +247,8 @@ taken then, so a prompt in between names no session. The code was right; the mod
 ## Running
 
 ```sh
-python3 tools/tla/check.py                 # every case; logs and configurations in target/tla
+python3 tools/tla/check.py                 # every case of the three models; logs and configurations in target/tla
+python3 tools/tla/check.py --model CoreLifecycle   # this model's cases
 python3 tools/tla/check.py --only fair     # one case
 python3 tools/tla/check.py --counterexamples   # writes the committed schedules again, from TLC's traces
 tools/tla/run.sh formal/tla CoreLifecycle.tla CoreLifecycle.fair.cfg   # TLC on one configuration
@@ -253,4 +257,5 @@ tools/tla/run.sh formal/tla CoreLifecycle.tla CoreLifecycle.fair.cfg   # TLC on 
 `tools/tla/run.sh` downloads TLC v1.7.4 (the release MDK pins, with the same SHA-256) into
 `~/.cache/marmot-agents/tla` once, and runs it with the local Java, or, when there is none, in a pinned Eclipse
 Temurin 21 image with Docker. `TLC_WORKERS` sets TLC's workers (default 1); `TLC_HEAP` its heap (default 2g).
-CI runs `check.py` in the two `TLA+ models` jobs on every pull request.
+CI runs `check.py` in the `TLA+ models` jobs on every pull request: two for this model, one for
+`SocketProtocol` and one for `DriverTransport`.

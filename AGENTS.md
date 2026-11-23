@@ -330,12 +330,14 @@ python3 -m unittest discover -s install -p 'test_*.py'   # runs each install scr
 `.github/workflows/release.yml` runs only on a version tag, so a change to it is checked by reading it, and by
 [actionlint](https://github.com/rhysd/actionlint) if you have it.
 
-For any change under `formal/` or `tools/tla/`, or to the code a model follows (`formal/tla/README.md` and
-`formal/tla/SocketProtocol.md` say which), with Java 21, or Docker when there is no Java (the script then runs
-TLC in a pinned Java image):
+For any change under `formal/` or `tools/tla/`, or to the code a model follows (the core for `CoreLifecycle`,
+`formal/tla/README.md`; the core's socket and the Claude Code, OpenClaw and Hermes connectors for
+`SocketProtocol`, `formal/tla/SocketProtocol.md`; the built-in drivers for `DriverTransport`,
+`formal/tla/DriverTransport.md`), with Java 21, or Docker when there is no Java (the script then runs TLC in a
+pinned Java image):
 
 ```sh
-python3 tools/tla/check.py   # the fair model passes; every counterexample, deliberate defect and
+python3 tools/tla/check.py   # the fair models pass; every counterexample, deliberate defect and
                              # reachability probe fails as stated, and each counterexample's schedule
                              # is the committed one. TLC is downloaded once, pinned by version and
                              # checksum, by tools/tla/run.sh
