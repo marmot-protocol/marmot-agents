@@ -87,7 +87,9 @@ identity in the old home, and makes no new one.
   identity. Until there is a release, give it `--from-source` each time. A `--cwd` or `--model-key` given
   again replaces the old one, and nothing else in the settings.
   Every agent on your account uses the same `marmot-agent` and support files, so an update that fails or is
-  stopped puts back the ones it found, and running it again after a kill finishes it
+  stopped puts back the ones it found, with Pi's or Goose's container image and the plugin in your Hermes or
+  OpenClaw, and running it again after a kill finishes it. One install runs on your account at a time; a
+  second waits for the first to end
   ([D-134](docs/decisions.md#d-134-an-upgrade-of-the-core-and-its-support-files-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)).
 - `--uninstall` stops and removes the service, and keeps the agent's folder.
 - `--no-service` sets up no service; run the agent with the `start` script in its folder (and `connector`, for

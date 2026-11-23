@@ -193,7 +193,8 @@ Decided, and not built: the core, the drivers, MDK and the apps each have their 
 - A gateway's plugin change is put back if the installer fails or is stopped, and a re-run after a kill always
   finishes or puts it back; a few named moments after a kill leave neither plugin working until then ([D-116](decisions.md#d-116-a-gateways-plugin-swap-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)).
 - An upgrade puts the new core and support files in place together, once both are prepared, and puts back
-  the ones it found if it fails or is stopped; a re-run after a kill finishes it or puts it back ([D-134](decisions.md#d-134-an-upgrade-of-the-core-and-its-support-files-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)).
+  the ones it found if it fails or is stopped, with Pi's and Goose's image and our plugin in a gateway; a
+  re-run after a kill finishes it or puts it back. One install runs in a home at a time ([D-134](decisions.md#d-134-an-upgrade-of-the-core-and-its-support-files-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)).
 - A gateway install moves over with its installer's `--replace-plugin`. The OpenClaw installer finishes a
   half-done move by editing OpenClaw's settings file itself, after a copy; the gateway's conversation starts
   fresh in each chat. `--replace-plugin` lists the gateway's work folder in `files_from` beside the old
