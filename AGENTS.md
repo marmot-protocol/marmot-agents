@@ -323,7 +323,7 @@ The settings are in `lychee.toml`. The check covers links inside the repository,
 It does not fetch web addresses; check those by hand.
 
 For any change under `packages/claude-code` or `packages/openclaw`, in that package, with Node 24 (CI uses the
-version named in `.github/workflows/ci.yml`):
+version named in `.github/actions/node/action.yml`):
 
 ```sh
 cd packages/claude-code   # or packages/openclaw
