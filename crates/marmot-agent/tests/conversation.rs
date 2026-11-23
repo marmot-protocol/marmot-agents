@@ -2066,6 +2066,64 @@ fn words_that_settle_very_many_leave_the_rest_to_the_turn() {
     assert!(failed_at_the_end(&mut talk).is_empty());
 }
 
+// What fits on the words is sized by what their `settles` tags carry, each request's event id,
+// not by the core's shorter key for it: with a long turn, fewer fit, and the turn settles the rest.
+#[test]
+fn words_settle_what_fits_by_the_requests_events() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let long = "t".repeat(12 * 1024);
+    let in_long_turn = |event: AgentEvent| {
+        let mut header = event.header().clone();
+        header.turn = Some(long.as_str().into());
+        AgentEvent::new(header, event.body().clone(), None).unwrap()
+    };
+    sent(
+        &mut talk,
+        &chat,
+        in_long_turn(event("t1", State::Running, turn())),
+        "e-t1",
+    );
+    let requests: Vec<_> = (0..60)
+        .map(|n| interrupt_taken(&mut talk, &format!("{n:064x}")))
+        .collect();
+    let mut said = emitted(&chat, in_long_turn(words(State::Done)));
+    said.settles = requests;
+    let acts = talk.emitted(said);
+    let mut settled = Vec::new();
+    let mut words = 0;
+    for (_, what) in sends(&talk, acts) {
+        let settles = match what {
+            Sending::Words {
+                settles,
+                turn,
+                remark,
+                ..
+            } => {
+                let tags = carrier::words_tags(turn.as_ref(), remark, &settles);
+                let bytes: usize = tags.iter().flatten().map(String::len).sum();
+                assert!(
+                    tags.len() <= 64 && bytes <= 16 * 1024,
+                    "MDK takes the words: {} tags, {bytes} bytes",
+                    tags.len()
+                );
+                words = settles.len();
+                settles
+            }
+            Sending::Item { item, .. } => item.settles,
+        };
+        settled.extend(settles);
+    }
+    assert!(
+        words > 0 && words < 60,
+        "the words settle what fits: {words}"
+    );
+    settled.sort();
+    settled.dedup();
+    assert_eq!(settled.len(), 60);
+    assert!(failed_at_the_end(&mut talk).is_empty());
+}
+
 // Words that come again unchanged, and final, still settle what they name: the turn's next
 // version carries it, and it is not left to be settled as failed (S1, D-028).
 #[test]

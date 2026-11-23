@@ -969,10 +969,14 @@ impl Conversation {
                     && !(self.saved.outbox.iter()).any(|q| q.what.key() == key);
                 let remark = message.phase == Some(marmot_agent_events::body::Phase::Commentary);
                 let settles = if first_words {
-                    // As many as MDK takes in a chat message; the turn carries the rest.
-                    let keys: Vec<EventKey> =
-                        held.iter().map(|r| EventKey::from(r.as_str())).collect();
-                    let fit = carrier::words_settles_fit(header.turn.as_ref(), remark, &keys);
+                    // As many as MDK takes in a chat message, sized by the event ids their tags
+                    // carry; the turn carries the rest. What is no longer pending settles nothing.
+                    held.retain(|r| (self.saved.pending.get(r)).is_some_and(|p| p.group == group));
+                    let events: Vec<EventKey> = held
+                        .iter()
+                        .map(|r| self.saved.pending[r].event.clone())
+                        .collect();
+                    let fit = carrier::words_settles_fit(header.turn.as_ref(), remark, &events);
                     by_turn = held.split_off(fit);
                     take_pending(&mut self.saved.pending, &group, &held)
                 } else {
