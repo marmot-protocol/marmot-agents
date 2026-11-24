@@ -241,6 +241,7 @@ fn saved() -> Vec<u8> {
         files_in: FilesIn::Images,
         approval_commands: Vec::new(),
         subagents: false,
+        stop_subagent: false,
     };
     let saved = marmot_agent::Saved::default();
     let mut talk = Conversation::new(PubKey::from("agent"), "codex", rights, capabilities, saved);
