@@ -3776,6 +3776,114 @@ fn an_items_thread_is_kept_across_a_restart() {
     assert_eq!(cmd.thread.as_ref().map(|t| &t.root), Some(&hex_id(1)));
 }
 
+/// The words `text` of the subagent whose `task` item is `task:s1`, in `state`.
+fn subagent_words(state: State, text: &str) -> AgentEvent {
+    let event = of_subagent(
+        event("w1", state, Body::Message(Message::default())),
+        "task:s1",
+    );
+    let header = Header {
+        text: text.into(),
+        ..event.header().clone()
+    };
+    AgentEvent::new(header, event.body().clone(), None).unwrap()
+}
+
+// MDK takes no durable edit of a thread message (D-149): a subagent's words go out once, when they
+// are complete, as a thread message under its task item; a version while they are still being
+// written goes nowhere. A later complete version is MDK's plain edit of that message, which names
+// no token.
+#[test]
+fn a_subagents_words_go_out_once_complete_and_a_later_version_is_a_plain_edit() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("task:s1", State::Running, subagent_task()),
+        &hex_id(1).0,
+    );
+    let acts = talk.emitted(emitted(&chat, subagent_words(State::Running, "a dra")));
+    assert!(sends(&talk, acts).is_empty(), "words still being written");
+    talk.emitted(emitted(
+        &chat,
+        subagent_words(State::Done, "found two files"),
+    ));
+    let group = direct().group;
+    let (token, what) = talk.next_send(&group).expect("the words");
+    let Sending::Words {
+        key, text, thread, ..
+    } = what
+    else {
+        panic!("not words: {what:?}");
+    };
+    assert_eq!(text, "found two files");
+    assert_eq!(thread.and_then(|t| t.parent), Some(hex_id(1)));
+    assert!(token.edits.is_none());
+    talk.sent(&key, hex_id(2));
+    assert!(talk.next_send(&group).is_none(), "sent once");
+
+    talk.emitted(emitted(
+        &chat,
+        subagent_words(State::Done, "found three files"),
+    ));
+    let (token, what) = talk.next_send(&group).expect("the later version");
+    let Sending::Words { text, edit, .. } = what else {
+        panic!("not words: {what:?}");
+    };
+    assert_eq!(text, "found three files");
+    assert_eq!(edit, Some(hex_id(2)), "an edit of the thread message");
+    assert_eq!(token.edits, None, "MDK's plain edit, which names no token");
+}
+
+// A subagent's words whose thread MDK cannot place, as when the task item disappeared under the
+// chat's retention, go in the main chat as the agent's words, and stay there: tried again, after a
+// restart too, and in every later version, which is then MDK's durable edit of a chat message.
+#[test]
+fn a_subagents_words_with_no_thread_left_go_in_the_main_chat() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("task:s1", State::Running, subagent_task()),
+        &hex_id(1).0,
+    );
+    talk.emitted(emitted(&chat, subagent_words(State::Done, "late words")));
+    let group = direct().group;
+    let (token, what) = talk.next_send(&group).unwrap();
+    assert!(matches!(
+        what,
+        Sending::Words {
+            thread: Some(_),
+            ..
+        }
+    ));
+    talk.thread_gone(&token.send);
+    let saved: Saved = serde_json::from_str(&serde_json::to_string(talk.saved()).unwrap()).unwrap();
+    let mut talk = conversation(saved);
+    let (token, what) = talk.next_send(&group).expect("tried again");
+    let Sending::Words {
+        key, text, thread, ..
+    } = what
+    else {
+        panic!("not words: {what:?}");
+    };
+    assert_eq!((text.as_str(), thread), ("late words", None));
+    talk.sent(&key, hex_id(2));
+    let _ = token;
+    talk.emitted(emitted(
+        &chat,
+        subagent_words(State::Done, "late words, again"),
+    ));
+    let (token, what) = talk.next_send(&group).unwrap();
+    let Sending::Words { edit, thread, .. } = what else {
+        panic!("not words: {what:?}");
+    };
+    assert_eq!((edit, thread), (Some(hex_id(2)), None));
+    assert!(token.edits.is_some(), "a durable edit of a chat message");
+}
+
 // A subagent's work whose task item the chat was not sent goes in the main chat, as any item does:
 // here, a subagent's approval in a group that is not sent the agent's full activity (D-136).
 #[test]

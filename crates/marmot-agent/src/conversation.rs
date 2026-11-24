@@ -383,6 +383,10 @@ struct Record {
     /// (D-133). `None` for one sent in the main chat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thread: Option<Thread>,
+    /// Its subagent's thread could not be placed when its first event was tried, as MDK no
+    /// longer had the `task` item: it goes in the main chat (D-142).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    main_chat: bool,
 }
 
 /// Something queued to be sent to a group.
@@ -1063,6 +1067,7 @@ impl Conversation {
                 closed_in_chat: false,
                 subagent: None,
                 thread,
+                main_chat: false,
             });
         if record.first.is_none() && record.subagent.is_none() {
             record.subagent = subagent;
@@ -1484,6 +1489,23 @@ impl Conversation {
         }
     }
 
+    /// MDK refused the send named `token`, a subagent's words in its thread, because it no longer
+    /// has the thread's `task` item to place them by: the group's messages disappeared since it
+    /// went, and MDK did not take the words. They go in the main chat, as the agent's words, and
+    /// stay there in every later version (D-142). The caller saves this before the send is tried
+    /// again.
+    pub fn thread_gone(&mut self, token: &str) {
+        let Some(queued) = self.saved.outbox.iter().find(|q| q.token == token) else {
+            return;
+        };
+        let key = queued.what.key().to_string();
+        if let Some(record) = self.saved.items.get_mut(&key)
+            && record.first.is_none()
+        {
+            record.main_chat = true;
+        }
+    }
+
     /// The send named `token` is given up without knowing whether it went out: MDK no longer
     /// knows its token, and trying it again could send it twice. It is dropped as a refused one
     /// is ([`Conversation::refused`]), and the chat's notice says it may not have been delivered.
@@ -1687,8 +1709,14 @@ impl Conversation {
         let record = self.saved.items.get(what.key());
         let mut edits = None;
         if let Some(first) = record.and_then(|r| r.first.clone()) {
-            // An edit names the token its first event went under.
-            edits = record.and_then(|r| r.first_token.clone());
+            // An edit names the token its first event went under. MDK keeps no edit of a thread
+            // message under a token: a later version of a subagent's words in its thread is MDK's
+            // plain edit, which names none (D-142).
+            let comment =
+                matches!(what, Sending::Words { .. }) && record.is_some_and(|r| r.thread.is_some());
+            edits = record
+                .filter(|_| !comment)
+                .and_then(|r| r.first_token.clone());
             match &mut what {
                 Sending::Item { item, .. } => item.first = Some(first),
                 Sending::Words { edit, settles, .. } => {
@@ -1782,6 +1810,9 @@ impl Conversation {
         let record = self.saved.items.get(key)?;
         if record.first.is_some() {
             return record.thread.clone();
+        }
+        if record.main_chat {
+            return None;
         }
         let task = self.saved.items.get(record.subagent.as_deref()?)?;
         if task.group != record.group {

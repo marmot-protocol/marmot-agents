@@ -2884,7 +2884,15 @@ something open:
    ([D-122](#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar)). MDK writes their `E`, `K`, `P`, `e`
    and `k` from that item's place and leaves NIP-22's parent `p` off, as on every comment it sends. An item
    carries the parent `p`, naming the agent; MDK reads a `p` that names its sender as no mention (MDK pull
-   request 3622), which settles what D-121 left open about it.
+   request 3622), which settles what D-121 left open about it. The core sends words once they are complete, as
+   it sends the agent's own. MDK keeps no edit of a thread message under a token, as it does a chat message's
+   or an item's (`submit_tagged_edit_for_local_send`, at MDK `029e057`, takes only those), so a later version of
+   a subagent's words in its thread is MDK's plain edit of the thread message (`edit_message`), which MDK takes
+   for a comment. Tried again after an answer that was lost, it shows the same words again. Two later versions
+   in one second may show in either order, as MDK orders a message's edits by their second; a harness sends a
+   subagent's complete words once, so this is not expected to be seen. And when MDK cannot place the thread
+   message, because the `task` item, or the thread's root, disappeared under the chat's retention, MDK does not
+   take it, and the words go in the main chat as the agent's words, and stay there in every later version.
 5. **Every item of a subagent's carries a `subagent` tag** with that field, as `turn` and `session` are carried.
    An edit carries only the root's tags (D-133), so a member who joined late can place it in the tree but not
    under its nested subagent; the tag lets an app find that subagent's view by its `task` item's id.
@@ -2911,8 +2919,9 @@ how every chat's session is resumed and set. Placing an item when it goes out, f
 event to be held, and falls back to the main chat whenever there is no thread to put it in. One row per subagent
 is what D-121 describes, and a subagent given more work is the same subagent.
 
-Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points. Points 5 and 6
-are visible to apps and provisional until the owner accepts them.
+Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points. Points 5 and 6,
+and what point 4 says of a later version and of words whose thread is gone, are visible to apps and provisional
+until the owner accepts them.
 
 ## D-143 One issue tracks the CI jobs that flake
 

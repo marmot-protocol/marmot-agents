@@ -445,6 +445,8 @@ impl Marmot {
                     Ok(None) if token.edits.is_some() && first_gone(&error) => {
                         SendFailed::FirstGone
                     }
+                    // Nor these words: it places a thread message before it keeps it.
+                    Ok(None) if in_thread(what) && thread_gone(&error) => SendFailed::ThreadGone,
                     _ => send_failed(&error),
                 });
             }
@@ -884,6 +886,10 @@ pub enum SendFailed {
     /// later version of an item then goes out as a new first event, and the agent's words as a
     /// new message.
     FirstGone,
+    /// It was a subagent's words, a thread message under its `task` item, and MDK no longer has
+    /// that item, or the thread's root, to place it by: the group's messages disappeared since it
+    /// went. MDK did not take it. The words then go in the main chat, as the agent's words.
+    ThreadGone,
     /// It was first tried so long ago that its group's messages have disappeared since, and
     /// MDK no longer knows its token: it may have gone out, and tried again it could go out
     /// twice. It is given up, and the chat told it may not have been delivered.
@@ -919,6 +925,21 @@ fn first_gone(error: &AppError) -> bool {
         AppError::InvalidAppMessagePayload(why)
             if why == "original local send was not found"
                 || why == "original local message is unavailable"
+    )
+}
+
+/// Whether `what` is words to go in a subagent's thread, as a new thread message.
+fn in_thread(what: &Sending) -> bool {
+    matches!(what, Sending::Words { edit: None, thread: Some(t), .. } if t.parent.is_some())
+}
+
+/// Whether MDK refused a thread message because it does not have the message it answers, or the
+/// thread's root, to place it by (`thread_placement`, MDK `029e057`).
+fn thread_gone(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::InvalidAppMessagePayload(why)
+            if why == "thread parent is unavailable" || why == "thread root is unavailable"
     )
 }
 

@@ -146,7 +146,8 @@ Built in the core, the Codex driver and MDK ([D-141](decisions.md#d-141-subagent
 - A driver names the subagent each event belongs to by its `task` item, and says whether its harness tells
   subagents apart; only Codex's does. The core places an item when its first event goes out, under its
   subagent's `task` item, and keeps that place; with no `task` item sent to the chat, it goes in the main chat.
-  A subagent's words are MDK's thread messages; its items carry a `subagent` tag naming their `task` item
+  A subagent's words are MDK's thread messages, a later version MDK's plain edit of one, and words whose
+  `task` item has disappeared go in the main chat; its items carry a `subagent` tag naming their `task` item
   ([D-142](decisions.md#d-142-how-subagent-threads-are-built)).
 - Stop in the main chat stops every subagent the agent started, even after its turn; Stop in a thread stops that
   subagent and those it started. A comment in a thread is a prompt only where the driver allows it and the

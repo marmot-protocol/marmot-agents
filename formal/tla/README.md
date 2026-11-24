@@ -64,7 +64,8 @@ tries a send again is not modelled: a send may be tried again at once.
   oracle allows it).
 - **Time.** No clock: `Tick` may fire for any taken control, and a send may be tried again at once. So
   disappearing messages are not modelled either: a send MDK has forgotten the token of (`lost`), and an edit
-  whose first event has disappeared, which goes out as a new first event (`first_gone`).
+  whose first event has disappeared, which goes out as a new first event (`first_gone`), and a subagent's words
+  whose thread's `task` item has disappeared, which go in the main chat (`thread_gone`).
 - **Files the agent sends** (D-090).
 
 ## Trusted assumptions
