@@ -530,13 +530,12 @@ renamed over the old one, and the folder synced.
 
 The machine: an Intel i9-10850K (20 threads), 62 GB of memory, Linux 6.12, the state on ext4 (`relatime`) on a
 software RAID 0 of two NVMe drives, a release build, the system's default write-back, and nothing else told to
-sync. The machine was shared, and it had just been rebooted: the rows below are from runs a few minutes after a reboot,
-before the other work on it had started again, at a load average of about 6 (the table's, before the change, at
-09:47 after a reboot at 09:45; the figures after the change, at 10:18 after another at 10:16). Runs at a load of
-20 to 45 took up to twice as long, once 8.4 s for the answer at the largest backlog, which a quiet run did not
-repeat.
+sync. The machine was shared, and it had just been rebooted: the rows below, before the change, are from a run at
+09:47, two minutes after a reboot, before the other work on it had started again, at a load average of about 6.
+Runs at a load of 20 to 45 took up to twice as long, once 8.4 s for the answer at the largest backlog, which a
+quiet run did not repeat.
 
-| Waiting in the outbox | State file | Writes per new message there | Time per new message | Writes before the answer reaches the driver | Answer to driver | Writes in a stop | Stop | One save alone, of which JSON |
+| Waiting in the outbox | State file | Writes per new message there | Last backlog event | Writes before the answer reaches the driver | Answer to driver | Writes in a stop | Stop | One save alone, of which JSON |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0 | 2 KB | (none) | | 1 | 4.9 ms | 12 | 59 ms | 4.9 ms, 4 µs |
 | 50 | 183 KB | 2 | 14 ms | 1 | 5.6 ms | 12 | 77 ms | 5.4 ms, 0.1 ms |
@@ -563,7 +562,7 @@ After the change the bench counts what the store writes, at the write itself, an
 answering step has ended. One run, at 12:53 on 2026-11-24, on the same machine and disk, with nothing else of this
 work running but at a load average of about 13 from other work on the machine:
 
-| Waiting in the outbox | Saves (writes) per new message there | Bytes written building it | Time per new message | Writes before the answer | Answer to driver | Saves (writes) in a stop | Stop | One save alone, of which JSON |
+| Waiting in the outbox | Saves (writes) per new message there | Bytes written building it | Last backlog event | Writes before the answer | Answer to driver | Saves (writes) in a stop | Stop | One save alone, of which JSON |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0 | (none) | (none) | | 1 | 5.5 ms | 11 (7) | 36 ms | 5.2 ms, 5 µs |
 | 50 | 2 (1) | 4.7 MB | 6.2 ms | 1 | 5.8 ms | 11 (7) | 50 ms | 6.0 ms, 0.2 ms |
