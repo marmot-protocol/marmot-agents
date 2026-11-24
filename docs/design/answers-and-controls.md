@@ -378,7 +378,8 @@ Four things made the rule in D-032 too weak as it stood. The first three were de
 2. **One word does two jobs.** In Hermes `/approve` answers an approval, and also confirms `/new`. So a
    request to confirm a command is a `question` item, and a typed `/approve` is an approval answer only while
    an approval is waiting ([D-048](../decisions.md#d-048-a-request-to-confirm-a-command-is-a-question)). An
-   answer to that question goes to Hermes by the confirmation's id, so it can answer nothing else
+   answer to that question goes to Hermes by the confirmation's id, so it can answer nothing else, and only
+   after Hermes's own check of who may answer
    ([D-146](../decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id)).
 3. **An approval can cover other people.** After one person answered "always", the same command from another
    person ran with no prompt, in both gateways. In Hermes the standing approval covers the reason a command

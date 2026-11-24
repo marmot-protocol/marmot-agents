@@ -2845,26 +2845,39 @@ Decided 2026-11-23 by the builder, under the project owner's instruction to deci
 `/always` or `/cancel` for it. It answers only while that confirmation still waits in Hermes; when it does not,
 because it was answered, a newer one replaced it or it waited longer than Hermes waits, the answer is refused as
 `not_waiting` and nothing else is answered: not an approval that started meanwhile, and not another command's
-confirmation. Hermes hands back its reply to the answer instead of sending it, and the plugin sends it as the
-command's output, in the command's session, outside any turn.
+confirmation. The plugin stops a second before Hermes's own limit, so that an answer it hands Hermes is one Hermes
+runs. Before it answers, the plugin asks Hermes's own check of who may answer, `slash_confirm_refusal`, with the
+person who answered and the chat's Hermes settings, as Hermes's own platforms do: where Hermes's settings name
+admins for the chat, only someone Hermes lets run the confirmed command may confirm it, whatever the core allows.
+A person Hermes refuses is refused as `not_supported`, with Hermes's words, and the confirmation still waits.
+
+Hermes hands back its reply to the answer instead of sending it, and the plugin sends it as the command's output,
+in the session Hermes asked in, outside any turn. That reply settles the command the confirmation is for, and no
+other: in a group, where each sender has a session and each can have a confirmation waiting, an answer to one
+settles nothing of another's. When Hermes ran the command and said nothing, a notice says so (`Hermes ran /new and
+said nothing.`), and settles the command.
 
 Nothing else changes. Answering the confirmation still needs the right to prompt, and answering an approval the
 right to approve. The confirmation and its answer show as before; the one difference people see is that the
 answer no longer starts a turn of its own, which the typed `/approve` did. The plugin does not claim Hermes's
 confirmation buttons, so Hermes still sends the question as text, and a person who types `/approve` in the chat is
-still read as [D-048](#d-048-a-request-to-confirm-a-command-is-a-question) says, by the core and then by Hermes.
+still read as [D-048](#d-048-a-request-to-confirm-a-command-is-a-question) says, by the core and then by Hermes,
+which runs the same check of who may answer on typed text.
 
 **Why.** A structured answer names the item it answers, but typed text names nothing. Hermes reads a typed
 `/approve` as the answer to an approval when one waits in the session, and otherwise to the session's current
 confirmation, whatever its id. So between the core's check and Hermes reading the text, an approval that started
 or a confirmation that replaced the first would take the answer, and someone who may only prompt could approve
 what the agent does ([D-049](#d-049-a-standing-approval-is-an-ordinary-approval-answer) records this gap). Hermes's
-call checks the id, and its own platforms with buttons answer through it. It is not on Hermes's list of what a
-plugin may use, so it is listed in [what the plugin relies on](reference/hermes-messages.md#what-the-plugin-relies-on-outside-the-published-plugin-interface),
+call checks the id, and its own platforms with buttons answer through it, after asking its check of who may
+answer, which the call itself does not ask: without that check, an answer through the call could do what the
+same person typing `/approve` could not. The call is not on Hermes's list of what a plugin may use, so it is
+listed in [what the plugin relies on](reference/hermes-messages.md#what-the-plugin-relies-on-outside-the-published-plugin-interface),
 and the Hermes move-over test fails when it changes. Issue #153.
 
 Not closed: a `/approve` that a person who may only prompt types while a confirmation waits still has the gap
-D-049 describes, as typed text always will.
+D-049 describes, as typed text always will. Answers to an approval card and to a question do not yet ask Hermes's
+check with the chat's settings (`approval_refusal` and `clarify_refusal`); that is for a change of its own.
 
 Decided 2026-11-24 by the builder, under the project owner's instruction to build a fix only if it narrows what an
 answer can do. It concerns who may do what, so it is for the owner to confirm.
