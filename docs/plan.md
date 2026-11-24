@@ -100,7 +100,9 @@ on 2026-11-22: [D-112](decisions.md#d-112-the-core-sends-kinds-1201-1202-and-edi
 Also before the swap: a chat can move a coding harness to another folder
 ([D-101](decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder)), and the installers connect to the
 harness the person already has, on Linux and macOS
-([D-102](decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)).
+([D-102](decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)), and subagents are
+shown as threads ([D-121](decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)
+to D-126, moved into M4 by [D-141](decisions.md#d-141-subagent-threads-are-built-before-the-swap)).
 **Done when** an install of each of today's connectors has moved over, on a test machine, without being
 invited again, and every harness that allows it can send a file.
 
@@ -132,8 +134,17 @@ Built so far, provisional until the owner accepts what others can see:
 - **Sends that survive a crash.** On MDK 0.19.0, every send in the core's outbox (the agent's words and their
   edits, items and their later versions, notices, and what stands in for a dropped send) is handed to MDK under
   a token saved with it, and a send tried again under it, after a lost answer or a restart, gives back the same
-  event and sends nothing. A file the agent sends keeps no token: MDK's token form for files carries no tags. See
+  event and sends nothing. A file the agent sends keeps no token: MDK's token form for files carries no tags. Nor
+  does a later version of a subagent's words in its thread: MDK keeps no edit of a thread message under a token,
+  so it is MDK's plain edit, which shows the same words again if tried after a lost answer
+  ([D-142](decisions.md#d-142-how-subagent-threads-are-built), point 4). See
   [sends that give up](design/verification.md#first-fix-what-is-known).
+- **Subagents as threads.** On MDK master at `029e0579f`, which places agent items in threads (MDK pull
+  requests 3622, 3630 and 3640), a driver names the subagent each event belongs to, and the core puts it in that
+  subagent's thread with NIP-22's tags; edits repeat the root's, and the subagent's words are thread messages.
+  Codex's driver says its harness tells subagents apart; the others do not, and are unchanged. Not built yet:
+  writing to a running subagent, which no driver allows, and a Stop that stops only one subagent
+  ([D-142](decisions.md#d-142-how-subagent-threads-are-built)).
 - **Catching up after being offline.** On MDK master after 0.19.0 (`7f7dcc6ca`, which holds MDK's fixes for
   #3602 and #3603), the core reads each chat from its saved mark, a page at a time in the order MDK stored the
   messages, and moves the mark as it handles each. MDK's live notice of a message only wakes that chat's reader,
@@ -165,8 +176,7 @@ These are the project owner's to arrange. This repository does not change MDK.
 
 ## Not before the swap
 
-Each of these is wanted, and none is needed to replace what runs today: subagents as threads
-(decided as [D-121](decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them) to D-126, not built), how much detail a chat gets
+Each of these is wanted, and none is needed to replace what runs today: how much detail a chat gets
 ([Q-11, Q-12](open-questions.md#q-11-what-keeps-sensitive-output-from-spreading)), going back to an older
 session, changing permissions from the chat
 ([Q-10](open-questions.md#q-10-how-are-permissions-changed-from-the-chat)), several identities in one program

@@ -7,7 +7,7 @@ use marmot_agent::carrier::{self, Item};
 use marmot_agent_events::body::{Approval, Body, Notice, NoticeKind, Turn};
 use marmot_agent_events::{AgentEvent, Header, State};
 use marmot_agent_sim::oracle::{self, Failure, NET_EARLIEST_MS};
-use marmot_agent_sim::world::{CHAT, Delivery, EDIT, Emission, RefusedSend, World};
+use marmot_agent_sim::world::{CHAT, COMMENT, Delivery, EDIT, Emission, RefusedSend, World};
 use marmot_agent_sim::{Posted, What};
 
 /// A world whose chats the agent joined, with `posted` posted and stored.
@@ -46,6 +46,7 @@ fn header(item: &str, state: State) -> Header {
         harness: "sim".into(),
         session: None,
         turn: None,
+        subagent: None,
         item: item.into(),
         seq: 1,
         state,
@@ -77,6 +78,7 @@ fn item(id: &str, version: u64, state: State, body: Body, settles: Vec<EventKey>
         first: None,
         started_by: None,
         settles,
+        thread: None,
     }
 }
 
@@ -91,6 +93,12 @@ fn sent(world: &mut World, chat: usize, item: &Item) -> EventKey {
 fn said(world: &mut World, chat: usize, text: &str, edits: Option<EventKey>) -> EventKey {
     let kind = if edits.is_some() { EDIT } else { CHAT };
     let row = world.store_sent(chat, kind, text.into(), Vec::new(), edits);
+    world.keep(row)
+}
+
+/// A subagent's words, stored in `chat` as a thread comment; gives their event.
+fn commented(world: &mut World, chat: usize, text: &str) -> EventKey {
+    let row = world.store_sent(chat, COMMENT, text.into(), Vec::new(), None);
     world.keep(row)
 }
 
@@ -205,6 +213,37 @@ fn words_in_the_wrong_chat_fail_s5() {
     let first = said(&mut own, 0, "w-t1-2", None);
     said(&mut own, 0, "w-t1-2 more", Some(first));
     assert_eq!(property(oracle::safety(&own)), None);
+}
+
+// A subagent's words are a thread comment, and a later version MDK's plain edit of it (D-142):
+// the comment in another chat fails S5 as the agent's words there do, an edit of the comment in
+// its own chat is an edit of the words' own message, and the words sent again as a new message
+// fail S3.
+#[test]
+fn a_subagents_words_are_checked_as_the_agents_words_are() {
+    let base = || {
+        let mut w = world(2, &[prompt(0), prompt(1)]);
+        handed(&mut w, 0, "A");
+        handed(&mut w, 1, "B");
+        emitted(&mut w, 10, "A", "words-sub-2", Some("w-sub-2"));
+        w
+    };
+    let mut wrong = base();
+    commented(&mut wrong, 1, "w-sub-2");
+    assert_eq!(property(oracle::safety(&wrong)), Some("S5".into()));
+
+    let mut own = base();
+    emitted(&mut own, 30, "A", "words-sub-2", Some("w-sub-2 more"));
+    let first = commented(&mut own, 0, "w-sub-2");
+    said(&mut own, 0, "w-sub-2 more", Some(first));
+    assert_eq!(property(oracle::safety(&own)), None);
+
+    // The comment, a new message, twice: in its thread and again, as when a retry under the same
+    // token went to the main chat.
+    let mut twice = base();
+    commented(&mut twice, 0, "w-sub-2");
+    said(&mut twice, 0, "w-sub-2", None);
+    assert_eq!(property(oracle::safety(&twice)), Some("S3".into()));
 }
 
 // Finding 3, requests. The old L1 let off a request when any refused send had settled it: a core
@@ -506,4 +545,79 @@ fn a_closing_version_dropped_after_a_close_is_let_off_l2() {
     assert_eq!(properties(oracle::liveness(&open)), vec!["L2"]);
     let (closed, _events) = make(true);
     assert_eq!(properties(oracle::liveness(&closed)), Vec::<String>::new());
+}
+
+// S14: a subagent's item in a thread is under its own subagent's `task` item; one under another
+// subagent's fails (D-121, D-142).
+#[test]
+fn an_item_in_another_subagents_thread_fails_s14() {
+    let task = |id: &str| {
+        let body = Body::Task(marmot_agent_events::body::Task {
+            kind: "subagent".into(),
+            description: None,
+            subject: None,
+        });
+        item(id, 1, State::Running, body, vec![])
+    };
+    let under = |task: &str, place: &EventKey| {
+        let mut child = item("subcmd-t", 1, State::Running, turn(), vec![]);
+        let header = Header {
+            subagent: Some(task.into()),
+            ..child.event.header().clone()
+        };
+        child.event = AgentEvent::new(header, child.event.body().clone(), None).unwrap();
+        child.thread = Some(marmot_agent::carrier::Thread {
+            root: place.clone(),
+            parent: Some(place.clone()),
+            agent: marmot_agent::PubKey::from("agent"),
+        });
+        child
+    };
+    let make = |right: bool| {
+        let mut w = world(1, &[]);
+        let own = sent(&mut w, 0, &task("sub-t"));
+        let other = sent(&mut w, 0, &task("sub-u"));
+        sent(
+            &mut w,
+            0,
+            &under("sub-t", if right { &own } else { &other }),
+        );
+        w
+    };
+    assert_eq!(property(oracle::safety(&make(true))), None);
+    assert_eq!(property(oracle::safety(&make(false))), Some("S14".into()));
+}
+
+// S14: a subagent's item goes in the main chat only when its subagent's `task` item has not gone
+// out to that chat before it; with that item there, an item of the subagent's in the main chat
+// fails (D-142).
+#[test]
+fn an_item_in_the_main_chat_whose_task_item_went_out_fails_s14() {
+    let task = || {
+        let body = Body::Task(marmot_agent_events::body::Task {
+            kind: "subagent".into(),
+            description: None,
+            subject: None,
+        });
+        item("sub-t", 1, State::Running, body, vec![])
+    };
+    let of_subagent = || {
+        let mut child = item("subcmd-t", 1, State::Running, turn(), vec![]);
+        let header = Header {
+            subagent: Some("sub-t".into()),
+            ..child.event.header().clone()
+        };
+        child.event = AgentEvent::new(header, child.event.body().clone(), None).unwrap();
+        child
+    };
+    // Its task item never went to this chat: the main chat is its place.
+    let mut w = world(2, &[]);
+    sent(&mut w, 1, &task());
+    sent(&mut w, 0, &of_subagent());
+    assert_eq!(property(oracle::safety(&w)), None);
+    // It did, before it.
+    let mut w = world(1, &[]);
+    sent(&mut w, 0, &task());
+    sent(&mut w, 0, &of_subagent());
+    assert_eq!(property(oracle::safety(&w)), Some("S14".into()));
 }

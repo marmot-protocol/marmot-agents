@@ -52,6 +52,7 @@ impl Driver for SimDriver {
             resume: true,
             approvals: true,
             files_in: FilesIn::None,
+            subagents: true,
             approval_commands: Vec::new(),
         }
     }

@@ -1,7 +1,10 @@
-//! Scenarios for a driver whose harness starts subagents (D-117). A subagent's activity is shown
-//! flat in the chat of the turn that started it: what started it is a `tool` item of kind
-//! `subagent`, its work a `task` item of kind `subagent` whose subject is that tool item, and its
-//! words a message whose `parent` is that tool item. Stop stops the agent and every subagent it
+//! Scenarios for a driver whose harness starts subagents (D-117, D-121). A subagent's activity is
+//! in the chat of the turn that started it, in that chat's session: what started it is a `tool`
+//! item of kind `subagent`, the subagent's row its one `task` item of kind `subagent`, whose
+//! subject is that tool item, and its words a message whose `parent` is that tool item. Every
+//! other event of a subagent's names its `task` item as the subagent it belongs to, so the core
+//! shows it in that subagent's thread; a nested subagent's `task` item names the subagent that
+//! started it, and a top-level one's names none. Stop stops the agent and every subagent it
 //! started, and is settled once, when the last of them has ended (D-028, D-029). Every subagent
 //! item closes when the harness stops (D-070).
 //!
@@ -19,6 +22,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 const FLAT: &str = "D-117";
+const THREADS: &str = "D-121";
 
 fn taken<T>(result: Result<T, marmot_agent_driver::Refusal>, what: &str) -> Result<T, Violation> {
     result.map_err(|r| broke("L3", format!("{what} was refused: {r:?}")))
@@ -141,12 +145,65 @@ pub fn shown_flat(
     one_session(seen, chat)
 }
 
+/// Every event of a subagent's names its `task` item, which is a subagent's `task` item of the
+/// chat and not the event's own, and names it from its first version on; and a subagent's words
+/// name the one whose subject is their parent, the tool item that started it (D-121).
+fn in_threads(seen: &[Emitted], chat: &str) -> Result<(), Violation> {
+    let last = items(seen, chat);
+    let tasks: Vec<(&str, Option<&str>)> = (last.iter())
+        .filter_map(|e| match e.event.body() {
+            Body::Task(t) if t.kind == "subagent" => Some((
+                e.event.header().item.as_str(),
+                t.subject.as_ref().map(|s| s.as_str()),
+            )),
+            _ => None,
+        })
+        .collect();
+    let subject_of = |task: &str| tasks.iter().find(|(item, _)| *item == task).map(|t| t.1);
+    let fail = |detail: String| Err(broke(THREADS, detail));
+    for e in &last {
+        let header = e.event.header();
+        let item = header.item.as_str();
+        if let Some(of) = &header.subagent
+            && (subject_of(of.as_str()).is_none() || *of == header.item)
+        {
+            return fail(format!("{item} names {}, no subagent's task", of.as_str()));
+        }
+        if let Body::Message(m) = e.event.body()
+            && let Some(parent) = &m.parent
+        {
+            let Some(of) = &header.subagent else {
+                return fail("a subagent's words name no subagent".into());
+            };
+            if subject_of(of.as_str()).flatten() != Some(parent.as_str()) {
+                let (of, parent) = (of.as_str(), parent.as_str());
+                return fail(format!(
+                    "{item} names {of}, not the task of the subagent {parent} started"
+                ));
+            }
+        }
+    }
+    // An event names its subagent from its first version on: an item never moves.
+    for e in seen
+        .iter()
+        .filter(|e| e.chat.as_ref().is_some_and(|c| c.0 == chat))
+    {
+        let item = e.event.header().item.as_str();
+        let now = (last.iter()).find(|l| l.event.header().item.as_str() == item);
+        if now.is_some_and(|l| l.event.header().subagent != e.event.header().subagent) {
+            return fail(format!("{item} moved to another subagent"));
+        }
+    }
+    Ok(())
+}
+
 fn subagents_shown(
     seen: &[Emitted],
     chat: &str,
     count: usize,
     state: State,
 ) -> Result<(), Violation> {
+    in_threads(seen, chat)?;
     let s = shown(seen, chat);
     let fail = |detail: String| Err(broke(FLAT, detail));
     if let Some(item) = s.turnless.first() {
@@ -220,7 +277,31 @@ pub async fn nested_subagents<S: Subject>(subject: S) -> Result<(), Violation> {
     if s.tasks.first().map(|t| &t.0) == s.tasks.get(1).map(|t| &t.0) {
         return Err(broke(FLAT, "both subagents name the same item"));
     }
+    nested_once(&run.seen, "c-1")?;
     run.end().await
+}
+
+/// Of a chat's two subagents' `task` items, the inner one names the outer as the subagent that
+/// started it, and the outer names none: it is in the main chat (D-121).
+pub fn nested_once(seen: &[Emitted], chat: &str) -> Result<(), Violation> {
+    let tasks: Vec<&Emitted> = (items(seen, chat).into_iter())
+        .filter(|e| matches!(e.event.body(), Body::Task(t) if t.kind == "subagent"))
+        .collect();
+    let outer: Vec<&str> = (tasks.iter())
+        .filter(|e| e.event.header().subagent.is_none())
+        .map(|e| e.event.header().item.as_str())
+        .collect();
+    let inner = (tasks.iter()).filter_map(|e| e.event.header().subagent.as_ref());
+    let inner: Vec<&str> = inner.map(|s| s.as_str()).collect();
+    if outer.len() != 1 || inner != outer {
+        let detail = format!(
+            "{} top-level subagents and {} nested",
+            outer.len(),
+            inner.len()
+        );
+        return Err(broke(THREADS, detail));
+    }
+    Ok(())
 }
 
 /// A subagent asks for approval: it waits in the chat, is answered there, and the answer reaches
@@ -431,4 +512,74 @@ pub async fn restart_with_subagents_running<S: Subject>(subject: S) -> Result<()
         return Err(broke(FLAT, "an old subagent shown after the restart"));
     }
     run.end().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use marmot_agent_driver::ChatId;
+
+    /// The last version of an item of chat `c-1`, from its JSON fields.
+    fn emitted(
+        seq: u64,
+        item: &str,
+        of: Option<&str>,
+        kind: &str,
+        body: serde_json::Value,
+    ) -> Emitted {
+        let event = serde_json::json!({
+            "harness": "fake", "session": "s", "turn": "t", "subagent": of, "item": item,
+            "seq": seq, "type": kind, "state": "done", "title": "t", "text": item, "body": body,
+        });
+        Emitted {
+            event: serde_json::from_value(event).unwrap(),
+            chat: Some(ChatId("c-1".into())),
+            prompts: Vec::new(),
+            settles: Vec::new(),
+        }
+    }
+
+    /// Two subagents, started by tool items `tool-a` and `tool-b`, whose `task` items are
+    /// `task-a` and `task-b`, and words whose parent is `parent` that name `of` as their subagent.
+    fn two_subagents(parent: &str, of: &str) -> Vec<Emitted> {
+        let tool = |seq, item| {
+            let body = serde_json::json!({"kind": "subagent", "name": "spawn"});
+            emitted(seq, item, None, "tool", body)
+        };
+        let task = |seq, item, subject| {
+            let body = serde_json::json!({"kind": "subagent", "subject": subject});
+            emitted(seq, item, None, "task", body)
+        };
+        let said = |seq, item, parent, of| {
+            emitted(
+                seq,
+                item,
+                Some(of),
+                "message",
+                serde_json::json!({"parent": parent}),
+            )
+        };
+        vec![
+            tool(1, "tool-a"),
+            tool(2, "tool-b"),
+            task(3, "task-a", "tool-a"),
+            task(4, "task-b", "tool-b"),
+            said(5, "words-a", parent, of),
+            said(6, "words-b", "tool-b", "task-b"),
+        ]
+    }
+
+    // A subagent's words name, as their subagent, the `task` item of the subagent their parent
+    // started: words whose parent is one subagent's tool item and that name another's task are
+    // not that subagent's (D-121).
+    #[test]
+    fn words_name_the_task_of_the_subagent_their_parent_started() {
+        shown_flat(&two_subagents("tool-a", "task-a"), "c-1", 2, State::Done)
+            .unwrap_or_else(|v| panic!("{v}"));
+        let crossed = shown_flat(&two_subagents("tool-a", "task-b"), "c-1", 2, State::Done);
+        assert!(
+            crossed.is_err(),
+            "words of one subagent naming another's task"
+        );
+    }
 }

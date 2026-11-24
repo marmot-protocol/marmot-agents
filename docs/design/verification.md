@@ -67,6 +67,7 @@ The properties come from the decisions. Each gets an id that the models, tests a
 | S11 | A request is handed to the harness before the driver returns, and dropping a wait never loses or halves anything | D-066 |
 | S12 | A prompt names a session only to resume it, never an ended one | D-065 |
 | S13 | Item ids never repeat for a chat, across sessions and restarts | D-059 |
+| S14 | A subagent's item is in its thread, under its `task` item sent before it, or in the main chat; an edit never moves it | D-121, D-133, D-142 |
 
 **Liveness** (eventually happens, if the network, MDK and the harness keep working):
 
@@ -296,7 +297,8 @@ they read only fields the core sends. So a field changed on one side only fails 
 
 One suite, written once against the driver trait, that every driver must pass: Codex, ACP (OpenCode, Goose,
 Cursor), Pi, and the socket connectors (Claude Code, OpenClaw, Hermes) through a real connector on the socket with
-a fake harness behind it. It owns S1, S2, S5, S11, S12 and S13 for drivers. Three connectors carry their own copy
+a fake harness behind it. It owns S1, S2, S5, S11, S12 and S13 for drivers, and for a driver whose harness starts
+subagents, that each of its events names the subagent it belongs to (S14's half that is a driver's). Three connectors carry their own copy
 of the settling logic today; the suite checks all of them the same way.
 
 Each driver gets a scriptable fake harness, grown from the stand-ins that exist (`fake_pi.py`, ACP's in-memory
@@ -343,8 +345,8 @@ clock, from a seed. It owns S1 to S4, S10, L1 to L3 for the core.
 
 **Built** (2026-11-22): [`crates/marmot-agent-sim`](../../crates/marmot-agent-sim/README.md). The seam is
 `marmot::Side`, which the real `Marmot` implements; the clock is tokio's, paused in a run; the run loop looks at
-what it waits for in turn rather than at random, so a schedule replays exactly. It checks S1, S3, S4, S5, S10 and
-S12 after every step, and L1, L2, L3 and S2 at the end within 900 s of virtual time, from what the simulated MDK
+what it waits for in turn rather than at random, so a schedule replays exactly. It checks S1, S3, S4, S5, S10,
+S12 and S14 after every step (every third scripted turn starts a subagent, which runs a command and speaks in its thread), and L1, L2, L3 and S2 at the end within 900 s of virtual time, from what the simulated MDK
 stored and what the harness saw. Its MDK refuses an item that MDK's own reading of an item refuses
 (`cgka_traits::agent_events`, at the revision the core depends on), and S3 fails on any such send. Runs are named `family/vVERSION/SEED/INDEX`; a failure leaves a capsule that
 replays exactly, shrunk greedily. Seven families form the gate and run on every pull request. One more shows

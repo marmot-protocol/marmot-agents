@@ -34,6 +34,7 @@ fn capabilities() -> Capabilities {
         resume: true,
         approvals: true,
         files_in: FilesIn::Images,
+        subagents: true,
         approval_commands: vec![ApprovalCommand {
             command: "/approve".into(),
             counts: Position::Anywhere,
@@ -177,6 +178,7 @@ fn event(item: &str, state: State, body: Body) -> AgentEvent {
         harness: "codex".into(),
         session: Some("th1".into()),
         turn: Some("t1".into()),
+        subagent: None,
         item: item.into(),
         seq: 1,
         state,
@@ -777,6 +779,7 @@ fn an_item_survives_the_carrier() {
         first: None,
         started_by: Some(hex_id(2)),
         settles: vec![hex_id(3)],
+        thread: None,
     };
     let later = Item {
         event: event("cmd", State::Done, turn()),
@@ -818,6 +821,7 @@ fn mdk_reads_every_event_the_carrier_writes() {
         first: None,
         started_by: Some(hex_id(2)),
         settles: vec![hex_id(3)],
+        thread: None,
     };
     let huge = Body::Approval(body::Approval {
         subject: None,
@@ -902,6 +906,7 @@ fn an_item_over_the_limit_loses_its_native_message_then_output() {
         first: None,
         started_by: None,
         settles: Vec::new(),
+        thread: None,
     };
     let out = carrier::item(&item).unwrap();
     assert!(out.size() <= carrier::LIMIT, "{}", out.size());
@@ -1173,6 +1178,7 @@ fn a_large_diff_and_escaped_output_are_cut_to_fit() {
         first: None,
         started_by: None,
         settles: Vec::new(),
+        thread: None,
     };
     let out = carrier::item(&item).unwrap();
     assert!(out.size() <= carrier::LIMIT, "{}", out.size());
@@ -1674,6 +1680,7 @@ fn a_sessions_last_number_outlives_its_items() {
         harness: "codex".into(),
         session: Some("earlier".into()),
         turn: Some("t0".into()),
+        subagent: None,
         item: "early".into(),
         seq: 40,
         state: State::Done,
@@ -1707,6 +1714,7 @@ fn a_state_file_from_before_keeps_its_items_numbers() {
         harness: "codex".into(),
         session: Some("earlier".into()),
         turn: Some("t0".into()),
+        subagent: None,
         item: "early".into(),
         seq: 40,
         state: State::Done,
@@ -1862,6 +1870,7 @@ fn a_large_item(dice: &mut Dice) -> Item {
         harness: "codex".into(),
         session: Some("th1".into()),
         turn: Some("t1".into()),
+        subagent: None,
         item: "big".into(),
         seq: 7,
         state: State::Running,
@@ -1878,6 +1887,7 @@ fn a_large_item(dice: &mut Dice) -> Item {
         first: Some(EventKey::from("e-first")),
         started_by: None,
         settles: vec![EventKey::from("r1")],
+        thread: None,
     }
 }
 
@@ -2063,6 +2073,7 @@ fn commands_item(count: usize, name: usize, hint: usize, description: usize) -> 
         first: Some(EventKey::from("e-first")),
         started_by: None,
         settles: vec![EventKey::from("r1")],
+        thread: None,
     }
 }
 
@@ -2114,6 +2125,7 @@ fn a_plan_of_thousands_of_steps_fits_with_few_cut_tags() {
         first: None,
         started_by: None,
         settles: Vec::new(),
+        thread: None,
     };
     let started = std::time::Instant::now();
     let out = carrier::item(&item).unwrap();
@@ -2161,6 +2173,7 @@ fn an_item_that_settles_very_many_is_never_over_the_limit() {
         first: Some(EventKey::from("e-first")),
         started_by: None,
         settles: many_settles(3000),
+        thread: None,
     };
     if let Ok(out) = carrier::item(&item) {
         assert!(on_the_wire(&out) <= carrier::LIMIT, "{}", on_the_wire(&out));
@@ -2251,6 +2264,7 @@ fn a_thinned_plan_counts_what_was_cut_of_every_step_it_kept() {
         first: None,
         started_by: None,
         settles: Vec::new(),
+        thread: None,
     };
     let out = carrier::item(&item).unwrap();
     let read = carrier::read_item(out.kind, &out.content, &out.tags).unwrap();
@@ -2292,6 +2306,7 @@ fn the_output_is_cut_before_other_text() {
         first: None,
         started_by: None,
         settles: Vec::new(),
+        thread: None,
     };
     let out = carrier::item(&item).unwrap();
     assert!(on_the_wire(&out) <= carrier::LIMIT);
@@ -2983,6 +2998,7 @@ fn what_stands_in_for_a_dropped_send_fits_when_the_session_id_does_not() {
             harness: "codex".into(),
             session: Some(huge.as_str().into()),
             turn: Some("t1".into()),
+            subagent: None,
             item: "sess".into(),
             seq: 1,
             state,
@@ -3606,6 +3622,443 @@ fn a_stop_after_the_turn_stops_what_still_works() {
         !acts.iter().any(|a| matches!(a, Act::Control(_))),
         "{acts:?}"
     );
+}
+
+/// `event` as the work of the subagent whose `task` item is `task` (D-121).
+fn of_subagent(event: AgentEvent, task: &str) -> AgentEvent {
+    let header = Header {
+        subagent: Some(task.into()),
+        ..event.header().clone()
+    };
+    AgentEvent::new(header, event.body().clone(), None).unwrap()
+}
+
+fn command() -> Body {
+    Body::Tool(body::Tool {
+        kind: body::ToolKind::Command,
+        name: "shell".into(),
+        command: Some("ls".into()),
+        cwd: None,
+        exit_code: None,
+        duration_ms: None,
+        output: None,
+        changes: Vec::new(),
+        query: None,
+        path: None,
+        input: None,
+        error: None,
+    })
+}
+
+fn tag_values<'a>(tags: &'a [Vec<String>], name: &str) -> Vec<&'a [String]> {
+    (tags.iter())
+        .filter(|t| t[0] == name)
+        .map(|t| &t[1..])
+        .collect()
+}
+
+// Everything a subagent does goes in its thread: NIP-22's `E`, `K` and `P` name the top-level
+// subagent's `task` item, `e`, `k` and `p` the `task` item of the subagent it belongs to, and a
+// later version, an edit, repeats the root's tags alone. A top-level `task` item is in the main
+// chat. MDK takes every one of them (D-121, D-133).
+#[test]
+fn a_subagents_work_goes_in_its_thread() {
+    use cgka_traits::agent_events::{validate_agent_item_edit_tags, validate_agent_item_tags};
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let agent = AGENT.to_string();
+    let outer = sent(
+        &mut talk,
+        &chat,
+        event("task:s1", State::Running, subagent_task()),
+        &hex_id(1).0,
+    );
+    assert_eq!(
+        outer.thread, None,
+        "a top-level task item is in the main chat"
+    );
+
+    let command_of = |task: &str| of_subagent(event("cmd", State::Running, command()), task);
+    let cmd = sent(&mut talk, &chat, command_of("task:s1"), &hex_id(2).0);
+    let out = carrier::item(&cmd).unwrap();
+    let thread = |root: u8| vec![vec![hex_id(root).0, String::new(), agent.clone()]];
+    assert_eq!(tag_values(&out.tags, "E"), thread(1));
+    assert_eq!(
+        tag_values(&out.tags, "e"),
+        thread(1),
+        "a top-level one's root is its parent"
+    );
+    assert_eq!(tag_values(&out.tags, "K"), vec![vec!["1201".to_string()]]);
+    assert_eq!(tag_values(&out.tags, "k"), vec![vec!["1201".to_string()]]);
+    assert_eq!(tag_values(&out.tags, "P"), vec![vec![agent.clone()]]);
+    assert_eq!(tag_values(&out.tags, "p"), vec![vec![agent.clone()]]);
+    validate_agent_item_tags(&out.tags).expect("MDK takes the parent beside the root");
+
+    // A nested subagent's task item is in the outer one's thread; its work names it as parent.
+    let nested = of_subagent(event("task:s2", State::Running, subagent_task()), "task:s1");
+    let inner = sent(&mut talk, &chat, nested, &hex_id(3).0);
+    let out = carrier::item(&inner).unwrap();
+    assert_eq!(tag_values(&out.tags, "E"), thread(1));
+    assert_eq!(tag_values(&out.tags, "e"), thread(1));
+    let deep = of_subagent(event("cmd2", State::Running, command()), "task:s2");
+    let deep = sent(&mut talk, &chat, deep, &hex_id(4).0);
+    let out = carrier::item(&deep).unwrap();
+    assert_eq!(
+        tag_values(&out.tags, "E"),
+        thread(1),
+        "the root is the top-level task item"
+    );
+    assert_eq!(
+        tag_values(&out.tags, "e"),
+        thread(3),
+        "the parent is its own subagent's"
+    );
+
+    // An edit carries its target as `e`, and the root's tags again, whatever else it says.
+    let done = of_subagent(event("cmd2", State::Done, command()), "task:s2");
+    let (_, _, edit) = the_item(&mut talk, |t| t.emitted(emitted(&chat, done)));
+    let out = carrier::item(&edit).unwrap();
+    assert_eq!(out.kind, carrier::EDIT_KIND);
+    assert_eq!(out.edits(), Some(hex_id(4).0.as_str()));
+    assert_eq!(tag_values(&out.tags, "e").len(), 1);
+    assert_eq!(tag_values(&out.tags, "E"), thread(1));
+    assert!(tag_values(&out.tags, "k").is_empty() && tag_values(&out.tags, "p").is_empty());
+    validate_agent_item_edit_tags(&out.tags_but_target()).expect("MDK takes the edit");
+    let read = carrier::read_item(out.kind, &out.content, &out.tags).unwrap();
+    assert_eq!(
+        read.item.event, edit.event,
+        "read back, it names its subagent"
+    );
+    assert_eq!(read.item.thread.map(|t| t.root), Some(hex_id(1)));
+
+    // The subagent's words are a thread message under its task item.
+    let words = of_subagent(
+        event("w1", State::Done, Body::Message(Message::default())),
+        "task:s2",
+    );
+    let acts = talk.emitted(emitted(&chat, words));
+    match sends(&talk, acts).pop() {
+        Some((
+            _,
+            Sending::Words {
+                thread: Some(thread),
+                ..
+            },
+        )) => {
+            assert_eq!(thread.parent, Some(hex_id(3)));
+            assert_eq!(thread.root, hex_id(1));
+        }
+        other => panic!("not words in a thread: {other:?}"),
+    }
+}
+
+// An item keeps its thread across a restart: its next version, after the core starts again,
+// repeats the root's tags (D-133).
+#[test]
+fn an_items_thread_is_kept_across_a_restart() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("task:s1", State::Running, subagent_task()),
+        &hex_id(1).0,
+    );
+    let running = of_subagent(event("cmd", State::Running, command()), "task:s1");
+    sent(&mut talk, &chat, running, &hex_id(2).0);
+    let saved: Saved = serde_json::from_str(&serde_json::to_string(talk.saved()).unwrap()).unwrap();
+    let mut restarted = conversation(saved);
+    let acts = restarted.recover();
+    let closed = items_of(&restarted, acts);
+    let cmd = (closed.iter())
+        .find(|i| i.first == Some(hex_id(2)))
+        .expect("the command closes");
+    assert_eq!(cmd.thread.as_ref().map(|t| &t.root), Some(&hex_id(1)));
+}
+
+/// The words `text` of the subagent whose `task` item is `task:s1`, in `state`.
+fn subagent_words(state: State, text: &str) -> AgentEvent {
+    let event = of_subagent(
+        event("w1", state, Body::Message(Message::default())),
+        "task:s1",
+    );
+    let header = Header {
+        text: text.into(),
+        ..event.header().clone()
+    };
+    AgentEvent::new(header, event.body().clone(), None).unwrap()
+}
+
+// MDK takes no durable edit of a thread message (D-142): a subagent's words go out once, when they
+// are complete, as a thread message under its task item; a version while they are still being
+// written goes nowhere. A later complete version is MDK's plain edit of that message, which names
+// no token.
+#[test]
+fn a_subagents_words_go_out_once_complete_and_a_later_version_is_a_plain_edit() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("task:s1", State::Running, subagent_task()),
+        &hex_id(1).0,
+    );
+    let acts = talk.emitted(emitted(&chat, subagent_words(State::Running, "a dra")));
+    assert!(sends(&talk, acts).is_empty(), "words still being written");
+    talk.emitted(emitted(
+        &chat,
+        subagent_words(State::Done, "found two files"),
+    ));
+    let group = direct().group;
+    let (token, what) = talk.next_send(&group).expect("the words");
+    let Sending::Words {
+        key, text, thread, ..
+    } = what
+    else {
+        panic!("not words: {what:?}");
+    };
+    assert_eq!(text, "found two files");
+    assert_eq!(thread.and_then(|t| t.parent), Some(hex_id(1)));
+    assert!(token.edits.is_none());
+    talk.sent(&key, hex_id(2));
+    assert!(talk.next_send(&group).is_none(), "sent once");
+
+    talk.emitted(emitted(
+        &chat,
+        subagent_words(State::Done, "found three files"),
+    ));
+    let (token, what) = talk.next_send(&group).expect("the later version");
+    let Sending::Words { text, edit, .. } = what else {
+        panic!("not words: {what:?}");
+    };
+    assert_eq!(text, "found three files");
+    assert_eq!(edit, Some(hex_id(2)), "an edit of the thread message");
+    assert_eq!(token.edits, None, "MDK's plain edit, which names no token");
+}
+
+// A subagent's words whose thread MDK cannot place, as when the task item disappeared under the
+// chat's retention, go in the main chat as the agent's words, and stay there: tried again, after a
+// restart too, and in every later version, which is then MDK's durable edit of a chat message.
+#[test]
+fn a_subagents_words_with_no_thread_left_go_in_the_main_chat() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("task:s1", State::Running, subagent_task()),
+        &hex_id(1).0,
+    );
+    talk.emitted(emitted(&chat, subagent_words(State::Done, "late words")));
+    let group = direct().group;
+    let (token, what) = talk.next_send(&group).unwrap();
+    assert!(matches!(
+        what,
+        Sending::Words {
+            thread: Some(_),
+            ..
+        }
+    ));
+    talk.thread_gone(&token.send);
+    let saved: Saved = serde_json::from_str(&serde_json::to_string(talk.saved()).unwrap()).unwrap();
+    let mut talk = conversation(saved);
+    let (token, what) = talk.next_send(&group).expect("tried again");
+    let Sending::Words {
+        key, text, thread, ..
+    } = what
+    else {
+        panic!("not words: {what:?}");
+    };
+    assert_eq!((text.as_str(), thread), ("late words", None));
+    talk.sent(&key, hex_id(2));
+    let _ = token;
+    talk.emitted(emitted(
+        &chat,
+        subagent_words(State::Done, "late words, again"),
+    ));
+    let (token, what) = talk.next_send(&group).unwrap();
+    let Sending::Words { edit, thread, .. } = what else {
+        panic!("not words: {what:?}");
+    };
+    assert_eq!((edit, thread), (Some(hex_id(2)), None));
+    assert!(token.edits.is_some(), "a durable edit of a chat message");
+}
+
+/// Sends a subagent's `task` item `task:s1` for the direct chat, as `first`, and its end.
+fn a_finished_subagent(talk: &mut Conversation, chat: &str, first: &str) {
+    sent(
+        talk,
+        chat,
+        event("task:s1", State::Running, subagent_task()),
+        first,
+    );
+    sent(
+        talk,
+        chat,
+        event("task:s1", State::Done, subagent_task()),
+        "e-task-done",
+    );
+}
+
+// Where a subagent's words go is chosen when they are first handed to MDK, and kept for every
+// later try under that token and for the receipt: MDK may already have taken them as a thread
+// message, and a try asking for a chat message would be refused (D-142). The `task` item aging
+// out of the core's records between the two tries changes nothing.
+#[test]
+fn a_subagents_words_keep_their_place_when_the_task_item_is_forgotten_between_tries() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    a_finished_subagent(&mut talk, &chat, &hex_id(1).0);
+    talk.emitted(emitted(&chat, subagent_words(State::Done, "found it")));
+    let group = direct().group;
+    let (token, what) = talk.next_send(&group).unwrap();
+    assert!(matches!(&what, Sending::Words { thread: Some(t), .. } if t.parent == Some(hex_id(1))));
+    assert!(talk.attempting(&token.send, 100));
+
+    // Past what the core keeps of forgotten items too.
+    finish_many(&mut talk, &chat, 5000);
+    let task = format!("{chat}/task:s1");
+    let saved = serde_json::to_value(talk.saved()).unwrap();
+    let forgotten = saved["forgotten"].as_array().unwrap();
+    assert!(
+        !kept_items(&talk).contains(&task) && !forgotten.iter().any(|f| f["key"] == task.as_str()),
+        "nothing is kept of the task item"
+    );
+    let (again, what) = talk.next_send(&group).expect("tried again");
+    assert_eq!(again.mdk, token.mdk, "under the same token");
+    let Sending::Words { key, thread, .. } = what else {
+        panic!("not words: {what:?}");
+    };
+    assert_eq!(
+        thread.and_then(|t| t.parent),
+        Some(hex_id(1)),
+        "still in its thread"
+    );
+    talk.sent(&key, hex_id(2));
+
+    // The receipt keeps the place too: a later version is MDK's plain edit of a thread message.
+    talk.emitted(emitted(
+        &chat,
+        subagent_words(State::Done, "found it, again"),
+    ));
+    let (token, what) = talk.next_send(&group).unwrap();
+    assert!(
+        matches!(&what, Sending::Words { edit: Some(e), thread: Some(_), .. } if *e == hex_id(2))
+    );
+    assert_eq!(token.edits, None, "a thread message's edit names no token");
+}
+
+// A version whose first event is gone goes out as a new first event under the same token, placed
+// again when it is next handed to MDK. That placement is saved before MDK has it, as a first try's
+// is, and kept for every later try under the token, without moving the time the token was first
+// tried: the `task` item aging out between two tries does not move the second to the main chat,
+// where it could show beside the first (D-142).
+#[test]
+fn a_new_first_event_keeps_its_place_when_the_task_item_is_forgotten_between_tries() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let group = direct().group;
+    a_finished_subagent(&mut talk, &chat, &hex_id(1).0);
+    let cmd = || of_subagent(event("cmd", State::Running, command()), "task:s1");
+    sent(&mut talk, &chat, cmd(), &hex_id(2).0);
+    talk.emitted(emitted(&chat, cmd()));
+    let (edit, _) = talk.next_send(&group).unwrap();
+    assert!(talk.attempting(&edit.send, 100));
+    talk.first_gone(&edit.send);
+
+    let (anew, what) = talk.next_send(&group).unwrap();
+    assert!(matches!(&what, Sending::Item { item, .. }
+        if item.first.is_none() && item.thread.as_ref().and_then(|t| t.parent.clone()) == Some(hex_id(1))));
+    assert!(
+        talk.attempting(&anew.send, 200),
+        "its new placement is saved before MDK has it"
+    );
+    assert!(!talk.attempting(&anew.send, 300), "and then kept");
+
+    finish_many(&mut talk, &chat, 5000);
+    let talk = conversation(talk.saved().clone());
+    let (again, what) = talk.next_send(&group).expect("tried again");
+    assert_eq!(again.mdk, anew.mdk, "under the same token");
+    assert_eq!(again.tried_at, Some(100), "first tried when it was");
+    let Sending::Item { item, .. } = what else {
+        panic!("not an item")
+    };
+    assert_eq!(
+        item.thread.and_then(|t| t.parent),
+        Some(hex_id(1)),
+        "still in its thread"
+    );
+}
+
+// A subagent's work that comes after its `task` item was forgotten still goes in its thread, from
+// what the core keeps of a forgotten item (D-121).
+#[test]
+fn a_subagents_work_after_its_task_item_was_forgotten_goes_in_its_thread() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    a_finished_subagent(&mut talk, &chat, &hex_id(1).0);
+    finish_many(&mut talk, &chat, 3000);
+    assert!(!kept_items(&talk).contains(&format!("{chat}/task:s1")));
+    talk.emitted(emitted(&chat, subagent_words(State::Done, "late words")));
+    let (_, what) = talk.next_send(&direct().group).unwrap();
+    let Sending::Words { thread, .. } = what else {
+        panic!("not words: {what:?}");
+    };
+    let thread = thread.expect("in its thread");
+    assert_eq!((thread.root, thread.parent), (hex_id(1), Some(hex_id(1))));
+}
+
+// A subagent's work whose task item the chat was not sent goes in the main chat, as any item does:
+// here, a subagent's approval in a group that is not sent the agent's full activity (D-136).
+#[test]
+fn a_subagents_work_goes_in_the_main_chat_when_its_task_item_was_not_sent() {
+    let mut talk = conversation(Saved::default());
+    let mut mention = heard(group(), "e1", OWNER, "split it up");
+    mention.mentions_agent = true;
+    let chat = the_prompt(talk.heard(mention)).chat.id.0;
+    let acts = talk.emitted(emitted(
+        &chat,
+        event("task:s1", State::Running, subagent_task()),
+    ));
+    assert!(
+        sends(&talk, acts).is_empty(),
+        "a task item is full activity"
+    );
+    let asked = of_subagent(event("ask", State::Waiting, approval()), "task:s1");
+    let (_, _, item) = the_item(&mut talk, |t| t.emitted(emitted(&chat, asked)));
+    assert_eq!(item.thread, None);
+    let out = carrier::item(&item).unwrap();
+    assert!(tag_values(&out.tags, "E").is_empty() && tag_values(&out.tags, "e").is_empty());
+}
+
+// A driver whose harness does not tell its subagents apart has its work shown in the main chat,
+// whatever its events say (D-124).
+#[test]
+fn a_harness_that_does_not_tell_subagents_apart_has_no_threads() {
+    let caps = Capabilities {
+        subagents: false,
+        ..capabilities()
+    };
+    let mut talk = Conversation::new(
+        PubKey::from(AGENT),
+        "codex",
+        rights(),
+        caps,
+        Saved::default(),
+    );
+    let chat = the_prompt(talk.heard(heard(direct(), "e1", OWNER, "hello")))
+        .chat
+        .id
+        .0;
+    sent(
+        &mut talk,
+        &chat,
+        event("task:s1", State::Running, subagent_task()),
+        &hex_id(1).0,
+    );
+    let cmd = of_subagent(event("cmd", State::Running, command()), "task:s1");
+    let cmd = sent(&mut talk, &chat, cmd, &hex_id(2).0);
+    assert_eq!(cmd.thread, None);
 }
 
 // ------------------------------------------------------------------------- what a chat is sent

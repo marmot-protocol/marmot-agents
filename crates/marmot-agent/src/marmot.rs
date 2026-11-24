@@ -445,6 +445,8 @@ impl Marmot {
                     Ok(None) if token.edits.is_some() && first_gone(&error) => {
                         SendFailed::FirstGone
                     }
+                    // Nor these words: it places a thread message before it keeps it.
+                    Ok(None) if in_thread(what) && thread_gone(&error) => SendFailed::ThreadGone,
                     _ => send_failed(&error),
                 });
             }
@@ -515,13 +517,30 @@ impl Marmot {
                 turn,
                 remark,
                 settles,
+                thread,
                 ..
             } => {
                 let tags = carrier::words_tags(turn.as_ref(), *remark, settles);
-                let text = carrier::fit_words(text, &tags).map_err(|_| too_large())?;
-                (self.runtime)
-                    .submit_tagged_text(label, id, text, tags, mdk)
-                    .await?
+                // Sized with the thread's tags too, which MDK adds to a thread message.
+                let sized: Vec<Vec<String>> = (tags.iter().cloned())
+                    .chain(thread.iter().flat_map(|t| carrier::thread_tags(t, true)))
+                    .collect();
+                let text = carrier::fit_words(text, &sized).map_err(|_| too_large())?;
+                match thread.as_ref().and_then(|t| t.parent.as_ref()) {
+                    // A subagent's words are a thread message under its `task` item, which MDK
+                    // tags from that item's place (D-122).
+                    Some(parent) => {
+                        let parent = parent.as_str().to_string();
+                        (self.runtime)
+                            .submit_thread_message(label, id, parent, text, Vec::new(), tags, mdk)
+                            .await?
+                    }
+                    None => {
+                        (self.runtime)
+                            .submit_tagged_text(label, id, text, tags, mdk)
+                            .await?
+                    }
+                }
             }
         };
         Ok(Taken::Kept(EventKey(accepted.message_id_hex)))
@@ -867,6 +886,10 @@ pub enum SendFailed {
     /// later version of an item then goes out as a new first event, and the agent's words as a
     /// new message.
     FirstGone,
+    /// It was a subagent's words, a thread message under its `task` item, and MDK no longer has
+    /// that item, or the thread's root, to place it by: the group's messages disappeared since it
+    /// went. MDK did not take it. The words then go in the main chat, as the agent's words.
+    ThreadGone,
     /// It was first tried so long ago that its group's messages have disappeared since, and
     /// MDK no longer knows its token: it may have gone out, and tried again it could go out
     /// twice. It is given up, and the chat told it may not have been delivered.
@@ -902,6 +925,21 @@ fn first_gone(error: &AppError) -> bool {
         AppError::InvalidAppMessagePayload(why)
             if why == "original local send was not found"
                 || why == "original local message is unavailable"
+    )
+}
+
+/// Whether `what` is words to go in a subagent's thread, as a new thread message.
+fn in_thread(what: &Sending) -> bool {
+    matches!(what, Sending::Words { edit: None, thread: Some(t), .. } if t.parent.is_some())
+}
+
+/// Whether MDK refused a thread message because it does not have the message it answers, or the
+/// thread's root, to place it by (`thread_placement`, MDK `029e057`).
+fn thread_gone(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::InvalidAppMessagePayload(why)
+            if why == "thread parent is unavailable" || why == "thread root is unavailable"
     )
 }
 

@@ -3,7 +3,7 @@
 //! core's state. The ids are those of `docs/design/verification.md`.
 
 use crate::schedule::What;
-use crate::world::{CHAT, EDIT, Row, World};
+use crate::world::{CHAT, COMMENT, EDIT, Row, World};
 use marmot_agent::EventKey;
 use marmot_agent::carrier;
 use marmot_agent::conversation::EFFECT_LIMIT_SECS;
@@ -73,7 +73,7 @@ fn settling(world: &World) -> Vec<(&Row, Vec<EventKey>)> {
             let settles: Vec<EventKey> =
                 if let Some(read) = carrier::read_item(row.kind, &row.content, &row.tags) {
                     read.item.settles
-                } else if row.kind == CHAT {
+                } else if row.kind == CHAT || row.kind == COMMENT {
                     (row.tags.iter())
                         .filter(|t| t.len() >= 2 && t[0] == "settles")
                         .map(|t| EventKey(t[1].clone()))
@@ -104,6 +104,7 @@ pub fn safety(world: &World) -> Option<Failure> {
         .or_else(|| s5(world))
         .or_else(|| s10(world))
         .or_else(|| s12(world))
+        .or_else(|| s14(world))
 }
 
 /// The earliest the core's `no_effect` net may settle a request after the harness took it, in
@@ -237,7 +238,9 @@ fn s3(world: &World) -> Option<Failure> {
         }
     }
     let mut words: BTreeSet<(usize, &str)> = BTreeSet::new();
-    for row in (world.rows.iter()).filter(|r| r.from_agent && r.kind == CHAT) {
+    // A subagent's words are a thread comment, a new message too (D-122).
+    let new = |r: &&Row| r.from_agent && (r.kind == CHAT || r.kind == COMMENT);
+    for row in world.rows.iter().filter(new) {
         if !words.insert((row.chat, row.content.as_str())) {
             return Some(fail(
                 "S3",
@@ -298,7 +301,8 @@ fn chat_ids(world: &World) -> Result<BTreeMap<String, usize>, Failure> {
 }
 
 /// S5: a request, an item and the agent's words reach only their own chat, and an edit of the
-/// agent's words edits their own message there.
+/// agent's words edits their own message there. A subagent's words are a thread comment, and a
+/// later version of them MDK's plain edit of it (D-142).
 fn s5(world: &World) -> Option<Failure> {
     let ids = match chat_ids(world) {
         Ok(ids) => ids,
@@ -329,7 +333,7 @@ fn s5(world: &World) -> Option<Failure> {
     }
     let words = (world.rows.iter()).filter(|r| {
         let item = carrier::read_item(r.kind, &r.content, &r.tags).is_some();
-        r.from_agent && (r.kind == CHAT || r.kind == EDIT) && !item
+        r.from_agent && [CHAT, COMMENT, EDIT].contains(&r.kind) && !item
     });
     for row in words {
         let Some(&(chat, item)) = said.get(row.content.as_str()) else {
@@ -346,7 +350,7 @@ fn s5(world: &World) -> Option<Failure> {
                 (row.edits.as_ref()).and_then(|t| world.rows.iter().find(|r| r.event == *t));
             let own = target.is_some_and(|t| {
                 t.from_agent
-                    && t.kind == CHAT
+                    && (t.kind == CHAT || t.kind == COMMENT)
                     && t.chat == chat
                     && said
                         .get(t.content.as_str())
@@ -382,6 +386,72 @@ fn s10(world: &World) -> Option<Failure> {
             ));
         }
         last.insert(chat, (order, msg));
+    }
+    None
+}
+
+/// S14: a subagent's item goes in its thread or, failing that, in the main chat, and never moves
+/// (D-121, D-133, D-142). An item's first event that carries NIP-22's tags names, as its parent,
+/// the first event of its subagent's `task` item in the same chat, stored before it, and as its
+/// root that item's root, or that item when it is the root. An item of a subagent's goes in the
+/// main chat only when that `task` item had not gone out to the chat before it. Each edit of an
+/// item carries the root its first event carries, and none when that carries none.
+fn s14(world: &World) -> Option<Failure> {
+    let one = |row: &Row, name: &str| {
+        (row.tags.iter())
+            .find(|t| t.len() >= 2 && t[0] == name)
+            .map(|t| t[1].clone())
+    };
+    let items: Vec<(&Row, carrier::Read)> = (world.rows.iter())
+        .filter(|r| r.from_agent)
+        .filter_map(|r| Some((r, carrier::read_item(r.kind, &r.content, &r.tags)?)))
+        .collect();
+    let mut firsts: BTreeMap<(usize, String), &Row> = BTreeMap::new();
+    for (row, read) in items.iter().filter(|(r, _)| r.kind == carrier::ITEM_KIND) {
+        let id = read.item.event.header().item.as_str().to_string();
+        firsts.entry((row.chat, id)).or_insert(row);
+    }
+    for (row, read) in &items {
+        let (root, parent) = (one(row, "E"), one(row, "e"));
+        let name = read.item.event.header().item.as_str();
+        if row.kind == EDIT {
+            let first = (world.rows.iter()).find(|r| Some(&r.event) == row.edits.as_ref());
+            if let Some(first) = first
+                && one(first, "E") != root
+            {
+                return Some(fail("S14", format!("an edit of {name} moved it")));
+            }
+            continue;
+        }
+        // Its subagent's `task` item in this chat, if it went out before it: the thread it goes in.
+        let task = (read.item.event.header().subagent.as_ref())
+            .and_then(|t| firsts.get(&(row.chat, t.as_str().to_string())))
+            .filter(|task| task.order < row.order);
+        let Some(root) = root else {
+            if parent.is_some() {
+                return Some(fail("S14", format!("{name} names a parent and no root")));
+            }
+            if task.is_some() {
+                return Some(fail(
+                    "S14",
+                    format!("{name} is in the main chat, though its thread was there"),
+                ));
+            }
+            continue;
+        };
+        let Some(task) = task else {
+            return Some(fail(
+                "S14",
+                format!("{name} is in a thread of no subagent's"),
+            ));
+        };
+        let wanted_root = one(task, "E").unwrap_or_else(|| task.event.as_str().to_string());
+        if parent.as_deref() != Some(task.event.as_str()) || root != wanted_root {
+            return Some(fail(
+                "S14",
+                format!("{name} is in another subagent's thread"),
+            ));
+        }
     }
     None
 }
@@ -545,7 +615,7 @@ pub fn liveness(world: &World) -> Vec<Failure> {
             let reached = match &e.words {
                 Some(text) if world.refused.iter().any(|r| r.words.as_ref() == Some(text)) => true,
                 Some(text) => (world.rows.iter()).any(|r| {
-                    r.from_agent && r.content == *text && (r.kind == CHAT || r.kind == EDIT)
+                    r.from_agent && r.content == *text && [CHAT, COMMENT, EDIT].contains(&r.kind)
                 }),
                 None => (versions.iter()).any(|v| v.id == item && v.seq == e.seq),
             };

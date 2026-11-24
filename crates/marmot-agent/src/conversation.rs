@@ -22,10 +22,12 @@
 //!   its next session (D-101);
 //! - the agent's full activity goes to the owner's two-person chat with it, and to the chats the
 //!   owner lists; every other chat is sent its words and what people there need to answer it
-//!   (D-136).
+//!   (D-136);
+//! - a subagent's work goes in its thread, under its `task` item, with NIP-22's tags, once that
+//!   item has gone out; with none sent, it goes in the main chat (D-121, D-122, D-133, D-142).
 
 use crate::activity::{self, FullActivity};
-use crate::carrier::{self, Asked, Item, SETTLES_MAX, Unreadable};
+use crate::carrier::{self, Asked, Item, SETTLES_MAX, Thread, Unreadable};
 use crate::chat_folder::{FOLDER, FolderRule, LABEL};
 use crate::keys::{EventKey, GroupKey, PubKey};
 use crate::rights::{Right, Rights, needed_for};
@@ -162,6 +164,10 @@ pub enum Sending {
         /// The answers and controls whose effect they show (D-028). Only a new message carries
         /// them: an edit cannot carry tags.
         settles: Vec<EventKey>,
+        /// For a subagent's words: its thread, where they go as a thread message whose parent is
+        /// the subagent's `task` item (D-122).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        thread: Option<Thread>,
     },
 }
 
@@ -370,6 +376,17 @@ struct Record {
     /// that is dropped leaves the chat showing it closed, and the core does not close it again.
     #[serde(default)]
     closed_in_chat: bool,
+    /// For a subagent's work: the core's name for the subagent's `task` item (D-121).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subagent: Option<String>,
+    /// Where its first event went in a subagent's thread, which every later version names again
+    /// (D-133). `None` for one sent in the main chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread: Option<Thread>,
+    /// Its subagent's thread could not be placed when its first event was tried, as MDK no
+    /// longer had the `task` item: it goes in the main chat (D-142).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    main_chat: bool,
 }
 
 /// Something queued to be sent to a group.
@@ -405,6 +422,19 @@ struct Queued {
     /// in turn is replaced once, even when it settles nothing, so the chat is told of the gap.
     #[serde(default)]
     tells: bool,
+    /// Where it was placed when first handed to MDK under its token now, which MDK may have
+    /// taken: every later try under that token, and its receipt, place it the same, whatever
+    /// the core has forgotten since (D-142). `None` until then, and from when MDK did not take
+    /// it until its next try under that token, which places it again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    placed: Option<Placed>,
+}
+
+/// Where a send was placed: in a subagent's thread, or, with none, in the main chat.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+struct Placed {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread: Option<Thread>,
 }
 
 impl Sending {
@@ -431,6 +461,12 @@ struct Forgotten {
     #[serde(default)]
     first_token: Option<String>,
     version: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread: Option<Thread>,
+    /// Its group: a subagent's work that comes after its `task` item was forgotten still goes in
+    /// its thread. `None` from an older core's state file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    group: Option<GroupKey>,
 }
 
 impl Record {
@@ -1017,14 +1053,20 @@ impl Conversation {
                 .and_then(|m| self.messages.get(&m.0).cloned()),
             _ => None,
         };
-        let (first, first_token, version) =
+        let (first, first_token, version, thread) =
             match self.saved.forgotten.iter().position(|f| f.key == key) {
                 Some(at) if !self.saved.items.contains_key(&key) => {
                     let forgotten = self.saved.forgotten.remove(at).expect("found");
-                    (forgotten.first, forgotten.first_token, forgotten.version)
+                    let f = forgotten;
+                    (f.first, f.first_token, f.version, f.thread)
                 }
-                _ => (None, None, 0),
+                _ => (None, None, 0, None),
             };
+        // The subagent whose work it is, by its `task` item, from a driver whose harness tells
+        // them apart (D-124).
+        let subagent = (header.subagent.as_ref())
+            .filter(|_| self.capabilities.subagents)
+            .map(|task| format!("{chat}/{}", task.as_str()));
         let record = self
             .saved
             .items
@@ -1040,7 +1082,13 @@ impl Conversation {
                 started_by: None,
                 held: Vec::new(),
                 closed_in_chat: false,
+                subagent: None,
+                thread,
+                main_chat: false,
             });
+        if record.first.is_none() && record.subagent.is_none() {
+            record.subagent = subagent;
+        }
         let was_waiting = record.last.header().state == State::Waiting;
         record.last = emitted.event.clone();
         if record.started_by.is_none() {
@@ -1109,6 +1157,7 @@ impl Conversation {
                     remark,
                     edit: record.first.clone(),
                     settles,
+                    thread: None,
                 });
             } else if !open {
                 // The words are final and go out no more: what they name is not lost.
@@ -1406,6 +1455,7 @@ impl Conversation {
                     first: record.first.clone(),
                     started_by: record.started_by.clone(),
                     settles,
+                    thread: None,
                 }),
             };
             acts.push(self.queue(group, what, shown_by.clone()));
@@ -1453,6 +1503,27 @@ impl Conversation {
             if let Sending::Item { item, .. } = &mut queued.what {
                 item.first = None;
             }
+            // MDK did not take it: it is placed again.
+            queued.placed = None;
+        }
+    }
+
+    /// MDK refused the send named `token`, a subagent's words in its thread, because it no longer
+    /// has the thread's `task` item to place them by: the group's messages disappeared since it
+    /// went, and MDK did not take the words. They go in the main chat, as the agent's words, and
+    /// stay there in every later version (D-142). The caller saves this before the send is tried
+    /// again.
+    pub fn thread_gone(&mut self, token: &str) {
+        let Some(queued) = self.saved.outbox.iter_mut().find(|q| q.token == token) else {
+            return;
+        };
+        // MDK did not take it: it is placed again, in the main chat.
+        queued.placed = None;
+        let key = queued.what.key().to_string();
+        if let Some(record) = self.saved.items.get_mut(&key)
+            && record.first.is_none()
+        {
+            record.main_chat = true;
         }
     }
 
@@ -1476,6 +1547,8 @@ impl Conversation {
             if let Sending::Words { edit, .. } = &mut self.saved.outbox[at].what {
                 *edit = None;
             }
+            // MDK did not take it: it is placed again.
+            self.saved.outbox[at].placed = None;
             return;
         }
         let queued = self.saved.outbox.remove(at).expect("found");
@@ -1583,6 +1656,7 @@ impl Conversation {
             ),
             started_by: record.started_by.clone(),
             settles: Vec::new(),
+            thread: None,
         };
         if crate::carrier::item(&item).is_err() {
             let header = Header {
@@ -1605,15 +1679,23 @@ impl Conversation {
     /// The send named `token` is about to be handed to MDK, `now` (seconds since 1970). Whether
     /// that is new, the first try under its token, and so to be saved before it is: what MDK
     /// takes is on disk first, with the token it is taken under and when it was first tried.
+    /// Where it goes is chosen now, and kept for every try under its token (D-142). A send MDK did
+    /// not take and that is placed again under the same token, as a new first event or message,
+    /// is saved again: its new place is chosen now, and the time its token was first tried stays.
     pub fn attempting(&mut self, token: &str, now: u64) -> bool {
-        match self.saved.outbox.iter_mut().find(|q| q.token == token) {
-            Some(queued) if queued.tried_at.is_none() => {
-                queued.attempted = true;
-                queued.tried_at = Some(now);
-                true
-            }
-            _ => false,
+        let Some(at) = self.saved.outbox.iter().position(|q| q.token == token) else {
+            return false;
+        };
+        let queued = &self.saved.outbox[at];
+        if queued.tried_at.is_some() && queued.placed.is_some() {
+            return false;
         }
+        let thread = self.thread_of(queued.what.key());
+        let queued = &mut self.saved.outbox[at];
+        queued.attempted = true;
+        queued.tried_at.get_or_insert(now);
+        queued.placed = Some(Placed { thread });
+        true
     }
 
     /// MDK took the send named `token` and dropped it before it went out: nothing of it went,
@@ -1624,6 +1706,7 @@ impl Conversation {
             Some(queued) => {
                 queued.rejected += 1;
                 queued.tried_at = None;
+                queued.placed = None;
                 queued.rejected
             }
             None => 0,
@@ -1650,11 +1733,25 @@ impl Conversation {
 
     fn as_sent(&self, queued: &Queued) -> (Token, Sending) {
         let mut what = queued.what.clone();
+        let place = match &queued.placed {
+            Some(placed) => placed.thread.clone(),
+            None => self.thread_of(what.key()),
+        };
+        match &mut what {
+            Sending::Item { item, .. } => item.thread = place,
+            Sending::Words { thread, .. } => *thread = place,
+        }
         let record = self.saved.items.get(what.key());
         let mut edits = None;
         if let Some(first) = record.and_then(|r| r.first.clone()) {
-            // An edit names the token its first event went under.
-            edits = record.and_then(|r| r.first_token.clone());
+            // An edit names the token its first event went under. MDK keeps no edit of a thread
+            // message under a token: a later version of a subagent's words in its thread is MDK's
+            // plain edit, which names none (D-142).
+            let comment =
+                matches!(what, Sending::Words { .. }) && record.is_some_and(|r| r.thread.is_some());
+            edits = record
+                .filter(|_| !comment)
+                .and_then(|r| r.first_token.clone());
             match &mut what {
                 Sending::Item { item, .. } => item.first = Some(first),
                 Sending::Words { edit, settles, .. } => {
@@ -1713,9 +1810,11 @@ impl Conversation {
     pub fn sent(&mut self, key: &str, event: EventKey) {
         let mut closed = None;
         let mut token = None;
+        let mut placed = None;
         if let Some(at) = self.saved.outbox.iter().position(|q| q.what.key() == key) {
             token = Some(self.mdk_token(&self.saved.outbox[at]));
             let queued = self.saved.outbox.remove(at).expect("found");
+            placed = queued.placed.clone();
             if let Sending::Item { item, .. } = &queued.what {
                 closed = Some(!matches!(
                     item.event.header().state,
@@ -1723,16 +1822,55 @@ impl Conversation {
                 ));
             }
         }
+        // Where it was placed when MDK was handed it, which is where it went.
+        let thread = placed.map_or_else(|| self.thread_of(key), |p| p.thread);
         if let Some(record) = self.saved.items.get_mut(key) {
             if record.first.is_none() {
                 record.first = Some(event);
                 record.first_token = token;
+                record.thread = thread;
             }
             if let Some(closed) = closed {
                 record.closed_in_chat = closed;
             }
         }
         self.forget_old();
+    }
+
+    /// Where the item named `key` goes in a subagent's thread (D-121): under the first event of its
+    /// subagent's `task` item, in the tree that item is in or is the root of. Once its first event
+    /// went out, where that went, which its later versions name again (D-133): an item never
+    /// moves. `None` for an item of no subagent's, and for one whose subagent's `task` item has
+    /// not gone out, as to a chat not sent the agent's full activity (D-136): it goes in the main
+    /// chat, as any item does. A group's sends go out in order, and a driver makes a subagent's
+    /// `task` item before its work, so that item has gone out by the time its work's does.
+    fn thread_of(&self, key: &str) -> Option<Thread> {
+        let record = self.saved.items.get(key)?;
+        if record.first.is_some() {
+            return record.thread.clone();
+        }
+        if record.main_chat {
+            return None;
+        }
+        let subagent = record.subagent.as_deref()?;
+        // The `task` item, or what is kept of it once forgotten.
+        let (group, first, thread) = match self.saved.items.get(subagent) {
+            Some(task) => (Some(&task.group), &task.first, &task.thread),
+            None => {
+                let task = self.saved.forgotten.iter().find(|f| f.key == subagent)?;
+                (task.group.as_ref(), &task.first, &task.thread)
+            }
+        };
+        if group != Some(&record.group) {
+            return None;
+        }
+        let parent = first.clone()?;
+        let root = (thread.as_ref()).map_or_else(|| parent.clone(), |t| t.root.clone());
+        Some(Thread {
+            root,
+            parent: Some(parent),
+            agent: self.agent.clone(),
+        })
     }
 
     /// Queues something to send, and says so. `shown_by` names the send that shows the effect of
@@ -1764,6 +1902,7 @@ impl Conversation {
             tried_at: None,
             last_resort,
             tells: false,
+            placed: None,
         });
         Act::Send {
             group: group.clone(),
@@ -2010,6 +2149,8 @@ impl Conversation {
                     first: record.first,
                     first_token: record.first_token,
                     version: record.version,
+                    thread: record.thread,
+                    group: Some(record.group),
                 });
             }
             while self.saved.forgotten.len() > KEPT {
@@ -2108,6 +2249,7 @@ impl Conversation {
             harness: self.harness.clone(),
             session: self.saved.sessions.get(&chat.id.0).cloned(),
             turn: None,
+            subagent: None,
             item: ItemId(self.make_id("core")),
             seq,
             state: State::Done,
@@ -2144,6 +2286,7 @@ fn notice_item(event: AgentEvent, about: Option<EventKey>, settles: Vec<EventKey
             first: None,
             started_by: about,
             settles,
+            thread: None,
         }),
     }
 }

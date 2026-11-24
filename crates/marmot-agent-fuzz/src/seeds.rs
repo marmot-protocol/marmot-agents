@@ -153,6 +153,7 @@ fn items() -> Vec<Vec<u8>> {
                 first,
                 started_by: Some(id(n + 1)),
                 settles: vec![id(n + 2)],
+                thread: None,
             };
             if let Ok(out) = carrier::item(&item) {
                 seeds.push(parts(out.kind, &out.content, &out.tags));
@@ -239,6 +240,7 @@ fn saved() -> Vec<u8> {
         approvals: true,
         files_in: FilesIn::Images,
         approval_commands: Vec::new(),
+        subagents: false,
     };
     let saved = marmot_agent::Saved::default();
     let mut talk = Conversation::new(PubKey::from("agent"), "codex", rights, capabilities, saved);

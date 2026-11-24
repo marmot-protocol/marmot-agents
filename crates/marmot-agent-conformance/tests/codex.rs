@@ -149,7 +149,8 @@ async fn replays_recordings() {
 
 // Every recording of subagents that one prompt makes, its approvals allowed as recorded, played
 // back through the driver: every recorded message is played, nothing is routed nowhere but
-// Codex's own bookkeeping, and the chat shows each subagent flat, as the fake's do (D-117).
+// Codex's own bookkeeping, and the chat shows each subagent as one `task` item, with all it did
+// naming that item, as the fake's do (D-117, D-121).
 #[tokio::test]
 async fn replays_subagent_recordings() {
     for (name, count) in [
@@ -183,6 +184,10 @@ async fn replays_subagent_recordings() {
         assert_eq!(progress.left(), 0, "{name}: recorded messages never played");
         let found = subagents::shown_flat(&run.seen, "c-1", count, State::Done);
         found.unwrap_or_else(|v| panic!("{name}: {v}"));
+        if count == 2 {
+            let found = subagents::nested_once(&run.seen, "c-1");
+            found.unwrap_or_else(|v| panic!("{name}: {v}"));
+        }
         // What is routed nowhere is what names no thread, after Codex's greeting: the account,
         // rate limits and remote control. (The recorder's moderation notes name a redacted
         // thread, and are held as a thread not yet named.)

@@ -52,6 +52,8 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 /// The kind of a chat message.
 const CHAT: u64 = 9;
+/// A NIP-22 comment: a subagent's words, in its thread (D-122).
+const COMMENT: u64 = 1111;
 
 struct Client {
     runtime: MarmotAppRuntime,
@@ -71,6 +73,9 @@ struct Items {
     known: HashMap<EventKey, Seen>,
     /// How many item versions have arrived, to tell the latest.
     arrived: u64,
+    /// Each thread comment shown, by its event: who sent it, and the place it was shown in, which
+    /// an edit of it, carrying no thread's tags, is shown in again.
+    comments: HashMap<String, (String, String)>,
 }
 
 /// An item as MDK keeps it: one row at its first event, holding the latest version its sender
@@ -371,16 +376,11 @@ impl Client {
         if message.sender == self.me {
             return;
         }
-        let name = clean(message.sender_display_name.as_deref().unwrap_or("agent"));
-        let group = hex::encode(message.group_id.as_slice());
-        if message.kind == CHAT {
-            println!(
-                "{} {name}: {}",
-                chat_label(&group, &message.sender),
-                clean(&message.plaintext)
-            );
+        if let Some(line) = self.items.words_line(&message) {
+            println!("{line}");
             return;
         }
+        let group = hex::encode(message.group_id.as_slice());
         let row = |first: &str| {
             let row = self
                 .runtime
@@ -402,6 +402,55 @@ impl Client {
 }
 
 impl Items {
+    /// The line for words sent to the chat, or `None` for anything else: a chat message, or a
+    /// thread comment, which this client, having no threads, shows inline, marked as in a thread.
+    /// A subagent's words are a thread comment by the agent whose root is the agent's `task` item
+    /// of a subagent (D-122): they are marked as in the thread of the subagent whose `task` item
+    /// they answer, by what that item says it is for, once it has shown. Any other comment, as a
+    /// person's reply in a thread, is shown as a reply in a thread. A later version of a
+    /// comment is MDK's plain edit of it, which names no thread (D-142): it is shown in the place
+    /// the comment was, when its author sent it.
+    fn words_line(&mut self, message: &marmot_app::ReceivedMessage) -> Option<String> {
+        let name = clean(message.sender_display_name.as_deref().unwrap_or("agent"));
+        let group = hex::encode(message.group_id.as_slice());
+        let chat = chat_label(&group, &message.sender);
+        let text = clean(&message.plaintext);
+        match message.kind {
+            CHAT => Some(format!("{chat} {name}: {text}")),
+            COMMENT => {
+                let named = |tag: &str| {
+                    let id = (message.tags.iter())
+                        .find(|t| t.first().map(String::as_str) == Some(tag))
+                        .and_then(|t| t.get(1))?;
+                    self.known.get(&EventKey(id.clone()))
+                };
+                // A task row of a subagent's that the comment's author sent.
+                let subagents = |seen: &&Seen| {
+                    seen.sender == message.sender
+                        && matches!(seen.read.item.event.body(),
+                            Body::Task(task) if task.kind == "subagent")
+                };
+                let place = match named("E").filter(subagents) {
+                    Some(root) => {
+                        let task = named("e").filter(subagents).unwrap_or(root);
+                        format!("in the thread of {}", task_label(task))
+                    }
+                    None => "in a thread".to_string(),
+                };
+                let place = format!("{chat} {name}, {place}");
+                let line = format!("{place}: {text}");
+                let shown = (message.sender.clone(), place);
+                self.comments.insert(message.message_id_hex.clone(), shown);
+                Some(line)
+            }
+            EDIT_KIND => {
+                let (sender, place) = self.comments.get(carrier::edit_target(&message.tags)?)?;
+                (*sender == message.sender).then(|| format!("{place}, revised: {text}"))
+            }
+            _ => None,
+        }
+    }
+
     /// Takes in an item event that arrived, its first version or a later one, and gives the lines
     /// to show for it: none when it changes nothing the chat shows. `row` gives the item as MDK
     /// keeps it, by its first event.
@@ -487,6 +536,14 @@ impl Items {
 
 /// A short name for a chat with one agent in it, from its group's hex id and the agent's key: the
 /// first eight digits of each. Two agents in one group are two chats.
+/// What a subagent's `task` row says it is for: the first line of its text, its path or what it
+/// was asked, or, with none, its title, which a harness may give every subagent alike.
+fn task_label(seen: &Seen) -> String {
+    let header = seen.read.item.event.header();
+    let text = header.text.lines().find(|l| !l.trim().is_empty());
+    clean(text.unwrap_or(&header.title))
+}
+
 fn chat_label(group: &str, agent: &str) -> String {
     let short = |hex: &str| hex.chars().take(8).collect::<String>();
     format!("{}/{}", short(group), short(agent))
@@ -715,6 +772,7 @@ mod tests {
             harness: "stub".into(),
             session: None,
             turn: None,
+            subagent: None,
             item: "t".into(),
             seq: 1,
             state: State::Running,
@@ -732,6 +790,7 @@ mod tests {
             first: first.map(EventKey::from),
             started_by: None,
             settles: Vec::new(),
+            thread: None,
         };
         received(id, sender, CHAT_A, carrier::item(&item).unwrap())
     }
@@ -744,6 +803,7 @@ mod tests {
             first: None,
             started_by: None,
             settles: Vec::new(),
+            thread: None,
         };
         received(id, sender, chat, carrier::item(&item).unwrap())
     }
@@ -1058,6 +1118,154 @@ mod tests {
         (items.known.values())
             .map(|s| (s.sender.clone(), s.read.item.version))
             .collect()
+    }
+
+    /// A subagent's `task` item, as event `id`, titled as Codex titles every one, and saying what
+    /// it is for, "look around".
+    fn task_row(id: &str) -> ReceivedVersion {
+        let header = Header {
+            harness: "stub".into(),
+            session: None,
+            turn: None,
+            subagent: None,
+            item: "task:a".into(),
+            seq: 1,
+            state: State::Running,
+            title: "Subagent working".into(),
+            text: "look around".into(),
+        };
+        let body = Body::Task(marmot_agent_events::body::Task {
+            kind: "subagent".into(),
+            description: None,
+            subject: None,
+        });
+        first_of(
+            id,
+            AGENT,
+            CHAT_A,
+            AgentEvent::new(header, body, None).unwrap(),
+        )
+    }
+
+    /// A message of the agent's, of `kind`, with `tags`, as MDK hands it over.
+    fn words(
+        id: &str,
+        kind: u64,
+        text: &str,
+        tags: Vec<Vec<String>>,
+    ) -> marmot_app::ReceivedMessage {
+        let mut message = received(
+            id,
+            AGENT,
+            CHAT_A,
+            carrier::Outgoing {
+                kind,
+                content: text.into(),
+                tags,
+            },
+        )
+        .0;
+        message.sender_display_name = Some("Codex".into());
+        message
+    }
+
+    // A subagent's words are a thread comment, kind 1111 (D-122): the terminal client, which has no
+    // threads, shows them inline as the agent's words, marked as in the thread of the subagent
+    // whose `task` item they answer; the agent's own words are shown as before.
+    #[test]
+    fn a_subagents_words_are_shown_inline_marked_as_in_its_thread() {
+        let mut items = Items::default();
+        let said = words("c1", 9, "all done", Vec::new());
+        assert_eq!(
+            items.words_line(&said),
+            Some(format!(
+                "{} Codex: all done",
+                chat_label(&group_hex(CHAT_A), AGENT)
+            ))
+        );
+        let comment = |parent: &str| {
+            let tags = vec![
+                vec!["E".into(), parent.into(), String::new(), AGENT.into()],
+                vec!["K".into(), "1201".into()],
+                vec!["P".into(), AGENT.into()],
+                vec!["e".into(), parent.into(), String::new(), AGENT.into()],
+                vec!["k".into(), "1201".into()],
+            ];
+            words("c2", 1111, "found two\nfiles", tags)
+        };
+        // Its subagent's row not seen yet: shown as a reply in a thread, nothing more.
+        let line = items.words_line(&comment("t1")).unwrap();
+        assert_eq!(
+            line,
+            format!(
+                "{} Codex, in a thread: found two files",
+                chat_label(&group_hex(CHAT_A), AGENT)
+            )
+        );
+        items.arrived(&task_row("t1").0, None, DIRECT, |_| {
+            Some(task_row("t1").row())
+        });
+        // Marked by what the row says the subagent is for, not by its title, which is every
+        // subagent's.
+        let line = items.words_line(&comment("t1")).unwrap();
+        assert_eq!(
+            line,
+            format!(
+                "{} Codex, in the thread of look around: found two files",
+                chat_label(&group_hex(CHAT_A), AGENT)
+            )
+        );
+        // A person's reply in that thread is not the subagent's.
+        let mut reply = comment("t1");
+        reply.sender = STRANGER.into();
+        reply.sender_display_name = Some("Bob".into());
+        let line = items.words_line(&reply).unwrap();
+        assert_eq!(
+            line,
+            format!(
+                "{} Bob, in a thread: found two files",
+                chat_label(&group_hex(CHAT_A), STRANGER)
+            )
+        );
+        // Anything else is not words.
+        assert_eq!(items.words_line(&words("c3", 7, "+", Vec::new())), None);
+    }
+
+    // A later version of a subagent's words is MDK's plain edit of their comment, which carries no
+    // thread's tags (D-142): the client shows the revised words in the place the comment was
+    // shown, and only for an edit from the comment's author. An edit of anything else is not
+    // words.
+    #[test]
+    fn a_subagents_revised_words_are_shown_where_its_words_were() {
+        let mut items = Items::default();
+        items.arrived(&task_row("t1").0, None, DIRECT, |_| {
+            Some(task_row("t1").row())
+        });
+        let tags = vec![
+            vec!["E".into(), "t1".into(), String::new(), AGENT.into()],
+            vec!["K".into(), "1201".into()],
+            vec!["P".into(), AGENT.into()],
+            vec!["e".into(), "t1".into(), String::new(), AGENT.into()],
+            vec!["k".into(), "1201".into()],
+        ];
+        let first = items.words_line(&words("c1", 1111, "found two files", tags));
+        let place = format!(
+            "{} Codex, in the thread of look around",
+            chat_label(&group_hex(CHAT_A), AGENT)
+        );
+        assert_eq!(first, Some(format!("{place}: found two files")));
+        let edit = |id: &str, target: &str| {
+            let tags = vec![vec!["e".into(), target.into()]];
+            words(id, EDIT_KIND, "found three\nfiles", tags)
+        };
+        assert_eq!(
+            items.words_line(&edit("c2", "c1")),
+            Some(format!("{place}, revised: found three files"))
+        );
+        let mut forged = edit("c3", "c1");
+        forged.sender = STRANGER.into();
+        assert_eq!(items.words_line(&forged), None, "not the author's");
+        assert_eq!(items.words_line(&edit("c4", "t1")), None, "an item's edit");
     }
 
     // An edit that comes before its first event shows nothing until the first event comes, and

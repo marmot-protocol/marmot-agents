@@ -1281,6 +1281,11 @@ impl<D: Driver, M: Side> Core<D, M> {
                         self.conversation.first_gone(&token.send);
                         self.save()?;
                     }
+                    SendFailed::ThreadGone => {
+                        // Saved before the words are tried again, in the main chat.
+                        self.conversation.thread_gone(&token.send);
+                        self.save()?;
+                    }
                     SendFailed::Forgotten => {
                         // MDK's own words can name a group, so they are not printed (D-071).
                         eprintln!(
@@ -1782,6 +1787,7 @@ mod tests {
                 resume: false,
                 approvals: false,
                 files_in: marmot_agent_driver::FilesIn::None,
+                subagents: false,
                 approval_commands: Vec::new(),
             }
         }
@@ -2258,6 +2264,7 @@ mod tests {
                 approvals: false,
                 files_in: marmot_agent_driver::FilesIn::None,
                 approval_commands: Vec::new(),
+                subagents: false,
             }
         }
 

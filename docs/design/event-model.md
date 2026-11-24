@@ -69,6 +69,7 @@ decides, not the driver, which produces every event as before
 | `harness` | Which harness produced it |
 | `session` | The harness's session |
 | `turn` | The turn it belongs to |
+| `subagent` | For a subagent's work: its `task` item, in the same session. The core puts the event in that subagent's thread ([D-142](../decisions.md#d-142-how-subagent-threads-are-built); provisional) |
 | `item` | The item's id. It stays the same for the life of the item |
 | `seq` | Order within the session |
 | `type` | One of the item types |

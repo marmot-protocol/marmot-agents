@@ -11,7 +11,8 @@ use marmot_agent_driver::{
     Action as DriverAction, Answer, Control, Emitted, Output, Prompt, Reason, Refusal,
 };
 use marmot_agent_events::body::{
-    Approval, Body, Choice, Effect, Message as Words, Session, StartedBy, Turn,
+    Approval, Body, Choice, Effect, Message as Words, Session, StartedBy, Task, Tool, ToolKind,
+    Turn,
 };
 use marmot_agent_events::{AgentEvent, Header, State};
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,8 @@ use tokio::time::Instant;
 
 /// The kind of a chat message.
 pub const CHAT: u64 = 9;
+/// A thread message, NIP-22's comment: a subagent's words (D-122).
+pub const COMMENT: u64 = 1111;
 /// The kind of an edit, MDK's: of the agent's words, or an item's later version.
 pub const EDIT: u64 = carrier::EDIT_KIND;
 
@@ -265,6 +268,9 @@ struct Script {
     answer: Option<(String, bool)>,
     /// An interrupt taken for it.
     interrupt: Option<String>,
+    /// Whether the turn starts a subagent, whose `task` item and command are open from its words
+    /// to its end (D-121): every third turn.
+    subagent: bool,
 }
 
 /// A control's effect the harness is still to show.
@@ -994,6 +1000,7 @@ impl World {
             },
             answer: None,
             interrupt: None,
+            subagent: h.next.is_multiple_of(3),
         });
     }
 
@@ -1115,7 +1122,22 @@ impl World {
         let turn_item = format!("turn-{}", script.turn);
         let approval_item = format!("appr-{}", script.turn);
         let words_item = format!("words-{}", script.turn);
+        let (sub_item, sub_cmd) = (
+            format!("sub-{}", script.turn),
+            format!("subcmd-{}", script.turn),
+        );
         if let Some(request) = &script.interrupt {
+            if script.stage == Stage::TurnEnd && script.subagent {
+                self.send_sub_event(
+                    &script,
+                    &sub_cmd,
+                    Some(&sub_item),
+                    State::Cancelled,
+                    command(),
+                    "",
+                );
+                self.send_sub_event(&script, &sub_item, None, State::Cancelled, task(), "");
+            }
             if script.stage == Stage::Waiting {
                 self.send_event(
                     &script,
@@ -1232,6 +1254,17 @@ impl World {
                 None => Stage::Waiting,
             },
             Stage::Words => {
+                if script.subagent {
+                    self.send_sub_event(&script, &sub_item, None, State::Running, task(), "sub");
+                    let (of, running) = (Some(sub_item.as_str()), State::Running);
+                    self.send_sub_event(&script, &sub_cmd, of, running, command(), "ls");
+                    // The subagent's words, which go in its thread as a comment (D-122).
+                    let (said, text) = (
+                        format!("subw-{}", script.turn),
+                        format!("w-{}-sub", script.turn),
+                    );
+                    self.send_sub_event(&script, &said, of, State::Done, words(), &text);
+                }
                 let text = format!("w-{}", script.turn);
                 self.send_event(
                     &script,
@@ -1244,6 +1277,11 @@ impl World {
                 Stage::TurnEnd
             }
             Stage::TurnEnd => {
+                if script.subagent {
+                    let of = Some(sub_item.as_str());
+                    self.send_sub_event(&script, &sub_cmd, of, State::Done, command(), "ls");
+                    self.send_sub_event(&script, &sub_item, None, State::Done, task(), "sub");
+                }
                 self.send_event(&script, &turn_item, State::Done, turn(), Vec::new(), "Done");
                 Stage::Done
             }
@@ -1293,6 +1331,7 @@ impl World {
                             stage: Stage::Done,
                             answer: None,
                             interrupt: None,
+                            subagent: false,
                         };
                         let item = format!("set-{}-{n}", self.harness.life);
                         let text = format!("w-set-{}-{n}", self.harness.life);
@@ -1313,6 +1352,7 @@ impl World {
             stage: Stage::Done,
             answer: None,
             interrupt: None,
+            subagent: false,
         };
         let body = Body::Session(Session {
             harness_version: "sim".into(),
@@ -1339,6 +1379,34 @@ impl World {
         settles: Vec<String>,
         text: &str,
     ) {
+        self.send_event_of(script, item, None, state, body, settles, text);
+    }
+
+    /// An event of the subagent whose `task` item is `of`, or of a subagent's `task` item, with
+    /// `of` none (D-121).
+    fn send_sub_event(
+        &mut self,
+        script: &Script,
+        item: &str,
+        of: Option<&str>,
+        state: State,
+        body: Body,
+        text: &str,
+    ) {
+        self.send_event_of(script, item, of, state, body, Vec::new(), text);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn send_event_of(
+        &mut self,
+        script: &Script,
+        item: &str,
+        of: Option<&str>,
+        state: State,
+        body: Body,
+        settles: Vec<String>,
+        text: &str,
+    ) {
         self.harness.seq += 1;
         let is_turn = matches!(body, Body::Turn(_));
         let event_body_kind = if matches!(body, Body::Message(_)) {
@@ -1351,6 +1419,7 @@ impl World {
             harness: "sim".into(),
             session: (!script.session.is_empty()).then(|| script.session.as_str().into()),
             turn: (!script.turn.is_empty() && !is_session).then(|| script.turn.as_str().into()),
+            subagent: of.map(Into::into),
             item: item.into(),
             seq: self.harness.seq,
             state,
@@ -1413,8 +1482,13 @@ enum BodyKind {
 pub fn describe(row: &Row) -> String {
     if let Some(read) = carrier::read_item(row.kind, &row.content, &row.tags) {
         let h = read.item.event.header();
+        let threaded = if read.item.thread.is_some() {
+            " in thread"
+        } else {
+            ""
+        };
         return format!(
-            "c{} {} v{} {}",
+            "c{} {} v{} {}{threaded}",
             row.chat,
             h.item.as_str(),
             read.item.version,
@@ -1423,6 +1497,9 @@ pub fn describe(row: &Row) -> String {
     }
     if row.kind == EDIT {
         return format!("c{} edit", row.chat);
+    }
+    if row.kind == COMMENT {
+        return format!("c{} words in thread {}", row.chat, row.content);
     }
     format!("c{} words {}", row.chat, row.content)
 }
@@ -1475,4 +1552,29 @@ fn approval() -> Body {
 
 fn words() -> Body {
     Body::Message(Words::default())
+}
+
+fn task() -> Body {
+    Body::Task(Task {
+        kind: "subagent".into(),
+        description: None,
+        subject: None,
+    })
+}
+
+fn command() -> Body {
+    Body::Tool(Tool {
+        kind: ToolKind::Command,
+        name: "shell".into(),
+        command: Some("ls".into()),
+        cwd: None,
+        exit_code: None,
+        duration_ms: None,
+        output: None,
+        changes: Vec::new(),
+        query: None,
+        path: None,
+        input: None,
+        error: None,
+    })
 }

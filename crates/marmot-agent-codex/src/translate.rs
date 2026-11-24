@@ -122,13 +122,18 @@ struct Sent {
     owner: (Option<String>, Option<String>),
 }
 
-/// What a translator that follows a subagent's thread shows it as (D-117): in the chat of the turn
-/// that started it, in that chat's session and under the turn the person started, each of its
-/// turns a `task` item, and its words naming the item that gave it its work.
+/// What a translator that follows a subagent's thread shows it as (D-117, D-121): in the chat of
+/// the turn that started it, in that chat's session and under the turn the person started, as one
+/// `task` item, its row, which each of its turns opens again; everything else it does names that
+/// item as the subagent it belongs to, so the core puts it in the subagent's thread; and its words
+/// name the item that gave it its work.
 #[derive(Clone, Default)]
 struct Subagent {
     /// The chat's session, which every event names.
     session: Option<String>,
+    /// For a subagent another subagent started: that one's `task` item, which this one's names
+    /// as the subagent it belongs to (D-121).
+    parent: Option<String>,
     /// The item that gave the subagent its work, as the chat shows it: what started it, or what
     /// gave it more.
     subject: Option<String>,
@@ -140,6 +145,26 @@ struct Subagent {
     /// The work its next turn is for: the item that gave it, and what it is for. The newest
     /// given, while a turn runs or between turns, and taken when the next turn starts.
     next: Option<(String, Option<String>)>,
+    /// The newest of its turns to start, whose state the row shows: the end of an earlier one,
+    /// read late, does not change it.
+    latest: Option<String>,
+    /// The row as the latest turn last showed it, for an earlier turn's end read late: its body,
+    /// state, title and text, before what [`Subagent::failed`] adds.
+    row: Option<(Body, State, String, String)>,
+    /// What people need to know of earlier turns whose ends were read late: each that failed, with
+    /// its error. The row's text says it from then on.
+    failed: Vec<String>,
+}
+
+impl Subagent {
+    /// The row's text: `text`, and what earlier turns that failed left to say.
+    fn row_text(&self, text: &str) -> String {
+        std::iter::once(text.to_string())
+            .chain(self.failed.iter().cloned())
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 /// Turns the messages of one chat's Codex session into agent events.
@@ -205,16 +230,24 @@ impl Translator {
     }
 
     /// A translator for a subagent's `thread`, shown in the chat whose session is `session`
-    /// (D-117). It never picks a session: the thread is the subagent's from the start.
-    pub fn subagent(thread: &str, session: Option<&str>) -> Self {
+    /// (D-117). It never picks a session: the thread is the subagent's from the start. `parent`
+    /// is the subagent's thread that started it, for a subagent started by another.
+    pub fn subagent(thread: &str, session: Option<&str>, parent: Option<&str>) -> Self {
         Self {
             session: Some(thread.to_string()),
             subagent: Some(Subagent {
                 session: session.map(String::from),
+                parent: parent.map(task_of),
                 ..Subagent::default()
             }),
             ..Self::default()
         }
+    }
+
+    /// For a subagent's thread, its `task` item: its row in the chat (D-121).
+    pub fn task_item(&self) -> Option<String> {
+        self.subagent.as_ref()?;
+        Some(task_of(self.session.as_deref().unwrap_or_default()))
     }
 
     /// The item that gave a subagent its work, and what that work is, as its next turn shows them:
@@ -255,10 +288,13 @@ impl Translator {
         let body = Body::Task(Task {
             kind: task.kind.clone(),
             description: task.description.clone().or(sub.description.clone()),
-            subject: sub.subject.map(Into::into),
+            subject: sub.subject.clone().map(Into::into),
         });
-        let text = sub.description.unwrap_or_default();
+        let base = sub.description.clone().unwrap_or_default();
+        let text = sub.row_text(&base);
         let title = "Subagent working";
+        // The row as the latest turn shows it now, for an earlier turn's end read late.
+        self.remember_row(&body, State::Running, title, &base);
         self.emit(&mut out, &item, body, State::Running, title, &text, native);
         out
     }
@@ -659,6 +695,7 @@ impl Translator {
         let turn = p.turn.unwrap_or_default();
         self.turn = turn.id;
         if let Some(sub) = self.subagent.as_mut() {
+            sub.latest = self.turn.clone();
             // Work given while the last turn ran is this one's.
             if let Some((subject, description)) = sub.next.take() {
                 sub.subject = Some(subject);
@@ -1080,12 +1117,12 @@ impl Translator {
 
     // -- a subagent's turns
 
-    /// The item a turn is shown as: the turn itself, or, for a subagent, its task (D-117).
+    /// The item a turn is shown as: the turn itself, or, for a subagent, its one `task` item,
+    /// which each of its turns opens again (D-121).
     fn turn_item(&self, turn: Option<&str>) -> String {
-        if self.subagent.is_some() {
-            format!("task:{}", show(turn))
-        } else {
-            format!("turn:{}", show(turn))
+        match self.task_item() {
+            Some(task) => task,
+            None => format!("turn:{}", show(turn)),
         }
     }
 
@@ -1105,22 +1142,24 @@ impl Translator {
             }
         }
         let item = self.turn_item(self.turn.as_deref());
+        let base = sub.description.clone().unwrap_or_default();
+        let text = sub.row_text(&base);
         let body = Body::Task(Task {
             kind: "subagent".into(),
-            description: sub.description.clone(),
+            description: sub.description,
             subject: sub.subject.map(Into::into),
         });
-        let text = sub.description.unwrap_or_default();
         let native = native(method, params);
-        self.emit(
-            out,
-            &item,
-            body,
-            State::Running,
-            "Subagent working",
-            &text,
-            native,
-        );
+        let title = "Subagent working";
+        self.remember_row(&body, State::Running, title, &base);
+        self.emit(out, &item, body, State::Running, title, &text, native);
+    }
+
+    /// Keeps the row as the subagent's latest turn shows it.
+    fn remember_row(&mut self, body: &Body, state: State, title: &str, text: &str) {
+        if let Some(sub) = self.subagent.as_mut() {
+            sub.row = Some((body.clone(), state, title.into(), text.into()));
+        }
     }
 
     /// A subagent's turn ends, and its task with it. `current` when it is the turn the subagent
@@ -1139,6 +1178,27 @@ impl Translator {
             _ => (State::Done, "Subagent finished"),
         };
         let item = self.turn_item(turn.id.as_deref());
+        let native = native(method, params);
+        // The end of an earlier turn read late, after a later one started: the row shows the
+        // later turn, running or ended, and the end is shown on it (D-007), so a Stop waiting for
+        // that turn is settled. A failure is said on the row from then on, with its error.
+        let sub = self.subagent.clone().unwrap_or_default();
+        let late = turn.id.is_some() && sub.latest.is_some() && turn.id != sub.latest;
+        if late && let Some((body, state, title, base)) = sub.row {
+            if turn.status.as_deref() == Some("failed") {
+                let error = turn.error.as_ref().and_then(|e| e.message.clone());
+                let said = match error {
+                    Some(error) => format!("An earlier turn failed: {error}"),
+                    None => "An earlier turn failed".to_string(),
+                };
+                if let Some(sub) = self.subagent.as_mut() {
+                    sub.failed.push(said);
+                }
+            }
+            let text = (self.subagent.as_ref()).map_or_else(|| base.clone(), |s| s.row_text(&base));
+            let owner = (self.session.clone(), self.turn.clone().or(turn.id));
+            return self.emit_owned(out, owner, &item, body, state, &title, &text, native);
+        }
         let body = match self.open_event(&item) {
             Some(prev) => prev.body().clone(),
             None => {
@@ -1150,15 +1210,16 @@ impl Translator {
                 })
             }
         };
-        let text = (turn.error.and_then(|e| e.message))
+        let base = (turn.error.and_then(|e| e.message))
             .or_else(|| self.subagent.as_ref().and_then(|s| s.description.clone()))
             .unwrap_or_default();
+        let text = (self.subagent.as_ref()).map_or_else(|| base.clone(), |s| s.row_text(&base));
         if let Some(id) = &turn.id {
             self.usage.remove(&Some(id.clone()));
         }
-        let native = native(method, params);
         let ended = if current { self.turn.clone() } else { turn.id };
         let owner = (self.session.clone(), ended);
+        self.remember_row(&body, state, title, &base);
         self.emit_owned(out, owner, &item, body, state, title, &text, native);
         if current {
             self.turn = None; // nothing that follows belongs to this turn
@@ -1923,12 +1984,19 @@ impl Translator {
     ) {
         self.made += 1;
         // A subagent's events are the chat's: in its session, under the turn the person started.
-        let (session, turn) = match &self.subagent {
+        // Each names the subagent it belongs to by its `task` item, and the `task` item itself the
+        // subagent that started it, if one did (D-121).
+        let task = self.task_item();
+        let (session, turn, subagent) = match &self.subagent {
             Some(sub) => {
                 let root = turn.map(|t| self.roots.get(&t).cloned().unwrap_or(t));
-                (sub.session.clone(), root.or(sub.root.clone()))
+                let of = match task {
+                    Some(task) if task == item => sub.parent.clone(),
+                    task => task,
+                };
+                (sub.session.clone(), root.or(sub.root.clone()), of)
             }
-            None => (session, turn),
+            None => (session, turn, None),
         };
         let seq = self.seq.entry(session.clone()).or_default();
         *seq += 1;
@@ -1936,6 +2004,7 @@ impl Translator {
             harness: "codex".into(),
             session: session.map(Into::into),
             turn: turn.map(Into::into),
+            subagent: subagent.map(Into::into),
             item: item.into(),
             seq: *seq,
             state,
@@ -1961,6 +2030,11 @@ impl Translator {
         }
         out.push(event);
     }
+}
+
+/// A subagent's `task` item, by its thread: one for the whole of its life (D-121).
+fn task_of(thread: &str) -> String {
+    format!("task:{thread}")
 }
 
 /// What the client's reply answered, for each question asked: the ids of the options whose labels

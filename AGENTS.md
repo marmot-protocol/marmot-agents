@@ -10,8 +10,9 @@ Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) i
 **Status: every harness is driven; building towards the swap (M4).** The Rust workspace under `crates/` has
 ten crates, and CI checks them: `marmot-agent-events`, the agent event and its eleven item types;
 `marmot-agent-driver`, the trait a driver implements; the built-in drivers `marmot-agent-codex` (Codex, with
-its subagents shown in the chat that started them,
-[D-117](docs/decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)),
+its subagents shown in the chat that started them, each in a thread of its own,
+[D-117](docs/decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them),
+[D-142](docs/decisions.md#d-142-how-subagent-threads-are-built)),
 `marmot-agent-acp` (OpenCode, Goose and Cursor over ACP) and `marmot-agent-pi` (Pi, in a container from
 `tools/pi`); `marmot-agent`, the core, which runs one agent's account through MDK and
 drives a built-in driver or serves a local socket; `marmot-agent-chat`, a terminal client for trying it;

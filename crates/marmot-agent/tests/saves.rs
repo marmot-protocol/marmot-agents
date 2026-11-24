@@ -237,6 +237,7 @@ impl Driver for Harnessed {
             approvals: true,
             files_in: FilesIn::None,
             approval_commands: Vec::new(),
+            subagents: false,
         }
     }
 
@@ -291,6 +292,7 @@ fn event(prompt: &Prompt, item: &str, state: State, body: Body, text: &str) -> O
         state,
         title: "Words".into(),
         text: text.into(),
+        subagent: None,
     };
     Output::Event(Emitted {
         event: AgentEvent::new(header, body, None).unwrap(),

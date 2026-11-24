@@ -1083,6 +1083,7 @@ impl Driver for Acp {
             resume: self.resume || self.load,
             approvals: true,
             files_in: FilesIn::None,
+            subagents: false,
             approval_commands: Vec::new(),
         }
     }

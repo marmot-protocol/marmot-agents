@@ -168,17 +168,17 @@ fn changed(lines: &[Line], changes: &[Change]) -> Vec<Line> {
 
 /// The three translators, fed alike.
 enum Translator {
-    Codex(marmot_agent_codex::Translator),
-    Acp(marmot_agent_acp::Translator),
-    Pi(marmot_agent_pi::Translator),
+    Codex(Box<marmot_agent_codex::Translator>),
+    Acp(Box<marmot_agent_acp::Translator>),
+    Pi(Box<marmot_agent_pi::Translator>),
 }
 
 impl Translator {
     fn new(harness: Harness) -> Self {
         match harness {
-            Harness::Codex => Self::Codex(marmot_agent_codex::Translator::new()),
-            Harness::Acp(name) => Self::Acp(marmot_agent_acp::Translator::named(name)),
-            Harness::Pi => Self::Pi(marmot_agent_pi::Translator::new()),
+            Harness::Codex => Self::Codex(Box::new(marmot_agent_codex::Translator::new())),
+            Harness::Acp(name) => Self::Acp(Box::new(marmot_agent_acp::Translator::named(name))),
+            Harness::Pi => Self::Pi(Box::new(marmot_agent_pi::Translator::new())),
         }
     }
 

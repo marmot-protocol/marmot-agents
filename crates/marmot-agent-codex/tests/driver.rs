@@ -1074,6 +1074,94 @@ async fn a_thread_started_under_a_chats_thread_is_its_subagent() {
     assert_eq!(codex.unrouted(), 0);
 }
 
+// Each subagent is one `task` item, its row, which each of its turns opens again, and everything
+// else it does names that item, so the core shows it in the subagent's thread; a subagent started
+// by another names that one's `task` item, and the outer one names none (D-121).
+#[tokio::test]
+async fn a_subagents_work_names_its_task_item_and_a_nested_ones_names_its_parent() {
+    let (mut codex, mut fake) = running().await;
+    until(&mut codex, is_turn(State::Running)).await;
+    let thread = |id: &str, parent: &str| {
+        json!({"method": "thread/started", "params": {"thread": {"id": id,
+            "parentThreadId": parent}}})
+    };
+    let words = |thread: &str, turn: &str, id: &str| {
+        json!({"method": "item/completed", "params": {"threadId": thread, "turnId": turn,
+            "item": {"type": "agentMessage", "id": id, "text": id, "phase": "final_answer"}}})
+    };
+    fake.say(thread("sub1", "th1")).await;
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    fake.say(started_by("a1", "sub1")).await;
+    fake.say(words("sub1", "st1", "w1")).await;
+    fake.say(thread("sub2", "sub1")).await;
+    fake.say(sub_turn("turn/started", "sub2", "st2", "inProgress"))
+        .await;
+    fake.say(words("sub2", "st2", "w2")).await;
+    fake.say(sub_turn("turn/completed", "sub2", "st2", "completed"))
+        .await;
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "completed"))
+        .await;
+    // Given more work, the same subagent works again on the same row.
+    fake.say(sub_turn("turn/started", "sub1", "st3", "inProgress"))
+        .await;
+    fake.say(words("sub1", "st3", "w3")).await;
+    fake.say(sub_turn("turn/completed", "sub1", "st3", "completed"))
+        .await;
+    let mut events = until(&mut codex, |e| e.event.header().text == "w3").await;
+    events.extend(until(&mut codex, is_task(State::Done)).await);
+    let of = |e: &Emitted| {
+        e.event
+            .header()
+            .subagent
+            .as_ref()
+            .map(|s| s.as_str().to_string())
+    };
+    let tasks: Vec<(String, Option<String>, State)> = (events.iter())
+        .filter(|e| matches!(e.event.body(), Body::Task(_)))
+        .map(|e| {
+            (
+                e.event.header().item.as_str().to_string(),
+                of(e),
+                e.event.header().state,
+            )
+        })
+        .collect();
+    let outer = "task:sub1".to_string();
+    let inner = "task:sub2".to_string();
+    let rows: std::collections::HashSet<&String> = tasks.iter().map(|t| &t.0).collect();
+    assert_eq!(
+        rows,
+        std::collections::HashSet::from([&outer, &inner]),
+        "{tasks:?}"
+    );
+    for (item, named, _) in &tasks {
+        let wanted = (*item == inner).then(|| outer.clone());
+        assert_eq!(*named, wanted, "{item} names the subagent that started it");
+    }
+    let outer_states: Vec<State> = (tasks.iter())
+        .filter(|t| t.0 == outer)
+        .map(|t| t.2)
+        .collect();
+    let opened = (outer_states.windows(2))
+        .filter(|w| w[0] == State::Done && w[1] == State::Running)
+        .count();
+    assert_eq!(
+        opened, 1,
+        "its second turn opens the row again: {outer_states:?}"
+    );
+    assert_eq!(outer_states.last(), Some(&State::Done));
+    for (said, by) in [("w1", &outer), ("w2", &inner), ("w3", &outer)] {
+        let e = (events.iter()).find(|e| e.event.header().text == said);
+        assert_eq!(
+            e.and_then(of).as_ref(),
+            Some(by),
+            "{said} names its subagent"
+        );
+    }
+    assert_eq!(codex.unrouted(), 0);
+}
+
 /// The parent's item that starts a subagent in `thread`, on Codex's newer runtime.
 fn started_by(item: &str, thread: &str) -> Value {
     let started = json!({"type": "subAgentActivity", "id": item, "kind": "started",
@@ -1997,20 +2085,25 @@ async fn work_given_during_a_subagents_turn_is_for_its_next() {
         .await;
     fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
         .await;
-    let events = until(&mut codex, |e| e.event.header().item.as_str() == "task:st2").await;
+    let mut events = until(&mut codex, is_task(State::Done)).await;
+    let first = events.last().unwrap().clone();
+    events.extend(until(&mut codex, is_task(State::Running)).await);
     let parent = (events.iter()).find_map(|e| match e.event.body() {
         Body::Message(m) if e.event.header().item.as_str() == "w1" => Some(m.parent.clone()),
         _ => None,
     });
     assert_eq!(parent, Some(Some("a1".into())), "the running turn's words");
-    let subject = |item: &str| {
-        (events.iter().rev()).find_map(|e| match e.event.body() {
-            Body::Task(t) if e.event.header().item.as_str() == item => Some(t.subject.clone()),
-            _ => None,
-        })
+    // The subagent's one task item, its row: its first turn worked for a1, its next for a2.
+    let subject = |e: &Emitted| match e.event.body() {
+        Body::Task(t) => (
+            e.event.header().item.as_str().to_string(),
+            t.subject.clone(),
+        ),
+        _ => panic!("a task"),
     };
-    assert_eq!(subject("task:st1"), Some(Some("a1".into())));
-    assert_eq!(subject("task:st2"), Some(Some("a2".into())));
+    let task = "task:sub1".to_string();
+    assert_eq!(subject(&first), (task.clone(), Some("a1".into())));
+    assert_eq!(subject(events.last().unwrap()), (task, Some("a2".into())));
 }
 
 // Work given after a subagent's turn has ended replaces work given while it ran: the next turn
@@ -2034,10 +2127,15 @@ async fn the_newest_work_given_is_the_next_turns() {
     fake.say(started_by("a1", "sub1")).await; // the first item again
     fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
         .await;
-    let events = until(&mut codex, |e| e.event.header().item.as_str() == "task:st2").await;
+    until(&mut codex, is_task(State::Done)).await;
+    let events = until(&mut codex, is_task(State::Running)).await;
     let Body::Task(task) = events.last().unwrap().event.body() else {
         panic!("a task");
     };
+    assert_eq!(
+        events.last().unwrap().event.header().item.as_str(),
+        "task:sub1"
+    );
     assert_eq!(task.subject, Some("a3".into()));
 }
 
@@ -2066,4 +2164,95 @@ async fn a_failed_spawn_is_not_shown_as_started() {
         assert_eq!(header.state, state, "{status}");
         assert_eq!(header.title, title, "{status}");
     }
+}
+
+/// A subagent's turn ending with `error` as its error message.
+fn sub_turn_failed(thread: &str, turn: &str, error: &str) -> Value {
+    json!({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": turn,
+        "rootTurnId": "t1", "items": [], "status": "failed", "error": {"message": error}}}})
+}
+
+/// The subagent's row as its last event in `events` shows it: its state and text.
+fn row_of(events: &[Emitted]) -> (State, String) {
+    let row = (events.iter().rev())
+        .find(|e| matches!(e.event.body(), Body::Task(_)))
+        .expect("the row");
+    let header = row.event.header();
+    (header.state, header.text.clone())
+}
+
+// The subagent's row shows its latest turn (D-142): `st2` started and finished before the end of
+// `st1`, interrupted, is read. That late end leaves the row finished, as `st2` left it, and is
+// still shown on the row, so a Stop waiting for `st1` is settled by it.
+#[tokio::test]
+async fn a_late_end_of_a_subagents_earlier_turn_leaves_its_later_finish() {
+    let (mut codex, mut fake) = outliving().await;
+    fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
+        .await;
+    fake.say(sub_turn("turn/completed", "sub1", "st2", "completed"))
+        .await;
+    until(&mut codex, is_task(State::Done)).await;
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "interrupted"))
+        .await;
+    let (_, events) = read_so_far(&mut codex, &mut fake).await;
+    assert!(
+        (events.iter()).any(|e| matches!(e.event.body(), Body::Task(_))),
+        "the late end is shown on the row"
+    );
+    assert_eq!(row_of(&events).0, State::Done, "{events:?}");
+}
+
+// A late failure of an earlier turn of the subagent's, read while its next turn runs, leaves the
+// row working, and says on it that the earlier turn failed, with its error, which the row keeps
+// when the next turn ends.
+#[tokio::test]
+async fn a_late_failure_of_a_subagents_earlier_turn_is_shown_on_its_row() {
+    let (mut codex, mut fake) = outliving().await;
+    fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
+        .await;
+    fake.say(sub_turn_failed("sub1", "st1", "the disk is full"))
+        .await;
+    let (_, events) = read_so_far(&mut codex, &mut fake).await;
+    let (state, text) = row_of(&events);
+    assert_eq!(state, State::Running, "the next turn runs");
+    assert!(text.contains("the disk is full"), "{text}");
+    fake.say(sub_turn("turn/completed", "sub1", "st2", "completed"))
+        .await;
+    let events = until(&mut codex, is_task(State::Done)).await;
+    let (_, text) = row_of(&events);
+    assert!(text.contains("the disk is full"), "kept: {text}");
+}
+
+// A subject given after the subagent's latest turn started survives the late end of an earlier
+// turn: the late end changes only what the row says of that turn. Here `st2` starts before the
+// item that names the subagent, which fills in its subject and description, and `st1`'s failure
+// is read after.
+#[tokio::test]
+async fn a_late_end_keeps_the_subject_given_while_the_next_turn_runs() {
+    let (mut codex, mut fake) = running().await;
+    until(&mut codex, is_turn(State::Running)).await;
+    fake.say(
+        json!({"method": "thread/started", "params": {"thread": {"id": "sub1",
+        "parentThreadId": "th1"}}}),
+    )
+    .await;
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
+        .await;
+    fake.say(started_by("a1", "sub1")).await;
+    fake.say(sub_turn_failed("sub1", "st1", "the disk is full"))
+        .await;
+    let (_, events) = read_so_far(&mut codex, &mut fake).await;
+    let row = (events.iter().rev())
+        .find(|e| matches!(e.event.body(), Body::Task(_)))
+        .expect("the row");
+    let Body::Task(task) = row.event.body() else {
+        unreachable!()
+    };
+    assert_eq!(task.subject, Some("a1".into()), "the subject survives");
+    let (state, text) = row_of(&events);
+    assert_eq!(state, State::Running, "the next turn runs");
+    assert!(text.contains("/root/a"), "the description survives: {text}");
+    assert!(text.contains("the disk is full"), "{text}");
 }

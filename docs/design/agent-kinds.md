@@ -5,7 +5,8 @@ Status: decided on 2026-11-21, as [D-076](../decisions.md#d-076-the-tags-of-kind
 the Marmot specification. MDK took this shape on 2026-11-22 (MDK pull request 3613), renaming one tag, which
 D-076 allows: a turn's message is `started_by`, not `e`
 ([D-112](../decisions.md#d-112-the-core-sends-kinds-1201-1202-and-edits-and-a-turns-message-is-started_by)).
-The core has sent these kinds on MDK since. How an agent event travels was decided before
+The core has sent these kinds on MDK since, and the thread tags of a subagent's items since 2026-11-24, with a
+`subagent` tag that is provisional ([D-142](../decisions.md#d-142-how-subagent-threads-are-built)). How an agent event travels was decided before
 ([the carrier](event-carrier.md), D-022 to D-027); the exact tags were not. This page fixes them, from what the
 first end-to-end test (M1 of the [plan](../plan.md)) sent and read back, under the temporary kinds of
 [D-069](../decisions.md#d-069-until-mdk-takes-the-new-shape-agent-items-travel-under-a-temporary-kind). The code
@@ -56,8 +57,9 @@ nothing about agents shows.
 | `native` | The harness's own message: its kind, then the message itself | Unless left out |
 | `left_out` | `native` and the size left out, when the item was over 64 KB ([D-057](../decisions.md#d-057-the-core-applies-the-64-kb-limit)) | When it happened |
 | `cut` | `output` and its full length, or `diffs` and how many were cut | When it happened |
-| `E`, `K`, `P` | NIP-22's root: the top-level subagent's `task` item, `1201`, and the agent. Decided, not built ([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)) | In a subagent's thread |
-| `e`, `k`, `p` | NIP-22's parent: the `task` item of the subagent the item belongs to, `1201`, and the agent. Decided, not built (D-121) | In a subagent's thread, on the first event |
+| `subagent` | For a subagent's work: the `item_id` of its `task` item. Provisional ([D-142](../decisions.md#d-142-how-subagent-threads-are-built)) | When the driver names one |
+| `E`, `K`, `P` | NIP-22's root: the top-level subagent's `task` item, `1201`, and the agent; on an edit too ([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them), [D-133](../decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags)) | In a subagent's thread |
+| `e`, `k`, `p` | NIP-22's parent: the `task` item of the subagent the item belongs to, `1201`, and the agent (D-121) | In a subagent's thread, on the first event |
 
 A notice the core makes itself, to say why an answer, a control or a message was not acted on, is an item of
 type `notice` with the kind `refused`, a `reason` such as `not_allowed` or `busy`, and a `settles` tag for the
@@ -96,7 +98,7 @@ Built on 2026-11-22 with the move to MDK's kinds, and accepted by the owner on 2
 
 ## An item in a subagent's thread
 
-Decided on 2026-11-23 ([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)); not built in the core, and MDK does not take it yet. Each subagent
+Decided on 2026-11-23 ([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)); built on 2026-11-24 in the core and in MDK at `029e0579f` ([D-142](../decisions.md#d-142-how-subagent-threads-are-built)). Each subagent
 is a thread in the agent's group, rooted at its `task` item, and every item in it carries NIP-22's tags as NIP-22
 defines them, the same way a comment does:
 
@@ -110,8 +112,8 @@ with the same tags ([D-122](../decisions.md#d-122-a-subagents-words-what-alerts-
 whole shape is in [subagents as threads](subagents.md#how-it-travels).
 
 An edit already uses `e` for its target, so it cannot also carry the parent `e`; it repeats the root tags `E`, `K`
-and `P` and carries no lowercase ones ([D-133](../decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags)). Left for MDK to settle: MDK also has to take a parent `e` on an item's first event, which it refuses today, and to say whether a
-`p` naming the event's own author is a mention ([what MDK has to do](subagents.md#what-mdk-has-to-do)).
+and `P` and carries no lowercase ones ([D-133](../decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags)). MDK takes the parent `e` on an item's first event, and reads a `p` naming the event's own author as no
+mention ([what MDK has to do](subagents.md#what-mdk-has-to-do)).
 
 ## Provisional additions
 
@@ -198,7 +200,10 @@ A kind 9 chat message, as any person's, with one more tag: `["turn", <turn id>]`
 ([D-022](../decisions.md#d-022-the-agents-words-are-ordinary-chat-messages)). A remark made while the agent
 works, which the harness marks as one, also carries `["phase", "commentary"]`, and does not alert
 ([D-078](../decisions.md#d-078-the-agents-remarks-during-a-turn-do-not-alert)). When the words change after they
-were sent, they are edited like any chat message.
+were sent, they are edited like any chat message. A subagent's words are a kind 1111 thread message instead,
+with the same tags, under the subagent's `task` item, which MDK tags with NIP-22's root and parent
+([D-122](../decisions.md#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar),
+[D-142](../decisions.md#d-142-how-subagent-threads-are-built)).
 
 ## What MDK needs to do
 

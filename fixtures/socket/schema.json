@@ -844,7 +844,7 @@
         },
         "capabilities": {
           "$ref": "#/$defs/Capabilities",
-          "description": "What the harness can do: the seven flags, every one (D-058)."
+          "description": "What the harness can do: the seven flags, every one (D-058), and `subagents` when its\nharness tells them apart (D-142)."
         },
         "folder": {
           "type": [
@@ -937,6 +937,10 @@
             "$ref": "#/$defs/ApprovalCommand"
           },
           "description": "Typed commands that need the right to approve, even when there are none (D-032, D-047)."
+        },
+        "subagents": {
+          "type": "boolean",
+          "description": "Whether the harness tells its subagents apart, so each event of one names its `task` item\nand is shown in its thread (D-124, D-142). False when left out: a connector written\nbefore it shows subagents in the agent's own activity."
         }
       },
       "required": [
@@ -1127,6 +1131,17 @@
             }
           ],
           "description": "The turn the event belongs to. A session item and some notices belong to none."
+        },
+        "subagent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "For the work of a subagent: the `task` item that is that subagent's row, in the same\nsession (D-121, D-142). The core puts the event in that subagent's thread. A top-level\nsubagent's own `task` item names none; a nested one's names the subagent that started it.\nOnly a driver whose harness tells its subagents apart sets it (D-124)."
         },
         "item": {
           "$ref": "#/$defs/ItemId",

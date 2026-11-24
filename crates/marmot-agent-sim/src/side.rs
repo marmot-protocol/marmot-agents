@@ -4,7 +4,7 @@
 //! [`Marmot`]: marmot_agent::marmot::Marmot
 
 use crate::schedule::{Outcome, ReadStep};
-use crate::world::{CHAT, EDIT, Kept, Landing, RefusedSend, World, describe};
+use crate::world::{CHAT, COMMENT, EDIT, Kept, Landing, RefusedSend, World, describe};
 use marmot_agent::carrier::{self, REQUEST_KIND};
 use marmot_agent::files::Outgoing;
 use marmot_agent::marmot::{FileFailed, Incoming, Live, Message, NotNow, Page, SendFailed, Side};
@@ -287,10 +287,20 @@ fn send(
             turn,
             remark,
             settles,
+            thread,
             ..
         } => {
-            let tags = carrier::words_tags(turn.as_ref(), *remark, settles);
-            carrier::fit_words(text, &tags).map(|text| (CHAT, text, tags, None))
+            let mut tags = carrier::words_tags(turn.as_ref(), *remark, settles);
+            // A subagent's words are MDK's thread message, tagged from its parent (D-122).
+            let kind = match thread {
+                Some(thread) => {
+                    tags.extend(carrier::thread_tags(thread, true));
+                    tags.retain(|t| t[0] != "p");
+                    COMMENT
+                }
+                None => CHAT,
+            };
+            carrier::fit_words(text, &tags).map(|text| (kind, text, tags, None))
         }
     };
     let item = match what {
@@ -488,7 +498,12 @@ fn misshapen(what: &Sending, kind: u64, tags: &[Vec<String>], token: &Token) -> 
     } else {
         tags.to_vec()
     };
-    if let Err(error) = cgka_traits::agent_events::validate_agent_item_tags(&own) {
+    let checked = if edit {
+        cgka_traits::agent_events::validate_agent_item_edit_tags(&own)
+    } else {
+        cgka_traits::agent_events::validate_agent_item_tags(&own)
+    };
+    if let Err(error) = checked {
         return Some(format!("{name}: {error}"));
     }
     if edit != item.first.is_some() || (edit && token.edits.is_none()) {
@@ -509,6 +524,7 @@ mod tests {
             harness: "sim".into(),
             session: Some("s1".into()),
             turn: Some("t1".into()),
+            subagent: None,
             item: "t1".into(),
             seq: 1,
             state: State::Running,
@@ -528,6 +544,7 @@ mod tests {
                 first: first.map(EventKey::from),
                 started_by: None,
                 settles: Vec::new(),
+                thread: None,
             }),
         }
     }

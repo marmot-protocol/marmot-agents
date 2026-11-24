@@ -79,6 +79,7 @@ impl Echo {
             harness: "echo".into(),
             session: Some("s1".into()),
             turn: Some(format!("t{}", self.prompts.load(Ordering::SeqCst)).into()),
+            subagent: None,
             item: format!("{item}{}", self.prompts.load(Ordering::SeqCst)).into(),
             seq: self.seq,
             state,
@@ -110,6 +111,7 @@ impl Driver for Echo {
             resume: false,
             approvals: false,
             files_in: FilesIn::None,
+            subagents: false,
             approval_commands: Vec::new(),
         }
     }

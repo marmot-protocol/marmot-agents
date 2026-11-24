@@ -3,8 +3,10 @@
 
 use crate::events::{self, hex64};
 use cgka_traits::agent_events::{AgentItemState, validate_agent_item_tags};
-use marmot_agent::EventKey;
-use marmot_agent::carrier::{self, EDIT_KIND, ITEM_KIND, Item, LIMIT, LeftOut, SETTLES_MAX};
+use marmot_agent::carrier::{
+    self, EDIT_KIND, ITEM_KIND, Item, LIMIT, LeftOut, SETTLES_MAX, Thread,
+};
+use marmot_agent::{EventKey, PubKey};
 use marmot_agent_events::{AgentEvent, State};
 use proptest::prelude::*;
 
@@ -18,14 +20,23 @@ fn item() -> impl Strategy<Value = Item> {
             4 => prop::collection::vec(hex64(), 0..4),
             1 => prop::collection::vec(hex64(), 0..=SETTLES_MAX),
         ],
+        // A subagent's item carries NIP-22's thread tags, which count against the limit too (D-121).
+        prop::option::of((hex64(), prop::option::of(hex64()), hex64())),
     )
-        .prop_map(|(event, version, first, started_by, settles)| Item {
-            event,
-            version,
-            first: first.map(|f| EventKey::from(f.as_str())),
-            started_by: started_by.map(|s| EventKey::from(s.as_str())),
-            settles: settles.iter().map(|s| EventKey::from(s.as_str())).collect(),
-        })
+        .prop_map(
+            |(event, version, first, started_by, settles, thread)| Item {
+                event,
+                version,
+                first: first.map(|f| EventKey::from(f.as_str())),
+                started_by: started_by.map(|s| EventKey::from(s.as_str())),
+                settles: settles.iter().map(|s| EventKey::from(s.as_str())).collect(),
+                thread: thread.map(|(root, parent, agent)| Thread {
+                    root: EventKey::from(root.as_str()),
+                    parent: parent.map(|p| EventKey::from(p.as_str())),
+                    agent: PubKey::from(agent.as_str()),
+                }),
+            },
+        )
 }
 
 /// The ids the core never cuts, which a stand-in keeps: the harness, the item, its session and
@@ -100,7 +111,16 @@ proptest! {
         prop_assert_eq!(back.seq, header.seq);
         prop_assert_eq!(back.state, header.state);
         if read.left_out == LeftOut::default() {
-            prop_assert!(read.item == item, "an item nothing was cut of reads back whole");
+            // An edit repeats only the thread's root, not its parent (D-133); a first event with no
+            // parent of its own names the root as its parent, and reads back so.
+            let mut expected = item.clone();
+            if let Some(thread) = expected.thread.as_mut() {
+                thread.parent = match expected.first {
+                    Some(_) => None,
+                    None => Some(thread.parent.clone().unwrap_or_else(|| thread.root.clone())),
+                };
+            }
+            prop_assert!(read.item == expected, "an item nothing was cut of reads back whole");
         } else {
             prop_assert!(out.size() > 0);
             prop_assert!(

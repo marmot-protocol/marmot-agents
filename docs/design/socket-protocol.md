@@ -296,7 +296,10 @@ token is `connector.token` there, which the core writes the first time ([D-038](
 The seven flags of D-058, every one. A connector whose harness works in a folder a chat may move adds
 `"folder": "/home/me/work"`, a whole path, beside `capabilities`: where the harness works when a chat chose
 none ([D-101](../decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder); provisional, added
-2026-11-22). One that leaves it out, as a gateway's plugin does, is offered no folder setting. The core answers `{"core": {"version"}, "agent": {"name"}}`, or an error:
+2026-11-22). One that leaves it out, as a gateway's plugin does, is offered no folder setting. A connector whose
+harness tells its subagents apart adds `"subagents": true` to `capabilities`, and names the subagent each event
+belongs to in the event's `subagent` field; one that leaves it out says no, and its events are shown in the main
+chat ([D-142](../decisions.md#d-142-how-subagent-threads-are-built); provisional, added 2026-11-24). The core answers `{"core": {"version"}, "agent": {"name"}}`, or an error:
 `-32001` for another protocol version, `-32002` for a token that is not this agent's, `-32600` or `-32602` for a
 hello it cannot read, such as a `folder` that is not a whole path.
 
