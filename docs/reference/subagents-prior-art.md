@@ -159,7 +159,7 @@ What was checked for each:
 
 - **Codex:** the recordings, and the 0.171.0 schema. `max_depth`, `disable_direct_message` and
   `job_max_runtime_seconds` are names found in the binary's strings, with no meaning read.
-- **Claude Code:** the SDK's types at 0.3.330 (the driver pins 0.3.326), and the documentation's
+- **Claude Code:** the SDK's types at 0.3.330 (the driver pinned 0.3.326 when this was read), and the documentation's
   [sub-agents](https://code.claude.com/docs/en/sub-agents) and [agent view](https://code.claude.com/docs/en/agent-view)
   pages, which the fetcher read only in part. The SDK documents `forwardSubagentText`, which sends a
   subagent's text and thinking too; by default only its tool calls are forwarded.
