@@ -8,7 +8,7 @@ duplicate it here.
 Connectors that put AI agent harnesses (Claude Code, Codex, Hermes and others) into Marmot group chats.
 
 **Status: every harness is driven; building towards the swap (M4).** The Rust workspace under `crates/` has
-nine crates, and CI checks them: `marmot-agent-events`, the agent event and its eleven item types;
+ten crates, and CI checks them: `marmot-agent-events`, the agent event and its eleven item types;
 `marmot-agent-driver`, the trait a driver implements; the built-in drivers `marmot-agent-codex` (Codex, with
 its subagents shown in the chat that started them,
 [D-117](docs/decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)),
@@ -17,7 +17,7 @@ its subagents shown in the chat that started them,
 drives a built-in driver or serves a local socket; `marmot-agent-chat`, a terminal client for trying it;
 `marmot-agent-sim`, a deterministic simulator that runs the real core against a simulated MDK and a scripted
 driver, with faults, from a seed; and `marmot-agent-conformance`, the suite every driver must pass, on scriptable
-fakes of the harnesses.
+fakes of the harnesses; and `marmot-agent-fuzz`, the fuzz targets for everything the core reads from outside.
 Over the socket connect `packages/claude-code`, the Claude Code driver, and two **channel plugins**,
 `packages/openclaw` for OpenClaw and `python/marmot_hermes` for Hermes, which run inside those gateways as one of
 their channels, with a narrower contract than a driver
@@ -83,6 +83,7 @@ being replaced by what is designed here, not extended.
 | Run a real harness on a scripted or recorded model, or record a cassette | `tools/model_double/README.md`, after `docs/design/verification.md` ("A model double") |
 | Work on the simulator, or replay one of its failure capsules | `crates/marmot-agent-sim/README.md`, after `docs/design/verification.md` |
 | Work on the driver conformance suite or its fake harnesses, or add a driver to it | `crates/marmot-agent-conformance/README.md`, after `docs/design/verification.md` |
+| Add or change a property test, a fuzz target or a Kani proof | `docs/design/verification.md` (layers 5 to 7), then `crates/marmot-agent/tests/properties`, `crates/marmot-agent-fuzz/src/lib.rs` or the `proofs` modules |
 | Change the link check | `lychee.toml` |
 
 ## The shape, in brief
@@ -241,8 +242,8 @@ If you change a command here, change it there. CI runs in three tiers
 | Tier | When | What |
 | --- | --- | --- |
 | Pull request | Each push to a pull request; aim under 10 minutes | Every command below that CI runs, with the simulator at its normal count. The TLA+ models run only when `formal/`, `tools/tla/`, `ci.yml` or the code a model follows changed (the paths are in `ci.yml`'s first job) |
-| Merge queue | Each pull request queued to merge, and each push to `master`; aim under 30 minutes | All of the pull-request tier whatever changed, the simulator at `MARMOT_AGENT_SIM_RUNS=200`, and the move-over tests that need Docker, below |
-| Nightly | Once a night on `master` (`.github/workflows/nightly.yml`), and by hand | The simulator on a new seed with many runs, TLC on larger bounds, a coverage report, a 64th of the core's mutants, and `check_cassettes.py --strict` on the model double's cassettes; a failed job opens an issue |
+| Merge queue | Each pull request queued to merge, and each push to `master`; aim under 30 minutes | All of the pull-request tier whatever changed, the simulator at `MARMOT_AGENT_SIM_RUNS=200`, the move-over tests that need Docker, and the Kani proofs, below |
+| Nightly | Once a night on `master` (`.github/workflows/nightly.yml`), and by hand | The simulator on a new seed with many runs, the property tests at `PROPTEST_CASES=10000`, five minutes of each fuzz target, TLC on larger bounds, a coverage report, a 64th of the core's mutants, and `check_cassettes.py --strict` on the model double's cassettes; a failed job opens an issue |
 
 The job `CI passed` needs every other job of the first two tiers and is the one check `master` requires. It
 checks the run's jobs against a list of the names each tier expects (`EXPECTED` in `ci.yml`), so a new job, or a
@@ -265,6 +266,14 @@ it on purpose, with `cargo update` or by building once without the flag, and com
 The workspace's tests include the driver conformance suite (`crates/marmot-agent-conformance`), which runs every
 built-in driver on fakes of its harness in about 30 seconds; its Pi tests need `python3`, as Pi's own do. For a
 change to a driver, run it alone with `cargo test -p marmot-agent-conformance`.
+
+The workspace's tests include the property tests (D-144): the core's, `cargo test -p marmot-agent --test
+properties`, and every built-in translator over its recordings changed at random, `cargo test -p
+marmot-agent-conformance --test translators`, each property at proptest's 256 cases unless `PROPTEST_CASES` says
+otherwise (the nightly run sets 10,000). A failing case is written to the test's `proptest-regressions` file
+(`crates/marmot-agent/tests/proptest-regressions/`, or beside `translators.rs`): commit it with the fix, so it runs
+first from then on. They also run every fuzz target's check over its seeds (`crates/marmot-agent-fuzz`, its
+`tests/seeds.rs`), on the pinned compiler.
 
 The workspace's tests also run the real Claude Code and the real Codex through the core on the model double
 (`tools/model_double`), which stands in for their model, so they need no key or sign-in. They need Node 24 with
@@ -378,6 +387,29 @@ which the `CI passed` job runs:
 python3 -m unittest discover -s tools/ci -p 'test_*.py'   # the gate passes each tier, and fails when a job
                                                           # the tier expects never ran, was skipped or failed
 ```
+
+For a change to a function a Kani proof covers (a `proofs` module under `#[cfg(kani)]` in the core: the rights
+check, the socket's line reader and token comparison, and where the carrier's cut falls), with
+[Kani](https://github.com/model-checking/kani) at the release CI names in `ci.yml` (a tool, like lychee: `cargo
+install --locked kani-verifier --version <it>`, then `cargo kani setup`, which installs Kani's own nightly
+compiler). The first run builds the core under Kani, which takes about 5 minutes on a fast machine:
+
+```sh
+cargo kani -p marmot-agent   # every proof holds, each over every input up to the bound it states
+```
+
+For a change to a fuzz target, or to code one reads, fuzz it for a while with cargo-fuzz at the release the
+nightly workflow names, on the nightly compiler it names (`FUZZ_TOOLCHAIN`, with its `llvm-tools-preview`),
+from its seeds. `cargo fuzz list --fuzz-dir crates/marmot-agent-fuzz` lists the targets:
+
+```sh
+cargo run -p marmot-agent-fuzz --example seeds -- target/fuzz-corpus
+cargo +nightly-2026-08-21 fuzz run --fuzz-dir crates/marmot-agent-fuzz --features libfuzzer \
+    <target> target/fuzz-corpus/<target> -- -max_total_time=300
+```
+
+An input that makes a target fail is written under `crates/marmot-agent-fuzz/artifacts/`, which git ignores.
+Never commit one as it is: make it a test, as small as it can be, the way the property tests' cases are kept.
 
 For any change under `formal/` or `tools/tla/`, or to the code a model follows (the core for `CoreLifecycle`,
 `formal/tla/README.md`; the core's socket and the Claude Code, OpenClaw and Hermes connectors for

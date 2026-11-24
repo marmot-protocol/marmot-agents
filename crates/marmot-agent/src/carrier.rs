@@ -107,6 +107,19 @@ pub struct Item {
     pub settles: Vec<EventKey>,
 }
 
+/// Prints the event as it prints itself, the version, and how many requests it settles: nothing
+/// anyone said, and no id (D-071).
+impl std::fmt::Debug for Item {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Item")
+            .field("event", &self.event)
+            .field("version", &self.version)
+            .field("edit", &self.first.is_some())
+            .field("settles", &self.settles.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// What the core left out of an item to keep it under the limit (D-057).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LeftOut {
@@ -597,6 +610,13 @@ fn cut(text: &str, over: usize, full: usize) -> String {
     if keep >= text.len() {
         return text.to_string();
     }
+    let (head, tail) = kept_ends(text, keep);
+    format!("{}{marker}{}", &text[..head], &text[tail..])
+}
+
+/// Where a cut that keeps about `keep` bytes of `text`, fewer than it has, ends its start and
+/// starts its end: half of `keep` from each end, each moved inwards to a whole character.
+fn kept_ends(text: &str, keep: usize) -> (usize, usize) {
     let mut head = keep / 2;
     while !text.is_char_boundary(head) {
         head -= 1;
@@ -605,7 +625,7 @@ fn cut(text: &str, over: usize, full: usize) -> String {
     while !text.is_char_boundary(tail) {
         tail += 1;
     }
-    format!("{}{marker}{}", &text[..head], &text[tail..])
+    (head, tail)
 }
 
 /// The type's own fields, as one tag of JSON: `{"type": ..., "body": ...}`.
@@ -838,19 +858,47 @@ pub enum Unreadable {
 
 /// An answer or a control read back: what it is about, and what it asks or why that could not be
 /// read, so that the agent can still settle it (D-028, D-140). `None` when it is not for this
-/// agent: it names no agent, or another (D-027).
+/// agent: it names no agent, or another, or more than one (D-027). Each of its tags is read as
+/// MDK reads it, and so as a person's app does: a tag given twice, even with no value, is never
+/// read as one of its values. Repeated `details` or `e`, or an `e` that is not an event id, make it
+/// invalid, as a field given twice in `details` does; it names no item then.
 pub fn read_request(
     agent: &PubKey,
     tags: &[Vec<String>],
 ) -> Option<(Option<EventKey>, Result<Asked, Unreadable>)> {
-    if value(tags, "p")? != agent.as_str() {
+    if single(tags, "p").ok()?? != agent.as_str() {
         return None;
     }
-    let asked = match value(tags, "details") {
-        None => Err(Unreadable::Invalid),
-        Some(details) => read_asked(details),
+    let target = match single(tags, "e") {
+        Ok(target) if target.is_none_or(is_event_id) => target,
+        _ => return Some((None, Err(Unreadable::Invalid))),
     };
-    Some((value(tags, "e").map(EventKey::from), asked))
+    let asked = match single(tags, "details") {
+        Ok(Some(details)) => read_asked(details),
+        Ok(None) | Err(Repeated) => Err(Unreadable::Invalid),
+    };
+    Some((target.map(EventKey::from), asked))
+}
+
+/// Whether `text` is an event id as MDK writes one: 64 lowercase hex digits.
+fn is_event_id(text: &str) -> bool {
+    text.len() == 64 && (text.bytes()).all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// A tag given more than once.
+struct Repeated;
+
+/// The value of the one tag named `name`, as MDK reads a tag (its `single`): every tag of that
+/// name counts, one with no value too, whose value is empty.
+fn single<'a>(tags: &'a [Vec<String>], name: &str) -> Result<Option<&'a str>, Repeated> {
+    let mut named = (tags.iter())
+        .filter(|t| t.first().is_some_and(|n| n == name))
+        .map(|t| t.get(1).map_or("", String::as_str));
+    let first = named.next();
+    match named.next() {
+        Some(_) => Err(Repeated),
+        None => Ok(first),
+    }
 }
 
 /// Read straight from the text, so that a field given twice is refused, as `Asked` refuses it;
@@ -983,5 +1031,37 @@ mod tests {
             let shown = format!("{asked:?}");
             assert_eq!(shown, name);
         }
+    }
+}
+
+/// Bounded proofs (`docs/design/verification.md`, "5. Bounded proofs with Kani").
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    // How tags are read (D-140) has no proof here: Kani on a list of tags, each a `Vec<String>`,
+    // took more than 12 GB for three tags. The property test against MDK's reader
+    // (`tests/properties/requests.rs`) and the `carrier_request` fuzz target own it.
+
+    /// S7: a cut never splits a character: what it keeps of a text's start and end ends and
+    /// starts on whole characters, no more than it means to keep, and the two never overlap.
+    /// Every text of up to 8 bytes, of any characters, and every amount kept short of all of it.
+    #[kani::proof]
+    #[kani::unwind(10)]
+    fn s7_a_cut_keeps_whole_characters() {
+        let bytes: [u8; 8] = kani::any();
+        let length: usize = kani::any();
+        kani::assume(length <= 8);
+        let Ok(text) = std::str::from_utf8(&bytes[..length]) else {
+            return;
+        };
+        let keep: usize = kani::any();
+        kani::assume(keep < text.len());
+        let (head, tail) = kept_ends(text, keep);
+        assert!(text.is_char_boundary(head) && text.is_char_boundary(tail));
+        assert!(head <= keep / 2 && tail >= text.len() - keep / 2);
+        assert!(head <= tail);
+        // What is kept is a whole text: slicing there never fails.
+        let _ = (&text[..head], &text[tail..]);
     }
 }

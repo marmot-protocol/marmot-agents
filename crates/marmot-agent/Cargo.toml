@@ -39,6 +39,8 @@ cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "029e0
 rusqlite = { version = "0.40.1", default-features = false }
 
 [dev-dependencies]
+# Property tests (docs/design/verification.md, "6. Property tests"): tests/properties.
+proptest = "1.12"
 # The socket's JSON Schema, made from its message types (`fixtures/socket/schema.json`), with the
 # events crate's.
 schemars = "1"
@@ -55,6 +57,10 @@ agent-control = { git = "https://github.com/marmot-protocol/mdk.git", rev = "029
 tokio = { version = "1", features = ["process", "test-util"] }
 # The socket connectors run the driver conformance suite over the socket (tests/conformance_socket.rs).
 marmot-agent-conformance = { path = "../marmot-agent-conformance" }
+
+# Kani's bounded proofs are built only under `cargo kani`, which sets `cfg(kani)`.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
 
 [features]
 # Bugs fixed before, put back on purpose for the simulator (`crates/marmot-agent-sim`), which

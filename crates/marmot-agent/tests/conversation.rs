@@ -23,6 +23,8 @@ const AGENT: &str = "agent-key";
 const OWNER: &str = "owner-key";
 const FRIEND: &str = "friend-key";
 const STRANGER: &str = "stranger-key";
+/// An item's first event, as an id MDK writes.
+const ES: &str = "e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5";
 
 fn capabilities() -> Capabilities {
     Capabilities {
@@ -922,10 +924,10 @@ fn a_request_is_read_only_by_its_agent() {
         setting: "model".into(),
         value: "m2".into(),
     };
-    let out = carrier::request(&agent, Some(&EventKey::from("es")), &asked, "Model: m2");
+    let out = carrier::request(&agent, Some(&EventKey::from(ES)), &asked, "Model: m2");
     assert_eq!(out.kind, carrier::REQUEST_KIND);
     let (target, read) = carrier::read_request(&agent, &out.tags).unwrap();
-    assert_eq!(target, Some(EventKey::from("es")));
+    assert_eq!(target, Some(EventKey::from(ES)));
     assert!(read == Ok(asked));
     assert!(carrier::read_request(&PubKey::from("other"), &out.tags).is_none());
 }
@@ -939,13 +941,13 @@ fn a_request_the_agent_cannot_read_is_still_heard() {
     let tags = |details: Option<&str>| {
         let mut tags = vec![vec!["p".to_string(), AGENT.to_string()]];
         tags.extend(details.map(|d| vec!["details".to_string(), d.to_string()]));
-        tags.push(vec!["e".to_string(), "es".to_string()]);
+        tags.push(vec!["e".to_string(), ES.to_string()]);
         tags
     };
     let read = |details| carrier::read_request(&agent, &tags(details));
     assert_eq!(
         read(Some(r#"{"action":"rewind","to":"e1"}"#)),
-        Some((Some(EventKey::from("es")), Err(Unreadable::UnknownAction)))
+        Some((Some(EventKey::from(ES)), Err(Unreadable::UnknownAction)))
     );
     for invalid in [
         None,
@@ -961,7 +963,7 @@ fn a_request_the_agent_cannot_read_is_still_heard() {
     ] {
         assert_eq!(
             read(invalid),
-            Some((Some(EventKey::from("es")), Err(Unreadable::Invalid))),
+            Some((Some(EventKey::from(ES)), Err(Unreadable::Invalid))),
             "{invalid:?}"
         );
     }

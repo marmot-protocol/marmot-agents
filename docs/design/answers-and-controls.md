@@ -93,7 +93,11 @@ exactly one event that points back at it ([D-028](../decisions.md#d-028-an-answe
 - **If it had none, a notice that says why**: not allowed, not supported by this harness, nothing to act on,
   already answered, or failed. One the agent cannot read is settled the same way: `not_supported` for an action
   it does not know, as from an app newer than the agent, and `invalid` for anything else it cannot read
-  ([D-140](../decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused)).
+  ([D-140](../decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused)). The agent reads
+  each tag as MDK does, and so as a person's app does: a `details` or `e` tag given twice, or an `e` that is not
+  an event id, makes the request `invalid`, as a field given twice in `details` does, and one that names an
+  agent twice, or two agents, is for none of them. (Provisional, 2026-11-24: found by the property test that checks the core against MDK's
+  reader. Before, the core acted on the first of each, so it could act on a press no app shows.)
 - **If the harness took a control and two minutes pass with nothing to show for it**, a notice with the reason
   `no_effect` ([D-087](../decisions.md#d-087-the-core-settles-a-request-whose-effect-never-shows)). An effect
   that shows later is still shown.

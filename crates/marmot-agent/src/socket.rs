@@ -16,6 +16,7 @@
 
 #[cfg(test)]
 mod corpus;
+pub mod lines;
 pub mod wire;
 
 use marmot_agent_driver::{
@@ -118,20 +119,18 @@ fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 /// Lines read from the connection, none over [`MAX_MESSAGE`]: a longer one is passed over as it
-/// arrives, without being held. What is read so far is kept here, so a read that is dropped half
-/// way loses nothing.
+/// arrives, without being held ([`lines::Splitter`]). What is read so far is kept here, so a read
+/// that is dropped half way loses nothing.
 struct Lines {
     inner: BufReader<OwnedReadHalf>,
-    line: Vec<u8>,
-    too_long: bool,
+    splitter: lines::Splitter,
 }
 
 impl Lines {
     fn new(read: OwnedReadHalf) -> Self {
         Self {
             inner: BufReader::new(read),
-            line: Vec::new(),
-            too_long: false,
+            splitter: lines::Splitter::new(MAX_MESSAGE),
         }
     }
 
@@ -142,26 +141,10 @@ impl Lines {
             if available.is_empty() {
                 return None;
             }
-            let (part, end) = match available.iter().position(|&b| b == b'\n') {
-                Some(at) => (&available[..at], Some(at + 1)),
-                None => (available, None),
-            };
-            if !self.too_long {
-                if self.line.len() + part.len() > MAX_MESSAGE {
-                    self.too_long = true;
-                    self.line = Vec::new();
-                } else {
-                    self.line.extend_from_slice(part);
-                }
-            }
-            let used = end.unwrap_or(available.len());
+            let (used, line) = self.splitter.take(available);
             self.inner.consume(used);
-            if end.is_some() {
-                let too_long = std::mem::replace(&mut self.too_long, false);
-                let line = std::mem::take(&mut self.line);
-                if !too_long {
-                    return Some(line);
-                }
+            if line.is_some() {
+                return line;
             }
         }
     }
@@ -1172,5 +1155,26 @@ mod tests {
         assert_eq!(emitted.event.native().unwrap().payload.get(), payload);
         assert_eq!(emitted.event.header().harness, "script");
         assert_eq!(emitted.event.header().seq, 1);
+    }
+}
+
+/// Bounded proofs (`docs/design/verification.md`, "5. Bounded proofs with Kani").
+#[cfg(kani)]
+mod proofs {
+    use super::same;
+
+    /// The connector's token is taken only when it is the core's, byte for byte (D-038): every
+    /// pair of byte strings of up to 4 bytes. The comparison looks at every byte whatever it
+    /// finds, so it takes as long for a near miss as for a far one.
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn the_token_is_taken_only_when_it_is_the_cores() {
+        let (a, b): ([u8; 4], [u8; 4]) = (kani::any(), kani::any());
+        let (n, m): (usize, usize) = (kani::any(), kani::any());
+        kani::assume(n <= 4 && m <= 4);
+        kani::assume(a[..n].is_ascii() && b[..m].is_ascii());
+        let given = std::str::from_utf8(&a[..n]).expect("ASCII");
+        let token = std::str::from_utf8(&b[..m]).expect("ASCII");
+        assert_eq!(same(given, token), given == token);
     }
 }

@@ -16,7 +16,9 @@ the duplicate a restart could make; how often a send is tried is decided
 ([D-109](../decisions.md#d-109-how-the-cores-sends-survive-a-crash-as-built)). The same day the core moved to MDK
 master after 0.19.0 (`7f7dcc6ca`) and reads each chat from its mark in MDK's insertion order. The
 [model double](#11-a-model-double) is decided ([D-127](../decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key), 2026-11-23): real harnesses run in CI on it,
-with no model key in CI. What a save costs under a backlog was [measured](#what-a-save-costs) on 2026-11-24.
+with no model key in CI. What a save costs under a backlog was [measured](#what-a-save-costs) on 2026-11-24. Property tests, fuzz targets and Kani proofs are built (2026-11-24), and so is where CI
+runs each ([D-144](../decisions.md#d-144-property-tests-run-on-every-pull-request-kani-in-the-full-gate-and-fuzzing-nightly-on-a-pinned-nightly-compiler)); what each covers is under its layer, and the bug the
+property tests found is fixed. Their details are internal.
 
 ## Why
 
@@ -382,6 +384,29 @@ splits a character, always shrinks, always ends), matching typed commands (S6), 
 passes, nobody else is ever the owner), token comparison, the socket's line reader, Codex's frame resumption, and
 how request and item ids are formed (S13).
 
+**Built** (2026-11-24), with Kani 0.68.0, in `proofs` modules of the core that only `cargo kani -p marmot-agent`
+builds. Each proof is over every input up to its bound:
+
+| Proof | Property | Bound |
+| --- | --- | --- |
+| `s6_the_owner_always_passes`, `s6_nobody_else_is_the_owner` | S6: the owner holds both rights; anyone else holds a right only where the settings give it | three keys in every place (a key is the owner, listed, or neither), up to 2 people listed, every `Who` and right |
+| `the_token_is_taken_only_when_it_is_the_cores` | D-038: the token comparison is equality | every pair of ASCII strings of up to 4 bytes |
+| `s11_a_take_ends_lines_at_newlines_and_holds_no_more_than_the_limit` | S11, D-033: the line reader ends a line at its first newline only, never over the limit, and holds no more than it | two parts of up to 3 bytes, a limit of up to 3 |
+| `s7_a_cut_keeps_whole_characters` | S7: where a cut keeps a text's start and end falls on whole characters, keeps no more than it means to, and the two never overlap | every text of up to 8 bytes, of any characters, and every amount kept short of all of it |
+
+Not built: **Codex's frame resumption**, three lines inside the driver's asynchronous write to Codex over
+tokio's pipe, which Kani cannot run; taking them out to prove a counter is worth less than the conformance suite's
+death and dropped wait at every frame, which owns S11 there. **How ids are formed** (S13): an item's key is the
+chat's id and the harness's item id joined, and a request's id a counter, each made with `format!`, whose
+machinery is too large for a bound that says anything; the conformance suite and the simulator own S13. **That a
+cut always shrinks and keeps its marker**, over whole items: a proof of it, on 140 bytes of text, did not finish in
+half an hour (`format!` again), so the carrier's property tests own it, and the proof is of where the cut falls.
+**Matching typed commands** (S6, D-047): a proof over every ASCII text of 4 bytes ran past half an hour and 7 GB,
+in the lowercasing and the line splitting; the rights property tests own it. **How a request's tags are read** (D-140): a proof over three tags, each a list of strings, took more than 12 GB,
+most of a runner's memory, and did not finish; the property test against MDK's reader and the `carrier_request`
+fuzz target own it. **What the core takes as an event id**: a proof over 64 bytes did not finish in half an hour;
+the same tests own it.
+
 ### 6. Property tests
 
 proptest for Rust, fast-check for TypeScript, hypothesis for Python.
@@ -398,11 +423,48 @@ proptest for Rust, fast-check for TypeScript, hypothesis for Python.
 Failing cases are committed (`.proptest-regressions`), and a list records each property's normal and nightly case
 counts.
 
+**Built** (2026-11-24), with proptest. Every property runs at 256 cases on a pull request and 10,000 nightly:
+
+| Where | Property |
+| --- | --- |
+| `crates/marmot-agent/tests/properties/carrier.rs` | S7 and the carrier: every expected event of every harness, its strings and lists made long or hard to escape, as a version with any ids and up to 200 `settles`, fits in 64 KB, is one MDK reads as the same item, and reads back with every id, whole when nothing was cut; the agent's words fit, as their start and end around a marker |
+| `requests.rs` | S6, D-140, against MDK's own reader: what the core acts on, MDK reads as the same agent, item and action, and the core hears every request MDK reads for it |
+| `rights.rs` | S6: the owner always passes, nobody else is the owner; a typed command in any case at the start of any line, or anywhere where it counts there, needs approval; keys in either case or as an npub read as themselves |
+| `conversation.rs` | S3 and the outbox: over the driver's events, sends, refusals, drops and restarts from the state file, an item's versions rise by one skipping only refused ones, later versions name the first event, and a send keeps its name and its token across tries and restarts, with a new token only after a drop |
+| `debug.rs` | S8, D-071: no value of an event or a request appears in what any of their types prints |
+| `lines.rs` | S11, D-033: the socket's lines arrive whole in parts of any size |
+| `crates/marmot-agent-conformance/tests/translators.rs` | Codex's, the ACP agents' and Pi's translators over every recording with messages repeated, dropped, swapped, stripped of their `params` and `result`, and the harness dying at any line: D-007 (each native message is the message the translator was reading, or the whole value of one of its fields, byte for byte: `marmot_agent_conformance::native`, which the fuzz targets use too) and `seq` always; S2 (all closed after the harness stops) and no item reopening once ended, when messages were only repeated or the harness died |
+
+**What they found.** The request property found that the core read the first of repeated `p`, `e` or `details`
+tags of a kind 1202, and an `e` that is no event id, all of which MDK, and so every app, refuses: the core could
+act on a press no app shows. Fixed, with the cases kept. Under swaps and drops, the translators' properties showed
+that a translator does not survive a lost or reordered message (Codex's turn stays open when its `turn/completed`
+is lost and the next turn starts). A harness writes its messages in order on one stream, so a driver does not meet
+that case, and there only what holds under any input is checked.
+
+Not built: **the conversation against a reference model** (the simulator does this for the whole core, and the
+outbox property above for the conversation's sends); **differential translators** against the prototype on
+changed recordings (the replay tests compare the recordings as they are); **file confinement on generated
+trees**; **the read mark only moving forward**, which lives in the run loop that only the simulator drives (S10,
+with the `mark_from_live` bug switch); and fast-check and hypothesis: the TypeScript and Python translators are
+checked by replay only, and the Hermes plugin takes nothing outside the standard library and Hermes.
+
 ### 7. Fuzzing
 
 cargo-fuzz targets for everything that reads input from outside: the socket's line reader and messages, the
 hello, each driver's translator, Pi's records, the carrier's tags, the settings file, and the saved state. The
 recordings are the starting corpus. Run nightly.
+
+**Built** (2026-11-24): [`crates/marmot-agent-fuzz`](../../crates/marmot-agent-fuzz/src/lib.rs), eleven targets,
+each asserting more than not failing where it can: the socket's line reader (lines as written, none over the
+limit), the hello (one taken has the token and the protocol), everything a connector writes after its hello,
+through the real socket reader (each event carries the harness and the next `seq`), a kind 1202 against MDK's
+reader, a kind 1201 or an edit read, written again and read back, the settings file (every key lowercase hex),
+the state file (written back as read, and started on), Codex's, the ACP agents' and Pi's translators (D-007 and
+`seq`), and the import's readers of env files and unit lines. The seeds are the socket's examples, every
+recording, the expected events as the core writes them, and settings and state files; a stable test runs every
+check over them on each pull request. Nightly, each target runs five minutes from its seeds and what earlier
+nights found.
 
 ### 8. Mutation testing
 
@@ -591,9 +653,9 @@ runs in three tiers ([D-130](../decisions.md#d-130-ci-runs-in-three-tiers-with-o
 
 | When | What |
 | --- | --- |
-| Every pull request, aimed at under 10 minutes | Formatting and Clippy; the workspace's tests in two jobs side by side, the core's and every other, with the conformance suite (about 30 s) and real Claude Code and Codex on the [model double](#11-a-model-double) in the core's; the socket connectors through the conformance suite, in a job of their own (about a minute once built); the simulator on a fixed set of seeds at its normal count (20 runs of each gate family from seed 0, in release, in its own job); TLC on small bounds, every model's cases in five jobs, only when the models or the code they follow changed; the TypeScript, Python, install-script, recording and document checks, and the cassettes' age as a warning. Planned: property tests at normal counts, Kani on the small proofs, the privacy scan |
-| The merge queue, and each push to `master`, aimed at under 30 minutes | All of the above whatever changed; the simulator at 200 runs of each family; the move-over tests that need Docker and no key (Hermes and OpenClaw installs moved over, on the model double, scripted) |
-| Nightly (`.github/workflows/nightly.yml`) | The simulator on a new seed each night, 5,000 runs of each family, its capsules kept; TLC on `CoreLifecycle`'s larger bounds, safety only (liveness there takes hours and is run by hand); a coverage report (`cargo llvm-cov`, a report only); mutation testing on a 64th of the core's 1,639 mutants (the simulator's hooks left out, since only it exercises them), by the day of the year, so each shard runs about every two months; the cassettes' age, failing, with newer harness releases reported (`check_cassettes.py --strict`, [the model double](#11-a-model-double)). Planned: property tests at high counts, fuzzing. A failed job opens an issue, with the mutants missed or the cassettes due |
+| Every pull request, aimed at under 10 minutes | Formatting and Clippy; the workspace's tests in two jobs side by side, the core's and every other, with the conformance suite (about 30 s) and real Claude Code and Codex on the [model double](#11-a-model-double) in the core's; the socket connectors through the conformance suite, in a job of their own (about a minute once built); the simulator on a fixed set of seeds at its normal count (20 runs of each gate family from seed 0, in release, in its own job); TLC on small bounds, every model's cases in five jobs, only when the models or the code they follow changed; the TypeScript, Python, install-script, recording and document checks, and the cassettes' age as a warning. The property tests at 256 cases each, and every fuzz target's check over its seeds. Planned: the privacy scan |
+| The merge queue, and each push to `master`, aimed at under 30 minutes | All of the above whatever changed; the simulator at 200 runs of each family; the move-over tests that need Docker and no key (Hermes and OpenClaw installs moved over, on the model double, scripted); the Kani proofs |
+| Nightly (`.github/workflows/nightly.yml`) | The simulator on a new seed each night, 5,000 runs of each family, its capsules kept; TLC on `CoreLifecycle`'s larger bounds, safety only (liveness there takes hours and is run by hand); a coverage report (`cargo llvm-cov`, a report only); mutation testing on a 64th of the core's 1,639 mutants (the simulator's hooks left out, since only it exercises them), by the day of the year, so each shard runs about every two months; the cassettes' age, failing, with newer harness releases reported (`check_cassettes.py --strict`, [the model double](#11-a-model-double)). The property tests at 10,000 cases each; every fuzz target for five minutes. A failed job opens an issue, with the mutants missed, the cassettes due or the fuzz targets that failed |
 | Weekly (planned) | Long simulator campaigns |
 
 ## In what order

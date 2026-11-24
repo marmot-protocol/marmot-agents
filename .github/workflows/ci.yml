@@ -4,11 +4,13 @@ name: CI
 # step.
 #
 # - A pull request runs the fast tier, under 10 minutes: formatting, Clippy, the workspace's tests
-#   with the conformance suite, the simulator at its normal count, the TypeScript, Python,
+#   with the conformance suite, the property tests at their normal count and every fuzz target's
+#   check over its seeds, the simulator at its normal count, the TypeScript, Python,
 #   install-script, recording and document checks, and the TLA+ models on small bounds when the
 #   code a model follows or the models changed.
 # - The merge queue (`merge_group`) runs the full gate: all of that whatever changed, the
-#   simulator at 200 runs, and the move-over tests in Docker, which need no key and no sign-in.
+#   simulator at 200 runs, the move-over tests in Docker, which need no key and no sign-in, and
+#   the Kani proofs (D-144).
 # - A push to master runs the full gate too, so master stays checked, and saves the build caches.
 #   A run started by hand saves them for its own branch.
 #
@@ -146,8 +148,11 @@ jobs:
     # simulator's, which runs in release in its own job. The conformance suite
     # (crates/marmot-agent-conformance) is in the second, in about 30 s; its Pi tests need the
     # runner's python3. The core's run the real Claude Code and Codex on the model double
-    # (tools/model_double), with no key, in about 30 s. Without a cache the build takes about 5
-    # minutes more.
+    # (tools/model_double), with no key, in about 30 s. The property tests run in both at
+    # proptest's normal count, 256 cases each (the core's in about a minute, the translators' in
+    # the conformance suite's package in about 20 s), and the second runs every fuzz target's
+    # check over its seeds (crates/marmot-agent-fuzz), on this compiler; the nightly run raises
+    # the count and fuzzes (D-144). Without a cache the build takes about 5 minutes more.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -306,6 +311,57 @@ jobs:
 
       - name: Each connector runs the conformance scenarios over the socket
         run: cargo test --locked --all-features -p marmot-agent --test conformance_socket -- --ignored
+
+  kani:
+    name: Kani proofs
+    needs: changes
+    # The full gate only: Kani builds the core, with MDK, with its own compiler before it proves
+    # anything, which takes longer than a pull request may. Its proofs are of small pure functions,
+    # each over every input up to a bound stated with it (docs/design/verification.md, "5. Bounded
+    # proofs with Kani"); `cargo kani -p marmot-agent` runs them all. Kani brings its own nightly
+    # compiler, which `cargo kani setup` installs; everything else builds with the workspace's.
+    if: needs.changes.outputs.full == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      KANI_VERSION: 0.68.0
+      # The `digest` of kani-<version>-x86_64-unknown-linux-gnu.tar.gz on Kani's release page.
+      # Change the version and the checksum together.
+      KANI_BUNDLE_SHA256: 32e2b484d73ede0bbf64a2cf0879c4259422497d8aec4ee67d448de9ae7843d3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/rust
+        id: rust
+        with:
+          cache: rust-kani
+
+      - name: Install Kani
+        # The driver from crates.io at this version, with its own lock file; the bundle it runs,
+        # CBMC and Kani's compiler, from the release page, checked against its checksum.
+        run: |
+          set -euo pipefail
+          cargo install --locked kani-verifier --version "${KANI_VERSION}"
+          name="kani-${KANI_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          url="https://github.com/model-checking/kani/releases/download/kani-${KANI_VERSION}/${name}"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/${name}" "${url}"
+          echo "${KANI_BUNDLE_SHA256}  ${RUNNER_TEMP}/${name}" | sha256sum --check
+          cargo kani setup --use-local-bundle "${RUNNER_TEMP}/${name}"
+          rm "${RUNNER_TEMP}/${name}"
+          cargo kani --version
+
+      - name: Every proof holds
+        run: cargo kani -p marmot-agent --output-format terse
+
+      - if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && steps.rust.outputs.hit != 'true'
+        uses: ./.github/actions/rust
+        with:
+          cache: rust-kani
+          save: "true"
+          key: ${{ steps.rust.outputs.key }}
 
   recordings:
     name: Recordings
@@ -536,6 +592,7 @@ jobs:
       - simulator
       - move-over
       - conformance-socket
+      - kani
       - recordings
       - typescript
       - python
@@ -582,6 +639,7 @@ jobs:
             Simulator
             Move-over tests (Docker) [full]
             Conformance (socket)
+            Kani proofs [full]
             Recordings
             TypeScript (claude-code)
             TypeScript (openclaw)

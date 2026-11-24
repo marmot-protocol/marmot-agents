@@ -248,9 +248,14 @@ impl Translator {
             self.unreadable += 1;
             return out;
         };
-        let params = m.params.map_or("{}", RawValue::get);
+        // A message with no `params` is passed on as one: read as `{}`, it would make an event
+        // whose native message never arrived (D-007).
+        let params = m.params.map(RawValue::get);
         if direction == Direction::In && m.method.as_deref() == Some("session/update") {
-            self.update(params, &mut out);
+            match params {
+                Some(params) => self.update(params, &mut out),
+                None => self.unreadable += 1,
+            }
             return out;
         }
         self.flush(&mut out); // anything else ends a message being streamed
@@ -403,10 +408,12 @@ impl Translator {
         &mut self,
         id: Option<&RawValue>,
         method: &str,
-        params: &str,
+        params: Option<&str>,
         out: &mut Vec<AgentEvent>,
     ) {
-        let p: Value = serde_json::from_str(params).unwrap_or(Value::Null);
+        let p: Value = params
+            .and_then(|p| serde_json::from_str(p).ok())
+            .unwrap_or(Value::Null);
         let session = p
             .get("sessionId")
             .and_then(Value::as_str)
@@ -953,9 +960,24 @@ impl Translator {
         &mut self,
         id: Option<&RawValue>,
         method: &str,
-        params: &str,
+        params: Option<&str>,
         out: &mut Vec<AgentEvent>,
     ) {
+        const READ: [&str; 3] = [
+            "session/request_permission",
+            "elicitation/create",
+            "cursor/update_todos",
+        ];
+        let Some(params) = params else {
+            // Each request the driver reads holds its `params`; one without says nothing, and
+            // changes nothing it has seen, such as the plan a to-do list replaces.
+            if READ.contains(&method) {
+                self.unreadable += 1;
+            } else {
+                self.unknown.push(format!("{method} (request)"));
+            }
+            return;
+        };
         let key = id.map(key).unwrap_or_default();
         match method {
             "session/request_permission" => {
@@ -1299,11 +1321,26 @@ impl Translator {
                 Some(native(&kind, error.get())),
             );
             if method.as_deref() == Some("session/prompt") && self.turn_request == Some(id) {
-                self.end_turn(State::Failed, &message, None, &kind, error.get(), out);
+                let native = native(&kind, error.get());
+                self.end_turn(State::Failed, &message, None, Some(native), out);
             }
             return;
         }
-        let result = m.result.map_or("{}", RawValue::get);
+        // A reply holds a result or an error. Read from nothing, one with neither would make an
+        // event whose native message never arrived (D-007), so it is unreadable. A turn it was
+        // to end still ends, as failed, as one that stopped for a reason nobody can read; and as
+        // an event the driver makes up, it carries no native message.
+        let Some(result) = m.result.map(RawValue::get) else {
+            self.unreadable += 1;
+            match method.as_deref() {
+                Some("session/load") => self.loading = None,
+                Some("session/prompt") if self.turn_request.as_deref() == Some(id.as_str()) => {
+                    self.end_turn(State::Failed, "The turn stopped", None, None, out);
+                }
+                _ => {}
+            }
+            return;
+        };
         let kind = format!("response to {shown}");
         match method.as_deref() {
             Some("initialize") => match serde_json::from_str::<InitializeResponse>(result) {
@@ -1388,7 +1425,7 @@ impl Translator {
                         input_tokens: Some(u.input_tokens),
                         output_tokens: Some(u.output_tokens),
                     });
-                    self.end_turn(state, &text, usage, &kind, result, out);
+                    self.end_turn(state, &text, usage, Some(native(&kind, result)), out);
                 }
                 Err(_) => {
                     // A reply the types cannot read, such as a stop reason they do not know, still
@@ -1404,7 +1441,8 @@ impl Translator {
                         output_tokens: u.get("outputTokens").and_then(Value::as_u64),
                     });
                     let text = format!("The turn stopped: {stop}");
-                    self.end_turn(State::Failed, &text, usage, &kind, result, out);
+                    let native = native(&kind, result);
+                    self.end_turn(State::Failed, &text, usage, Some(native), out);
                 }
             },
             _ => {}
@@ -1433,8 +1471,7 @@ impl Translator {
         state: State,
         text: &str,
         usage: Option<Usage>,
-        kind: &str,
-        payload: &str,
+        native: Option<Native>,
         out: &mut Vec<AgentEvent>,
     ) {
         self.close_open_items(out);
@@ -1449,15 +1486,7 @@ impl Translator {
             duration_ms: None,
             usage,
         });
-        self.emit(
-            out,
-            &item,
-            body,
-            state,
-            title,
-            text,
-            Some(native(kind, payload)),
-        );
+        self.emit(out, &item, body, state, title, text, native);
         self.forget_turn();
     }
 

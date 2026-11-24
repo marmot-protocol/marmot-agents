@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc f3daf459bbda9c7fbb05fbedea3e526c7d8577d40d4e1804f90863484123bd69 # shrinks to tags = [["p", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], ["details", "{\"action\":\"choice\",\"choice\":\"a\"}"], ["p", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"]]
+cc ab9fc0f4a11daf1dd87d83554ed79ad885368ad8fb59cbae6c1c4087ddfc6852 # shrinks to tags = [["e"], ["p", "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"], ["details", "{\"action\":\"choice\",\"choice\":\"a\"}"]]
