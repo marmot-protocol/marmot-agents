@@ -16,7 +16,7 @@ the duplicate a restart could make; how often a send is tried is decided
 ([D-109](../decisions.md#d-109-how-the-cores-sends-survive-a-crash-as-built)). The same day the core moved to MDK
 master after 0.19.0 (`7f7dcc6ca`) and reads each chat from its mark in MDK's insertion order. The
 [model double](#11-a-model-double) is decided ([D-127](../decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key), 2026-11-23): real harnesses run in CI on it,
-with no model key in CI.
+with no model key in CI. What a save costs under a backlog was [measured](#what-a-save-costs) on 2026-11-24.
 
 ## Why
 
@@ -511,6 +511,55 @@ run's log: Claude Code ships most days, and
 recording needs a key. The replay test prints the
 Claude Code version when it differs from the cassette's, and does not fail on it: failing would make every pull
 request that bumps a harness re-record, which needs a key. A request the cassette has no exchange for still fails.
+
+## What a save costs
+
+Measured on 2026-11-24 (issue #155), by `crates/marmot-agent/tests/saves.rs`, an ignored test run by hand:
+
+```sh
+MARMOT_AGENT_SAVES_DIR=<a folder on the disk to measure> MARMOT_AGENT_SAVES_BACKLOGS=0,50,500,2000 \
+    cargo test --release -p marmot-agent --test saves -- --ignored --nocapture
+```
+
+The workload: the real core on a stand-in for MDK with two chats. In a group, MDK is busy for every send, so each
+thing the agent says there, a 1 KB message, waits in the outbox; in the owner's two-person chat an approval waits.
+For each backlog the agent says that many things in the group, the owner answers the approval, and the core
+stops. A save is `Core::save` and `Store::save`: the state cloned, made into JSON, written to a new file, synced,
+renamed over the old one, and the folder synced.
+
+The machine: an Intel i9-10850K (20 threads), 62 GB of memory, Linux 6.12, the state on ext4 (`relatime`) on a
+software RAID 0 of two NVMe drives, a release build, the system's default write-back, and nothing else told to
+sync. The machine was shared; the rows below are from runs at a load average of about 6, and runs at a load of
+20 to 45 took up to twice as long, once 8.4 s for the answer at the largest backlog, which a quiet run did not
+repeat.
+
+| Waiting in the outbox | State file | Writes per new message there | Time per new message | Writes before the answer reaches the driver | Answer to driver | Writes in a stop | Stop | One save alone, of which JSON |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | 2 KB | (none) | | 1 | 4.9 ms | 12 | 59 ms | 4.9 ms, 4 µs |
+| 50 | 183 KB | 2 | 14 ms | 1 | 5.6 ms | 12 | 77 ms | 5.4 ms, 0.1 ms |
+| 500 | 1.8 MB | 2 | 23 ms | 1 | 7.3 ms | 12 | 112 ms | 8.6 ms, 1.0 ms |
+| 2,000 | 7.3 MB | 2 | 55 ms | 1 | 27 ms | 12 | 299 ms | 25 ms, 8.9 ms |
+
+The bytes written are the writes times the state file: each waiting 1 KB message adds about 3.6 KB to it. What
+it showed:
+
+- **The answer waits for one save.** The read mark and the request it admits go to disk in one write before the
+  driver has the answer, as they must (D-037, D-070). That write costs the whole state: about 5 ms, the two syncs,
+  at any small size, and 25 to 40 ms at 7 MB. Writing the JSON is a fifth of it; the rest is writing and syncing.
+  A backlog in another chat slows every chat's step by that much, and no more.
+- **A backlog costs most while it grows.** Each new message in a chat that waits was saved twice, the second time
+  unchanged: the core saves before each act and again at the end, and the send waited for its group's next try.
+  So building a backlog of N wrote about 3.6 KB × N² in all: 0.9 GB for 500, 14 GB for 2,000.
+- **A stop** saved 12 times, five of them unchanged, and took 60 to 300 ms.
+
+Built from this: a save of the state the store last wrote now writes nothing. A fault still meets every save, so
+the simulator and the crash tests put crashes where they did. On the same machine and load, that halves the
+writes per new message in a chat that waits (one, not two) and cuts the stop's writes from 12 to 7 (2,000
+waiting: 47 ms per new message, 32 ms to the answer, 306 ms to stop). The state file's format is unchanged.
+
+Not built, and proposed only if backlogs of thousands turn out to happen: a state written without its whole
+outbox each time, such as an outbox kept as a file appended to, so a save's cost no longer grows with what
+waits; and one write for everything a stop closes, not one for each.
 
 ## In CI
 
