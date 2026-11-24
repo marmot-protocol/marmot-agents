@@ -550,3 +550,37 @@ fn an_item_in_another_subagents_thread_fails_s14() {
     assert_eq!(property(oracle::safety(&make(true))), None);
     assert_eq!(property(oracle::safety(&make(false))), Some("S14".into()));
 }
+
+// S14: a subagent's item goes in the main chat only when its subagent's `task` item has not gone
+// out to that chat before it; with that item there, an item of the subagent's in the main chat
+// fails (D-142).
+#[test]
+fn an_item_in_the_main_chat_whose_task_item_went_out_fails_s14() {
+    let task = || {
+        let body = Body::Task(marmot_agent_events::body::Task {
+            kind: "subagent".into(),
+            description: None,
+            subject: None,
+        });
+        item("sub-t", 1, State::Running, body, vec![])
+    };
+    let of_subagent = || {
+        let mut child = item("subcmd-t", 1, State::Running, turn(), vec![]);
+        let header = Header {
+            subagent: Some("sub-t".into()),
+            ..child.event.header().clone()
+        };
+        child.event = AgentEvent::new(header, child.event.body().clone(), None).unwrap();
+        child
+    };
+    // Its task item never went to this chat: the main chat is its place.
+    let mut w = world(2, &[]);
+    sent(&mut w, 1, &task());
+    sent(&mut w, 0, &of_subagent());
+    assert_eq!(property(oracle::safety(&w)), None);
+    // It did, before it.
+    let mut w = world(1, &[]);
+    sent(&mut w, 0, &task());
+    sent(&mut w, 0, &of_subagent());
+    assert_eq!(property(oracle::safety(&w)), Some("S14".into()));
+}

@@ -390,8 +390,9 @@ fn s10(world: &World) -> Option<Failure> {
 /// S14: a subagent's item goes in its thread or, failing that, in the main chat, and never moves
 /// (D-121, D-133, D-142). An item's first event that carries NIP-22's tags names, as its parent,
 /// the first event of its subagent's `task` item in the same chat, stored before it, and as its
-/// root that item's root, or that item when it is the root. Each edit of an item carries the root
-/// its first event carries, and none when that carries none.
+/// root that item's root, or that item when it is the root. An item of a subagent's goes in the
+/// main chat only when that `task` item had not gone out to the chat before it. Each edit of an
+/// item carries the root its first event carries, and none when that carries none.
 fn s14(world: &World) -> Option<Failure> {
     let one = |row: &Row, name: &str| {
         (row.tags.iter())
@@ -419,14 +420,23 @@ fn s14(world: &World) -> Option<Failure> {
             }
             continue;
         }
+        // Its subagent's `task` item in this chat, if it went out before it: the thread it goes in.
+        let task = (read.item.event.header().subagent.as_ref())
+            .and_then(|t| firsts.get(&(row.chat, t.as_str().to_string())))
+            .filter(|task| task.order < row.order);
         let Some(root) = root else {
             if parent.is_some() {
                 return Some(fail("S14", format!("{name} names a parent and no root")));
             }
+            if task.is_some() {
+                return Some(fail(
+                    "S14",
+                    format!("{name} is in the main chat, though its thread was there"),
+                ));
+            }
             continue;
         };
-        let task = read.item.event.header().subagent.as_ref();
-        let Some(task) = task.and_then(|t| firsts.get(&(row.chat, t.as_str().to_string()))) else {
+        let Some(task) = task else {
             return Some(fail(
                 "S14",
                 format!("{name} is in a thread of no subagent's"),
@@ -437,12 +447,6 @@ fn s14(world: &World) -> Option<Failure> {
             return Some(fail(
                 "S14",
                 format!("{name} is in another subagent's thread"),
-            ));
-        }
-        if task.order >= row.order {
-            return Some(fail(
-                "S14",
-                format!("{name} is stored before its thread's root"),
             ));
         }
     }
