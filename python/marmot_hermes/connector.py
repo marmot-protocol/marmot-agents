@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import secrets
@@ -26,6 +27,8 @@ from pathlib import Path
 
 from .core import Refusal
 from .translate import CONFIRM, CONFIRM_CHOICES, OPEN, VERSION, Translator, key_of, names_session
+
+log = logging.getLogger("marmot_hermes")
 
 # Hermes can report a turn complete and start it again a moment later, for the first message of a
 # session (`docs/reference/hermes-messages.md`). The end of a turn that showed nothing is held this
@@ -222,7 +225,7 @@ class Connector:
                         settled_by_reply = awaiting[1] or None
                 if content.startswith(LOST_TURN):
                     self.discard(chat, text_of(p.get("reply_to")))
-        if line.get("via") == "press" and m.get("confirm_id") is not None:
+        if line.get("via") == "press" and m.get("confirm_id") is not None and "said" in m:
             # Hermes's reply to the answer, which it handed the plugin, is the outcome of the command that
             # request confirmed, and of no other. When Hermes said nothing, the notice saying so is.
             awaiting = chat.confirming.pop(f"confirm:{m['confirm_id']}", None)
@@ -544,7 +547,12 @@ class Connector:
         confirmation it names, by its id (D-146). A typed `/approve` would answer whatever Hermes waits on
         when it reads it: an approval that started meanwhile, or another command's confirmation. One that
         no longer waits is refused, and nothing else is answered. The item counts as answered from the
-        call on, so a second answer is refused, unless Hermes did not take it."""
+        call on, so a second answer is refused, unless Hermes did not take it.
+
+        The core's request is answered as soon as Hermes has taken the confirmation: the command it
+        confirms, which can take a while (a `/new` closes the old session's tools first), runs on and
+        shows its outcome when it finishes, and a core that goes away meanwhile does not cancel it
+        (D-058)."""
         session_key = self.confirms.get(item)
         if not session_key:
             raise Refusal("not_waiting")
@@ -552,18 +560,36 @@ class Connector:
         if request:
             chat.by_item.setdefault(item, []).append(request)
         try:
-            said = await self.hermes.resolve_confirm(session_key, item.removeprefix("confirm:"), choice, text_of(by.get("id")))
+            running = self.hermes.resolve_confirm(session_key, item.removeprefix("confirm:"), choice, text_of(by.get("id")))
         except BaseException:
             chat.answered.discard(item)
             unsettle(chat.by_item, item, request)
             raise
-        if said is None:
+        if running is None:
             chat.answered.discard(item)
             unsettle(chat.by_item, item, request)
             raise Refusal("not_waiting")
-        press = {"confirm_id": item.removeprefix("confirm:"), "choice": choice, "user": by.get("id"),
-                 "session_key": session_key, "said": said}
-        self.record({"dir": "out", "via": "press", "msg": press}, chat.id)
+        confirm_id = item.removeprefix("confirm:")
+        taken = {"confirm_id": confirm_id, "choice": choice, "user": by.get("id"), "session_key": session_key}
+        self.record({"dir": "out", "via": "press", "msg": taken}, chat.id)
+        if running.done():
+            self.confirm_said(chat, confirm_id, session_key, running)
+        else:
+            self.background(self.confirm_finished(chat, confirm_id, session_key, running))
+
+    async def confirm_finished(self, chat: Chat, confirm_id: str, session_key: str, running) -> None:
+        await asyncio.wait({running})
+        self.confirm_said(chat, confirm_id, session_key, running)
+
+    def confirm_said(self, chat: Chat, confirm_id: str, session_key: str, running) -> None:
+        """What Hermes said to the answer to its request to confirm a command, once the command finished,
+        which shows its outcome. When Hermes's call failed, nothing does, and the core settles what waited
+        on it (D-087)."""
+        if running.cancelled() or running.exception() is not None:
+            log.warning("Hermes's call to answer a confirmation failed: %r", None if running.cancelled() else running.exception())
+            return
+        said = {"confirm_id": confirm_id, "session_key": session_key, "said": running.result()}
+        self.record({"dir": "out", "via": "press", "msg": said}, chat.id)
 
     async def typed_answer(self, chat: Chat, item: str, request: str, where: dict, sender: dict, text: str) -> None:
         """Types an answer. The item counts as answered from then on, so a second answer is refused, unless

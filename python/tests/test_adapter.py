@@ -304,9 +304,14 @@ class Confirmations(unittest.IsolatedAsyncioTestCase):
             self.adapter = MarmotAdapter(types.SimpleNamespace(extra=self.extra))
         self.ran = []
 
-    def asks(self, confirm_id, says="✨ Session reset! Starting fresh.", at=0.0):
+    def asks(self, confirm_id, says="✨ Session reset! Starting fresh.", at=0.0, pause=None):
+        """Hermes registers a confirmation whose handler, once run, pauses on `pause` if given, as a `/new`
+        closing an old session's tools can, before it says `says`."""
         async def handler(choice):
             self.ran.append((confirm_id, choice))
+            if pause is not None:
+                await pause.wait()
+                self.ran.append((confirm_id, "finished"))
             return says
         with mock.patch("time.time", return_value=at):
             self.module.register("agent:main:marmot:dm:c-1", confirm_id, "new", handler)
@@ -314,7 +319,22 @@ class Confirmations(unittest.IsolatedAsyncioTestCase):
     async def resolve(self, confirm_id, choice, actor="u-1", now=1.0):
         clock = now if isinstance(now, Clock) else Clock(now)
         with mock.patch("time.time", clock):
-            return await self.adapter.resolve_confirm("agent:main:marmot:dm:c-1", confirm_id, choice, actor)
+            running = self.adapter.resolve_confirm("agent:main:marmot:dm:c-1", confirm_id, choice, actor)
+            return None if running is None else await running
+
+    async def test_hermes_has_taken_the_confirmation_when_the_call_returns_and_the_command_runs_on(self):
+        """D-146, D-058. The call returns once Hermes has taken the confirmation, before the command it
+        confirms finishes: the core is answered at once, and what Hermes says to it comes later."""
+        pause = asyncio.Event()
+        self.asks("k-1", pause=pause)
+        with mock.patch("time.time", return_value=1.0):
+            running = self.adapter.resolve_confirm("agent:main:marmot:dm:c-1", "k-1", "once", "u-1")
+        self.assertIsNotNone(running)
+        self.assertIsNone(self.module.get_pending("agent:main:marmot:dm:c-1"), "Hermes took it")
+        self.assertEqual((self.ran, running.done()), ([("k-1", "once")], False), "the command runs on")
+        pause.set()
+        self.assertEqual(await running, "✨ Session reset! Starting fresh.")
+        self.assertEqual(self.ran, [("k-1", "once"), ("k-1", "finished")])
 
     async def test_only_the_confirmation_named_is_answered(self):
         self.asks("k-1")
@@ -367,6 +387,56 @@ class Confirmations(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.checks, [("agent:main:marmot:dm:c-1", "k-1", "u-1", self.extra)])
         self.assertEqual(await self.resolve("k-1", "once", actor="u-admin"), "✨ Session reset! Starting fresh.")
         self.assertEqual(self.ran, [("k-1", "once")])
+
+    async def test_a_command_that_runs_long_neither_holds_the_core_nor_stops_when_it_goes(self):
+        """The core's `answer`, through the adapter's real connection, is answered as soon as Hermes takes
+        the confirmation, while the command runs on, and the core going away does not cancel the command
+        (D-058)."""
+        self.adapter.loop = asyncio.get_running_loop()
+        self.adapter.connector.send_event = checked_send(self)
+        pause = asyncio.Event()
+        self.asks("k-1", pause=pause)
+        self.adapter.connector.record({"dir": "in", "via": "hook", "msg": {"method": "send_slash_confirm", "params": {
+            "chat_id": "c-1", "title": "/new", "message": "Confirm /new", "session_key": "agent:main:marmot:dm:c-1",
+            "confirm_id": "k-1", "metadata": None}}}, "c-1")
+        core = AnsweringCore({"request": "r-2", "item": "confirm:k-1", "by": {"id": "u-1", "name": "Alice"},
+                              "given": {"questions": [{"question": "q0", "options": ["o0"]}]}})
+        socket = str(Path(self.folder.name) / "core.sock")
+        server = await asyncio.start_unix_server(core.serve, socket)
+        self.addAsyncCleanup(server.wait_closed)
+        self.addCleanup(server.close)
+        self.adapter.core = connection = await CoreConnection.open(socket)
+        with mock.patch("time.time", return_value=1.0):
+            await connection.hello({"token": "t", "capabilities": {}}, self.adapter.connector.serve)
+            answered = await asyncio.wait_for(core.answered, 2)
+        self.assertEqual(answered["result"], {}, "answered while the command still runs")
+        self.assertEqual(self.ran, [("k-1", "once")])
+        await asyncio.wait_for(connection.done(), 2)
+        pause.set()
+        for _ in range(5):
+            await asyncio.sleep(0)
+        self.assertEqual(self.ran, [("k-1", "once"), ("k-1", "finished")], "the core going away cancelled nothing")
+        self.assertEqual(self.invalid, [])
+
+
+class AnsweringCore:
+    """The core's side of the socket, on a real Unix socket: it takes the hello, sends one `answer`, keeps
+    the plugin's response to it in `answered`, and goes away."""
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.answered = asyncio.get_running_loop().create_future()
+
+    async def serve(self, reader, writer):
+        hello = json.loads(await reader.readline())
+        writer.write(json.dumps({"jsonrpc": "2.0", "id": hello["id"], "result": {}}).encode() + b"\n")
+        writer.write(json.dumps({"jsonrpc": "2.0", "id": 7, "method": "answer", "params": self.answer}).encode() + b"\n")
+        while line := await reader.readline():
+            m = json.loads(line)
+            if m.get("id") == 7 and "method" not in m:
+                self.answered.set_result(m)
+                break
+        writer.close()
 
 
 class FakeCore:

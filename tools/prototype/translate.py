@@ -1608,6 +1608,7 @@ class Hermes(Translator):
         self.typed_words: dict[str, str] = {}  # message id of a typed command -> the command
         self.confirm_command = None  # the command the open confirmation is about
         self.confirm_commands: dict[str, str] = {}  # request to confirm a command -> the command
+        self.confirm_answered: dict[str, str | None] = {}  # request to confirm a command, answered -> its session
         self.reset_by_hook = False
         self.turn_key: dict[str, str] = {}  # turn -> the chat and sender whose session it runs in, oldest first
         self.questions: dict[str, str | None] = {}  # question item -> the chat and sender it asks, if known
@@ -1761,20 +1762,26 @@ class Hermes(Translator):
 
     def confirmed(self, m):
         """Hermes took the answer to its request to confirm a command, given through its own call for it,
-        which names the confirmation by its id. Hermes hands its reply back instead of sending it: the
-        command's output, in the command's session and outside any turn, as the answer started none."""
+        which names the confirmation by its id: the question is answered. Once the command finishes,
+        Hermes hands its reply back instead of sending it (`said`): the command's output, in the
+        command's session and outside any turn, as the answer started none."""
         item = f"confirm:{m['confirm_id']}"
-        prev = self.open.get(item)
-        if prev is None or m.get("choice") not in self.CONFIRM_CHOICES:
-            return self.skip("client: answer to a command confirmation no longer open")
-        q = prev["body"]["questions"][0]
-        chosen = q["options"][self.CONFIRM_CHOICES.index(m["choice"])]
-        self.emit(item, "question", "done", prev["title"], f"Answered: {chosen['label']}",
-                  {**prev["body"], "answer": [{"question": q["id"], "options": [chosen["id"]]}]},
-                  "answer to a command confirmation", m, owner=(prev["session"], prev["turn"]))
-        if self.confirm == item:
-            self.confirm = None
-        key = self.key_named(m.get("session_key")) or str(prev["session"] or "").split("#")[0]
+        if "said" not in m:
+            prev = self.open.get(item)
+            if prev is None or m.get("choice") not in self.CONFIRM_CHOICES:
+                return self.skip("client: answer to a command confirmation no longer open")
+            q = prev["body"]["questions"][0]
+            chosen = q["options"][self.CONFIRM_CHOICES.index(m["choice"])]
+            self.emit(item, "question", "done", prev["title"], f"Answered: {chosen['label']}",
+                      {**prev["body"], "answer": [{"question": q["id"], "options": [chosen["id"]]}]},
+                      "answer to a command confirmation", m, owner=(prev["session"], prev["turn"]))
+            self.confirm_answered[item] = prev["session"]
+            if self.confirm == item:
+                self.confirm = None
+            return
+        if item not in self.confirm_answered:
+            return self.skip("client: reply to a command confirmation not answered")
+        key = self.key_named(m.get("session_key")) or str(self.confirm_answered[item] or "").split("#")[0]
         if key:
             # Hermes ran the command and said nothing: nothing else shows its outcome, so a notice says so.
             said = str(m.get("said") or "") or f"Hermes ran {self.confirm_commands.get(item) or 'the command'} and said nothing."

@@ -430,12 +430,15 @@ class MarmotAdapter(BasePlatformAdapter):
 
         return bool(resolve_gateway_clarify(clarify_id, text))
 
-    async def resolve_confirm(self, session_key: str, confirm_id: str, choice: str, actor: str) -> str | None:
+    def resolve_confirm(self, session_key: str, confirm_id: str, choice: str, actor: str) -> asyncio.Task | None:
         """Answers Hermes's request to confirm a command, the one named by `confirm_id` and no other, for
         `actor`, as Hermes's own button platforms do (`tools.slash_confirm`, D-146). None when it no longer
         waits: answered, replaced by another, or expired. Refused when Hermes's own check of who may answer
-        refuses `actor`, and the confirmation then still waits. Otherwise what Hermes says to the answer,
-        which it hands back instead of sending; empty when it says nothing."""
+        refuses `actor`, and the confirmation then still waits. Otherwise Hermes has taken it by the time
+        this returns, and the command it confirms runs on its own: what is returned gives what Hermes says
+        to the answer, which it hands back instead of sending, once the command finishes; empty when it
+        says nothing. Nothing that waits on it holds the core's request (D-058), and nothing that stops
+        waiting on it, such as the core going away, cancels the command."""
         from gateway.approval_actor import refusal_text, slash_confirm_refusal
         from tools import slash_confirm
 
@@ -454,8 +457,14 @@ class MarmotAdapter(BasePlatformAdapter):
         refused = slash_confirm_refusal(session_key, confirm_id, actor, extra=getattr(self.config, "extra", None))
         if refused:
             raise Refusal("not_supported", refusal_text(refused))
-        said = await slash_confirm.resolve(session_key, confirm_id, choice)
-        return "" if said is None else str(said)
+
+        async def said() -> str:
+            out = await slash_confirm.resolve(session_key, confirm_id, choice)
+            return "" if out is None else str(out)
+
+        # Started at once, Hermes's call takes the confirmation in its first step, before the command runs
+        # and before anything else can come between: once this returns, Hermes has it.
+        return asyncio.Task(said(), loop=asyncio.get_running_loop(), eager_start=True)
 
     def phrase(self, key: str, **fields) -> str:
         """What Hermes says under `key` of its catalog, in the language it is set to, as its commands

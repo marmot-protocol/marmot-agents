@@ -52,6 +52,7 @@ class FakeHermes:
         self.waiting_confirm = {}  # Hermes's session key -> the confirmation it waits on there
         self.confirmed = ""  # what Hermes says once a confirmation is answered: words, or words for a choice
         self.refuses = {}  # a person Hermes does not let answer a confirmation -> its words
+        self.pause = None  # what a confirmed command waits on before it finishes, if anything
 
     async def inject(self, chat, sender, message_id, text, reply_to):
         if self.fails is not None:
@@ -70,17 +71,24 @@ class FakeHermes:
             raise self.question_answer
         return self.question_answer
 
-    async def resolve_confirm(self, session_key, confirm_id, choice, actor):
+    def resolve_confirm(self, session_key, confirm_id, choice, actor):
         """As `tools.slash_confirm.resolve`: only the confirmation Hermes waits on in that session, by its
         id, is answered; any other answers nothing. Hermes's own check of who may answer refuses each
-        person in `refuses`, and the confirmation still waits."""
+        person in `refuses`, and the confirmation still waits. Hermes takes it at once, and what it says
+        comes once the command finishes, after `pause` when that is set."""
         self.confirms.append((session_key, confirm_id, choice, actor))
         if self.waiting_confirm.get(session_key) != confirm_id:
             return None
         if actor in self.refuses:
             raise Refusal("not_supported", self.refuses[actor])
+        said = self.confirmed(choice) if callable(self.confirmed) else self.confirmed
         del self.waiting_confirm[session_key]
-        return self.confirmed(choice) if callable(self.confirmed) else self.confirmed
+
+        async def finished():
+            if self.pause is not None:
+                await self.pause.wait()
+            return said
+        return asyncio.Task(finished(), loop=asyncio.get_running_loop(), eager_start=True)
 
     async def read_model_settings(self, chat, sender):
         self.model_reads.append((chat["id"], sender["id"]))
@@ -749,6 +757,49 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         notice = next(e for e in self.sent if e["item"] == settled[1][0])
         self.assertEqual((notice["session"], notice.get("turn"), notice["title"]), (session, None, "Command output"))
         self.assertEqual(notice["text"], "Hermes ran /new and said nothing.")
+
+    async def slow_new_session_confirmed(self):
+        """Alice asks for a new session, Hermes asks her to confirm it, and she does; the reset Hermes then
+        runs pauses, as a `/new` closing the old session's tools can."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), said("Hi.", "m-1", notify=True), complete("m-1"))
+        session = self.of("session")[0]["session"]
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "new_session", "chat": CHAT, "session": session}})
+        typed = self.hermes.typed[-1]
+        self.feed(started(typed[2], "/new"))
+        self.asks_to_confirm(typed[2], "/new", "⚠️ **Confirm /new**\n\nThis starts a fresh session.", "k-1")
+        self.feed(complete(typed[2]))
+        self.hermes.confirmed = phrase("gateway.reset.header_default")
+        self.hermes.pause = asyncio.Event()
+        # Well inside the core's 30 seconds: the answer is taken while the reset still runs (D-058).
+        await asyncio.wait_for(self.connector.serve("answer", {"request": "r-2", "item": "confirm:k-1", "by": ALICE,
+                                                               "given": YES}), 1)
+        return session
+
+    async def test_a_confirmed_command_that_runs_long_does_not_hold_the_answer(self):
+        """The core is answered once Hermes has taken the confirmation: the question shows the answer at
+        once, and the command's outcome, which settles the command's request, when it finishes."""
+        session = await self.slow_new_session_confirmed()
+        self.assertEqual([(e["item"], e["settles"]) for e in self.sent if "settles" in e], [("confirm:k-1", ["r-2"])])
+        self.hermes.pause.set()
+        for _ in range(3):
+            await asyncio.sleep(0)
+        settled = [(e["item"], e["settles"]) for e in self.sent if "settles" in e]
+        self.assertEqual(settled, [("confirm:k-1", ["r-2"]), (f"session:{session}", ["r-1"])])
+        reply = self.of("notice")[-1]
+        self.assertEqual((reply["text"], reply.get("turn")), (phrase("gateway.reset.header_default"), None))
+
+    async def test_a_core_that_goes_away_does_not_cancel_a_confirmed_command(self):
+        """The core goes away while the command Hermes took runs: the command runs to its end, and what
+        Hermes said is still shown."""
+        await self.slow_new_session_confirmed()
+        self.connector.core_gone()
+        self.hermes.pause.set()
+        for _ in range(5):
+            await asyncio.sleep(0)
+        self.assertEqual(self.of("notice")[-1]["text"], phrase("gateway.reset.header_default"))
+        self.assertEqual(self.connector.tasks, set(), "nothing left waiting")
 
     async def two_confirmations_in_a_group(self):
         """Alice asks for a new session and Bob for another model, in one group, where Hermes keeps a session

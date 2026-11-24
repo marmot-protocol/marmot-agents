@@ -506,21 +506,27 @@ class Translator:
     # -- text
 
     def confirmed(self, m):
-        """Hermes took the answer to its request to confirm a command (D-146). Its reply to the answer,
-        which it hands the plugin and not the chat, is the command's output, in the session of the
-        command, outside any turn: the answer started none."""
+        """Hermes took the answer to its request to confirm a command (D-146): the question is answered.
+        Once the command finishes, what Hermes says to the answer (`said`), which it hands the plugin and
+        not the chat, is the command's output, in the session of the command, outside any turn: the
+        answer started none."""
         item = f"confirm:{m['confirm_id']}"
-        prev = self.open.get(item)
-        if prev is None or m.get("choice") not in CONFIRM_CHOICES:
+        if "said" not in m:
+            prev = self.open.get(item)
+            if prev is None or m.get("choice") not in CONFIRM_CHOICES:
+                return
+            q = prev["body"]["questions"][0]
+            chosen = q["options"][CONFIRM_CHOICES.index(m["choice"])]
+            self.emit(item, "question", "done", prev["title"], f"Answered: {chosen['label']}",
+                      {**prev["body"], "answer": [{"question": q["id"], "options": [chosen["id"]]}]},
+                      owner=(prev.get("session"), prev.get("turn")))
+            if self.confirm == item:
+                self.confirm = None
             return
-        q = prev["body"]["questions"][0]
-        chosen = q["options"][CONFIRM_CHOICES.index(m["choice"])]
-        self.emit(item, "question", "done", prev["title"], f"Answered: {chosen['label']}",
-                  {**prev["body"], "answer": [{"question": q["id"], "options": [chosen["id"]]}]},
-                  owner=(prev.get("session"), prev.get("turn")))
-        if self.confirm == item:
-            self.confirm = None
-        key = self.key_named(m.get("session_key")) or str(prev.get("session") or "").split("#")[0]
+        answered = self.last.get(item)
+        if answered is None or answered["state"] != "done":
+            return
+        key = self.key_named(m.get("session_key")) or str(answered.get("session") or "").split("#")[0]
         if key:
             # Hermes ran the command and said nothing: nothing else shows its outcome, so a notice says so.
             said = str(m.get("said") or "") or f"Hermes ran {self.confirm_commands.get(item) or 'the command'} and said nothing."

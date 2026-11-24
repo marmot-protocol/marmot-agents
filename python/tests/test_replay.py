@@ -41,17 +41,21 @@ class Replay(unittest.TestCase):
 
     def test_a_confirmation_answered_by_its_id_gives_the_prototypes_events(self):
         """No recording holds it: the plugin answers Hermes's request to confirm `/new` through Hermes's
-        own call (D-146), in place of the typed `/approve` of `new_session.jsonl`, and records what Hermes
-        said to it. The answer, the old session's end, the new session and Hermes's reply follow, outside
+        own call (D-146), in place of the typed `/approve` of `new_session.jsonl`, and records that Hermes
+        took it and, once the reset is done, what Hermes said to it. The answer, the old session's end, the new session and Hermes's reply follow, outside
         any turn. Bob, in the same group, has a turn running when Alice's answer is taken: what follows
         is his turn's, and then Alice's own, as recorded."""
         recorded = lines(FOLDER / "new_session.jsonl")
         typed = next(i for i, line in enumerate(recorded)
                      if line.get("via") == "inbound" and line["msg"].get("text") == "/approve")
         after = next(i for i, line in enumerate(recorded) if i > typed and line.get("via") == "inbound")
-        press = {"dir": "out", "via": "press", "msg": {
-            "confirm_id": "990865760537", "choice": "once", "user": "alice",
-            "session_key": "agent:main:recorder:group:family:alice", "said": "✨ Session reset! Starting fresh."}}
+        # Hermes takes the answer, and once the reset is done, the plugin records what Hermes said to it.
+        press = [{"dir": "out", "via": "press", "msg": {
+                     "confirm_id": "990865760537", "choice": "once", "user": "alice",
+                     "session_key": "agent:main:recorder:group:family:alice"}},
+                 {"dir": "out", "via": "press", "msg": {
+                     "confirm_id": "990865760537", "session_key": "agent:main:recorder:group:family:alice",
+                     "said": "✨ Session reset! Starting fresh."}}]
         source = {**recorded[typed + 1]["msg"]["params"]["event"]["source"], "user_id": "bob", "user_name": "Bob",
                   "message_id": "in-b"}
         bob = [{"dir": "out", "via": "inbound", "msg": {"message_id": "in-b", "chat": "family", "user": "bob",
@@ -63,7 +67,7 @@ class Replay(unittest.TestCase):
                         "chat_id": "family", "content": "Hi, Bob.", "reply_to": "in-b", "metadata": {"notify": True}}}},
                     {"dir": "in", "via": "hook", "msg": {"method": "on_processing_complete", "params": {
                         "message_id": "in-b", "outcome": "success"}}}]
-        fed = recorded[:typed] + bob + [press] + bob_ends + recorded[after:]
+        fed = recorded[:typed] + bob + press + bob_ends + recorded[after:]
         translator, made = Translator(), []
         for line in fed:
             made += translator.feed(line)
