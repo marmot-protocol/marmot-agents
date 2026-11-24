@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 from pathlib import Path
@@ -64,7 +65,7 @@ stand_in_for_gateway()
 from gateway.platforms.base import MessageEvent, MessageType  # noqa: E402
 from marmot_hermes import adapter as adapter_module  # noqa: E402
 from marmot_hermes.adapter import MarmotAdapter  # noqa: E402
-from marmot_hermes.core import CoreConnection  # noqa: E402
+from marmot_hermes.core import CoreConnection, Refusal  # noqa: E402
 from protocol import event_problems, problems  # noqa: E402
 
 
@@ -220,12 +221,15 @@ class Phrases(unittest.TestCase):
 
 def stand_in_for_slash_confirm():
     """Hermes's `tools.slash_confirm`, as the pinned commit has it: one confirmation waits in a session,
-    a new one replaces it, and `resolve` runs the one it names and no other, once, while it is fresh."""
+    a new one replaces it, and `resolve` runs the one it names and no other, once, while it is fresh, by
+    Hermes's clock (`time.time`). What its handler gives that is not text comes back as None, as when it
+    ran none."""
     module = types.ModuleType("tools.slash_confirm")
-    module.waiting, module.now = {}, 0.0
+    module.waiting, module.DEFAULT_TIMEOUT_SECONDS = {}, 300
 
-    def register(session_key, confirm_id, handler):
-        module.waiting[session_key] = {"confirm_id": confirm_id, "handler": handler, "created_at": module.now}
+    def register(session_key, confirm_id, command, handler, authority=None):
+        module.waiting[session_key] = {"confirm_id": confirm_id, "command": command, "handler": handler,
+                                       "created_at": time.time(), "authority": authority}
 
     def get_pending(session_key):
         entry = module.waiting.get(session_key)
@@ -233,7 +237,7 @@ def stand_in_for_slash_confirm():
 
     def clear_if_stale(session_key, timeout=300):
         entry = module.waiting.get(session_key)
-        stale = bool(entry and module.now - entry["created_at"] > timeout)
+        stale = bool(entry and time.time() - entry["created_at"] > timeout)
         if stale:
             module.waiting.pop(session_key)
         return stale
@@ -243,7 +247,7 @@ def stand_in_for_slash_confirm():
         if not entry or entry["confirm_id"] != confirm_id:
             return None
         module.waiting.pop(session_key)
-        if module.now - entry["created_at"] > timeout:
+        if time.time() - entry["created_at"] > timeout:
             return None
         result = await entry["handler"](choice)
         return result if isinstance(result, str) else None
@@ -253,46 +257,115 @@ def stand_in_for_slash_confirm():
     return module
 
 
+def stand_in_for_approval_actor(asked):
+    """Hermes's `gateway.approval_actor`, as far as a confirmation goes: with an admin list for the chat's
+    scope (`group_allow_admin_from` in the platform's `extra`), only an admin may answer, as the answer
+    runs an admin-only command. Each check is kept in `asked`."""
+    module = types.ModuleType("gateway.approval_actor")
+
+    def slash_confirm_refusal(session_key, confirm_id, actor_id, *, admin_ids=(), extra=None, admitted=True):
+        asked.append((session_key, confirm_id, actor_id, extra))
+        admins = (extra or {}).get("group_allow_admin_from") or []
+        return None if not admins or actor_id in admins else "\0admin-only:new"
+
+    def refusal_text(requester):
+        return f"⛔ /{requester.split(':')[-1]} is admin-only here."
+
+    module.slash_confirm_refusal, module.refusal_text = slash_confirm_refusal, refusal_text
+    return module
+
+
+class Clock:
+    """Hermes's clock, read in turn: each reading is the next of `readings`, and then the last again."""
+
+    def __init__(self, *readings):
+        self.readings = list(readings)
+
+    def __call__(self):
+        return self.readings.pop(0) if len(self.readings) > 1 else self.readings[0]
+
+
 class Confirmations(unittest.IsolatedAsyncioTestCase):
     """The adapter answers Hermes's request to confirm a command by its id, through Hermes's own call
-    (D-146): never another confirmation, and never one that no longer waits."""
+    (D-146): never another confirmation, never one that no longer waits, and never for someone Hermes's
+    own check refuses."""
 
     async def asyncSetUp(self):
         self.module = stand_in_for_slash_confirm()
-        patch = mock.patch.dict(sys.modules, {"tools": types.ModuleType("tools"), "tools.slash_confirm": self.module})
+        self.checks = []
+        patch = mock.patch.dict(sys.modules, {"tools": types.ModuleType("tools"), "tools.slash_confirm": self.module,
+                                              "gateway.approval_actor": stand_in_for_approval_actor(self.checks)})
         patch.start()
         self.addCleanup(patch.stop)
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)
+        self.extra = {}
         with mock.patch.dict("os.environ", {"HERMES_HOME": self.folder.name}):
-            self.adapter = MarmotAdapter({})
+            self.adapter = MarmotAdapter(types.SimpleNamespace(extra=self.extra))
         self.ran = []
 
-    def asks(self, confirm_id, says="✨ Session reset! Starting fresh."):
+    def asks(self, confirm_id, says="✨ Session reset! Starting fresh.", at=0.0):
         async def handler(choice):
             self.ran.append((confirm_id, choice))
             return says
-        self.module.register("agent:main:marmot:dm:c-1", confirm_id, handler)
+        with mock.patch("time.time", return_value=at):
+            self.module.register("agent:main:marmot:dm:c-1", confirm_id, "new", handler)
+
+    async def resolve(self, confirm_id, choice, actor="u-1", now=1.0):
+        clock = now if isinstance(now, Clock) else Clock(now)
+        with mock.patch("time.time", clock):
+            return await self.adapter.resolve_confirm("agent:main:marmot:dm:c-1", confirm_id, choice, actor)
 
     async def test_only_the_confirmation_named_is_answered(self):
         self.asks("k-1")
         self.asks("k-2")
-        self.assertIsNone(await self.adapter.resolve_confirm("agent:main:marmot:dm:c-1", "k-1", "once"))
+        self.assertIsNone(await self.resolve("k-1", "once"))
         self.assertEqual(self.ran, [], "a confirmation another replaced runs nothing, nor the other")
-        said = await self.adapter.resolve_confirm("agent:main:marmot:dm:c-1", "k-2", "cancel")
+        said = await self.resolve("k-2", "cancel")
         self.assertEqual((said, self.ran), ("✨ Session reset! Starting fresh.", [("k-2", "cancel")]))
-        self.assertIsNone(await self.adapter.resolve_confirm("agent:main:marmot:dm:c-1", "k-2", "once"))
+        self.assertIsNone(await self.resolve("k-2", "once"))
         self.assertEqual(self.ran, [("k-2", "cancel")], "once only")
 
     async def test_one_that_waited_too_long_is_not_run(self):
         self.asks("k-1")
-        self.module.now = 301
-        self.assertIsNone(await self.adapter.resolve_confirm("agent:main:marmot:dm:c-1", "k-1", "once"))
+        self.assertIsNone(await self.resolve("k-1", "once", now=301))
         self.assertEqual((self.ran, self.module.waiting), ([], {}))
 
+    async def test_one_that_expires_on_the_way_to_hermes_is_not_waiting(self):
+        """Fresh when the plugin looks, and too old a moment later when Hermes looks: Hermes runs nothing
+        and says None, as it would for a handler that said nothing. The plugin's own look comes earlier
+        than Hermes's limit, so what it lets through is what Hermes runs."""
+        self.asks("k-1")
+        self.assertIsNone(await self.resolve("k-1", "once", now=Clock(299.9995, 300.0001)))
+        self.assertEqual(self.ran, [])
+        # Fresh at each of the plugin's looks, and too old by Hermes's: the plugin looks a second early.
+        self.asks("k-2")
+        self.assertIsNone(await self.resolve("k-2", "once", now=Clock(299.9995, 299.9996, 300.0001)))
+        self.assertEqual(self.ran, [])
+        self.assertEqual(self.checks, [], "nothing past the look")
+
     async def test_a_confirmation_hermes_says_nothing_to_is_still_answered(self):
+        """A handler that ran and said nothing, or gave Hermes something other than text: Hermes says None,
+        and the plugin, which knows it ran, says it was answered with nothing said."""
         self.asks("k-1", says=None)
-        self.assertEqual(await self.adapter.resolve_confirm("agent:main:marmot:dm:c-1", "k-1", "once"), "")
+        self.assertEqual(await self.resolve("k-1", "once"), "")
+        self.assertEqual(self.ran, [("k-1", "once")])
+        self.asks("k-2", says=object())
+        self.assertEqual(await self.resolve("k-2", "once"), "")
+
+    async def test_hermes_own_check_of_who_may_answer_is_asked_first(self):
+        """D-146. With an admin list for the chat, Hermes lets only an admin answer, as its own platforms
+        ask (`gateway.approval_actor.slash_confirm_refusal`): a person the core lets prompt is refused, and
+        the confirmation still waits for someone who may."""
+        self.extra["group_allow_admin_from"] = ["u-admin"]
+        self.asks("k-1")
+        with self.assertRaises(Refusal) as refused:
+            await self.resolve("k-1", "once", actor="u-1")
+        self.assertEqual((refused.exception.reason, refused.exception.detail), ("not_supported", "⛔ /new is admin-only here."))
+        self.assertEqual(self.ran, [])
+        self.assertEqual(self.module.get_pending("agent:main:marmot:dm:c-1")["confirm_id"], "k-1", "still waiting")
+        self.assertEqual(self.checks, [("agent:main:marmot:dm:c-1", "k-1", "u-1", self.extra)])
+        self.assertEqual(await self.resolve("k-1", "once", actor="u-admin"), "✨ Session reset! Starting fresh.")
         self.assertEqual(self.ran, [("k-1", "once")])
 
 

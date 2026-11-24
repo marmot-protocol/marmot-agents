@@ -531,7 +531,7 @@ class Connector:
         if request:
             chat.by_item.setdefault(item, []).append(request)
         try:
-            said = await self.hermes.resolve_confirm(session_key, item.removeprefix("confirm:"), choice)
+            said = await self.hermes.resolve_confirm(session_key, item.removeprefix("confirm:"), choice, text_of(by.get("id")))
         except BaseException:
             chat.answered.discard(item)
             unsettle(chat.by_item, item, request)

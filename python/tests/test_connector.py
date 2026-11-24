@@ -51,6 +51,7 @@ class FakeHermes:
         self.confirms = []  # each answer to a confirmation, as the plugin gave it
         self.waiting_confirm = {}  # Hermes's session key -> the confirmation it waits on there
         self.confirmed = ""  # what Hermes says once a confirmation is answered: words, or words for a choice
+        self.refuses = {}  # a person Hermes does not let answer a confirmation -> its words
 
     async def inject(self, chat, sender, message_id, text, reply_to):
         if self.fails is not None:
@@ -69,12 +70,15 @@ class FakeHermes:
             raise self.question_answer
         return self.question_answer
 
-    async def resolve_confirm(self, session_key, confirm_id, choice):
+    async def resolve_confirm(self, session_key, confirm_id, choice, actor):
         """As `tools.slash_confirm.resolve`: only the confirmation Hermes waits on in that session, by its
-        id, is answered; any other answers nothing."""
-        self.confirms.append((session_key, confirm_id, choice))
+        id, is answered; any other answers nothing. Hermes's own check of who may answer refuses each
+        person in `refuses`, and the confirmation still waits."""
+        self.confirms.append((session_key, confirm_id, choice, actor))
         if self.waiting_confirm.get(session_key) != confirm_id:
             return None
+        if actor in self.refuses:
+            raise Refusal("not_supported", self.refuses[actor])
         del self.waiting_confirm[session_key]
         return self.confirmed(choice) if callable(self.confirmed) else self.confirmed
 
@@ -606,7 +610,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.hermes.confirmed = phrase("gateway.reset.header_default")
         before = list(self.hermes.typed)
         await self.connector.serve("answer", {"request": "r-2", "item": "confirm:k-1", "by": ALICE, "given": YES})
-        self.assertEqual(self.hermes.confirms, [(KEY, "k-1", "once")])
+        self.assertEqual(self.hermes.confirms, [(KEY, "k-1", "once", "u-1")])
         self.assertEqual(self.hermes.typed, before, "nothing typed for the answer")
         settled = [(e["item"], e["state"], e["settles"]) for e in self.sent if "settles" in e]
         self.assertEqual(settled, [("confirm:k-1", "done", ["r-2"]), (f"session:{session}", "done", ["r-1"])])
@@ -652,7 +656,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.asks_to_confirm(typed[2], "/new", "⚠️ **Confirm /new**\n\nThis starts a fresh session.", "k-2")
         await self.connector.serve("answer", {"request": "r-4", "item": "confirm:k-2", "by": BOB,
                                               "given": {"questions": [{"question": "q0", "options": ["o2"]}]}})
-        self.assertEqual(self.hermes.confirms[-1], (KEY, "k-2", "cancel"))
+        self.assertEqual(self.hermes.confirms[-1], (KEY, "k-2", "cancel", "u-2"))
         self.assertEqual(self.hermes.typed, before)
         self.assertEqual(self.hermes.cards, [])
         self.assertEqual([(e["item"], e["settles"]) for e in self.sent if "settles" in e], [("confirm:k-2", ["r-4"])])
@@ -701,6 +705,31 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         shown = self.of("session")[-1]
         self.assertEqual((shown["text"], shown["settles"]), ("Model: n, Provider: custom", ["r-1"]))
         self.assertEqual([e["settles"] for e in self.sent if e["item"] == "confirm:k-2" and "settles" in e], [["r-3"]])
+
+    async def test_an_answer_hermes_does_not_let_that_person_give_leaves_the_confirmation_waiting(self):
+        """D-146. The core lets Bob prompt, and so answer Hermes's request to confirm Alice's `/new` (D-048),
+        but Hermes's own list of admins does not let him run `/new` here: Hermes refuses him, its words go
+        to him, and the confirmation waits for someone Hermes lets answer it."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), said("Hi.", "m-1", notify=True), complete("m-1"))
+        session = self.of("session")[0]["session"]
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "new_session", "chat": CHAT, "session": session}})
+        typed = self.hermes.typed[-1]
+        self.feed(started(typed[2], "/new"))
+        self.asks_to_confirm(typed[2], "/new", "⚠️ **Confirm /new**\n\nThis starts a fresh session.", "k-1")
+        self.feed(complete(typed[2]))
+        self.hermes.refuses = {"u-2": "⛔ /new is admin-only here."}
+        self.hermes.confirmed = phrase("gateway.reset.header_default")
+        with self.assertRaises(Refusal) as refused:
+            await self.connector.serve("answer", {"request": "r-2", "item": "confirm:k-1", "by": BOB, "given": YES})
+        self.assertEqual((refused.exception.reason, refused.exception.detail), ("not_supported", "⛔ /new is admin-only here."))
+        self.assertEqual(self.hermes.waiting_confirm, {KEY: "k-1"}, "still waiting")
+        self.assertEqual([e for e in self.sent if "settles" in e], [])
+        await self.connector.serve("answer", {"request": "r-3", "item": "confirm:k-1", "by": ALICE, "given": YES})
+        self.assertEqual(self.hermes.confirms[-1], (KEY, "k-1", "once", "u-1"))
+        settled = [(e["item"], e["settles"]) for e in self.sent if "settles" in e]
+        self.assertEqual(settled, [("confirm:k-1", ["r-3"]), (f"session:{session}", ["r-1"])])
 
     async def test_a_second_reset_while_one_is_on_its_way_is_refused(self):
         """One reset settles one request: a second `/new` for the same session waits for the first."""

@@ -38,6 +38,7 @@ import functools
 import inspect
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -46,12 +47,15 @@ from gateway.config import Platform
 from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageType, SendResult
 
 from .connector import Connector
-from .core import CoreConnection, HelloRefused, Refused, line_of
+from .core import CoreConnection, HelloRefused, Refusal, Refused, line_of
 from .translate import VERSION, usable_settings
 
 PLATFORM = "marmot"
 PLUGIN_VERSION = "0.1.0"
 RECONNECT_SECONDS = 2.0
+# How much sooner than Hermes's limit the plugin stops answering a request to confirm a command, so that
+# one it answers is one Hermes runs (`MarmotAdapter.resolve_confirm`).
+CONFIRM_MARGIN_SECONDS = 1.0
 log = logging.getLogger("marmot_hermes")
 
 # Methods of the base adapter through which Hermes hands a platform something. Each is wrapped so that
@@ -426,11 +430,13 @@ class MarmotAdapter(BasePlatformAdapter):
 
         return bool(resolve_gateway_clarify(clarify_id, text))
 
-    async def resolve_confirm(self, session_key: str, confirm_id: str, choice: str) -> str | None:
-        """Answers Hermes's request to confirm a command, the one named by `confirm_id` and no other, as
-        Hermes's own button platforms do (`tools.slash_confirm`, D-146). None when it no longer waits:
-        answered, replaced by another, or expired. Otherwise what Hermes says to the answer, which it hands
-        back instead of sending; empty when it says nothing."""
+    async def resolve_confirm(self, session_key: str, confirm_id: str, choice: str, actor: str) -> str | None:
+        """Answers Hermes's request to confirm a command, the one named by `confirm_id` and no other, for
+        `actor`, as Hermes's own button platforms do (`tools.slash_confirm`, D-146). None when it no longer
+        waits: answered, replaced by another, or expired. Refused when Hermes's own check of who may answer
+        refuses `actor`, and the confirmation then still waits. Otherwise what Hermes says to the answer,
+        which it hands back instead of sending; empty when it says nothing."""
+        from gateway.approval_actor import refusal_text, slash_confirm_refusal
         from tools import slash_confirm
 
         # As Hermes does with the next message: a confirmation older than it waits is dropped, not run.
@@ -438,6 +444,16 @@ class MarmotAdapter(BasePlatformAdapter):
         waiting = slash_confirm.get_pending(session_key)
         if not waiting or str(waiting.get("confirm_id")) != confirm_id:
             return None
+        # Hermes looks at the age again before it runs one, and says None both when it ran none and when
+        # what ran said nothing. The plugin looks a little sooner than Hermes's limit, so one it lets
+        # through is one Hermes runs: nothing is awaited from here to Hermes's own look.
+        limit = float(getattr(slash_confirm, "DEFAULT_TIMEOUT_SECONDS", 300)) - CONFIRM_MARGIN_SECONDS
+        if time.time() - float(waiting.get("created_at") or 0) > limit:
+            return None
+        # Who may answer it is Hermes's check, with the chat's own list of admins, as its platforms ask.
+        refused = slash_confirm_refusal(session_key, confirm_id, actor, extra=getattr(self.config, "extra", None))
+        if refused:
+            raise Refusal("not_supported", refusal_text(refused))
         said = await slash_confirm.resolve(session_key, confirm_id, choice)
         return "" if said is None else str(said)
 
