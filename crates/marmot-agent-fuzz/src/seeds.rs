@@ -48,6 +48,12 @@ pub fn of(target: &str) -> Vec<Vec<u8>> {
             .into_iter()
             .chain([crate::hello().trim_end().to_string()])
             .map(String::into_bytes)
+            // A raw newline inside the token. The check takes every newline out to make one
+            // line, so what it checks is that line, not these bytes.
+            .chain([crate::hello()
+                .trim_end()
+                .replacen(crate::TOKEN, &crate::TOKEN.replacen("0123", "0123\n", 1), 1)
+                .into_bytes()])
             .collect(),
         "socket_connector" => {
             let all = socket_messages(None).join("\n") + "\n";

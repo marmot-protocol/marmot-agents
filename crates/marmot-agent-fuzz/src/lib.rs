@@ -91,17 +91,18 @@ fn on_socket<T>(bytes: Vec<u8>, core: impl AsyncFnOnce(tokio::net::UnixStream) -
     })
 }
 
-/// A connector's first line, as the hello. A hello the core takes names this agent's token and
-/// the protocol.
+/// A connector's first line, as the hello: the bytes with every newline taken out. A hello the
+/// core takes names this agent's token and the protocol.
 pub fn socket_hello(data: &[u8]) {
     let mut line = data.to_vec();
     line.retain(|&b| b != b'\n');
-    line.push(b'\n');
-    let taken = on_socket(line, async |stream| {
+    let mut written = line.clone();
+    written.push(b'\n');
+    let taken = on_socket(written, async |stream| {
         SocketDriver::greet(stream, TOKEN, "Agent").await.is_ok()
     });
     if taken {
-        let hello: serde_json::Value = serde_json::from_slice(data).expect("a hello taken reads");
+        let hello: serde_json::Value = serde_json::from_slice(&line).expect("a hello taken reads");
         assert_eq!(hello["params"]["token"], TOKEN);
         assert_eq!(hello["params"]["protocol"], PROTOCOL);
     }
