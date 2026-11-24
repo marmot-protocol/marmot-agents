@@ -198,16 +198,26 @@ impl Side for Mdk {
     }
 }
 
+/// How far the core is with the outputs the bench handed it.
+#[derive(Clone, Copy)]
+struct Taken {
+    /// How many it has taken.
+    count: usize,
+    /// Whether it waits for the next: the step that took the last has ended.
+    waiting: bool,
+    /// When it last began to wait.
+    since: Instant,
+}
+
 /// A harness the bench hands its events to. It passes on each prompt, and notes when it is given
 /// the answer and how many saves had been made by then.
 struct Harnessed {
     outputs: mpsc::UnboundedReceiver<Output>,
     prompts: mpsc::UnboundedSender<Prompt>,
-    /// How many outputs the core has taken, and whether it waits for the next.
-    taken: Arc<Mutex<(usize, bool)>>,
+    taken: Arc<Mutex<Taken>>,
     answered: Option<oneshot::Sender<(Instant, Count)>>,
     saves: Arc<AtomicUsize>,
-    writes: Arc<Writes>,
+    writes: Writes,
 }
 
 impl Driver for Harnessed {
@@ -236,16 +246,17 @@ impl Driver for Harnessed {
     }
 
     async fn answer(&mut self, _answer: Answer) -> Result<(), Refusal> {
+        // The core is in a step until it asks for the next output: so the bench, once it has the
+        // answer, never sees the step as ended before it has.
+        self.taken.lock().unwrap().waiting = false;
         if let Some(answered) = self.answered.take() {
             let count = Count {
                 saves: self.saves.load(SeqCst),
-                writes: self.writes.count.load(SeqCst),
-                bytes: self.writes.bytes.load(SeqCst),
+                writes: self.writes.count(),
+                bytes: self.writes.bytes(),
             };
             let _ = answered.send((Instant::now(), count));
         }
-        // The core is in a step until it asks for the next output.
-        self.taken.lock().unwrap().1 = false;
         Ok(())
     }
 
@@ -254,10 +265,15 @@ impl Driver for Harnessed {
     }
 
     async fn next_event(&mut self) -> Option<Output> {
-        self.taken.lock().unwrap().1 = true;
+        {
+            let mut taken = self.taken.lock().unwrap();
+            taken.waiting = true;
+            taken.since = Instant::now();
+        }
         let output = self.outputs.recv().await;
         let mut taken = self.taken.lock().unwrap();
-        *taken = (taken.0 + 1, false);
+        taken.count += 1;
+        taken.waiting = false;
         output
     }
 
@@ -342,11 +358,11 @@ async fn measure(backlog: usize, under: &std::path::Path) -> Measured {
         counting.fetch_add(1, SeqCst);
         false
     });
-    let writes = store.writes();
+    let (store, writes) = store.counting_writes();
     let count = || Count {
         saves: saves.load(SeqCst),
-        writes: writes.count.load(SeqCst),
-        bytes: writes.bytes.load(SeqCst),
+        writes: writes.count(),
+        bytes: writes.bytes(),
     };
     let settings = format!(
         "home = \"/unused\"\nrelays = [\"wss://relay.invalid\"]\nowner = \"{OWNER}\"\n[connector]\n"
@@ -362,7 +378,11 @@ async fn measure(backlog: usize, under: &std::path::Path) -> Measured {
     let (outputs, outputs_in) = mpsc::unbounded_channel();
     let (prompts_out, mut prompts) = mpsc::unbounded_channel();
     let (answered, answer) = oneshot::channel();
-    let taken = Arc::new(Mutex::new((0, false)));
+    let taken = Arc::new(Mutex::new(Taken {
+        count: 0,
+        waiting: false,
+        since: Instant::now(),
+    }));
     let driver = Harnessed {
         outputs: outputs_in,
         prompts: prompts_out,
@@ -377,15 +397,30 @@ async fn measure(backlog: usize, under: &std::path::Path) -> Measured {
         events: (),
         since: 0,
     };
-    let running = tokio::spawn(core.run(live, async {
-        let _ = stopped.await;
-    }));
+    // How the core ended, once it has: a save that failed ends the bench with its error.
+    let ended: Arc<Mutex<Option<Result<(), String>>>> = Arc::default();
+    let ending = ended.clone();
+    let running = tokio::spawn(async move {
+        let ran = core
+            .run(live, async {
+                let _ = stopped.await;
+            })
+            .await;
+        *ending.lock().unwrap() = Some(ran.clone());
+        ran
+    });
+    // Waits until the core has taken `count` outputs and waits for the next, and gives when it
+    // began to wait.
     let drained = |count: usize| {
-        let taken = taken.clone();
+        let (taken, ended) = (taken.clone(), ended.clone());
         async move {
             loop {
-                if *taken.lock().unwrap() == (count, true) {
-                    return;
+                let now = *taken.lock().unwrap();
+                if now.count == count && now.waiting {
+                    return now.since;
+                }
+                if let Some(ran) = ended.lock().unwrap().clone() {
+                    panic!("the core ended before the bench was done: {ran:?}");
                 }
                 tokio::time::sleep(Duration::from_millis(1)).await;
             }
@@ -433,16 +468,11 @@ async fn measure(backlog: usize, under: &std::path::Path) -> Measured {
     let mut last_event = Duration::ZERO;
     for n in 0..backlog {
         let words = Body::Message(Words::default());
-        let at = send(event(
-            &busy,
-            &format!("words-{n}"),
-            State::Done,
-            words,
-            &text,
-        ));
+        let output = event(&busy, &format!("words-{n}"), State::Done, words, &text);
+        // From the event handed over to the core asking for the next, as the driver saw it.
         let started = Instant::now();
-        drained(at).await;
-        last_event = started.elapsed();
+        let at = send(output);
+        last_event = drained(at).await - started;
     }
     let build = count() - before;
     let state_file = state.path().join("marmot-agent-state.json");
