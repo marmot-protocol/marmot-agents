@@ -3128,11 +3128,15 @@ Decided 2026-11-24 by the builder, under the project owner's instruction to deci
 [D-123](#d-123-stop-and-writing-in-a-subagents-thread), which
 [D-142](#d-142-how-subagent-threads-are-built), point 7, left unbuilt.
 
-1. **Kind 1202 is unchanged.** An `interrupt` whose `e` names a subagent's `task` item, or an item in a
-   subagent's thread, stops that subagent and the subagents it started: the subagent of the item, which is the
-   `task` item itself, or else the subagent the item belongs to. The person's turn and the other subagents go on.
-   One whose `e` names any other item, or none, stops the turn and every subagent under it, as before. The `e`
-   already says which subagent is meant, so no tag is added.
+1. **Kind 1202 is unchanged.** An `interrupt` whose `e` names a subagent's `task` item (one of kind
+   `subagent`), or an item in a subagent's thread, stops that subagent and the subagents it started: the
+   subagent of the item, which is the `task` item itself, or else the subagent the item belongs to. The person's
+   turn and the other subagents go on. One whose `e` names any other item, or none, stops the turn and every
+   subagent under it, as before. So does one that names a subagent's item shown in the main chat, as its
+   approval in a chat not sent the agent's full activity, which sees only the turn. The `e` already says which
+   subagent is meant, so no tag is added. A Stop of one subagent is passed on even when the item it names has
+   ended, since a subagent that finished can have started one that still works, and the driver, which knows,
+   refuses it as `nothing_to_do` when nothing of it does ([D-123](#d-123-stop-and-writing-in-a-subagents-thread)).
 2. **The driver's `interrupt` control, and the socket's `interrupt` message, take an optional `subagent`**: the
    `task` item's id, as the driver named it. Left out, it is today's Stop.
 3. **One more capability flag, `stop_subagent`**: whether a Stop can stop one subagent and those it started
