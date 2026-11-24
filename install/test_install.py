@@ -1883,9 +1883,11 @@ exec {rm} "$@"
         was made for, whatever step an upgrade is stopped at (InstallUpgrade.tla, U1): stopped by TERM;
         killed, then run again, or run again and failing, or followed by Codex's install. older(m) puts
         in an older install; together(m) says what is wrong, or None. Checked once nothing is left under
-        way, as the next run of the same harness finishes or puts back what is. A run that fails, and
-        Codex's install, which cannot finish another harness's upgrade, leave nothing under way: they
-        put back all of it, a plugin change too. stopped_env is the stopped run's, not the runs' after it."""
+        way. A run stopped by TERM puts back what it changed as it ends, so it leaves nothing under way;
+        only a kill does. After a kill, the next run of the same harness finishes the install, and leaves
+        nothing under way; a run that fails, and Codex's install, which cannot finish another harness's
+        upgrade, put back all of it, a plugin change too. stopped_env is the stopped run's, not the runs'
+        after it."""
         m = Machine(self)
         m.write(m.bin / "docker", FAKE_DOCKER)
         older(m)
@@ -1909,6 +1911,8 @@ exec {rm} "$@"
                 if then is None:
                     if not under_way(m):
                         found.append((said, together(m), stopped.stderr))
+                    elif signal == "TERM":
+                        found.append((said, "something is left under way", stopped.stderr))
                     continue
                 if signal == "TERM" or not under_way(m):
                     break
@@ -1917,10 +1921,12 @@ exec {rm} "$@"
                 else:
                     env = {"FAKE_FAIL": "systemctl --user restart"} if then == "failing" else {}
                     ran = m.run(harness, *args(m), env=env, check=False)
-                if not under_way(m):
-                    found.append((f"{said}, then {then}", together(m), ran.stderr))
-                elif then in ("failing", "codex"):
+                if then == "again" and ran.returncode != 0:
+                    found.append((f"{said}, then {then}", "the run failed", ran.stderr))
+                elif under_way(m):
                     found.append((f"{said}, then {then}", "something is left under way", ran.stderr))
+                else:
+                    found.append((f"{said}, then {then}", together(m), ran.stderr))
             return found
 
         with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
@@ -1928,6 +1934,17 @@ exec {rm} "$@"
                 for said, wrong, stderr in found:
                     with self.subTest(said):
                         self.assertIsNone(wrong, f"{said}:\n{stderr}")
+
+    @staticmethod
+    def pi_together(m: Machine):
+        """Whether Pi's scripts and the image tagged for them are of one install, the older or the new."""
+        tag = json.loads((m.dir / "docker-tags").read_text()).get("marmot-agents-pi:latest")
+        if not tag:
+            return "no image is tagged for the scripts"
+        scripts_older = (m.data / "lib/tools/pi/OLDER").exists()
+        if scripts_older != (tag == m.older_image):
+            return f"the scripts are {'older' if scripts_older else 'new'}, the image tagged {tag}"
+        return None
 
     def test_every_step_keeps_the_image_with_its_scripts(self):
         def args(m: Machine) -> list:
@@ -1940,14 +1957,7 @@ exec {rm} "$@"
             (m.data / "lib/tools/pi/OLDER").write_text("an older file\n")
             m.older_image = json.loads((m.dir / "docker-tags").read_text())["marmot-agents-pi:latest"]
 
-        def together(m: Machine):
-            tag = json.loads((m.dir / "docker-tags").read_text()).get("marmot-agents-pi:latest")
-            scripts_older = (m.data / "lib/tools/pi/OLDER").exists()
-            if scripts_older != (tag == m.older_image):
-                return f"the scripts are {'older' if scripts_older else 'new'}, the image tagged {tag}"
-            return None
-
-        self.every_step_together("pi", args, older, together)
+        self.every_step_together("pi", args, older, self.pi_together)
 
     def test_a_lookup_docker_cannot_answer_never_takes_the_tag_away(self):
         """Pi: when docker cannot say which image the tag names, as when it cannot be reached for a
@@ -1963,14 +1973,7 @@ exec {rm} "$@"
             (m.data / "lib/tools/pi/OLDER").write_text("an older file\n")
             m.older_image = json.loads((m.dir / "docker-tags").read_text())["marmot-agents-pi:latest"]
 
-        def together(m: Machine):
-            tag = json.loads((m.dir / "docker-tags").read_text()).get("marmot-agents-pi:latest")
-            scripts_older = (m.data / "lib/tools/pi/OLDER").exists()
-            if scripts_older != (tag == m.older_image):
-                return f"the scripts are {'older' if scripts_older else 'new'}, the image tagged {tag}"
-            return None
-
-        self.every_step_together("pi", args, older, together, stopped_env={"FAKE_DOCKER_FAIL": "image inspect"})
+        self.every_step_together("pi", args, older, self.pi_together, stopped_env={"FAKE_DOCKER_FAIL": "image inspect"})
 
     def test_a_put_back_docker_cannot_answer_keeps_the_record(self):
         """Pi: a first install killed once its tag moved, and put back by Codex's install while docker
@@ -2013,6 +2016,9 @@ exec {rm} "$@"
             (m.home / plugin / "OLDER").write_text("an older file\n")
 
         def together(m: Machine):
+            for name, folder in (("support files", m.data / "lib/python/marmot_hermes"), ("plugin", m.home / plugin)):
+                if not (folder / "plugin.yaml").is_file():
+                    return f"the {name} are not there" if name.endswith("s") else f"the {name} is not there"
             files_older = (m.data / "lib/python/marmot_hermes/OLDER").exists()
             plugin_older = (m.home / plugin / "OLDER").exists()
             if files_older != plugin_older:
