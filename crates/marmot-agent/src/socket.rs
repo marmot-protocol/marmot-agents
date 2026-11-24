@@ -202,6 +202,13 @@ impl std::fmt::Display for HelloError {
     }
 }
 
+/// What an event shows of a request: a prompt named as its turn's, or an answer or a control
+/// settled.
+enum Shows {
+    Prompt(MessageId),
+    Settles(RequestId),
+}
+
 /// A connector on the socket, as a driver.
 pub struct SocketDriver {
     lines: Lines,
@@ -348,8 +355,16 @@ impl SocketDriver {
     /// (D-058). A connection that drops, or a connector that has not taken the request in time,
     /// refuses it as failed and is given up: a prompt is then perhaps not delivered, and never
     /// sent again (D-037, D-129). The time is for writing the request and answering it both, so a
-    /// connector that stops reading cannot hold the core either.
+    /// connector that stops reading cannot hold the core either. A request whose effect an event
+    /// read meanwhile showed was taken all the same: the event settles an answer or a control, or
+    /// names a prompt as its turn's (D-147).
     async fn request(&mut self, request: wire::CoreRequest) -> Result<(), Refusal> {
+        let shows = match &request {
+            wire::CoreRequest::Prompt(p) => Shows::Prompt(MessageId(p.message.clone())),
+            wire::CoreRequest::Answer(a) => Shows::Settles(RequestId(a.request.clone())),
+            wire::CoreRequest::Control(c) => Shows::Settles(RequestId(c.request.clone())),
+        };
+        let mut shown = false;
         if self.gone {
             return Err(Refusal::new(Reason::Failed));
         }
@@ -385,10 +400,10 @@ impl SocketDriver {
         loop {
             let Ok(next) = tokio::time::timeout_at(deadline, self.read()).await else {
                 self.gone = true;
-                return Err(unanswered);
+                return if shown { Ok(()) } else { Err(unanswered) };
             };
             let Some(envelope) = next else {
-                return Err(unanswered);
+                return if shown { Ok(()) } else { Err(unanswered) };
             };
             let is_response = envelope.jsonrpc.as_deref() == Some("2.0")
                 && envelope.method.is_none()
@@ -401,6 +416,12 @@ impl SocketDriver {
                 }
             }
             if let Some(output) = self.output(&envelope) {
+                if let Output::Event(e) = &output {
+                    shown |= match &shows {
+                        Shows::Prompt(m) => e.prompts.contains(m),
+                        Shows::Settles(r) => e.settles.contains(r),
+                    };
+                }
                 self.held.push_back(output);
             }
         }
@@ -881,6 +902,93 @@ mod tests {
         assert!(result.unanswered, "written whole, so the connector has it");
         assert!(driver.next_event().await.is_none(), "given up");
         drop(peer.await.unwrap());
+    }
+
+    // The connection drops after the connector sent the event that shows a request's effect, and
+    // before its response: the request was taken, and the event settles it, once. Refused as
+    // failed, it would be settled twice: by the refusal, and by the event.
+    #[tokio::test]
+    async fn a_request_an_event_settled_before_the_connection_dropped_was_taken() {
+        use marmot_agent_driver::{Answer, Given, Person};
+        let (core, connector) = UnixStream::pair().unwrap();
+        let (read, mut write) = connector.into_split();
+        write
+            .write_all(hello(json!(TOKEN)).as_bytes())
+            .await
+            .unwrap();
+        let mut driver = greeted(core).await;
+        let peer = tokio::spawn(async move {
+            let mut lines = BufReader::new(read).lines();
+            let _welcome = lines.next_line().await;
+            let _answer = lines.next_line().await;
+            let shown = json!({"jsonrpc": "2.0", "method": "event", "params": {
+                "item": "ap-2", "type": "approval", "state": "done", "title": "Allowed", "text": "",
+                "body": {"choices": [{"id": "c0", "label": "Allow", "effect": "allow"}],
+                    "answer": {"choice": "c0"}},
+                "session": "s-1", "turn": "t-1", "chat": "c-1", "settles": ["r-0"]}});
+            write
+                .write_all(format!("{shown}\n").as_bytes())
+                .await
+                .unwrap();
+            // Gone before the response.
+        });
+        let answer = Answer {
+            request: "r-0".into(),
+            item: "ap-2".into(),
+            by: Person {
+                id: "u-1".into(),
+                name: "Alice".into(),
+            },
+            given: Given::Choice("c0".into()),
+        };
+        assert_eq!(
+            driver.answer(answer).await,
+            Ok(()),
+            "taken: its effect was shown"
+        );
+        peer.await.unwrap();
+        let Some(Output::Event(shown)) = driver.next_event().await else {
+            panic!("the event that settles it is handed on");
+        };
+        assert_eq!(shown.settles, vec![RequestId::from("r-0")]);
+        assert!(
+            driver.next_event().await.is_none(),
+            "and then the connection is gone"
+        );
+    }
+
+    // The same for a prompt: a turn that names it came before the connection dropped, so it was
+    // delivered, and is not told as perhaps not delivered (D-129).
+    #[tokio::test]
+    async fn a_prompt_a_turn_named_before_the_connection_dropped_was_delivered() {
+        let (core, connector) = UnixStream::pair().unwrap();
+        let (read, mut write) = connector.into_split();
+        write
+            .write_all(hello(json!(TOKEN)).as_bytes())
+            .await
+            .unwrap();
+        let mut driver = greeted(core).await;
+        let peer = tokio::spawn(async move {
+            let mut lines = BufReader::new(read).lines();
+            let _welcome = lines.next_line().await;
+            let _prompt = lines.next_line().await;
+            let turn = json!({"jsonrpc": "2.0", "method": "event", "params": {
+                "item": "t-1", "type": "turn", "state": "running", "title": "Working", "text": "",
+                "body": {"started_by": "user"}, "session": "s-1", "turn": "t-1", "chat": "c-1",
+                "prompts": ["m-1"]}});
+            write
+                .write_all(format!("{turn}\n").as_bytes())
+                .await
+                .unwrap();
+        });
+        assert_eq!(
+            driver.request(a_prompt()).await,
+            Ok(()),
+            "delivered: a turn responds to it"
+        );
+        peer.await.unwrap();
+        assert!(matches!(driver.next_event().await, Some(Output::Event(_))));
+        assert!(driver.next_event().await.is_none());
     }
 
     // A response with only an id, not a result or an error, is not taken as an acknowledgement.
