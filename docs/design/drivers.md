@@ -330,7 +330,8 @@ agent, with Codex's subagents on, shown in the chat of the turn that started the
 ([D-117](../decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them),
 [subagents as threads](subagents.md), [D-142](../decisions.md#d-142-how-subagent-threads-are-built)). Each
 subagent's thread gets a translator of its own in its parent's chat. The subagent is one `task` item, `task:` and
-its thread's id, which each of its turns opens again; everything else it does names that item in the event's
+its thread's id, which each of its turns opens again and which shows its newest turn's state (an earlier turn's
+end read late changes it only to say, in its text, that the turn failed); everything else it does names that item in the event's
 `subagent` field, and a nested subagent's `task` item names the one that started it. Its words name the
 `subagent` tool item that started it as `parent`. The driver says its harness tells subagents apart
 (`subagents`), so the core puts all of it in the subagent's thread; a message for a thread not yet named is held until the item that names it arrives. Codex waits for a

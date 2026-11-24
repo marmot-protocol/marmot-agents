@@ -2165,3 +2165,60 @@ async fn a_failed_spawn_is_not_shown_as_started() {
         assert_eq!(header.title, title, "{status}");
     }
 }
+
+/// A subagent's turn ending with `error` as its error message.
+fn sub_turn_failed(thread: &str, turn: &str, error: &str) -> Value {
+    json!({"method": "turn/completed", "params": {"threadId": thread, "turn": {"id": turn,
+        "rootTurnId": "t1", "items": [], "status": "failed", "error": {"message": error}}}})
+}
+
+/// The subagent's row as its last event in `events` shows it: its state and text.
+fn row_of(events: &[Emitted]) -> (State, String) {
+    let row = (events.iter().rev())
+        .find(|e| matches!(e.event.body(), Body::Task(_)))
+        .expect("the row");
+    let header = row.event.header();
+    (header.state, header.text.clone())
+}
+
+// The subagent's row shows its latest turn (D-142): `st2` started and finished before the end of
+// `st1`, interrupted, is read. That late end leaves the row finished, as `st2` left it, and is
+// still shown on the row, so a Stop waiting for `st1` is settled by it.
+#[tokio::test]
+async fn a_late_end_of_a_subagents_earlier_turn_leaves_its_later_finish() {
+    let (mut codex, mut fake) = outliving().await;
+    fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
+        .await;
+    fake.say(sub_turn("turn/completed", "sub1", "st2", "completed"))
+        .await;
+    until(&mut codex, is_task(State::Done)).await;
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "interrupted"))
+        .await;
+    let (_, events) = read_so_far(&mut codex, &mut fake).await;
+    assert!(
+        (events.iter()).any(|e| matches!(e.event.body(), Body::Task(_))),
+        "the late end is shown on the row"
+    );
+    assert_eq!(row_of(&events).0, State::Done, "{events:?}");
+}
+
+// A late failure of an earlier turn of the subagent's, read while its next turn runs, leaves the
+// row working, and says on it that the earlier turn failed, with its error, which the row keeps
+// when the next turn ends.
+#[tokio::test]
+async fn a_late_failure_of_a_subagents_earlier_turn_is_shown_on_its_row() {
+    let (mut codex, mut fake) = outliving().await;
+    fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
+        .await;
+    fake.say(sub_turn_failed("sub1", "st1", "the disk is full"))
+        .await;
+    let (_, events) = read_so_far(&mut codex, &mut fake).await;
+    let (state, text) = row_of(&events);
+    assert_eq!(state, State::Running, "the next turn runs");
+    assert!(text.contains("the disk is full"), "{text}");
+    fake.say(sub_turn("turn/completed", "sub1", "st2", "completed"))
+        .await;
+    let events = until(&mut codex, is_task(State::Done)).await;
+    let (_, text) = row_of(&events);
+    assert!(text.contains("the disk is full"), "kept: {text}");
+}

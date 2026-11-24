@@ -2891,7 +2891,9 @@ something open:
 6. **A Codex subagent is one `task` item**, `task:` and its thread's id, which each of its turns opens again, as
    D-121's row "edited as it works"; under D-117 each turn was a `task` item of its own. The parent's `subagent`
    tool items, which start a subagent or give it more work, stay in the main chat as the agent's own tool calls,
-   and the row names the newest as its `subject`.
+   and the row names the newest as its `subject`. The row shows the state of the subagent's newest turn: the end
+   of an earlier turn, read late, leaves it as it is, and only adds, on the row's text, that the earlier turn
+   failed, with its error, when it did.
 7. **Not built yet.** The flag and the `task` field for writing to a running subagent
    ([D-123](#d-123-stop-and-writing-in-a-subagents-thread)) come with the first driver that says yes; until
    then the core reads no comment in a thread, as it reads only chat messages and kind 1202. And Stop in a

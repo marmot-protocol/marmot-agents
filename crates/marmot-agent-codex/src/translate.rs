@@ -145,6 +145,26 @@ struct Subagent {
     /// The work its next turn is for: the item that gave it, and what it is for. The newest
     /// given, while a turn runs or between turns, and taken when the next turn starts.
     next: Option<(String, Option<String>)>,
+    /// The newest of its turns to start, whose state the row shows: the end of an earlier one,
+    /// read late, does not change it.
+    latest: Option<String>,
+    /// The row as the latest turn last showed it, for an earlier turn's end read late: its body,
+    /// state, title and text, before what [`Subagent::failed`] adds.
+    row: Option<(Body, State, String, String)>,
+    /// What people need to know of earlier turns whose ends were read late: each that failed, with
+    /// its error. The row's text says it from then on.
+    failed: Vec<String>,
+}
+
+impl Subagent {
+    /// The row's text: `text`, and what earlier turns that failed left to say.
+    fn row_text(&self, text: &str) -> String {
+        std::iter::once(text.to_string())
+            .chain(self.failed.iter().cloned())
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
 }
 
 /// Turns the messages of one chat's Codex session into agent events.
@@ -672,6 +692,7 @@ impl Translator {
         let turn = p.turn.unwrap_or_default();
         self.turn = turn.id;
         if let Some(sub) = self.subagent.as_mut() {
+            sub.latest = self.turn.clone();
             // Work given while the last turn ran is this one's.
             if let Some((subject, description)) = sub.next.take() {
                 sub.subject = Some(subject);
@@ -1118,22 +1139,24 @@ impl Translator {
             }
         }
         let item = self.turn_item(self.turn.as_deref());
+        let base = sub.description.clone().unwrap_or_default();
+        let text = sub.row_text(&base);
         let body = Body::Task(Task {
             kind: "subagent".into(),
-            description: sub.description.clone(),
+            description: sub.description,
             subject: sub.subject.map(Into::into),
         });
-        let text = sub.description.unwrap_or_default();
         let native = native(method, params);
-        self.emit(
-            out,
-            &item,
-            body,
-            State::Running,
-            "Subagent working",
-            &text,
-            native,
-        );
+        let title = "Subagent working";
+        self.remember_row(&body, State::Running, title, &base);
+        self.emit(out, &item, body, State::Running, title, &text, native);
+    }
+
+    /// Keeps the row as the subagent's latest turn shows it.
+    fn remember_row(&mut self, body: &Body, state: State, title: &str, text: &str) {
+        if let Some(sub) = self.subagent.as_mut() {
+            sub.row = Some((body.clone(), state, title.into(), text.into()));
+        }
     }
 
     /// A subagent's turn ends, and its task with it. `current` when it is the turn the subagent
@@ -1153,16 +1176,25 @@ impl Translator {
         };
         let item = self.turn_item(turn.id.as_deref());
         let native = native(method, params);
-        // The end of an earlier turn read late, while a later one runs: the row stays open, as
-        // that turn has it, and the end is shown on it (D-007).
-        if !current
-            && self.turn.is_some()
-            && let Some(prev) = self.open_event(&item)
-        {
-            let h = prev.header().clone();
-            let (body, title, text) = (prev.body().clone(), h.title.clone(), h.text.clone());
-            let owner = (self.session.clone(), self.turn.clone());
-            return self.emit_owned(out, owner, &item, body, h.state, &title, &text, native);
+        // The end of an earlier turn read late, after a later one started: the row shows the
+        // later turn, running or ended, and the end is shown on it (D-007), so a Stop waiting for
+        // that turn is settled. A failure is said on the row from then on, with its error.
+        let sub = self.subagent.clone().unwrap_or_default();
+        let late = turn.id.is_some() && sub.latest.is_some() && turn.id != sub.latest;
+        if late && let Some((body, state, title, base)) = sub.row {
+            if turn.status.as_deref() == Some("failed") {
+                let error = turn.error.as_ref().and_then(|e| e.message.clone());
+                let said = match error {
+                    Some(error) => format!("An earlier turn failed: {error}"),
+                    None => "An earlier turn failed".to_string(),
+                };
+                if let Some(sub) = self.subagent.as_mut() {
+                    sub.failed.push(said);
+                }
+            }
+            let text = (self.subagent.as_ref()).map_or_else(|| base.clone(), |s| s.row_text(&base));
+            let owner = (self.session.clone(), self.turn.clone().or(turn.id));
+            return self.emit_owned(out, owner, &item, body, state, &title, &text, native);
         }
         let body = match self.open_event(&item) {
             Some(prev) => prev.body().clone(),
@@ -1175,14 +1207,16 @@ impl Translator {
                 })
             }
         };
-        let text = (turn.error.and_then(|e| e.message))
+        let base = (turn.error.and_then(|e| e.message))
             .or_else(|| self.subagent.as_ref().and_then(|s| s.description.clone()))
             .unwrap_or_default();
+        let text = (self.subagent.as_ref()).map_or_else(|| base.clone(), |s| s.row_text(&base));
         if let Some(id) = &turn.id {
             self.usage.remove(&Some(id.clone()));
         }
         let ended = if current { self.turn.clone() } else { turn.id };
         let owner = (self.session.clone(), ended);
+        self.remember_row(&body, state, title, &base);
         self.emit_owned(out, owner, &item, body, state, title, &text, native);
         if current {
             self.turn = None; // nothing that follows belongs to this turn
