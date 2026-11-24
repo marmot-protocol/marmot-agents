@@ -731,6 +731,94 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         settled = [(e["item"], e["settles"]) for e in self.sent if "settles" in e]
         self.assertEqual(settled, [("confirm:k-1", ["r-3"]), (f"session:{session}", ["r-1"])])
 
+    async def test_a_confirmation_hermes_ran_and_said_nothing_to_settles_its_command(self):
+        """Hermes ran what was confirmed and said nothing: nothing will show the outcome, so a notice says
+        so, and settles the command, as Hermes's words would have; the core does not wait for an effect."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), said("Hi.", "m-1", notify=True), complete("m-1"))
+        session = self.of("session")[0]["session"]
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "new_session", "chat": CHAT, "session": session}})
+        typed = self.hermes.typed[-1]
+        self.feed(started(typed[2], "/new"))
+        self.asks_to_confirm(typed[2], "/new", "⚠️ **Confirm /new**\n\nThis starts a fresh session.", "k-1")
+        self.feed(complete(typed[2]))
+        await self.connector.serve("answer", {"request": "r-2", "item": "confirm:k-1", "by": ALICE, "given": YES})
+        settled = [(e["item"], e["type"], e["settles"]) for e in self.sent if "settles" in e]
+        self.assertEqual([(i, t, s) for i, t, s in settled], [("confirm:k-1", "question", ["r-2"]), (settled[1][0], "notice", ["r-1"])])
+        notice = next(e for e in self.sent if e["item"] == settled[1][0])
+        self.assertEqual((notice["session"], notice.get("turn"), notice["title"]), (session, None, "Command output"))
+        self.assertEqual(notice["text"], "Hermes ran /new and said nothing.")
+
+    async def two_confirmations_in_a_group(self):
+        """Alice asks for a new session and Bob for another model, in one group, where Hermes keeps a session
+        for each: Hermes asks each of them to confirm, and both wait."""
+        for message, sender in (("m-a", ALICE), ("m-b", BOB)):
+            await self.connector.serve("prompt", prompt(message, chat=GROUP, sender=sender))
+        self.feed(started("m-a", chat="c-2", user="u-1", chat_type="group"), complete("m-a"),
+                  started("m-b", chat="c-2", user="u-2", chat_type="group"), complete("m-b"), chat="c-2")
+        source = {"chat_id": "c-2", "chat_type": "group", "user_id": "u-2"}
+        self.hermes.read_model = lambda: self.feed(
+            {"dir": "out", "via": "call", "msg": {"method": "get_session_model_settings", "params": {"source": source}}},
+            {"dir": "in", "via": "call", "msg": {"method": "get_session_model_settings", "result": {
+                "session_key": "agent:main:marmot:group:c-2:u-2", "model": "n", "provider": "custom"}}}, chat="c-2")
+        keys = {"u-1": "agent:main:marmot:group:c-2:u-1", "u-2": "agent:main:marmot:group:c-2:u-2"}
+        await self.connector.serve("control", {"request": "r-a", "by": ALICE, "action": {
+            "type": "new_session", "chat": GROUP, "session": "group:c-2:u-1"}})
+        typed_a = self.hermes.typed[-1][2]
+        self.feed(started(typed_a, "/new", "c-2", "u-1", "group"), chat="c-2")
+        await self.connector.serve("control", {"request": "r-b", "by": BOB, "action": {
+            "type": "set", "session": "group:c-2:u-2", "setting": "model", "value": "n"}})
+        typed_b = self.hermes.typed[-1][2]
+        for typed, title, asking, confirm_id, user in (
+                (typed_a, "/new", "⚠️ **Confirm /new**\n\nThis starts a fresh session.", "k-a", "u-1"),
+                (typed_b, "/model", "⚠️ **Confirm /model**\n\nThis model costs more.", "k-b", "u-2")):
+            self.hermes.waiting_confirm[keys[user]] = confirm_id
+            self.feed(hook("send_slash_confirm", chat_id="c-2", title=title, message=asking, session_key=keys[user],
+                           confirm_id=confirm_id, metadata=None), said(asking, typed, True, "c-2"), chat="c-2")
+        self.feed(complete(typed_a), chat="c-2")
+        self.assertEqual([e for e in self.sent if "settles" in e], [])
+
+    async def answer_alices(self):
+        self.hermes.confirmed = phrase("gateway.reset.header_default")
+        await self.connector.serve("answer", {"request": "r-a2", "item": "confirm:k-a", "by": ALICE, "given": YES})
+        await asyncio.sleep(0)
+
+    async def answer_bobs(self):
+        self.hermes.confirmed = switched("n")
+        await self.connector.serve("answer", {"request": "r-b2", "item": "confirm:k-b", "by": BOB, "given": YES})
+        await asyncio.sleep(0)
+
+    def settled(self):
+        return [(e["item"], e["session"], e["settles"]) for e in self.sent if "settles" in e]
+
+    async def test_two_confirmations_in_a_group_each_settle_their_own_command_alices_first(self):
+        """Hermes's reply to Alice's answer is the outcome of her `/new`, and says nothing of Bob's `/model`,
+        which still waits for his answer, whichever of them Hermes asked last."""
+        await self.two_confirmations_in_a_group()
+        await self.answer_alices()
+        self.assertEqual(self.settled(), [("confirm:k-a", "group:c-2:u-1", ["r-a2"]),
+                                          ("session:group:c-2:u-1", "group:c-2:u-1", ["r-a"])])
+        self.assertEqual(self.hermes.model_reads, [], "Bob's model is not read: his switch did not happen")
+        await self.answer_bobs()
+        self.assertEqual(self.settled()[2:], [("confirm:k-b", "group:c-2:u-2", ["r-b2"]),
+                                              ("session:group:c-2:u-2", "group:c-2:u-2", ["r-b"])])
+        self.assertEqual(self.hermes.model_reads, [("c-2", "u-2")])
+        replies = [(e["session"], e["text"]) for e in self.of("notice")]
+        # Hermes's words on a reset are the new session's first.
+        self.assertEqual(replies, [("group:c-2:u-1#2", phrase("gateway.reset.header_default")), ("group:c-2:u-2", switched("n"))])
+
+    async def test_two_confirmations_in_a_group_each_settle_their_own_command_bobs_first(self):
+        await self.two_confirmations_in_a_group()
+        await self.answer_bobs()
+        self.assertEqual(self.settled(), [("confirm:k-b", "group:c-2:u-2", ["r-b2"]),
+                                          ("session:group:c-2:u-2", "group:c-2:u-2", ["r-b"])])
+        await self.answer_alices()
+        self.assertEqual(self.settled()[2:], [("confirm:k-a", "group:c-2:u-1", ["r-a2"]),
+                                              ("session:group:c-2:u-1", "group:c-2:u-1", ["r-a"])])
+        replies = [(e["session"], e["text"]) for e in self.of("notice")]
+        self.assertEqual(replies, [("group:c-2:u-2", switched("n")), ("group:c-2:u-1#2", phrase("gateway.reset.header_default"))])
+
     async def test_a_second_reset_while_one_is_on_its_way_is_refused(self):
         """One reset settles one request: a second `/new` for the same session waits for the first."""
         await self.connector.serve("prompt", prompt("m-1"))

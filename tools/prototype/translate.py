@@ -1607,6 +1607,7 @@ class Hermes(Translator):
         self.typed: dict[str, tuple] = {}  # message id of a typed command -> the control it was counted as
         self.typed_words: dict[str, str] = {}  # message id of a typed command -> the command
         self.confirm_command = None  # the command the open confirmation is about
+        self.confirm_commands: dict[str, str] = {}  # request to confirm a command -> the command
         self.reset_by_hook = False
         self.turn_key: dict[str, str] = {}  # turn -> the chat and sender whose session it runs in, oldest first
         self.questions: dict[str, str | None] = {}  # question item -> the chat and sender it asks, if known
@@ -1773,10 +1774,19 @@ class Hermes(Translator):
                   "answer to a command confirmation", m, owner=(prev["session"], prev["turn"]))
         if self.confirm == item:
             self.confirm = None
-        said = str(m.get("said") or "")
-        if said and prev["session"]:
-            self.key = str(prev["session"]).split("#")[0]
-            self.command_reply(f"sent:{self.seq + 1}", said, self.confirm_command, None, m, alone=True)
+        key = self.key_named(m.get("session_key")) or str(prev["session"] or "").split("#")[0]
+        if key:
+            # Hermes ran the command and said nothing: nothing else shows its outcome, so a notice says so.
+            said = str(m.get("said") or "") or f"Hermes ran {self.confirm_commands.get(item) or 'the command'} and said nothing."
+            # The reply is the command's session's, and what follows is still the latest turn's, which in a
+            # group can be another sender's.
+            latest, session, self.key = self.key, self.session, key
+            try:
+                self.command_reply(f"sent:{self.seq + 1}", said, self.confirm_commands.get(item), None, m, alone=True)
+            finally:
+                self.key = latest
+                if latest != key:
+                    self.session = session
 
     # -- sessions
 
@@ -1948,6 +1958,12 @@ class Hermes(Translator):
                 return turn
         return None
 
+    def key_named(self, session_key):
+        """The chat and sender of the Hermes session `session_key`, of those this chat has had a turn or a
+        session of, or None. In a group each sender has a session: the latest is not theirs."""
+        known = [*reversed(list(self.turn_key.values())), *self.generation]
+        return next((key for key in known if session_key and str(session_key).endswith(":" + key)), None)
+
     # -- everything that arrives as text
 
     def command_reply(self, item, content, command, typed, p, alone=False):
@@ -2076,9 +2092,13 @@ class Hermes(Translator):
         options = [{"id": f"o{n}", "label": label} for n, label in enumerate(self.CONFIRM_LABELS)]
         self.confirm = f"confirm:{p.get('confirm_id')}"
         self.confirm_command = p.get("title")
+        self.confirm_commands[self.confirm] = p.get("title")
         qs = [{"id": "q0", "text": p.get("message"), "multiple": False, "allow_text": False, "options": options}]
+        # The session Hermes asks in, which in a group need not be the latest turn's.
+        key = self.key_named(p.get("session_key"))
+        owner = None if key is None else (self.name(key), self.turn_of_session(p.get("session_key")))
         self.emit(self.confirm, "question", "waiting", "Confirm this command?", p.get("message"),
-                  {"answer_via": "message", "questions": qs}, method, self.msg)
+                  {"answer_via": "message", "questions": qs}, method, self.msg, owner=owner)
 
 
 # ---------------------------------------------------------------------------- OpenClaw
