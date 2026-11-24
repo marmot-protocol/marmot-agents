@@ -403,7 +403,7 @@ nightly workflow names, on the nightly compiler it names (`FUZZ_TOOLCHAIN`, with
 from its seeds. `cargo fuzz list --fuzz-dir crates/marmot-agent-fuzz` lists the targets:
 
 ```sh
-cargo run -p marmot-agent-fuzz --bin marmot-agent-fuzz-seeds -- target/fuzz-corpus
+cargo run -p marmot-agent-fuzz --example seeds -- target/fuzz-corpus
 cargo +nightly-2026-08-21 fuzz run --fuzz-dir crates/marmot-agent-fuzz --features libfuzzer \
     <target> target/fuzz-corpus/<target> -- -max_total_time=300
 ```

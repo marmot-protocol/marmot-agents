@@ -152,7 +152,7 @@ jobs:
       - name: Write the seeds, and build the targets
         run: |
           cargo fuzz --version
-          cargo run --locked -p marmot-agent-fuzz --bin marmot-agent-fuzz-seeds -- target/fuzz-corpus
+          cargo run --locked -p marmot-agent-fuzz --example seeds -- target/fuzz-corpus
           cargo "+${FUZZ_TOOLCHAIN}" fuzz build --fuzz-dir crates/marmot-agent-fuzz --features libfuzzer
 
       - name: Each target, five minutes

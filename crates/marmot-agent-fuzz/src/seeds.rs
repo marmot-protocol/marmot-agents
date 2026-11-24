@@ -1,7 +1,7 @@
 //! The starting corpus of each target, made from what the repository holds: the socket's examples
 //! (`fixtures/socket/examples.json`), every recording of Codex, the ACP agents and Pi, the drivers'
 //! expected events as the core writes them, and settings and state files the core takes. Nothing
-//! binary is committed: the nightly job writes these out with `marmot-agent-fuzz-seeds` before it
+//! binary is committed: the nightly job writes these out with `examples/seeds.rs` before it
 //! fuzzes, and `tests/seeds.rs` runs every check over them.
 
 use marmot_agent::carrier::{self, Asked, AskedReply, Item};

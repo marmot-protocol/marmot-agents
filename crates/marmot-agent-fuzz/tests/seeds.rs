@@ -31,3 +31,28 @@ fn every_check_passes_over_nothing_and_noise() {
         }
     }
 }
+
+/// cargo-fuzz takes every program of the package for a fuzz target, and the nightly job fuzzes
+/// each one it lists, so the package's programs are the targets and nothing else: one that is
+/// not, such as what writes the seeds, would be run as a fuzzer and pass without fuzzing.
+#[test]
+fn the_package_has_a_program_for_each_target_and_no_other() {
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest = std::fs::read_to_string(folder.join("Cargo.toml")).expect("the manifest");
+    let mut programs = Vec::new();
+    let mut in_bin = false;
+    for line in manifest.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_bin = line == "[[bin]]";
+        } else if in_bin && let Some(name) = line.strip_prefix("name = ") {
+            programs.push(name.trim_matches('"').to_string());
+        }
+    }
+    let mut targets: Vec<String> = TARGETS.iter().map(|(t, _)| t.to_string()).collect();
+    programs.sort();
+    targets.sort();
+    assert_eq!(programs, targets);
+    // Cargo would find these by itself.
+    assert!(!folder.join("src/main.rs").exists());
+    assert!(!folder.join("src/bin").exists());
+}

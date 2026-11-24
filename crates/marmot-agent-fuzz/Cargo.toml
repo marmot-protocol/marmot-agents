@@ -8,7 +8,9 @@ repository.workspace = true
 publish.workspace = true
 
 # cargo-fuzz finds its targets here (`cargo fuzz run --fuzz-dir crates/marmot-agent-fuzz`). The
-# checks are the library, which a stable test runs over the seeds; the targets are thin.
+# checks are the library, which a stable test runs over the seeds; the targets are thin. Every
+# `[[bin]]` here is a target, as cargo-fuzz lists them, so what writes the seeds is an example
+# (`examples/seeds.rs`).
 [package.metadata]
 cargo-fuzz = true
 
@@ -119,9 +121,3 @@ test = false
 doc = false
 bench = false
 required-features = ["libfuzzer"]
-
-[[bin]]
-name = "marmot-agent-fuzz-seeds"
-path = "src/bin/marmot-agent-fuzz-seeds.rs"
-test = false
-doc = false
