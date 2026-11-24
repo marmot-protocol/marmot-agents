@@ -73,6 +73,9 @@ struct Items {
     known: HashMap<EventKey, Seen>,
     /// How many item versions have arrived, to tell the latest.
     arrived: u64,
+    /// Each thread comment shown, by its event: who sent it, and the place it was shown in, which
+    /// an edit of it, carrying no thread's tags, is shown in again.
+    comments: HashMap<String, (String, String)>,
 }
 
 /// An item as MDK keeps it: one row at its first event, holding the latest version its sender
@@ -404,8 +407,10 @@ impl Items {
     /// A subagent's words are a thread comment by the agent whose root is the agent's `task` item
     /// of a subagent (D-122): they are marked as in the thread of the subagent whose `task` item
     /// they answer, by what that item says it is for, once it has shown. Any other comment, as a
-    /// person's reply in a thread, is shown as a reply in a thread.
-    fn words_line(&self, message: &marmot_app::ReceivedMessage) -> Option<String> {
+    /// person's reply in a thread, is shown as a reply in a thread. A later version of a
+    /// comment is MDK's plain edit of it, which names no thread (D-142): it is shown in the place
+    /// the comment was, when its author sent it.
+    fn words_line(&mut self, message: &marmot_app::ReceivedMessage) -> Option<String> {
         let name = clean(message.sender_display_name.as_deref().unwrap_or("agent"));
         let group = hex::encode(message.group_id.as_slice());
         let chat = chat_label(&group, &message.sender);
@@ -432,7 +437,15 @@ impl Items {
                     }
                     None => "in a thread".to_string(),
                 };
-                Some(format!("{chat} {name}, {place}: {text}"))
+                let place = format!("{chat} {name}, {place}");
+                let line = format!("{place}: {text}");
+                let shown = (message.sender.clone(), place);
+                self.comments.insert(message.message_id_hex.clone(), shown);
+                Some(line)
+            }
+            EDIT_KIND => {
+                let (sender, place) = self.comments.get(carrier::edit_target(&message.tags)?)?;
+                (*sender == message.sender).then(|| format!("{place}, revised: {text}"))
             }
             _ => None,
         }
@@ -1216,6 +1229,43 @@ mod tests {
         );
         // Anything else is not words.
         assert_eq!(items.words_line(&words("c3", 7, "+", Vec::new())), None);
+    }
+
+    // A later version of a subagent's words is MDK's plain edit of their comment, which carries no
+    // thread's tags (D-142): the client shows the revised words in the place the comment was
+    // shown, and only for an edit from the comment's author. An edit of anything else is not
+    // words.
+    #[test]
+    fn a_subagents_revised_words_are_shown_where_its_words_were() {
+        let mut items = Items::default();
+        items.arrived(&task_row("t1").0, None, DIRECT, |_| {
+            Some(task_row("t1").row())
+        });
+        let tags = vec![
+            vec!["E".into(), "t1".into(), String::new(), AGENT.into()],
+            vec!["K".into(), "1201".into()],
+            vec!["P".into(), AGENT.into()],
+            vec!["e".into(), "t1".into(), String::new(), AGENT.into()],
+            vec!["k".into(), "1201".into()],
+        ];
+        let first = items.words_line(&words("c1", 1111, "found two files", tags));
+        let place = format!(
+            "{} Codex, in the thread of look around",
+            chat_label(&group_hex(CHAT_A), AGENT)
+        );
+        assert_eq!(first, Some(format!("{place}: found two files")));
+        let edit = |id: &str, target: &str| {
+            let tags = vec![vec!["e".into(), target.into()]];
+            words(id, EDIT_KIND, "found three\nfiles", tags)
+        };
+        assert_eq!(
+            items.words_line(&edit("c2", "c1")),
+            Some(format!("{place}, revised: found three files"))
+        );
+        let mut forged = edit("c3", "c1");
+        forged.sender = STRANGER.into();
+        assert_eq!(items.words_line(&forged), None, "not the author's");
+        assert_eq!(items.words_line(&edit("c4", "t1")), None, "an item's edit");
     }
 
     // An edit that comes before its first event shows nothing until the first event comes, and

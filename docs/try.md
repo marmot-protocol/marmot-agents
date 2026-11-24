@@ -68,7 +68,8 @@ starts a new session, and `:set <setting> <value>` changes one of the session's 
 with a slash goes to Codex as typed. The client has no threads: a Codex subagent's words, which an app shows in the
 subagent's thread, are shown in line, as `<label> <agent>, in the thread of <its task>: <words>`, where
 `<its task>` is what the subagent's row says it is for; any other reply in a thread is shown as
-`<label> <name>, in a thread: <words>`.
+`<label> <name>, in a thread: <words>`. When the subagent's words change after they were shown, the new words
+are shown in the same place, as `<label> <agent>, in the thread of <its task>, revised: <words>`.
 
 Your two-person chat with the agent is sent everything it does. A group is sent its words, its turns, what it
 asks and its errors, and its reasoning, tools, plans and notices only if its settings list the group under
