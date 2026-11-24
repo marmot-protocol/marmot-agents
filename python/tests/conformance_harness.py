@@ -147,6 +147,9 @@ class ScriptedAdapter(MarmotAdapter):
     """The plugin's adapter, with what Hermes does played by a script."""
 
     def __init__(self, control: Control):
+        # The plugin keeps its session generations under HERMES_HOME; keep them in this run's own folder,
+        # never in the developer's ~/.hermes, and never shared between scenarios.
+        os.environ["HERMES_HOME"] = os.environ["MARMOT_CONFORMANCE_STATE"]
         super().__init__({})
         self.control = control
         self.connector.hold = 0.05
