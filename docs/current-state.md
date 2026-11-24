@@ -41,7 +41,8 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   Messages a driver that ended was never given wait for the next driver ([D-139](decisions.md#d-139-prompts-a-driver-that-ended-was-never-given-wait-for-the-next-driver)).
 - The core waits for every request it hands a driver. A harness that stops reading for a minute is stopped, and
   its requests are refused as failed; a connector on the socket, after 30 seconds ([D-066](decisions.md#d-066-the-core-finishes-every-request-it-starts), [D-098](decisions.md#d-098-a-harness-that-stops-reading-ends-its-connection), [D-138](decisions.md#d-138-a-connector-that-stops-reading-is-given-up-in-a-requests-time)).
-  A connector that sends more than 32 MB while a request waits is given up at once ([D-145](decisions.md#d-145-the-core-bounds-what-it-holds-for-a-connector-and-the-files-it-sends-at-once)).
+  A connector is given up at once when what the core holds for it while a request waits, the lines it sent
+  meanwhile and the refusals it owes for repeated `send_file` ids together, would pass 32 MB ([D-145](decisions.md#d-145-the-core-bounds-what-it-holds-for-a-connector-and-the-files-it-sends-at-once)).
 - No word-by-word streaming, and the QUIC preview stack is removed ([D-012](decisions.md#d-012-word-by-word-streaming-is-not-required-now), [D-067](decisions.md#d-067-the-quic-preview-stack-is-removed)).
 - Logs never hold message text, prompts, output, native messages, keys, public keys, event or group ids, relay
   addresses, paths, or a harness's session or turn ids ([D-071](decisions.md#d-071-what-may-be-logged)).
