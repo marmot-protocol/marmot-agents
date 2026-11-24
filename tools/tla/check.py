@@ -432,9 +432,10 @@ CASES += [
               "r1, which MDK's post of the tool settled already (H1)."),
     hold("kept-posted-later", HFAIR, invariant("H4"), {"INVARIANTS": "H4", **SAFETY},
          counterexample="hold-kept-posted-later",
-         what="The limit, the code as it is: MDK keeps a send of the tool to post later, which "
-              "the core handed it while the chat was the owner's; someone joins, and MDK posts "
-              "it to them (H4). The core cannot take back what MDK keeps."),
+         what="The limit, the code as it is, accepted for the pilot (D-148): MDK keeps a send "
+              "of the tool to post later, which the core handed it while the chat was the owner's; "
+              "someone joins, and MDK posts it to them (H4). The core cannot take back what MDK "
+              "keeps."),
     hold("bug-NoMove", HFAIR, TEMPORAL, {"Bug": '"NoMove"', "INVARIANTS": None}),
     hold("bug-HoldNothing", HPOSTED, invariant("H4"),
          {"Bug": '"HoldNothing"', "INVARIANTS": "H4", **SAFETY}),

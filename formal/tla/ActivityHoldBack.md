@@ -3,8 +3,9 @@
 Status: built and checked with TLC on small bounds, as the verification page plans for the parts of the system
 that face crashes and reordering (see [the inventory](inventory.md)). The model, its bounds and its switches are
 internal and change as the work goes. Read on 2026-11-24 against master `7118005`, on branch
-`t3/survey-and-model-state-machines`, which also fixes the two findings below. One point it shows waits for the owner
-([below](#what-the-model-found)).
+`t3/survey-and-model-state-machines`, which also fixes the two findings below. The limit it shows is accepted for
+the pilot ([D-148](../../docs/decisions.md#d-148-for-the-pilot-a-send-of-the-full-activity-that-mdk-keeps-and-posts-after-someone-joins-is-an-accepted-limit),
+[below](#what-the-model-found)).
 
 `ActivityHoldBack.tla` models the core holding the agent's full activity back from a chat that is no longer the
 owner's two-person chat with it
@@ -59,7 +60,7 @@ as it was handed.
 
 | Switch | When on | Shown when off, or on |
 | --- | --- | --- |
-| `MdkKeeps` | MDK may keep a send to post later, and answer `Pending` | on: MDK posts the full activity to someone who joined after the core handed it over (`hold-kept-posted-later`), the limit below |
+| `MdkKeeps` | MDK may keep a send to post later, and answer `Pending` | on: MDK posts the full activity to someone who joined after the core handed it over (`hold-kept-posted-later`), the limit below, accepted for the pilot (D-148) |
 | `FairMdk` | MDK eventually posts what it keeps | off: `r1` may never be settled in the chat (`hold-unfair`) |
 
 ## Properties
@@ -134,12 +135,14 @@ token, whether it went without its native message (`Queued::bare`), and goes so 
 nothing binds the token, and it goes as the chat is sent now (`not_kept`). MDK offers no read of a kept send's
 event before its engine takes it, so trying it again as it was handed is the only way to learn its event.
 
-**The limit, for the owner** (`hold-kept-posted-later`, H4): a send MDK keeps to post later, which the core handed
-it while the chat was the owner's, MDK posts to whoever is in the chat when it does, someone who joined since too.
-D-136 says a person added is sent none of what was queued before they came. The core cannot take back what MDK
-keeps; only MDK could (by withdrawing a queued send, or refusing one queued before a member joined). The same is
-true, more briefly, of the moment between the core's read of the members and MDK taking a send. This waits for
-the owner, as a privacy matter; the fix changes neither.
+**The limit, accepted for the pilot** ([`hold-kept-posted-later`](counterexamples/hold-kept-posted-later.json),
+H4; [D-148](../../docs/decisions.md#d-148-for-the-pilot-a-send-of-the-full-activity-that-mdk-keeps-and-posts-after-someone-joins-is-an-accepted-limit)):
+a send MDK keeps to post later, which the core handed it while the chat was the owner's, MDK posts to whoever is
+in the chat when it does, someone who joined since too. D-136 says a person added is sent none of what was queued
+before they came. The core cannot take back what MDK keeps; it holds back everything it has not handed over. Only
+MDK could do more, by withdrawing a queued send or refusing one queued before a member joined; the owner will ask
+MDK for one of these, and the core will use whichever MDK offers. The same is true, more briefly, of the moment
+between the core's read of the members and MDK taking a send. The fixes change neither.
 
 ## Running
 

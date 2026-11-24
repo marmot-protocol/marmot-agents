@@ -3122,6 +3122,25 @@ Issue #154.
 
 Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points.
 
+## D-148 For the pilot, a send of the full activity that MDK keeps and posts after someone joins is an accepted limit
+
+**Decision.** A send of the agent's full activity that the core handed to MDK while a chat was the owner's
+two-person chat, and that MDK keeps and posts later, can reach someone who joined the chat in between. This goes
+against [D-136](#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)'s
+"none of what was queued before they came", and is accepted for the pilot. The core cannot take back a send MDK
+holds; it holds back everything it has not yet handed to MDK, and a send MDK was handed goes on only as MDK was
+handed it. The owner will ask MDK for a way out, either a call that withdraws a queued send or MDK refusing to
+post a send queued before a member joined, and the core will use whichever MDK offers. The model
+`ActivityHoldBack` shows the limit as the counterexample
+[`hold-kept-posted-later`](../formal/tla/counterexamples/hold-kept-posted-later.json)
+([its page](../formal/tla/ActivityHoldBack.md#what-the-model-found)).
+
+**Why.** MDK keeps a send under its token from the moment it takes it, and posts it to whoever is in the group
+when its engine sends it. Nothing the core can call at MDK's pinned revision withdraws it. The moment is short,
+and so is the one between the core's read of a chat's members and MDK taking a send, which is the same limit.
+
+Decided 2026-11-24 by the project owner.
+
 ## D-149 Stop in a subagent's thread stops that subagent alone
 
 **Decision.** This builds the Stop in a thread of
@@ -3157,6 +3176,7 @@ before it passes the Stop on, and a driver that cannot stop one subagent need do
 
 Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points. It is visible to
 apps and connectors, and provisional until the owner accepts it.
+
 
 ## D-150 The core matches a typed command as the harness reads it, failing towards asking for the right to approve
 

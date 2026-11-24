@@ -24,7 +24,7 @@ cut anywhere, pays most.
    and can start its item twice; fixed. In review, a send tried again without the native message it was first
    handed with, which MDK refuses as another submission, settled its request twice too; fixed, and modelled
    since. It also shows the privacy limit that MDK posts what it keeps, to whoever
-   is in the chat then: an owner question.
+   is in the chat then: a limit accepted for the pilot (D-148).
 3. **The agent's words and the settles they carry** (`conversation.rs` `emitted` for `Body::Message`,
    `settle_by_turn`, `shown_by`, `refused` for words): a second model of the core, which `CoreLifecycle` leaves
    out on purpose. The requests words name move between the words' next new message, the turn's next version and
