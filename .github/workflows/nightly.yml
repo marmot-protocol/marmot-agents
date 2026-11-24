@@ -160,7 +160,16 @@ jobs:
         run: |
           set -uo pipefail
           failed=()
-          for target in $(cargo "+${FUZZ_TOOLCHAIN}" fuzz list --fuzz-dir crates/marmot-agent-fuzz); do
+          # A listing that fails, or finds nothing, would fuzz no target and pass.
+          if ! targets="$(cargo "+${FUZZ_TOOLCHAIN}" fuzz list --fuzz-dir crates/marmot-agent-fuzz)"; then
+            echo "::error::cargo fuzz list failed"
+            exit 1
+          fi
+          if [ -z "${targets}" ]; then
+            echo "::error::cargo fuzz list found no targets"
+            exit 1
+          fi
+          for target in ${targets}; do
             echo "::group::${target}"
             if ! cargo "+${FUZZ_TOOLCHAIN}" fuzz run --fuzz-dir crates/marmot-agent-fuzz --features libfuzzer \
                 "${target}" "target/fuzz-corpus/${target}" -- \
