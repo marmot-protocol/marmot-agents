@@ -9,17 +9,19 @@ use crate::activity::{FullActivity, owners_chat};
 use crate::carrier::{self, REQUEST_KIND};
 use crate::config::Config;
 use crate::conversation::{Heard, HeardQuote, HeardRequest, Sending, Token, Where};
-use crate::files::Outgoing;
+use crate::files::{Folders, Outgoing};
 use crate::groups::Listed;
 use crate::keys::{EventKey, GroupKey, PubKey};
 use cgka_traits::GroupId;
 use marmot_account::{AccountHome, AccountSummary};
+use marmot_agent_driver::Refusal;
 use marmot_agent_events::TurnId;
 use marmot_app::{
     AppError, AppMessageQuery, AppMessageRecord, LocalSendStatus, MarmotApp, MarmotAppConfig,
     MarmotAppEvent, MarmotAppRuntime, MediaUploadAttachmentRequest, MediaUploadRequest,
 };
 use std::collections::{HashMap, VecDeque};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -795,6 +797,13 @@ pub trait Side: Clone + Send + Sync + 'static {
         file: &Outgoing,
         turn: Option<&TurnId>,
     ) -> impl Future<Output = Result<EventKey, FileFailed>> + Send;
+
+    /// Reads a file the agent asks to send from the folders it may come from, before it is sent:
+    /// what [`Folders::read`] does, on a thread that may block. A stand-in may take its time, as a
+    /// slow disk does.
+    fn read_file(&self, folders: &Folders, path: &Path) -> Result<Outgoing, Refusal> {
+        folders.read(path)
+    }
 }
 
 /// Live events, and when they were subscribed to: what a group the core has no read mark for

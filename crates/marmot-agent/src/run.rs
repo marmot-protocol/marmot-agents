@@ -151,12 +151,26 @@ struct Waiting {
 /// The files the agent asked to send that the core holds: at most [`FILES_AT_ONCE`] uploading,
 /// each a task the core owns, and the rest waiting, [`FILES_HELD`] in all (D-145). A waiting file
 /// is only its path until its turn comes, so the bytes held are those of the files uploading.
-#[derive(Default)]
 struct Files {
     uploading: tokio::task::JoinSet<Uploaded>,
     /// Which file each upload is, for one whose task did not end by itself.
     running: HashMap<tokio::task::Id, (String, marmot_agent_driver::ChatId)>,
     waiting: VecDeque<Waiting>,
+    /// One for each file that may be read at once. A read holds one until it has returned, even
+    /// after its upload was stopped, since a read on its own thread cannot be stopped: the core
+    /// takes them all back before it ends, so no read outlives it.
+    reads: Arc<tokio::sync::Semaphore>,
+}
+
+impl Default for Files {
+    fn default() -> Self {
+        Self {
+            uploading: tokio::task::JoinSet::new(),
+            running: HashMap::new(),
+            waiting: VecDeque::new(),
+            reads: Arc::new(tokio::sync::Semaphore::new(FILES_AT_ONCE)),
+        }
+    }
 }
 
 impl Files {
@@ -582,7 +596,9 @@ impl<D: Driver, M: Side> Core<D, M> {
             // driver's by its trait (D-058), the others lose nothing.
             let first = self.first;
             self.first = (first + 1) % WAITS;
-            // A driver a catch-up found ended is handed nothing more.
+            // The files waiting go once the driver waits for more.
+            self.start_uploads().await;
+            // A driver a catch-up, or the files, found ended is handed nothing more.
             if self.ended {
                 break;
             }
@@ -652,7 +668,6 @@ impl<D: Driver, M: Side> Core<D, M> {
                     if let Some(done) = self.files.ended(ended, failed) {
                         self.file_done(done).await?;
                     }
-                    self.start_uploads();
                 }
                 Woke::Marmot(Live::Message(message)) => self.live(message).await?,
                 Woke::Marmot(Live::Groups) => self.consider_invitations().await?,
@@ -720,28 +735,41 @@ impl<D: Driver, M: Side> Core<D, M> {
             turn,
             folders,
         });
-        self.start_uploads();
         Ok(())
     }
 
     /// Starts the uploads of the files waiting, oldest first, while fewer than [`FILES_AT_ONCE`]
-    /// are under way.
-    fn start_uploads(&mut self) {
+    /// are under way, unless the driver has ended or has something for the loop: a driver that
+    /// ended, as a connector the core gave up, may still hand over what it read before, a file to
+    /// send among it, and how a file went may be what ends it. So an upload starts only once the
+    /// driver is waiting for more, and a file the driver asks for after its end is never offered
+    /// to MDK (D-145).
+    async fn start_uploads(&mut self) {
+        if self.files.waiting.is_empty() || self.files.running.len() >= FILES_AT_ONCE {
+            return;
+        }
+        if self.driver_ready().await {
+            return;
+        }
         while self.files.running.len() < FILES_AT_ONCE {
             let Some(file) = self.files.waiting.pop_front() else {
                 return;
             };
-            let marmot = self.marmot.clone();
-            let (id, chat) = (file.id.clone(), file.chat.clone());
+            let (marmot, reads) = (self.marmot.clone(), self.files.reads.clone());
+            let Waiting {
+                id,
+                chat,
+                path,
+                group,
+                turn,
+                folders,
+            } = file;
+            let named = (id.clone(), chat.clone());
             let task = self.files.uploading.spawn(async move {
-                let result = upload(&marmot, file.folders, file.path, &file.group, file.turn).await;
-                Uploaded {
-                    id: file.id,
-                    chat: file.chat,
-                    result,
-                }
+                let result = upload(marmot, reads, folders, path, &group, turn).await;
+                Uploaded { id, chat, result }
             });
-            self.files.running.insert(task.id(), (id, chat));
+            self.files.running.insert(task.id(), named);
         }
     }
 
@@ -767,6 +795,9 @@ impl<D: Driver, M: Side> Core<D, M> {
                 self.file_done(done).await?;
             }
         }
+        // A read of a file whose upload was stopped goes on on its own thread until it returns:
+        // it is waited for, so none goes on after the core.
+        drop(self.files.reads.acquire_many(FILES_AT_ONCE as u32).await);
         for file in std::mem::take(&mut self.files.waiting) {
             let result = Err(Refusal {
                 reason: Reason::Failed,
@@ -1365,14 +1396,24 @@ impl Drop for Ending {
 /// while MDK says it is busy, which MDK says only before it has taken the file. Any other failure
 /// may have come after MDK took it, such as a wait for MDK that ran out while the send went on, so
 /// it is not tried again: that could post the file twice, and a post cannot be taken back.
+///
+/// The read takes one of `reads` for as long as it runs, on its own thread, so the core can wait
+/// for it to return even once this upload was stopped (D-145).
 async fn upload(
-    marmot: &impl Side,
+    marmot: impl Side,
+    reads: Arc<tokio::sync::Semaphore>,
     folders: Folders,
     path: PathBuf,
     group: &GroupKey,
     turn: Option<marmot_agent_events::TurnId>,
 ) -> Result<(), Refusal> {
-    let read = tokio::task::spawn_blocking(move || folders.read(&path)).await;
+    let reading = reads.acquire_owned().await;
+    let side = marmot.clone();
+    let read = tokio::task::spawn_blocking(move || {
+        let _reading = reading;
+        side.read_file(&folders, &path)
+    })
+    .await;
     let outgoing = read.map_err(|_| Refusal::new(Reason::Failed))??;
     let mut wait = Duration::from_millis(100);
     for tried in 1..=FILE_BUSY_TRIES {
@@ -1774,7 +1815,9 @@ mod tests {
         std::fs::write(&path, "hello").unwrap();
         let folders = Folders::new(&[dir.path().to_path_buf()], None);
         let started = Instant::now();
-        let result = upload(side, folders, path, &GroupKey::from("g"), None).await;
+        let reads = Arc::new(tokio::sync::Semaphore::new(1));
+        let group = GroupKey::from("g");
+        let result = upload(side.clone(), reads, folders, path, &group, None).await;
         (result, started.elapsed())
     }
 
@@ -1889,7 +1932,9 @@ mod tests {
 
     /// A stand-in for MDK with one group, the owner's chat with the agent, holding what the test
     /// stores there. Each file offered waits until the test opens the gate, counting how many
-    /// wait at once; a wait that is dropped counts as ended. Every send is taken.
+    /// wait at once; a wait that is dropped counts as ended. Every send is taken, and the text of
+    /// each notice sent is kept. Reading a file to send waits while the test holds reads, and is
+    /// counted too.
     #[derive(Clone)]
     struct Desk {
         agent: PubKey,
@@ -1899,6 +1944,19 @@ mod tests {
         gate: tokio::sync::watch::Receiver<bool>,
         uploading: Arc<Mutex<(usize, usize)>>,
         offers: Arc<Mutex<u32>>,
+        notices: Arc<Mutex<Vec<String>>>,
+        /// Whether reads may go on, and the files being read now, and in all.
+        reads_open: Arc<(Mutex<bool>, std::sync::Condvar)>,
+        reading: Arc<Mutex<(usize, usize)>>,
+    }
+
+    /// One read of a file under way, for as long as it lives.
+    struct Reading(Arc<Mutex<(usize, usize)>>);
+
+    impl Drop for Reading {
+        fn drop(&mut self) {
+            self.0.lock().unwrap().0 -= 1;
+        }
     }
 
     /// One upload under way, for as long as it lives.
@@ -1942,6 +2000,30 @@ mod tests {
         /// How many files are uploading now, and the most that were at once.
         fn uploading(&self) -> (usize, usize) {
             *self.uploading.lock().unwrap()
+        }
+
+        /// How many files are being read now, and how many reads started in all.
+        fn reading(&self) -> (usize, usize) {
+            *self.reading.lock().unwrap()
+        }
+
+        /// How many files MDK was offered.
+        fn offers(&self) -> usize {
+            *self.offers.lock().unwrap() as usize
+        }
+
+        /// How many notices the chat was sent that a file was not sent.
+        fn not_sent(&self) -> usize {
+            (self.notices.lock().unwrap().iter())
+                .filter(|text| text.starts_with("The agent's file was not sent."))
+                .count()
+        }
+
+        /// Holds every read of a file from now, or lets them go on.
+        fn hold_reads(&self, held: bool) {
+            let (open, changed) = &*self.reads_open;
+            *open.lock().unwrap() = !held;
+            changed.notify_all();
         }
     }
 
@@ -2018,9 +2100,17 @@ mod tests {
         async fn send(
             &self,
             _group: &GroupKey,
-            _what: &Sending,
+            what: &Sending,
             token: &crate::Token,
         ) -> Result<EventKey, SendFailed> {
+            if let Sending::Item { item, .. } = what
+                && matches!(item.event.body(), marmot_agent_events::Body::Notice(_))
+            {
+                let text = item.event.header().text.clone();
+                self.notices.lock().unwrap().push(text);
+            }
+            // A send to MDK waits on its engine, and lets other tasks run meanwhile.
+            tokio::task::yield_now().await;
             Ok(EventKey::from(format!("sent-{}", token.mdk).as_str()))
         }
 
@@ -2035,6 +2125,22 @@ mod tests {
             let mut gate = self.gate.clone();
             let _ = gate.wait_for(|open| *open).await;
             Ok(EventKey::from("file"))
+        }
+
+        fn read_file(
+            &self,
+            folders: &Folders,
+            path: &std::path::Path,
+        ) -> Result<crate::files::Outgoing, Refusal> {
+            {
+                let mut reading = self.reading.lock().unwrap();
+                reading.0 += 1;
+                reading.1 += 1;
+            }
+            let _reading = Reading(self.reading.clone());
+            let (open, changed) = &*self.reads_open;
+            let _open = changed.wait_while(open.lock().unwrap(), |open| !*open);
+            folders.read(path)
         }
     }
 
@@ -2102,8 +2208,19 @@ mod tests {
         _state: tempfile::TempDir,
     }
 
-    impl Desked {
-        fn start() -> Self {
+    /// A core on a [`Desk`], with a folder it may send `notes.txt` from, driving `driver` until
+    /// it ends or the stop is sent.
+    struct OnDesk {
+        side: Desk,
+        open: tokio::sync::watch::Sender<bool>,
+        stop: tokio::sync::oneshot::Sender<()>,
+        running: tokio::task::JoinHandle<Result<(), String>>,
+        folder: tempfile::TempDir,
+        state: tempfile::TempDir,
+    }
+
+    impl OnDesk {
+        fn start(driver: impl Driver + 'static) -> Self {
             let folder = tempfile::tempdir().unwrap();
             std::fs::write(folder.path().join("notes.txt"), "hello").unwrap();
             let state = tempfile::tempdir().unwrap();
@@ -2123,14 +2240,9 @@ mod tests {
                 gate,
                 uploading: Arc::default(),
                 offers: Arc::default(),
-            };
-            let (outputs, outputs_in) = mpsc::unbounded_channel();
-            let (prompts_out, prompts) = mpsc::unbounded_channel();
-            let told = Arc::new(Mutex::new(Vec::new()));
-            let driver = Hand {
-                outputs: outputs_in,
-                prompts: prompts_out,
-                told: told.clone(),
+                notices: Arc::default(),
+                reads_open: Arc::new((Mutex::new(true), std::sync::Condvar::new())),
+                reading: Arc::default(),
             };
             let core = Core::new(side.clone(), driver, &config, Store::new(state.path())).unwrap();
             let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -2141,6 +2253,49 @@ mod tests {
             let running = tokio::spawn(core.run(live, async {
                 let _ = stopped.await;
             }));
+            Self {
+                side,
+                open,
+                stop,
+                running,
+                folder,
+                state,
+            }
+        }
+
+        /// The file the agent may send.
+        fn notes(&self) -> PathBuf {
+            self.folder.path().join("notes.txt")
+        }
+
+        /// Waits for the core to end, within a few seconds.
+        async fn ended(self) {
+            tokio::time::timeout(Duration::from_secs(5), self.running)
+                .await
+                .expect("the core ends in time")
+                .unwrap()
+                .unwrap();
+        }
+    }
+
+    impl Desked {
+        fn start() -> Self {
+            let (outputs, outputs_in) = mpsc::unbounded_channel();
+            let (prompts_out, prompts) = mpsc::unbounded_channel();
+            let told = Arc::new(Mutex::new(Vec::new()));
+            let driver = Hand {
+                outputs: outputs_in,
+                prompts: prompts_out,
+                told: told.clone(),
+            };
+            let OnDesk {
+                side,
+                open,
+                stop,
+                running,
+                folder,
+                state,
+            } = OnDesk::start(driver);
             Self {
                 side,
                 open,
@@ -2254,6 +2409,192 @@ mod tests {
             let told = desk.told.lock().unwrap().clone();
             assert_eq!(told.len(), FILES_AT_ONCE + 3, "each file was answered");
             assert!(told.iter().all(|(_, r)| r.is_err()), "none was sent");
+            // MDK may have taken a file that was uploading, so only the driver hears of those;
+            // the chat is told of the files never offered (D-145).
+            assert_eq!(
+                desk.side.not_sent(),
+                3,
+                "the chat hears of the waiting files only"
+            );
         }
+    }
+
+    // A file being read when the core stops, or when its driver ends, is waited for: no read the
+    // core started goes on after it, however slow the disk, and none of those files reaches MDK
+    // (D-145).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn no_read_outlives_the_core() {
+        for driver_ends in [false, true] {
+            let mut desk = Desked::start();
+            desk.side.say("go");
+            let chat = desk.prompted().await.chat.id;
+            desk.side.hold_reads(true);
+            desk.send_files(&chat, 0, FILES_AT_ONCE);
+            until(|| (desk.side.reading().0 == FILES_AT_ONCE).then_some(())).await;
+            if driver_ends {
+                drop(desk.outputs);
+            } else {
+                let _ = desk.stop.send(());
+            }
+            let side = desk.side.clone();
+            let slow_disk = tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                side.hold_reads(false);
+            });
+            let ended = tokio::time::timeout(Duration::from_secs(5), desk.running).await;
+            let reading = desk.side.reading().0;
+            // Let any read still held go, so a failure is reported and does not hang the test.
+            desk.side.hold_reads(false);
+            slow_disk.await.unwrap();
+            ended
+                .expect("the core ends once the reads have")
+                .unwrap()
+                .unwrap();
+            assert_eq!(reading, 0, "no read goes on after the core");
+            assert_eq!(desk.side.offers(), 0, "no file read was offered to MDK");
+            let told = desk.told.lock().unwrap().clone();
+            assert_eq!(told.len(), FILES_AT_ONCE, "each file was answered");
+            assert!(told.iter().all(|(_, r)| r.is_err()), "none was sent");
+            assert_eq!(desk.side.not_sent(), 0, "the chat is told nothing of them");
+        }
+    }
+
+    /// A connector on the socket, as the test plays it: it has given its hello.
+    struct Connector {
+        lines: tokio::io::Lines<tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>>,
+        write: tokio::net::unix::OwnedWriteHalf,
+    }
+
+    impl Connector {
+        /// A connector and the core's driver for it, greeted.
+        async fn greeted() -> (Self, SocketDriver) {
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+            const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+            let (core, connector) = tokio::net::UnixStream::pair().unwrap();
+            let (read, mut write) = connector.into_split();
+            let hello = serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "hello",
+                "params": {"protocol": crate::socket::PROTOCOL, "token": TOKEN,
+                "harness": {"name": "script"}, "connector": {"name": "script", "version": "0"},
+                "capabilities": {"interrupt": false, "mid_turn": "queue", "sessions": "core",
+                    "resume": false, "approvals": false, "files_in": "none",
+                    "approval_commands": []}}});
+            write
+                .write_all(format!("{hello}\n").as_bytes())
+                .await
+                .unwrap();
+            let driver = SocketDriver::greet(core, TOKEN, "agent").await.unwrap();
+            let mut lines = tokio::io::BufReader::new(read).lines();
+            lines
+                .next_line()
+                .await
+                .unwrap()
+                .expect("the core's answer to the hello");
+            (Self { lines, write }, driver)
+        }
+
+        /// The chat of the next prompt the core sends, and the prompt's id.
+        async fn prompted(&mut self) -> (String, serde_json::Value) {
+            loop {
+                let line = tokio::time::timeout(Duration::from_secs(5), self.lines.next_line())
+                    .await
+                    .expect("a prompt in time")
+                    .unwrap()
+                    .expect("the connection is open");
+                let message: serde_json::Value = serde_json::from_str(&line).unwrap();
+                if message["method"] == "prompt" {
+                    let chat = message["params"]["chat"]["id"].as_str().unwrap();
+                    return (chat.into(), message["id"].clone());
+                }
+            }
+        }
+
+        /// The connector takes the request `id`.
+        async fn take(&mut self, id: serde_json::Value) {
+            use tokio::io::AsyncWriteExt;
+            let taken = serde_json::json!({"jsonrpc": "2.0", "id": id, "result": {}});
+            self.write
+                .write_all(format!("{taken}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+
+        /// The connector asks the core to send `path` to `chat`, under its id `id`.
+        async fn send_file(&mut self, id: i64, chat: &str, path: &std::path::Path) {
+            use tokio::io::AsyncWriteExt;
+            let ask = serde_json::json!({"jsonrpc": "2.0", "id": id, "method": "send_file",
+                "params": {"chat": chat, "path": path}});
+            self.write
+                .write_all(format!("{ask}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+    }
+
+    // A connector that sends a file to send, and then more than the core holds for it while a
+    // prompt waits, is given up; what it sent still reaches the core, but no file reaches MDK
+    // once it is given up, not even one it asked for before: the chat is told that file was not
+    // sent (D-145).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn no_file_starts_after_a_connector_is_given_up() {
+        use tokio::io::AsyncWriteExt;
+        let (mut connector, driver) = Connector::greeted().await;
+        let desk = OnDesk::start(driver);
+        desk.open.send(true).unwrap();
+        desk.side.say("go");
+        // It never takes the prompt.
+        let (chat, _) = connector.prompted().await;
+        connector.send_file(2, &chat, &desk.notes()).await;
+        let event = |chat: Option<&str>, text: String| {
+            let event = serde_json::json!({"jsonrpc": "2.0", "method": "event", "params": {
+                "chat": chat, "item": "i", "type": "notice", "state": "done", "title": "t",
+                "text": text, "body": {"kind": "warning"}, "native": {"kind": "k", "payload": {}}}});
+            format!("{event}\n")
+        };
+        // One for the chat, which the core sends there, and then the flood.
+        let mut write = connector.write;
+        let said = event(Some(&chat), "working".into());
+        write.write_all(said.as_bytes()).await.unwrap();
+        let line = event(None, "x".repeat(1024 * 1024));
+        let flooding =
+            tokio::spawn(async move { while write.write_all(line.as_bytes()).await.is_ok() {} });
+        let side = desk.side.clone();
+        desk.ended().await;
+        flooding.await.unwrap();
+        assert_eq!(side.reading().1, 0, "the file was not read");
+        assert_eq!(side.offers(), 0, "nor offered to MDK");
+        assert_eq!(side.not_sent(), 1, "the chat is told it was not sent");
+    }
+
+    // A connector the core gives up while it answers how a file went, since the connector stopped
+    // reading, starts no upload of the files still waiting: those were never offered, and the
+    // chat is told they were not sent (D-145).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_file_waiting_does_not_start_once_its_connector_is_given_up() {
+        let (mut connector, driver) = Connector::greeted().await;
+        let desk = OnDesk::start(driver);
+        desk.side.say("go");
+        let (chat, prompt) = connector.prompted().await;
+        connector.take(prompt).await;
+        let files = FILES_AT_ONCE as i64 + 1;
+        for id in 2..2 + files {
+            connector.send_file(id, &chat, &desk.notes()).await;
+        }
+        until(|| (desk.side.uploading().0 == FILES_AT_ONCE).then_some(())).await;
+        // It reads nothing more, so the core cannot tell it how its files went.
+        let Connector { lines, write } = connector;
+        let read = lines.into_inner().into_inner();
+        let stream = read.reunite(write).unwrap().into_std().unwrap();
+        stream.shutdown(std::net::Shutdown::Read).unwrap();
+        desk.open.send(true).unwrap();
+        let side = desk.side.clone();
+        desk.ended().await;
+        drop(stream);
+        assert_eq!(
+            side.reading().1,
+            FILES_AT_ONCE,
+            "only the first files were read"
+        );
+        assert_eq!(side.offers(), FILES_AT_ONCE, "and offered");
+        assert_eq!(side.not_sent(), 1, "the chat is told the last was not sent");
     }
 }
