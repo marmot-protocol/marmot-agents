@@ -733,3 +733,17 @@ platform's settings (Telegram passes its `config.extra`), which reads the admins
 confirmed command answer when there are any; with none, everyone Hermes admits may. The text a person types is read by
 `_hm_slash_confirm_reply` in `gateway/run_inbound.py`, which leaves it to an approval when one waits in the
 session (`has_blocking_approval`) and otherwise answers whichever confirmation waits there, by no id.
+
+The checks for an approval card and a question, read at the same commit and on the same list (with
+`refusal_text`):
+`approval_refusal(session_key, actor_id, *, admin_ids=(), request_id=None, extra=None, choice=None, admitted=True)`
+and `clarify_refusal(clarify_id, actor_id, *, admin_ids=(), extra=None, admitted=True)`, each `None` when the person
+may answer and otherwise the asker's name, which `refusal_text` turns into Hermes's words. `approval_refusal` checks
+the card `request_id` names, or the oldest, and the slash command the `choice` runs; it refuses nothing when nothing
+waits, so the card's own call then reports that. `clarify_refusal` checks against the authority the question was
+asked with, and refuses nothing when the question no longer waits. The card's call takes the same settings:
+`resolve_gateway_approval_card(session_key, choice, request_id, *, actor_id=None, admin_ids=(), extra=None,
+admitted=True)`, which gives how many approvals it answered. Hermes's Telegram adapter asks each check with the
+person who pressed and its `config.extra`, before it resolves anything, and passes the same `extra` to the card's
+call; the plugin does the same with its own platform settings
+([D-151](../decisions.md#d-151-the-hermes-plugin-asks-hermess-own-check-of-who-may-answer-an-approval-card-or-a-question)).

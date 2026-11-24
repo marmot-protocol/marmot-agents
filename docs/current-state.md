@@ -188,7 +188,11 @@ Built in the core, the Codex driver and MDK ([D-141](decisions.md#d-141-subagent
   watched by the end-to-end scenario ([D-118](decisions.md#d-118-the-channel-plugin-contract-is-accepted-as-written)). The socket's chat section, for the gateways' message tools,
   is not designed, so OpenClaw's message tool is offered no actions
   ([Q-32](open-questions.md#q-32-what-does-the-sockets-chat-section-carry)).
-- The core decides who may prompt and approve; the gateway allows what the core lets through ([D-084](decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)).
+- The core decides who may prompt and approve; the gateway allows what the core lets through ([D-084](decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)),
+  except that Hermes's plugin also asks Hermes's own check of who may answer before it answers a request to confirm
+  a command, an approval card or a question, so where Hermes's own settings limit who may answer, an answer the
+  core allows can still be refused, and the item keeps waiting ([D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id),
+  [D-151](decisions.md#d-151-the-hermes-plugin-asks-hermess-own-check-of-who-may-answer-an-approval-card-or-a-question)).
 - What they send and how they behave was accepted from M3; OpenClaw's `/model status` may show the masked key
   ([D-092](decisions.md#d-092-the-choices-made-while-building-m3-are-accepted), [D-088](decisions.md#d-088-openclaws-model-status-may-show-the-masked-model-key)).
 
