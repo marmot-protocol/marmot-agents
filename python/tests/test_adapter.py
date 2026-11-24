@@ -439,6 +439,9 @@ class AdminChecks(unittest.TestCase):
 
     def setUp(self):
         self.asked, self.resolved = [], []
+        # Who Hermes's question check refuses, and its words: a fixture, since whom Hermes lets answer a
+        # question is its own policy, which this test does not copy.
+        self.clarify_refuses = {}
         actor = types.ModuleType("gateway.approval_actor")
         admins = lambda extra: (extra or {}).get("group_allow_admin_from") or []  # noqa: E731
 
@@ -449,7 +452,7 @@ class AdminChecks(unittest.TestCase):
 
         def clarify_refusal(clarify_id, actor_id, *, admin_ids=(), extra=None, admitted=True):
             self.asked.append(("clarify", clarify_id, actor_id, extra))
-            return None if not admins(extra) or actor_id in admins(extra) else "Alice"
+            return self.clarify_refuses.get(actor_id)
 
         actor.approval_refusal, actor.clarify_refusal = approval_refusal, clarify_refusal
         actor.refusal_text = lambda r: f"⛔ /{r.split(':')[-1]} is admin-only here." if r.startswith("\0") else f"Only {r} can answer this."
@@ -488,14 +491,18 @@ class AdminChecks(unittest.TestCase):
                          "Hermes's own call is given the chat's settings too")
 
     def test_a_question_is_answered_only_for_someone_hermes_lets_answer_it(self):
+        """Hermes's check is asked with the person and the chat's settings, and decides alone: whom it
+        refuses gets its words and nothing is answered; whom it lets, admin or not, answers."""
         self.extra["group_allow_admin_from"] = ["u-admin"]
+        self.clarify_refuses["u-2"] = "Alice"
         with self.assertRaises(Refusal) as refused:
             self.adapter.resolve_question("k-1", "blue", "u-2")
         self.assertEqual((refused.exception.reason, refused.exception.detail), ("not_supported", "Only Alice can answer this."))
-        self.assertEqual(self.resolved, [])
-        self.assertTrue(self.adapter.resolve_question("k-1", "blue", "u-admin"))
+        self.assertEqual(self.resolved, [], "nothing answered: the question still waits")
+        self.assertEqual(self.asked, [("clarify", "k-1", "u-2", self.extra)])
+        self.assertTrue(self.adapter.resolve_question("k-1", "blue", "u-3"))
         self.assertEqual(self.resolved, [("clarify", "k-1", "blue")])
-        self.assertEqual(self.asked[-1], ("clarify", "k-1", "u-admin", self.extra))
+        self.assertEqual(self.asked[-1], ("clarify", "k-1", "u-3", self.extra))
 
 
 class AnsweringCore:
