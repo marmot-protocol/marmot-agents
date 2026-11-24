@@ -157,6 +157,11 @@ MDK could do more, by withdrawing a queued send or refusing one queued before a 
 MDK for one of these, and the core will use whichever MDK offers. The same is true, more briefly, of the moment
 between the core's read of the members and MDK taking a send. The fixes change neither.
 
+D-148 also covers a narrower path the model does not hold: the core hands a send MDK was given again under its
+token after asking MDK whether it keeps it, and a stall of more than the 60 seconds the core allows between those
+two calls lets MDK forget the token and take the send as new. Issue #194 is the core's fix (never hand such a send
+again; ask only), and its model change: a second hand-over after a membership change is a defect.
+
 ## Running
 
 ```sh

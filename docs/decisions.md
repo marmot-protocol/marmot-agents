@@ -3140,6 +3140,13 @@ post a send queued before a member joined, and the core will use whichever MDK o
 [`hold-kept-posted-later`](../formal/tla/counterexamples/hold-kept-posted-later.json)
 ([its page](../formal/tla/ActivityHoldBack.md#what-the-model-found)).
 
+The limit also covers a narrower path to the same outcome. To learn what became of a send MDK was handed, the
+core asks MDK whether it still holds the token, and if so hands the same send again under it; it treats a token
+MDK may forget within 60 seconds as gone. If the core stalls for longer than that between the two calls, MDK may
+have forgotten the token and take the send as new, posting it to the chat as it is then. That too is accepted for
+the pilot, and the request to MDK covers it. Issue #194 is the core's own fix, to make before the release: never
+hand MDK such a send again, and learn its outcome by asking only.
+
 **Why.** MDK keeps a send under its token from the moment it takes it, and posts it to whoever is in the group
 when its engine sends it. Nothing the core can call at MDK's pinned revision withdraws it. The moment is short,
 and so is the one between the core's read of a chat's members and MDK taking a send, which is the same limit.
