@@ -148,7 +148,8 @@ pub fn shown_flat(
 
 /// Every event of a subagent's names its `task` item, which is a subagent's `task` item of the
 /// chat and not the event's own, and names it from its first version on; and a subagent's words
-/// name the one whose subject is their parent, the tool item that started it (D-121).
+/// name the one whose subject, when they were said, is their parent: the tool item that started
+/// it or gave it that work, which a later turn's work replaces (D-121).
 fn in_threads(seen: &[Emitted], chat: &str) -> Result<(), Violation> {
     let last = items(seen, chat);
     let tasks: Vec<(&str, Option<&str>)> = (last.iter())
@@ -170,26 +171,34 @@ fn in_threads(seen: &[Emitted], chat: &str) -> Result<(), Violation> {
         {
             return fail(format!("{item} names {}, no subagent's task", of.as_str()));
         }
-        if let Body::Message(m) = e.event.body()
-            && let Some(parent) = &m.parent
-        {
-            let Some(of) = &header.subagent else {
-                return fail("a subagent's words name no subagent".into());
-            };
-            if subject_of(of.as_str()).flatten() != Some(parent.as_str()) {
-                let (of, parent) = (of.as_str(), parent.as_str());
-                return fail(format!(
-                    "{item} names {of}, not the task of the subagent {parent} started"
-                ));
-            }
-        }
     }
-    // An event names its subagent from its first version on: an item never moves.
+    // Each version of a subagent's words is checked against the subject its task had then, by
+    // the task's versions before it.
+    let mut subject_then: HashMap<&str, Option<&str>> = HashMap::new();
     for e in seen
         .iter()
         .filter(|e| e.chat.as_ref().is_some_and(|c| c.0 == chat))
     {
-        let item = e.event.header().item.as_str();
+        let header = e.event.header();
+        let item = header.item.as_str();
+        match e.event.body() {
+            Body::Task(t) if t.kind == "subagent" => {
+                subject_then.insert(item, t.subject.as_ref().map(|s| s.as_str()));
+            }
+            Body::Message(m) if m.parent.is_some() => {
+                let parent = m.parent.as_ref().map(|p| p.as_str());
+                let Some(of) = &header.subagent else {
+                    return fail("a subagent's words name no subagent".into());
+                };
+                if subject_then.get(of.as_str()).copied().flatten() != parent {
+                    let (of, parent) = (of.as_str(), parent.unwrap_or_default());
+                    return fail(format!(
+                        "{item} names {of}, not the task of the subagent {parent} started"
+                    ));
+                }
+            }
+            _ => {}
+        }
         let now = (last.iter()).find(|l| l.event.header().item.as_str() == item);
         if now.is_some_and(|l| l.event.header().subagent != e.event.header().subagent) {
             return fail(format!("{item} moved to another subagent"));
@@ -642,6 +651,46 @@ mod tests {
         assert!(
             crossed.is_err(),
             "words of one subagent naming another's task"
+        );
+    }
+
+    /// One subagent, started by `tool-1` and given more work by `tool-2` in a later turn, whose
+    /// `task` item takes the new subject; its words of the first turn name `tool-1`, and words
+    /// whose parent is `late` come after the new subject.
+    fn reused_subagent(late: &str) -> Vec<Emitted> {
+        let tool = |seq, item| {
+            let body = serde_json::json!({"kind": "subagent", "name": "spawn"});
+            emitted(seq, item, None, "tool", body)
+        };
+        let task = |seq, subject| {
+            let body = serde_json::json!({"kind": "subagent", "subject": subject});
+            emitted(seq, "task-a", None, "task", body)
+        };
+        let said = |seq, item, parent| {
+            let body = serde_json::json!({"parent": parent});
+            emitted(seq, item, Some("task-a"), "message", body)
+        };
+        vec![
+            tool(1, "tool-1"),
+            task(2, "tool-1"),
+            said(3, "words-1", "tool-1"),
+            tool(4, "tool-2"),
+            task(5, "tool-2"),
+            said(6, "words-2", late),
+        ]
+    }
+
+    // A subagent's words name the tool item that gave it its work when they were said, so the
+    // words of a subagent given new work in a later turn pass, each turn's against its own
+    // subject, and words said after the new work that name the old tool item do not.
+    #[test]
+    fn words_match_the_subject_their_task_had_when_they_were_said() {
+        shown_flat(&reused_subagent("tool-2"), "c-1", 1, State::Done)
+            .unwrap_or_else(|v| panic!("{v}"));
+        let stale = shown_flat(&reused_subagent("tool-1"), "c-1", 1, State::Done);
+        assert!(
+            stale.is_err(),
+            "words naming the work the subagent had before"
         );
     }
 }
