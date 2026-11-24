@@ -411,6 +411,13 @@ impl SocketDriver {
                 }
             }
             if let Some(output) = self.output(&envelope, size) {
+                // A line past the budget is not kept, so what it would have shown is not.
+                if !self.hold(size) {
+                    if let Output::SendFile(file) = &output {
+                        self.files.remove(&file.id);
+                    }
+                    return if shown { Ok(()) } else { Err(unanswered) };
+                }
                 if let Output::Event(e) = &output {
                     shown |= match &shows {
                         Shows::Prompt(m, chat) => {
@@ -422,19 +429,21 @@ impl SocketDriver {
                     };
                 }
                 self.held.push_back((output, size));
-                self.holding += size;
             }
-            if self.over_budget() {
+            // A repeated `send_file` whose refusal would not fit gave the connector up.
+            if self.gone {
                 return if shown { Ok(()) } else { Err(unanswered) };
             }
         }
     }
 
-    /// Whether the core holds more for this connection than [`HELD_MAX`]: then the connector is
-    /// given up, as one that does not answer is, and nothing more is read from it (D-145).
-    fn over_budget(&mut self) -> bool {
-        if self.holding <= HELD_MAX {
-            return false;
+    /// Counts a line of `size` bytes against what the core holds for this connection, if it fits
+    /// in [`HELD_MAX`]. If it does not, it is not held: the connector is given up, as one that
+    /// does not answer is, and nothing more is read from it (D-145).
+    fn hold(&mut self, size: usize) -> bool {
+        if self.holding + size <= HELD_MAX {
+            self.holding += size;
+            return true;
         }
         if !self.gone {
             eprintln!(
@@ -442,7 +451,7 @@ impl SocketDriver {
             );
         }
         self.gone = true;
-        true
+        false
     }
 
     /// Answers each `send_file` that reused an unanswered id: `invalid`, and nothing was sent.
@@ -495,9 +504,11 @@ impl SocketDriver {
             .unwrap_or(Value::Null);
         let key = id.to_string();
         if self.files.contains_key(&key) {
-            // The same id again, while the first is unanswered: refused, and not sent.
-            self.duplicates.push((id, size));
-            self.holding += size;
+            // The same id again, while the first is unanswered: refused, and not sent. Its
+            // refusal waits for the next write, so it is held.
+            if self.hold(size) {
+                self.duplicates.push((id, size));
+            }
             return None;
         }
         self.files.insert(key.clone(), id);
@@ -609,10 +620,8 @@ impl Driver for SocketDriver {
             }
             // Reading keeps what it has read in `self`, and nothing is written here, so this
             // future is safe to drop (D-058). Duplicates to answer pile up here until the next
-            // write, so they count against the budget too.
-            if self.over_budget() {
-                return None;
-            }
+            // write, so they count against the budget too, and one that does not fit ends the
+            // reading.
             let (envelope, size) = self.read().await?;
             if let Some(output) = self.output(&envelope, size) {
                 return Some(output);
@@ -1202,8 +1211,8 @@ mod tests {
 
     // A connector that goes on sending while the core waits for its answer, more than the core
     // holds for one connection, is given up then, not when the request's time runs out: what the
-    // core holds stays bounded, the request is told as perhaps taken, and what was held still
-    // reaches the core (D-145).
+    // core holds stays within the budget, the line that would pass it is not kept, the request is
+    // told as perhaps taken, and what was held still reaches the core (D-145).
     #[tokio::test]
     async fn a_connector_that_sends_more_than_the_core_holds_is_given_up() {
         let (core, connector) = UnixStream::pair().unwrap();
@@ -1213,7 +1222,11 @@ mod tests {
             .await
             .unwrap();
         let mut driver = greeted(core).await;
-        let line = a_big_event(1024 * 1024);
+        // Lines of exactly a mebibyte before their newline, so that the budget holds a whole
+        // number of them.
+        let size = 1024 * 1024;
+        let line = a_big_event(size + 1 - a_big_event(0).len());
+        assert_eq!(line.len(), size + 1);
         let flooding = tokio::spawn(async move {
             // It never answers, and stops only when the core lets go of the connection.
             while write.write_all(line.as_bytes()).await.is_ok() {}
@@ -1229,10 +1242,10 @@ mod tests {
             assert!(output.into_event().is_some(), "the events it sent");
             held += 1;
         }
-        let most = HELD_MAX / (1024 * 1024);
-        assert!(
-            (most - 1..=most + 1).contains(&held),
-            "{held} events held, about {most} fit"
+        assert_eq!(
+            held,
+            HELD_MAX / size,
+            "as many as fit, and not the one past them"
         );
         drop(driver);
         flooding.await.unwrap();
@@ -1262,6 +1275,14 @@ mod tests {
             .await
             .expect("given up, not read for ever");
         assert!(next.is_none(), "given up");
+        assert!(
+            driver.holding <= HELD_MAX,
+            "the refusal past the budget is not held"
+        );
+        assert_eq!(
+            driver.holding,
+            driver.duplicates.iter().map(|(_, s)| s).sum::<usize>()
+        );
         drop(driver);
         flooding.await.unwrap();
     }
