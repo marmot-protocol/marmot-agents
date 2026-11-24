@@ -13,7 +13,7 @@
 //! | `carrier_item` | a kind 1201 or an edit | an item the core reads, written again, fits, MDK reads it, and it reads back the same (S7) |
 //! | `settings` | the settings file | every key the settings take is lowercase hex, as MDK gives keys (S6) |
 //! | `saved_state` | the state file | one the core reads it writes back the same, and starts on |
-//! | `codex`, `acp`, `pi` | each built-in driver's harness messages | every native message is text that arrived (D-007), `seq` rises (D-059) |
+//! | `codex`, `acp`, `pi` | each built-in driver's harness messages | every native message is the message read or a whole value of one of its fields (D-007), `seq` rises (D-059) |
 //! | `import` | today's connectors' env files and unit lines | none |
 
 pub mod seeds;
@@ -24,10 +24,10 @@ use marmot_agent::config::Config;
 use marmot_agent::socket::lines::Splitter;
 use marmot_agent::socket::{PROTOCOL, SocketDriver};
 use marmot_agent::{Conversation, EventKey, PubKey, Rights, Saved, Who};
+use marmot_agent_conformance::native::Arrived;
 use marmot_agent_driver::{Capabilities, Driver, FilesIn, MidTurn, Output, Sessions};
 use marmot_agent_events::AgentEvent;
 use serde::Deserialize;
-use serde_json::value::RawValue;
 use std::collections::HashMap;
 
 /// The agent's key, as the core holds it.
@@ -328,22 +328,18 @@ fn harness_lines(data: &[u8]) -> Vec<(bool, &str)> {
         .collect()
 }
 
-/// What a translator made, checked: every native message is text that arrived, and `seq` rises
-/// in each session.
-fn translated(arrived: &str, events: &[AgentEvent], seq: &mut HashMap<String, u64>) {
+/// What a translator made, checked: every native message arrived, as
+/// [`Arrived`](marmot_agent_conformance::native::Arrived) checks (D-007), and `seq` rises in each
+/// session.
+fn translated(
+    arrived: &Arrived,
+    events: &[AgentEvent],
+    stopped: bool,
+    seq: &mut HashMap<String, u64>,
+) {
     for event in events {
-        if let Some(native) = event.native() {
-            let parts: Vec<&RawValue> = if native.kind.ends_with("_chunk]") {
-                serde_json::from_str(native.payload.get()).expect("a streamed one is a list")
-            } else {
-                vec![&*native.payload]
-            };
-            for part in parts {
-                assert!(
-                    arrived.contains(part.get()),
-                    "a native message is text that arrived"
-                );
-            }
+        if let Err(why) = arrived.check(event, stopped) {
+            panic!("{why}");
         }
         let header = event.header();
         let session = header.session.as_ref().map(|s| s.as_str().to_string());
@@ -358,21 +354,20 @@ macro_rules! translator_check {
         #[doc = $doc]
         pub fn $name(data: &[u8]) {
             let mut translator = $make;
-            let mut arrived = String::new();
+            let mut arrived = Arrived::default();
             let mut seq = HashMap::new();
             for (from_harness, text) in harness_lines(data) {
-                arrived.push_str(text);
-                arrived.push('\n');
+                arrived.push(text);
                 let way = if from_harness {
                     $crate_::Direction::In
                 } else {
                     $crate_::Direction::Out
                 };
                 let events = translator.feed(way, text);
-                translated(&arrived, &events, &mut seq);
+                translated(&arrived, &events, false, &mut seq);
             }
             let events = translator.harness_stopped();
-            translated(&arrived, &events, &mut seq);
+            translated(&arrived, &events, true, &mut seq);
         }
     };
 }

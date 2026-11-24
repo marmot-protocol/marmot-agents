@@ -4,8 +4,9 @@
 //! translator after; the recordings' own restarts stay). After each, with the harness stopped at
 //! the end:
 //!
-//! - D-007: every native message is text that arrived, unchanged (a streamed one, a list of the
-//!   chunks that arrived).
+//! - D-007: every native message arrived, unchanged: the message the translator was reading, or
+//!   the whole value of one of its fields (a streamed one, a list of such values of the chunks that
+//!   arrived), as `marmot_agent_conformance::native` checks.
 //! - SEQ: `seq` rises within a session (D-059, point 4).
 //! - S2: every item of the session's turns is closed. A session's own item outlives its harness.
 //! - Nothing reopens an item once it ended: no later event of it is running or waiting.
@@ -18,6 +19,7 @@
 //! The case count comes from `PROPTEST_CASES`; a failing case is kept in
 //! `translators.proptest-regressions` beside this file.
 
+use marmot_agent_conformance::native::Arrived;
 use marmot_agent_events::{AgentEvent, Body, State};
 use proptest::prelude::*;
 use serde_json::value::RawValue;
@@ -213,33 +215,18 @@ fn is_open(state: State) -> bool {
 struct Checked {
     /// Whether every item must close, and none reopen once it ended.
     strict: bool,
-    arrived: String,
+    arrived: Arrived,
     /// Each item's last state, by its id; a session's own item apart.
     items: BTreeMap<String, (State, bool)>,
     seq: BTreeMap<String, u64>,
 }
 
 impl Checked {
-    fn event(&mut self, event: &AgentEvent) -> Result<(), String> {
+    fn event(&mut self, event: &AgentEvent, stopped: bool) -> Result<(), String> {
         let header = event.header();
         let id = header.item.as_str().to_string();
         let session_item = matches!(event.body(), Body::Session(_));
-        if let Some(native) = event.native() {
-            let parts: Vec<&RawValue> = if native.kind.ends_with("_chunk]") {
-                serde_json::from_str(native.payload.get())
-                    .map_err(|_| format!("item {id}: a streamed native message is not a list"))?
-            } else {
-                vec![&*native.payload]
-            };
-            for part in parts {
-                if !self.arrived.contains(part.get()) {
-                    return Err(format!(
-                        "D-007: item {id}'s native message ({}) is not text that arrived",
-                        native.kind
-                    ));
-                }
-            }
-        }
+        self.arrived.check(event, stopped)?;
         let session = header.session.as_ref().map(|s| s.as_str().to_string());
         let last = self.seq.entry(session.unwrap_or_default()).or_insert(0);
         if header.seq <= *last {
@@ -283,13 +270,12 @@ fn run(recording: &Recording, lines: &[Line], strict: bool) -> Result<(), String
         ..Checked::default()
     };
     for line in lines {
-        let events = match line {
+        let (events, stopped) = match line {
             Line::Message { into, text } => {
-                checked.arrived.push_str(text);
-                checked.arrived.push('\n');
-                translator.feed(*into, text)
+                checked.arrived.push(text);
+                (translator.feed(*into, text), false)
             }
-            Line::Restarted => translator.harness_stopped(),
+            Line::Restarted => (translator.harness_stopped(), true),
             Line::PiVersion(version) => {
                 if let Translator::Pi(t) = &mut translator {
                     t.set_version(version.clone());
@@ -298,11 +284,11 @@ fn run(recording: &Recording, lines: &[Line], strict: bool) -> Result<(), String
             }
         };
         for event in &events {
-            checked.event(event)?;
+            checked.event(event, stopped)?;
         }
     }
     for event in &translator.harness_stopped() {
-        checked.event(event)?;
+        checked.event(event, true)?;
     }
     if strict { checked.all_closed() } else { Ok(()) }
 }

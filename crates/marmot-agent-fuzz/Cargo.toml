@@ -17,6 +17,8 @@ cargo-fuzz = true
 [dependencies]
 marmot-agent = { path = "../marmot-agent" }
 marmot-agent-acp = { path = "../marmot-agent-acp" }
+# D-007's check of a translator, which the translators' property uses too.
+marmot-agent-conformance = { path = "../marmot-agent-conformance" }
 marmot-agent-codex = { path = "../marmot-agent-codex" }
 marmot-agent-driver = { path = "../marmot-agent-driver" }
 marmot-agent-events = { path = "../marmot-agent-events" }
