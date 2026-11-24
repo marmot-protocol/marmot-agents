@@ -10,5 +10,6 @@ mod carrier;
 mod conversation;
 mod debug;
 mod events;
+mod lines;
 mod requests;
 mod rights;
