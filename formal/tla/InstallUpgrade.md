@@ -50,7 +50,9 @@ call `image_commit` and `change_begin` alike).
 
 - **A command that fails while putting back.** `upgrade_put_back` and `change_put_back` go on and say what they
   could not put back, and where the copies are; the model's put backs never fail. Neither does a `docker tag` or
-  `docker rmi` (both may be refused when docker is gone).
+  `docker rmi` (both may be refused when docker is gone), nor a look at which image a tag names: when docker
+  cannot say, `image_commit` stops the install before the tag moves, and `image_put_back_from` fails, which keeps
+  the record (`image_id`; `install/test_install.py` stops the one at every step and checks the other).
 - **The two renames of `replace_dir` without `mv --exchange`** (macOS): a kill between them leaves the person's
   gateway with neither plugin, which `docs/move.md` states. The model has the exchange, one step.
 - **What the agent's own folder holds** (settings, launchers, services, `before-move`): written by one agent's

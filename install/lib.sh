@@ -574,12 +574,28 @@ lock_fd() {
 # install (upgrade_put_back). The tag goes with the record, never apart from it: a run stopped once the
 # upgrade is done leaves the new image with the new scripts.
 
+# Prints the id of the image the tag NAME (NAME:latest) names, or nothing once docker has said there is
+# none; fails when docker cannot say, as when it cannot be reached for a moment. `docker image inspect`
+# fails both ways, so an image it does not find is taken as none only once `docker image ls` lists none.
+image_id() {
+    local image=$1 id listed
+    if id=$(docker image inspect -f '{{.Id}}' "$image" 2>/dev/null 9>&-); then
+        printf '%s\n' "$id"
+        return 0
+    fi
+    listed=$(docker image ls --quiet "$image:latest" 2>/dev/null 9>&-) || return 1
+    [ -z "$listed" ]
+}
+
 # Tags NAME:staging as NAME, the image NAME was noted first in the record, unless a run before this one
-# that was killed noted it: that one is the image the scripts in the record were made for.
+# that was killed noted it: that one is the image the scripts in the record were made for. Noted as none
+# only once docker says there is none: noted so by mistake, putting the upgrade back would take the tag
+# off the image the old scripts run. When docker cannot say, the install stops, and puts back the
+# upgrade, under which the tag has not moved.
 image_commit() {
     local image=$1 before=""
     if [ "$DRY_RUN" -eq 0 ] && [ ! -f "$MA_UPGRADE/image" ]; then
-        before=$(docker image inspect -f '{{.Id}}' "$image" 2>/dev/null 9>&-) || before=""
+        before=$(image_id "$image") || die "docker could not say which image $image names; run this again once docker answers"
         printf '%s\t%s\n' "$image" "$before" >"$MA_UPGRADE/image.new"
         mv -f "$MA_UPGRADE/image.new" "$MA_UPGRADE/image"
     fi
@@ -593,15 +609,17 @@ image_put_back() {
 }
 
 # Puts the tag an upgrade's record names back on the image it named, or takes it away when it named
-# none, and takes the staging tag away; fails if docker cannot.
+# none, and takes the staging tag away; fails if docker cannot, or cannot say whether the tag is there,
+# so that the record is kept for a run after this one.
 image_put_back_from() {
-    local record=$1 image before
+    local record=$1 image before now
     [ -f "$record" ] || return 0
     IFS='	' read -r image before <"$record" || return 1
     if [ -n "$before" ]; then
         docker tag "$before" "$image" 9>&- || return 1
-    elif docker image inspect "$image" >/dev/null 2>&1 9>&-; then
-        docker rmi "$image" >/dev/null 9>&- || return 1
+    else
+        now=$(image_id "$image") || return 1
+        if [ -n "$now" ]; then docker rmi "$image" >/dev/null 9>&- || return 1; fi
     fi
     docker rmi "$image:staging" >/dev/null 2>&1 9>&- || true
 }

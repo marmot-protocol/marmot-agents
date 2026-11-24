@@ -76,7 +76,8 @@ esac; fi
 # A stand-in for docker that keeps its images' tags, in docker-tags beside FAKE_LOG, and its images, in
 # docker-images: each build makes a new image. An image a tag no longer names is kept, as docker keeps it
 # (dangling), and may be tagged again by its id; `rmi` of its last tag removes it. It says nothing of the
-# containers it does not run.
+# containers it does not run. A command that starts as FAKE_DOCKER_FAIL says fails as one does when docker
+# cannot be reached, such as "image inspect".
 FAKE_DOCKER = r'''#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
@@ -84,6 +85,8 @@ from pathlib import Path
 args = sys.argv[1:]
 with open(os.environ["FAKE_LOG"], "a") as log:
     log.write("docker " + " ".join(args) + "\n")
+if os.environ.get("FAKE_DOCKER_FAIL") and " ".join(args).startswith(os.environ["FAKE_DOCKER_FAIL"]):
+    sys.exit("Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?")
 store = Path(os.environ["FAKE_LOG"]).parent / "docker-tags"
 kept = Path(os.environ["FAKE_LOG"]).parent / "docker-images"
 tags = json.loads(store.read_text()) if store.exists() else {}
@@ -103,6 +106,10 @@ elif args[:1] == ["tag"]:
     tags[name(args[2])] = source or sys.exit(f"Error: No such image: {args[1]}")
 elif args[:2] == ["image", "inspect"]:
     print(tags.get(name(args[-1])) or sys.exit(f"Error: No such image: {args[-1]}"))
+elif args[:2] == ["image", "ls"]:
+    # With --quiet and a reference: the image it names, if any.
+    if name(args[-1]) in tags:
+        print(tags[name(args[-1])])
 elif args[:1] == ["rmi"]:
     for tag in args[1:]:
         image = tags.pop(name(tag), None) or sys.exit(f"Error: No such image: {tag}")
@@ -1871,18 +1878,18 @@ exec {rm} "$@"
                 self.assertEqual(list((m.data / f"agents/{harness}/backups").glob("marmot.*")), [],
                                  "no copy of our own plugin is kept once the update is done")
 
-    def every_step_together(self, harness: str, args, older, together) -> None:
+    def every_step_together(self, harness: str, args, older, together, stopped_env=None) -> None:
         """What goes with the core, Pi's image or the person's Hermes plugin, stays with the files it
         was made for, whatever step an upgrade is stopped at (InstallUpgrade.tla, U1): stopped by TERM;
         killed, then run again, or run again and failing, or followed by Codex's install. older(m) puts
         in an older install; together(m) says what is wrong, or None. Checked once nothing is left under
         way, as the next run of the same harness finishes or puts back what is. A run that fails, and
         Codex's install, which cannot finish another harness's upgrade, leave nothing under way: they
-        put back all of it, a plugin change too."""
+        put back all of it, a plugin change too. stopped_env is the stopped run's, not the runs' after it."""
         m = Machine(self)
         m.write(m.bin / "docker", FAKE_DOCKER)
         older(m)
-        m.run(harness, *args(m), stop=("KILL", 0))
+        m.run(harness, *args(m), stop=("KILL", 0), env=stopped_env, check=stopped_env is None)
         steps = int(m.steps.read_text())
         self.assertGreater(steps, 10)
         cases = [(signal, step) for signal in ("TERM", "KILL") for step in range(1, steps + 1)]
@@ -1897,7 +1904,7 @@ exec {rm} "$@"
                 m = Machine(self)
                 m.write(m.bin / "docker", FAKE_DOCKER)
                 older(m)
-                stopped = m.run(harness, *args(m), stop=(signal, step), check=False)
+                stopped = m.run(harness, *args(m), stop=(signal, step), env=stopped_env, check=False)
                 said = f"after SIG{signal} at step {step}"
                 if then is None:
                     if not under_way(m):
@@ -1941,6 +1948,56 @@ exec {rm} "$@"
             return None
 
         self.every_step_together("pi", args, older, together)
+
+    def test_a_lookup_docker_cannot_answer_never_takes_the_tag_away(self):
+        """Pi: when docker cannot say which image the tag names, as when it cannot be reached for a
+        moment, the image is not noted as none, which would have a run that puts the upgrade back take the
+        tag off the image the old scripts run: the install stops, whatever step it is stopped at too."""
+        def args(m: Machine) -> list:
+            return m.args("pi", "--binary", str(m.core), container=True)
+
+        def older(m: Machine) -> None:
+            first = m.dir / "older-core"
+            m.write(first, FAKE_CORE + "# an older core\n")
+            m.run("pi", *m.args("pi", "--binary", str(first), container=True))
+            (m.data / "lib/tools/pi/OLDER").write_text("an older file\n")
+            m.older_image = json.loads((m.dir / "docker-tags").read_text())["marmot-agents-pi:latest"]
+
+        def together(m: Machine):
+            tag = json.loads((m.dir / "docker-tags").read_text()).get("marmot-agents-pi:latest")
+            scripts_older = (m.data / "lib/tools/pi/OLDER").exists()
+            if scripts_older != (tag == m.older_image):
+                return f"the scripts are {'older' if scripts_older else 'new'}, the image tagged {tag}"
+            return None
+
+        self.every_step_together("pi", args, older, together, stopped_env={"FAKE_DOCKER_FAIL": "image inspect"})
+
+    def test_a_put_back_docker_cannot_answer_keeps_the_record(self):
+        """Pi: a first install killed once its tag moved, and put back by Codex's install while docker
+        cannot say whether the tag is there: the upgrade's record is kept, not retired with the tag left on,
+        and the next install, with docker back, takes the tag away."""
+        m = Machine(self)
+        m.write(m.bin / "docker", FAKE_DOCKER)
+        args = m.args("pi", "--binary", str(m.core), container=True)
+        m.run("pi", *args, stop=("KILL", 0))
+        steps = int(m.steps.read_text())
+        for step in range(1, steps + 1):
+            m = Machine(self)
+            m.write(m.bin / "docker", FAKE_DOCKER)
+            m.run("pi", *m.args("pi", "--binary", str(m.core), container=True), stop=("KILL", step), check=False)
+            tags = m.dir / "docker-tags"
+            tagged = tags.exists() and "marmot-agents-pi:latest" in json.loads(tags.read_text())
+            if tagged and (m.data / "upgrade").exists():
+                break
+        else:
+            self.fail("no step leaves the tag moved and the upgrade under way")
+        codex = m.args("codex", "--binary", str(m.core), "--name", "other")
+        ran = m.run("codex", *codex, env={"FAKE_DOCKER_FAIL": "image inspect"}, check=False)
+        self.assertNotEqual(ran.returncode, 0, ran.stdout)
+        self.assertTrue((m.data / "upgrade").exists(), ran.stderr)
+        m.run("codex", *codex)
+        self.assertFalse((m.data / "upgrade").exists())
+        self.assertNotIn("marmot-agents-pi:latest", json.loads(tags.read_text()))
 
     def test_every_step_keeps_the_hermes_plugin_with_its_core(self):
         plugin = ".hermes/plugins/marmot"
