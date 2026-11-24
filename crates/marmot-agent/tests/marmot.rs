@@ -551,9 +551,10 @@ async fn a_dropped_send_tried_again_in_the_same_second_is_not_refused() {
     // The second try must start in the second MDK dated the first, which a busy machine can make
     // it miss: then it is another event, which MDK takes and drops too. The disband goes through
     // a moment later, and MDK refuses every send to the group after, so the case is tried again
-    // with a new person and agent.
+    // with a new person and agent. So it is too when the disband went through before either send
+    // was looked at: MDK refused it for good, as it should, and the case was not tried.
     for n in 0.. {
-        assert!(n < 5, "two sends in one second, in five tries");
+        assert!(n < 10, "two sends in one second, in ten tries");
         let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
         let group = a_quiet_chat(&world).await;
         let id = group_id(&group);
@@ -568,6 +569,10 @@ async fn a_dropped_send_tried_again_in_the_same_second_is_not_refused() {
         let (words, first) = words_named("a");
         let before = sent_by_core(&world, &group, 9);
         let tried = world.send(&group, &words, &first).await;
+        if disbanded(&world, &group) {
+            world.runtime.shutdown().await;
+            continue;
+        }
         let dated = dated_since(&world, &group, &before);
         let again = marmot_agent::Token {
             mdk: "token a, again".into(),
@@ -575,7 +580,8 @@ async fn a_dropped_send_tried_again_in_the_same_second_is_not_refused() {
         };
         let started = unix_second();
         let tried_again = world.send(&group, &words, &again).await;
-        let met = met_the_first(&world, &group, &again, dated, started);
+        let met =
+            !disbanded(&world, &group) && met_the_first(&world, &group, &again, dated, started);
         world.runtime.shutdown().await;
         if !met {
             continue;
@@ -588,6 +594,16 @@ async fn a_dropped_send_tried_again_in_the_same_second_is_not_refused() {
         );
         break;
     }
+}
+
+/// Whether MDK's disband of `group` has gone through: MDK refuses every send to it from then on,
+/// whatever the token, and keeps no record of one. MDK marks the group so in the same change that
+/// ends it.
+fn disbanded(world: &World, group: &GroupKey) -> bool {
+    let record = (world.marmot.app).group(&world.marmot.label, group.as_str());
+    record
+        .expect("MDK reads its group")
+        .is_none_or(|g| g.disbanded)
 }
 
 /// This machine's clock, in whole seconds, as MDK dates an event.
