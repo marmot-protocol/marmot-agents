@@ -2914,6 +2914,35 @@ and a corpus kept between nights lets each night start where the last stopped.
 
 Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points.
 
+## D-145 The core bounds what it holds for a connector, and the files it sends at once
+
+**Decision.** While the core waits for a connector's answer to a request, it holds what the connector sends
+meanwhile for later, and it holds the refusals it owes for a `send_file` that reused an unanswered id until its
+next write. All of that together is at most 32 MB, counted by the lines it came in, eight messages of the largest
+size ([D-033](#d-033-the-sockets-framing-is-json-rpc-20-one-message-per-line)). A connector that sends more is
+given up at once, as one that does not answer in time is
+([D-138](#d-138-a-connector-that-stops-reading-is-given-up-in-a-requests-time)): the request waited on is told as
+perhaps taken ([D-129](#d-129-a-prompt-whose-answer-a-dropped-connection-lost-is-told-as-perhaps-not-delivered)),
+what was held still reaches the chat, and the messages it was never given wait for the next connector
+([D-139](#d-139-prompts-a-driver-that-ended-was-never-given-wait-for-the-next-driver)). No socket message changes.
+
+Of the files an agent asks to send ([D-090](#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder)),
+whatever its driver, the core reads and uploads two at once, and holds at most 16, those uploading included. The
+others wait their turn, in order, as a path only. One more is refused as `busy`, at once, with a refused notice in
+the chat. Each upload is a task the core owns: when the core stops, or its driver ends as when a connector goes,
+the uploads under way are stopped and the driver is told they failed, with nothing in the chat, since MDK may
+already have taken the file; the files waiting were never offered to MDK, and the chat is told they were not sent.
+No upload goes on after the core.
+
+**Why.** The core answered only for single lines. A connector that went on writing while a request waited, as
+fast as a local socket carries, made the core hold all of it for up to 30 seconds, without bound; and each file
+the agent asked for started an upload of its own, holding up to 64 MB, with no limit on how many, which went on
+uploading after a lost connector, into a chat whose turn the core had already closed. The budget is far above what
+a connector sends while it hands a request to its harness, and giving up is what the protocol already does for a
+connector it cannot keep up with. Issue #150.
+
+Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points.
+
 ## D-146 The Hermes plugin answers a request to confirm a command by its id
 
 **Decision.** An answer to Hermes's request to confirm a command, the `question` item of
@@ -2977,7 +3006,6 @@ command did not happen asks again. The plugin does not pass Hermes's call a long
 that would override Hermes's own 300-second rule for confirmations, and Hermes's rule stands.
 
 Decided 2026-11-24 by the project owner.
-
 
 ## D-147 A request whose effect a connector showed before its connection dropped was taken
 

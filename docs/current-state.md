@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-24, at `master` commit `aad1611`, through [D-140](decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused), [D-143](decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake), [D-144](decisions.md#d-144-property-tests-run-on-every-pull-request-kani-in-the-full-gate-and-fuzzing-nightly-on-a-pinned-nightly-compiler), [D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id), and [D-147](decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken). A change that adds or replaces
+Brought up to date on 2026-11-24, at `master` commit `989a239`, through [D-140](decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused), [D-143](decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake), [D-144](decisions.md#d-144-property-tests-run-on-every-pull-request-kani-in-the-full-gate-and-fuzzing-nightly-on-a-pinned-nightly-compiler), [D-145](decisions.md#d-145-the-core-bounds-what-it-holds-for-a-connector-and-the-files-it-sends-at-once), [D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id), and [D-147](decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -41,6 +41,7 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   Messages a driver that ended was never given wait for the next driver ([D-139](decisions.md#d-139-prompts-a-driver-that-ended-was-never-given-wait-for-the-next-driver)).
 - The core waits for every request it hands a driver. A harness that stops reading for a minute is stopped, and
   its requests are refused as failed; a connector on the socket, after 30 seconds ([D-066](decisions.md#d-066-the-core-finishes-every-request-it-starts), [D-098](decisions.md#d-098-a-harness-that-stops-reading-ends-its-connection), [D-138](decisions.md#d-138-a-connector-that-stops-reading-is-given-up-in-a-requests-time)).
+  A connector that sends more than 32 MB while a request waits is given up at once ([D-145](decisions.md#d-145-the-core-bounds-what-it-holds-for-a-connector-and-the-files-it-sends-at-once)).
 - No word-by-word streaming, and the QUIC preview stack is removed ([D-012](decisions.md#d-012-word-by-word-streaming-is-not-required-now), [D-067](decisions.md#d-067-the-quic-preview-stack-is-removed)).
 - Logs never hold message text, prompts, output, native messages, keys, public keys, event or group ids, relay
   addresses, paths, or a harness's session or turn ids ([D-071](decisions.md#d-071-what-may-be-logged)).
@@ -184,6 +185,8 @@ Decided, and not built: the core, the drivers, MDK and the apps each have their 
 
 - An agent's file goes to the chat as an encrypted attachment, tagged with its turn, only from folders the
   settings allow; every harness that can send one does ([D-090](decisions.md#d-090-an-agent-sends-a-file-as-an-encrypted-attachment-from-an-allowed-folder), [D-107](decisions.md#d-107-every-harness-that-lets-an-agent-send-a-file-gets-file-sending-before-the-swap)).
+- Two files upload at once and 16 are held at most; one more is refused as busy, and no upload outlives the core
+  or its driver ([D-145](decisions.md#d-145-the-core-bounds-what-it-holds-for-a-connector-and-the-files-it-sends-at-once)).
 - Every harness the core gives a tool gets `send_file(path)`; Hermes and OpenClaw turn their own media into the
   same request; ACP agents get it from a loopback MCP server, on by default ([D-108](decisions.md#d-108-how-an-agents-file-reaches-the-core-as-built), [D-110](decisions.md#d-110-an-acp-agent-gets-the-file-tool-from-a-loopback-mcp-server-on-by-default)).
 - Files inside the agent's own home are refused unless the owner allows them; a bind mount is an accepted

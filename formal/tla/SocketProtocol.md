@@ -34,7 +34,7 @@ writes a counterexample.
 | `Read` | The core reads what the connector wrote, in order; while it waits on a request it holds the events it reads and takes the answer first (`request`, `held`). An event changes its item's row and settles what it names that is pending |
 | `Tick` | The core's net for a control whose effect never shows (D-087) |
 | `Run`, `EndTurn(hold)`, `Release` | The harness runs the prompt and ends its turn, stopped when it has `r1`; the end settles what waits on it. Hermes may hold a quiet end and let it go later (`send_held`) |
-| `Drop` | The connection goes: the core restarts, or the socket breaks |
+| `Drop` | The connection goes: the core restarts, or the socket breaks, or the core gives up a connector that sent more than it holds for one (`HELD_MAX`, D-145), which may come at any read, answered or not, and ends as a drop does. Events are not sized in the model |
 | `GiveUp` | `ANSWER_WITHIN`: the core's 30 s for a request to be written and taken runs out, and it gives the connector up (D-138). A connector that stops reading, so the request is never wholly written, is one that does not take it in time; part of it may have reached it, so the request counts as in flight, as `Hand` has it |
 | (in `Drop`, `GiveUp`) | `ended`: the request waited on is refused as failed (a prompt is told as perhaps not delivered and never sent again, D-037, D-129), every control taken is settled as failed, every open item is closed (D-058, D-070). The connector forgets by its kind: Claude Code exits, and its query with it; OpenClaw cancels the run; Hermes's `core_gone` closes what was open on its side, drops a held end, and forgets what waited, while Hermes runs on |
 | `Restart` | A connector that exited is started again |
