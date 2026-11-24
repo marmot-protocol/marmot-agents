@@ -106,6 +106,7 @@ proptest! {
             first: Some(EventKey::from(mark(1).as_str())),
             started_by: Some(EventKey::from(mark(2).as_str())),
             settles: vec![EventKey::from(mark(3).as_str())],
+            thread: None,
         };
         assert_quiet("Item", format!("{item:?}"))?;
         assert_quiet("Outgoing", format!("{:?}", carrier::item(&item).ok()))?;
@@ -118,6 +119,7 @@ proptest! {
             remark: true,
             edit: Some(EventKey::from(mark(8).as_str())),
             settles: vec![EventKey::from(mark(9).as_str())],
+            thread: None,
         };
         assert_quiet("Sending", format!("{words:?}"))?;
         let emitted = Emitted {

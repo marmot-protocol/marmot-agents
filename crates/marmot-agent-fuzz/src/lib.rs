@@ -308,6 +308,7 @@ pub fn saved_state(data: &[u8]) {
         approvals: true,
         files_in: FilesIn::Images,
         approval_commands: Vec::new(),
+        subagents: false,
     };
     let mut talk = Conversation::new(PubKey::from(AGENT), "codex", rights, capabilities, saved);
     talk.recover();

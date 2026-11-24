@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c6f08c0b66b44dbeb96b534388024e4109cced5f81d7cc35a61c3eaa8836987d # shrinks to item = Item { event: AgentEvent { header: Header { harness: "opencode", seq: 2, state: Running, .. }, body: Body::turn, native: None }, version: 1, edit: false, settles: 0, .. }

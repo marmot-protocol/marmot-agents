@@ -61,6 +61,7 @@ fn conversation(saved: Saved) -> Conversation {
         approvals: true,
         files_in: FilesIn::Images,
         approval_commands: Vec::new(),
+        subagents: false,
     };
     let rights = Rights {
         owner: PubKey::from(OWNER),
@@ -113,6 +114,7 @@ fn event(item: u8, words: bool, state: State, seq: u64) -> AgentEvent {
         state,
         title: "A title".into(),
         text: format!("text {seq}"),
+        subagent: None,
     };
     AgentEvent::new(header, body, None).expect("no secret")
 }
