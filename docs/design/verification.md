@@ -529,7 +529,9 @@ renamed over the old one, and the folder synced.
 
 The machine: an Intel i9-10850K (20 threads), 62 GB of memory, Linux 6.12, the state on ext4 (`relatime`) on a
 software RAID 0 of two NVMe drives, a release build, the system's default write-back, and nothing else told to
-sync. The machine was shared; the rows below are from runs at a load average of about 6, and runs at a load of
+sync. The machine was shared, and it had just been rebooted: the rows below are from runs a few minutes after a reboot,
+before the other work on it had started again, at a load average of about 6 (the table's, before the change, at
+09:47 after a reboot at 09:45; the figures after the change, at 10:18 after another at 10:16). Runs at a load of
 20 to 45 took up to twice as long, once 8.4 s for the answer at the largest backlog, which a quiet run did not
 repeat.
 
