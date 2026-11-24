@@ -134,7 +134,10 @@ Built so far, provisional until the owner accepts what others can see:
 - **Sends that survive a crash.** On MDK 0.19.0, every send in the core's outbox (the agent's words and their
   edits, items and their later versions, notices, and what stands in for a dropped send) is handed to MDK under
   a token saved with it, and a send tried again under it, after a lost answer or a restart, gives back the same
-  event and sends nothing. A file the agent sends keeps no token: MDK's token form for files carries no tags. See
+  event and sends nothing. A file the agent sends keeps no token: MDK's token form for files carries no tags. Nor
+  does a later version of a subagent's words in its thread: MDK keeps no edit of a thread message under a token,
+  so it is MDK's plain edit, which shows the same words again if tried after a lost answer
+  ([D-142](decisions.md#d-142-how-subagent-threads-are-built), point 4). See
   [sends that give up](design/verification.md#first-fix-what-is-known).
 - **Subagents as threads.** On MDK master at `029e0579f`, which places agent items in threads (MDK pull
   requests 3622, 3630 and 3640), a driver names the subagent each event belongs to, and the core puts it in that
