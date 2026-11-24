@@ -1783,8 +1783,9 @@ class Hermes(Translator):
             return self.skip("client: reply to a command confirmation not answered")
         key = self.key_named(m.get("session_key")) or str(self.confirm_answered[item] or "").split("#")[0]
         if key:
-            # Hermes ran the command and said nothing: nothing else shows its outcome, so a notice says so.
-            said = str(m.get("said") or "") or f"Hermes ran {self.confirm_commands.get(item) or 'the command'} and said nothing."
+            # Hermes gave no reply: nothing else shows the outcome, so a notice says so. Hermes says the same
+            # when it ran nothing, having found the confirmation too old after all, so it never says it ran.
+            said = str(m.get("said") or "") or f"Hermes gave no reply to {self.confirm_commands.get(item) or 'the command'}."
             # The reply is the command's session's, and what follows is still the latest turn's, which in a
             # group can be another sender's.
             latest, session, self.key = self.key, self.session, key

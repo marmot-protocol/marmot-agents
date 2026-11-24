@@ -528,8 +528,9 @@ class Translator:
             return
         key = self.key_named(m.get("session_key")) or str(answered.get("session") or "").split("#")[0]
         if key:
-            # Hermes ran the command and said nothing: nothing else shows its outcome, so a notice says so.
-            said = str(m.get("said") or "") or f"Hermes ran {self.confirm_commands.get(item) or 'the command'} and said nothing."
+            # Hermes gave no reply: nothing else shows the outcome, so a notice says so. Hermes says the same
+            # when it ran nothing, having found the confirmation too old after all, so it never says it ran.
+            said = str(m.get("said") or "") or f"Hermes gave no reply to {self.confirm_commands.get(item) or 'the command'}."
             self.command_reply(f"sent:{self.ids}{self.seq + 1}", said, None, key, alone=True)
 
     def command_reply(self, item, content, typed, key, alone=False):

@@ -54,8 +54,9 @@ PLATFORM = "marmot"
 PLUGIN_VERSION = "0.1.0"
 RECONNECT_SECONDS = 2.0
 # How much sooner than Hermes's limit the plugin stops answering a request to confirm a command, so that
-# one it answers is one Hermes runs (`MarmotAdapter.resolve_confirm`).
-CONFIRM_MARGIN_SECONDS = 1.0
+# one it answers is one Hermes runs, even after a stall of a few seconds between the plugin's look and
+# Hermes's (`MarmotAdapter.resolve_confirm`).
+CONFIRM_MARGIN_SECONDS = 5.0
 log = logging.getLogger("marmot_hermes")
 
 # Methods of the base adapter through which Hermes hands a platform something. Each is wrapped so that
@@ -437,7 +438,7 @@ class MarmotAdapter(BasePlatformAdapter):
         refuses `actor`, and the confirmation then still waits. Otherwise Hermes has taken it by the time
         this returns, and the command it confirms runs on its own: what is returned gives what Hermes says
         to the answer, which it hands back instead of sending, once the command finishes; empty when it
-        says nothing. Nothing that waits on it holds the core's request (D-058), and nothing that stops
+        gives no reply, which it also does when it ran nothing after all (below). Nothing that waits on it holds the core's request (D-058), and nothing that stops
         waiting on it, such as the core going away, cancels the command."""
         from gateway.approval_actor import refusal_text, slash_confirm_refusal
         from tools import slash_confirm
@@ -448,8 +449,9 @@ class MarmotAdapter(BasePlatformAdapter):
         if not waiting or str(waiting.get("confirm_id")) != confirm_id:
             return None
         # Hermes looks at the age again before it runs one, and says None both when it ran none and when
-        # what ran said nothing. The plugin looks a little sooner than Hermes's limit, so one it lets
-        # through is one Hermes runs: nothing is awaited from here to Hermes's own look.
+        # what ran said nothing. The plugin looks a few seconds sooner than Hermes's limit, and awaits
+        # nothing from here to Hermes's own look, so one it lets through is one Hermes runs unless the
+        # process stalls longer than that between the two; an empty reply is never read as a run (D-146).
         limit = float(getattr(slash_confirm, "DEFAULT_TIMEOUT_SECONDS", 300)) - CONFIRM_MARGIN_SECONDS
         if time.time() - float(waiting.get("created_at") or 0) > limit:
             return None

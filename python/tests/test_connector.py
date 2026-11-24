@@ -739,9 +739,11 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         settled = [(e["item"], e["settles"]) for e in self.sent if "settles" in e]
         self.assertEqual(settled, [("confirm:k-1", ["r-3"]), (f"session:{session}", ["r-1"])])
 
-    async def test_a_confirmation_hermes_ran_and_said_nothing_to_settles_its_command(self):
-        """Hermes ran what was confirmed and said nothing: nothing will show the outcome, so a notice says
-        so, and settles the command, as Hermes's words would have; the core does not wait for an effect."""
+    async def test_a_confirmation_hermes_gave_no_reply_to_settles_its_command(self):
+        """Hermes gave no reply to the answer: nothing will show the outcome, so a notice says so, and
+        settles the command, as Hermes's words would have; the core does not wait for an effect. Hermes
+        says the same when it ran nothing, having found the confirmation too old after all, so the notice
+        never says the command ran."""
         await self.connector.serve("prompt", prompt("m-1"))
         self.feed(started("m-1"), said("Hi.", "m-1", notify=True), complete("m-1"))
         session = self.of("session")[0]["session"]
@@ -756,7 +758,7 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([(i, t, s) for i, t, s in settled], [("confirm:k-1", "question", ["r-2"]), (settled[1][0], "notice", ["r-1"])])
         notice = next(e for e in self.sent if e["item"] == settled[1][0])
         self.assertEqual((notice["session"], notice.get("turn"), notice["title"]), (session, None, "Command output"))
-        self.assertEqual(notice["text"], "Hermes ran /new and said nothing.")
+        self.assertEqual(notice["text"], "Hermes gave no reply to /new.")
 
     async def slow_new_session_confirmed(self):
         """Alice asks for a new session, Hermes asks her to confirm it, and she does; the reset Hermes then

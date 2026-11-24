@@ -2845,8 +2845,8 @@ Decided 2026-11-23 by the builder, under the project owner's instruction to deci
 `/always` or `/cancel` for it. It answers only while that confirmation still waits in Hermes; when it does not,
 because it was answered, a newer one replaced it or it waited longer than Hermes waits, the answer is refused as
 `not_waiting` and nothing else is answered: not an approval that started meanwhile, and not another command's
-confirmation. The plugin stops a second before Hermes's own limit, so that an answer it hands Hermes is one Hermes
-runs. Before it answers, the plugin asks Hermes's own check of who may answer, `slash_confirm_refusal`, with the
+confirmation. The plugin stops five seconds before Hermes's own limit, so that an answer it hands Hermes is one
+Hermes runs. Before it answers, the plugin asks Hermes's own check of who may answer, `slash_confirm_refusal`, with the
 person who answered and the chat's Hermes settings, as Hermes's own platforms do: where Hermes's settings name
 admins for the chat, only someone Hermes lets run the confirmed command may confirm it, whatever the core allows.
 A person Hermes refuses is refused as `not_supported`, with Hermes's words, and the confirmation still waits.
@@ -2860,8 +2860,8 @@ meanwhile does not cancel the command.
 When the command finishes, Hermes hands back its reply to the answer instead of sending it, and the plugin sends it
 as the command's output, in the session Hermes asked in, outside any turn. That reply settles the command the confirmation is for, and no
 other: in a group, where each sender has a session and each can have a confirmation waiting, an answer to one
-settles nothing of another's. When Hermes ran the command and said nothing, a notice says so (`Hermes ran /new and
-said nothing.`), and settles the command.
+settles nothing of another's. When Hermes gives no reply, a notice says so (`Hermes gave no reply to /new.`), and
+settles the command. The notice never says the command ran, as the remaining limit below explains.
 
 Nothing else changes. Answering the confirmation still needs the right to prompt, and answering an approval the
 right to approve. The confirmation and its answer show as before; the one difference people see is that the
@@ -2890,6 +2890,13 @@ Hermes's. When two people confirm commands at once in one group chat, that recor
 person's answer may settle the other's command, or leave a confirmation that still waits in Hermes unanswerable
 from the chat. Neither lets anyone answer what Hermes would not let them answer. Issue #183 rebuilds the record
 from Hermes's own.
+
+A remaining limit: Hermes's call says `None` both when it ran nothing and when the command it ran gave no reply, and
+at the pinned commit Hermes offers no other way to learn that it ran the command. Hermes checks the confirmation's
+age again when it runs it, so if the gateway stalls longer than the plugin's five seconds between the plugin's check
+and Hermes's, a confirmation the plugin handed over can be one Hermes drops without running it. The answer then
+shows as given, and the notice says only that Hermes gave no reply, which is true either way; a person who sees the
+command did not happen asks again.
 
 Decided 2026-11-24 by the project owner.
 

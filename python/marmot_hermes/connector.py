@@ -227,7 +227,7 @@ class Connector:
                     self.discard(chat, text_of(p.get("reply_to")))
         if line.get("via") == "press" and m.get("confirm_id") is not None and "said" in m:
             # Hermes's reply to the answer, which it handed the plugin, is the outcome of the command that
-            # request confirmed, and of no other. When Hermes said nothing, the notice saying so is.
+            # request confirmed, and of no other. When Hermes gave no reply, the notice saying so is.
             awaiting = chat.confirming.pop(f"confirm:{m['confirm_id']}", None)
             if awaiting is not None and awaiting[2](text_of(m.get("said"))):
                 settled_by_reply = awaiting[1] or None

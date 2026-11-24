@@ -358,15 +358,28 @@ class Confirmations(unittest.IsolatedAsyncioTestCase):
         self.asks("k-1")
         self.assertIsNone(await self.resolve("k-1", "once", now=Clock(299.9995, 300.0001)))
         self.assertEqual(self.ran, [])
-        # Fresh at each of the plugin's looks, and too old by Hermes's: the plugin looks a second early.
+        # Fresh at each of the plugin's looks, and too old by Hermes's: the plugin looks a few seconds early.
         self.asks("k-2")
         self.assertIsNone(await self.resolve("k-2", "once", now=Clock(299.9995, 299.9996, 300.0001)))
         self.assertEqual(self.ran, [])
         self.assertEqual(self.checks, [], "nothing past the look")
+        # Within a few seconds of Hermes's limit the plugin answers nothing, so a moment's stall between
+        # its look and Hermes's, such as a second, does not cross Hermes's limit.
+        self.asks("k-3")
+        self.assertIsNone(await self.resolve("k-3", "once", now=Clock(298.99, 298.99, 300.01)))
+        self.assertEqual((self.ran, self.checks), ([], []))
+
+    async def test_one_hermes_finds_too_old_after_the_plugin_let_it_through_gives_no_reply(self):
+        """Fresh by the plugin's look, a few seconds early, and too old by Hermes's after a longer stall:
+        Hermes runs nothing and says None, as it does for a handler that said nothing, and the plugin
+        cannot tell the two apart. It says only that Hermes gave no reply, never that the command ran."""
+        self.asks("k-1")
+        self.assertEqual(await self.resolve("k-1", "once", now=Clock(294.9, 294.9, 300.01)), "")
+        self.assertEqual((self.ran, self.module.waiting), ([], {}), "Hermes ran nothing")
 
     async def test_a_confirmation_hermes_says_nothing_to_is_still_answered(self):
         """A handler that ran and said nothing, or gave Hermes something other than text: Hermes says None,
-        and the plugin, which knows it ran, says it was answered with nothing said."""
+        and the plugin says it was answered with no reply."""
         self.asks("k-1", says=None)
         self.assertEqual(await self.resolve("k-1", "once"), "")
         self.assertEqual(self.ran, [("k-1", "once")])
