@@ -2934,10 +2934,13 @@ the uploads under way are stopped and the driver is told they failed, with nothi
 already have taken the file; the files waiting were never offered to MDK, and the chat is told they were not sent.
 An upload starts only while the driver is waiting for more, so a file a driver hands over once it has ended, as
 one a connector asked for before the core gave it up, or one still waiting when telling the connector how a file
-went gives it up, is never offered to MDK, and is told in the chat as not sent. A file being read when its upload is
-stopped is waited for, since a read cannot be stopped: no read goes on after the core. MDK may still finish a send
-it was already handed after the core stops waiting for it, which is why the chat is told nothing of it. No upload
-goes on after the core.
+went gives it up, is never offered to MDK, and is told in the chat as not sent. A read cannot be stopped, so a file
+being read when its upload is stopped goes on being read until the read returns, holding one of the two places for
+reads, and then reaches no MDK, since the upload that would have sent it is gone. Every read has returned before
+the program ends. A connector's core does not wait for one as the connector goes, so a read stalled on a slow or
+network folder holds up no next connector, which reads in one place fewer until it returns. A save that fails ends
+the files the same way, before the core stops. MDK may still finish a send it was already handed after the core
+stops waiting for it, which is why the chat is told nothing of it. No upload goes on after the core.
 
 **Why.** The core answered only for single lines. A connector that went on writing while a request waited, as
 fast as a local socket carries, made the core hold all of it for up to 30 seconds, without bound; and each file
