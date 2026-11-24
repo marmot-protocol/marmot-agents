@@ -851,19 +851,47 @@ pub enum Unreadable {
 
 /// An answer or a control read back: what it is about, and what it asks or why that could not be
 /// read, so that the agent can still settle it (D-028, D-140). `None` when it is not for this
-/// agent: it names no agent, or another (D-027).
+/// agent: it names no agent, or another, or more than one (D-027). Each of its tags is read as
+/// MDK reads it, and so as a person's app does: a tag given twice, even with no value, is never
+/// read as one of its values. Repeated `details` or `e`, or an `e` that is not an event id, make it
+/// invalid, as a field given twice in `details` does; it names no item then.
 pub fn read_request(
     agent: &PubKey,
     tags: &[Vec<String>],
 ) -> Option<(Option<EventKey>, Result<Asked, Unreadable>)> {
-    if value(tags, "p")? != agent.as_str() {
+    if single(tags, "p").ok()?? != agent.as_str() {
         return None;
     }
-    let asked = match value(tags, "details") {
-        None => Err(Unreadable::Invalid),
-        Some(details) => read_asked(details),
+    let target = match single(tags, "e") {
+        Ok(target) if target.is_none_or(is_event_id) => target,
+        _ => return Some((None, Err(Unreadable::Invalid))),
     };
-    Some((value(tags, "e").map(EventKey::from), asked))
+    let asked = match single(tags, "details") {
+        Ok(Some(details)) => read_asked(details),
+        Ok(None) | Err(Repeated) => Err(Unreadable::Invalid),
+    };
+    Some((target.map(EventKey::from), asked))
+}
+
+/// Whether `text` is an event id as MDK writes one: 64 lowercase hex digits.
+fn is_event_id(text: &str) -> bool {
+    text.len() == 64 && (text.bytes()).all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// A tag given more than once.
+struct Repeated;
+
+/// The value of the one tag named `name`, as MDK reads a tag (its `single`): every tag of that
+/// name counts, one with no value too, whose value is empty.
+fn single<'a>(tags: &'a [Vec<String>], name: &str) -> Result<Option<&'a str>, Repeated> {
+    let mut named = (tags.iter())
+        .filter(|t| t.first().is_some_and(|n| n == name))
+        .map(|t| t.get(1).map_or("", String::as_str));
+    let first = named.next();
+    match named.next() {
+        Some(_) => Err(Repeated),
+        None => Ok(first),
+    }
 }
 
 /// Read straight from the text, so that a field given twice is refused, as `Asked` refuses it;
