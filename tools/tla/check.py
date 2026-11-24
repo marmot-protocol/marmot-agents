@@ -4,9 +4,11 @@
     python3 tools/tla/check.py [--out DIR] [--bounds small|larger] [--model NAME]
                                [--only NAME ...] [--except NAME ...] [--counterexamples]
 
-Three models, each with its README: CoreLifecycle (formal/tla/README.md), SocketProtocol
-(formal/tla/SocketProtocol.md), whose cases are named `socket-...`, and DriverTransport
-(formal/tla/DriverTransport.md), whose cases are named `driver-...`. The cases on the small
+The models, each with its README: CoreLifecycle (formal/tla/README.md), SocketProtocol
+(formal/tla/SocketProtocol.md), whose cases are named `socket-...`, DriverTransport
+(formal/tla/DriverTransport.md), whose cases are named `driver-...`, InstallUpgrade
+(formal/tla/InstallUpgrade.md), whose cases are named `install-...`, and ActivityHoldBack
+(formal/tla/ActivityHoldBack.md), whose cases are named `hold-...`. The cases on the small
 bounds, the default, which CI runs on pull requests and in the merge queue:
 
 - the fair configurations (CoreLifecycle's, SocketProtocol's for each kind of connector, and
@@ -51,7 +53,8 @@ ROOT = Path(__file__).resolve().parents[2]
 MODEL_DIR = ROOT / "formal" / "tla"
 COUNTEREXAMPLES = MODEL_DIR / "counterexamples"
 CORE, SOCKET, DT = "CoreLifecycle", "SocketProtocol", "DriverTransport"
-MODELS = (CORE, SOCKET, DT)
+IU, AH = "InstallUpgrade", "ActivityHoldBack"
+MODELS = (CORE, SOCKET, DT, IU, AH)
 RUN = ROOT / "tools" / "tla" / "run.sh"
 
 PASS = "pass"
@@ -331,6 +334,102 @@ CASES += [
     driver_probe("NeverFailed", PI),
     driver_probe("NeverStrayAnswered", f"{DT}.stray.cfg"),
 ]
+# InstallUpgrade (formal/tla/InstallUpgrade.md): an install script's upgrade, stopped anywhere.
+IPI, IHERMES, ILOCK = (f"{IU}.{shape}.cfg" for shape in ("pi", "hermes", "lock"))
+
+
+def install(name, cfg, expected, changes=None, counterexample=None, what=None):
+    return Case(f"install-{name}", cfg, expected, changes, counterexample, what)
+
+
+def install_mutant(bug, cfg, counterexample=None, what=None):
+    return install(f"bug-{bug}", cfg, invariant("U1"),
+                   {"Bug": f'"{bug}"', "INVARIANTS": "U1", **SAFETY}, counterexample, what)
+
+
+def install_probe(name, cfg=IPI):
+    return install(f"reach-{name}", cfg, invariant(name), {"INVARIANTS": name, **SAFETY})
+
+
+CASES += [
+    install("pi", IPI, PASS),
+    install("hermes", IHERMES, PASS),
+    install("lock", ILOCK, PASS),
+    install("first", f"{IU}.first.cfg", PASS),
+    install("all", f"{IU}.all.cfg", PASS),
+    install("unfair", f"{IU}.unfair.cfg", TEMPORAL, {"INVARIANTS": None}),
+    install_mutant("ImageOutsideRecord", IPI, "install-image-put-back-apart",
+                   "ImageOutsideRecord, install/lib.sh before 2026-11-24: Pi's install moves the "
+                   "image tag once the agent is started and ends the upgrade; a TERM then, as the "
+                   "summary is printed, and the exit trap puts the tag back on the image it found, "
+                   "under the new scripts (U1). Killed between the two instead, the next run that "
+                   "fails, or another harness's install, puts the old scripts back under the new "
+                   "image."),
+    install_mutant("ChangeEndsApart", IHERMES, "install-plugin-change-ends-apart",
+                   "ChangeEndsApart, install/lib.sh before 2026-11-24: Hermes's install ends the "
+                   "upgrade, then the plugin change; a TERM between the two, and the exit trap puts "
+                   "the old plugin back over the new core (U1). Killed there instead, the next run "
+                   "that fails does the same, as its own upgrade record holds the new core."),
+    install_mutant("NoLock", ILOCK),
+    install_mutant("FreshRecord", IPI),
+    install_mutant("KeepOverwrites", IPI),
+    install_mutant("RecordAfterCore", IPI),
+    install_probe("NeverTakenOver"),
+    install_probe("NeverPutBackOther"),
+    install_probe("NeverImagePutBack"),
+    install_probe("NeverUpgraded"),
+    install_probe("NeverRestored"),
+    install_probe("NeverChangeFinished", IHERMES),
+    install_probe("NeverWaited", ILOCK),
+]
+
+# ActivityHoldBack (formal/tla/ActivityHoldBack.md): the full activity held back from a chat that
+# is no longer the owner's, while MDK may hold what is held back.
+HFAIR, HPOSTED = f"{AH}.fair.cfg", f"{AH}.posted.cfg"
+
+
+def hold(name, cfg, expected, changes=None, counterexample=None, what=None):
+    return Case(f"hold-{name}", cfg, expected, changes, counterexample, what)
+
+
+def hold_probe(name):
+    return hold(f"reach-{name}", HFAIR, invariant(name), {"INVARIANTS": name, **SAFETY})
+
+
+CASES += [
+    hold("fair", HFAIR, PASS),
+    hold("posted", HPOSTED, PASS),
+    hold("unfair", HFAIR, TEMPORAL, {"FairMdk": "FALSE", "INVARIANTS": None}),
+    hold("bug-HoldAttempted-H1", HPOSTED, invariant("H1"),
+         {"Bug": '"HoldAttempted"', "INVARIANTS": "H1", **SAFETY},
+         counterexample="hold-settled-twice",
+         what="HoldAttempted, conversation.rs hold_back before 2026-11-24: the tool's closing "
+              "version, which settles r1, is posted by MDK and its answer lost; someone joins the "
+              "owner's chat before the core tries it again; the core holds it back and settles r1 "
+              "by the turn's next version, so the chat sees r1 settled twice (H1)."),
+    hold("bug-HoldAttempted-H2", HFAIR, invariant("H2"),
+         {"Bug": '"HoldAttempted"', "INVARIANTS": "H2", **SAFETY},
+         counterexample="hold-first-event-twice",
+         what="HoldAttempted again: MDK posts the tool's first version and its answer is lost; "
+              "someone joins the owner's chat, and the core holds the version back, not knowing "
+              "it went; they leave, and the tool's next version goes as a first event too: the "
+              "chat has the tool twice (H2). A version MDK keeps and posts later does the same."),
+    hold("kept-posted-later", HFAIR, invariant("H4"), {"INVARIANTS": "H4", **SAFETY},
+         counterexample="hold-kept-posted-later",
+         what="The limit, the code as it is: MDK keeps a send of the tool to post later, which "
+              "the core handed it while the chat was the owner's; someone joins, and MDK posts "
+              "it to them (H4). The core cannot take back what MDK keeps."),
+    hold("bug-NoMove", HFAIR, TEMPORAL, {"Bug": '"NoMove"', "INVARIANTS": None}),
+    hold("bug-HoldNothing", HPOSTED, invariant("H4"),
+         {"Bug": '"HoldNothing"', "INVARIANTS": "H4", **SAFETY}),
+    hold_probe("NeverHeldBack"),
+    hold_probe("NeverSettledByTurn"),
+    hold_probe("NeverSettledByTool"),
+    hold_probe("NeverOwnersAgain"),
+    hold_probe("NeverHeldAtSend"),
+    hold_probe("NeverKeptPosted"),
+]
+
 # The larger bounds (formal/tla/README.md, "Larger bounds"): CoreLifecycle's fair configuration
 # with more in it, the other constants as there. Safety, for the nightly workflow, and liveness,
 # which takes hours there, apart.
@@ -415,8 +514,15 @@ def socket_schedule(log, constants):
     return {"messages": SOCKET_MESSAGES, **named_steps_of(log)}
 
 
+def steps_schedule(log, constants):
+    """A model whose every state names its step, with no messages of a chat: InstallUpgrade and
+    ActivityHoldBack."""
+    return named_steps_of(log)
+
+
 # How each model's trace becomes a schedule.
-SCHEDULES = {CORE: schedule_of, SOCKET: socket_schedule, DT: schedule_driver.schedule_of}
+SCHEDULES = {CORE: schedule_of, SOCKET: socket_schedule, DT: schedule_driver.schedule_of,
+             IU: steps_schedule, AH: steps_schedule}
 
 
 def schedule_text(case, cfg_text, log):
@@ -430,8 +536,9 @@ def schedule_text(case, cfg_text, log):
         "what": case.what,
         "generated_by": "python3 tools/tla/check.py --counterexamples",
         "constants": constants_of(cfg_text),
-        "messages": made["messages"],
     }
+    if "messages" in made:
+        head["messages"] = made["messages"]
     lines = ["{"]
     for key, value in head.items():
         lines.append(f"  {json.dumps(key)}: {json.dumps(value)},")
@@ -450,7 +557,7 @@ def main():
     parser.add_argument("--bounds", choices=sorted(BOUNDS), default="small",
                         help="the small bounds, every case (the default), or the larger ones: "
                              "safety, or liveness")
-    parser.add_argument("--model", choices=MODELS, help="run only this model's cases")
+    parser.add_argument("--model", nargs="+", choices=MODELS, help="run only these models' cases")
     parser.add_argument("--only", nargs="+", choices=NAMES, metavar="NAME",
                         help=f"run only these cases, from: {', '.join(NAMES)}")
     parser.add_argument("--except", dest="skip", nargs="+", choices=NAMES, metavar="NAME",
@@ -461,7 +568,7 @@ def main():
 
     chosen = [case for case in BOUNDS[args.bounds]
               if (not args.only or case.name in args.only) and case.name not in args.skip
-              and (not args.model or case.model == args.model)]
+              and (not args.model or case.model in args.model)]
     if not chosen:
         raise SystemExit(f"no case of --bounds {args.bounds} is chosen")
     failed = []

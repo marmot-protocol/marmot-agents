@@ -1,0 +1,32 @@
+{
+  "case": "install-image-put-back-apart",
+  "model": "InstallUpgrade",
+  "config": "InstallUpgrade.pi.cfg",
+  "breaks": "U1",
+  "what": "ImageOutsideRecord, install/lib.sh before 2026-11-24: Pi's install moves the image tag once the agent is started and ends the upgrade; a TERM then, as the summary is printed, and the exit trap puts the tag back on the image it found, under the new scripts (U1). Killed between the two instead, the next run that fails, or another harness's install, puts the old scripts back under the new image.",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"Harnesses": ["codex", "pi"], "Main": "pi", "Older": true, "FirstRuns": 1, "Slots": [1], "MaxKills": 2, "MaxFails": 2, "FairPerson": true, "Bug": "ImageOutsideRecord"},
+  "steps": [
+    {"action": "Start", "slot": 1, "harness": "pi"},
+    {"action": "Lock", "slot": 1},
+    {"action": "Prepare", "slot": 1},
+    {"action": "Publish", "slot": 1},
+    {"action": "Begin", "slot": 1, "how": "records"},
+    {"action": "Core", "slot": 1},
+    {"action": "Keep", "slot": 1, "part": "S"},
+    {"action": "Put", "slot": 1, "part": "S"},
+    {"action": "Keep", "slot": 1, "part": "pi"},
+    {"action": "Put", "slot": 1, "part": "pi"},
+    {"action": "Connect", "slot": 1, "finishes": false},
+    {"action": "StartServices", "slot": 1},
+    {"action": "Commit", "slot": 1},
+    {"action": "Tag", "slot": 1},
+    {"action": "End", "slot": 1, "change": false},
+    {"action": "Retire", "slot": 1},
+    {"action": "Fail", "slot": 1, "at": "change_end"},
+    {"action": "Trap", "slot": 1},
+    {"action": "Finish", "slot": 1},
+    {"action": "Exit", "slot": 1}
+  ],
+  "end": {"kind": "violation"}
+}

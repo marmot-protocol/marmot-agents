@@ -72,10 +72,11 @@ jobs:
           fetch-depth: 2
 
       - name: Choose the tier, and whether the models run
-        # The models follow code: CoreLifecycle the core (formal/tla/README.md), SocketProtocol
-        # the core's socket and the three connectors on it (SocketProtocol.md), DriverTransport
-        # the built-in drivers (DriverTransport.md). So they run when that code, the models or
-        # their tools change, or this file. Anything that cannot tell runs them.
+        # The models follow code: CoreLifecycle and ActivityHoldBack the core (formal/tla/README.md,
+        # ActivityHoldBack.md), SocketProtocol the core's socket and the three connectors on it
+        # (SocketProtocol.md), DriverTransport the built-in drivers (DriverTransport.md),
+        # InstallUpgrade the install scripts (InstallUpgrade.md). So they run when that code, the
+        # models or their tools change, or this file. Anything that cannot tell runs them.
         id: tier
         env:
           EVENT: ${{ github.event_name }}
@@ -100,7 +101,7 @@ jobs:
               crates/marmot-agent/src/ \
               packages/claude-code/src/ packages/openclaw/src/ python/marmot_hermes/ \
               crates/marmot-agent-driver/src/ crates/marmot-agent-codex/src/ \
-              crates/marmot-agent-acp/src/ crates/marmot-agent-pi/src/ || status=$?
+              crates/marmot-agent-acp/src/ crates/marmot-agent-pi/src/ install/ || status=$?
             case "${status}" in
               0) models=false ;;
               1) ;;
@@ -502,9 +503,10 @@ jobs:
     # full gate.
     if: needs.changes.outputs.models == 'true'
     runs-on: ubuntu-24.04
-    # The small bounds, in five jobs side by side: CoreLifecycle's fair configuration, its give-up
-    # configuration, which takes as long, and its other cases, each about 4 minutes, and the cases
-    # of SocketProtocol and of DriverTransport. The larger bounds are in nightly.yml.
+    # The small bounds, in six jobs side by side: CoreLifecycle's fair configuration, its give-up
+    # configuration, which takes as long, and its other cases, each about 4 minutes, the cases
+    # of SocketProtocol and of DriverTransport, and those of the two small models, InstallUpgrade
+    # and ActivityHoldBack, about a minute together. The larger bounds are in nightly.yml.
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -520,6 +522,8 @@ jobs:
             cases: --model SocketProtocol
           - part: DriverTransport
             cases: --model DriverTransport
+          - part: InstallUpgrade and ActivityHoldBack
+            cases: --model InstallUpgrade ActivityHoldBack
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -653,6 +657,7 @@ jobs:
             TLA+ models (the other cases) [models]
             TLA+ models (SocketProtocol) [models]
             TLA+ models (DriverTransport) [models]
+            TLA+ models (InstallUpgrade and ActivityHoldBack) [models]
             Documents
         run: |
           set -euo pipefail

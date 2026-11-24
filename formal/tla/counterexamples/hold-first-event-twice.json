@@ -1,0 +1,20 @@
+{
+  "case": "hold-first-event-twice",
+  "model": "ActivityHoldBack",
+  "config": "ActivityHoldBack.fair.cfg",
+  "breaks": "H2",
+  "what": "HoldAttempted again: MDK posts the tool's first version and its answer is lost; someone joins the owner's chat, and the core holds the version back, not knowing it went; they leave, and the tool's next version goes as a first event too: the chat has the tool twice (H2). A version MDK keeps and posts later does the same.",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"MaxFlips": 3, "MaxLost": 2, "MdkKeeps": true, "FairMdk": true, "Bug": "HoldAttempted"},
+  "steps": [
+    {"action": "Emit", "item": "K", "shown": true},
+    {"action": "Send", "tok": ["K", 1], "outcome": "posted-lost"},
+    {"action": "Flip", "members": "more"},
+    {"action": "ReadMembers", "owners": false},
+    {"action": "Flip", "members": "owners"},
+    {"action": "ReadMembers", "owners": true},
+    {"action": "Emit", "item": "K", "shown": true},
+    {"action": "Send", "tok": ["K", 2], "outcome": "sent"}
+  ],
+  "end": {"kind": "violation"}
+}

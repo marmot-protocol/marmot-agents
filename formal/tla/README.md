@@ -9,9 +9,13 @@ the sends under MDK 0.19.0's tokens on branch `crash-safe-sends` the same day, w
 again for the reading by insertion order of MDK #3606 on branch `mdk-insertion-paging` the same day; and again on
 2026-11-23 for a driver that ends during a catch-up, on branch `core-socket-backlog`.
 
-This folder holds three models: `CoreLifecycle`, the core, which this page is about; `SocketProtocol`, the socket
-between the core and a connector, which [its own page](SocketProtocol.md) is about; and `DriverTransport`, one
-driver's side, which [its own page](DriverTransport.md) is about. All three are checked by `tools/tla/check.py`.
+This folder holds five models: `CoreLifecycle`, the core, which this page is about; `SocketProtocol`, the socket
+between the core and a connector, which [its own page](SocketProtocol.md) is about; `DriverTransport`, one
+driver's side, which [its own page](DriverTransport.md) is about; `InstallUpgrade`, an install script's upgrade
+stopped anywhere ([its page](InstallUpgrade.md)); and `ActivityHoldBack`, the core holding the full activity back
+from a chat that is no longer the owner's ([its page](ActivityHoldBack.md)). All five are checked by
+`tools/tla/check.py`. [The inventory](inventory.md) lists every state machine in the code, what checks each, and
+which a model would pay for next.
 
 `CoreLifecycle.tla` models the core between MDK and one driver: requests pending and settled, items and their
 versions, read marks, sessions, the outbox, saves and crashes. It owns S1, S2, S3, S4, S10, S12 and L1 to L3 for
@@ -255,7 +259,7 @@ taken then, so a prompt in between names no session. The code was right; the mod
 ## Running
 
 ```sh
-python3 tools/tla/check.py                 # every case of the three models; logs and configurations in target/tla
+python3 tools/tla/check.py                 # every case of the five models; logs and configurations in target/tla
 python3 tools/tla/check.py --model CoreLifecycle   # this model's cases
 python3 tools/tla/check.py --only fair     # one case
 python3 tools/tla/check.py --counterexamples   # writes the committed schedules again, from TLC's traces
@@ -268,6 +272,7 @@ python3 tools/tla/check.py --bounds larger-liveness   # their liveness, which ta
 `~/.cache/marmot-agents/tla` once, and runs it with the local Java, or, when there is none, in a pinned Eclipse
 Temurin 21 image with Docker. `TLC_WORKERS` sets TLC's workers (default 1); `TLC_HEAP` its heap (default 2g).
 
-CI runs `check.py` in the `TLA+ models` jobs, three for this model, one for `SocketProtocol` and one for
-`DriverTransport`: in the merge queue and on `master` always, and on a pull request when it changes `formal/`,
-`tools/tla/`, the code a model follows or `.github/workflows/ci.yml`.
+CI runs `check.py` in the `TLA+ models` jobs, three for this model, one for `SocketProtocol`, one for
+`DriverTransport`, and one for `InstallUpgrade` and `ActivityHoldBack` together: in the merge queue and on
+`master` always, and on a pull request when it changes `formal/`, `tools/tla/`, the code a model follows or
+`.github/workflows/ci.yml`.
