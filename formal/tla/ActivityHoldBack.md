@@ -81,7 +81,7 @@ as it was handed.
 | Id | Property | Form | From |
 | --- | --- | --- | --- |
 | H1 | Every request is settled at most once in the chat (S1, for D-136) | invariant `H1` | D-028, D-136 |
-| H2 | An item has one first event in the chat, and each later version names it (S3, for D-136) | invariant `H2` | D-025, D-136 |
+| H2 | An item has one first event in the chat, and each later version names that event (S3, for D-136) | invariant `H2` | D-025, D-136 |
 | H4 | The full activity is posted only while the chat is the owner's two-person chat | invariant `H4` | D-136 |
 | L1 | Every request is eventually settled in the chat | `<>` | D-028 |
 
@@ -93,26 +93,26 @@ are lost (or MDK is busy).**
 
 | Case | Configuration | Expected | Distinct states | Counterexample |
 | --- | --- | --- | ---: | --- |
-| `hold-fair` | `ActivityHoldBack.fair.cfg` (MDK may keep a send; H1, H2, L1) | every property holds | 10,557 | |
-| `hold-posted` | `ActivityHoldBack.posted.cfg` (MDK never keeps a send; H1, H2, H4, L1) | every property holds | 3,197 | |
-| `hold-unfair` | fair, without `FairMdk` | L1 fails | 10,557 | |
+| `hold-fair` | `ActivityHoldBack.fair.cfg` (MDK may keep a send; H1, H2, L1) | every property holds | 10,601 | |
+| `hold-posted` | `ActivityHoldBack.posted.cfg` (MDK never keeps a send; H1, H2, H4, L1) | every property holds | 3,221 | |
+| `hold-unfair` | fair, without `FairMdk` | L1 fails | 10,601 | |
 | `hold-kept-posted-later` | fair, H4 | H4 fails | 88 | [`hold-kept-posted-later`](counterexamples/hold-kept-posted-later.json) |
 | `hold-bug-HoldAttempted-H1` | posted, the code before the fix, H1 | H1 fails | 479 | [`hold-settled-twice`](counterexamples/hold-settled-twice.json) |
-| `hold-bug-HoldAttempted-H2` | fair, the code before the fix, H2 | H2 fails | 2,621 | [`hold-first-event-twice`](counterexamples/hold-first-event-twice.json) |
-| `hold-bug-RetryChanged-H1` | posted, the code before the second fix, H1 | H1 fails | 921 | [`hold-retry-changed`](counterexamples/hold-retry-changed.json) |
+| `hold-bug-HoldAttempted-H2` | fair, the code before the fix, H2 | H2 fails | 2,625 | [`hold-first-event-twice`](counterexamples/hold-first-event-twice.json) |
+| `hold-bug-RetryChanged-H1` | posted, the code before the second fix, H1 | H1 fails | 923 | [`hold-retry-changed`](counterexamples/hold-retry-changed.json) |
 
 Every case of this model together takes under half a minute here.
 
 **Each check catches its bug.** `HoldAttempted` and `RetryChanged`, the code before each fix (above); `NoMove`, a
-send held back whose settles are dropped, not moved to the turn, fails L1 (7,969 distinct states); `HoldNothing`, no hold-back at all,
+send held back whose settles are dropped, not moved to the turn, fails L1 (8,012 distinct states); `HoldNothing`, no hold-back at all,
 fails H4 even where MDK never keeps a send (59).
 
-**No empty passes.** On the fair configuration: `NeverHeldBack` (a send of the tool is held back once the tool
-went out), `NeverSettledByTurn` and `NeverSettledByTool` (`r1` is settled by each), `NeverOwnersAgain` (the tool
-goes again once the chat is the owner's again), `NeverHeldAtSend` (a send MDK was handed and does not have is held
-back at its send, the fix's path), `NeverKeptPosted` (MDK posts a tool it kept) and `NeverRetriedOtherwise` (the
-turn is tried again as MDK was handed it, in a chat sent otherwise now, the second fix's path). All are reached
-within 1,600 distinct states.
+**No empty passes.** On the fair configuration: `NeverHeldBack` (a send of the tool still queued is held back,
+`held`, once an earlier version of the tool went out), `NeverSettledByTurn` and `NeverSettledByTool` (`r1` is
+settled by each), `NeverOwnersAgain` (the tool goes again once the chat is the owner's again), `NeverHeldAtSend` (a
+send MDK was handed and does not have is held back at its send, the fix's path), `NeverKeptPosted` (MDK posts a tool
+it kept) and `NeverRetriedOtherwise` (the turn is tried again as MDK was handed it, in a chat sent otherwise now,
+the second fix's path). All are reached within 1,600 distinct states.
 
 ## What the model found
 

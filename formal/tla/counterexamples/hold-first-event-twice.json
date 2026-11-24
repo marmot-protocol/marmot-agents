@@ -10,9 +10,9 @@
     {"action": "Emit", "item": "K", "shown": true},
     {"action": "Send", "tok": ["K", 1], "outcome": "posted-lost"},
     {"action": "Flip", "members": "more"},
-    {"action": "ReadMembers", "owners": false},
+    {"action": "ReadMembers", "owners": false, "held": 1},
     {"action": "Flip", "members": "owners"},
-    {"action": "ReadMembers", "owners": true},
+    {"action": "ReadMembers", "owners": true, "held": 0},
     {"action": "Emit", "item": "K", "shown": true},
     {"action": "Send", "tok": ["K", 2], "outcome": "sent"}
   ],

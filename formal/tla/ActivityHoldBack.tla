@@ -148,14 +148,16 @@ HoldBack(box) ==
     IF Bug = "NoMove" THEN <<kept, version>> ELSE ByTurn(kept, s)
 
 \* `members_now` before each send: the core reads who is in the chat, and holds back what the
-\* chat is no longer sent.
+\* chat is no longer sent. `held` counts the sends it held back.
 ReadMembers ==
     /\ owners' = (members = "owners")
     /\ owners' # owners
-    /\ IF ~owners' /\ Bug # "HoldNothing"
-       THEN LET by == HoldBack(outbox) IN outbox' = by[1] /\ version' = by[2]
-       ELSE UNCHANGED <<outbox, version>>
-    /\ step' = [a |-> "ReadMembers", owners |-> owners']
+    /\ LET holds == ~owners' /\ Bug # "HoldNothing" IN
+       /\ IF holds
+          THEN LET by == HoldBack(outbox) IN outbox' = by[1] /\ version' = by[2]
+          ELSE UNCHANGED <<outbox, version>>
+       /\ step' = [a |-> "ReadMembers", owners |-> owners',
+                    held |-> IF holds THEN Len(SelectSeq(outbox, Held)) ELSE 0]
     /\ UNCHANGED <<members, pending, first, mdk, chat, emitted, flips, lost>>
 
 Posted(t, names, settles) ==
@@ -261,7 +263,9 @@ H1 == \A r \in {"r1"} : Cardinality({k \in DOMAIN chat : r \in chat[k].settles})
 \* H2 (S3, for D-136): an item has one first event in the chat, and each later version names it.
 H2 == \A i \in Items \ {"N"} :
         \A k \in Posts(i) :
-            (chat[k].names = NoEvent) <=> (\A j \in Posts(i) : j >= k)
+            IF \A j \in Posts(i) : j >= k
+            THEN chat[k].names = NoEvent
+            ELSE chat[k].names = chat[CHOOSE f \in Posts(i) : \A j \in Posts(i) : j >= f].tok
 
 \* H4 (D-136's privacy): the full activity is posted only while the chat is the owner's
 \* two-person chat. The core reads who is in it just before it hands a send to MDK; a send MDK
@@ -271,10 +275,11 @@ H4 == \A k \in DOMAIN chat : Kind(chat[k].item) = "full" => chat[k].to = "owners
 \* L1: every request is eventually settled in the chat.
 L1 == <>(\A r \in {"r1"} : \E k \in DOMAIN chat : r \in chat[k].settles)
 
-\* Reachability probes: each must be violated. A send of the tool is held back once it went out;
+\* Reachability probes: each must be violated. A send of the tool still queued is held back
+\* once an earlier version of it went out;
 \* r1 is settled by the turn, and by the tool; the tool goes again once the chat is the owner's
 \* again; MDK holds back what it was never handed, at its send; MDK posts a tool it kept.
-NeverHeldBack == ~(step.a = "ReadMembers" /\ ~step.owners /\ \E k \in DOMAIN chat : chat[k].item = "K")
+NeverHeldBack == ~(step.a = "ReadMembers" /\ step.held > 0 /\ \E k \in DOMAIN chat : chat[k].item = "K")
 NeverSettledByTurn == ~(\E k \in DOMAIN chat : chat[k].item = "T" /\ "r1" \in chat[k].settles)
 NeverSettledByTool == ~(\E k \in DOMAIN chat : chat[k].item = "K" /\ "r1" \in chat[k].settles)
 NeverOwnersAgain == ~(step.a = "Send" /\ step.tok[1] = "K" /\ step.outcome = "sent"
