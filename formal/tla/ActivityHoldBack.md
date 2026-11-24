@@ -39,7 +39,15 @@ cannot close it).
 
 - **Crashes.** The outbox, the items and what is pending are saved; who is in a chat is not, and is read again
   before the first send after a restart, so a restart is a read like any other here. `CoreLifecycle` checks the
-  saves and the tokens across crashes.
+  saves and the tokens across crashes. Nor an outbox saved by an older core, whose sends tried before carry no
+  record of how they went (`Queued::bare`): after someone joins, such a send is tried again changed, which MDK
+  refuses, and its stand-in can settle its request a second time. Review found it, not the model; it is issue
+  [#181](https://github.com/marmot-protocol/marmot-agents/issues/181).
+- **MDK forgetting a token**, its record of a send expiring before the core asks again: the model's MDK keeps
+  every token it took. The hold-back check (`not_kept`) then takes a send MDK posted and forgot for one it never
+  took, and settles it with a `not_shown` notice, or by the turn, where
+  [D-109](../../docs/decisions.md#d-109-how-the-cores-sends-survive-a-crash-as-built) tells it as failed,
+  delivery uncertain. Review found it, not the model; it is issue [#182](https://github.com/marmot-protocol/marmot-agents/issues/182).
 - **Refusals and give-ups**, and what stands in for them, but for MDK refusing a token handed another submission:
   `CoreLifecycle`'s. That one is modelled as a notice settling what the send settled; the version that closes an
   item the core then sends in its place is left out.

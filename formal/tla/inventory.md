@@ -18,13 +18,16 @@ cut anywhere, pays most.
 1. **The installer's upgrade** (D-134, D-116): modelled, [`InstallUpgrade`](InstallUpgrade.md). It found two
    windows in which a TERM or a kill left Pi's image tag, or the person's Hermes plugin, apart from the files they
    go with; both fixed. Review found a third, which U1 as first stated let through: another harness's install
-   put back the core and left the Hermes plugin; fixed, and U1 restated so the model catches it.
+   put back the core and left the Hermes plugin; fixed, and U1 restated so the model catches it. Its second
+   review found a case the model leaves out, two agents of one harness in one home: issue [#180](https://github.com/marmot-protocol/marmot-agents/issues/180).
 2. **The core's hold-back of the full activity** (D-136): modelled, [`ActivityHoldBack`](ActivityHoldBack.md). It
    found that a send MDK was already handed, held back when someone joins the chat, settles its request twice,
    and can start its item twice; fixed. In review, a send tried again without the native message it was first
    handed with, which MDK refuses as another submission, settled its request twice too; fixed, and modelled
    since. It also shows the privacy limit that MDK posts what it keeps, to whoever
-   is in the chat then: a limit accepted for the pilot (D-148).
+   is in the chat then: a limit accepted for the pilot (D-148). Its second review found two cases the model
+   leaves out: an outbox saved by an older core (issue [#181](https://github.com/marmot-protocol/marmot-agents/issues/181)), and a send MDK forgot (issue
+   [#182](https://github.com/marmot-protocol/marmot-agents/issues/182)).
 3. **The agent's words and the settles they carry** (`conversation.rs` `emitted` for `Body::Message`,
    `settle_by_turn`, `shown_by`, `refused` for words): a second model of the core, which `CoreLifecycle` leaves
    out on purpose. The requests words name move between the words' next new message, the turn's next version and

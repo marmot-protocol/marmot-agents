@@ -55,6 +55,11 @@ call `image_commit` and `change_begin` alike).
   the record (`image_id`; `install/test_install.py` stops the one at every step and checks the other).
 - **The two renames of `replace_dir` without `mv --exchange`** (macOS): a kill between them leaves the person's
   gateway with neither plugin, which `docs/move.md` states. The model has the exchange, one step.
+- **Two agents of one harness in one home.** Each harness has one agent here, so one Hermes plugin change. With
+  two named Hermes agents, a run for the second can take over the first's killed upgrade, since the parts they
+  list match, and `upgrade_end` then moves only the second's plugin change: the first's record is left to put
+  stale plugin files back later. Review found it, not the model; it is issue [#180](https://github.com/marmot-protocol/marmot-agents/issues/180), to fix before the
+  release, with a configuration of two agents of one harness.
 - **What the agent's own folder holds** (settings, launchers, services, `before-move`): written by one agent's
   install only, and put back by none.
 - **The old connector's plugin replaced on a move** (`--replace-plugin`): its put back is the same as our own
