@@ -2770,6 +2770,11 @@ core reads them, is read from MDK's source and not tested against MDK.
 
 Decided 2026-11-23. The project owner decided the rule; the builder decided the points above, on 2026-11-23.
 
+"Not what was queued before they came" is narrowed by
+[D-148](#d-148-for-the-pilot-a-send-of-the-full-activity-that-mdk-keeps-and-posts-after-someone-joins-is-an-accepted-limit):
+a send of the full activity that the core handed to MDK while the chat was the owner's, and that MDK keeps and
+posts later, can reach someone who joined in between.
+
 ## D-137 A secret answer's membership check is not bound to the epoch it is sent under
 
 **Decision.** Secret answers stay as they are
