@@ -31,9 +31,9 @@ sha2 = "0.10"
 rustix = { version = "1", features = ["fs"] }
 # MDK, as a library (D-002). The revision moves together with the [patch] entries in the workspace
 # Cargo.toml and tools/odin/install.sh.
-marmot-app = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
-marmot-account = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
-cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
+marmot-app = { git = "https://github.com/marmot-protocol/mdk.git", rev = "029e0579fdb7f59e85b3a4a55dd7a9e42091988a" }
+marmot-account = { git = "https://github.com/marmot-protocol/mdk.git", rev = "029e0579fdb7f59e85b3a4a55dd7a9e42091988a" }
+cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "029e0579fdb7f59e85b3a4a55dd7a9e42091988a" }
 # MDK's SQLite, which is SQLCipher, started on one thread before MDK opens a database
 # (`marmot::start_sqlite`). The version is MDK's, so it is the same library.
 rusqlite = { version = "0.40.1", default-features = false }
@@ -45,12 +45,12 @@ schemars = "1"
 marmot-agent-events = { path = "../marmot-agent-events", features = ["schema"] }
 # MDK's test relay, and its storage settings for tests.
 nostr-relay-builder = "0.44"
-storage-sqlite = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8", features = ["test-support"] }
+storage-sqlite = { git = "https://github.com/marmot-protocol/mdk.git", rev = "029e0579fdb7f59e85b3a4a55dd7a9e42091988a", features = ["test-support"] }
 tempfile = "3"
 # The import test runs today's connector, wn-agent, from MDK at the same revision, and speaks to
 # its socket.
-agent-connector = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
-agent-control = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
+agent-connector = { git = "https://github.com/marmot-protocol/mdk.git", rev = "029e0579fdb7f59e85b3a4a55dd7a9e42091988a" }
+agent-control = { git = "https://github.com/marmot-protocol/mdk.git", rev = "029e0579fdb7f59e85b3a4a55dd7a9e42091988a" }
 # The Claude Code scenario runs the driver as a program.
 tokio = { version = "1", features = ["process", "test-util"] }
 
