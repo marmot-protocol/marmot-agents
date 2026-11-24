@@ -6,7 +6,8 @@
 //! driver request is always awaited to the end (D-066); only the wait for the driver's next event
 //! is dropped when a group message comes first, which the trait allows (D-058). The one piece of
 //! work done on the side is a file the agent sends (D-090): uploading it can take long, so it runs
-//! as a task of its own, and how it went comes back to this one, which tells the driver.
+//! as a task of its own, a few at once, and how it went comes back to this one, which tells the
+//! driver. The core owns those tasks, and none outlives it (D-145).
 //!
 //! What the core keeps across a restart is one file: the conversation's state, what it means to
 //! send, and for each group how far it has read, in the order messages arrived on this machine.
@@ -46,7 +47,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
 use std::task::Poll;
 use std::time::Duration;
-use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 /// The longest a group's sends wait before the next try, after failing again and again.
@@ -54,6 +54,13 @@ const SEND_WAIT_MAX: Duration = Duration::from_secs(10);
 
 /// The longest a group waits before it asks again after a send MDK has queued.
 const QUEUED_WAIT_MAX: Duration = Duration::from_millis(500);
+
+/// How many files the agent sends are read and uploaded at once (D-145).
+const FILES_AT_ONCE: usize = 2;
+
+/// How many files the agent sends the core holds at once, those uploading included: one more is
+/// refused as busy (D-145).
+const FILES_HELD: usize = 16;
 
 /// How long a stop waits, in all, for MDK to take into its engine the sends it has queued.
 const STOP_WAIT: Duration = Duration::from_secs(60);
@@ -127,6 +134,59 @@ struct Uploaded {
     id: String,
     chat: marmot_agent_driver::ChatId,
     result: Result<(), Refusal>,
+}
+
+/// A file the agent asked to send, waiting for its turn to upload. Where it goes, the chat's
+/// group and running turn, and the folders it may come from, were taken when it was asked for
+/// (D-090).
+struct Waiting {
+    id: String,
+    chat: marmot_agent_driver::ChatId,
+    path: PathBuf,
+    group: GroupKey,
+    turn: Option<marmot_agent_events::TurnId>,
+    folders: Folders,
+}
+
+/// The files the agent asked to send that the core holds: at most [`FILES_AT_ONCE`] uploading,
+/// each a task the core owns, and the rest waiting, [`FILES_HELD`] in all (D-145). A waiting file
+/// is only its path until its turn comes, so the bytes held are those of the files uploading.
+#[derive(Default)]
+struct Files {
+    uploading: tokio::task::JoinSet<Uploaded>,
+    /// Which file each upload is, for one whose task did not end by itself.
+    running: HashMap<tokio::task::Id, (String, marmot_agent_driver::ChatId)>,
+    waiting: VecDeque<Waiting>,
+}
+
+impl Files {
+    /// How many files are held, uploading or waiting.
+    fn held(&self) -> usize {
+        self.running.len() + self.waiting.len()
+    }
+
+    /// How an upload went, once its task has ended: a task that did not finish, as when it
+    /// panicked or was stopped, failed with `detail`.
+    fn ended(
+        &mut self,
+        ended: Result<(tokio::task::Id, Uploaded), tokio::task::JoinError>,
+        detail: &str,
+    ) -> Option<Uploaded> {
+        let (task, uploaded) = match ended {
+            Ok((task, uploaded)) => (task, Some(uploaded)),
+            Err(error) => (error.id(), None),
+        };
+        let (id, chat) = self.running.remove(&task)?;
+        Some(uploaded.unwrap_or(Uploaded {
+            id,
+            chat,
+            result: Err(Refusal {
+                reason: Reason::Failed,
+                detail: Some(detail.into()),
+                unanswered: false,
+            }),
+        }))
+    }
 }
 
 /// What the core keeps across a restart.
@@ -301,8 +361,8 @@ enum Woke {
     Retry,
     /// The driver's next event, or its end.
     Driver(Option<Output>),
-    /// A file finished uploading.
-    Uploaded(Uploaded),
+    /// A file's upload ended.
+    Uploaded(Result<(tokio::task::Id, Uploaded), tokio::task::JoinError>),
     /// A live event from the Marmot side.
     Marmot(Live),
     /// The core is asked to stop.
@@ -323,6 +383,8 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     config: Config,
     /// The folders the agent may send files from (D-090).
     folders: Folders,
+    /// The files the agent asked to send that are uploading or waiting to (D-145).
+    files: Files,
     /// The core's clock, which never jumps, for how long a control has waited (D-087). Tokio's,
     /// which is the system's except in a simulation, whose clock is virtual.
     started: Instant,
@@ -432,6 +494,7 @@ impl<D: Driver, M: Side> Core<D, M> {
             history: kept.history,
             store,
             folders,
+            files: Files::default(),
             config: config.clone(),
             started: Instant::now(),
             since: 0,
@@ -501,9 +564,6 @@ impl<D: Driver, M: Side> Core<D, M> {
         self.catch_up().await?;
         tokio::pin!(stop);
         let mut clock = tokio::time::interval(std::time::Duration::from_secs(10));
-        // Files being uploaded say here how they went. A file still uploading when the core
-        // stops is not waited for: the driver it would answer goes with the core.
-        let (uploaded, mut uploads) = mpsc::unbounded_channel::<Uploaded>();
         loop {
             // Each group may send a few more events in this turn.
             self.drained.clear();
@@ -537,7 +597,7 @@ impl<D: Driver, M: Side> Core<D, M> {
                         None => driver.next_event().await,
                     }
                 });
-                let mut upload = pin!(uploads.recv());
+                let uploads = &mut self.files.uploading;
                 let mut live = pin!(self.marmot.next(&mut events));
                 let mut stop = stop.as_mut();
                 std::future::poll_fn(|cx| {
@@ -546,8 +606,8 @@ impl<D: Driver, M: Side> Core<D, M> {
                             0 => tick.as_mut().poll(cx).map(|_| Woke::Tick),
                             1 => retry.as_mut().poll(cx).map(|()| Woke::Retry),
                             2 => driver.as_mut().poll(cx).map(Woke::Driver),
-                            // The core holds a sender, so this never ends.
-                            3 => match upload.as_mut().poll(cx) {
+                            // With no upload under way, nothing to wait for here.
+                            3 => match uploads.poll_join_next_with_id(cx) {
                                 Poll::Ready(Some(done)) => Poll::Ready(Woke::Uploaded(done)),
                                 _ => Poll::Pending,
                             },
@@ -585,11 +645,15 @@ impl<D: Driver, M: Side> Core<D, M> {
                     let acts = self.conversation.emitted(emitted);
                     self.carry_out(acts).await?;
                 }
-                Woke::Driver(Some(Output::SendFile(file))) => {
-                    self.send_file(file, &uploaded).await?
-                }
+                Woke::Driver(Some(Output::SendFile(file))) => self.send_file(file).await?,
                 Woke::Driver(None) => break,
-                Woke::Uploaded(done) => self.file_done(done).await?,
+                Woke::Uploaded(ended) => {
+                    let failed = "It could not be uploaded or sent.";
+                    if let Some(done) = self.files.ended(ended, failed) {
+                        self.file_done(done).await?;
+                    }
+                    self.start_uploads();
+                }
                 Woke::Marmot(Live::Message(message)) => self.live(message).await?,
                 Woke::Marmot(Live::Groups) => self.consider_invitations().await?,
                 Woke::Marmot(Live::Other) => {}
@@ -597,6 +661,7 @@ impl<D: Driver, M: Side> Core<D, M> {
                 Woke::Marmot(Live::Closed) | Woke::Stop => break,
             }
         }
+        self.end_files().await?;
         // Everything the stop closes is queued and saved at once, before any of it is sent: a
         // crash in between sends what is left when the core starts again, and closes nothing
         // twice.
@@ -620,14 +685,24 @@ impl<D: Driver, M: Side> Core<D, M> {
         Ok(())
     }
 
-    /// Starts sending a file the agent asked to send, as a task of its own so the chats go on
-    /// meanwhile. Where it goes, the chat's group and running turn, is taken now (D-090).
-    async fn send_file(
-        &mut self,
-        file: SendFile,
-        uploaded: &mpsc::UnboundedSender<Uploaded>,
-    ) -> Result<(), Unsaved> {
+    /// Takes a file the agent asked to send. Where it goes, the chat's group and running turn,
+    /// is taken now (D-090). It uploads as a task of its own, so the chats go on meanwhile, once
+    /// fewer than [`FILES_AT_ONCE`] are uploading; with [`FILES_HELD`] already held, it is refused
+    /// as busy (D-145).
+    async fn send_file(&mut self, file: SendFile) -> Result<(), Unsaved> {
         let SendFile { id, chat, path } = file;
+        if self.files.held() >= FILES_HELD {
+            let result = Err(Refusal {
+                reason: Reason::Busy,
+                detail: Some(
+                    "The agent is already sending as many files as it can. Try again once they \
+                     are sent."
+                        .into(),
+                ),
+                unanswered: false,
+            });
+            return self.file_done(Uploaded { id, chat, result }).await;
+        }
         let Some((group, turn)) = self.conversation.file_place(&chat) else {
             let result = Err(Refusal {
                 reason: Reason::Invalid,
@@ -637,11 +712,70 @@ impl<D: Driver, M: Side> Core<D, M> {
             return self.file_done(Uploaded { id, chat, result }).await;
         };
         let folders = self.folders_for(&chat);
-        let (marmot, uploaded) = (self.marmot.clone(), uploaded.clone());
-        tokio::spawn(async move {
-            let result = upload(&marmot, folders, path, &group, turn).await;
-            let _ = uploaded.send(Uploaded { id, chat, result });
+        self.files.waiting.push_back(Waiting {
+            id,
+            chat,
+            path,
+            group,
+            turn,
+            folders,
         });
+        self.start_uploads();
+        Ok(())
+    }
+
+    /// Starts the uploads of the files waiting, oldest first, while fewer than [`FILES_AT_ONCE`]
+    /// are under way.
+    fn start_uploads(&mut self) {
+        while self.files.running.len() < FILES_AT_ONCE {
+            let Some(file) = self.files.waiting.pop_front() else {
+                return;
+            };
+            let marmot = self.marmot.clone();
+            let (id, chat) = (file.id.clone(), file.chat.clone());
+            let task = self.files.uploading.spawn(async move {
+                let result = upload(&marmot, file.folders, file.path, &file.group, file.turn).await;
+                Uploaded {
+                    id: file.id,
+                    chat: file.chat,
+                    result,
+                }
+            });
+            self.files.running.insert(task.id(), (id, chat));
+        }
+    }
+
+    /// Ends the files the core holds as it stops, or as its driver ends, so no upload outlives
+    /// it (D-145). One uploading is stopped, and the driver hears it failed; MDK may have taken it
+    /// already, so the chat is told nothing it may not be true of. One that ended meanwhile is told
+    /// as it went. One waiting was never offered to MDK: the chat is told it was not sent.
+    async fn end_files(&mut self) -> Result<(), Unsaved> {
+        self.files.uploading.abort_all();
+        while let Some(ended) = self.files.uploading.join_next_with_id().await {
+            let stopped = matches!(&ended, Err(error) if error.is_cancelled());
+            let detail = if stopped {
+                "The agent stopped while the file was being sent."
+            } else {
+                "It could not be uploaded or sent."
+            };
+            let Some(done) = self.files.ended(ended, detail) else {
+                continue;
+            };
+            if stopped {
+                self.driver.file_sent(done.id, done.result).await;
+            } else {
+                self.file_done(done).await?;
+            }
+        }
+        for file in std::mem::take(&mut self.files.waiting) {
+            let result = Err(Refusal {
+                reason: Reason::Failed,
+                detail: Some("The agent stopped before it was sent.".into()),
+                unanswered: false,
+            });
+            let (id, chat) = (file.id, file.chat);
+            self.file_done(Uploaded { id, chat, result }).await?;
+        }
         Ok(())
     }
 
@@ -1333,6 +1467,10 @@ mod tests {
     use crate::keys::{EventKey, PubKey};
     use crate::marmot::Page;
     use std::sync::Mutex;
+    use tokio::sync::mpsc;
+
+    /// How each file went, as a driver was told, in order.
+    type Told = Arc<Mutex<Vec<(String, Result<(), Refusal>)>>>;
 
     /// A stand-in for MDK that answers each file it is offered with the next of `answers`, and
     /// counts the offers. It does nothing else.
@@ -1747,5 +1885,375 @@ mod tests {
             "the same state again still fails"
         );
         assert!(failed.load(SeqCst));
+    }
+
+    /// A stand-in for MDK with one group, the owner's chat with the agent, holding what the test
+    /// stores there. Each file offered waits until the test opens the gate, counting how many
+    /// wait at once; a wait that is dropped counts as ended. Every send is taken.
+    #[derive(Clone)]
+    struct Desk {
+        agent: PubKey,
+        owner: PubKey,
+        stored: Arc<Mutex<Vec<Message>>>,
+        stored_now: Arc<tokio::sync::Notify>,
+        gate: tokio::sync::watch::Receiver<bool>,
+        uploading: Arc<Mutex<(usize, usize)>>,
+        offers: Arc<Mutex<u32>>,
+    }
+
+    /// One upload under way, for as long as it lives.
+    struct Uploading(Arc<Mutex<(usize, usize)>>);
+
+    impl Uploading {
+        fn new(counts: &Arc<Mutex<(usize, usize)>>) -> Self {
+            let mut now = counts.lock().unwrap();
+            now.0 += 1;
+            now.1 = now.1.max(now.0);
+            Self(counts.clone())
+        }
+    }
+
+    impl Drop for Uploading {
+        fn drop(&mut self) {
+            self.0.lock().unwrap().0 -= 1;
+        }
+    }
+
+    impl Desk {
+        /// The owner says `text` in the chat.
+        fn say(&self, text: &str) {
+            let mut stored = self.stored.lock().unwrap();
+            let order = stored.len() as i64 + 1;
+            stored.push(Message {
+                group: GroupKey::from("g"),
+                event: EventKey::from(format!("m{order}").as_str()),
+                sender: self.owner.clone(),
+                sender_name: None,
+                kind: 9,
+                content: text.into(),
+                tags: Vec::new(),
+                recorded_at: 1,
+                received_at: 1,
+                order: Some(order),
+            });
+            self.stored_now.notify_one();
+        }
+
+        /// How many files are uploading now, and the most that were at once.
+        fn uploading(&self) -> (usize, usize) {
+            *self.uploading.lock().unwrap()
+        }
+    }
+
+    impl Side for Desk {
+        type Events = ();
+
+        fn agent(&self) -> &PubKey {
+            &self.agent
+        }
+
+        async fn next(&self, _events: &mut ()) -> Live {
+            self.stored_now.notified().await;
+            let last = self.stored.lock().unwrap().last().cloned().unwrap();
+            Live::Message(Message {
+                order: None,
+                ..last
+            })
+        }
+
+        async fn publish_name(&self, _name: &str, _relays: &[String]) -> Result<(), NotNow> {
+            Ok(())
+        }
+
+        async fn incoming(&self, message: Message) -> Result<Option<Incoming>, NotNow> {
+            Ok(Some(Incoming::Heard(crate::conversation::Heard {
+                chat: crate::conversation::Where {
+                    group: message.group,
+                    name: None,
+                    direct: true,
+                    members: 2,
+                },
+                event: message.event,
+                author: message.sender,
+                author_name: "Owner".into(),
+                text: message.content,
+                reply_to: None,
+                mentions_agent: false,
+                attachments: Vec::new(),
+            })))
+        }
+
+        fn invitations(&self) -> Vec<(GroupKey, Option<PubKey>)> {
+            Vec::new()
+        }
+
+        async fn decide(&self, _group: &GroupKey, _accept: bool) -> bool {
+            unreachable!("no invitations")
+        }
+
+        fn groups(&self) -> Result<Vec<GroupKey>, NotNow> {
+            Ok(vec![GroupKey::from("g")])
+        }
+
+        fn two_people(&self, _group: &GroupKey) -> Result<Option<Vec<PubKey>>, NotNow> {
+            Ok(Some(vec![self.agent.clone(), self.owner.clone()]))
+        }
+
+        fn stored(&self, _group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {
+            let stored = self.stored.lock().unwrap();
+            let messages: Vec<Message> = (stored.iter())
+                .filter(|m| m.order > Some(after))
+                .take(limit)
+                .cloned()
+                .collect();
+            let last = messages.last().and_then(|m| m.order);
+            let more = messages.len() == limit;
+            Ok(Page {
+                messages,
+                last,
+                more,
+            })
+        }
+
+        async fn send(
+            &self,
+            _group: &GroupKey,
+            _what: &Sending,
+            token: &crate::Token,
+        ) -> Result<EventKey, SendFailed> {
+            Ok(EventKey::from(format!("sent-{}", token.mdk).as_str()))
+        }
+
+        async fn send_file(
+            &self,
+            _group: &GroupKey,
+            _file: &crate::files::Outgoing,
+            _turn: Option<&marmot_agent_events::TurnId>,
+        ) -> Result<EventKey, FileFailed> {
+            *self.offers.lock().unwrap() += 1;
+            let _uploading = Uploading::new(&self.uploading);
+            let mut gate = self.gate.clone();
+            let _ = gate.wait_for(|open| *open).await;
+            Ok(EventKey::from("file"))
+        }
+    }
+
+    /// A driver the test hands outputs to, which passes on each prompt it is given and notes how
+    /// each file went. It ends when the test drops its sender.
+    struct Hand {
+        outputs: mpsc::UnboundedReceiver<Output>,
+        prompts: mpsc::UnboundedSender<marmot_agent_driver::Prompt>,
+        told: Told,
+    }
+
+    impl Driver for Hand {
+        fn harness(&self) -> marmot_agent_driver::Harness {
+            marmot_agent_driver::Harness {
+                name: "hand".into(),
+                version: None,
+            }
+        }
+
+        fn capabilities(&self) -> marmot_agent_driver::Capabilities {
+            marmot_agent_driver::Capabilities {
+                interrupt: false,
+                mid_turn: marmot_agent_driver::MidTurn::Queue,
+                sessions: marmot_agent_driver::Sessions::Core,
+                resume: false,
+                approvals: false,
+                files_in: marmot_agent_driver::FilesIn::None,
+                approval_commands: Vec::new(),
+            }
+        }
+
+        async fn prompt(&mut self, prompt: marmot_agent_driver::Prompt) -> Result<(), Refusal> {
+            let _ = self.prompts.send(prompt);
+            Ok(())
+        }
+
+        async fn answer(&mut self, _answer: marmot_agent_driver::Answer) -> Result<(), Refusal> {
+            unreachable!("no answer")
+        }
+
+        async fn control(&mut self, _control: marmot_agent_driver::Control) -> Result<(), Refusal> {
+            unreachable!("no control")
+        }
+
+        async fn next_event(&mut self) -> Option<Output> {
+            self.outputs.recv().await
+        }
+
+        async fn file_sent(&mut self, id: String, result: Result<(), Refusal>) {
+            self.told.lock().unwrap().push((id, result));
+        }
+    }
+
+    /// A core on a [`Desk`], driving a [`Hand`], running until `stop` is sent, with what the
+    /// test needs to steer and watch it.
+    struct Desked {
+        side: Desk,
+        open: tokio::sync::watch::Sender<bool>,
+        outputs: mpsc::UnboundedSender<Output>,
+        prompts: mpsc::UnboundedReceiver<marmot_agent_driver::Prompt>,
+        told: Told,
+        stop: tokio::sync::oneshot::Sender<()>,
+        running: tokio::task::JoinHandle<Result<(), String>>,
+        folder: tempfile::TempDir,
+        _state: tempfile::TempDir,
+    }
+
+    impl Desked {
+        fn start() -> Self {
+            let folder = tempfile::tempdir().unwrap();
+            std::fs::write(folder.path().join("notes.txt"), "hello").unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let owner = "ab".repeat(32);
+            let settings = format!(
+                "home = \"/unused\"\nrelays = [\"wss://relay.invalid\"]\nowner = \"{owner}\"\n\
+                 files_from = [\"{}\"]\n[connector]\n",
+                folder.path().display()
+            );
+            let config = Config::parse(&settings).unwrap();
+            let (open, gate) = tokio::sync::watch::channel(false);
+            let side = Desk {
+                agent: PubKey::from("cd".repeat(32).as_str()),
+                owner: PubKey::from(owner.as_str()),
+                stored: Arc::default(),
+                stored_now: Arc::default(),
+                gate,
+                uploading: Arc::default(),
+                offers: Arc::default(),
+            };
+            let (outputs, outputs_in) = mpsc::unbounded_channel();
+            let (prompts_out, prompts) = mpsc::unbounded_channel();
+            let told = Arc::new(Mutex::new(Vec::new()));
+            let driver = Hand {
+                outputs: outputs_in,
+                prompts: prompts_out,
+                told: told.clone(),
+            };
+            let core = Core::new(side.clone(), driver, &config, Store::new(state.path())).unwrap();
+            let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+            let live = Subscribed {
+                events: (),
+                since: 0,
+            };
+            let running = tokio::spawn(core.run(live, async {
+                let _ = stopped.await;
+            }));
+            Self {
+                side,
+                open,
+                outputs,
+                prompts,
+                told,
+                stop,
+                running,
+                folder,
+                _state: state,
+            }
+        }
+
+        /// The next prompt the driver is given, within a few seconds.
+        async fn prompted(&mut self) -> marmot_agent_driver::Prompt {
+            tokio::time::timeout(Duration::from_secs(5), self.prompts.recv())
+                .await
+                .expect("a prompt in time")
+                .unwrap()
+        }
+
+        /// The agent asks to send `count` files to `chat`, numbered from `from`.
+        fn send_files(&self, chat: &marmot_agent_driver::ChatId, from: usize, count: usize) {
+            for n in from..from + count {
+                let file = SendFile {
+                    id: format!("f{n}"),
+                    chat: chat.clone(),
+                    path: self.folder.path().join("notes.txt"),
+                };
+                self.outputs.send(Output::SendFile(file)).unwrap();
+            }
+        }
+
+        /// How each file went, as the driver was told, once `count` were.
+        async fn told(&self, count: usize) -> Vec<(String, Result<(), Refusal>)> {
+            until(|| (self.told.lock().unwrap().len() >= count).then_some(())).await;
+            self.told.lock().unwrap().clone()
+        }
+    }
+
+    /// Waits up to five seconds for `found` to give something.
+    async fn until<T>(mut found: impl FnMut() -> Option<T>) -> T {
+        for _ in 0..500 {
+            if let Some(found) = found() {
+                return found;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("not in time");
+    }
+
+    // The agent asks for more files than the core works on at once: a few upload, some more wait
+    // their turn, and the rest are refused as busy at once, so the files the core holds stay
+    // bounded. Meanwhile the chat goes on: a prompt reaches the agent while every upload is stuck.
+    // Once they get through, each waiting file goes, and never more at once (D-145).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_core_uploads_a_few_files_at_once_and_holds_a_bounded_number() {
+        let mut desk = Desked::start();
+        desk.side.say("go");
+        let chat = desk.prompted().await.chat.id;
+        let asked = FILES_HELD + 4;
+        desk.send_files(&chat, 0, asked);
+        let busy = desk.told(asked - FILES_HELD).await;
+        assert!(
+            (busy.iter()).all(|(_, r)| r.as_ref().is_err_and(|r| r.reason == Reason::Busy)),
+            "the files past those held are refused as busy: {busy:?}"
+        );
+        until(|| (desk.side.uploading().0 == FILES_AT_ONCE).then_some(())).await;
+        // The chat is not held up by the files.
+        desk.side.say("still there?");
+        assert_eq!(desk.prompted().await.text, "still there?");
+        assert_eq!(*desk.side.offers.lock().unwrap() as usize, FILES_AT_ONCE);
+        desk.open.send(true).unwrap();
+        let told = desk.told(asked).await;
+        let sent = told.iter().filter(|(_, r)| r.is_ok()).count();
+        assert_eq!(sent, FILES_HELD, "every file held went");
+        assert_eq!(desk.side.uploading(), (0, FILES_AT_ONCE));
+        let _ = desk.stop.send(());
+        desk.running.await.unwrap().unwrap();
+    }
+
+    // Files the core holds when it stops, or when its driver ends as a lost connector does, end
+    // with it: those uploading are stopped, those waiting are never offered to MDK, and nothing
+    // the core started goes on uploading after it (D-145).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn no_upload_outlives_the_core() {
+        for driver_ends in [false, true] {
+            let mut desk = Desked::start();
+            desk.side.say("go");
+            let chat = desk.prompted().await.chat.id;
+            desk.send_files(&chat, 0, FILES_AT_ONCE + 3);
+            until(|| (desk.side.uploading().0 == FILES_AT_ONCE).then_some(())).await;
+            if driver_ends {
+                drop(desk.outputs);
+            } else {
+                let _ = desk.stop.send(());
+            }
+            tokio::time::timeout(Duration::from_secs(5), desk.running)
+                .await
+                .expect("the core ends at once")
+                .unwrap()
+                .unwrap();
+            assert_eq!(desk.side.uploading().0, 0, "no upload goes on");
+            desk.open.send(true).unwrap();
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert_eq!(
+                *desk.side.offers.lock().unwrap() as usize,
+                FILES_AT_ONCE,
+                "no file waiting was offered after the core ended"
+            );
+            let told = desk.told.lock().unwrap().clone();
+            assert_eq!(told.len(), FILES_AT_ONCE + 3, "each file was answered");
+            assert!(told.iter().all(|(_, r)| r.is_err()), "none was sent");
+        }
     }
 }
