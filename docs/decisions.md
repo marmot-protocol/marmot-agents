@@ -2896,7 +2896,8 @@ at the pinned commit Hermes offers no other way to learn that it ran the command
 age again when it runs it, so if the gateway stalls longer than the plugin's five seconds between the plugin's check
 and Hermes's, a confirmation the plugin handed over can be one Hermes drops without running it. The answer then
 shows as given, and the notice says only that Hermes gave no reply, which is true either way; a person who sees the
-command did not happen asks again.
+command did not happen asks again. The plugin does not pass Hermes's call a longer `timeout` to close this gap:
+that would override Hermes's own 300-second rule for confirmations, and Hermes's rule stands.
 
 Decided 2026-11-24 by the project owner.
 
