@@ -548,27 +548,51 @@ fn words_named(name: &str) -> (marmot_agent::Sending, marmot_agent::Token) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_dropped_send_tried_again_in_the_same_second_is_not_refused() {
     use marmot_agent::marmot::SendFailed;
-    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
-    let group = a_quiet_chat(&world).await;
-    let id = group_id(&group);
-    let agent = &world.marmot.label;
-    world
-        .runtime
-        .enable_group_disbanding(agent, &id)
-        .await
-        .unwrap();
-    at_a_new_second().await;
-    world.runtime.disband_group(agent, &id).await.unwrap();
-    let (words, first) = words_named("a");
-    let tried = world.send(&group, &words, &first).await;
-    assert_eq!(tried, Err(SendFailed::Rejected), "taken, and dropped");
-    let again = marmot_agent::Token {
-        mdk: "token a, again".into(),
-        ..first
-    };
-    let tried = world.send(&group, &words, &again).await;
-    assert_eq!(tried, Err(SendFailed::Busy), "busy until the next second");
-    world.runtime.shutdown().await;
+    // Both tries must fall in one second, which a busy machine can make them miss: then the
+    // second try is another event, which MDK takes and drops too. The disband goes through a
+    // moment later, and MDK refuses every send to the group after, so the case is tried again
+    // with a new person and agent.
+    for n in 0.. {
+        assert!(n < 5, "two sends in one second, in five tries");
+        let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+        let group = a_quiet_chat(&world).await;
+        let id = group_id(&group);
+        let agent = &world.marmot.label;
+        world
+            .runtime
+            .enable_group_disbanding(agent, &id)
+            .await
+            .unwrap();
+        at_a_new_second().await;
+        world.runtime.disband_group(agent, &id).await.unwrap();
+        let second = unix_second();
+        let (words, first) = words_named("a");
+        let tried = world.send(&group, &words, &first).await;
+        let again = marmot_agent::Token {
+            mdk: "token a, again".into(),
+            ..first
+        };
+        let tried_again = world.send(&group, &words, &again).await;
+        // Busy, the second was the same; anything else in another second says nothing.
+        let crossed = tried_again != Err(SendFailed::Busy) && unix_second() != second;
+        world.runtime.shutdown().await;
+        if crossed {
+            continue;
+        }
+        assert_eq!(tried, Err(SendFailed::Rejected), "taken, and dropped");
+        assert_eq!(
+            tried_again,
+            Err(SendFailed::Busy),
+            "busy until the next second"
+        );
+        break;
+    }
+}
+
+/// This machine's clock, in whole seconds, as MDK dates an event.
+fn unix_second() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    now.unwrap().as_secs()
 }
 
 // Two sends of the same words, with the same tags, in one second would be one event to MDK: the
@@ -578,15 +602,29 @@ async fn the_same_words_twice_in_one_second_both_go_out() {
     use marmot_agent::marmot::SendFailed;
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     let group = a_quiet_chat(&world).await;
-    let ((a, first), (b, second)) = (words_named("a"), words_named("b"));
-    at_a_new_second().await;
-    let went = world.send(&group, &a, &first).await.unwrap();
-    let tried = world.send(&group, &b, &second).await;
-    assert_eq!(tried, Err(SendFailed::Busy), "busy until the next second");
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    let also = world.send(&group, &b, &second).await.unwrap();
-    assert_ne!(went, also, "two events");
-    assert_eq!(sent_by_core(&world, &group, 9).len(), 2, "both went out");
+    // Both sends must fall in one second, which a busy machine can make them miss: then they are
+    // two events, and are tried again in a later second under tokens of their own.
+    for n in 0.. {
+        assert!(n < 5, "two sends in one second, in five tries");
+        let before = sent_by_core(&world, &group, 9).len();
+        let (a, first) = words_named(&format!("a{n}"));
+        let (b, second) = words_named(&format!("b{n}"));
+        at_a_new_second().await;
+        let at = unix_second();
+        let went = world.send(&group, &a, &first).await.unwrap();
+        let tried = world.send(&group, &b, &second).await;
+        // Busy, the second was the same; anything else in another second says nothing.
+        if tried != Err(SendFailed::Busy) && unix_second() != at {
+            continue;
+        }
+        assert_eq!(tried, Err(SendFailed::Busy), "busy until the next second");
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        let also = world.send(&group, &b, &second).await.unwrap();
+        assert_ne!(went, also, "two events");
+        let sent = sent_by_core(&world, &group, 9).len();
+        assert_eq!(sent, before + 2, "both went out");
+        break;
+    }
     world.runtime.shutdown().await;
 }
 
