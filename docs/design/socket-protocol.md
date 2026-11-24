@@ -219,6 +219,7 @@ harness apply to the Rust trait, whose flags are the seven in D-058, not the row
 | The connector comes back | Takes a new hello. Nothing is replayed. A connector that outlived the connection, as a gateway's plugin does, starts from what the new core knows: it sends nothing more of the items that were open, and names none of the requests the old core settled |
 | The connector has not taken a request after 30 seconds | Refuses it as failed and gives the connector up, as for a drop. So a connector answers once its harness has the request, never once its effect shows |
 | The connector stops reading, so the core cannot write a request, or another line, within 30 seconds | Gives the connector up, as above. A prompt of which part was written is reported as perhaps not delivered ([D-138](../decisions.md#d-138-a-connector-that-stops-reading-is-given-up-in-a-requests-time)) |
+| What the core holds for the connector while it waits for its answer, the lines it sent meanwhile and the refusals it owes for repeated `send_file` ids together, would pass 32 MB | Gives the connector up at once, as above, and keeps nothing of the line that would pass it. The events it sent until then still reach the chat; a file it asked for meanwhile is not sent, and the chat is told so ([D-145](../decisions.md#d-145-the-core-bounds-what-it-holds-for-a-connector-and-the-files-it-sends-at-once)) |
 | The connection drops while the core hands on what was stored meanwhile | Hands nothing more to it. The next connector is given the messages that were never tried, each once ([D-139](../decisions.md#d-139-prompts-a-driver-that-ended-was-never-given-wait-for-the-next-driver)) |
 | A prompt was sent and no response came before the drop | Reports it as perhaps not delivered: the harness may have it ([D-129](../decisions.md#d-129-a-prompt-whose-answer-a-dropped-connection-lost-is-told-as-perhaps-not-delivered)). It is never sent again |
 | An event that settles the request waited on, or a turn of the prompt's chat that names the prompt, came before the drop and the response | Counts the request as taken: the event settles it, once ([D-147](../decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken)) |
@@ -336,6 +337,11 @@ with an error whose `data` holds a `reason` and a `detail` for the agent, which 
 folders the agent may send files from."}}`. The reasons are the eight above and `not_allowed`, which only the
 core gives. The answer can take as long as the upload; the connector's id is its own, numbered after the hello.
 A second `send_file` with the id of one still unanswered is refused as `invalid` and nothing is sent.
+The core uploads two files at once and holds 16 at most; one more is refused as `busy` at once. When the
+connection goes, a file still waiting is never offered to MDK, and the chat is told it was not sent; an upload
+under way is stopped, and since MDK may already have taken its file, which can still reach the chat, the chat is
+told nothing of it. The connector is told about neither
+([D-145](../decisions.md#d-145-the-core-bounds-what-it-holds-for-a-connector-and-the-files-it-sends-at-once)).
 The protocol version stays `marmot.agent-control.v3`: a connector that never sends the request is unchanged.
 
 ## What it replaces
