@@ -33,7 +33,8 @@ id; an id that starts with "other" comes up as a session of another id. `--ask-a
 extension ask a question as Pi starts, before it reads anything, as Pi 1.6.0 does when an extension
 asks in its start-up handler; it then waits for good. Each fake writes its process id to
 `.fake-pid`, so a test can see that it was stopped, and adds each prompt's text it hears, as one
-JSON string per line, to `.fake-prompts`, so a test can see every prompt that reached a Pi.
+JSON string per line, to `.fake-prompts`, so a test can see every prompt that reached a Pi, and a
+line to `.fake-settled` each time a run has settled.
 """
 
 import json
@@ -201,9 +202,15 @@ def ask_command(cmd):
 
 def finish(aborted):
     send({"type": "agent_end", "messages": [], "willRetry": False})
-    send({"type": "agent_settled", "aborted": aborted})
-    with wake:
+    # As Pi is: idle once it says so. A prompt read after `agent_settled` was written starts a
+    # run, not a steer, and nothing answered after it is written before it.
+    with out_lock:
         state["running"] = False
+        sys.stdout.write(json.dumps({"type": "agent_settled", "aborted": aborted}) + "\n")
+        sys.stdout.flush()
+        with open(".fake-settled", "a") as settled:
+            settled.write("settled\n")
+    with wake:
         wake.notify_all()
 
 

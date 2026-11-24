@@ -522,12 +522,19 @@ async fn one_compaction_at_a_time_settled_by_its_own_end() {
 
 #[tokio::test]
 async fn a_prompt_sent_as_a_turn_ends_starts_the_next_turn() {
-    let (mut pi, _work) = start().await;
+    let (mut pi, work) = start().await;
     pi.prompt(prompt("c-1", "m-1", "hello")).await.unwrap();
     until(&mut pi, |e| is_turn(e, State::Running)).await;
     // Pi finishes the turn and says so; the driver has not read that yet when the next prompt
     // goes.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    let settled = work.path().join(".fake-settled");
+    for _ in 0..100 {
+        if settled.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(settled.exists(), "Pi settled the turn within ten seconds");
     pi.prompt(prompt("c-1", "m-2", "again")).await.unwrap();
     let ended = until(&mut pi, |e| is_turn(e, State::Done)).await;
     assert_eq!(ended.prompts, vec!["m-1".into()]);
