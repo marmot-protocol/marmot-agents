@@ -105,6 +105,7 @@ its first version on, and a nested subagent's task item names the one that start
 | `stop_stops_every_subagent` | Stop while the agent waits for a subagent: both stop, and the Stop is settled once, by the last to end |
 | `stop_after_the_turn_has_ended` | Stop naming the agent's ended turn stops the subagent still working under it |
 | `stop_stops_nested_subagents` | Stop stops the agent, its subagent and that subagent's subagent, each parent first |
+| `stop_stops_one_subagent` | Stop in a nested subagent's thread stops it alone, settled by its end; the agent and the outer subagent go on (D-149) |
 | `dies_with_subagents_running` | The harness dies while two subagents work: every item closes (S2) |
 | `new_session_with_subagents_running` | A new session while a subagent of the old one works: it is stopped, and its items close (D-070, D-117) |
 | `restart_with_subagents_running` | A restart while a subagent works: the next prompt takes the session up, and nothing of the old subagent is shown |

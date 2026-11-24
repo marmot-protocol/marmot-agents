@@ -792,9 +792,15 @@ impl Conversation {
         let answering = matches!(asked, Asked::Choice { .. } | Asked::Questions { .. });
         let answers = target.clone().filter(|_| answering);
         let target = target.map(|key| self.saved.items[&key].clone());
+        // A Stop in a subagent's thread stops that subagent and those it started (D-149).
+        let subagent = (target.as_ref())
+            .filter(|_| matches!(asked, Asked::Interrupt))
+            .and_then(|record| self.stops_one(record));
         // One that points at an item acts only while the item is live, and an answer only while
-        // its item is waiting and nobody has answered it first (D-028).
-        if let Some(record) = &target {
+        // its item is waiting and nobody has answered it first (D-028). A Stop of one subagent
+        // acts while any of what it stops still works, which only the driver knows: a subagent
+        // that ended can have started one that still works (D-123).
+        if let Some(record) = target.as_ref().filter(|_| subagent.is_none()) {
             let waiting = record.last.header().state == State::Waiting;
             let refusal = if answering && self.saved.pending.values().any(|p| p.answers == answers)
             {
@@ -810,7 +816,6 @@ impl Conversation {
                 return self.refuse_now(&heard, &chat, Refusal::new(reason));
             }
         }
-        let target = target.map(|record| record.last);
         let by = self.person(&heard.author, heard.author_name.clone());
         let request = RequestId(self.make_id("r"));
         let act = match self.translate(&heard, &asked, &chat, target.as_ref(), &request, by) {
@@ -842,16 +847,36 @@ impl Conversation {
         vec![act]
     }
 
+    /// The subagent a Stop that points at `record` stops alone, with those it started, to a
+    /// driver that can stop one (D-123, D-149): a subagent's own `task` item names that subagent,
+    /// and any other item the subagent it belongs to, when it went in that subagent's thread.
+    /// `None` stops the whole turn: for an item of no subagent's, a task that is not a subagent's,
+    /// and an item shown in the main chat, as a subagent's approval in a chat not sent the agent's
+    /// full activity, where the chat sees only the turn (D-136).
+    fn stops_one(&self, record: &Record) -> Option<ItemId> {
+        let caps = &self.capabilities;
+        if !(caps.subagents && caps.stop_subagent) {
+            return None;
+        }
+        let header = record.last.header();
+        match record.last.body() {
+            Body::Task(task) if task.kind == "subagent" => Some(header.item.clone()),
+            _ => header.subagent.clone().filter(|_| record.thread.is_some()),
+        }
+    }
+
     /// The driver request a request becomes, or why it cannot be one.
     fn translate(
         &self,
         heard: &HeardRequest,
         asked: &Asked,
         chat: &Chat,
-        target: Option<&AgentEvent>,
+        target: Option<&Record>,
         request: &RequestId,
         by: Person,
     ) -> Result<Act, Refusal> {
+        let subagent = target.and_then(|record| self.stops_one(record));
+        let target = target.map(|record| &record.last);
         let control = |action| {
             Act::Control(Control {
                 request: request.clone(),
@@ -913,7 +938,7 @@ impl Conversation {
                     None => self.open_turn(&chat.id.0),
                 };
                 let turn = turn.ok_or(Refusal::new(Reason::NothingToDo))?;
-                control(Action::Interrupt { turn })
+                control(Action::Interrupt { turn, subagent })
             }
             Asked::NewSession => {
                 let session = match target {

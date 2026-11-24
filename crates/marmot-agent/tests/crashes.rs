@@ -66,6 +66,7 @@ impl Driver for Stub {
             approvals: true,
             files_in: FilesIn::None,
             subagents: false,
+            stop_subagent: false,
             approval_commands: Vec::new(),
         }
     }

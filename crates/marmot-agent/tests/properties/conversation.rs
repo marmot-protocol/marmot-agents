@@ -62,6 +62,7 @@ fn conversation(saved: Saved) -> Conversation {
         files_in: FilesIn::Images,
         approval_commands: Vec::new(),
         subagents: false,
+        stop_subagent: false,
     };
     let rights = Rights {
         owner: PubKey::from(OWNER),

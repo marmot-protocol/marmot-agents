@@ -522,7 +522,7 @@ impl<D: Driver> Driver for FaultyDriver<D> {
     }
 
     async fn control(&mut self, control: Control) -> Result<(), Refusal> {
-        if let (Fault::MadeUpStop, Action::Interrupt { turn }) = (self.fault, &control.action) {
+        if let (Fault::MadeUpStop, Action::Interrupt { turn, .. }) = (self.fault, &control.action) {
             let stopped = self.turns.get(turn.as_str()).and_then(|last| {
                 let session = last.event.header().session.as_ref()?.as_str().to_string();
                 let seq = self.seqs.get(&session).copied().unwrap_or_default() + 1;

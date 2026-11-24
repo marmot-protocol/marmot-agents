@@ -1788,6 +1788,7 @@ mod tests {
                 approvals: false,
                 files_in: marmot_agent_driver::FilesIn::None,
                 subagents: false,
+                stop_subagent: false,
                 approval_commands: Vec::new(),
             }
         }
@@ -2265,6 +2266,7 @@ mod tests {
                 files_in: marmot_agent_driver::FilesIn::None,
                 approval_commands: Vec::new(),
                 subagents: false,
+                stop_subagent: false,
             }
         }
 

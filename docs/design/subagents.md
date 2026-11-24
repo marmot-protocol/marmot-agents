@@ -154,8 +154,10 @@ What [D-142](../decisions.md#d-142-how-subagent-threads-are-built) chose where t
 - A Codex subagent's row shows its newest turn's state; an earlier turn's end read late only adds to its text
   that the turn failed, with its error, when it did.
 - Each Codex subagent is one `task` item, which each of its turns opens again.
-- Not built yet: writing to a running subagent, which no driver allows, and a Stop that stops only one subagent
-  and those it started; a Stop in a thread names the person's turn today, and stops every subagent under it.
+- A Stop in a subagent's thread stops that subagent and those it started, for a driver that says it can
+  (`stop_subagent`, Codex's); for any other it stops the whole turn
+  ([D-149](../decisions.md#d-149-stop-in-a-subagents-thread-stops-that-subagent-alone)).
+- Not built yet: writing to a running subagent, which no driver allows.
 
 ## The cases
 

@@ -67,7 +67,7 @@ The properties come from the decisions. Each gets an id that the models, tests a
 | S11 | A request is handed to the harness before the driver returns, and dropping a wait never loses or halves anything | D-066 |
 | S12 | A prompt names a session only to resume it, never an ended one | D-065 |
 | S13 | Item ids never repeat for a chat, across sessions and restarts | D-059 |
-| S14 | A subagent's item is in its thread, under its `task` item sent before it, or in the main chat; an edit never moves it | D-121, D-133, D-142 |
+| S14 | A subagent's item is in its thread, under its `task` item sent before it. It is in the main chat only when that `task` item never went out to that chat, or MDK reports the thread gone. The place a send took is kept for every retry under its token and every later version: an edit never moves it | D-121, D-133, D-142 |
 
 **Liveness** (eventually happens, if the network, MDK and the harness keep working):
 

@@ -341,7 +341,10 @@ picked and no subagent being started (an open `spawnAgent` item), since until th
 yet named. Codex does not stop
 a subagent when its parent is interrupted, so Stop interrupts every running turn under the one it names, each
 parent before the subagents it started, and one whose start arrives while it waits, and is settled by the end of
-the last, or as failed by Codex's refusal to stop one that runs on. A turn is interrupted once however many
+the last, or as failed by Codex's refusal to stop one that runs on. A Stop in a subagent's thread names that
+subagent, and the driver says it can stop one (`stop_subagent`): it interrupts that subagent's turn and those of
+the subagents it started, and nothing else
+([D-149](../decisions.md#d-149-stop-in-a-subagents-thread-stops-that-subagent-alone)). A turn is interrupted once however many
 Stops wait for it: a later Stop joins the interrupt already sent. Item ids the driver makes up name a
 subagent's thread, since every translator of a chat counts from 0. When the chat's session is replaced, its
 subagents are interrupted; their open items close then, and when Codex stops. One that a Stop is waiting for
@@ -699,7 +702,8 @@ These are the same as for every connector on the socket.
   ([D-105](../decisions.md#d-105-which-gateway-settings-the-installers-change)).
 
 The seven flags, and where each plugin stands. Neither plugin states the eighth, `subagents`
-([D-142](../decisions.md#d-142-how-subagent-threads-are-built)), so it is no:
+([D-142](../decisions.md#d-142-how-subagent-threads-are-built)), nor the ninth, `stop_subagent`
+([D-149](../decisions.md#d-149-stop-in-a-subagents-thread-stops-that-subagent-alone)), so both are no:
 
 | Flag | A driver | A channel plugin | OpenClaw | Hermes |
 | --- | --- | --- | --- | --- |

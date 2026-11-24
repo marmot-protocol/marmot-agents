@@ -206,10 +206,15 @@ pub struct ControlParams {
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlAction {
-    /// Stop the running turn.
+    /// Stop the running turn, or one subagent under it.
     Interrupt {
         /// The turn to stop.
         turn: String,
+        /// For a Stop in a subagent's thread: that subagent's `task` item. Only it and the
+        /// subagents it started are stopped (D-123, D-149). Left out, the turn and every subagent
+        /// under it are. Sent only to a connector that says `stop_subagent`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagent: Option<String>,
     },
     /// End a chat's session, if it has one, and start a fresh one. A chat that moved folder gets one
     /// whose `chat` names the new folder (D-101).
@@ -380,6 +385,11 @@ pub struct Capabilities {
     /// before it shows subagents in the agent's own activity.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub subagents: bool,
+    /// Whether a Stop can stop one subagent, and those it started, while the turn goes on
+    /// (D-149). False when left out: a Stop in a subagent's thread then stops the whole turn, and
+    /// names no `subagent`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub stop_subagent: bool,
 }
 
 impl From<Capabilities> for driver::Capabilities {
@@ -393,10 +403,12 @@ impl From<Capabilities> for driver::Capabilities {
             files_in,
             approval_commands,
             subagents,
+            stop_subagent,
         } = c;
         Self {
             interrupt,
             subagents,
+            stop_subagent,
             mid_turn: match mid_turn {
                 MidTurn::Fold => driver::MidTurn::Fold,
                 MidTurn::Restart => driver::MidTurn::Restart,
@@ -849,8 +861,9 @@ impl From<&driver::Control> for ControlParams {
             request: request.0.clone(),
             by: by.into(),
             action: match action {
-                driver::Action::Interrupt { turn } => ControlAction::Interrupt {
+                driver::Action::Interrupt { turn, subagent } => ControlAction::Interrupt {
                     turn: turn.as_str().to_string(),
+                    subagent: subagent.as_ref().map(|s| s.as_str().to_string()),
                 },
                 driver::Action::NewSession { chat, session } => ControlAction::NewSession {
                     chat: chat.into(),

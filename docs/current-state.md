@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-24, at `master` commit `6d18889`, through [D-140](decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused), [D-142](decisions.md#d-142-how-subagent-threads-are-built), [D-143](decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake), [D-144](decisions.md#d-144-property-tests-run-on-every-pull-request-kani-in-the-full-gate-and-fuzzing-nightly-on-a-pinned-nightly-compiler), [D-145](decisions.md#d-145-the-core-bounds-what-it-holds-for-a-connector-and-the-files-it-sends-at-once), [D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id), [D-147](decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken), and [D-150](decisions.md#d-150-the-core-matches-a-typed-command-as-the-harness-reads-it-failing-towards-asking-for-the-right-to-approve). A change that adds or replaces
+Brought up to date on 2026-11-24, at `master` commit `3922de5`, through [D-140](decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused), [D-142](decisions.md#d-142-how-subagent-threads-are-built), [D-143](decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake), [D-144](decisions.md#d-144-property-tests-run-on-every-pull-request-kani-in-the-full-gate-and-fuzzing-nightly-on-a-pinned-nightly-compiler), [D-145](decisions.md#d-145-the-core-bounds-what-it-holds-for-a-connector-and-the-files-it-sends-at-once), [D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id), [D-147](decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken), [D-149](decisions.md#d-149-stop-in-a-subagents-thread-stops-that-subagent-alone), and [D-150](decisions.md#d-150-the-core-matches-a-typed-command-as-the-harness-reads-it-failing-towards-asking-for-the-right-to-approve). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -31,7 +31,9 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   [D-079](decisions.md#d-079-the-settings-name-the-agent)).
 - The core reads each group from its own mark. A group it has never read starts after what arrived before the
   core did. A group MDK cannot read for a moment is read again, backing off to 10 s ([D-111](decisions.md#d-111-a-group-the-core-has-never-read-starts-after-what-arrived-before-the-core-did), [D-106](decisions.md#d-106-the-core-keeps-reading-again-a-group-mdk-cannot-read-for-a-moment)).
-- Every send but a file's goes through MDK's token-based sends, so it can be tried again safely. A send that is dropped for
+- Every send but a file's, and but a later version of a subagent's words in its thread, goes through MDK's
+  token-based sends, so it can be tried again safely. That later version is MDK's plain edit of the thread message,
+  which keeps no token: tried again after an answer that was lost, it shows the same words again ([D-142](decisions.md#d-142-how-subagent-threads-are-built), point 4). A send that is dropped for
   good is stood in for once; four limits are accepted ([D-109](decisions.md#d-109-how-the-cores-sends-survive-a-crash-as-built), [D-097](decisions.md#d-097-what-stands-in-for-a-send-that-is-dropped), [D-096](decisions.md#d-096-four-limits-of-the-core-that-the-simulator-and-the-model-accept)).
 - A restart closes the running turn and its open items as interrupted, and settles open requests as failed.
   Nothing is sent again, and a prompt is delivered at most once ([D-070](decisions.md#d-070-a-restart-closes-the-turn-as-interrupted), [D-037](decisions.md#d-037-a-prompt-is-delivered-at-most-once)).
@@ -112,8 +114,9 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
 ## Drivers
 
 - Each driver speaks its harness's official interface where one exists ([D-006](decisions.md#d-006-prefer-official-interfaces-and-libraries)), implements one trait, and
-  states seven capability flags ([D-058](decisions.md#d-058-the-driver-trait-and-the-capability-flags)), and an eighth, whether its harness tells
-  its subagents apart ([D-142](decisions.md#d-142-how-subagent-threads-are-built)).
+  states seven capability flags ([D-058](decisions.md#d-058-the-driver-trait-and-the-capability-flags)), an eighth, whether its harness tells
+  its subagents apart ([D-142](decisions.md#d-142-how-subagent-threads-are-built)), and a ninth, `stop_subagent`, whether a Stop can stop one
+  subagent while the turn goes on ([D-149](decisions.md#d-149-stop-in-a-subagents-thread-stops-that-subagent-alone)).
 - Codex: native, in Rust, on `codex app-server`, with types of its own. One translator per thread; a working
   folder and a narrow sandbox by default; sessions kept so they resume ([D-055](decisions.md#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own), [D-060](decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes), [D-061](decisions.md#d-061-a-codex-session-starts-in-a-working-folder-with-a-safe-sandbox-unless-configured), [D-062](decisions.md#d-062-what-codex-reads-for-a-chat-message),
   [D-063](decisions.md#d-063-codex-keeps-a-session-so-it-can-be-resumed), [D-064](decisions.md#d-064-the-codex-driver-declines-an-mcp-servers-form-until-forms-are-designed)).
@@ -121,7 +124,8 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   for each subagent, its row, which each of its turns opens again, and everything else it does in its thread,
   its words naming that tool item as `parent` ([D-117](decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them), [D-142](decisions.md#d-142-how-subagent-threads-are-built)). Stop stops the agent and every
   subagent under its turn, settled once when the last has ended, or as failed if one Codex refused to stop runs
-  on; a Stop naming no item, after the turn, stops what still works beside it; a new session stops the old one's
+  on; a Stop in a subagent's thread stops that subagent and those it started alone
+  ([D-149](decisions.md#d-149-stop-in-a-subagents-thread-stops-that-subagent-alone)); a Stop naming no item, after the turn, stops what still works beside it; a new session stops the old one's
   subagents ([D-117](decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)).
   One a Stop waits for then is followed until Codex says whether it stopped, which settles the Stop
   ([D-132](decisions.md#d-132-a-stop-waiting-for-a-subagent-is-settled-by-codex-after-a-new-session)).
@@ -154,8 +158,10 @@ Built in the core, the Codex driver and MDK ([D-141](decisions.md#d-141-subagent
 - Stop in the main chat stops every subagent the agent started, even after its turn; Stop in a thread stops that
   subagent and those it started. A comment in a thread is a prompt only where the driver allows it and the
   writer may prompt, and never goes to the parent ([D-123](decisions.md#d-123-stop-and-writing-in-a-subagents-thread)).
-  Not built yet: no driver lets a person write to a subagent, so the core reads no comment in a thread; and a Stop
-  in a thread names the person's turn, so it stops every subagent under it ([D-142](decisions.md#d-142-how-subagent-threads-are-built)).
+  Not built yet: no driver lets a person write to a subagent, so the core reads no comment in a thread
+  ([D-142](decisions.md#d-142-how-subagent-threads-are-built)). A Stop in a thread names that subagent to a driver
+  that says it can stop one, `stop_subagent`, which only Codex's does; to any other it stops the whole turn
+  ([D-149](decisions.md#d-149-stop-in-a-subagents-thread-stops-that-subagent-alone)).
 - A driver closes open `task` items when it can no longer follow them; the app keeps counting a quiet row and
   says when it was last heard from. A harness that does not tell subagents apart keeps them as `tool` items. An
   app shows a held edit of an item sent before the member joined as the item ([D-124](decisions.md#d-124-what-keeps-subagents-reliable-closes-harnesses-that-do-not-tell-them-apart-and-late-joiners)).

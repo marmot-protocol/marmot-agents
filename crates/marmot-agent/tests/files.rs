@@ -98,6 +98,7 @@ impl Driver for Sender {
             approvals: false,
             files_in: FilesIn::None,
             subagents: false,
+            stop_subagent: false,
             approval_commands: Vec::new(),
         }
     }

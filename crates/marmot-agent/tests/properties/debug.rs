@@ -173,6 +173,7 @@ fn s8_requests_print_nothing_they_carry() -> Result<(), TestCaseError> {
     for action in [
         Action::Interrupt {
             turn: TurnId::from(mark(17)),
+            subagent: Some(ItemId::from(mark(19))),
         },
         Action::NewSession {
             chat: chat(18),

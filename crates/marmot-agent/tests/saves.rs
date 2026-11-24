@@ -238,6 +238,7 @@ impl Driver for Harnessed {
             files_in: FilesIn::None,
             approval_commands: Vec::new(),
             subagents: false,
+            stop_subagent: false,
         }
     }
 

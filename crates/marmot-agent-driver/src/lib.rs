@@ -178,6 +178,7 @@ impl fmt::Debug for SendFile {
 ///             files_in: FilesIn::None,
 ///             // A harness with no such command still says so. This one has one, to show how.
 ///             subagents: false,
+///             stop_subagent: false,
 ///             approval_commands: vec![ApprovalCommand { command: "/approve".into(), counts: Position::Start }],
 ///         }
 ///     }

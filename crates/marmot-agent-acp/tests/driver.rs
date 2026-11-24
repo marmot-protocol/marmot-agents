@@ -208,7 +208,10 @@ async fn an_approval_is_answered_and_an_interrupt_settled_by_the_turn_ending() {
     let stop = Control {
         request: RequestId::from("r-2"),
         by: person(),
-        action: Action::Interrupt { turn },
+        action: Action::Interrupt {
+            turn,
+            subagent: None,
+        },
     };
     acp.control(stop).await.unwrap();
     let ended = loop {

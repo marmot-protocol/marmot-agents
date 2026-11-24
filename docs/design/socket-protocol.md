@@ -299,7 +299,11 @@ none ([D-101](../decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-
 2026-11-22). One that leaves it out, as a gateway's plugin does, is offered no folder setting. A connector whose
 harness tells its subagents apart adds `"subagents": true` to `capabilities`, and names the subagent each event
 belongs to in the event's `subagent` field; one that leaves it out says no, and its events are shown in the main
-chat ([D-142](../decisions.md#d-142-how-subagent-threads-are-built); provisional, added 2026-11-24). The core answers `{"core": {"version"}, "agent": {"name"}}`, or an error:
+chat ([D-142](../decisions.md#d-142-how-subagent-threads-are-built); provisional, added 2026-11-24). One that can
+stop one subagent, and those it started, while the turn goes on adds `"stop_subagent": true`, and is then sent
+an `interrupt` naming that subagent's `task` item as `subagent` for a Stop in its thread; one that leaves it out
+is sent the turn alone, and stops it all ([D-149](../decisions.md#d-149-stop-in-a-subagents-thread-stops-that-subagent-alone);
+provisional, added 2026-11-24). The core answers `{"core": {"version"}, "agent": {"name"}}`, or an error:
 `-32001` for another protocol version, `-32002` for a token that is not this agent's, `-32600` or `-32602` for a
 hello it cannot read, such as a `folder` that is not a whole path.
 
@@ -311,7 +315,8 @@ the chat's next session there, and leaves a running one where it is (provisional
 **`answer`**: `request`, `item`, `by` (`id`, `name`) and `given`: `{"choice": <id>}` for an approval, or
 `{"questions": [{"question", "options", "text"}]}`.
 
-**`control`**: `request`, `by` and `action`, by `type`: `interrupt` (`turn`), `new_session` (`chat`,
+**`control`**: `request`, `by` and `action`, by `type`: `interrupt` (`turn`, and `subagent` for a Stop of one
+subagent), `new_session` (`chat`,
 `session`), `set` (`session`, `setting`, `value`), `own` (`session`, `id`). A `set` of the core's own
 `folder` setting never reaches a connector: the core turns it into a `new_session` whose `chat` names the
 new folder (provisional, D-101).

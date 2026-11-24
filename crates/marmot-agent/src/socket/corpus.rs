@@ -397,7 +397,17 @@ async fn from_the_core() -> Vec<Example> {
     let controls = [
         (
             "control: interrupt",
-            Action::Interrupt { turn: "t-4".into() },
+            Action::Interrupt {
+                turn: "t-4".into(),
+                subagent: None,
+            },
+        ),
+        (
+            "control: interrupt one subagent",
+            Action::Interrupt {
+                turn: "t-4".into(),
+                subagent: Some("task-2".into()),
+            },
         ),
         (
             "control: a new session, ending one, in the folder the chat chose",
@@ -747,7 +757,10 @@ async fn from_a_connector() -> Vec<Example> {
         let control = Control {
             request: RequestId("r-9".into()),
             by: person("u-1", "Alice"),
-            action: Action::Interrupt { turn: "t-4".into() },
+            action: Action::Interrupt {
+                turn: "t-4".into(),
+                subagent: None,
+            },
         };
         let driver = &mut wire.driver;
         let written = &mut wire.written;

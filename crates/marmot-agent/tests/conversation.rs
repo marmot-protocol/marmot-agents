@@ -35,6 +35,7 @@ fn capabilities() -> Capabilities {
         approvals: true,
         files_in: FilesIn::Images,
         subagents: true,
+        stop_subagent: true,
         approval_commands: vec![ApprovalCommand {
             command: "/approve".into(),
             counts: Position::Anywhere,
@@ -3606,7 +3607,7 @@ fn a_stop_after_the_turn_stops_what_still_works() {
     let acts = talk.asked(stop);
     assert!(
         matches!(acts.as_slice(), [Act::Control(c)]
-            if matches!(&c.action, Action::Interrupt { turn } if turn.as_str() == "t1")),
+            if matches!(&c.action, Action::Interrupt { turn, .. } if turn.as_str() == "t1")),
         "{acts:?}"
     );
 
@@ -4008,6 +4009,139 @@ fn a_subagents_work_after_its_task_item_was_forgotten_goes_in_its_thread() {
     assert_eq!((thread.root, thread.parent), (hex_id(1), Some(hex_id(1))));
 }
 
+/// The subagent, if any, of the one `Interrupt` control in `acts`, and its turn.
+fn interrupt_of(acts: &[Act]) -> (String, Option<String>) {
+    match acts {
+        [Act::Control(c)] => match &c.action {
+            Action::Interrupt { turn, subagent } => (
+                turn.as_str().to_string(),
+                subagent.as_ref().map(|s| s.as_str().to_string()),
+            ),
+            other => panic!("not an interrupt: {other:?}"),
+        },
+        other => panic!("not one control: {other:?}"),
+    }
+}
+
+// Stop in a subagent's thread names that subagent (D-123, D-149): an interrupt that points at a
+// subagent's `task` item, or at anything in its thread, names the person's turn and that subagent,
+// the innermost the item belongs to. One that points at the turn, or at nothing, names no subagent.
+#[test]
+fn a_stop_in_a_subagents_thread_names_that_subagent() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        &hex_id(9).0,
+    );
+    sent(
+        &mut talk,
+        &chat,
+        event("task:s1", State::Running, subagent_task()),
+        &hex_id(1).0,
+    );
+    let nested = of_subagent(event("task:s2", State::Running, subagent_task()), "task:s1");
+    sent(&mut talk, &chat, nested, &hex_id(2).0);
+    let deep = of_subagent(event("cmd", State::Running, command()), "task:s2");
+    sent(&mut talk, &chat, deep, &hex_id(3).0);
+    let stop = |talk: &mut Conversation, n: &str, at: Option<EventKey>| {
+        let at = at.map(|e| e.0);
+        let acts = talk.asked(request(direct(), n, OWNER, at.as_deref(), Asked::Interrupt));
+        interrupt_of(&acts)
+    };
+    let s1 = (String::from("t1"), Some(String::from("task:s1")));
+    let s2 = (String::from("t1"), Some(String::from("task:s2")));
+    assert_eq!(stop(&mut talk, "r1", Some(hex_id(1))), s1, "its task item");
+    assert_eq!(stop(&mut talk, "r2", Some(hex_id(2))), s2, "a nested one's");
+    assert_eq!(
+        stop(&mut talk, "r3", Some(hex_id(3))),
+        s2,
+        "an item in its thread"
+    );
+    let whole = (String::from("t1"), None);
+    assert_eq!(stop(&mut talk, "r4", Some(hex_id(9))), whole, "the turn");
+    assert_eq!(stop(&mut talk, "r5", None), whole, "nothing");
+
+    // A task that is not a subagent's, as a background job, names none: it stops the turn.
+    let job = Body::Task(Task {
+        kind: "background".into(),
+        description: None,
+        subject: None,
+    });
+    sent(
+        &mut talk,
+        &chat,
+        event("job", State::Running, job),
+        &hex_id(4).0,
+    );
+    assert_eq!(
+        stop(&mut talk, "r6", Some(hex_id(4))),
+        whole,
+        "a background task"
+    );
+}
+
+// A subagent that has finished while one it started still works is still stopped from its row:
+// the Stop names it, and the driver, which knows what of it still works, stops that (D-123:
+// accepted while any of the subagent's tree works, D-149).
+#[test]
+fn a_stop_on_a_finished_subagent_reaches_one_it_started_that_still_works() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    sent(
+        &mut talk,
+        &chat,
+        event("task:s1", State::Running, subagent_task()),
+        &hex_id(1).0,
+    );
+    let nested = of_subagent(event("task:s2", State::Running, subagent_task()), "task:s1");
+    sent(&mut talk, &chat, nested, &hex_id(2).0);
+    sent(
+        &mut talk,
+        &chat,
+        event("task:s1", State::Done, subagent_task()),
+        "e-s1-done",
+    );
+    let at = hex_id(1).0;
+    let acts = talk.asked(request(direct(), "r1", OWNER, Some(&at), Asked::Interrupt));
+    assert_eq!(
+        interrupt_of(&acts),
+        (String::from("t1"), Some(String::from("task:s1")))
+    );
+}
+
+// A driver that cannot stop one subagent says so (`stop_subagent`, D-149): a Stop in a thread
+// stops the whole turn, as before, and names no subagent.
+#[test]
+fn a_stop_in_a_thread_names_no_subagent_to_a_driver_that_cannot_stop_one() {
+    let caps = Capabilities {
+        stop_subagent: false,
+        ..capabilities()
+    };
+    let mut talk = Conversation::new(
+        PubKey::from(AGENT),
+        "codex",
+        rights(),
+        caps,
+        Saved::default(),
+    );
+    let chat = the_prompt(talk.heard(heard(direct(), "e1", OWNER, "hello")))
+        .chat
+        .id
+        .0;
+    sent(
+        &mut talk,
+        &chat,
+        event("task:s1", State::Running, subagent_task()),
+        &hex_id(1).0,
+    );
+    let at = hex_id(1).0;
+    let acts = talk.asked(request(direct(), "r1", OWNER, Some(&at), Asked::Interrupt));
+    assert_eq!(interrupt_of(&acts), (String::from("t1"), None));
+}
+
 // A subagent's work whose task item the chat was not sent goes in the main chat, as any item does:
 // here, a subagent's approval in a group that is not sent the agent's full activity (D-136).
 #[test]
@@ -4025,10 +4159,17 @@ fn a_subagents_work_goes_in_the_main_chat_when_its_task_item_was_not_sent() {
         "a task item is full activity"
     );
     let asked = of_subagent(event("ask", State::Waiting, approval()), "task:s1");
-    let (_, _, item) = the_item(&mut talk, |t| t.emitted(emitted(&chat, asked)));
+    let (_, key, item) = the_item(&mut talk, |t| t.emitted(emitted(&chat, asked)));
     assert_eq!(item.thread, None);
     let out = carrier::item(&item).unwrap();
     assert!(tag_values(&out.tags, "E").is_empty() && tag_values(&out.tags, "e").is_empty());
+
+    // Shown in the main chat, a Stop on it stops the whole turn, which is all the chat sees, and
+    // not only the subagent it hides (D-149).
+    talk.sent(&key, hex_id(1));
+    let at = hex_id(1).0;
+    let acts = talk.asked(request(group(), "r1", OWNER, Some(&at), Asked::Interrupt));
+    assert_eq!(interrupt_of(&acts), (String::from("t1"), None));
 }
 
 // A driver whose harness does not tell its subagents apart has its work shown in the main chat,
@@ -4037,6 +4178,7 @@ fn a_subagents_work_goes_in_the_main_chat_when_its_task_item_was_not_sent() {
 fn a_harness_that_does_not_tell_subagents_apart_has_no_threads() {
     let caps = Capabilities {
         subagents: false,
+        stop_subagent: false,
         ..capabilities()
     };
     let mut talk = Conversation::new(
@@ -4260,7 +4402,7 @@ fn a_stop_in_a_group_stops_a_subagent_it_is_not_shown() {
     let acts = talk.asked(stop);
     assert!(
         matches!(acts.as_slice(), [Act::Control(c)]
-            if matches!(&c.action, Action::Interrupt { turn } if turn.as_str() == "t1")),
+            if matches!(&c.action, Action::Interrupt { turn, .. } if turn.as_str() == "t1")),
         "{acts:?}"
     );
 }

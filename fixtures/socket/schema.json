@@ -398,13 +398,20 @@
             "turn": {
               "type": "string",
               "description": "The turn to stop."
+            },
+            "subagent": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "For a Stop in a subagent's thread: that subagent's `task` item. Only it and the\nsubagents it started are stopped (D-123, D-149). Left out, the turn and every subagent\nunder it are. Sent only to a connector that says `stop_subagent`."
             }
           },
           "required": [
             "type",
             "turn"
           ],
-          "description": "Stop the running turn.",
+          "description": "Stop the running turn, or one subagent under it.",
           "unevaluatedProperties": false
         },
         {
@@ -941,6 +948,10 @@
         "subagents": {
           "type": "boolean",
           "description": "Whether the harness tells its subagents apart, so each event of one names its `task` item\nand is shown in its thread (D-124, D-142). False when left out: a connector written\nbefore it shows subagents in the agent's own activity."
+        },
+        "stop_subagent": {
+          "type": "boolean",
+          "description": "Whether a Stop can stop one subagent, and those it started, while the turn goes on\n(D-149). False when left out: a Stop in a subagent's thread then stops the whole turn, and\nnames no `subagent`."
         }
       },
       "required": [
