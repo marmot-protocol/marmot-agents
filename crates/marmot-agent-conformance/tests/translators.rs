@@ -304,6 +304,38 @@ fn every_recording_as_recorded_keeps_the_properties() {
     assert!(failed.is_empty(), "{}", failed.join("\n"));
 }
 
+// A reply with no `result` is not one Codex writes, nor one the driver does. Read as if its
+// result were `{}`, a list arriving once the session had started made a session event whose
+// native message, `{}`, never arrived (D-007), though `{}` had, as the params of two requests;
+// and an answer to an approval request made the approval's.
+#[test]
+fn a_codex_reply_with_no_result_makes_up_no_native_message() {
+    let message = |into: bool, text: &str| Line::Message {
+        into,
+        text: text.to_string(),
+    };
+    let list = Recording {
+        harness: Harness::Codex,
+        name: "a list with no result".into(),
+        lines: vec![
+            message(false, r#"{"id":1,"method":"thread/start","params":{}}"#),
+            message(true, r#"{"id":1,"result":{"thread":{"id":"th1"}}}"#),
+            message(false, r#"{"id":2,"method":"model/list","params":{}}"#),
+            message(true, r#"{"id":2}"#),
+        ],
+    };
+    assert_eq!(run(&list, &list.lines, false), Ok(()));
+    let recorded = (recordings().iter())
+        .find(|r| r.harness == Harness::Codex && r.name == "approval_allowed")
+        .expect("a recording of an approval");
+    let asked = (recorded.lines.iter())
+        .position(|l| matches!(l, Line::Message { text, .. } if text.contains("requestApproval")))
+        .expect("the approval request");
+    let mut lines = recorded.lines[..=asked].to_vec();
+    lines.push(message(false, r#"{"id":0}"#));
+    assert_eq!(run(recorded, &lines, false), Ok(()));
+}
+
 proptest! {
     #[test]
     fn every_recording_changed_keeps_the_properties(

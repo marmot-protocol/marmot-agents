@@ -1446,7 +1446,12 @@ impl Translator {
         };
         let (Pending::Approval { item, .. } | Pending::Question { item, .. }) = &asked;
         self.answered.insert(item.clone());
-        let result = m.result.map_or("{}", RawValue::get);
+        // The driver answers with a result; read from nothing, an answer without one would make
+        // an event whose native message never arrived (D-007).
+        let Some(result) = m.result.map(RawValue::get) else {
+            self.unreadable += 1;
+            return;
+        };
         match asked {
             Pending::Approval {
                 item,
@@ -1571,7 +1576,12 @@ impl Translator {
             // It belongs where the request was sent, whatever has finished or changed since.
             return self.emit_owned(out, owner, &item, body, state, title, &text, native);
         }
-        let result = m.result.map_or("{}", RawValue::get);
+        // A reply holds a result or an error. Read from nothing, one without either would make
+        // an event whose native message never arrived (D-007), so it is unreadable.
+        let Some(result) = m.result.map(RawValue::get) else {
+            self.unreadable += 1;
+            return;
+        };
         match method.as_deref() {
             Some("model/list") => {
                 let Some(list) = self.read::<ListReply>("a reply", result) else {
