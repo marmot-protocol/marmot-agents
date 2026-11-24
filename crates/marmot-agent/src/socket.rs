@@ -9,7 +9,8 @@
 //!
 //! The socket is in a folder only the owner can open, and the token is in a file only the owner
 //! can read (D-038). One connection is one agent (D-035). No line over 4 MB is read or written
-//! (D-033), and a harness's own message reaches the chat exactly as the connector sent it (D-007).
+//! (D-033), no more than [`HELD_MAX`] is held for a connection (D-145), and a harness's own
+//! message reaches the chat exactly as the connector sent it (D-007).
 //!
 //! Every message is written and read through the types in [`wire`], and the JSON Schema made from
 //! them is `fixtures/socket/schema.json`, with examples of each message beside it.
@@ -40,6 +41,10 @@ use tokio::net::{UnixListener, UnixStream};
 pub const PROTOCOL: &str = "marmot.agent-control.v3";
 /// The largest message either side may send (D-033).
 pub const MAX_MESSAGE: usize = 4 * 1024 * 1024;
+/// The most the core holds for one connection, in the bytes of the lines it read, while it waits
+/// for the answer to a request, or to answer a connector's repeated `send_file` (D-145): eight
+/// messages of the largest size. A connector that sends more is given up.
+pub const HELD_MAX: usize = 8 * MAX_MESSAGE;
 /// How long a connector has to give its hello.
 pub const HELLO_WITHIN: Duration = Duration::from_secs(10);
 /// How long a connector has to take or refuse a request: it answers once it has handed the
@@ -204,15 +209,18 @@ pub struct SocketDriver {
     folder: Option<PathBuf>,
     next_id: i64,
     /// Events, and files to send, read while a request waited for its response, for the next call
-    /// of `next_event`.
-    held: VecDeque<Output>,
+    /// of `next_event`, each with the length of the line it came in.
+    held: VecDeque<(Output, usize)>,
+    /// The bytes of the lines behind what is held, and behind the duplicates to answer: at most
+    /// [`HELD_MAX`], or the connector is given up (D-145).
+    holding: usize,
     /// The connector's `send_file` requests the core has not answered, by the id the core was
     /// given: the connector's own id, as it wrote it.
     files: HashMap<String, Value>,
     /// `send_file` requests that reused the id of one still unanswered, to answer `invalid`. They
     /// are answered at the next write that is awaited to its end, never while waiting for the
     /// next event, which may be dropped partway (D-058).
-    duplicates: Vec<Value>,
+    duplicates: Vec<(Value, usize)>,
     /// The number of the next event in each session, which the core gives (D-034).
     seq: HashMap<String, u64>,
     answer_within: Duration,
@@ -313,6 +321,7 @@ impl SocketDriver {
             folder,
             next_id: 0,
             held: VecDeque::new(),
+            holding: 0,
             files: HashMap::new(),
             duplicates: Vec::new(),
             seq: HashMap::new(),
@@ -388,7 +397,7 @@ impl SocketDriver {
                 self.gone = true;
                 return if shown { Ok(()) } else { Err(unanswered) };
             };
-            let Some(envelope) = next else {
+            let Some((envelope, size)) = next else {
                 return if shown { Ok(()) } else { Err(unanswered) };
             };
             let is_response = envelope.jsonrpc.as_deref() == Some("2.0")
@@ -401,7 +410,7 @@ impl SocketDriver {
                     _ => {}
                 }
             }
-            if let Some(output) = self.output(&envelope) {
+            if let Some(output) = self.output(&envelope, size) {
                 if let Output::Event(e) = &output {
                     shown |= match &shows {
                         Shows::Prompt(m, chat) => {
@@ -412,17 +421,37 @@ impl SocketDriver {
                         Shows::Settles(r) => e.settles.contains(r),
                     };
                 }
-                self.held.push_back(output);
+                self.held.push_back((output, size));
+                self.holding += size;
+            }
+            if self.over_budget() {
+                return if shown { Ok(()) } else { Err(unanswered) };
             }
         }
+    }
+
+    /// Whether the core holds more for this connection than [`HELD_MAX`]: then the connector is
+    /// given up, as one that does not answer is, and nothing more is read from it (D-145).
+    fn over_budget(&mut self) -> bool {
+        if self.holding <= HELD_MAX {
+            return false;
+        }
+        if !self.gone {
+            eprintln!(
+                "marmot-agent: the connector sent more than the core holds for it, so it was given up"
+            );
+        }
+        self.gone = true;
+        true
     }
 
     /// Answers each `send_file` that reused an unanswered id: `invalid`, and nothing was sent.
     /// Each is written by `deadline`, or the connector is given up.
     async fn answer_duplicates(&mut self, deadline: tokio::time::Instant) {
-        for id in std::mem::take(&mut self.duplicates) {
+        for (id, size) in std::mem::take(&mut self.duplicates) {
+            self.holding -= size;
             if self.gone {
-                return;
+                continue;
             }
             let message = refused(
                 wire::Id::deserialize(&id).ok(),
@@ -442,8 +471,8 @@ impl SocketDriver {
     }
 
     /// What a message from the connector is for the core: an event, a file to send, or nothing.
-    fn output(&mut self, envelope: &Envelope) -> Option<Output> {
-        if let Some(file) = self.send_file(envelope) {
+    fn output(&mut self, envelope: &Envelope, size: usize) -> Option<Output> {
+        if let Some(file) = self.send_file(envelope, size) {
             return Some(Output::SendFile(file));
         }
         self.event(envelope).map(Output::Event)
@@ -452,7 +481,7 @@ impl SocketDriver {
     /// A `send_file` request (D-090): the chat and the file's path. One the core cannot read is
     /// still handed on, with what could be read, so the core answers it with a refusal: the
     /// connector waits for an answer.
-    fn send_file(&mut self, envelope: &Envelope) -> Option<SendFile> {
+    fn send_file(&mut self, envelope: &Envelope, size: usize) -> Option<SendFile> {
         if envelope.method.as_deref() != Some("send_file") {
             return None;
         }
@@ -467,7 +496,8 @@ impl SocketDriver {
         let key = id.to_string();
         if self.files.contains_key(&key) {
             // The same id again, while the first is unanswered: refused, and not sent.
-            self.duplicates.push(id);
+            self.duplicates.push((id, size));
+            self.holding += size;
             return None;
         }
         self.files.insert(key.clone(), id);
@@ -478,9 +508,9 @@ impl SocketDriver {
         })
     }
 
-    /// The next message, or `None` once the connection is gone. A line that is not a JSON
-    /// message is passed over.
-    async fn read(&mut self) -> Option<Envelope> {
+    /// The next message, with the length of its line, or `None` once the connection is gone. A
+    /// line that is not a JSON message is passed over.
+    async fn read(&mut self) -> Option<(Envelope, usize)> {
         if self.gone {
             return None;
         }
@@ -490,7 +520,7 @@ impl SocketDriver {
                 return None;
             };
             if let Ok(envelope) = serde_json::from_slice(&line) {
-                return Some(envelope);
+                return Some((envelope, line.len()));
             }
         }
     }
@@ -573,13 +603,18 @@ impl Driver for SocketDriver {
 
     async fn next_event(&mut self) -> Option<Output> {
         loop {
-            if let Some(output) = self.held.pop_front() {
+            if let Some((output, size)) = self.held.pop_front() {
+                self.holding -= size;
                 return Some(output);
             }
             // Reading keeps what it has read in `self`, and nothing is written here, so this
-            // future is safe to drop (D-058).
-            let envelope = self.read().await?;
-            if let Some(output) = self.output(&envelope) {
+            // future is safe to drop (D-058). Duplicates to answer pile up here until the next
+            // write, so they count against the budget too.
+            if self.over_budget() {
+                return None;
+            }
+            let (envelope, size) = self.read().await?;
+            if let Some(output) = self.output(&envelope, size) {
                 return Some(output);
             }
         }
@@ -1155,6 +1190,80 @@ mod tests {
         assert_eq!(emitted.event.native().unwrap().payload.get(), payload);
         assert_eq!(emitted.event.header().harness, "script");
         assert_eq!(emitted.event.header().seq, 1);
+    }
+
+    /// An event of about `size` bytes, as a line.
+    fn a_big_event(size: usize) -> String {
+        let text = "x".repeat(size);
+        format!(
+            r#"{{"jsonrpc":"2.0","method":"event","params":{{"item":"i","type":"notice","state":"done","title":"t","text":"{text}","body":{{"kind":"warning"}},"native":{{"kind":"k","payload":{{}}}}}}}}"#
+        ) + "\n"
+    }
+
+    // A connector that goes on sending while the core waits for its answer, more than the core
+    // holds for one connection, is given up then, not when the request's time runs out: what the
+    // core holds stays bounded, the request is told as perhaps taken, and what was held still
+    // reaches the core (D-145).
+    #[tokio::test]
+    async fn a_connector_that_sends_more_than_the_core_holds_is_given_up() {
+        let (core, connector) = UnixStream::pair().unwrap();
+        let (_read, mut write) = connector.into_split();
+        write
+            .write_all(hello(json!(TOKEN)).as_bytes())
+            .await
+            .unwrap();
+        let mut driver = greeted(core).await;
+        let line = a_big_event(1024 * 1024);
+        let flooding = tokio::spawn(async move {
+            // It never answers, and stops only when the core lets go of the connection.
+            while write.write_all(line.as_bytes()).await.is_ok() {}
+        });
+        let result = tokio::time::timeout(Duration::from_secs(10), driver.request(a_prompt()))
+            .await
+            .expect("given up before the request's time ran out")
+            .unwrap_err();
+        assert_eq!(result.reason, Reason::Failed);
+        assert!(result.unanswered, "the connector may have the prompt");
+        let mut held = 0;
+        while let Some(output) = driver.next_event().await {
+            assert!(output.into_event().is_some(), "the events it sent");
+            held += 1;
+        }
+        let most = HELD_MAX / (1024 * 1024);
+        assert!(
+            (most - 1..=most + 1).contains(&held),
+            "{held} events held, about {most} fit"
+        );
+        drop(driver);
+        flooding.await.unwrap();
+    }
+
+    // A connector that sends the same file's id again and again, while the core only reads, is
+    // given up too once what it holds to answer passes the budget: those answers wait for the next
+    // write, so they are held (D-145).
+    #[tokio::test]
+    async fn a_connector_that_repeats_a_file_request_endlessly_is_given_up() {
+        let (core, connector) = UnixStream::pair().unwrap();
+        let (_read, mut write) = connector.into_split();
+        write
+            .write_all(hello(json!(TOKEN)).as_bytes())
+            .await
+            .unwrap();
+        let mut driver = greeted(core).await;
+        let ask = json!({"jsonrpc": "2.0", "id": 7, "method": "send_file",
+            "params": {"chat": "c-1", "path": format!("/work/{}", "x".repeat(4096))}});
+        let line = format!("{ask}\n");
+        let flooding =
+            tokio::spawn(async move { while write.write_all(line.as_bytes()).await.is_ok() {} });
+        let Some(Output::SendFile(_)) = driver.next_event().await else {
+            panic!("the first file to send");
+        };
+        let next = tokio::time::timeout(Duration::from_secs(10), driver.next_event())
+            .await
+            .expect("given up, not read for ever");
+        assert!(next.is_none(), "given up");
+        drop(driver);
+        flooding.await.unwrap();
     }
 }
 
