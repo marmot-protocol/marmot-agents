@@ -299,3 +299,44 @@ fn a_repeated_request_takes_no_name_a_tool_call_could_have() {
         }
     }
 }
+
+/// The plan items' entries, as text, in the order the events came.
+fn plans(events: &[AgentEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter(|e| matches!(e.body(), Body::Plan(_)))
+        .map(|e| e.header().text.clone())
+        .collect()
+}
+
+#[test]
+fn a_to_do_list_with_no_params_is_unreadable_and_leaves_the_plan_alone() {
+    let (mut acp, _) = started();
+    let first = acp.feed(
+        Direction::In,
+        r#"{"jsonrpc":"2.0","id":7,"method":"cursor/update_todos","params":{"merge":false,"todos":[{"id":"1","content":"Read","status":"in_progress"}]}}"#,
+    );
+    assert_eq!(plans(&first), vec!["[ ] Read".to_string()]);
+    // Not `{}`: a message with no params at all says nothing, so it neither clears the list nor
+    // makes an event with a native message that never arrived (D-007).
+    let bare = acp.feed(
+        Direction::In,
+        r#"{"jsonrpc":"2.0","id":8,"method":"cursor/update_todos"}"#,
+    );
+    assert!(bare.is_empty(), "made {bare:?}");
+    assert_eq!(acp.unreadable(), 1);
+    let merged = acp.feed(
+        Direction::In,
+        r#"{"jsonrpc":"2.0","id":9,"method":"cursor/update_todos","params":{"merge":true,"todos":[{"id":"2","content":"Write","status":"pending"}]}}"#,
+    );
+    assert_eq!(plans(&merged), vec!["[ ] Read\n[ ] Write".to_string()]);
+    // A real empty object is what arrived, so it is the native message, and it empties the list.
+    let empty = acp.feed(
+        Direction::In,
+        r#"{"jsonrpc":"2.0","id":10,"method":"cursor/update_todos","params":{}}"#,
+    );
+    assert_eq!(plans(&empty), vec![String::new()]);
+    let native = empty[0].native().expect("a native message");
+    assert_eq!(native.payload.get(), "{}");
+    assert_eq!(acp.unreadable(), 1);
+}

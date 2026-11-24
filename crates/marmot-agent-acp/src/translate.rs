@@ -248,9 +248,14 @@ impl Translator {
             self.unreadable += 1;
             return out;
         };
-        let params = m.params.map_or("{}", RawValue::get);
+        // A message with no `params` is passed on as one: read as `{}`, it would make an event
+        // whose native message never arrived (D-007).
+        let params = m.params.map(RawValue::get);
         if direction == Direction::In && m.method.as_deref() == Some("session/update") {
-            self.update(params, &mut out);
+            match params {
+                Some(params) => self.update(params, &mut out),
+                None => self.unreadable += 1,
+            }
             return out;
         }
         self.flush(&mut out); // anything else ends a message being streamed
@@ -403,10 +408,12 @@ impl Translator {
         &mut self,
         id: Option<&RawValue>,
         method: &str,
-        params: &str,
+        params: Option<&str>,
         out: &mut Vec<AgentEvent>,
     ) {
-        let p: Value = serde_json::from_str(params).unwrap_or(Value::Null);
+        let p: Value = params
+            .and_then(|p| serde_json::from_str(p).ok())
+            .unwrap_or(Value::Null);
         let session = p
             .get("sessionId")
             .and_then(Value::as_str)
@@ -953,9 +960,24 @@ impl Translator {
         &mut self,
         id: Option<&RawValue>,
         method: &str,
-        params: &str,
+        params: Option<&str>,
         out: &mut Vec<AgentEvent>,
     ) {
+        const READ: [&str; 3] = [
+            "session/request_permission",
+            "elicitation/create",
+            "cursor/update_todos",
+        ];
+        let Some(params) = params else {
+            // Each request the driver reads holds its `params`; one without says nothing, and
+            // changes nothing it has seen, such as the plan a to-do list replaces.
+            if READ.contains(&method) {
+                self.unreadable += 1;
+            } else {
+                self.unknown.push(format!("{method} (request)"));
+            }
+            return;
+        };
         let key = id.map(key).unwrap_or_default();
         match method {
             "session/request_permission" => {
