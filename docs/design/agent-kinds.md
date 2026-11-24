@@ -98,7 +98,7 @@ Built on 2026-11-22 with the move to MDK's kinds, and accepted by the owner on 2
 
 ## An item in a subagent's thread
 
-Decided on 2026-11-23 ([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)); not built in the core, and MDK does not take it yet. Each subagent
+Decided on 2026-11-23 ([D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)); built on 2026-11-24 in the core and in MDK at `029e0579f` ([D-142](../decisions.md#d-142-how-subagent-threads-are-built)). Each subagent
 is a thread in the agent's group, rooted at its `task` item, and every item in it carries NIP-22's tags as NIP-22
 defines them, the same way a comment does:
 
@@ -112,8 +112,8 @@ with the same tags ([D-122](../decisions.md#d-122-a-subagents-words-what-alerts-
 whole shape is in [subagents as threads](subagents.md#how-it-travels).
 
 An edit already uses `e` for its target, so it cannot also carry the parent `e`; it repeats the root tags `E`, `K`
-and `P` and carries no lowercase ones ([D-133](../decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags)). Left for MDK to settle: MDK also has to take a parent `e` on an item's first event, which it refuses today, and to say whether a
-`p` naming the event's own author is a mention ([what MDK has to do](subagents.md#what-mdk-has-to-do)).
+and `P` and carries no lowercase ones ([D-133](../decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags)). MDK takes the parent `e` on an item's first event, and reads a `p` naming the event's own author as no
+mention ([what MDK has to do](subagents.md#what-mdk-has-to-do)).
 
 ## Provisional additions
 

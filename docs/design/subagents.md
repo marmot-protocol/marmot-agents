@@ -133,7 +133,7 @@ mention, and a late joiner is shown an item from its edits. What follows was the
 | --- | --- |
 | A driver | Says whether its harness tells subagents apart, and whether a person can write to a running one. Finds each subagent, makes its `task` item and keeps it current, gives its activity a session of its own that names the `task` item, closes it when the harness stops, and stops a subagent and those it started when asked |
 | The Codex transport | Gives each subagent's thread a translator of its own, in the chat of the thread that started it. Holds a message for a thread it does not know yet until the item that names it arrives, since a subagent can speak first ([recorded](../reference/harness-messages.md#subagents)). Interrupts subagents itself, since interrupting the parent does not stop them, following `agentThreadId` (and `parentThreadId` from 0.171.0, or `receiverThreadIds` on the older runtime) |
-| The core | Holds a subagent's events until its `task` item has been sent, then adds the thread tags. Takes a person's comment as a prompt for the subagent whose `task` item is first up its parents, when the driver allows it and the writer may prompt. Takes Stop as below |
+| The core | Puts a subagent's events in its thread once its `task` item has been sent, adding the thread tags, and in the main chat when it has not. Takes a person's comment as a prompt for the subagent whose `task` item is first up its parents, when the driver allows it and the writer may prompt. Takes Stop as below |
 | MDK | Places a kind 1201 event and its edits in the thread its tags name, as it does a poll's. Takes the parent `e` on an item's first event. Keeps the agent's own comments in its threads silent |
 | White Noise | Draws the `task` item as the row and the thread under it, a nested subagent's view from the lowercase parent, the bar from the `task` items still open, and a waiting approval in the bar |
 
@@ -147,8 +147,12 @@ What [D-142](../decisions.md#d-142-how-subagent-threads-are-built) chose where t
 - The core places an item when its first event goes out, and keeps that place for its later versions. It holds
   nothing back: a group's sends go out in order, after the `task` item. An item whose `task` item has not gone
   out to that chat, as in a chat not sent the agent's full activity, goes in the main chat.
-- A subagent's words are MDK's thread message under its `task` item. Each item carries a `subagent` tag with the
+- A subagent's words are MDK's thread message under its `task` item, sent once complete; a later version is MDK's
+  plain edit of it, as MDK keeps no edit of a thread message under a token. Words whose `task` item has
+  disappeared under the chat's retention go in the main chat. Each item carries a `subagent` tag with the
   `task` item's id, so an app can find a nested subagent's view from an edit, which names only the root.
+- A Codex subagent's row shows its newest turn's state; an earlier turn's end read late only adds to its text
+  that the turn failed, with its error, when it did.
 - Each Codex subagent is one `task` item, which each of its turns opens again.
 - Not built yet: writing to a running subagent, which no driver allows, and a Stop that stops only one subagent
   and those it started; a Stop in a thread names the person's turn today, and stops every subagent under it.
@@ -270,9 +274,9 @@ the parent's choice, shown as a new row; the person who wants it all to end uses
 ### 9. A thread that began before someone joined
 
 A member added to the group cannot read anything sent before they joined. So they miss a running subagent's
-`task` item and the start of its thread, and get later edits of an item they never had. MDK holds such an edit,
-waiting for an item that will never come
-([what this costs](event-carrier.md#what-this-costs)).
+`task` item and the start of its thread, and get later edits of an item they never had. MDK at `6f6b427` held
+such an edit, waiting for an item that would never come
+([what this costs](event-carrier.md#what-this-costs)); at `029e0579f` it shows the item from its edits.
 
 **Proposed:** an edit carries the whole item, so an app that holds an edit of an item sent before the member
 joined shows the edit as the item. This helps every item, not only subagents. The thread then shows what
@@ -357,7 +361,6 @@ neither was tested.
 
 ## Still open
 
-- **What a parent `p` means**, for MDK to settle ([above](#what-mdk-has-to-do)).
 - **A thread's detail at a lower detail setting** (case 5), with
   [the Q-11 and Q-12 proposal](../open-questions.md#a-proposal-for-q-11-and-q-12-not-decided).
 - **An app's setting for people's replies** and subagents' threads (case 12), for the apps.
