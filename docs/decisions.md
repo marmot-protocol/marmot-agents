@@ -2907,7 +2907,8 @@ something open:
    then the core reads no comment in a thread, as it reads only chat messages and kind 1202. And Stop in a
    thread: a Stop that names a subagent's item names its turn, the person's, so it stops the agent's turn and
    every subagent under it, which is more than D-123 asks; stopping only that subagent and those it started needs
-   a Stop that names the subagent, which a later change adds.
+   a Stop that names the subagent, which a later change adds. (Replaced for Stop by
+   [D-149](#d-149-stop-in-a-subagents-thread-stops-that-subagent-alone), which adds it.)
 
 This replaces in part
 [D-117](#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them): Codex's subagents
@@ -3120,6 +3121,38 @@ though it was taken. The socket connectors' run of the conformance suite (`dropp
 Issue #154.
 
 Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points.
+
+## D-149 Stop in a subagent's thread stops that subagent alone
+
+**Decision.** This builds the Stop in a thread of
+[D-123](#d-123-stop-and-writing-in-a-subagents-thread), which
+[D-142](#d-142-how-subagent-threads-are-built), point 7, left unbuilt.
+
+1. **Kind 1202 is unchanged.** An `interrupt` whose `e` names a subagent's `task` item, or an item in a
+   subagent's thread, stops that subagent and the subagents it started: the subagent of the item, which is the
+   `task` item itself, or else the subagent the item belongs to. The person's turn and the other subagents go on.
+   One whose `e` names any other item, or none, stops the turn and every subagent under it, as before. The `e`
+   already says which subagent is meant, so no tag is added.
+2. **The driver's `interrupt` control, and the socket's `interrupt` message, take an optional `subagent`**: the
+   `task` item's id, as the driver named it. Left out, it is today's Stop.
+3. **One more capability flag, `stop_subagent`**: whether a Stop can stop one subagent and those it started
+   while the turn goes on. This extends [D-058](#d-058-the-driver-trait-and-the-capability-flags). The core names
+   a subagent only to a driver that says yes, and that says `subagents` too. To any other, a Stop in a thread
+   stops the whole turn, as one in the main chat does, and the flag is how that driver says it cannot stop one
+   alone. Codex's driver says yes; every other driver says no, and a connector on the socket that leaves it out
+   says no.
+4. **Codex** interrupts the running turn of that subagent's thread and of every thread it started, at any
+   depth, each parent before those it started, and a turn of theirs whose start is read while the Stop waits.
+   It does not interrupt the person's turn, nor any other subagent. The Stop is settled once, by the end of the
+   last of them, as a Stop of the turn is. A Stop naming a subagent the driver does not follow is refused as
+   `nothing_to_do`, not widened to the turn.
+
+**Why.** D-123 asks for this, and D-142 left it out until the Stop could name the subagent. The `e` tag already
+names the item a press was on, so an app needs to send nothing new. A flag rather than a notice: the core knows
+before it passes the Stop on, and a driver that cannot stop one subagent need do nothing new.
+
+Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points. It is visible to
+apps and connectors, and provisional until the owner accepts it.
 
 ## D-150 The core matches a typed command as the harness reads it, failing towards asking for the right to approve
 

@@ -148,7 +148,7 @@ Only three actions mean the same thing everywhere ([D-029](../decisions.md#d-029
 
 | Action | What it does | Acts on |
 | --- | --- | --- |
-| `interrupt` | Stops the running turn | The turn |
+| `interrupt` | Stops the running turn, or, in a subagent's thread, that subagent and those it started ([D-149](../decisions.md#d-149-stop-in-a-subagents-thread-stops-that-subagent-alone)) | The turn, or a subagent's `task` item or an item in its thread |
 | `new_session` | Ends this chat's session and starts a fresh one | The session |
 | `set` | Changes one setting of the session | The session |
 
