@@ -149,6 +149,8 @@ type FailWhen = dyn Fn(&Kept) -> bool + Send + Sync;
 /// Where the kept state lives.
 pub struct Store {
     path: PathBuf,
+    /// The bytes the last save wrote, so a save of the same state writes nothing (#155).
+    written: std::sync::Mutex<Option<Vec<u8>>>,
     /// A fault for the tests of a failed save, as the simulator will put one
     /// (`docs/design/verification.md`): none in use.
     fault: Option<(Arc<FailWhen>, Arc<AtomicBool>)>,
@@ -159,6 +161,7 @@ impl Store {
     pub fn new(dir: &Path) -> Self {
         Self {
             path: dir.join("marmot-agent-state.json"),
+            written: std::sync::Mutex::new(None),
             fault: None,
         }
     }
@@ -193,7 +196,10 @@ impl Store {
 
     /// Writes the state whole: to a file only its owner can read, flushed to disk, then put in
     /// place of the old one, so a crash leaves the old file or the new one and never half of one.
+    /// A state the same as the last one this store wrote is on disk already, so nothing is
+    /// written: what is durable is the same either way (#155).
     pub fn save(&self, kept: &Kept) -> std::io::Result<()> {
+        // A fault meets every save, written or not, so a crash can be put at any of them.
         if let Some((when, failed)) = &self.fault
             && (failed.load(SeqCst) || when(kept))
         {
@@ -201,6 +207,10 @@ impl Store {
             return Err(std::io::Error::other("a save made to fail"));
         }
         let bytes = serde_json::to_vec(kept).map_err(std::io::Error::other)?;
+        let mut written = self.written.lock().unwrap_or_else(|e| e.into_inner());
+        if written.as_ref() == Some(&bytes) {
+            return Ok(());
+        }
         let temporary = self.path.with_extension("json.new");
         let mut file = private_file(&temporary)?;
         file.write_all(&bytes)?;
@@ -209,6 +219,7 @@ impl Store {
         if let Some(dir) = self.path.parent() {
             std::fs::File::open(dir)?.sync_all()?;
         }
+        *written = Some(bytes);
         Ok(())
     }
 }
@@ -1618,5 +1629,25 @@ mod tests {
         assert_eq!(refusal.reason, Reason::Failed);
         assert!(!refusal.detail.unwrap_or_default().contains('/'));
         assert_eq!(side.offers(), 1);
+    }
+
+    // A save of the state already on disk writes nothing, so a step that changed nothing costs no
+    // write and no sync; a state that changed is written whole, as before (#155).
+    #[test]
+    fn a_save_of_the_state_on_disk_writes_nothing() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let file = dir.path().join("marmot-agent-state.json");
+        let inode = || std::fs::metadata(&file).unwrap().ino();
+        let mut kept = Kept::default();
+        store.save(&kept).unwrap();
+        let first = inode();
+        store.save(&kept).unwrap();
+        assert_eq!(inode(), first, "the same state again is not written");
+        kept.read.insert(GroupKey::from("g"), 7);
+        store.save(&kept).unwrap();
+        assert_ne!(inode(), first, "a changed state is written");
+        assert_eq!(store.load().unwrap().read, kept.read);
     }
 }
