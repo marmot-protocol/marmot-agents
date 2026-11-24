@@ -788,6 +788,52 @@ async fn a_send_older_than_its_groups_messages_is_not_sent_again() {
     world.runtime.shutdown().await;
 }
 
+// A send of the agent's full activity that MDK was handed while the chat was the owner's goes on,
+// after someone joins, only as MDK keeps it (`keeps`). MDK lets go of a token with the message it
+// made, once the group's messages disappear, and takes a token it no longer knows as a new send.
+// Were it to let go between the core's question and the send, it would post the send again, to
+// the chat as it is now. So a token MDK may let go of before the send is handed to it again is not
+// taken as kept, however MDK answers now (D-136).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_token_mdk_may_let_go_of_before_it_is_handed_again_is_not_kept() {
+    use marmot_agent::marmot::Side;
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    let group = a_quiet_chat(&world).await;
+    (world.runtime)
+        .update_message_retention(&world.person, &group_id(&group), 3600)
+        .await
+        .unwrap();
+    let keep = || {
+        let record = world.marmot.app.group(&world.marmot.label, group.as_str());
+        record
+            .ok()
+            .flatten()
+            .map(|r| r.message_retention.disappearing_message_secs)
+    };
+    eventually(|| (keep() == Some(3600)).then_some(())).await;
+    let (words, token) = words_named("kept");
+    world.send(&group, &words, &token).await.unwrap();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    let now = now.unwrap().as_secs();
+    let tried = |ago: u64| marmot_agent::Token {
+        tried_at: Some(now - ago),
+        ..token.clone()
+    };
+    assert_eq!(world.marmot.keeps(&group, &tried(0)), Ok(true), "kept");
+    assert_eq!(
+        world.marmot.keeps(&group, &tried(3600 - 600)),
+        Ok(true),
+        "kept a good while yet"
+    );
+    assert_eq!(
+        world.marmot.keeps(&group, &tried(3600 - 10)),
+        Ok(false),
+        "MDK may let go of it before it is handed again"
+    );
+    assert_eq!(world.marmot.keeps(&group, &tried(7200)), Ok(false));
+    world.runtime.shutdown().await;
+}
+
 // In a chat whose messages disappear, an item's first event can be gone while the item goes on.
 // MDK then refuses an edit of it, as it no longer has the event nor the token it went under, and
 // says so: the core is told the first event is gone, apart from any other refusal.

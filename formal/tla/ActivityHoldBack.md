@@ -48,6 +48,11 @@ cannot close it).
   took, and settles it with a `not_shown` notice, or by the turn, where
   [D-109](../../docs/decisions.md#d-109-how-the-cores-sends-survive-a-crash-as-built) tells it as failed,
   delivery uncertain. Review found it, not the model; it is issue [#182](https://github.com/marmot-protocol/marmot-agents/issues/182).
+  MDK takes a token it has forgotten as a new send, so one forgotten between `Side::keeps` and the send would
+  go out again, as it was handed, to the chat as it is now. `Side::keeps` therefore counts a token as not kept
+  once MDK may forget it within a minute, by the group's disappearing time and the send's first try
+  (`a_token_mdk_may_let_go_of_before_it_is_handed_again_is_not_kept`, `tests/marmot.rs`); such a send is then
+  taken for one MDK never took, the case of #182.
 - **Refusals and give-ups**, and what stands in for them, but for MDK refusing a token handed another submission:
   `CoreLifecycle`'s. That one is modelled as a notice settling what the send settled; the version that closes an
   item the core then sends in its place is left out.
