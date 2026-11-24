@@ -352,7 +352,7 @@ so nothing it says later is read and a message cut short is never finished
 ## The Claude Code driver
 
 A separate TypeScript program, [`packages/claude-code`](../../packages/claude-code), that runs Claude Code
-through the official Claude Agent SDK (pinned exactly, at 0.3.326, which runs Claude Code 2.1.326) and connects
+through the official Claude Agent SDK (pinned exactly, at 0.3.331, which runs Claude Code 2.1.331) and connects
 to the core over the [socket](socket-protocol.md#the-messages-as-built). The core is started with a
 `[connector]` section in place of `[codex]`; then:
 
