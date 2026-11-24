@@ -335,6 +335,11 @@ backup_file() {
 # connector's services are stopped by then: change_end then removes the record. --uninstall removes it
 # too, so a move given up is not put back over the gateway later.
 #
+# A change is made only during an upgrade (upgrade_begin), and goes with it: the upgrade's record lists
+# the change's record before the first change (change_note), so that whatever puts the upgrade back puts
+# the plugin back with the core, another harness's install too (upgrade_put_back), and the rename that
+# ends the upgrade ends the change (upgrade_end).
+#
 # Replacing the old connector's plugin, the copies are also listed in backups/before-move, which a
 # person going back to that connector puts back (docs/move.md). It lists what the gateway had before
 # the latest run that found the old plugin and finished, or noted, its change.
@@ -357,6 +362,7 @@ change_begin() {
         say "would note in $MA_CHANGE what to put back should this fail"
         return 0
     fi
+    change_note
     if [ -f "$MA_CHANGE" ]; then
         say "a run before this one stopped part way through changing your $HARNESS_TITLE's plugin; this one finishes it, and puts back what that run found if it fails"
         MA_CHANGING=1
@@ -375,6 +381,17 @@ change_begin() {
     MA_CHANGING=1
 }
 
+# Lists the change's record in the upgrade's, unless it is there already, before the record is written:
+# killed between the two, nothing has changed yet, and a record listed and not there puts nothing back.
+# Written beside the list and renamed over it.
+change_note() {
+    local list="$MA_UPGRADE/plugin-changes"
+    [ -d "$MA_UPGRADE" ] || return 0
+    if [ -f "$list" ] && grep -qxF "$MA_CHANGE" "$list"; then return 0; fi
+    { if [ -f "$list" ]; then cat "$list"; fi && printf '%s\n' "$MA_CHANGE"; } >"$list.new"
+    mv -f "$list.new" "$list"
+}
+
 # Ends a change; one stopped before its record is gone is put back. Its record went with the upgrade's
 # (upgrade_end), which every install makes; the copies of our own plugin it named go now.
 change_end() {
@@ -387,9 +404,10 @@ change_end() {
     MA_CHANGING=0
 }
 
-# The copies of our own plugin the record names, one a line.
+# The copies of our own plugin the record names (that of this run's change, or the one given), one a
+# line.
 own_copies() {
-    awk -F '\t' '$1 == "own" && $3 != "" { print $3 }' "$MA_CHANGE"
+    awk -F '\t' '$1 == "own" && $3 != "" { print $3 }' "${1:-$MA_CHANGE}"
 }
 
 # Removes the copies named, one a line, once the record that names them is gone.
@@ -402,7 +420,8 @@ $1
 EOF
 }
 
-# Puts back what the record names, in its order; fails if any of it could not be put back.
+# Puts back what the record names (that of this run's change, or the one given), in its order; fails if
+# any of it could not be put back.
 put_back_change() {
     local kind path copy ok=0
     while IFS='	' read -r kind path copy; do
@@ -410,7 +429,7 @@ put_back_change() {
             file) put_back_file "$copy" "$path" || ok=1 ;;
             folder | own) replace_dir "$copy" "$path" || ok=1 ;;
         esac
-    done <"$MA_CHANGE"
+    done <"${1:-$MA_CHANGE}"
     return "$ok"
 }
 
@@ -826,13 +845,39 @@ upgrade_retire() {
     rm -rf "$MA_DATA/.upgrade.done.$$" && mv "$MA_UPGRADE" "$MA_DATA/.upgrade.done.$$"
 }
 
-# After an upgrade that did not end: the core and the parts of $MA_LIB there before it put back, a part
-# that was not there removed, and what happened said. Given "other", the upgrade is one a run before
-# this one left, which this one puts back before it starts, and the status says whether it could.
+# Puts back each plugin change the upgrade's record lists whose record is still there, the last first, as
+# that one's copies are of what the one before it left, and removes its record; prints the agents'
+# folders of those it put back, one a line, and fails if any could not be. One this run was making was
+# put back already, by change_put_back, unless that failed. The change moved into the upgrade's record as
+# it ended is back in its place by now (change_restore).
+upgrade_put_back_changes() {
+    local list="$MA_UPGRADE/plugin-changes" record own ok=0
+    [ -f "$list" ] || return 0
+    while IFS= read -r record; do
+        if [ -z "$record" ] || [ ! -f "$record" ]; then continue; fi
+        own=$(own_copies "$record")
+        if put_back_change "$record" >&2 && rm -f "$record"; then
+            drop_copies "$own"
+            dirname "$record"
+        else
+            ok=1
+        fi
+    done < <(awk '{ line[NR] = $0 } END { for (i = NR; i > 0; i--) print line[i] }' "$list")
+    return "$ok"
+}
+
+# After an upgrade that did not end: the plugin changes it lists, the core and the parts of $MA_LIB
+# there before it put back, a part that was not there removed, and what happened said. Given "other",
+# the upgrade is one a run before this one left, which this one puts back before it starts, and the
+# status says whether it could.
 upgrade_put_back() {
-    local why=${1:-} kind part found ok=0
+    local why=${1:-} kind part found ok=0 plugins
     # Gone already: upgrade_end took it away, and the upgrade is done.
     [ -f "$MA_UPGRADE/list" ] || return 0
+    plugins=$(upgrade_put_back_changes) || ok=1
+    if [ -n "$plugins" ]; then
+        say "put back the gateway plugin that upgrade changed, for the agent in $(printf '%s' "$plugins" | tr '\n' ' ')"
+    fi
     while IFS='	' read -r kind part found; do
         case $kind in
             core)

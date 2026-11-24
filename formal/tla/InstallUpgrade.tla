@@ -5,7 +5,8 @@
 (* install put into a person's Hermes (D-116). It follows install/lib.sh  *)
 (* as of master 7118005 with the fixes of its branch                    *)
 (* (2026-11-24): `main`, `install_core`, `publish_support`, the           *)
-(* `upgrade_*` functions, `change_begin`, `change_end`, `change_put_back`, *)
+(* `upgrade_*` functions, `change_begin`, `change_note`, `change_end`,    *)
+(* `change_put_back`,                                                      *)
 (* `image_commit`, `image_put_back`, `finish` and `lock_installs`.        *)
 (*                                                                         *)
 (* Every shell command that changes something shared is one step, and a   *)
@@ -42,7 +43,7 @@ CONSTANTS
 
 ASSUME Main \in Harnesses /\ Harnesses \subseteq {"pi", "hermes", "claude", "codex"}
 ASSUME Bug \in {"none", "NoLock", "FreshRecord", "KeepOverwrites", "RecordAfterCore",
-                "ImageOutsideRecord", "ChangeEndsApart"}
+                "ImageOutsideRecord", "ChangeEndsApart", "ChangeOutsideRecord"}
 
 None == "none"
 Old == "old"
@@ -62,6 +63,8 @@ Plugins == "hermes" \in Harnesses
 \* The code before the fixes of 2026-11-24, which a Bug puts back.
 OldImage == Bug = "ImageOutsideRecord" \* `image_put_back` from the run's own IMAGE_BEFORE
 OldChange == Bug = "ChangeEndsApart"   \* the change ended after the upgrade, apart
+\* The upgrade's record does not list the change, so putting the upgrade back leaves the plugin.
+Unlisted == Bug = "ChangeOutsideRecord"
 
 VARIABLES
     core,       \* $MA_CORE
@@ -82,10 +85,11 @@ Idle == [pc |-> "idle", h |-> None, upgrading |-> FALSE, changing |-> FALSE,
          prepared |-> FALSE, tagged |-> FALSE, before |-> None, i |-> 0, then |-> "none"]
 
 \* A record as upgrade_begin makes it: a copy of the core, and every part this run replaces, as
-\* present or absent; `kept` holds the parts moved into it; `image` and `chg` are the fixes: the
-\* image the tag named before the run moved it, and the plugin change moved in as it ends.
+\* present or absent; `kept` holds the parts moved into it; `image`, `chg` and `listed` are the
+\* fixes: the image the tag named before the run moved it, the plugin change moved in as it ends,
+\* and whether it lists the plugin change's record (`plugin-changes`).
 NoRecord == [on |-> FALSE, core |-> None, list |-> <<>>, found |-> [p \in AllParts |-> "unlisted"],
-             kept |-> [p \in AllParts |-> None], image |-> Unset, chg |-> Unset]
+             kept |-> [p \in AllParts |-> None], image |-> Unset, chg |-> Unset, listed |-> FALSE]
 Found(v) == IF v = None THEN "absent" ELSE "present"
 Fresh(h) == [NoRecord EXCEPT !.on = TRUE, !.core = core, !.list = PartsOf(h),
                              !.found = [p \in AllParts |-> IF p \in SetOf(PartsOf(h))
@@ -172,7 +176,7 @@ Begin(s) ==
             /\ run' = [run EXCEPT ![s].pc = r.then, ![s].upgrading = TRUE]
             /\ step' = [a |-> "Begin", slot |-> s, how |-> "takes over"]
        ELSE IF rec.on /\ Bug # "FreshRecord"
-       THEN /\ run' = [run EXCEPT ![s].pc = "pb_core", ![s].i = 0]
+       THEN /\ run' = [run EXCEPT ![s].pc = "pb_plugin", ![s].i = 0]
             /\ step' = [a |-> "Begin", slot |-> s, how |-> "puts back another's"]
             /\ UNCHANGED rec
        ELSE /\ rec' = Fresh(r.h)
@@ -236,17 +240,26 @@ Put(s) ==
     /\ step' = [a |-> "Put", slot |-> s, part |-> p]
     /\ UNCHANGED <<core, image, staging, plugin, rec, chg, lock, kills, fails, firstLeft>>
 
-\* `change_begin`: a copy of the plugin there, and the record naming it; or a record a run
-\* before this one left, which this run finishes.
-Connect(s) ==
+\* `change_begin` first lists the change's record in the upgrade's (`change_note`), with the fix.
+Note(s) ==
     LET r == run[s] IN
     /\ r.pc = "connect"
     /\ IF HasPlugin(r.h)
-       THEN /\ chg' = IF chg = Unset THEN plugin ELSE chg
-            /\ run' = [run EXCEPT ![s].pc = "replace", ![s].changing = TRUE]
+       THEN /\ rec' = IF Unlisted THEN rec ELSE [rec EXCEPT !.listed = TRUE]
+            /\ run' = [run EXCEPT ![s].pc = "record"]
+            /\ step' = [a |-> "Note", slot |-> s]
        ELSE /\ run' = [run EXCEPT ![s].pc = "start"]
-            /\ UNCHANGED chg
-    /\ step' = [a |-> "Connect", slot |-> s, finishes |-> HasPlugin(r.h) /\ chg # Unset]
+            /\ step' = [a |-> "Connect", slot |-> s, finishes |-> FALSE]
+            /\ UNCHANGED rec
+    /\ UNCHANGED <<core, lib, image, staging, plugin, chg, lock, kills, fails, firstLeft>>
+
+\* `change_begin`: a copy of the plugin there, and the record naming it; or a record a run
+\* before this one left, which this run finishes.
+Connect(s) ==
+    /\ run[s].pc = "record"
+    /\ chg' = IF chg = Unset THEN plugin ELSE chg
+    /\ run' = [run EXCEPT ![s].pc = "replace", ![s].changing = TRUE]
+    /\ step' = [a |-> "Connect", slot |-> s, finishes |-> chg # Unset]
     /\ UNCHANGED <<core, lib, image, staging, plugin, rec, lock, kills, fails, firstLeft>>
 
 \* `replace_dir` of $MA_LIB/python/marmot_hermes into the person's Hermes (mv --exchange).
@@ -320,9 +333,9 @@ ChangeEnd(s) ==
     /\ step' = [a |-> "Done", slot |-> s]
     /\ UNCHANGED <<core, lib, image, staging, plugin, rec, kills, fails, firstLeft>>
 
-MainPcs == {"prepare", "publish", "begin", "core", "keep", "put", "connect", "replace", "start",
-            "commit", "tag", "end", "retire", "change_end", "pb_core", "pb_mv", "pb_part",
-            "pb_image", "pb_retire"}
+MainPcs == {"prepare", "publish", "begin", "core", "keep", "put", "connect", "record", "replace",
+            "start", "commit", "tag", "end", "retire", "change_end", "pb_plugin", "pb_plugin_rm",
+            "pb_core", "pb_mv", "pb_part", "pb_image", "pb_retire"}
 
 (***************************************************************************)
 (* Failing, and the exit trap                                              *)
@@ -330,7 +343,7 @@ MainPcs == {"prepare", "publish", "begin", "core", "keep", "put", "connect", "re
 
 \* A command fails, or the run is stopped with TERM, INT or HUP: the trap runs `finish`, with
 \* those signals ignored. Stopped while it puts back another's upgrade, nothing is its own yet.
-PutBackPcs == {"pb_core", "pb_part", "pb_mv", "pb_image", "pb_retire"}
+PutBackPcs == {"pb_plugin", "pb_plugin_rm", "pb_core", "pb_part", "pb_mv", "pb_image", "pb_retire"}
 
 Fail(s) ==
     LET r == run[s] IN
@@ -369,13 +382,31 @@ FinishUpgrade(s) ==
     LET r == run[s] IN
     /\ r.pc = "f_up"
     /\ IF r.upgrading /\ rec.on
-       THEN run' = [run EXCEPT ![s].pc = "pb_core", ![s].upgrading = FALSE, ![s].then = "f_img"]
+       THEN run' = [run EXCEPT ![s].pc = "pb_plugin", ![s].upgrading = FALSE, ![s].then = "f_img"]
        ELSE run' = [run EXCEPT ![s].pc = "f_img", ![s].upgrading = FALSE]
     /\ step' = [a |-> "Finish", slot |-> s]
     /\ UNCHANGED <<core, lib, image, staging, plugin, rec, chg, lock, kills, fails, firstLeft>>
 
 \* `upgrade_put_back`, for this run's upgrade (from finish) or another's (from upgrade_begin):
-\* the core from its copy, then each part the list names, in order.
+\* with the fix, first the plugin change the record lists, if its record is still there
+\* (`upgrade_put_back_changes`): the plugin's copy put back, then the change's record removed. One
+\* this run was making was put back already (FinishChange).
+PutBackPlugin(s) ==
+    /\ run[s].pc = "pb_plugin"
+    /\ IF rec.listed /\ chg # Unset
+       THEN /\ plugin' = chg
+            /\ Go(s, "pb_plugin_rm", "PutBackChange")
+       ELSE /\ Go(s, "pb_core", "PutBackNoChange")
+            /\ UNCHANGED plugin
+    /\ UNCHANGED <<core, lib, image, staging, rec, chg, lock, kills, fails, firstLeft>>
+
+PutBackPluginEnd(s) ==
+    /\ run[s].pc = "pb_plugin_rm"
+    /\ chg' = Unset
+    /\ Go(s, "pb_core", "DropChange")
+    /\ UNCHANGED <<core, lib, image, staging, plugin, rec, lock, kills, fails, firstLeft>>
+
+\* Then the core from its copy, then each part the list names, in order.
 PutBackCore(s) ==
     /\ run[s].pc = "pb_core"
     /\ core' = rec.core
@@ -464,9 +495,9 @@ Kill(s) ==
 
 Steps(s) ==
     \/ Lock(s) \/ Restore(s) \/ Begin(s) \/ Prepare(s) \/ Publish(s) \/ Core(s) \/ Keep(s)
-    \/ Put(s) \/ Connect(s) \/ Replace(s) \/ StartServices(s) \/ Commit(s) \/ Tag(s) \/ End(s)
+    \/ Put(s) \/ Note(s) \/ Connect(s) \/ Replace(s) \/ StartServices(s) \/ Commit(s) \/ Tag(s) \/ End(s)
     \/ Retire(s) \/ ChangeEnd(s) \/ FinishChange(s) \/ FinishChangeEnd(s) \/ FinishUpgrade(s)
-    \/ PutBackCore(s) \/ PutBackPart(s) \/ PutBackMove(s) \/ PutBackImage(s)
+    \/ PutBackPlugin(s) \/ PutBackPluginEnd(s) \/ PutBackCore(s) \/ PutBackPart(s) \/ PutBackMove(s) \/ PutBackImage(s)
     \/ PutBackRetire(s) \/ FinishImage(s)
 
 Next ==
@@ -492,13 +523,17 @@ TypeOK ==
 \* No run is under way, and none left anything under way.
 Quiescent == (\A s \in Slots : run[s].pc = "idle") /\ ~LeftUnderWay
 
-\* U1, what D-134 promises: once no install is under way and none left an upgrade or a plugin
-\* change under way, the core and the support files every harness's install replaces are of one
-\* release, Pi's image tag names the image Pi's scripts were made for, and our plugin in the
-\* person's Hermes is the one the Hermes part holds. Never the new core with the old files, or
-\* the other way round, whatever was killed or stopped where.
+\* No run is under way, and none left an upgrade under way. A plugin change is made only during an
+\* upgrade, so one left without it is no excuse: the gateway runs the plugin it has.
+Settled == (\A s \in Slots : run[s].pc = "idle") /\ ~rec.on
+
+\* U1, what D-134 promises: once no install is under way and none left an upgrade under way, the
+\* core and the support files every harness's install replaces are of one release, Pi's image tag
+\* names the image Pi's scripts were made for, and our plugin in the person's Hermes is the one the
+\* Hermes part holds. Never the new core with the old files, or the other way round, whatever was
+\* killed or stopped where.
 U1 ==
-    Quiescent =>
+    Settled =>
         /\ core = lib["S"]
         /\ Images => image = lib["pi"]
         /\ Plugins => plugin = lib["hermes"]
@@ -521,6 +556,8 @@ NeverTakenOver == ~(step.a = "Begin" /\ step.how = "takes over")
 NeverPutBackOther == ~(step.a = "Begin" /\ step.how = "puts back another's")
 \* A run finishes a plugin change a killed run left.
 NeverChangeFinished == ~(step.a = "Connect" /\ step.finishes)
+\* A run puts back, with an upgrade, a plugin change its record lists.
+NeverPluginPutBack == ~(step.a = "PutBackChange")
 \* A failed run puts the image tag back from the record.
 NeverImagePutBack == ~(step.a = "PutBackImage" /\ rec.image = Old)
 \* An upgrade ends with everything new.

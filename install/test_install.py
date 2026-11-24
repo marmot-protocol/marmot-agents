@@ -1875,8 +1875,10 @@ exec {rm} "$@"
         """What goes with the core, Pi's image or the person's Hermes plugin, stays with the files it
         was made for, whatever step an upgrade is stopped at (InstallUpgrade.tla, U1): stopped by TERM;
         killed, then run again, or run again and failing, or followed by Codex's install. older(m) puts
-        in an older install; together(m) says what is wrong, or None. Checked only once nothing is left
-        under way, as the next run of the same harness finishes or puts back what is."""
+        in an older install; together(m) says what is wrong, or None. Checked once nothing is left under
+        way, as the next run of the same harness finishes or puts back what is. A run that fails, and
+        Codex's install, which cannot finish another harness's upgrade, leave nothing under way: they
+        put back all of it, a plugin change too."""
         m = Machine(self)
         m.write(m.bin / "docker", FAKE_DOCKER)
         older(m)
@@ -1910,6 +1912,8 @@ exec {rm} "$@"
                     ran = m.run(harness, *args(m), env=env, check=False)
                 if not under_way(m):
                     found.append((f"{said}, then {then}", together(m), ran.stderr))
+                elif then in ("failing", "codex"):
+                    found.append((f"{said}, then {then}", "something is left under way", ran.stderr))
             return found
 
         with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:

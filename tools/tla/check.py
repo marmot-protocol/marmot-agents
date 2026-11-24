@@ -370,6 +370,12 @@ CASES += [
                    "upgrade, then the plugin change; a TERM between the two, and the exit trap puts "
                    "the old plugin back over the new core (U1). Killed there instead, the next run "
                    "that fails does the same, as its own upgrade record holds the new core."),
+    install_mutant("ChangeOutsideRecord", IHERMES, "install-plugin-put-back-apart",
+                   "ChangeOutsideRecord, install/lib.sh before the second fix of 2026-11-24: Hermes's "
+                   "install is killed once it has put our new plugin in; Codex's install, which "
+                   "cannot finish that upgrade, puts back the core and the support files, and leaves "
+                   "the new plugin over the old core, as the upgrade's record does not list the "
+                   "plugin change (U1)."),
     install_mutant("NoLock", ILOCK),
     install_mutant("FreshRecord", IPI),
     install_mutant("KeepOverwrites", IPI),
@@ -380,6 +386,7 @@ CASES += [
     install_probe("NeverUpgraded"),
     install_probe("NeverRestored"),
     install_probe("NeverChangeFinished", IHERMES),
+    install_probe("NeverPluginPutBack", IHERMES),
     install_probe("NeverWaited", ILOCK),
 ]
 

@@ -3,7 +3,7 @@
 Status: built and checked with TLC on small bounds, as the verification page plans for the parts of the system
 that face crashes and reordering (see [the inventory](inventory.md)). The model, its bounds and its switches are
 internal and change as the work goes. Read on 2026-11-24 against master `7118005`, on branch
-`t3/survey-and-model-state-machines`, which also fixes the two findings below.
+`t3/survey-and-model-state-machines`, which also fixes the three findings below.
 
 `InstallUpgrade.tla` models what an install script does to what every agent in a home shares
 ([D-134](../../docs/decisions.md#d-134-an-upgrade-of-the-core-and-its-support-files-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)):
@@ -34,7 +34,7 @@ call `image_commit` and `change_begin` alike).
 | `Prepare(s)` | `harness_prepare`: Pi's `docker build -t marmot-agents-pi:staging`; `MA_PREPARED` is set |
 | `Publish(s)`, `Core(s)` | `publish_support`: `upgrade_begin`, then `install` and `mv -f` of the new core |
 | `Keep(s)`, `Put(s)` | `upgrade_keep` for each part (the part there before moved into the record, or what a killed run put there removed), then `mv` of the staged part into `$MA_LIB` |
-| `Connect(s)`, `Replace(s)` | `change_begin` (a copy of the plugin and the record naming it, or the record a killed run left, which this run finishes), then `replace_dir` into the person's Hermes |
+| `Note(s)`, `Connect(s)`, `Replace(s)` | `change_begin`: since the second fix, the change's record listed in the upgrade's first (`change_note`, `$MA_UPGRADE/plugin-changes`); then a copy of the plugin and the record naming it, or the record a killed run left, which this run finishes; then `replace_dir` into the person's Hermes |
 | `StartServices(s)` | `start_services`: where an install most often fails (`systemctl`) |
 | `Commit(s)`, `Tag(s)` | `image_commit`: since the fix, the image the tag names written into the record (`$MA_UPGRADE/image`) unless a killed run wrote it; then `docker tag` and `docker rmi` of the staging tag |
 | `End(s)`, `Retire(s)` | `upgrade_end`: since the fix, the plugin change's record moved into the upgrade's (`plugin-change`, with `plugin-change.path`); then `upgrade_retire`, one `mv` that ends both |
@@ -42,7 +42,7 @@ call `image_commit` and `change_begin` alike).
 | `Fail(s)` | A command fails, or TERM, INT or HUP arrives: the trap runs `finish`, with those signals ignored |
 | `FinishChange(s)`, `FinishChangeEnd(s)` | `finish` → `change_put_back`: the plugin's copy put back, the record removed |
 | `FinishUpgrade(s)` | `finish` → `upgrade_put_back`, given `MA_UPGRADING` |
-| `PutBackCore`, `PutBackPart`, `PutBackMove`, `PutBackImage`, `PutBackRetire` | `upgrade_put_back`, from `finish` or from `upgrade_begin`: the core from its copy; each listed part (a kept one by `rm` then `mv`, an absent one removed, one never moved left); since the fix, the image tag from the record (`image_put_back_from`); then `upgrade_retire` |
+| `PutBackPlugin`, `PutBackPluginEnd`, `PutBackCore`, `PutBackPart`, `PutBackMove`, `PutBackImage`, `PutBackRetire` | `upgrade_put_back`, from `finish` or from `upgrade_begin`: since the second fix, first each plugin change the record lists whose record is still there (`upgrade_put_back_changes`: the plugin's copy put back, then the change's record removed); the core from its copy; each listed part (a kept one by `rm` then `mv`, an absent one removed, one never moved left); since the fix, the image tag from the record (`image_put_back_from`); then `upgrade_retire` |
 | `FinishImage(s)` | `finish` → `harness_put_back` → `image_put_back`: before the fix, the tag put back on the image this run found, given `IMAGE_TAGGED`; since, only the staging tag taken away. The run ends |
 | `Kill(s)` | SIGKILL: the run ends where it is; the system lets the lock go |
 
@@ -78,14 +78,16 @@ no longer names (dangling) until something prunes it, so a tag can be put back o
 
 | Id | Property | Form |
 | --- | --- | --- |
-| U1 | Once no install is under way and none left an upgrade or a plugin change under way, the core is of the release of the files every install replaces, Pi's image tag names the image Pi's scripts were made for, and our plugin in the person's Hermes is the one the Hermes files hold: never the new core with the old files, or the other way round, wherever a run was killed or stopped | invariant `U1` |
+| U1 | Once no install is under way and none left an upgrade under way, the core is of the release of the files every install replaces, Pi's image tag names the image Pi's scripts were made for, and our plugin in the person's Hermes is the one the Hermes files hold: never the new core with the old files, or the other way round, wherever a run was killed or stopped | invariant `U1` |
 | U2 | One install at a time is past the lock | invariant `U2` |
 | L1 | What a run left under way is finished or put back, once the person runs installers again | `<>[]Quiescent` |
 
 U1 says what [D-134](../../docs/decisions.md#d-134-an-upgrade-of-the-core-and-its-support-files-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)
 promises. It allows another harness's own folder to stay as it was when one harness upgrades the core: an install
-replaces only its harness's parts, by design. While something is left under way, anything may be mixed; the next
-run of that harness finishes it or puts it back, and L1 says it does.
+replaces only its harness's parts, by design. While an upgrade is left under way, anything may be mixed; the next
+run of that harness finishes it or puts it back, and L1 says it does. A plugin change left under way without an
+upgrade is no excuse: a change is made only during an upgrade, and the gateway runs the plugin it has. U1 said
+"nor a plugin change" until the third finding below, which is how the model missed it.
 
 The liveness property holds under strong fairness for each slot's steps and, with `FairPerson`, for each
 harness's `Start`. Kills and failures are bounded, so they end.
@@ -98,17 +100,20 @@ install to upgrade but the first, 2 kills and 2 runs that fail or are stopped, u
 
 | Case | Configuration | Expected | Distinct states | Counterexample |
 | --- | --- | --- | ---: | --- |
-| `install-pi` | `InstallUpgrade.pi.cfg` (Pi in a container; a run after a kill may be Codex's) | every property holds | 8,228 | |
-| `install-hermes` | `InstallUpgrade.hermes.cfg` (Hermes with our plugin; then maybe Codex) | every property holds | 11,730 | |
-| `install-lock` | `InstallUpgrade.lock.cfg` (two Claude Code installs at once; then maybe Codex) | every property holds | 11,455 | |
-| `install-first` | `InstallUpgrade.first.cfg` (a first install of Pi, nothing there before) | every property holds | 5,076 | |
-| `install-all` | `InstallUpgrade.all.cfg` (an older install of each harness, a Hermes install, then any) | every property holds | 92,983 | |
+| `install-pi` | `InstallUpgrade.pi.cfg` (Pi in a container; a run after a kill may be Codex's) | every property holds | 9,113 | |
+| `install-hermes` | `InstallUpgrade.hermes.cfg` (Hermes with our plugin; then maybe Codex) | every property holds | 6,746 | |
+| `install-lock` | `InstallUpgrade.lock.cfg` (two Claude Code installs at once; then maybe Codex) | every property holds | 12,545 | |
+| `install-first` | `InstallUpgrade.first.cfg` (a first install of Pi, nothing there before) | every property holds | 5,605 | |
+| `install-all` | `InstallUpgrade.all.cfg` (an older install of each harness, a Hermes install, then any) | every property holds | 17,389 | |
 | `install-unfair` | `InstallUpgrade.unfair.cfg` (no `FairPerson`, 1 kill, no failure) | L1 fails | 120 | |
-| `install-bug-ImageOutsideRecord` | Pi's, the code before the fix | U1 fails | 1,734 | [`install-image-put-back-apart`](counterexamples/install-image-put-back-apart.json) |
+| `install-bug-ImageOutsideRecord` | Pi's, the code before the fix | U1 fails | 1,680 | [`install-image-put-back-apart`](counterexamples/install-image-put-back-apart.json) |
 | `install-bug-ChangeEndsApart` | Hermes's, the code before the fix | U1 fails | 1,929 | [`install-plugin-change-ends-apart`](counterexamples/install-plugin-change-ends-apart.json) |
+| `install-bug-ChangeOutsideRecord` | Hermes's, the code before the second fix | U1 fails | 4,693 | [`install-plugin-put-back-apart`](counterexamples/install-plugin-put-back-apart.json) |
 
-Every case of this model together takes under a minute here (`install-all` about 25 s), so all of it runs on
-every pull request that changes `install/`.
+Every case of this model together takes under a minute here, so all of it runs on every pull request that
+changes `install/`. `install-all` has fewer states than before the second fix (92,983 then): another harness's
+install no longer leaves a plugin change under way, for later runs to finish. With the defect
+`ChangeOutsideRecord` it has 103,226.
 
 **Each check catches its bug.** On the configuration named, with U1 only:
 
@@ -116,24 +121,27 @@ every pull request that changes `install/`.
 | --- | --- | --- | ---: |
 | `ImageOutsideRecord` | the tag put back from what the run noted, apart from the record: the code before the fix | Pi's | 1,734 |
 | `ChangeEndsApart` | the plugin change ended after the upgrade, apart: the code before the fix | Hermes's | 1,929 |
-| `NoLock` | no lock: a second install takes over or puts back an upgrade the first is still making | two installs | 13,573 |
-| `FreshRecord` | a run after a kill makes a record of its own over the one left, which holds the new core | Pi's | 2,590 |
-| `KeepOverwrites` | `upgrade_keep` moves what is in place into the record even when the record holds the part there before | Pi's | 6,621 |
+| `ChangeOutsideRecord` | the upgrade's record does not list the plugin change, so putting it back leaves the plugin: the code before the second fix | Hermes's | 4,693 |
+| `NoLock` | no lock: a second install takes over or puts back an upgrade the first is still making | two installs | 16,069 |
+| `FreshRecord` | a run after a kill makes a record of its own over the one left, which holds the new core | Pi's | 3,101 |
+| `KeepOverwrites` | `upgrade_keep` moves what is in place into the record even when the record holds the part there before | Pi's | 7,416 |
 | `RecordAfterCore` | the new core is put in before the record is made | Pi's | 15 |
 
 **No empty passes.** Each probe must be found false: `NeverTakenOver` (a run takes over an upgrade a killed run
 left), `NeverPutBackOther` (Codex's install puts back Pi's), `NeverImagePutBack` (the tag is put back from the
 record), `NeverUpgraded` (an upgrade ends with everything new), `NeverRestored` (a run killed once it put in the
 new core and files has them put back by the next), on Pi's configuration; `NeverChangeFinished` (a run finishes a
-plugin change a killed run left), on Hermes's; and `NeverWaited` (a second install waits for the lock), on two
-installs. Each is reached within 3,800 distinct states.
+plugin change a killed run left) and `NeverPluginPutBack` (a run puts a plugin change back with the upgrade that
+lists it), on Hermes's; and `NeverWaited` (a second install waits for the lock), on two installs. Each is reached
+within 4,500 distinct states.
 
 ## What the model found
 
-Two windows in which an upgrade's parts end up apart, each reached by a TERM as well as by a kill. **Both are
-fixed** (2026-11-24, this branch), each shown first by a test of `install/test_install.py` that stops an install
-at every step (`test_every_step_keeps_the_image_with_its_scripts`, `test_every_step_keeps_the_hermes_plugin_with_its_core`),
-and the model follows the fix:
+Three windows in which an upgrade's parts end up apart. **All are fixed** (2026-11-24, this branch), each shown
+first by a test of `install/test_install.py` that stops an install at every step
+(`test_every_step_keeps_the_image_with_its_scripts`, `test_every_step_keeps_the_hermes_plugin_with_its_core`), and
+the model follows the fixes. The model found the first two, each reached by a TERM as well as by a kill; review
+found the third, which the model then missed because of how U1 was stated:
 
 - **Pi's and Goose's image tag was put back apart from the scripts** (U1). `image_commit` noted the image the tag
   named in a variable of the run, and the exit trap put the tag back from it whenever the run did not end well,
@@ -146,6 +154,13 @@ and the model follows the fix:
   kill there followed by a run that failed, put the old plugin back in the person's Hermes over the new core.
   Now the change's record is moved into the upgrade's just before the one rename that ends the upgrade, so both
   end together, and is moved back to its place by a run that finds it there or is stopped before the rename.
+- **Another harness's install put back the core and left the plugin** (U1, with U1 stated as above). A Hermes
+  install killed once it had put our new plugin in, and then Codex's install, which cannot finish that upgrade:
+  `upgrade_put_back other` put back the core and the support files and left the new plugin over the old core,
+  with the change's record still in the Hermes agent's folder for a later Hermes install. A Hermes install that
+  took the upgrade over and failed before its own change did the same. Now `change_begin` lists the change's
+  record in the upgrade's before it writes it (`change_note`, `$MA_UPGRADE/plugin-changes`), and
+  `upgrade_put_back` puts back each change listed whose record is still there, the last first, before the core.
 
 The test of the image also needed the docker stand-in to keep an image no tag names, as docker does: before, the
 put back of the tag failed in the stand-in, which hid the TERM case.

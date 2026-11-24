@@ -17,7 +17,8 @@ cut anywhere, pays most.
 
 1. **The installer's upgrade** (D-134, D-116): modelled, [`InstallUpgrade`](InstallUpgrade.md). It found two
    windows in which a TERM or a kill left Pi's image tag, or the person's Hermes plugin, apart from the files they
-   go with; both fixed.
+   go with; both fixed. Review found a third, which U1 as first stated let through: another harness's install
+   put back the core and left the Hermes plugin; fixed, and U1 restated so the model catches it.
 2. **The core's hold-back of the full activity** (D-136): modelled, [`ActivityHoldBack`](ActivityHoldBack.md). It
    found that a send MDK was already handed, held back when someone joins the chat, settles its request twice,
    and can start its item twice; fixed. In review, a send tried again without the native message it was first
