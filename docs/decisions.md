@@ -2840,8 +2840,8 @@ Decided 2026-11-23 by the builder, under the project owner's instruction to deci
 
 **Decision.** While the core waits for a connector's response to a request, it holds the events it reads
 ([D-058](#d-058-the-driver-trait-and-the-capability-flags)). When the connection then drops, or the connector is
-given up, before the response, a request that one of those events already settles, or a prompt one of them
-names as its turn's, counts as taken: the event settles it, once, and the chat is not told it failed or was perhaps
+given up, before the response, a request that one of those events already settles, or a prompt that a turn of
+the prompt's own chat among them names, counts as taken: the event settles it, once, and the chat is not told it failed or was perhaps
 not delivered ([D-129](#d-129-a-prompt-whose-answer-a-dropped-connection-lost-is-told-as-perhaps-not-delivered)).
 A request no event showed is refused as failed, as before. Taken or not, nothing is sent again
 ([D-037](#d-037-a-prompt-is-delivered-at-most-once)).

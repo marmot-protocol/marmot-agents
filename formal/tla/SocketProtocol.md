@@ -51,7 +51,7 @@ writes a counterexample.
   for any control taken. `TakenInTime` stands for the 30 s.
 - **The events the core held when a connection goes.** At a drop the model loses everything the core had not
   read, the events it held while it waited on a request included. The core hands those on, and since 2026-11-24
-  counts the request one of them settles, or the prompt one names as its turn's, as taken
+  counts the request one of them settles, or the prompt a turn of its chat among them names, as taken
   ([D-147](../../docs/decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken)).
   Before that it refused such a request as failed and then let the event settle it too, which the model could not
   show; the socket connectors' conformance run (`dropped_after_delivery`) found it. Not yet in the model.

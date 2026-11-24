@@ -19,10 +19,11 @@ mod corpus;
 pub mod wire;
 
 use marmot_agent_driver::{
-    Answer, Capabilities, Control, Driver, Emitted, Harness, MessageId, Output, Prompt, Reason,
-    Refusal, RequestId, SendFile,
+    Answer, Capabilities, ChatId, Control, Driver, Emitted, Harness, MessageId, Output, Prompt,
+    Reason, Refusal, RequestId, SendFile,
 };
 use marmot_agent_events::AgentEvent;
+use marmot_agent_events::body::Body;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
@@ -202,10 +203,10 @@ impl std::fmt::Display for HelloError {
     }
 }
 
-/// What an event shows of a request: a prompt named as its turn's, or an answer or a control
-/// settled.
+/// What an event shows of a request: a prompt named by a turn of its own chat, or an answer or a
+/// control settled.
 enum Shows {
-    Prompt(MessageId),
+    Prompt(MessageId, ChatId),
     Settles(RequestId),
 }
 
@@ -360,7 +361,9 @@ impl SocketDriver {
     /// names a prompt as its turn's (D-147).
     async fn request(&mut self, request: wire::CoreRequest) -> Result<(), Refusal> {
         let shows = match &request {
-            wire::CoreRequest::Prompt(p) => Shows::Prompt(MessageId(p.message.clone())),
+            wire::CoreRequest::Prompt(p) => {
+                Shows::Prompt(MessageId(p.message.clone()), ChatId(p.chat.id.clone()))
+            }
             wire::CoreRequest::Answer(a) => Shows::Settles(RequestId(a.request.clone())),
             wire::CoreRequest::Control(c) => Shows::Settles(RequestId(c.request.clone())),
         };
@@ -418,7 +421,11 @@ impl SocketDriver {
             if let Some(output) = self.output(&envelope) {
                 if let Output::Event(e) = &output {
                     shown |= match &shows {
-                        Shows::Prompt(m) => e.prompts.contains(m),
+                        Shows::Prompt(m, chat) => {
+                            matches!(e.event.body(), Body::Turn(_))
+                                && e.chat.as_ref() == Some(chat)
+                                && e.prompts.contains(m)
+                        }
                         Shows::Settles(r) => e.settles.contains(r),
                     };
                 }
@@ -989,6 +996,44 @@ mod tests {
         peer.await.unwrap();
         assert!(matches!(driver.next_event().await, Some(Output::Event(_))));
         assert!(driver.next_event().await.is_none());
+    }
+
+    // Only a turn of the prompt's own chat responds to it: a message that names it, or another
+    // chat's turn that does, is no sign it was delivered, and the dropped connection leaves it
+    // perhaps not delivered (D-129).
+    #[tokio::test]
+    async fn a_prompt_named_only_by_another_event_before_the_connection_dropped_is_not_delivered() {
+        let message = json!({"item": "m-a", "type": "message", "state": "done", "title": "Message",
+            "text": "hi", "body": {"phase": "final"}, "session": "s-1", "turn": "t-1", "chat": "c-1",
+            "prompts": ["m-1"]});
+        let elsewhere = json!({"item": "t-2", "type": "turn", "state": "running", "title": "Working",
+            "text": "", "body": {"started_by": "user"}, "session": "s-2", "turn": "t-2", "chat": "c-2",
+            "prompts": ["m-1"]});
+        for shown in [message, elsewhere] {
+            let (core, connector) = UnixStream::pair().unwrap();
+            let (read, mut write) = connector.into_split();
+            write
+                .write_all(hello(json!(TOKEN)).as_bytes())
+                .await
+                .unwrap();
+            let mut driver = greeted(core).await;
+            let event = json!({"jsonrpc": "2.0", "method": "event", "params": shown});
+            let peer = tokio::spawn(async move {
+                let mut lines = BufReader::new(read).lines();
+                let _welcome = lines.next_line().await;
+                let _prompt = lines.next_line().await;
+                write
+                    .write_all(format!("{event}\n").as_bytes())
+                    .await
+                    .unwrap();
+            });
+            assert!(
+                driver.request(a_prompt()).await.is_err(),
+                "not delivered: no turn of its chat responds to it, after {shown}"
+            );
+            peer.await.unwrap();
+            assert!(matches!(driver.next_event().await, Some(Output::Event(_))));
+        }
     }
 
     // A response with only an id, not a result or an error, is not taken as an acknowledgement.
