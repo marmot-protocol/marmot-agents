@@ -2837,6 +2837,39 @@ good. An app newer than the core will send actions the core does not know, and t
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
 
+## D-144 Property tests run on every pull request, Kani in the full gate, and fuzzing nightly on a pinned nightly compiler
+
+**Decision.** The fourth step of the verification plan runs in CI's tiers
+([D-130](#d-130-ci-runs-in-three-tiers-with-one-required-check)) like this:
+
+- **Pull request**: the property tests, at proptest's normal 256 cases each, in the workspace's tests: the core's
+  (`crates/marmot-agent/tests/properties`) and the built-in translators' over changed recordings (the conformance
+  suite's `tests/translators.rs`). So does every fuzz target's check over its seeds, on the workspace's compiler
+  (`crates/marmot-agent-fuzz/tests/seeds.rs`). A failing case found anywhere is committed in the test's
+  `proptest-regressions` file.
+- **Merge queue and `master`**: the Kani proofs, `cargo kani -p marmot-agent`, in a job of their own. Kani builds
+  the core with MDK under its own compiler before it proves anything, which is more than a pull request's time.
+- **Nightly**: the property tests at 10,000 cases each, and every fuzz target for five minutes, from its seeds and
+  from what the nights before found, which a cache carries from night to night. An input that makes a target fail
+  is kept as the run's artifact for 30 days; the issue the night opens names the target and the input's file name,
+  nothing it holds.
+
+The tools are pinned: proptest by `Cargo.lock`; cargo-fuzz 0.13.2 and Kani 0.68.0 by version, and by the
+checksums of their release files; Kani installs the compiler its release names. Fuzzing uses that same nightly
+compiler, `nightly-2026-08-21`, the one that builds MDK; a later nightly tried (2026-11-01) failed on one of MDK's
+dependencies. Everything else builds with MDK's compiler, as
+[D-053](#d-053-the-rust-workspace-builds-with-mdks-compiler-and-forbids-unsafe-code) says. cargo-fuzz sets the
+compiler's flags for its own build, which replaces the ban on unsafe code there; the fuzz targets hold none, and
+every other build keeps the ban. The fuzz targets' inputs are made by the fuzzer from the repository's seeds,
+never from real use.
+
+**Why.** The property tests take about a minute in all and catch what example tests do not, as the first one did
+(a request MDK refuses that the core acted on), so they belong where a change is made. Kani's proofs are bounded
+and change rarely, but its build is long. Fuzzing finds more the longer it runs, so it runs where time is cheap,
+and a corpus kept between nights lets each night start where the last stopped.
+
+Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points.
+
 ## D-146 The Hermes plugin answers a request to confirm a command by its id
 
 **Decision.** An answer to Hermes's request to confirm a command, the `question` item of
@@ -2900,6 +2933,7 @@ command did not happen asks again. The plugin does not pass Hermes's call a long
 that would override Hermes's own 300-second rule for confirmations, and Hermes's rule stands.
 
 Decided 2026-11-24 by the project owner.
+
 
 ## D-147 A request whose effect a connector showed before its connection dropped was taken
 

@@ -91,7 +91,10 @@ proptest! {
     /// An event, the item it goes out as, what is queued to send and what a driver hands the
     /// core print none of its values.
     #[test]
-    fn s8_an_event_prints_nothing_it_holds(event in events::event()) {
+    fn s8_an_event_prints_nothing_it_holds(at in 0..events::pool().len()) {
+        // The events as the expected files hold them: what matters is that every string is
+        // marked, not how long it is, and marking reads the event again for each of its strings.
+        let event: AgentEvent = serde_json::from_value(events::pool()[at].clone()).expect("an event");
         let event = marked(&event);
         assert_quiet("AgentEvent", format!("{event:?}"))?;
         assert_quiet("Header", format!("{:?}", event.header()))?;

@@ -1,13 +1,14 @@
 name: Nightly
 
 # The long checks (D-094, D-130), on master once a night and by hand: the simulator on many new
-# seeds, TLC on larger bounds, a coverage report, one shard of the core's mutants, and the model
-# double's cassettes against their age and the harnesses' releases (D-127). Nothing here gates a
+# seeds, the property tests at high counts and every fuzz target (D-144), TLC on larger bounds, a
+# coverage report, one shard of the core's mutants, and the model double's cassettes against their
+# age and the harnesses' releases (D-127). Nothing here gates a
 # pull request; a job that fails opens an issue, or adds to the one it opened before.
 #
 # Rules for this file, as for ci.yml: every action is pinned to a commit and every downloaded
 # tool to a version and a checksum, the token can only read except in the job that writes issues,
-# and no job uses a secret. No job sets RUSTFLAGS.
+# and no job uses a secret. No job sets RUSTFLAGS; cargo-fuzz sets it for its own build (the Fuzzing job).
 on:
   schedule:
     # 03:17 UTC, off the hour, when the runners are quieter.
@@ -66,6 +67,137 @@ jobs:
           path: target/tmp/marmot-agent-sim/
           if-no-files-found: ignore
           retention-days: 30
+
+  properties:
+    name: Property tests at high counts
+    # The property tests a pull request runs at proptest's normal 256 cases, at 10,000 (D-144):
+    # the core's (crates/marmot-agent/tests/properties) and the translators' over changed
+    # recordings (crates/marmot-agent-conformance/tests/translators.rs). A failure prints the
+    # case, shrunk, and the seed to keep in the test's proptest-regressions file.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      PROPTEST_CASES: "10000"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/rust
+        with:
+          # CI's cache of the core's tests, read only: the same debug build.
+          cache: rust-test-core
+
+      - name: Build the property tests
+        run: |
+          cargo test --locked --all-features -p marmot-agent --test properties --no-run
+          cargo test --locked --all-features -p marmot-agent-conformance --test translators --no-run
+
+      - name: The properties, at 10,000 cases each
+        run: |
+          echo "${PROPTEST_CASES} cases of each property." | tee -a "${GITHUB_STEP_SUMMARY}"
+          cargo test --locked --all-features -p marmot-agent --test properties
+          cargo test --locked --all-features -p marmot-agent-conformance --test translators
+
+  fuzzing:
+    name: Fuzzing
+    # Every target in crates/marmot-agent-fuzz for five minutes, from its seeds and what the night
+    # before found (D-144). cargo-fuzz needs a nightly compiler for the sanitizer and the coverage
+    # it builds with; it is the one Kani pins, which builds MDK. cargo-fuzz sets RUSTFLAGS for its
+    # own build, which replaces the ban on unsafe code there; every other build keeps it. A target
+    # that fails leaves the input that made it fail, which the job keeps; the issue names the
+    # targets and the inputs' names, nothing of what they hold.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    outputs:
+      findings: ${{ steps.fuzz.outputs.findings }}
+    env:
+      FUZZ_TOOLCHAIN: nightly-2026-08-21
+      FUZZ_SECONDS: "300"
+      CARGO_FUZZ_VERSION: 0.13.2
+      # The `digest` of cargo-fuzz-<version>-x86_64-unknown-linux-musl.tar.gz on cargo-fuzz's
+      # release page. Change the version and the checksum together.
+      CARGO_FUZZ_SHA256: b5b704018b63e0f151c17a057ac53b5111e1db545d1b9f72fee79f08a545931c
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/rust
+        with:
+          # For Odin and the registry: the fuzz build is its own.
+          cache: rust-test-rest
+
+      - name: Install the nightly compiler and cargo-fuzz
+        # MDK's markdown parser runs `opt` from llvm-tools when built optimised, as cargo-fuzz builds.
+        run: |
+          set -euo pipefail
+          rustup toolchain install "${FUZZ_TOOLCHAIN}" --profile minimal --component llvm-tools-preview
+          name="cargo-fuzz-${CARGO_FUZZ_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          url="https://github.com/rust-fuzz/cargo-fuzz/releases/download/${CARGO_FUZZ_VERSION}/${name}"
+          mkdir -p "${RUNNER_TEMP}/cargo-fuzz"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            --output "${RUNNER_TEMP}/${name}" "${url}"
+          echo "${CARGO_FUZZ_SHA256}  ${RUNNER_TEMP}/${name}" | sha256sum --check
+          tar -xzf "${RUNNER_TEMP}/${name}" -C "${RUNNER_TEMP}/cargo-fuzz"
+          dirname "$(find "${RUNNER_TEMP}/cargo-fuzz" -name cargo-fuzz -type f | head -1)" >> "${GITHUB_PATH}"
+
+      - name: Restore what the fuzzing found before
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/fuzz-corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: fuzz-corpus-
+
+      - name: Write the seeds, and build the targets
+        run: |
+          cargo fuzz --version
+          cargo run --locked -p marmot-agent-fuzz --bin marmot-agent-fuzz-seeds -- target/fuzz-corpus
+          cargo "+${FUZZ_TOOLCHAIN}" fuzz build --fuzz-dir crates/marmot-agent-fuzz --features libfuzzer
+
+      - name: Each target, five minutes
+        id: fuzz
+        run: |
+          set -uo pipefail
+          failed=()
+          for target in $(cargo "+${FUZZ_TOOLCHAIN}" fuzz list --fuzz-dir crates/marmot-agent-fuzz); do
+            echo "::group::${target}"
+            if ! cargo "+${FUZZ_TOOLCHAIN}" fuzz run --fuzz-dir crates/marmot-agent-fuzz --features libfuzzer \
+                "${target}" "target/fuzz-corpus/${target}" -- \
+                -max_total_time="${FUZZ_SECONDS}" -rss_limit_mb=4096 -timeout=30; then
+              failed+=("${target}")
+            fi
+            echo "::endgroup::"
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            {
+              echo "findings<<END_OF_FINDINGS"
+              echo "Fuzz targets that failed, with the inputs they kept (in the run's fuzz-artifacts):"
+              for target in "${failed[@]}"; do
+                echo "- ${target}: $(find crates/marmot-agent-fuzz/artifacts/"${target}" -type f -printf '%f ' 2>/dev/null)"
+              done
+              echo "END_OF_FINDINGS"
+            } >> "${GITHUB_OUTPUT}"
+            echo "Failed: ${failed[*]}" | tee -a "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
+
+      - name: Keep the inputs that made a target fail
+        # `cargo fuzz tmin` shrinks one, and the target's check run on it says what broke.
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-artifacts
+          path: crates/marmot-agent-fuzz/artifacts/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Keep what the fuzzing found, for the next night
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/fuzz-corpus
+          key: fuzz-corpus-${{ github.run_id }}
 
   models:
     name: TLA+ models on larger bounds
@@ -289,6 +421,8 @@ jobs:
     if: always() && github.event_name == 'schedule'
     needs:
       - simulator
+      - properties
+      - fuzzing
       - models
       - coverage
       - mutants
@@ -314,6 +448,8 @@ jobs:
           title_of() {
             case "$1" in
               simulator) echo "Simulator on new seeds" ;;
+              properties) echo "Property tests at high counts" ;;
+              fuzzing) echo "Fuzzing" ;;
               models) echo "TLA+ models on larger bounds" ;;
               coverage) echo "Coverage report" ;;
               mutants) echo "Mutation testing" ;;
