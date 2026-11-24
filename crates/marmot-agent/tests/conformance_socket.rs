@@ -100,6 +100,10 @@ struct OnSocket {
     /// Both ends of the relay of the connection there is, to drop it: on a restart, or when a
     /// scenario says.
     current: Current,
+    /// How long the relay waits, once it has held a response back, before it says so, and so before
+    /// a scenario drops the connection: none but in the test that shows a drop too late to decide
+    /// the request is caught.
+    withheld_late: Duration,
 }
 
 /// The sockets of the connection there is, by the relay: the connector's, and the one towards
@@ -128,6 +132,7 @@ impl OnSocket {
             process: None,
             listener: None,
             current: Arc::default(),
+            withheld_late: Duration::ZERO,
         }
     }
 
@@ -150,6 +155,7 @@ impl OnSocket {
         connector: std::os::unix::net::UnixStream,
         core: std::os::unix::net::UnixStream,
         current: Current,
+        withheld_late: Duration,
     ) {
         let pending: Arc<Mutex<Vec<Pending>>> = Arc::default();
         let stream = |s: std::os::unix::net::UnixStream| {
@@ -179,14 +185,25 @@ impl OnSocket {
                 let Ok(Some(line)) = line else { break };
                 let message: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
                 if message.get("method").is_none() && message.get("id").is_some() {
-                    let mut pending = pending_up.lock().unwrap();
-                    if let Some(at) = pending.iter().position(|p| p.id == message["id"]) {
-                        if fake_up.knobs().withhold_responses {
-                            pending[at].withheld = true;
-                            fake_up.record_withheld();
-                            continue;
+                    let withheld = {
+                        let mut pending = pending_up.lock().unwrap();
+                        let at = pending.iter().position(|p| p.id == message["id"]);
+                        match at {
+                            Some(at) if fake_up.knobs().withhold_responses => {
+                                pending[at].withheld = true;
+                                true
+                            }
+                            Some(at) => {
+                                pending.remove(at);
+                                false
+                            }
+                            None => false,
                         }
-                        pending.remove(at);
+                    };
+                    if withheld {
+                        tokio::time::sleep(withheld_late).await;
+                        fake_up.record_withheld();
+                        continue;
                     }
                 }
                 if message["method"] == "event" {
@@ -378,7 +395,13 @@ impl Subject for OnSocket {
         let (core, relayed) = std::os::unix::net::UnixStream::pair().expect("a socket pair");
         let handles = [&connector, &relayed].map(|s| s.try_clone().expect("a second handle on it"));
         *self.current.lock().unwrap() = handles.into();
-        Self::relay(self.fake.clone(), connector, relayed, self.current.clone());
+        Self::relay(
+            self.fake.clone(),
+            connector,
+            relayed,
+            self.current.clone(),
+            self.withheld_late,
+        );
         core.set_nonblocking(true).unwrap();
         let stream = UnixStream::from_std(core).expect("the core's end, on the runtime");
         SocketDriver::greet(stream, &token, "Agent")
@@ -463,5 +486,23 @@ async fn openclaw_dropped_after_delivery() {
     assert!(
         answer.as_ref().is_some_and(|a| a.shown),
         "the event that settles the answer reached the core before the connection dropped: {answer:?}"
+    );
+}
+
+// A drop that comes only once the request has been given up decides nothing: the core refuses a
+// request on a timeout as on a drop (D-147), so the scenario cannot tell which it saw, and fails.
+// The relay says it held the response back only after the request's deadline, as on a machine that
+// stalls there, so the scenario drops the connection too late.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs Python 3.14 and Node 24, with npm ci run in both packages: CI's Conformance (socket) job"]
+async fn a_drop_after_the_request_was_given_up_checks_nothing() {
+    let mut subject = OnSocket::new(Connector::Hermes);
+    subject.withheld_late = ANSWER_WITHIN + Duration::from_secs(1);
+    let found = socket::dropped_after_delivery(subject).await;
+    let violation = found.expect_err("a drop after the deadline is caught");
+    assert_eq!(violation.property, "L3", "{violation}");
+    assert!(
+        violation.detail.contains("before the connection dropped"),
+        "{violation}"
     );
 }

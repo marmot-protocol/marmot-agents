@@ -56,8 +56,10 @@ fn prompt_heard(heard: &[Heard], chat: &str, words: &str) -> bool {
 /// Runs `request` with the connector's responses held back on the socket, and drops the connection
 /// once the harness has had the request (`delivered`) and the connector has responded: a disconnect
 /// after delivery and before the response reaches the core. Gives what `request` gave and the
-/// request as the drop found it, which must be the one request in flight, its response held back:
-/// otherwise the drop did not happen where it was meant to, and nothing was checked.
+/// request as the drop found it, which must be the one request in flight, its response held back,
+/// and still waited on when the connection began to drop: otherwise the drop did not happen where
+/// it was meant to, and nothing was checked. A request given up before then timed out, which the
+/// core settles as it settles a drop (D-147), so its end shows nothing of the drop.
 async fn dropped_during<T>(
     fake: &Fake,
     patience: Duration,
@@ -77,9 +79,17 @@ async fn dropped_during<T>(
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         fake.drop_connection();
+        // What carries the connection keeps what was in flight as it drops it.
+        while fake.dropped().len() == drops && tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         heard
     };
-    let (out, heard) = tokio::join!(request, dropping);
+    let request = async {
+        let out = request.await;
+        (out, fake.dropped().len() > drops)
+    };
+    let ((out, after_the_drop), heard) = tokio::join!(request, dropping);
     fake.set_knobs(Knobs::default());
     let out = out?;
     if !heard {
@@ -87,6 +97,15 @@ async fn dropped_during<T>(
             "L3",
             format!(
                 "the harness never had the {what} the connection dropped after, so nothing was checked"
+            ),
+        ));
+    }
+    if !after_the_drop {
+        return Err(broke(
+            "L3",
+            format!(
+                "the {what} ended before the connection dropped, given up as a timeout, \
+                 so nothing was checked"
             ),
         ));
     }

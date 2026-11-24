@@ -290,7 +290,8 @@ that names the prompt, or an event that settles the answer or the control. While
 events go on. `Fake::drop_connection` drops the connection at both ends, and keeps what was in flight
 (`Fake::dropped`). So a drop after delivery and before the response is one, whenever the connector responds: the
 scenario drops the connection once the harness has had the request and the connector has responded, and checks
-that the request was the one in flight, its response held back.
+that the request was the one in flight, its response held back, and still waited on when the connection began to
+drop: one given up first timed out, which the core settles as it settles a drop (D-147), and shows nothing.
 
 **Each connector, as it lives.** Hermes and OpenClaw run inside their gateway, which goes on when the connection
 drops: they connect again, and the next `start` takes that connection. Claude Code's connector ends with its
