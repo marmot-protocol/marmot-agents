@@ -545,27 +545,40 @@ lock_fd() {
 #
 # Pi's and Goose's scripts in $MA_LIB run the image tagged NAME. An install builds the new image as
 # NAME:staging and tags it NAME only once the upgrade is done (main), so one that fails leaves NAME on the
-# image the scripts it puts back were made for, and takes NAME:staging away.
+# image the scripts it puts back were made for, and takes NAME:staging away. The image NAME named before
+# is written into the upgrade's record before the tag moves, so that whatever puts the upgrade back puts
+# the tag back with the scripts: this run's exit trap, the next run after a kill, or another harness's
+# install (upgrade_put_back). The tag goes with the record, never apart from it: a run stopped once the
+# upgrade is done leaves the new image with the new scripts.
 
-# Tags NAME:staging as NAME, noting the image NAME was, for image_put_back.
+# Tags NAME:staging as NAME, the image NAME was noted first in the record, unless a run before this one
+# that was killed noted it: that one is the image the scripts in the record were made for.
 image_commit() {
-    local image=$1
-    if [ "$DRY_RUN" -eq 0 ]; then
-        IMAGE_BEFORE=$(docker image inspect -f '{{.Id}}' "$image" 2>/dev/null 9>&-) || IMAGE_BEFORE=""
+    local image=$1 before=""
+    if [ "$DRY_RUN" -eq 0 ] && [ ! -f "$MA_UPGRADE/image" ]; then
+        before=$(docker image inspect -f '{{.Id}}' "$image" 2>/dev/null 9>&-) || before=""
+        printf '%s\t%s\n' "$image" "$before" >"$MA_UPGRADE/image.new"
+        mv -f "$MA_UPGRADE/image.new" "$MA_UPGRADE/image"
     fi
     act docker tag "$image:staging" "$image"
-    IMAGE_TAGGED=1
     act docker rmi "$image:staging" >/dev/null || warn "docker could not take the tag $image:staging away"
 }
 
-# After a run that did not end: NAME back on the image it was, should image_commit have moved it, and
-# NAME:staging taken away.
+# After a run that did not end: NAME:staging taken away. NAME itself is put back with the upgrade.
 image_put_back() {
-    local image=$1
-    if [ "${IMAGE_TAGGED:-0}" -eq 1 ] && [ -n "${IMAGE_BEFORE:-}" ]; then
-        docker tag "$IMAGE_BEFORE" "$image" 9>&- || warn "docker could not tag $IMAGE_BEFORE as $image again: run this again"
-    elif [ "${IMAGE_TAGGED:-0}" -eq 1 ]; then
-        docker rmi "$image" >/dev/null 9>&- || true
+    docker rmi "$1:staging" >/dev/null 2>&1 9>&- || true
+}
+
+# Puts the tag an upgrade's record names back on the image it named, or takes it away when it named
+# none, and takes the staging tag away; fails if docker cannot.
+image_put_back_from() {
+    local record=$1 image before
+    [ -f "$record" ] || return 0
+    IFS='	' read -r image before <"$record" || return 1
+    if [ -n "$before" ]; then
+        docker tag "$before" "$image" 9>&- || return 1
+    elif docker image inspect "$image" >/dev/null 2>&1 9>&-; then
+        docker rmi "$image" >/dev/null 9>&- || return 1
     fi
     docker rmi "$image:staging" >/dev/null 2>&1 9>&- || true
 }
@@ -817,6 +830,7 @@ upgrade_put_back() {
                 ;;
         esac
     done <"$MA_UPGRADE/list"
+    image_put_back_from "$MA_UPGRADE/image" || ok=1
     if [ "$why" = other ]; then
         if [ "$ok" -eq 0 ] && upgrade_retire; then
             rm -rf "$MA_DATA/.upgrade.done.$$"
@@ -1783,7 +1797,7 @@ main() {
     set_paths
     check_harness
     # MA_STAGED says whether this run made the folder in MA_STAGE: a dry run names the installed one.
-    MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0 MA_UPGRADING=0 MA_PREPARED=0 IMAGE_TAGGED=0 IMAGE_BEFORE=""
+    MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0 MA_UPGRADING=0 MA_PREPARED=0
     trap 'finish $?' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT
