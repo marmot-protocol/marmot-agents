@@ -399,10 +399,12 @@ impl Client {
 }
 
 impl Items {
-    /// The line for words an agent sent, or `None` for anything else: a chat message, or a
-    /// subagent's words, a thread comment (D-122), which this client, having no threads, shows
-    /// inline, marked as in the thread of the `task` item it answers, by that item's title once it
-    /// has shown.
+    /// The line for words sent to the chat, or `None` for anything else: a chat message, or a
+    /// thread comment, which this client, having no threads, shows inline, marked as in a thread.
+    /// A subagent's words are a thread comment by the agent whose root is the agent's `task` item
+    /// of a subagent (D-122): they are marked as in the thread of the subagent whose `task` item
+    /// they answer, by what that item says it is for, once it has shown. Any other comment, as a
+    /// person's reply in a thread, is shown as a reply in a thread.
     fn words_line(&self, message: &marmot_app::ReceivedMessage) -> Option<String> {
         let name = clean(message.sender_display_name.as_deref().unwrap_or("agent"));
         let group = hex::encode(message.group_id.as_slice());
@@ -411,17 +413,24 @@ impl Items {
         match message.kind {
             CHAT => Some(format!("{chat} {name}: {text}")),
             COMMENT => {
-                let parent = (message.tags.iter())
-                    .find(|t| t.first().map(String::as_str) == Some("e"))
-                    .and_then(|t| t.get(1))
-                    .map(|id| EventKey(id.clone()));
-                let task = parent.and_then(|p| self.known.get(&p));
-                let place = match task {
-                    Some(seen) => format!(
-                        "in the thread of {}",
-                        clean(&seen.read.item.event.header().title)
-                    ),
-                    None => "in a subagent's thread".to_string(),
+                let named = |tag: &str| {
+                    let id = (message.tags.iter())
+                        .find(|t| t.first().map(String::as_str) == Some(tag))
+                        .and_then(|t| t.get(1))?;
+                    self.known.get(&EventKey(id.clone()))
+                };
+                // A task row of a subagent's that the comment's author sent.
+                let subagents = |seen: &&Seen| {
+                    seen.sender == message.sender
+                        && matches!(seen.read.item.event.body(),
+                            Body::Task(task) if task.kind == "subagent")
+                };
+                let place = match named("E").filter(subagents) {
+                    Some(root) => {
+                        let task = named("e").filter(subagents).unwrap_or(root);
+                        format!("in the thread of {}", task_label(task))
+                    }
+                    None => "in a thread".to_string(),
                 };
                 Some(format!("{chat} {name}, {place}: {text}"))
             }
@@ -514,6 +523,14 @@ impl Items {
 
 /// A short name for a chat with one agent in it, from its group's hex id and the agent's key: the
 /// first eight digits of each. Two agents in one group are two chats.
+/// What a subagent's `task` row says it is for: the first line of its text, its path or what it
+/// was asked, or, with none, its title, which a harness may give every subagent alike.
+fn task_label(seen: &Seen) -> String {
+    let header = seen.read.item.event.header();
+    let text = header.text.lines().find(|l| !l.trim().is_empty());
+    clean(text.unwrap_or(&header.title))
+}
+
 fn chat_label(group: &str, agent: &str) -> String {
     let short = |hex: &str| hex.chars().take(8).collect::<String>();
     format!("{}/{}", short(group), short(agent))
@@ -1090,7 +1107,8 @@ mod tests {
             .collect()
     }
 
-    /// A subagent's `task` item, as event `id`, titled "look around".
+    /// A subagent's `task` item, as event `id`, titled as Codex titles every one, and saying what
+    /// it is for, "look around".
     fn task_row(id: &str) -> ReceivedVersion {
         let header = Header {
             harness: "stub".into(),
@@ -1100,8 +1118,8 @@ mod tests {
             item: "task:a".into(),
             seq: 1,
             state: State::Running,
-            title: "look around".into(),
-            text: "Subagent working".into(),
+            title: "Subagent working".into(),
+            text: "look around".into(),
         };
         let body = Body::Task(marmot_agent_events::body::Task {
             kind: "subagent".into(),
@@ -1162,19 +1180,38 @@ mod tests {
             ];
             words("c2", 1111, "found two\nfiles", tags)
         };
-        // Its subagent's row not seen yet: still shown, marked.
+        // Its subagent's row not seen yet: shown as a reply in a thread, nothing more.
         let line = items.words_line(&comment("t1")).unwrap();
-        assert!(line.contains("in a subagent's thread"), "{line}");
-        assert!(line.ends_with(": found two files"), "{line}");
+        assert_eq!(
+            line,
+            format!(
+                "{} Codex, in a thread: found two files",
+                chat_label(&group_hex(CHAT_A), AGENT)
+            )
+        );
         items.arrived(&task_row("t1").0, None, DIRECT, |_| {
             Some(task_row("t1").row())
         });
+        // Marked by what the row says the subagent is for, not by its title, which is every
+        // subagent's.
         let line = items.words_line(&comment("t1")).unwrap();
         assert_eq!(
             line,
             format!(
                 "{} Codex, in the thread of look around: found two files",
                 chat_label(&group_hex(CHAT_A), AGENT)
+            )
+        );
+        // A person's reply in that thread is not the subagent's.
+        let mut reply = comment("t1");
+        reply.sender = STRANGER.into();
+        reply.sender_display_name = Some("Bob".into());
+        let line = items.words_line(&reply).unwrap();
+        assert_eq!(
+            line,
+            format!(
+                "{} Bob, in a thread: found two files",
+                chat_label(&group_hex(CHAT_A), STRANGER)
             )
         );
         // Anything else is not words.
