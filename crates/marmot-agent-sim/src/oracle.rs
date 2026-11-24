@@ -3,7 +3,7 @@
 //! core's state. The ids are those of `docs/design/verification.md`.
 
 use crate::schedule::What;
-use crate::world::{CHAT, EDIT, Row, World};
+use crate::world::{CHAT, COMMENT, EDIT, Row, World};
 use marmot_agent::EventKey;
 use marmot_agent::carrier;
 use marmot_agent::conversation::EFFECT_LIMIT_SECS;
@@ -299,7 +299,8 @@ fn chat_ids(world: &World) -> Result<BTreeMap<String, usize>, Failure> {
 }
 
 /// S5: a request, an item and the agent's words reach only their own chat, and an edit of the
-/// agent's words edits their own message there.
+/// agent's words edits their own message there. A subagent's words are a thread comment, and a
+/// later version of them MDK's plain edit of it (D-142).
 fn s5(world: &World) -> Option<Failure> {
     let ids = match chat_ids(world) {
         Ok(ids) => ids,
@@ -330,7 +331,7 @@ fn s5(world: &World) -> Option<Failure> {
     }
     let words = (world.rows.iter()).filter(|r| {
         let item = carrier::read_item(r.kind, &r.content, &r.tags).is_some();
-        r.from_agent && (r.kind == CHAT || r.kind == EDIT) && !item
+        r.from_agent && [CHAT, COMMENT, EDIT].contains(&r.kind) && !item
     });
     for row in words {
         let Some(&(chat, item)) = said.get(row.content.as_str()) else {
@@ -347,7 +348,7 @@ fn s5(world: &World) -> Option<Failure> {
                 (row.edits.as_ref()).and_then(|t| world.rows.iter().find(|r| r.event == *t));
             let own = target.is_some_and(|t| {
                 t.from_agent
-                    && t.kind == CHAT
+                    && (t.kind == CHAT || t.kind == COMMENT)
                     && t.chat == chat
                     && said
                         .get(t.content.as_str())

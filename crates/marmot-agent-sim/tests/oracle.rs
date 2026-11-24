@@ -7,7 +7,7 @@ use marmot_agent::carrier::{self, Item};
 use marmot_agent_events::body::{Approval, Body, Notice, NoticeKind, Turn};
 use marmot_agent_events::{AgentEvent, Header, State};
 use marmot_agent_sim::oracle::{self, Failure, NET_EARLIEST_MS};
-use marmot_agent_sim::world::{CHAT, Delivery, EDIT, Emission, RefusedSend, World};
+use marmot_agent_sim::world::{CHAT, COMMENT, Delivery, EDIT, Emission, RefusedSend, World};
 use marmot_agent_sim::{Posted, What};
 
 /// A world whose chats the agent joined, with `posted` posted and stored.
@@ -93,6 +93,12 @@ fn sent(world: &mut World, chat: usize, item: &Item) -> EventKey {
 fn said(world: &mut World, chat: usize, text: &str, edits: Option<EventKey>) -> EventKey {
     let kind = if edits.is_some() { EDIT } else { CHAT };
     let row = world.store_sent(chat, kind, text.into(), Vec::new(), edits);
+    world.keep(row)
+}
+
+/// A subagent's words, stored in `chat` as a thread comment; gives their event.
+fn commented(world: &mut World, chat: usize, text: &str) -> EventKey {
+    let row = world.store_sent(chat, COMMENT, text.into(), Vec::new(), None);
     world.keep(row)
 }
 
@@ -206,6 +212,29 @@ fn words_in_the_wrong_chat_fail_s5() {
     emitted(&mut own, 30, "A", "words-t1-2", Some("w-t1-2 more"));
     let first = said(&mut own, 0, "w-t1-2", None);
     said(&mut own, 0, "w-t1-2 more", Some(first));
+    assert_eq!(property(oracle::safety(&own)), None);
+}
+
+// A subagent's words are a thread comment, and a later version MDK's plain edit of it (D-142):
+// the comment in another chat fails S5 as the agent's words there do, and an edit of the comment
+// in its own chat is an edit of the words' own message.
+#[test]
+fn a_subagents_words_in_the_wrong_chat_fail_s5() {
+    let base = || {
+        let mut w = world(2, &[prompt(0), prompt(1)]);
+        handed(&mut w, 0, "A");
+        handed(&mut w, 1, "B");
+        emitted(&mut w, 10, "A", "words-sub-2", Some("w-sub-2"));
+        w
+    };
+    let mut wrong = base();
+    commented(&mut wrong, 1, "w-sub-2");
+    assert_eq!(property(oracle::safety(&wrong)), Some("S5".into()));
+
+    let mut own = base();
+    emitted(&mut own, 30, "A", "words-sub-2", Some("w-sub-2 more"));
+    let first = commented(&mut own, 0, "w-sub-2");
+    said(&mut own, 0, "w-sub-2 more", Some(first));
     assert_eq!(property(oracle::safety(&own)), None);
 }
 
