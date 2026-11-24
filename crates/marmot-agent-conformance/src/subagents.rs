@@ -147,25 +147,40 @@ pub fn shown_flat(
 
 /// Every event of a subagent's names its `task` item, which is a subagent's `task` item of the
 /// chat and not the event's own, and names it from its first version on; and a subagent's words
-/// name one (D-121).
+/// name the one whose subject is their parent, the tool item that started it (D-121).
 fn in_threads(seen: &[Emitted], chat: &str) -> Result<(), Violation> {
     let last = items(seen, chat);
-    let tasks: Vec<&str> = (last.iter())
-        .filter(|e| matches!(e.event.body(), Body::Task(t) if t.kind == "subagent"))
-        .map(|e| e.event.header().item.as_str())
+    let tasks: Vec<(&str, Option<&str>)> = (last.iter())
+        .filter_map(|e| match e.event.body() {
+            Body::Task(t) if t.kind == "subagent" => Some((
+                e.event.header().item.as_str(),
+                t.subject.as_ref().map(|s| s.as_str()),
+            )),
+            _ => None,
+        })
         .collect();
+    let subject_of = |task: &str| tasks.iter().find(|(item, _)| *item == task).map(|t| t.1);
     let fail = |detail: String| Err(broke(THREADS, detail));
     for e in &last {
         let header = e.event.header();
+        let item = header.item.as_str();
         if let Some(of) = &header.subagent
-            && (!tasks.contains(&of.as_str()) || *of == header.item)
+            && (subject_of(of.as_str()).is_none() || *of == header.item)
         {
-            let item = header.item.as_str();
             return fail(format!("{item} names {}, no subagent's task", of.as_str()));
         }
-        let words = matches!(e.event.body(), Body::Message(m) if m.parent.is_some());
-        if words && header.subagent.is_none() {
-            return fail("a subagent's words name no subagent".into());
+        if let Body::Message(m) = e.event.body()
+            && let Some(parent) = &m.parent
+        {
+            let Some(of) = &header.subagent else {
+                return fail("a subagent's words name no subagent".into());
+            };
+            if subject_of(of.as_str()).flatten() != Some(parent.as_str()) {
+                let (of, parent) = (of.as_str(), parent.as_str());
+                return fail(format!(
+                    "{item} names {of}, not the task of the subagent {parent} started"
+                ));
+            }
         }
     }
     // An event names its subagent from its first version on: an item never moves.
@@ -497,4 +512,74 @@ pub async fn restart_with_subagents_running<S: Subject>(subject: S) -> Result<()
         return Err(broke(FLAT, "an old subagent shown after the restart"));
     }
     run.end().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use marmot_agent_driver::ChatId;
+
+    /// The last version of an item of chat `c-1`, from its JSON fields.
+    fn emitted(
+        seq: u64,
+        item: &str,
+        of: Option<&str>,
+        kind: &str,
+        body: serde_json::Value,
+    ) -> Emitted {
+        let event = serde_json::json!({
+            "harness": "fake", "session": "s", "turn": "t", "subagent": of, "item": item,
+            "seq": seq, "type": kind, "state": "done", "title": "t", "text": item, "body": body,
+        });
+        Emitted {
+            event: serde_json::from_value(event).unwrap(),
+            chat: Some(ChatId("c-1".into())),
+            prompts: Vec::new(),
+            settles: Vec::new(),
+        }
+    }
+
+    /// Two subagents, started by tool items `tool-a` and `tool-b`, whose `task` items are
+    /// `task-a` and `task-b`, and words whose parent is `parent` that name `of` as their subagent.
+    fn two_subagents(parent: &str, of: &str) -> Vec<Emitted> {
+        let tool = |seq, item| {
+            let body = serde_json::json!({"kind": "subagent", "name": "spawn"});
+            emitted(seq, item, None, "tool", body)
+        };
+        let task = |seq, item, subject| {
+            let body = serde_json::json!({"kind": "subagent", "subject": subject});
+            emitted(seq, item, None, "task", body)
+        };
+        let said = |seq, item, parent, of| {
+            emitted(
+                seq,
+                item,
+                Some(of),
+                "message",
+                serde_json::json!({"parent": parent}),
+            )
+        };
+        vec![
+            tool(1, "tool-a"),
+            tool(2, "tool-b"),
+            task(3, "task-a", "tool-a"),
+            task(4, "task-b", "tool-b"),
+            said(5, "words-a", parent, of),
+            said(6, "words-b", "tool-b", "task-b"),
+        ]
+    }
+
+    // A subagent's words name, as their subagent, the `task` item of the subagent their parent
+    // started: words whose parent is one subagent's tool item and that name another's task are
+    // not that subagent's (D-121).
+    #[test]
+    fn words_name_the_task_of_the_subagent_their_parent_started() {
+        shown_flat(&two_subagents("tool-a", "task-a"), "c-1", 2, State::Done)
+            .unwrap_or_else(|v| panic!("{v}"));
+        let crossed = shown_flat(&two_subagents("tool-a", "task-b"), "c-1", 2, State::Done);
+        assert!(
+            crossed.is_err(),
+            "words of one subagent naming another's task"
+        );
+    }
 }
