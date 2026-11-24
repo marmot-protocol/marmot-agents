@@ -1050,3 +1050,29 @@ impl Side for Marmot {
             })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MDK's words, at the revision the core links (`marmot-app`'s `local_submissions.rs`), for a
+    /// send under a new token whose event is one MDK already keeps: the same kind, tags, content
+    /// and second.
+    const COLLISION: &str = "message identity collision: an identical event already exists; \
+                             submission was not accepted";
+
+    // The same words in the same second meet the event MDK made of them: MDK took nothing, and in
+    // the next second they are another event, so it is tried again, and not refused (S1).
+    #[test]
+    fn a_send_that_meets_an_event_mdk_keeps_is_busy_and_not_refused() {
+        let collision = AppError::InvalidAppMessagePayload(COLLISION.into());
+        assert_eq!(send_failed(&collision), SendFailed::Busy);
+        let unreadable =
+            AppError::InvalidAppMessagePayload("missing local submission payload".into());
+        assert_eq!(
+            send_failed(&unreadable),
+            SendFailed::Refused { gone: false },
+            "any other payload MDK will not take is refused"
+        );
+    }
+}
