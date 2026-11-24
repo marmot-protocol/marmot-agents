@@ -146,14 +146,27 @@ pub struct Kept {
 /// Which save fails: one that would write a state it matches.
 type FailWhen = dyn Fn(&Kept) -> bool + Send + Sync;
 
-/// How many times a [`Store`] wrote its file, and how many bytes in all, counted once each
-/// write is synced: what a save costs is measured by them (#155).
-#[derive(Debug, Default)]
-pub struct Writes {
-    /// The writes.
-    pub count: AtomicU64,
+/// How many times a [`Store`] that counts them wrote its file, and how many bytes in all,
+/// counted once each write is synced: what a save costs is measured by them (#155). Only the
+/// store adds to them.
+#[derive(Clone, Debug, Default)]
+pub struct Writes(Arc<(AtomicU64, AtomicU64)>);
+
+impl Writes {
+    /// The writes so far.
+    pub fn count(&self) -> u64 {
+        self.0.0.load(SeqCst)
+    }
+
     /// The bytes they wrote.
-    pub bytes: AtomicU64,
+    pub fn bytes(&self) -> u64 {
+        self.0.1.load(SeqCst)
+    }
+
+    fn add(&self, bytes: usize) {
+        self.0.0.fetch_add(1, SeqCst);
+        self.0.1.fetch_add(bytes as u64, SeqCst);
+    }
 }
 
 /// Where the kept state lives.
@@ -163,10 +176,15 @@ pub struct Store {
     /// nothing (#155). `None` while the store does not know: before its first save, and after
     /// one that failed partway.
     written: std::sync::Mutex<Option<Vec<u8>>>,
-    writes: Arc<Writes>,
+    /// What it wrote, if it counts it.
+    writes: Option<Writes>,
     /// A fault for the tests of a failed save, as the simulator will put one
     /// (`docs/design/verification.md`): none in use.
     fault: Option<(Arc<FailWhen>, Arc<AtomicBool>)>,
+    /// A fault for the tests at the last step of a save, the folder's sync, once the new file is
+    /// in place.
+    #[cfg(test)]
+    folder_sync_fails: AtomicBool,
 }
 
 impl Store {
@@ -175,14 +193,19 @@ impl Store {
         Self {
             path: dir.join("marmot-agent-state.json"),
             written: std::sync::Mutex::new(None),
-            writes: Arc::default(),
+            writes: None,
             fault: None,
+            #[cfg(test)]
+            folder_sync_fails: AtomicBool::new(false),
         }
     }
 
-    /// How many times this store has written its file, and how many bytes.
-    pub fn writes(&self) -> Arc<Writes> {
-        self.writes.clone()
+    /// This store, counting how many times it writes its file and how many bytes, which the
+    /// count given back shows.
+    pub fn counting_writes(mut self) -> (Self, Writes) {
+        let writes = Writes::default();
+        self.writes = Some(writes.clone());
+        (self, writes)
     }
 
     /// The state file in `dir`, where the first save of a state `when` matches fails, as on a
@@ -238,10 +261,15 @@ impl Store {
         file.sync_all()?;
         std::fs::rename(&temporary, &self.path)?;
         if let Some(dir) = self.path.parent() {
+            #[cfg(test)]
+            if self.folder_sync_fails.load(SeqCst) {
+                return Err(std::io::Error::other("the folder's sync made to fail"));
+            }
             std::fs::File::open(dir)?.sync_all()?;
         }
-        self.writes.count.fetch_add(1, SeqCst);
-        (self.writes.bytes).fetch_add(bytes.len() as u64, SeqCst);
+        if let Some(writes) = &self.writes {
+            writes.add(bytes.len());
+        }
         *written = Some(bytes);
         Ok(())
     }
@@ -1679,19 +1707,16 @@ mod tests {
     // returns well always leaves its own state on disk (#155).
     #[test]
     fn a_save_after_one_that_failed_is_written() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
         let a = Kept::default();
         let mut b = Kept::default();
         b.read.insert(GroupKey::from("g"), 7);
         store.save(&a).unwrap();
-        // The folder can be written to but not opened, so the new file goes in place and the
-        // folder's sync, the last step, fails.
-        let mode = |mode| std::fs::Permissions::from_mode(mode);
-        std::fs::set_permissions(dir.path(), mode(0o300)).unwrap();
+        // The new file goes in place, and the folder's sync, the last step, fails.
+        store.folder_sync_fails.store(true, SeqCst);
         let failed = store.save(&b);
-        std::fs::set_permissions(dir.path(), mode(0o700)).unwrap();
+        store.folder_sync_fails.store(false, SeqCst);
         assert!(failed.is_err(), "the folder's sync failed");
         assert_eq!(
             store.load().unwrap().read,
