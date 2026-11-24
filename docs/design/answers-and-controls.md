@@ -138,7 +138,9 @@ Two exceptions stay, because the evidence forces them.
   approve, and the core checks every message against that list
   ([D-032](../decisions.md#d-032-every-action-needs-one-of-two-rights)). A command that changes the permission
   mode belongs on the list too. Each entry says whether it counts anywhere in a message or only at the start
-  ([D-047](../decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts)).
+  ([D-047](../decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts)). The core reads a message as
+  any harness may, in every case and after any space, and asks for the right to approve when any reading finds a
+  listed command ([D-150](../decisions.md#d-150-the-core-matches-a-typed-command-as-the-harness-reads-it-failing-towards-asking-for-the-right-to-approve)).
 
 ### 5. Controls: a few shared ones, and whatever the harness offers
 
@@ -468,6 +470,7 @@ In the core:
 | A message sent during a turn goes straight to the harness | [D-040](../decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness) |
 | A secret answer is accepted only in a two-person chat | [D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat) |
 | A listed command says where in a message it counts | [D-047](../decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts) |
+| The core matches a typed command as any harness reads it, failing towards asking for the right to approve | [D-150](../decisions.md#d-150-the-core-matches-a-typed-command-as-the-harness-reads-it-failing-towards-asking-for-the-right-to-approve) |
 | A request to confirm a command is a question | [D-048](../decisions.md#d-048-a-request-to-confirm-a-command-is-a-question) |
 | Hermes's plugin answers a confirmation by its id, so the answer resolves it or nothing | [D-146](../decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id) |
 | A standing approval is an ordinary approval answer | [D-049](../decisions.md#d-049-a-standing-approval-is-an-ordinary-approval-answer) |

@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-24, at `master` commit `c0e7219`, through [D-140](decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused), [D-142](decisions.md#d-142-how-subagent-threads-are-built), [D-143](decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake), [D-144](decisions.md#d-144-property-tests-run-on-every-pull-request-kani-in-the-full-gate-and-fuzzing-nightly-on-a-pinned-nightly-compiler), [D-145](decisions.md#d-145-the-core-bounds-what-it-holds-for-a-connector-and-the-files-it-sends-at-once), [D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id), and [D-147](decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken). A change that adds or replaces
+Brought up to date on 2026-11-24, at `master` commit `6d18889`, through [D-140](decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused), [D-142](decisions.md#d-142-how-subagent-threads-are-built), [D-143](decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake), [D-144](decisions.md#d-144-property-tests-run-on-every-pull-request-kani-in-the-full-gate-and-fuzzing-nightly-on-a-pinned-nightly-compiler), [D-145](decisions.md#d-145-the-core-bounds-what-it-holds-for-a-connector-and-the-files-it-sends-at-once), [D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id), [D-147](decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken), and [D-150](decisions.md#d-150-the-core-matches-a-typed-command-as-the-harness-reads-it-failing-towards-asking-for-the-right-to-approve). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -90,7 +90,9 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   approval and changing a setting marked as needing it (the permission mode, a chat's folder) need the right to
   approve; prompting, answering a question and every other control need the right to prompt ([D-010](decisions.md#d-010-the-owner-sets-who-may-prompt-and-who-may-approve),
   [D-032](decisions.md#d-032-every-action-needs-one-of-two-rights), [D-039](decisions.md#d-039-controls-need-the-right-to-prompt), [D-043](decisions.md#d-043-a-setting-says-which-right-it-needs)).
-- Each connector lists the typed commands that need the right to approve, and where in a message each counts. A
+- Each connector lists the typed commands that need the right to approve, by every name its harness runs them
+  under, and where in a message each counts; the core reads a message as any harness may, and asks for that
+  right whenever one could read a listed command ([D-150](decisions.md#d-150-the-core-matches-a-typed-command-as-the-harness-reads-it-failing-towards-asking-for-the-right-to-approve)). A
   request to confirm a command is a question; a standing approval is an ordinary answer ([D-047](decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts), [D-048](decisions.md#d-048-a-request-to-confirm-a-command-is-a-question),
   [D-049](decisions.md#d-049-a-standing-approval-is-an-ordinary-approval-answer)). Hermes's plugin answers a
   confirmation by its id, through Hermes's own call and after Hermes's own check of who may answer, so the

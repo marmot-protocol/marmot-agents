@@ -3121,3 +3121,27 @@ Issue #154.
 
 Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points.
 
+## D-150 The core matches a typed command as the harness reads it, failing towards asking for the right to approve
+
+**Decision.** When the core checks a message against the commands a connector lists as needing the right to
+approve ([D-047](#d-047-a-listed-command-says-where-in-a-message-it-counts)), it reads the message as every
+harness may: it skips before a command whatever any of the languages the harnesses are written in skips as space,
+it takes a line as starting after whatever any of them breaks a line at, and it compares a command's name in each
+way any of them lowercases text, ASCII only, by Unicode's rules, and folded by Unicode's case folding. Where the
+harnesses read a message differently, the core takes every reading, so it asks for the right to approve whenever
+any harness could read the message as such a command. It may ask more often than a harness would, never less. A
+connector lists a command by every name its harness runs it under.
+
+Two tests hold it there, beside the gateway move-over tests and in the same images: each makes thousands of
+messages from the harness's own command names and asks the harness's own code, Hermes's command parser and
+registry and OpenClaw's, which of them it would run as a listed command, and the core must ask for the right to
+approve for each; and each checks every character the harness's language skips as space, or lowercases or folds
+to plain letters.
+
+**Why.** The core trimmed and lowercased with Rust's ASCII rules, while Hermes, in Python, and OpenClaw, in
+JavaScript, skip more characters as space and lowercase by Unicode's rules, and each runs a command by names the
+connector did not list. So a message a harness read as a command that needs the right to approve could pass the
+core as plain text, from someone who may only prompt.
+
+Decided 2026-11-24 by the project owner.
+
