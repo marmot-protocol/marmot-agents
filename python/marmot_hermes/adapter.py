@@ -80,9 +80,12 @@ CAPABILITIES = {
     "approvals": True,
     "files_in": "none",
     # Typed commands that answer an approval or change what the agent may do without asking (D-032,
-    # D-047), as read in Hermes's source at the pinned commit (`docs/reference/hermes-messages.md`).
+    # D-047), as read in Hermes's source at the pinned commit (`docs/reference/hermes-messages.md`), each
+    # with the other names Hermes's command registry gives it, since Hermes runs a command by any of them
+    # (D-150).
     "approval_commands": [{"command": c, "counts": "start"} for c in
-                          ("/approve", "/deny", "/yolo", "/approvals", "/memory", "/skills", "/codex-runtime")],
+                          ("/approve", "/deny", "/yolo", "/approvals", "/memory", "/skills", "/codex-runtime",
+                           "/codex_runtime")],
 }
 
 

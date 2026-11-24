@@ -3121,3 +3121,34 @@ Issue #154.
 
 Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points.
 
+## D-150 The core matches a typed command as the harness reads it, failing towards asking for the right to approve
+
+**Decision.** When the core checks a message against the commands a connector lists as needing the right to
+approve ([D-047](#d-047-a-listed-command-says-where-in-a-message-it-counts)), it reads the message as every
+harness may: it skips before a command whatever any of the languages the harnesses are written in skips as space,
+it takes a line as starting after whatever any of them breaks a line at, and it compares a command's name in each
+way any of them lowercases text, ASCII only, by Unicode's rules, and folded by Unicode's case folding. A command
+whose name ends in a mark that cannot continue a name counts whatever follows it, as a harness runs the rest of
+the line after such a shorthand. Where the harnesses read a message differently, the core takes every reading, so
+it asks for the right to approve whenever any harness could read the message as such a command. It may ask more
+often than a harness would, never less. A connector lists a command by every name its harness runs it under.
+
+Two tests hold it there, beside the gateway move-over tests and in the same images. Each names the commands that
+need the right to approve by their identifiers in the harness's own command registry, not by the plugin's list,
+and fails when the registry no longer has one. It takes every name the registry gives those commands, in the form
+the harness runs it, and requires the core to ask for the right to approve for each, alone and followed by more;
+for OpenClaw, also for each directive of those it applies anywhere in ordinary text
+([D-047](#d-047-a-listed-command-says-where-in-a-message-it-counts)), within such text. Then it makes thousands of
+messages from all the harness's command names and asks the harness's own code, Hermes's command parser and
+registry and OpenClaw's command parser, shorthand and directive parser, which it would run as such a command, and
+the core must ask for that right for each. Each also checks every character the harness's language skips as space,
+or lowercases or folds to plain letters. A command that one of OpenClaw's own plugins adds is not in its registry,
+and these tests do not check it.
+
+**Why.** The core trimmed and lowercased with Rust's ASCII rules, while Hermes, in Python, and OpenClaw, in
+JavaScript, skip more characters as space and lowercase by Unicode's rules, and each runs a command by names the
+connector did not list. So a message a harness read as a command that needs the right to approve could pass the
+core as plain text, from someone who may only prompt.
+
+Decided 2026-11-24 by the project owner.
+

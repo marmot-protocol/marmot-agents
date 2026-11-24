@@ -28,6 +28,9 @@
 //! ```sh
 //! cargo test -p marmot-agent --test import_gateways -- --ignored --nocapture --test-threads=1
 //! ```
+//!
+//! Beside them, in the same images, the core's reading of a typed command is checked against each
+//! gateway's own (D-150): `the_core_reads_a_command_at_least_as_hermes_does` and its OpenClaw twin.
 
 mod common;
 mod model_double;
@@ -39,7 +42,8 @@ use marmot_account::AccountHome;
 use marmot_agent::EventKey;
 use marmot_agent::carrier::{self, Asked, EDIT_KIND, ITEM_KIND};
 use marmot_agent::import::{self, Connector, Options};
-use marmot_agent::rights::Who;
+use marmot_agent::rights::{Right, Who, needed_for};
+use marmot_agent_driver::{ApprovalCommand, Position};
 use marmot_agent_events::body::{Body, NoticeKind};
 use marmot_app::{AppMessageQuery, MarmotAppRuntime};
 use model_double::Double;
@@ -1499,4 +1503,481 @@ async fn an_openclaw_install_moves_over() {
 
     let _ = core.kill().await;
     install.end().await;
+}
+
+/// How many messages each harness's own reading of commands is compared on, and the seed they are
+/// made from; `MARMOT_AGENT_COMMAND_SEED` picks another seed.
+const COMMAND_TEXTS: usize = 4000;
+
+/// A small random number generator, so a failure names the seed that made it.
+struct Rng(u64);
+
+impl Rng {
+    fn new() -> (Self, u64) {
+        let seed = std::env::var("MARMOT_AGENT_COMMAND_SEED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0x6d61_726d_6f74);
+        (Rng(seed | 1), seed)
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 % n as u64) as usize
+    }
+
+    fn pick<'a>(&mut self, from: &[&'a str]) -> &'a str {
+        from[self.below(from.len())]
+    }
+}
+
+/// Messages made to probe how a harness reads a command: names it knows, each as it is typed, half
+/// of them names of commands that need the right to approve, before them what some
+/// language skips as space or what a harness drops as a line, each letter in another case or as
+/// a character that lowercases or folds to it, and after them what may or may not end a name.
+fn command_texts(names: &[String], approving: &[String], rng: &mut Rng) -> Vec<String> {
+    const BEFORE: &[&str] = &[
+        "",
+        "",
+        " ",
+        "\t",
+        "\n",
+        "\r\n",
+        "\u{b}",
+        "\u{c}",
+        "\u{a0}",
+        "\u{1c}",
+        "\u{1d}",
+        "\u{1e}",
+        "\u{1f}",
+        "\u{85}",
+        "\u{feff}",
+        "\u{2028}",
+        "\u{2029}",
+        "\u{3000}",
+        "\u{200b}",
+        "\u{180e}",
+        "\u{2060}",
+        "@image:/tmp/a.png\n",
+        "@FILE:notes.txt\n",
+        "[file: notes.txt]\n",
+        "hi\n",
+        "hi ",
+    ];
+    const SLASH: &[&str] = &["/", "/", "/", "/", "!", "\u{ff0f}", "//"];
+    const AFTER: &[&str] = &[
+        "",
+        "",
+        " on",
+        "@agent_bot",
+        ".",
+        ":",
+        ": on",
+        "x",
+        "_x",
+        "-x",
+        "\u{1c}on",
+        "\u{a0}on",
+        "\u{feff}",
+        "\u{200b}",
+        "\n/x",
+        "\u{3000}on",
+        "\u{301}",
+    ];
+    // A letter's other spellings that some harness lowercases or folds back to it.
+    let other = |c: char| -> &'static [&'static str] {
+        match c {
+            'k' => &["K", "\u{212a}"],
+            's' => &["S", "\u{17f}"],
+            'i' => &["I", "\u{130}", "\u{131}"],
+            'a' => &["A", "\u{1e9a}"],
+            _ => &[],
+        }
+    };
+    let pairs: &[(&str, &[&str])] = &[
+        ("ss", &["\u{df}", "\u{1e9e}"]),
+        ("fi", &["\u{fb01}"]),
+        ("fl", &["\u{fb02}"]),
+        ("ff", &["\u{fb00}"]),
+        ("st", &["\u{fb05}", "\u{fb06}"]),
+    ];
+    (0..COMMAND_TEXTS)
+        .map(|_| {
+            let from = if rng.below(2) == 0 { approving } else { names };
+            let typed = from[rng.below(from.len())].as_str();
+            // A name typed after a slash gets one of the slashes a harness may take; a name that is
+            // itself the mark of a command, such as a shorthand of one character, is typed alone.
+            let (slash, name) = match typed.strip_prefix('/') {
+                Some(name) => (rng.pick(SLASH), name),
+                None => ("", typed),
+            };
+            let mut spelt = String::new();
+            let mut rest = name;
+            while let Some(c) = rest.chars().next() {
+                if let Some((pair, ways)) = pairs.iter().find(|(p, _)| rest.starts_with(p))
+                    && rng.below(3) == 0
+                {
+                    spelt.push_str(rng.pick(ways));
+                    rest = &rest[pair.len()..];
+                    continue;
+                }
+                let ways = other(c);
+                match rng.below(4) {
+                    0 if !ways.is_empty() => spelt.push_str(rng.pick(ways)),
+                    1 => spelt.extend(c.to_uppercase()),
+                    _ => spelt.push(c),
+                }
+                rest = &rest[c.len_utf8()..];
+            }
+            let before: String = (0..rng.below(3)).map(|_| rng.pick(BEFORE)).collect();
+            format!("{before}{slash}{spelt}{}", rng.pick(AFTER))
+        })
+        .collect()
+}
+
+/// Runs `program` in `image`, read only and with no network, with the repository's `folder`
+/// mounted read only at `at`, hands it `input` and gives back what it prints, read as JSON.
+fn in_image(image: &str, folder: &str, at: &str, program: &[&str], input: &Value) -> Value {
+    use std::io::Write;
+    let mut child = Std::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "-i",
+            "--read-only",
+            "--tmpfs",
+            "/tmp",
+            "--network",
+            "none",
+            "--entrypoint",
+        ])
+        .arg(program[0])
+        .arg("-v")
+        .arg(format!("{}:{at}:ro", repository().join(folder).display()))
+        .arg(image)
+        .args(&program[1..])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("docker runs");
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(input.to_string().as_bytes()).unwrap();
+    drop(stdin);
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{program:?} in {image} failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout).expect("the program prints JSON")
+}
+
+/// What a harness's own code says about its commands, for `core_reads_as`.
+struct Known {
+    /// The commands the plugin lists, as its hello gives them.
+    listed: Vec<ApprovalCommand>,
+    /// Every name the harness's registry gives a command, as it is typed.
+    names: Vec<String>,
+    /// Every name of the commands that need the right to approve, as it is typed.
+    approving: Vec<String>,
+    /// The whole answer, for what a harness gives beyond these.
+    all: Value,
+}
+
+/// Asks the harness's own code, with `privileged` the registry's identifiers of the commands
+/// that need the right to approve. Each must be in the registry: a command renamed or removed
+/// there fails here, rather than quietly dropping out of the check.
+fn known(harness: &str, ask: &dyn Fn(&Value) -> Value, privileged: &[&str]) -> Known {
+    let all = ask(&json!({ "privileged": privileged }));
+    assert_eq!(
+        all["missing"],
+        json!([]),
+        "{harness}'s command registry has none of these, which this test takes to need the right to approve"
+    );
+    let strings = |v: &Value| -> Vec<String> { serde_json::from_value(v.clone()).unwrap() };
+    let known = Known {
+        listed: listed(&all["listed"]),
+        names: strings(&all["names"]),
+        approving: strings(&all["approving"]),
+        all,
+    };
+    assert!(
+        known.approving.len() >= privileged.len(),
+        "{harness} names each command: {:?}",
+        known.approving
+    );
+    known
+}
+
+/// Checks the core against what a harness itself reads, from the harness's own code: every
+/// character it skips as space before a command (`spaces`), every character it lowercases or
+/// folds to plain letters (`cases`, each with what it becomes), and for each message, the command
+/// it runs, of those that need the right to approve (`read`, null for none). The messages are
+/// `registered`, each of which the harness must read as such a command, then `texts`. The core
+/// must ask for that right for each of them; it may ask more often, never less (D-150).
+fn core_reads_as(
+    harness: &str,
+    known: &Known,
+    registered: &[String],
+    texts: &[String],
+    read: &Value,
+) {
+    let commands = &known.listed;
+    let first = commands
+        .iter()
+        .find(|c| c.counts == Position::Start)
+        .expect("a command that counts at the start");
+    for space in known.all["spaces"].as_array().unwrap() {
+        let c = char::from_u32(space.as_u64().unwrap() as u32).unwrap();
+        let text = format!("{c}{}", first.command);
+        assert_eq!(
+            needed_for(&text, commands),
+            Right::Approve,
+            "{harness} skips U+{:04X} as space before a command",
+            c as u32
+        );
+    }
+    for case in known.all["cases"].as_array().unwrap() {
+        let c = char::from_u32(case[0].as_u64().unwrap() as u32).unwrap();
+        for became in case[1].as_array().unwrap() {
+            let became = became.as_str().unwrap();
+            let command = ApprovalCommand {
+                command: format!("/x{became}y"),
+                counts: Position::Start,
+            };
+            assert_eq!(
+                needed_for(&format!("/x{c}y"), &[command]),
+                Right::Approve,
+                "{harness} reads U+{:04X} as {became:?}",
+                c as u32
+            );
+        }
+    }
+    let read = read.as_array().unwrap();
+    assert_eq!(read.len(), registered.len() + texts.len());
+    // Every name the harness gives a command that needs the right to approve, each on its own,
+    // before any message made at random.
+    for (text, command) in registered.iter().zip(read) {
+        let command = command.as_str().unwrap_or_else(|| {
+            panic!("{harness} does not read {text:?} as a command that needs the right to approve")
+        });
+        assert_eq!(
+            needed_for(text, commands),
+            Right::Approve,
+            "{harness} reads {text:?} as {command}, which needs the right to approve"
+        );
+    }
+    let mut approving = 0;
+    for (text, command) in texts.iter().zip(&read[registered.len()..]) {
+        if let Some(command) = command.as_str() {
+            approving += 1;
+            assert_eq!(
+                needed_for(text, commands),
+                Right::Approve,
+                "{harness} reads {text:?} as {command}, which needs the right to approve"
+            );
+        }
+    }
+    assert!(
+        approving * 20 > texts.len(),
+        "{harness} read only {approving} of {} messages as a command that needs the right to approve",
+        texts.len()
+    );
+}
+
+/// Each name alone, and followed by more.
+fn each_alone(names: &[String]) -> Vec<String> {
+    (names.iter())
+        .flat_map(|n| [n.clone(), format!("{n} x")])
+        .collect()
+}
+
+/// The commands a plugin lists, as its hello gives them.
+fn listed(list: &Value) -> Vec<ApprovalCommand> {
+    (list.as_array().unwrap().iter())
+        .map(|c| ApprovalCommand {
+            command: c["command"].as_str().unwrap().to_string(),
+            counts: match c["counts"].as_str() {
+                Some("start") => Position::Start,
+                _ => Position::Anywhere,
+            },
+        })
+        .collect()
+}
+
+/// The Hermes commands that need the right to approve, by their names in its registry
+/// (`hermes_cli.commands.COMMAND_REGISTRY`), whatever the plugin lists.
+const HERMES_APPROVING: &[&str] = &[
+    "approve",
+    "deny",
+    "yolo",
+    "approvals",
+    "memory",
+    "skills",
+    "codex-runtime",
+];
+
+/// Hermes's own reading of a typed command (`MessageEvent.get_command`, then its command registry,
+/// `hermes_cli.commands.resolve_command`), from its source in the Hermes image, and the commands
+/// the plugin lists (`marmot_hermes.adapter`, from this checkout).
+const HERMES_READS: &str = r#"
+import json, sys
+sys.path.insert(0, "/plugin")
+from gateway.platforms.event import MessageEvent
+from hermes_cli.commands import COMMAND_REGISTRY, resolve_command
+from marmot_hermes.adapter import CAPABILITIES
+asked = json.load(sys.stdin)
+privileged = set(asked["privileged"])
+def reading(text):
+    name = MessageEvent(text=text).get_command()
+    command = resolve_command(name) if name else None
+    return command.name if command is not None and command.name in privileged else None
+def plain(s):
+    return s.isascii() and s.isalpha()
+every = [chr(n) for n in range(0x110000) if not 0xD800 <= n < 0xE000]
+cases = []
+for c in every:
+    became = sorted({s for s in (c.lower(), c.casefold()) if plain(s)}) if not c.isascii() else []
+    if became:
+        cases.append([ord(c), became])
+print(json.dumps({
+    "listed": CAPABILITIES["approval_commands"],
+    "missing": sorted(privileged - {c.name for c in COMMAND_REGISTRY}),
+    "names": sorted({"/" + n for c in COMMAND_REGISTRY for n in (c.name, *c.aliases)}),
+    "approving": sorted({"/" + n for c in COMMAND_REGISTRY if c.name in privileged for n in (c.name, *c.aliases)}),
+    "spaces": [ord(c) for c in every if c.isspace()],
+    "cases": cases,
+    "read": [reading(t) for t in asked.get("texts", [])],
+}))
+"#;
+
+/// The core asks for the right to approve for every message Hermes reads as a command that needs
+/// it, whatever space comes before it and whatever case it is in (D-150): first for every name
+/// Hermes's registry gives such a command, then on messages made from all its names. Hermes's
+/// code is only read: the image runs read only, with no network, and the plugin's folder mounted
+/// read only.
+#[test]
+#[ignore = "needs Docker, and the network to build the image the first time"]
+fn the_core_reads_a_command_at_least_as_hermes_does() {
+    let image = hermes_image();
+    let program = ["python3", "-c", HERMES_READS];
+    let ask = |input: &Value| in_image(&image, "python", "/plugin", &program, input);
+    let known = known("Hermes", &ask, HERMES_APPROVING);
+    let registered = each_alone(&known.approving);
+    let (mut rng, seed) = Rng::new();
+    let texts = command_texts(&known.names, &known.approving, &mut rng);
+    let all: Vec<&String> = registered.iter().chain(&texts).collect();
+    let read = ask(&json!({ "privileged": HERMES_APPROVING, "texts": all }));
+    eprintln!("seed {seed}");
+    core_reads_as("Hermes", &known, &registered, &texts, &read["read"]);
+}
+
+/// The OpenClaw commands that need the right to approve, by their keys in its command registry,
+/// whatever the plugin lists. A command a plugin of OpenClaw's adds is not in that registry, and
+/// is not checked here.
+const OPENCLAW_APPROVING: &[&str] = &[
+    "approve",
+    "exec",
+    "elevated",
+    "config",
+    "debug",
+    "bash",
+    "allowlist",
+    "acp",
+    "mcp",
+    "plugins",
+];
+
+/// OpenClaw's own reading of a message, from the OpenClaw the image installs: a command at the
+/// start (`resolveTextCommand`, from its command registry, `getChatCommands`), the shorthand it
+/// runs as a shell command (`isBangCommandInput`), and a directive anywhere in the message
+/// (`parseInlineSessionDirectives`, D-047). The last is internal to its module, so a copy of the
+/// module, its imports pointed back at OpenClaw's own, exports it. The commands the plugin lists
+/// are its `CAPABILITIES`, from this checkout, as Node runs the plugin's source.
+const OPENCLAW_READS: &str = r#"
+const fs = await import("node:fs");
+const dist = "/usr/local/lib/node_modules/openclaw/dist/";
+const files = (pattern) => fs.readdirSync(dist).filter((f) => pattern.test(f)).map((f) => dist + f);
+const fail = (what) => { throw new Error(`OpenClaw has no ${what}`); };
+// A module's code can be split over several files of one name: the function is in one of them.
+const named = async (pattern, name) => {
+  for (const f of files(pattern)) {
+    const found = Object.values(await import(f)).find((v) => v?.name === name);
+    if (found) return found;
+  }
+  return fail(name);
+};
+const resolve = await named(/^commands-registry-normalize-.*\.mjs$/, "resolveTextCommand");
+const getChatCommands = await named(/^commands-registry\.data-.*\.mjs$/, "getChatCommands");
+const isBang = await named(/^command-detection-.*\.mjs$/, "isBangCommandInput");
+const defining = files(/^get-reply-.*\.mjs$/).find((f) => fs.readFileSync(f, "utf8").includes("function parseInlineSessionDirectives("))
+  ?? fail("parseInlineSessionDirectives");
+const source = fs.readFileSync(defining, "utf8")
+  .replace(/((?:from|import)\s*\(?\s*")\.\//g, (_, start) => start + dist);
+fs.writeFileSync("/tmp/get-reply.mjs", source
+  + "\nexport { parseInlineSessionDirectives as parseInline, REPLY_DIRECTIVE_COMMANDS as directives };\n");
+const { parseInline, directives } = await import("/tmp/get-reply.mjs");
+const { CAPABILITIES } = await import("/plugin/connector.ts");
+let input = "";
+for await (const part of process.stdin) input += part;
+const asked = JSON.parse(input);
+const privileged = new Set(asked.privileged);
+const commands = getChatCommands();
+const inline = Object.keys(directives).filter((key) => privileged.has(key));
+const reading = (text) => {
+  if (privileged.has("bash") && isBang(text)) return "bash";
+  const found = resolve(text);
+  if (found && privileged.has(found.command.key)) return found.command.key;
+  const parsed = parseInline(text);
+  return inline.find((key) => parsed[directives[key]]) ?? null;
+};
+const typed = (keep) => commands.filter(keep).flatMap((c) => [...c.textAliases, ...(c.key === "bash" ? ["!"] : [])]);
+const every = [];
+for (let n = 0; n < 0x110000; n++) if (n < 0xd800 || n >= 0xe000) every.push(String.fromCodePoint(n));
+const plain = (s) => /^[A-Za-z]+$/.test(s);
+console.log(JSON.stringify({
+  listed: CAPABILITIES.approval_commands,
+  missing: asked.privileged.filter((key) => !commands.some((c) => c.key === key)),
+  names: [...new Set(typed(() => true))].sort(),
+  approving: [...new Set(typed((c) => privileged.has(c.key)))].sort(),
+  inline: [...new Set(typed((c) => inline.includes(c.key)))].sort(),
+  spaces: every.filter((c) => c.trim() === "").map((c) => c.codePointAt(0)),
+  cases: every.filter((c) => c.codePointAt(0) >= 128 && plain(c.toLowerCase())).map((c) => [c.codePointAt(0), [c.toLowerCase()]]),
+  read: (asked.texts ?? []).map(reading),
+}));
+"#;
+
+/// As for Hermes, with OpenClaw's own reading of a command at the start of a message, and of a
+/// directive anywhere in it: each name of each directive that needs the right to approve is
+/// checked within ordinary text too.
+#[test]
+#[ignore = "needs Docker, and the network to build the image the first time"]
+fn the_core_reads_a_command_at_least_as_openclaw_does() {
+    let image = openclaw_image();
+    let program = ["node", "--input-type=module", "-e", OPENCLAW_READS];
+    let ask = |input: &Value| in_image(&image, "packages/openclaw/src", "/plugin", &program, input);
+    let known = known("OpenClaw", &ask, OPENCLAW_APPROVING);
+    let inline: Vec<String> = serde_json::from_value(known.all["inline"].clone()).unwrap();
+    assert!(
+        !inline.is_empty(),
+        "OpenClaw has directives that need the right to approve"
+    );
+    let mut registered = each_alone(&known.approving);
+    for name in &inline {
+        registered.extend([
+            format!("hi {name} on"),
+            format!("hi\n{name}"),
+            format!("ok {name}: on"),
+            format!("two words\t{}", name.to_uppercase()),
+        ]);
+    }
+    let (mut rng, seed) = Rng::new();
+    let texts = command_texts(&known.names, &known.approving, &mut rng);
+    let all: Vec<&String> = registered.iter().chain(&texts).collect();
+    let read = ask(&json!({ "privileged": OPENCLAW_APPROVING, "texts": all }));
+    eprintln!("seed {seed}");
+    core_reads_as("OpenClaw", &known, &registered, &texts, &read["read"]);
 }

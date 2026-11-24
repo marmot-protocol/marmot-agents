@@ -709,7 +709,7 @@ The seven flags, and where each plugin stands. Neither plugin states the eighth,
 | `resume` | yes or no | Whether the gateway's own store outlives a restart | Yes, in its state folder | Yes, in Hermes's home |
 | `approvals` | yes or no | Yes only when the gateway hands its channel approvals | Yes, once forwarding is on, which the installer turns on for Marmot chats when it is off | Yes, as approval cards, which the plugin claims |
 | `files_in` | `none`, `images` or `any` | `none`, as for every driver until files passed to a harness are designed ([D-083](../decisions.md#d-083-the-core-passes-no-files-to-a-harness-yet)) | `none` | `none` |
-| `approval_commands` | a list | The gateway's commands that approve or widen what the agent may do, read in its source | `/approve`, `/exec`, `/elevated`, `/elev` anywhere; `/config` and eight more at the start ([the OpenClaw plugin](#the-openclaw-plugin)) | `/approve`, `/deny`, `/yolo`, `/approvals`, `/memory`, `/skills`, `/codex-runtime`, at the start |
+| `approval_commands` | a list | The gateway's commands that approve or widen what the agent may do, read in its source | `/approve`, `/exec`, `/elevated`, `/elev` anywhere; `/config` and nine more at the start ([the OpenClaw plugin](#the-openclaw-plugin)) | `/approve`, `/deny`, `/yolo`, `/approvals`, `/memory`, `/skills`, `/codex-runtime`, `/codex_runtime`, at the start |
 
 What a channel plugin needs that a driver does not is the socket's chat section, for the gateway's own message
 tools ([D-020](../decisions.md#d-020-the-socket-speaks-agent-control-v3-with-a-clean-cutover),
@@ -808,9 +808,10 @@ the translator reads in use what it was tested on:
 Its capabilities: it can interrupt; a message sent during a turn waits (`queue`); OpenClaw picks the sessions
 (`own`), and they outlive a restart, in its state folder; approvals come to the chat; no files yet. Its
 approval commands are `/approve`, `/exec`, `/elevated` and `/elev` anywhere in a message, and `/config`,
-`/debug`, `/bash`, `!`, `/allowlist`, `/acp`, `/codex`, `/mcp` and `/plugins` at the start. These are as
+`/debug`, `/bash`, `!`, `/allowlist`, `/acp`, `/codex`, `/mcp`, `/plugins` and `/plugin` at the start. These are as
 [the contract's table](#channel-plugins) has them, accepted with it
-([D-118](../decisions.md#d-118-the-channel-plugin-contract-is-accepted-as-written)).
+([D-118](../decisions.md#d-118-the-channel-plugin-contract-is-accepted-as-written)), and each by every name
+OpenClaw runs it under ([D-150](../decisions.md#d-150-the-core-matches-a-typed-command-as-the-harness-reads-it-failing-towards-asking-for-the-right-to-approve)).
 
 ## The Hermes plugin
 
@@ -925,7 +926,8 @@ Hermes flags is always put to a person, never decided by a second model.
 Its capabilities: it can interrupt; a message sent during a turn is folded into it (`fold`); Hermes keeps its
 own sessions, and they survive a restart; approvals come to the chat; it takes no files yet. Its approval
 commands, each counted at the start of a message, are `/approve`, `/deny`, `/yolo`, `/approvals`, `/memory`,
-`/skills` and `/codex-runtime`.
+`/skills`, `/codex-runtime` and `/codex_runtime`, each name Hermes runs a command under
+([D-150](../decisions.md#d-150-the-core-matches-a-typed-command-as-the-harness-reads-it-failing-towards-asking-for-the-right-to-approve)).
 
 ## Adding a harness
 

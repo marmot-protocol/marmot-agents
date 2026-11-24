@@ -1037,5 +1037,8 @@ export const CAPABILITIES: Capabilities = {
     { command: "/codex", counts: "start" },
     { command: "/mcp", counts: "start" },
     { command: "/plugins", counts: "start" },
+    // Each by every name OpenClaw's command registry gives it, since OpenClaw runs a command by any of
+    // them (D-150).
+    { command: "/plugin", counts: "start" },
   ],
 };
