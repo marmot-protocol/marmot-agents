@@ -828,14 +828,13 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// already, so the chat is told nothing it may not be true of. One that ended meanwhile is told
     /// as it went. One waiting was never offered to MDK: the chat is told it was not sent.
     /// Every upload and read has ended before any of it is told, so a save that fails while it
-    /// is told leaves none going.
+    /// is told leaves none going. After a save that fails, the chat is told nothing more, but the
+    /// driver still hears of every file, and then the save's error is the core's.
     async fn end_files(&mut self) -> Result<(), Unsaved> {
+        let mut unsaved = None;
+        let mut ended = Vec::new();
         for (done, stopped) in self.files.stop().await {
-            if stopped {
-                self.driver.file_sent(done.id, done.result).await;
-            } else {
-                self.file_done(done).await?;
-            }
+            ended.push((done, !stopped));
         }
         for file in std::mem::take(&mut self.files.waiting) {
             let result = Err(Refusal {
@@ -844,9 +843,18 @@ impl<D: Driver, M: Side> Core<D, M> {
                 unanswered: false,
             });
             let (id, chat) = (file.id, file.chat);
-            self.file_done(Uploaded { id, chat, result }).await?;
+            ended.push((Uploaded { id, chat, result }, true));
         }
-        Ok(())
+        for (done, tell_chat) in ended {
+            if tell_chat && unsaved.is_none() {
+                if let Err(error) = self.file_done(done).await {
+                    unsaved = Some(error);
+                }
+            } else {
+                self.driver.file_sent(done.id, done.result).await;
+            }
+        }
+        unsaved.map_or(Ok(()), Err)
     }
 
     /// The folders a file from `chat` may come from (D-090): those the settings list, or else the
@@ -863,15 +871,17 @@ impl<D: Driver, M: Side> Core<D, M> {
     }
 
     /// Tells the driver how a file went. A refusal is shown in the chat, naming no path (D-090).
+    /// The driver hears of it even when the notice cannot be saved.
     async fn file_done(&mut self, done: Uploaded) -> Result<(), Unsaved> {
+        let mut saved = Ok(());
         if let Err(refusal) = &done.result {
             // Its kind only: a path or a file name is never logged (D-071).
             eprintln!("marmot-agent: a file was not sent ({:?})", refusal.reason);
             let acts = self.conversation.file_refused(&done.chat, refusal);
-            self.carry_out(acts).await?;
+            saved = self.carry_out(acts).await;
         }
         self.driver.file_sent(done.id, done.result).await;
-        Ok(())
+        saved
     }
 
     /// Seconds on the core's clock.
@@ -2554,6 +2564,35 @@ mod tests {
                 "the chat hears of the waiting files only"
             );
         }
+    }
+
+    // A save that fails while the core tells the chat of the files it stopped with still tells
+    // the driver of every one of them, and then stops with the save's error (D-145).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_failed_save_as_the_core_stops_still_answers_every_file() {
+        let failing = Arc::new(AtomicBool::new(false));
+        let fail = failing.clone();
+        let store = move |dir: &Path| Store::failing_when(dir, move |_| fail.load(SeqCst)).0;
+        let mut desk = Desked::start_with(store, None);
+        desk.side.say("go");
+        let chat = desk.prompted().await.chat.id;
+        let asked = FILES_AT_ONCE + 3;
+        desk.send_files(&chat, 0, asked);
+        until(|| (desk.side.uploading().0 == FILES_AT_ONCE).then_some(())).await;
+        failing.store(true, SeqCst);
+        let _ = desk.stop.send(());
+        let ran = tokio::time::timeout(Duration::from_secs(5), desk.running)
+            .await
+            .expect("the core ends at once")
+            .unwrap();
+        assert_eq!(
+            ran,
+            Err(UNSAVED.to_string()),
+            "the save's error is the core's"
+        );
+        let told = desk.told.lock().unwrap().clone();
+        assert_eq!(told.len(), asked, "each file was answered: {told:?}");
+        assert!(told.iter().all(|(_, r)| r.is_err()), "none was sent");
     }
 
     // A file being read when the core stops, or when its driver ends, is waited for: no read the
