@@ -989,6 +989,7 @@ impl Driver for Pi {
             approvals: false,
             files_in: FilesIn::None,
             subagents: false,
+            stop_subagent: false,
             approval_commands: Vec::new(),
         }
     }
@@ -1048,7 +1049,7 @@ impl Driver for Pi {
     async fn control(&mut self, control: Control) -> Result<(), Refusal> {
         let request = control.request.clone();
         match &control.action {
-            Action::Interrupt { turn } => {
+            Action::Interrupt { turn, .. } => {
                 let chat = (self.chats.iter())
                     .find(|(_, c)| c.translator.turn() == Some(turn.as_str()))
                     .map(|(chat, _)| chat.clone())

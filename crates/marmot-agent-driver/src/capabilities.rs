@@ -30,6 +30,11 @@ pub struct Capabilities {
     /// does not, a subagent stays a `tool` item in the agent's own activity, and anything it asks
     /// shows as the agent's own.
     pub subagents: bool,
+    /// Whether a Stop can stop one subagent, and those it started, while the turn and the other
+    /// subagents go on (D-123, D-149). Only with `subagents`. Where it cannot, a Stop in a
+    /// subagent's thread stops the whole turn, as a Stop in the main chat does, and the core names
+    /// no subagent on it.
+    pub stop_subagent: bool,
     /// Typed commands that need the right to approve (D-032, D-047). The core checks every
     /// message against this list, because a typed message otherwise needs only the right to
     /// prompt. A driver always states it, even when it is empty: leaving it out by mistake would

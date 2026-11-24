@@ -113,6 +113,7 @@ subagent_scenarios!(
     stop_stops_every_subagent,
     stop_after_the_turn_has_ended,
     stop_stops_nested_subagents,
+    stop_stops_one_subagent,
     dies_with_subagents_running,
     new_session_with_subagents_running,
     restart_with_subagents_running,

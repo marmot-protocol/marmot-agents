@@ -242,7 +242,10 @@ async fn an_interrupt_is_settled_when_the_turn_ends() {
     let stop = Control {
         request: "r-2".into(),
         by: alice(),
-        action: Action::Interrupt { turn: "t1".into() },
+        action: Action::Interrupt {
+            turn: "t1".into(),
+            subagent: None,
+        },
     };
     codex.control(stop).await.unwrap();
     fake.answer("turn/interrupt", json!({})).await;
@@ -525,7 +528,10 @@ async fn an_interrupt_is_settled_once() {
     let stop = Control {
         request: "r-7".into(),
         by: alice(),
-        action: Action::Interrupt { turn: "t1".into() },
+        action: Action::Interrupt {
+            turn: "t1".into(),
+            subagent: None,
+        },
     };
     codex.control(stop).await.unwrap();
     let interrupt = fake.hear().await;
@@ -948,7 +954,10 @@ async fn a_turn_closed_because_codex_stopped_does_not_settle_an_interrupt() {
     let stop = Control {
         request: "r-13".into(),
         by: alice(),
-        action: Action::Interrupt { turn: "t1".into() },
+        action: Action::Interrupt {
+            turn: "t1".into(),
+            subagent: None,
+        },
     };
     codex.control(stop).await.unwrap();
     assert_eq!(fake.hear().await["method"], "turn/interrupt");
@@ -1174,7 +1183,10 @@ fn stop_t1() -> Control {
     Control {
         request: "r1".into(),
         by: alice(),
-        action: Action::Interrupt { turn: "t1".into() },
+        action: Action::Interrupt {
+            turn: "t1".into(),
+            subagent: None,
+        },
     }
 }
 
@@ -1631,7 +1643,10 @@ fn stop_of(request: &str, turn: &str) -> Control {
     Control {
         request: request.into(),
         by: alice(),
-        action: Action::Interrupt { turn: turn.into() },
+        action: Action::Interrupt {
+            turn: turn.into(),
+            subagent: None,
+        },
     }
 }
 
@@ -2255,4 +2270,115 @@ async fn a_late_end_keeps_the_subject_given_while_the_next_turn_runs() {
     assert_eq!(state, State::Running, "the next turn runs");
     assert!(text.contains("/root/a"), "the description survives: {text}");
     assert!(text.contains("the disk is full"), "{text}");
+}
+
+/// A Stop of the subagent whose `task` item is `task`, under turn `t1`.
+fn stop_one(request: &str, task: &str) -> Control {
+    Control {
+        request: request.into(),
+        by: alice(),
+        action: Action::Interrupt {
+            turn: "t1".into(),
+            subagent: Some(task.into()),
+        },
+    }
+}
+
+/// The turns of `written` that were interrupted: each one's thread and turn.
+fn interrupted(written: &[Value]) -> Vec<(String, String)> {
+    let mut stopped: Vec<(String, String)> = (written.iter())
+        .filter(|m| m["method"] == "turn/interrupt")
+        .map(|m| {
+            let p = &m["params"];
+            (
+                p["threadId"].as_str().unwrap().into(),
+                p["turnId"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    stopped.sort();
+    stopped
+}
+
+/// A turn running with subagents `sub1` and `sub2` running under it, and `sub3`, which `sub1`
+/// started, running too.
+async fn three_subagents() -> (Codex, Fake) {
+    let (mut codex, mut fake) = running().await;
+    until(&mut codex, is_turn(State::Running)).await;
+    fake.say(started_by("a1", "sub1")).await;
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    fake.say(started_by("a2", "sub2")).await;
+    fake.say(sub_turn("turn/started", "sub2", "st2", "inProgress"))
+        .await;
+    fake.say(
+        json!({"method": "thread/started", "params": {"thread": {"id": "sub3",
+        "parentThreadId": "sub1"}}}),
+    )
+    .await;
+    fake.say(sub_turn("turn/started", "sub3", "st3", "inProgress"))
+        .await;
+    read_so_far(&mut codex, &mut fake).await;
+    (codex, fake)
+}
+
+// Stop in a subagent's thread stops that subagent and the subagents it started, and nothing else:
+// the person's turn and the other subagent go on. The Stop is settled once both have ended
+// (D-123, D-149).
+#[tokio::test]
+async fn a_stop_of_one_subagent_stops_it_and_those_it_started_alone() {
+    let (codex, mut fake) = three_subagents().await;
+    let driver = tokio::spawn(async move {
+        let mut codex = codex;
+        codex.control(stop_one("r1", "task:sub1")).await.unwrap();
+        codex
+    });
+    let mut codex = driver.await.unwrap();
+    let (written, _) = read_so_far(&mut codex, &mut fake).await;
+    assert_eq!(
+        interrupted(&written),
+        [("sub1".into(), "st1".into()), ("sub3".into(), "st3".into())],
+        "{written:?}"
+    );
+    for m in written.iter().filter(|m| m["method"] == "turn/interrupt") {
+        fake.say(json!({"id": m["id"], "result": {}})).await;
+    }
+    fake.say(sub_turn("turn/completed", "sub3", "st3", "interrupted"))
+        .await;
+    assert!(
+        within(&mut codex, settles_r1).await.is_none(),
+        "settled while sub1 runs"
+    );
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "interrupted"))
+        .await;
+    let events = within(&mut codex, settles_r1).await;
+    let events = events.expect("settled once both have ended");
+    let settling = events.last().unwrap();
+    assert!(matches!(settling.event.body(), Body::Task(_)));
+    assert_eq!(settling.event.header().state, State::Cancelled);
+}
+
+// A Stop of a nested subagent stops it alone, not the subagent that started it.
+#[tokio::test]
+async fn a_stop_of_a_nested_subagent_leaves_its_parent() {
+    let (codex, mut fake) = three_subagents().await;
+    let driver = tokio::spawn(async move {
+        let mut codex = codex;
+        codex.control(stop_one("r1", "task:sub3")).await.unwrap();
+        codex
+    });
+    let mut codex = driver.await.unwrap();
+    let (written, _) = read_so_far(&mut codex, &mut fake).await;
+    assert_eq!(interrupted(&written), [("sub3".into(), "st3".into())]);
+}
+
+// A Stop of a subagent the driver does not know is refused as having nothing to do: it does not
+// stop the whole turn instead.
+#[tokio::test]
+async fn a_stop_of_an_unknown_subagent_stops_nothing() {
+    let (mut codex, mut fake) = three_subagents().await;
+    let refused = codex.control(stop_one("r1", "task:sub9")).await;
+    assert_eq!(refused.unwrap_err().reason, Reason::NothingToDo);
+    let (written, _) = read_so_far(&mut codex, &mut fake).await;
+    assert!(interrupted(&written).is_empty(), "{written:?}");
 }

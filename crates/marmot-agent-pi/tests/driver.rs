@@ -145,7 +145,10 @@ async fn an_interrupt_is_settled_by_the_end_of_its_turn() {
     let interrupt = Control {
         request: "r-1".into(),
         by: person(),
-        action: Action::Interrupt { turn },
+        action: Action::Interrupt {
+            turn,
+            subagent: None,
+        },
     };
     pi.control(interrupt).await.unwrap();
     let tool = until(&mut pi, |e| matches!(e.event.body(), Body::Tool(_))).await;
@@ -638,6 +641,7 @@ async fn an_interrupt_pi_stops_before_acting_on_has_failed() {
         by: person(),
         action: Action::Interrupt {
             turn: started.event.header().turn.clone().unwrap(),
+            subagent: None,
         },
     };
     pi.control(interrupt).await.unwrap();

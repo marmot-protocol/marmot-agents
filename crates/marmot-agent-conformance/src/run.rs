@@ -12,6 +12,7 @@ use marmot_agent_driver::{
     Action, Answer, Chat, ChatId, Control, Driver, Emitted, Given, MessageId, Output, Person,
     Prompt, Refusal, Reply, RequestId, SendFile,
 };
+use marmot_agent_events::ItemId;
 use marmot_agent_events::body::Effect;
 use marmot_agent_events::{Body, SessionId, TurnId};
 use std::future::Future;
@@ -438,7 +439,24 @@ impl<S: Subject> Run<S> {
         chat_id: &str,
         turn: &TurnId,
     ) -> Result<(RequestId, Result<(), Refusal>), Violation> {
-        let action = Action::Interrupt { turn: turn.clone() };
+        let action = Action::Interrupt {
+            turn: turn.clone(),
+            subagent: None,
+        };
+        self.control(chat_id, action).await
+    }
+
+    /// Interrupts only the subagent whose `task` item is `subagent`, under `turn` (D-149).
+    pub async fn interrupt_subagent(
+        &mut self,
+        chat_id: &str,
+        turn: &TurnId,
+        subagent: &ItemId,
+    ) -> Result<(RequestId, Result<(), Refusal>), Violation> {
+        let action = Action::Interrupt {
+            turn: turn.clone(),
+            subagent: Some(subagent.clone()),
+        };
         self.control(chat_id, action).await
     }
 

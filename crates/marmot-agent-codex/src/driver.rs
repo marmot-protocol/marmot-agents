@@ -103,8 +103,9 @@ struct Written {
 /// stopped as its start is read, while the Stop waits.
 #[derive(Clone)]
 struct Stopping {
-    /// The turn the Stop names: a subagent's turn under it is stopped too.
-    root: String,
+    /// The turn the Stop names: a subagent's turn under it is stopped too. `None` for a Stop of
+    /// one subagent (D-149), which stops only the threads it names and those they start.
+    root: Option<String>,
     /// The threads being stopped: a subagent one of them started is stopped too.
     threads: Vec<String>,
     /// The turns it waits for, still running.
@@ -968,9 +969,12 @@ impl Codex {
             let Effect::Ended(stopping) = effect else {
                 continue;
             };
-            let under = match &root {
-                Some(root) => *root == stopping.root,
-                None => (parent.as_ref()).is_some_and(|p| stopping.threads.contains(p)),
+            let started_by_one = (parent.as_ref()).is_some_and(|p| stopping.threads.contains(p));
+            let under = match (&root, &stopping.root) {
+                (Some(root), Some(stopped)) => root == stopped,
+                (None, Some(_)) => started_by_one,
+                // A Stop of one subagent: its own next turn, or one of a subagent it started.
+                (_, None) => started_by_one || stopping.threads.iter().any(|t| t == thread),
             };
             if under && !stopping.waits.contains(&part) {
                 stopping.waits.push(part.clone());
@@ -982,7 +986,10 @@ impl Codex {
             return;
         }
         let id = self.id();
-        let action = Action::Interrupt { turn: turn.into() };
+        let action = Action::Interrupt {
+            turn: turn.into(),
+            subagent: None,
+        };
         let c = &self.chats[chat];
         let built = (c.translator(Some(thread))).map(|t| t.control(id, &action, &self.setup));
         let Some(Ok(text)) = built else {
@@ -1116,6 +1123,7 @@ impl Codex {
                 let id = self.id();
                 let action = Action::Interrupt {
                     turn: turn.as_str().into(),
+                    subagent: None,
                 };
                 if let Ok(text) = translator.control(id, &action, &self.setup) {
                     let then = Written {
@@ -1578,13 +1586,55 @@ impl Codex {
             }
             if !parts.is_empty() {
                 let stopping = Stopping {
-                    root: turn.to_string(),
+                    root: Some(turn.to_string()),
                     threads: stopping,
                     waits: parts,
                     refused: Vec::new(),
                 };
                 return Some((chat.clone(), stopping));
             }
+        }
+        None
+    }
+
+    /// The turns a Stop of the subagent whose `task` item is `task` stops (D-123, D-149): that
+    /// subagent's running turn and those of the subagents it started, at any depth, each parent
+    /// before the subagents it started. Nothing else: not the person's turn, nor another subagent.
+    fn under_subagent(&self, task: &str) -> Option<(ChatId, Stopping)> {
+        for (chat, c) in &self.chats {
+            let Some(top) = (c.subagents.iter())
+                .find(|(_, t)| t.task_item().as_deref() == Some(task))
+                .map(|(thread, _)| thread.clone())
+            else {
+                continue;
+            };
+            let mut threads: Vec<&String> = c.subagents.keys().collect();
+            threads.sort_by_key(|t| (c.depth(t), t.to_string()));
+            let mut stopping = vec![top];
+            let mut parts = Vec::new();
+            for thread in threads {
+                let own = *thread == stopping[0];
+                let started = (c.parents.get(thread)).is_some_and(|p| stopping.contains(p));
+                if !own && !started {
+                    continue;
+                }
+                if !own {
+                    stopping.push(thread.clone());
+                }
+                if let Some(turn) = c.subagents[thread].turn() {
+                    parts.push((Some(thread.clone()), turn.to_string()));
+                }
+            }
+            if parts.is_empty() {
+                return None;
+            }
+            let stopping = Stopping {
+                root: None,
+                threads: stopping,
+                waits: parts,
+                refused: Vec::new(),
+            };
+            return Some((chat.clone(), stopping));
         }
         None
     }
@@ -1611,6 +1661,7 @@ impl Codex {
             let (who, turn) = part.clone();
             let action = Action::Interrupt {
                 turn: turn.as_str().into(),
+                subagent: None,
             };
             let setup = self.setup.clone();
             let build = |t: &Translator, id| t.control(id, &action, &setup);
@@ -1641,6 +1692,7 @@ impl Driver for Codex {
             approvals: true,
             files_in: FilesIn::Images,
             subagents: true,
+            stop_subagent: true,
             approval_commands: Vec::new(),
         }
     }
@@ -1711,9 +1763,13 @@ impl Driver for Codex {
         let request = control.request.clone();
         let (chat, effect) = match &control.action {
             // The turn and every subagent under it, which Codex does not stop with it (D-117).
-            Action::Interrupt { turn } => {
-                let (chat, stopping) =
-                    (self.under(turn.as_str())).ok_or_else(|| Refusal::new(Reason::NothingToDo))?;
+            // Or one subagent and those it started, and nothing else (D-149).
+            Action::Interrupt { turn, subagent } => {
+                let stopping = match subagent {
+                    Some(task) => self.under_subagent(task.as_str()),
+                    None => self.under(turn.as_str()),
+                };
+                let (chat, stopping) = stopping.ok_or_else(|| Refusal::new(Reason::NothingToDo))?;
                 return self.stop(&request, &chat, stopping).await;
             }
             Action::NewSession { chat, session } => {

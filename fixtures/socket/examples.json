@@ -213,7 +213,7 @@
       }
     },
     {
-      "name": "control: a new session, ending one, in the folder the chat chose",
+      "name": "control: interrupt one subagent",
       "from": "core",
       "message": {
         "jsonrpc": "2.0",
@@ -221,6 +221,27 @@
         "method": "control",
         "params": {
           "request": "r-c1",
+          "by": {
+            "id": "u-1",
+            "name": "Alice"
+          },
+          "action": {
+            "type": "interrupt",
+            "turn": "t-4",
+            "subagent": "task-2"
+          }
+        }
+      }
+    },
+    {
+      "name": "control: a new session, ending one, in the folder the chat chose",
+      "from": "core",
+      "message": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "control",
+        "params": {
+          "request": "r-c2",
           "by": {
             "id": "u-1",
             "name": "Alice"
@@ -243,10 +264,10 @@
       "from": "core",
       "message": {
         "jsonrpc": "2.0",
-        "id": 7,
+        "id": 8,
         "method": "control",
         "params": {
-          "request": "r-c2",
+          "request": "r-c3",
           "by": {
             "id": "u-1",
             "name": "Alice"
@@ -268,10 +289,10 @@
       "from": "core",
       "message": {
         "jsonrpc": "2.0",
-        "id": 8,
+        "id": 9,
         "method": "control",
         "params": {
-          "request": "r-c3",
+          "request": "r-c4",
           "by": {
             "id": "u-1",
             "name": "Alice"
@@ -290,10 +311,10 @@
       "from": "core",
       "message": {
         "jsonrpc": "2.0",
-        "id": 9,
+        "id": 10,
         "method": "control",
         "params": {
-          "request": "r-c4",
+          "request": "r-c5",
           "by": {
             "id": "u-1",
             "name": "Alice"

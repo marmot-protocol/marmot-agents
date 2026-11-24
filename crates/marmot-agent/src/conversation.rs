@@ -913,7 +913,18 @@ impl Conversation {
                     None => self.open_turn(&chat.id.0),
                 };
                 let turn = turn.ok_or(Refusal::new(Reason::NothingToDo))?;
-                control(Action::Interrupt { turn })
+                // Stop in a subagent's thread names that subagent, to a driver that can stop one
+                // alone: the item's own, when it is a subagent's `task` item, or the subagent it
+                // belongs to (D-123, D-149). Any other stops the whole turn.
+                let caps = &self.capabilities;
+                let subagent =
+                    (target.filter(|_| caps.subagents && caps.stop_subagent)).and_then(|t| match t
+                        .body()
+                    {
+                        Body::Task(_) => Some(t.header().item.clone()),
+                        _ => t.header().subagent.clone(),
+                    });
+                control(Action::Interrupt { turn, subagent })
             }
             Asked::NewSession => {
                 let session = match target {

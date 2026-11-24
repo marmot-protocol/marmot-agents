@@ -945,6 +945,7 @@ impl marmot_agent_driver::Driver for Listener {
             approvals: false,
             files_in: marmot_agent_driver::FilesIn::None,
             subagents: false,
+            stop_subagent: false,
             approval_commands: Vec::new(),
         }
     }
@@ -1228,6 +1229,7 @@ impl marmot_agent_driver::Driver for Scripted {
             approvals: false,
             files_in: marmot_agent_driver::FilesIn::None,
             subagents: true,
+            stop_subagent: false,
             approval_commands: Vec::new(),
         }
     }

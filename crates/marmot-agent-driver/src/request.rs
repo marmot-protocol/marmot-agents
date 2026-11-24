@@ -245,10 +245,15 @@ pub struct Control {
 /// the harness published in its session item.
 #[derive(Clone, PartialEq, Eq)]
 pub enum Action {
-    /// Stop the running turn.
+    /// Stop the running turn, or one subagent under it.
     Interrupt {
-        /// The turn to stop.
+        /// The turn to stop: the person's turn, which every subagent under it is under too.
         turn: TurnId,
+        /// For a Stop in a subagent's thread: that subagent's `task` item. Only it and the
+        /// subagents it started are stopped, and the turn goes on (D-123, D-149). `None` stops
+        /// the turn and every subagent under it. The core names one only to a driver that says it
+        /// can stop one ([`Capabilities::stop_subagent`](crate::Capabilities::stop_subagent)).
+        subagent: Option<ItemId>,
     },
     /// End a chat's session, if it has one, and start a fresh one.
     NewSession {
@@ -278,7 +283,11 @@ pub enum Action {
 impl fmt::Debug for Action {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Interrupt { turn } => f.debug_struct("Interrupt").field("turn", turn).finish(),
+            Self::Interrupt { turn, subagent } => f
+                .debug_struct("Interrupt")
+                .field("turn", turn)
+                .field("subagent", subagent)
+                .finish(),
             Self::NewSession { chat, session } => f
                 .debug_struct("NewSession")
                 .field("chat", chat)

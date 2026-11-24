@@ -1026,7 +1026,7 @@ impl World {
         let ms = self.ms();
         let h = &mut self.harness;
         match &control.action {
-            DriverAction::Interrupt { turn } => {
+            DriverAction::Interrupt { turn, .. } => {
                 match (h.scripts.iter_mut())
                     .find(|s| s.turn == turn.as_str() && s.stage != Stage::Done)
                 {

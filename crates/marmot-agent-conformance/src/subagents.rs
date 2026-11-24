@@ -15,6 +15,7 @@
 use crate::check::{Violation, broke};
 use crate::fake::Heard;
 use crate::run::{Run, Subject, turn_ended, waiting};
+use marmot_agent_driver::Driver;
 use marmot_agent_driver::{Emitted, MessageId, RequestId};
 use marmot_agent_events::body::ToolKind;
 use marmot_agent_events::{Body, State};
@@ -415,6 +416,67 @@ pub async fn stop_after_the_turn_has_ended<S: Subject>(subject: S) -> Result<(),
 pub async fn stop_stops_nested_subagents<S: Subject>(subject: S) -> Result<(), Violation> {
     let mut run = Run::start(subject).await;
     stop(&mut run, "#nest #sleep", 2, false).await?;
+    run.end().await
+}
+
+/// Stop in a nested subagent's thread, by a driver that says it can stop one subagent: only that
+/// subagent is interrupted, and the Stop is settled by its end; the agent's turn and the subagent
+/// that started it are not stopped, and go on as they choose (D-123, D-149).
+pub async fn stop_stops_one_subagent<S: Subject>(subject: S) -> Result<(), Violation> {
+    const ONE: &str = "D-149";
+    let mut run = Run::start(subject).await;
+    if !run.driver.capabilities().stop_subagent {
+        return Err(broke(
+            ONE,
+            "a driver whose harness stops one subagent says so",
+        ));
+    }
+    taken(run.prompt("c-1", "#nest #sleep").await?, "the prompt")?;
+    let nested = run
+        .wait("L2", "the nested subagent's task", |e| {
+            task(true)(e) && e.event.header().subagent.is_some()
+        })
+        .await?;
+    run.wait("L2", "the nested subagent's command", |e| {
+        command_running(e)
+            && e.event.header().subagent.as_ref() == Some(&nested.event.header().item)
+    })
+    .await?;
+    let header = nested.event.header().clone();
+    let turn = header
+        .turn
+        .ok_or_else(|| broke(FLAT, "a subagent's task names no turn"))?;
+    let before = interrupts_heard(&run.subject.fake().heard());
+    let (request, result) = run.interrupt_subagent("c-1", &turn, &header.item).await?;
+    taken(result, "the interrupt")?;
+    let settled = run
+        .wait("L2", "the stop's settling", |e| {
+            e.settles.contains(&request)
+        })
+        .await?;
+    run.drain(Duration::from_millis(100)).await;
+    run.checkpoint().await?;
+    let heard = interrupts_heard(&run.subject.fake().heard()) - before;
+    if heard != 1 {
+        return Err(broke(ONE, format!("{heard} turns were interrupted, not 1")));
+    }
+    if settled.event.header().item != header.item || task(true)(&settled) {
+        return Err(broke(
+            ONE,
+            "the stop was not settled by the nested subagent's end",
+        ));
+    }
+    // The turn and the outer subagent were not stopped: each goes on, and may end as it chooses
+    // once the subagent it waited for has stopped, as the fake's does.
+    let stopped = (items(&run.seen, "c-1").into_iter())
+        .filter(|e| matches!(e.event.body(), Body::Turn(_) | Body::Task(_)))
+        .filter(|e| e.event.header().item != header.item)
+        .filter(|e| e.event.header().state == State::Cancelled)
+        .count();
+    if stopped > 0 {
+        let detail = format!("{stopped} of the turn and the outer subagent were stopped");
+        return Err(broke(ONE, detail));
+    }
     run.end().await
 }
 

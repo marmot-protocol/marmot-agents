@@ -265,7 +265,10 @@ fn the_driver_sends_what_the_recorded_client_sent() {
                     }
                     Some("turn/interrupt") => {
                         let turn = params["turnId"].as_str().unwrap();
-                        let action = Action::Interrupt { turn: turn.into() };
+                        let action = Action::Interrupt {
+                            turn: turn.into(),
+                            subagent: None,
+                        };
                         let built = translator.control(id, &action, &Setup::new("/w"));
                         Some((json(&built.expect("an interrupt")), recorded.clone()))
                     }

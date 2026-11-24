@@ -2342,7 +2342,7 @@ impl Translator {
             return refuse(Reason::Busy);
         }
         match action {
-            DriverAction::Interrupt { turn } => {
+            DriverAction::Interrupt { turn, .. } => {
                 let (Some(thread), Some(running)) = (&self.session, &self.turn) else {
                     return refuse(Reason::NothingToDo);
                 };
