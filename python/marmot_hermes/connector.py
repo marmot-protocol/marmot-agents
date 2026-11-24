@@ -532,7 +532,7 @@ class Connector:
             # Hermes's own call for a platform's answer: it says whether the question was still
             # waiting, and the question is closed only once Hermes has taken the answer.
             clarify_id = item.removeprefix("question:")
-            if not self.hermes.resolve_question(clarify_id, parts[0]):
+            if not self.hermes.resolve_question(clarify_id, parts[0], text_of(by.get("id"))):
                 raise Refusal("not_waiting")
             chat.answered.add(item)
             if request:

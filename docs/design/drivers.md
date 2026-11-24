@@ -871,7 +871,9 @@ does, and feeds it to the chat's translator:
 - An approval arrives as Hermes's approval card, because the plugin claims approval buttons, and is answered
   on the card with the choice Hermes offered, by the card's request id. A question is answered through the
   call Hermes gives a platform for it, by the question's id, and is closed only once Hermes has taken the
-  answer. A request to confirm a typed command is answered through Hermes's own call for it, by the
+  answer. Both are answered only for someone Hermes's own check of who may answer, with the chat's Hermes
+  settings, lets
+  ([D-151](../decisions.md#d-151-the-hermes-plugin-asks-hermess-own-check-of-who-may-answer-an-approval-card-or-a-question)). A request to confirm a typed command is answered through Hermes's own call for it, by the
   confirmation's id, never by typing `/approve`, and only for someone Hermes's own check of who may answer
   lets: it answers that confirmation while it waits, and nothing else. The core is answered as soon as Hermes
   has taken it, and the command runs on by itself; Hermes's reply to it, which Hermes hands back once the

@@ -3090,8 +3090,9 @@ listed in [what the plugin relies on](reference/hermes-messages.md#what-the-plug
 and the Hermes move-over test fails when it changes. Issue #153.
 
 Not closed: a `/approve` that a person who may only prompt types while a confirmation waits still has the gap
-D-049 describes, as typed text always will. Answers to an approval card and to a question do not yet ask Hermes's
-check with the chat's settings (`approval_refusal` and `clarify_refusal`); that is for a change of its own.
+D-049 describes, as typed text always will. Answers to an approval card and to a question ask Hermes's check with
+the chat's settings too, as [D-151](#d-151-the-hermes-plugin-asks-hermess-own-check-of-who-may-answer-an-approval-card-or-a-question)
+records.
 
 A limit for the pilot: the plugin keeps its own record of which confirmation waits, and for whom, beside
 Hermes's. When two people confirm commands at once in one group chat, that record and Hermes's can disagree, so one
@@ -3218,6 +3219,27 @@ and these tests do not check it.
 JavaScript, skip more characters as space and lowercase by Unicode's rules, and each runs a command by names the
 connector did not list. So a message a harness read as a command that needs the right to approve could pass the
 core as plain text, from someone who may only prompt.
+
+Decided 2026-11-24 by the project owner.
+
+## D-151 The Hermes plugin asks Hermes's own check of who may answer an approval card or a question
+
+**Decision.** Before it answers an approval card, the plugin asks Hermes's own check of who may answer it,
+`approval_refusal`, with the person who answered, the card's request, the choice and the chat's Hermes settings, and
+it hands Hermes's call for the card the same settings. Before it answers a question the agent asked, it asks
+`clarify_refusal` the same way. Hermes's own platforms with buttons ask both. A person Hermes refuses is refused as
+`not_supported`, with Hermes's words, as for a confirmation
+([D-146](#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id)), and the card or the question
+still waits for someone Hermes lets answer it. Where Hermes's settings name no admins for the chat and narrow no
+approvers, Hermes refuses no one, and nothing changes.
+
+The core's own rights are checked first, as before: answering an approval still needs the right to approve, and
+a question the right to prompt ([D-032](#d-032-every-action-needs-one-of-two-rights)). Hermes's check can only
+refuse more.
+
+**Why.** The plugin answered an approval card without the chat's settings, and a question without asking Hermes
+at all, so a Hermes whose owner limited who may approve, or who may answer for someone else, let through someone
+it would refuse on its own platforms. Both calls are on Hermes's list of what a platform plugin may use.
 
 Decided 2026-11-24 by the project owner.
 

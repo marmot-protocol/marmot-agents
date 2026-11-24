@@ -62,10 +62,14 @@ class FakeHermes:
             self.answer(text, message_id)
 
     def resolve_card(self, session_key, choice, request_id, actor):
+        if actor in self.refuses:
+            raise Refusal("not_supported", self.refuses[actor])
         self.cards.append((session_key, choice, request_id, actor))
         return self.resolves
 
-    def resolve_question(self, clarify_id, text):
+    def resolve_question(self, clarify_id, text, actor):
+        if actor in self.refuses:
+            raise Refusal("not_supported", self.refuses[actor])
         self.questions.append((clarify_id, text))
         if isinstance(self.question_answer, Exception):
             raise self.question_answer
@@ -256,6 +260,20 @@ class Connected(unittest.IsolatedAsyncioTestCase):
                                                   "given": {"choice": "c3"}})
         self.assertEqual(again.exception.reason, "already_answered")
 
+    async def test_an_approval_hermes_does_not_let_that_person_answer_still_waits(self):
+        """D-151. Hermes's own check of who may answer the card refuses Bob, with Hermes's words, and the
+        approval waits for someone it lets answer."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), card("rq", "rm -rf /work/x"))
+        self.hermes.refuses = {"u-2": "⛔ /approve is admin-only here."}
+        with self.assertRaises(Refusal) as refused:
+            await self.connector.serve("answer", {"request": "r-1", "item": "approval:rq", "by": BOB,
+                                                  "given": {"choice": "c0"}})
+        self.assertEqual((refused.exception.reason, refused.exception.detail), ("not_supported", "⛔ /approve is admin-only here."))
+        self.assertEqual((self.hermes.cards, self.of("approval")[-1]["state"]), ([], "waiting"))
+        await self.connector.serve("answer", {"request": "r-2", "item": "approval:rq", "by": ALICE, "given": {"choice": "c0"}})
+        self.assertEqual(self.of("approval")[-1]["settles"], ["r-2"])
+
     async def test_an_approval_hermes_no_longer_holds_is_refused(self):
         await self.connector.serve("prompt", prompt("m-1"))
         self.feed(started("m-1"), card("rq", "rm -rf /work/x"))
@@ -348,6 +366,19 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.of("question")[-1]["state"], "waiting")
         # Nothing was taken, so the answer can be given again.
         self.hermes.question_answer = True
+        await self.answer("r-2")
+        self.assertEqual(self.of("question")[-1]["settles"], ["r-2"])
+
+    async def test_a_question_hermes_does_not_let_that_person_answer_still_waits(self):
+        """D-151. Hermes's own check of who may answer refuses Bob, with Hermes's words, and the question
+        waits for someone it lets answer."""
+        await self.asked()
+        self.hermes.refuses = {"u-2": "Only Alice can answer this."}
+        with self.assertRaises(Refusal) as refused:
+            await self.connector.serve("answer", {"request": "r-1", "item": "question:q1", "by": BOB,
+                                                  "given": {"questions": [{"question": "q0", "options": ["o1"]}]}})
+        self.assertEqual((refused.exception.reason, refused.exception.detail), ("not_supported", "Only Alice can answer this."))
+        self.assertEqual((self.hermes.questions, self.of("question")[-1]["state"]), ([], "waiting"))
         await self.answer("r-2")
         self.assertEqual(self.of("question")[-1]["settles"], ["r-2"])
 

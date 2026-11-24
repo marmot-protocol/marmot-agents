@@ -432,6 +432,72 @@ class Confirmations(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.invalid, [])
 
 
+class AdminChecks(unittest.TestCase):
+    """D-151. Before it answers an approval card or an agent's question, the adapter asks Hermes's own
+    check of who may answer it (`gateway.approval_actor`), with the chat's Hermes settings, as Hermes's
+    own platforms do: someone Hermes refuses is refused with Hermes's words, and nothing is answered."""
+
+    def setUp(self):
+        self.asked, self.resolved = [], []
+        actor = types.ModuleType("gateway.approval_actor")
+        admins = lambda extra: (extra or {}).get("group_allow_admin_from") or []  # noqa: E731
+
+        def approval_refusal(session_key, actor_id, *, admin_ids=(), request_id=None, extra=None, choice=None,
+                             admitted=True):
+            self.asked.append(("approval", session_key, actor_id, request_id, choice, extra))
+            return None if not admins(extra) or actor_id in admins(extra) else "\0admin-only:approve"
+
+        def clarify_refusal(clarify_id, actor_id, *, admin_ids=(), extra=None, admitted=True):
+            self.asked.append(("clarify", clarify_id, actor_id, extra))
+            return None if not admins(extra) or actor_id in admins(extra) else "Alice"
+
+        actor.approval_refusal, actor.clarify_refusal = approval_refusal, clarify_refusal
+        actor.refusal_text = lambda r: f"⛔ /{r.split(':')[-1]} is admin-only here." if r.startswith("\0") else f"Only {r} can answer this."
+        approval = types.ModuleType("tools.approval")
+
+        def resolve_gateway_approval_card(session_key, choice, request_id, *, actor_id=None, admin_ids=(),
+                                          extra=None, admitted=True):
+            self.resolved.append(("card", session_key, choice, request_id, actor_id, extra))
+            return 1
+        approval.resolve_gateway_approval_card = resolve_gateway_approval_card
+        clarify = types.ModuleType("tools.clarify_gateway")
+
+        def resolve_gateway_clarify(clarify_id, text):
+            self.resolved.append(("clarify", clarify_id, text))
+            return True
+        clarify.resolve_gateway_clarify = resolve_gateway_clarify
+        patch = mock.patch.dict(sys.modules, {"tools": types.ModuleType("tools"), "tools.approval": approval,
+                                              "tools.clarify_gateway": clarify, "gateway.approval_actor": actor})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.extra = {}
+        with mock.patch.dict("os.environ", {"HERMES_HOME": self.folder.name}):
+            self.adapter = MarmotAdapter(types.SimpleNamespace(extra=self.extra))
+
+    def test_an_approval_card_is_answered_only_for_someone_hermes_lets_answer_it(self):
+        self.extra["group_allow_admin_from"] = ["u-admin"]
+        with self.assertRaises(Refusal) as refused:
+            self.adapter.resolve_card("agent:main:marmot:group:c-2:u-1", "once", "rq", "u-2")
+        self.assertEqual((refused.exception.reason, refused.exception.detail), ("not_supported", "⛔ /approve is admin-only here."))
+        self.assertEqual(self.resolved, [], "nothing answered: the card still waits")
+        self.assertEqual(self.asked, [("approval", "agent:main:marmot:group:c-2:u-1", "u-2", "rq", "once", self.extra)])
+        self.assertEqual(self.adapter.resolve_card("agent:main:marmot:group:c-2:u-1", "once", "rq", "u-admin"), 1)
+        self.assertEqual(self.resolved, [("card", "agent:main:marmot:group:c-2:u-1", "once", "rq", "u-admin", self.extra)],
+                         "Hermes's own call is given the chat's settings too")
+
+    def test_a_question_is_answered_only_for_someone_hermes_lets_answer_it(self):
+        self.extra["group_allow_admin_from"] = ["u-admin"]
+        with self.assertRaises(Refusal) as refused:
+            self.adapter.resolve_question("k-1", "blue", "u-2")
+        self.assertEqual((refused.exception.reason, refused.exception.detail), ("not_supported", "Only Alice can answer this."))
+        self.assertEqual(self.resolved, [])
+        self.assertTrue(self.adapter.resolve_question("k-1", "blue", "u-admin"))
+        self.assertEqual(self.resolved, [("clarify", "k-1", "blue")])
+        self.assertEqual(self.asked[-1], ("clarify", "k-1", "u-admin", self.extra))
+
+
 class AnsweringCore:
     """The core's side of the socket, on a real Unix socket: it takes the hello, sends one `answer`, keeps
     the plugin's response to it in `answered`, and goes away."""
