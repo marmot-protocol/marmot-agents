@@ -3789,7 +3789,7 @@ fn subagent_words(state: State, text: &str) -> AgentEvent {
     AgentEvent::new(header, event.body().clone(), None).unwrap()
 }
 
-// MDK takes no durable edit of a thread message (D-149): a subagent's words go out once, when they
+// MDK takes no durable edit of a thread message (D-142): a subagent's words go out once, when they
 // are complete, as a thread message under its task item; a version while they are still being
 // written goes nowhere. A later complete version is MDK's plain edit of that message, which names
 // no token.
@@ -3882,6 +3882,88 @@ fn a_subagents_words_with_no_thread_left_go_in_the_main_chat() {
     };
     assert_eq!((edit, thread), (Some(hex_id(2)), None));
     assert!(token.edits.is_some(), "a durable edit of a chat message");
+}
+
+/// Sends a subagent's `task` item `task:s1` for the direct chat, as `first`, and its end.
+fn a_finished_subagent(talk: &mut Conversation, chat: &str, first: &str) {
+    sent(
+        talk,
+        chat,
+        event("task:s1", State::Running, subagent_task()),
+        first,
+    );
+    sent(
+        talk,
+        chat,
+        event("task:s1", State::Done, subagent_task()),
+        "e-task-done",
+    );
+}
+
+// Where a subagent's words go is chosen when they are first handed to MDK, and kept for every
+// later try under that token and for the receipt: MDK may already have taken them as a thread
+// message, and a try asking for a chat message would be refused (D-142). The `task` item aging
+// out of the core's records between the two tries changes nothing.
+#[test]
+fn a_subagents_words_keep_their_place_when_the_task_item_is_forgotten_between_tries() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    a_finished_subagent(&mut talk, &chat, &hex_id(1).0);
+    talk.emitted(emitted(&chat, subagent_words(State::Done, "found it")));
+    let group = direct().group;
+    let (token, what) = talk.next_send(&group).unwrap();
+    assert!(matches!(&what, Sending::Words { thread: Some(t), .. } if t.parent == Some(hex_id(1))));
+    assert!(talk.attempting(&token.send, 100));
+
+    // Past what the core keeps of forgotten items too.
+    finish_many(&mut talk, &chat, 5000);
+    let task = format!("{chat}/task:s1");
+    let saved = serde_json::to_value(talk.saved()).unwrap();
+    let forgotten = saved["forgotten"].as_array().unwrap();
+    assert!(
+        !kept_items(&talk).contains(&task) && !forgotten.iter().any(|f| f["key"] == task.as_str()),
+        "nothing is kept of the task item"
+    );
+    let (again, what) = talk.next_send(&group).expect("tried again");
+    assert_eq!(again.mdk, token.mdk, "under the same token");
+    let Sending::Words { key, thread, .. } = what else {
+        panic!("not words: {what:?}");
+    };
+    assert_eq!(
+        thread.and_then(|t| t.parent),
+        Some(hex_id(1)),
+        "still in its thread"
+    );
+    talk.sent(&key, hex_id(2));
+
+    // The receipt keeps the place too: a later version is MDK's plain edit of a thread message.
+    talk.emitted(emitted(
+        &chat,
+        subagent_words(State::Done, "found it, again"),
+    ));
+    let (token, what) = talk.next_send(&group).unwrap();
+    assert!(
+        matches!(&what, Sending::Words { edit: Some(e), thread: Some(_), .. } if *e == hex_id(2))
+    );
+    assert_eq!(token.edits, None, "a thread message's edit names no token");
+}
+
+// A subagent's work that comes after its `task` item was forgotten still goes in its thread, from
+// what the core keeps of a forgotten item (D-121).
+#[test]
+fn a_subagents_work_after_its_task_item_was_forgotten_goes_in_its_thread() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    a_finished_subagent(&mut talk, &chat, &hex_id(1).0);
+    finish_many(&mut talk, &chat, 3000);
+    assert!(!kept_items(&talk).contains(&format!("{chat}/task:s1")));
+    talk.emitted(emitted(&chat, subagent_words(State::Done, "late words")));
+    let (_, what) = talk.next_send(&direct().group).unwrap();
+    let Sending::Words { thread, .. } = what else {
+        panic!("not words: {what:?}");
+    };
+    let thread = thread.expect("in its thread");
+    assert_eq!((thread.root, thread.parent), (hex_id(1), Some(hex_id(1))));
 }
 
 // A subagent's work whose task item the chat was not sent goes in the main chat, as any item does:

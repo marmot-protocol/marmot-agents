@@ -422,6 +422,18 @@ struct Queued {
     /// in turn is replaced once, even when it settles nothing, so the chat is told of the gap.
     #[serde(default)]
     tells: bool,
+    /// Where it was placed when first handed to MDK under its token now, which MDK may have
+    /// taken: every later try under that token, and its receipt, place it the same, whatever
+    /// the core has forgotten since (D-142). `None` until then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    placed: Option<Placed>,
+}
+
+/// Where a send was placed: in a subagent's thread, or, with none, in the main chat.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+struct Placed {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thread: Option<Thread>,
 }
 
 impl Sending {
@@ -450,6 +462,10 @@ struct Forgotten {
     version: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     thread: Option<Thread>,
+    /// Its group: a subagent's work that comes after its `task` item was forgotten still goes in
+    /// its thread. `None` from an older core's state file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    group: Option<GroupKey>,
 }
 
 impl Record {
@@ -1486,6 +1502,8 @@ impl Conversation {
             if let Sending::Item { item, .. } = &mut queued.what {
                 item.first = None;
             }
+            // MDK did not take it: it is placed again.
+            queued.placed = None;
         }
     }
 
@@ -1495,9 +1513,11 @@ impl Conversation {
     /// stay there in every later version (D-142). The caller saves this before the send is tried
     /// again.
     pub fn thread_gone(&mut self, token: &str) {
-        let Some(queued) = self.saved.outbox.iter().find(|q| q.token == token) else {
+        let Some(queued) = self.saved.outbox.iter_mut().find(|q| q.token == token) else {
             return;
         };
+        // MDK did not take it: it is placed again, in the main chat.
+        queued.placed = None;
         let key = queued.what.key().to_string();
         if let Some(record) = self.saved.items.get_mut(&key)
             && record.first.is_none()
@@ -1526,6 +1546,8 @@ impl Conversation {
             if let Sending::Words { edit, .. } = &mut self.saved.outbox[at].what {
                 *edit = None;
             }
+            // MDK did not take it: it is placed again.
+            self.saved.outbox[at].placed = None;
             return;
         }
         let queued = self.saved.outbox.remove(at).expect("found");
@@ -1656,15 +1678,20 @@ impl Conversation {
     /// The send named `token` is about to be handed to MDK, `now` (seconds since 1970). Whether
     /// that is new, the first try under its token, and so to be saved before it is: what MDK
     /// takes is on disk first, with the token it is taken under and when it was first tried.
+    /// Where it goes is chosen now, and kept for every try under its token (D-142).
     pub fn attempting(&mut self, token: &str, now: u64) -> bool {
-        match self.saved.outbox.iter_mut().find(|q| q.token == token) {
-            Some(queued) if queued.tried_at.is_none() => {
-                queued.attempted = true;
-                queued.tried_at = Some(now);
-                true
-            }
-            _ => false,
+        let Some(at) = self.saved.outbox.iter().position(|q| q.token == token) else {
+            return false;
+        };
+        if self.saved.outbox[at].tried_at.is_some() {
+            return false;
         }
+        let thread = self.thread_of(self.saved.outbox[at].what.key());
+        let queued = &mut self.saved.outbox[at];
+        queued.attempted = true;
+        queued.tried_at = Some(now);
+        queued.placed = Some(Placed { thread });
+        true
     }
 
     /// MDK took the send named `token` and dropped it before it went out: nothing of it went,
@@ -1675,6 +1702,7 @@ impl Conversation {
             Some(queued) => {
                 queued.rejected += 1;
                 queued.tried_at = None;
+                queued.placed = None;
                 queued.rejected
             }
             None => 0,
@@ -1701,7 +1729,10 @@ impl Conversation {
 
     fn as_sent(&self, queued: &Queued) -> (Token, Sending) {
         let mut what = queued.what.clone();
-        let place = self.thread_of(what.key());
+        let place = match &queued.placed {
+            Some(placed) => placed.thread.clone(),
+            None => self.thread_of(what.key()),
+        };
         match &mut what {
             Sending::Item { item, .. } => item.thread = place,
             Sending::Words { thread, .. } => *thread = place,
@@ -1775,9 +1806,11 @@ impl Conversation {
     pub fn sent(&mut self, key: &str, event: EventKey) {
         let mut closed = None;
         let mut token = None;
+        let mut placed = None;
         if let Some(at) = self.saved.outbox.iter().position(|q| q.what.key() == key) {
             token = Some(self.mdk_token(&self.saved.outbox[at]));
             let queued = self.saved.outbox.remove(at).expect("found");
+            placed = queued.placed.clone();
             if let Sending::Item { item, .. } = &queued.what {
                 closed = Some(!matches!(
                     item.event.header().state,
@@ -1785,7 +1818,8 @@ impl Conversation {
                 ));
             }
         }
-        let thread = self.thread_of(key);
+        // Where it was placed when MDK was handed it, which is where it went.
+        let thread = placed.map_or_else(|| self.thread_of(key), |p| p.thread);
         if let Some(record) = self.saved.items.get_mut(key) {
             if record.first.is_none() {
                 record.first = Some(event);
@@ -1814,12 +1848,20 @@ impl Conversation {
         if record.main_chat {
             return None;
         }
-        let task = self.saved.items.get(record.subagent.as_deref()?)?;
-        if task.group != record.group {
+        let subagent = record.subagent.as_deref()?;
+        // The `task` item, or what is kept of it once forgotten.
+        let (group, first, thread) = match self.saved.items.get(subagent) {
+            Some(task) => (Some(&task.group), &task.first, &task.thread),
+            None => {
+                let task = self.saved.forgotten.iter().find(|f| f.key == subagent)?;
+                (task.group.as_ref(), &task.first, &task.thread)
+            }
+        };
+        if group != Some(&record.group) {
             return None;
         }
-        let parent = task.first.clone()?;
-        let root = (task.thread.as_ref()).map_or_else(|| parent.clone(), |t| t.root.clone());
+        let parent = first.clone()?;
+        let root = (thread.as_ref()).map_or_else(|| parent.clone(), |t| t.root.clone());
         Some(Thread {
             root,
             parent: Some(parent),
@@ -1856,6 +1898,7 @@ impl Conversation {
             tried_at: None,
             last_resort,
             tells: false,
+            placed: None,
         });
         Act::Send {
             group: group.clone(),
@@ -2103,6 +2146,7 @@ impl Conversation {
                     first_token: record.first_token,
                     version: record.version,
                     thread: record.thread,
+                    group: Some(record.group),
                 });
             }
             while self.saved.forgotten.len() > KEPT {
