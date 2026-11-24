@@ -709,10 +709,22 @@ interface (`BasePlatformAdapter`, `MessageEvent`, `SendResult`) and `ctx.registe
 | What | Read for | Published? | What fails when it changes |
 | --- | --- | --- | --- |
 | `COMMAND_REGISTRY` and `_is_gateway_available`, from `hermes_cli.commands` | The commands a session item lists ([D-044](../decisions.md#d-044-a-connector-supplies-what-its-harness-does-not-say)) | No; Hermes's plugin check warns about the import | The move-over test, `a_hermes_install_moves_over` in `crates/marmot-agent/tests/import_gateways.rs`, which runs real Hermes on the scripted model double and checks that the session item lists `/new` (added 2026-11-24). The plugin logs a warning and the session item lists no commands; `python/tests` fake it |
-| `resolve_gateway_approval_card`, from `tools.approval` | Answering an approval card, as the person who answered | Not known | The approval step of the end-to-end scenario: the command is never run |
-| `resolve_gateway_clarify`, from `tools.clarify_gateway` | Answering a question | Not known | The same move-over test: the scripted model asks a question with Hermes's `clarify` tool, the person answers with the second choice, and the model must be handed it as the tool's `user_response` (added 2026-11-24). `python/tests` fake the call |
+| `resolve_gateway_approval_card`, from `tools.approval` | Answering an approval card, as the person who answered | Yes (read on 2026-11-24, below) | The approval step of the end-to-end scenario: the command is never run |
+| `resolve_gateway_clarify`, from `tools.clarify_gateway` | Answering a question | Yes (read on 2026-11-24, below) | The same move-over test: the scripted model asks a question with Hermes's `clarify` tool, the person answers with the second choice, and the model must be handed it as the tool's `user_response` (added 2026-11-24). `python/tests` fake the call |
+| `clear_if_stale`, `get_pending` and `resolve`, from `tools.slash_confirm` | Answering a request to confirm a command by its id ([D-146](../decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id)) | No (read on 2026-11-24, below) | The move-over test, `a_hermes_install_moves_over`, which runs real Hermes on the scripted model double, asks for a new session from the chat and answers Hermes's request to confirm it. `python/tests` stand in for the module as the pinned commit has it |
 | `t`, from `agent.i18n` | Telling from a reply to `/model` or `/new` whether Hermes took it ([above](#how-the-plugin-tells-what-became-of-a-command)) | Not known | For `/model`: the move-over test, `a_hermes_install_moves_over` in `crates/marmot-agent/tests/import_gateways.rs`, which runs real Hermes on the scripted model double, switches the model and resets it, and fails when a reply is not known as taken (`gateway.model.switched`, `gateway.model.reset_done`); the end-to-end scenario's last step does the same on a real model. For `/new`: the scenario's new session, step 4. `python/tests` read the pinned English texts from `python/tests/hermes_phrases.json`. The plugin refuses both controls as `not_supported` when `t` knows none of the keys |
 | `_mark_connected` and `_mark_disconnected`, helpers of `BasePlatformAdapter` | Telling Hermes the platform is up or down | Not known; the leading underscore suggests not (inferred) | The scenario's first step, if a change makes the call fail: the platform then does not start (inferred, not tried) |
 
 Each row now has a test that fails when it changes, as [D-118](../decisions.md#d-118-the-channel-plugin-contract-is-accepted-as-written)
 asks; the last two were added on 2026-11-24. The move-over test runs in CI's merge-queue tier, not on a pull request.
+
+Read on 2026-11-24 in Hermes's source at commit `40d1e95f`, in the image `tools/record/hermes` builds: Hermes's
+list of what a plugin may import, `hermes_cli/data/plugin_api.json`, names `resolve_gateway_approval_card` and
+`resolve_gateway_clarify` under "Public helpers for platform plugins", with `slash_confirm_refusal` from
+`gateway.approval_actor`, and names nothing of `tools.slash_confirm`. The base adapter's `send_slash_confirm` tells
+a platform with buttons to resolve the confirmation through `GatewayRunner._resolve_slash_confirm`, which that
+commit does not have; Hermes's own Telegram and relay platforms call `tools.slash_confirm.resolve`. That call runs
+the confirmation only when the id it is given is the one waiting in the session, once, and within 300 seconds of
+the request (`DEFAULT_TIMEOUT_SECONDS`); it checks no sender. The text a person types is read by
+`_hm_slash_confirm_reply` in `gateway/run_inbound.py`, which leaves it to an approval when one waits in the
+session (`has_blocking_approval`) and otherwise answers whichever confirmation waits there, by no id.

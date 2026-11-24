@@ -377,7 +377,9 @@ Four things made the rule in D-032 too weak as it stood. The first three were de
    ([D-047](../decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts)).
 2. **One word does two jobs.** In Hermes `/approve` answers an approval, and also confirms `/new`. So a
    request to confirm a command is a `question` item, and a typed `/approve` is an approval answer only while
-   an approval is waiting ([D-048](../decisions.md#d-048-a-request-to-confirm-a-command-is-a-question)).
+   an approval is waiting ([D-048](../decisions.md#d-048-a-request-to-confirm-a-command-is-a-question)). An
+   answer to that question goes to Hermes by the confirmation's id, so it can answer nothing else
+   ([D-146](../decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id)).
 3. **An approval can cover other people.** After one person answered "always", the same command from another
    person ran with no prompt, in both gateways. In Hermes the standing approval covers the reason a command
    was flagged, such as "delete in root path", and not the one command. A standing approval stays an
@@ -462,6 +464,7 @@ In the core:
 | A secret answer is accepted only in a two-person chat | [D-041](../decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat) |
 | A listed command says where in a message it counts | [D-047](../decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts) |
 | A request to confirm a command is a question | [D-048](../decisions.md#d-048-a-request-to-confirm-a-command-is-a-question) |
+| Hermes's plugin answers a confirmation by its id, so the answer resolves it or nothing | [D-146](../decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id) |
 | A standing approval is an ordinary approval answer | [D-049](../decisions.md#d-049-a-standing-approval-is-an-ordinary-approval-answer) |
 | A chat can move a coding harness to another folder, by someone who may approve, from its next session | [D-101](../decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder) |
 | An answer or a control the agent cannot read is refused, as `not_supported` or `invalid`, after the right | [D-140](../decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused) |
