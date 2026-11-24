@@ -97,12 +97,8 @@ def main() -> int:
     found = check(args.folder, args.today, args.max_age, None if args.offline else npm_latest)
     for line in found:
         print(line)
-    return 1 if args.strict and failing(found) else 0
-
-
-def failing(found: list[str]) -> bool:
-    """Whether the findings fail a `--strict` run: only a stale cassette does (D-127)."""
-    return any(line.startswith("stale:") for line in found)
+    # Only a stale cassette fails a `--strict` run (D-127).
+    return 1 if args.strict and any(line.startswith("stale:") for line in found) else 0
 
 
 if __name__ == "__main__":

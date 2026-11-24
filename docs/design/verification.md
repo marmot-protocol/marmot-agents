@@ -498,8 +498,9 @@ failing scenario, and the fix is in one file. Scripts drift with the scenarios t
 **Staleness.** `tools/model_double/check_cassettes.py` reports each cassette older than 14 days, and each harness
 whose latest release (npm) is newer than the version a cassette was recorded with. It needs no key. A pull
 request runs it offline, in the Recordings job, and each finding is a warning that does not fail it. The nightly
-run adds `--strict`, which exits 1 when a cassette is due for its age, and opens an issue with the output,
-newer releases of its harness included. A newer release alone fails nothing: Claude Code ships most days, and
+run adds `--strict`, which exits 1 when a cassette is due for its age, and then opens an issue with the output,
+newer releases of its harness included. A newer release alone fails nothing and opens no issue, and stays in the
+run's log: Claude Code ships most days, and
 recording needs a key. The replay test prints the
 Claude Code version when it differs from the cassette's, and does not fail on it: failing would make every pull
 request that bumps a harness re-record, which needs a key. A request the cassette has no exchange for still fails.

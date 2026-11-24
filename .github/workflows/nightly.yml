@@ -256,8 +256,8 @@ jobs:
     # D-127: a cassette older than 14 days fails the nightly run, which means it is time to record
     # it again; that needs a key and is done by hand (tools/model_double/README.md). A harness with
     # a release newer than the one a cassette was recorded with, which the script looks up in npm's
-    # registry, is reported with it and fails nothing: drift shows as a replay that cannot match.
-    # Its findings are cassettes' names, dates and versions, and go to the issue.
+    # registry, is printed and fails nothing: drift shows as a replay that cannot match. Its findings
+    # are cassettes' names, dates and versions; they go to the issue when a stale cassette fails the job.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
