@@ -2097,6 +2097,23 @@ mod tests {
             *open.lock().unwrap() = !held;
             changed.notify_all();
         }
+
+        /// Holds every read of a file until the guard given back is dropped, if nothing lets
+        /// them go before. A test that fails meanwhile lets them go as it unwinds, so it reports
+        /// the failure: its runtime, as it ends, waits for every read still held.
+        fn reads_held(&self) -> ReadsHeld {
+            self.hold_reads(true);
+            ReadsHeld(self.clone())
+        }
+    }
+
+    /// Lets every read of a file go on when dropped.
+    struct ReadsHeld(Desk);
+
+    impl Drop for ReadsHeld {
+        fn drop(&mut self) {
+            self.0.hold_reads(false);
+        }
     }
 
     impl Side for Desk {
@@ -2604,7 +2621,7 @@ mod tests {
             let mut desk = Desked::start();
             desk.side.say("go");
             let chat = desk.prompted().await.chat.id;
-            desk.side.hold_reads(true);
+            let _reads = desk.side.reads_held();
             desk.send_files(&chat, 0, FILES_AT_ONCE);
             until(|| (desk.side.reading().0 == FILES_AT_ONCE).then_some(())).await;
             if driver_ends {
@@ -2646,7 +2663,7 @@ mod tests {
         let mut desk = Desked::start_with(store, None);
         desk.side.say("go");
         let chat = desk.prompted().await.chat.id;
-        desk.side.hold_reads(true);
+        let _reads = desk.side.reads_held();
         desk.send_files(&chat, 0, FILES_AT_ONCE);
         until(|| (desk.side.reading().0 == FILES_AT_ONCE).then_some(())).await;
         // The disk fills, and the next message read is a save the core cannot make.
@@ -2682,7 +2699,7 @@ mod tests {
         desk.open.send(true).unwrap();
         desk.side.say("go");
         let chat = desk.prompted().await.chat.id;
-        desk.side.hold_reads(true);
+        let _reads = desk.side.reads_held();
         desk.send_files(&chat, 0, 1);
         until(|| (desk.side.reading().0 == 1).then_some(())).await;
         // The connector goes.
