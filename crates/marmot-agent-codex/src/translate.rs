@@ -484,7 +484,13 @@ impl Translator {
         let Some(method) = m.method.as_deref() else {
             return self.response(m, out);
         };
-        let params = m.params.map_or("{}", RawValue::get);
+        // Codex writes params with every method. Read from nothing, a message without them would
+        // make an event whose native message never arrived (D-007), so it is unreadable; a request
+        // among them is still refused ([`Translator::codex_sent`]).
+        let Some(params) = m.params.map(RawValue::get) else {
+            self.unreadable += 1;
+            return;
+        };
         if method.to_lowercase().contains("delta") {
             return; // partial text and output
         }

@@ -756,3 +756,32 @@ fn a_request_resolved_in_another_thread_is_counted() {
     }
     assert_eq!(translator.other_threads(), 1);
 }
+
+// A message from Codex with a method and no params is not one Codex writes. Read as if its params
+// were empty, it made an event whose native message, `{}`, never arrived (D-007): the fuzzer found
+// it with a `thread/started` whose `params` key was misspelt. It is counted as unreadable and
+// shows nothing; a request among such messages is still refused, as Codex waits for a reply.
+#[test]
+fn a_message_with_no_params_makes_up_no_native_message() {
+    let mut translator = Translator::new();
+    for notification in [
+        r#"{"method":"thread/started","paramw":{"thread":{"id":"th1"}}}"#,
+        r#"{"method":"item/started"}"#,
+        r#"{"method":"turn/started"}"#,
+    ] {
+        let events = translator.feed(Direction::In, notification);
+        assert!(events.is_empty(), "{notification}: {events:?}");
+    }
+    assert_eq!(translator.unreadable(), 3);
+    assert!(
+        translator
+            .feed(
+                Direction::In,
+                r#"{"id":7,"method":"item/commandExecution/requestApproval"}"#
+            )
+            .is_empty()
+    );
+    let replies = translator.take_replies();
+    assert_eq!(replies.len(), 1, "the request is refused");
+    assert!(replies[0].contains("\"error\""));
+}
