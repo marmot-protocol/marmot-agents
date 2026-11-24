@@ -158,6 +158,16 @@ async fn settled_by(chat: &Chat<'_>, request: &EventKey, seconds: u64) -> AgentE
     .await
 }
 
+/// Waits until the core has no send queued: each it made has gone to MDK and is done. A send MDK
+/// keeps queued for a moment is asked after again, later, so what a test does to MDK meanwhile can
+/// meet that send in place of the next one.
+async fn nothing_queued(world: &World) {
+    let store = Store::new(world.state.path());
+    let queued =
+        || (json(&store.load().unwrap())["conversation"]["outbox"].as_array()).map(Vec::len);
+    within(20, || (queued() == Some(0)).then_some(())).await;
+}
+
 /// Seconds since 1970, as the core keeps when a send was first tried.
 fn unix_now() -> u64 {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
@@ -1221,6 +1231,8 @@ async fn an_item_whose_first_event_disappeared_goes_on_as_a_new_one() {
     };
     events.send(emit(State::Running)).unwrap();
     let first = within(20, || firsts().into_iter().next()).await;
+    // Only once MDK is done with it: a send MDK still has queued could go out after the sweep.
+    nothing_queued(&world).await;
     // The first event's time comes: MDK's sweep takes the clock it is given.
     let later = (unix_now() + 3600) * 1000;
     let mut gone = false;
@@ -1426,7 +1438,12 @@ impl Stub {
 /// What makes the next send fail for good: MDK refuses it in a group that stays live, or, with
 /// `give_up`, MDK takes it and drops it before it goes out, so the core gives it up after its one
 /// try. The core is started with one try for a send MDK drops.
-fn dropped_next(world: &World, give_up: bool) {
+///
+/// A fault is met by the next send the core makes, whatever it is, so it is armed only once the
+/// core has nothing queued: else a send still queued, which the core asks MDK about again, would
+/// meet it in place of the one the test means.
+async fn dropped_next(world: &World, give_up: bool) {
+    nothing_queued(world).await;
     let fault = if give_up {
         Fault::Reject
     } else {
@@ -1456,7 +1473,7 @@ async fn closing_version_dropped(give_up: bool) {
     };
     events.send(emit(State::Running)).unwrap();
     within(20, || (!versions(&chat, "t").is_empty()).then_some(())).await;
-    dropped_next(&world, give_up);
+    dropped_next(&world, give_up).await;
     events.send(emit(State::Done)).unwrap();
     let (_, read) = within(30, || {
         (chat.items().into_iter())
@@ -1550,7 +1567,7 @@ async fn settling_notice_dropped(give_up: bool) {
         (seen.lock().unwrap().prompts.len() == 2).then_some(())
     })
     .await;
-    dropped_next(&world, give_up);
+    dropped_next(&world, give_up).await;
     let request = chat.ask(Some(&message), &Asked::Interrupt, "Stop").await;
     let settled = settled_by(&chat, &request, 30).await;
     assert_eq!(refused(&settled).as_deref(), Some("failed"));

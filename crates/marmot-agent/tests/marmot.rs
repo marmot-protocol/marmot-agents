@@ -548,27 +548,104 @@ fn words_named(name: &str) -> (marmot_agent::Sending, marmot_agent::Token) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_dropped_send_tried_again_in_the_same_second_is_not_refused() {
     use marmot_agent::marmot::SendFailed;
-    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
-    let group = a_quiet_chat(&world).await;
-    let id = group_id(&group);
-    let agent = &world.marmot.label;
-    world
-        .runtime
-        .enable_group_disbanding(agent, &id)
-        .await
-        .unwrap();
-    at_a_new_second().await;
-    world.runtime.disband_group(agent, &id).await.unwrap();
-    let (words, first) = words_named("a");
-    let tried = world.send(&group, &words, &first).await;
-    assert_eq!(tried, Err(SendFailed::Rejected), "taken, and dropped");
-    let again = marmot_agent::Token {
-        mdk: "token a, again".into(),
-        ..first
-    };
-    let tried = world.send(&group, &words, &again).await;
-    assert_eq!(tried, Err(SendFailed::Busy), "busy until the next second");
-    world.runtime.shutdown().await;
+    // The second try must start in the second MDK dated the first, which a busy machine can make
+    // it miss: then it is another event, which MDK takes and drops too. The disband goes through
+    // a moment later, and MDK refuses every send to the group after, so the case is tried again
+    // with a new person and agent. So it is too when the disband went through before either send
+    // was looked at: MDK refused it for good, as it should, and the case was not tried.
+    for n in 0.. {
+        assert!(n < 10, "two sends in one second, in ten tries");
+        let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+        let group = a_quiet_chat(&world).await;
+        let id = group_id(&group);
+        let agent = &world.marmot.label;
+        world
+            .runtime
+            .enable_group_disbanding(agent, &id)
+            .await
+            .unwrap();
+        at_a_new_second().await;
+        world.runtime.disband_group(agent, &id).await.unwrap();
+        let (words, first) = words_named("a");
+        let before = sent_by_core(&world, &group, 9);
+        let tried = world.send(&group, &words, &first).await;
+        if disbanded(&world, &group) {
+            world.runtime.shutdown().await;
+            continue;
+        }
+        let dated = dated_since(&world, &group, &before);
+        let again = marmot_agent::Token {
+            mdk: "token a, again".into(),
+            ..first.clone()
+        };
+        let started = unix_second();
+        let tried_again = world.send(&group, &words, &again).await;
+        let met =
+            !disbanded(&world, &group) && met_the_first(&world, &group, &again, dated, started);
+        world.runtime.shutdown().await;
+        if !met {
+            continue;
+        }
+        assert_eq!(tried, Err(SendFailed::Rejected), "taken, and dropped");
+        assert_eq!(
+            tried_again,
+            Err(SendFailed::Busy),
+            "busy until the next second"
+        );
+        break;
+    }
+}
+
+/// Whether MDK's disband of `group` has gone through: MDK refuses every send to it from then on,
+/// whatever the token, and keeps no record of one. MDK marks the group so in the same change that
+/// ends it.
+fn disbanded(world: &World, group: &GroupKey) -> bool {
+    let record = (world.marmot.app).group(&world.marmot.label, group.as_str());
+    record
+        .expect("MDK reads its group")
+        .is_none_or(|g| g.disbanded)
+}
+
+/// This machine's clock, in whole seconds, as MDK dates an event.
+fn unix_second() -> u64 {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    now.unwrap().as_secs()
+}
+
+/// The second MDK dated the one event the agent made in `group` since it kept `before`: what
+/// MDK recorded, not this machine's clock around the send.
+fn dated_since(world: &World, group: &GroupKey, before: &[marmot_app::AppMessageRecord]) -> u64 {
+    let new: Vec<_> = (sent_by_core(world, group, 9).into_iter())
+        .filter(|m| before.iter().all(|b| b.message_id_hex != m.message_id_hex))
+        .collect();
+    assert_eq!(new.len(), 1, "one event made of the send");
+    new[0].recorded_at
+}
+
+/// Whether a send under `token`, started at `started`, met the event MDK dated `dated`: it
+/// started in that second, and MDK took nothing under its token, which MDK says itself, apart
+/// from what the core made of its answer. If MDK took it, it was another event, of a later
+/// second; if it started later, it could not be the same event. Either way the case was not
+/// tried, and says nothing.
+fn met_the_first(
+    world: &World,
+    group: &GroupKey,
+    token: &marmot_agent::Token,
+    dated: u64,
+    started: u64,
+) -> bool {
+    let status =
+        (world.marmot.runtime).local_send_status(&world.marmot.label, &group_id(group), &token.mdk);
+    let took = status.expect("MDK says what it has of a token").is_some();
+    let of_that_second = sent_by_core(world, group, 9)
+        .iter()
+        .filter(|m| m.recorded_at == dated)
+        .count();
+    assert_eq!(
+        of_that_second, 1,
+        "MDK makes the same words one event in a second"
+    );
+    started == dated && !took
 }
 
 // Two sends of the same words, with the same tags, in one second would be one event to MDK: the
@@ -578,15 +655,30 @@ async fn the_same_words_twice_in_one_second_both_go_out() {
     use marmot_agent::marmot::SendFailed;
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     let group = a_quiet_chat(&world).await;
-    let ((a, first), (b, second)) = (words_named("a"), words_named("b"));
-    at_a_new_second().await;
-    let went = world.send(&group, &a, &first).await.unwrap();
-    let tried = world.send(&group, &b, &second).await;
-    assert_eq!(tried, Err(SendFailed::Busy), "busy until the next second");
-    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    let also = world.send(&group, &b, &second).await.unwrap();
-    assert_ne!(went, also, "two events");
-    assert_eq!(sent_by_core(&world, &group, 9).len(), 2, "both went out");
+    // The second send must start in the second MDK dated the first, which a busy machine can
+    // make it miss: then they are two events, and are tried again in a later second under tokens
+    // of their own.
+    for n in 0.. {
+        assert!(n < 5, "two sends in one second, in five tries");
+        let before = sent_by_core(&world, &group, 9);
+        let (a, first) = words_named(&format!("a{n}"));
+        let (b, second) = words_named(&format!("b{n}"));
+        at_a_new_second().await;
+        let went = world.send(&group, &a, &first).await.unwrap();
+        let dated = dated_since(&world, &group, &before);
+        let started = unix_second();
+        let tried = world.send(&group, &b, &second).await;
+        if !met_the_first(&world, &group, &second, dated, started) {
+            continue;
+        }
+        assert_eq!(tried, Err(SendFailed::Busy), "busy until the next second");
+        tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        let also = world.send(&group, &b, &second).await.unwrap();
+        assert_ne!(went, also, "two events");
+        let sent = sent_by_core(&world, &group, 9).len();
+        assert_eq!(sent, before.len() + 2, "both went out");
+        break;
+    }
     world.runtime.shutdown().await;
 }
 

@@ -172,11 +172,20 @@ pub struct Running {
 impl World {
     /// The person owns the agent; `settings` are added to the agent's settings.
     pub async fn new(settings: &str) -> Self {
-        Self::with_slow_files(settings, std::time::Duration::ZERO).await
+        Self::on_blossom(settings, None).await
     }
 
-    /// As [`World::new`], with a Blossom server that takes `delay` to accept each file.
-    pub async fn with_slow_files(settings: &str, delay: std::time::Duration) -> Self {
+    /// As [`World::new`], with a Blossom server that holds each file it is sent until the
+    /// [`HeldUploads`] given with it lets it through.
+    pub async fn with_held_files(settings: &str) -> (Self, Arc<HeldUploads>) {
+        let held = Arc::new(HeldUploads {
+            started: AtomicUsize::new(0),
+            through: tokio::sync::Semaphore::new(0),
+        });
+        (Self::on_blossom(settings, Some(held.clone())).await, held)
+    }
+
+    async fn on_blossom(settings: &str, held: Option<Arc<HeldUploads>>) -> Self {
         storage_sqlite::relax_storage_for_test_process();
         marmot_agent::marmot::start_sqlite();
         let home = tempfile::tempdir().unwrap();
@@ -186,7 +195,7 @@ impl World {
         // new group keeps its files, as a deployment names its own; the agent's files go there
         // as they would in use.
         let mut deployment = marmot_app::MarmotDeployment::white_noise();
-        deployment.new_group_media_endpoints = vec![blossom(delay).await];
+        deployment.new_group_media_endpoints = vec![blossom(held).await];
         let app_settings = marmot_app::MarmotAppConfig::white_noise()
             .with_deployment(deployment)
             .with_allow_loopback_relay_endpoints(true)
@@ -385,6 +394,11 @@ impl Running {
 
 /// MDK's test relay, without the limit it puts by default on how many events each connection may
 /// send a minute (60), as MDK's own harness relay does: a long scenario would otherwise stall on it.
+///
+/// The relay picks a port at random that it finds free, lets it go, and binds it again a moment
+/// later. On a busy machine something else, such as one of the many connections the tests make,
+/// can take the port in between, and the bind fails as in use. Nothing was bound then, so a relay
+/// that cannot bind is made again, on another port.
 pub async fn relay() -> nostr_relay_builder::LocalRelay {
     use nostr_relay_builder::builder::RateLimit;
     let unlimited = RateLimit {
@@ -392,14 +406,50 @@ pub async fn relay() -> nostr_relay_builder::LocalRelay {
         ..RateLimit::default()
     };
     let builder = nostr_relay_builder::RelayBuilder::default().rate_limit(unlimited);
-    let relay = nostr_relay_builder::LocalRelay::new(builder);
-    relay.run().await.unwrap();
-    relay
+    let mut tries = 0;
+    loop {
+        let relay = nostr_relay_builder::LocalRelay::new(builder.clone());
+        match relay.run().await {
+            Ok(()) => return relay,
+            Err(nostr_relay_builder::Error::IO(e))
+                if e.kind() == std::io::ErrorKind::AddrInUse && tries < 20 =>
+            {
+                tries += 1
+            }
+            Err(e) => panic!("the test relay could not start: {e}"),
+        }
+    }
+}
+
+/// A stand-in Blossom server's hold on the files it is sent: each is held until the test lets it
+/// through, so that a test can act while an upload is under way however slow the machine is.
+pub struct HeldUploads {
+    /// Files sent to the server so far, through or still held.
+    started: AtomicUsize,
+    /// Files let through.
+    through: tokio::sync::Semaphore,
+}
+
+impl HeldUploads {
+    /// How many files have been sent to the server.
+    pub fn started(&self) -> usize {
+        self.started.load(Ordering::SeqCst)
+    }
+
+    /// Lets one held file through.
+    pub fn release(&self) {
+        self.through.add_permits(1);
+    }
+
+    async fn take(&self) {
+        self.started.fetch_add(1, Ordering::SeqCst);
+        self.through.acquire().await.expect("never closed").forget();
+    }
 }
 
 /// A stand-in Blossom server, for the files an agent sends: it keeps each uploaded blob under its
-/// hash and serves it back, taking `delay` to accept each one.
-pub async fn blossom(delay: std::time::Duration) -> String {
+/// hash and serves it back, at once or, with `held`, once the test lets it through.
+pub async fn blossom(held: Option<Arc<HeldUploads>>) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -410,6 +460,7 @@ pub async fn blossom(delay: std::time::Duration) -> String {
         while let Ok((mut stream, _)) = listener.accept().await {
             let blobs = blobs.clone();
             let base = base.clone();
+            let held = held.clone();
             tokio::spawn(async move {
                 let mut request = Vec::new();
                 let mut buffer = [0u8; 8192];
@@ -444,7 +495,9 @@ pub async fn blossom(delay: std::time::Duration) -> String {
                 let (method, path) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
                 let (status, kind, reply) = match method {
                     "PUT" => {
-                        tokio::time::sleep(delay).await;
+                        if let Some(held) = &held {
+                            held.take().await;
+                        }
                         let hash = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&body));
                         let descriptor = serde_json::json!({
                             "url": format!("{base}/{hash}.bin"), "sha256": hash,
