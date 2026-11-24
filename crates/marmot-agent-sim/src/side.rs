@@ -252,6 +252,15 @@ impl Side for SimSide {
         // The scripted driver sends no files.
         Err(FileFailed::Failed)
     }
+
+    /// What MDK keeps under the token, unless it dropped it. Every chat of a simulation is the
+    /// owner's two-person chat, so the core never asks.
+    fn keeps(&self, group: &GroupKey, token: &Token) -> Result<bool, NotNow> {
+        let world = lock(&self.world);
+        Ok(world.chat_of(group).is_some_and(|chat| {
+            (world.tokens.get(&(chat, token.mdk.clone()))).is_some_and(|kept| !kept.rejected)
+        }))
+    }
 }
 
 /// What the simulated MDK does with a send: what it stores, and what it answers, with the

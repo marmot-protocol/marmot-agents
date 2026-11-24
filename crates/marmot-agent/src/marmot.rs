@@ -823,6 +823,10 @@ pub trait Side: Clone + Send + Sync + 'static {
     fn read_file(&self, folders: &Folders, path: &Path) -> Result<Outgoing, Refusal> {
         folders.read(path)
     }
+
+    /// Whether MDK keeps a send under `token`, to post or posted: not one it never took, nor one
+    /// it took and dropped. [`NotNow`] when MDK could not say.
+    fn keeps(&self, group: &GroupKey, token: &Token) -> Result<bool, NotNow>;
 }
 
 /// Live events, and when they were subscribed to: what a group the core has no read mark for
@@ -1064,6 +1068,17 @@ impl Side for Marmot {
 
     fn groups(&self) -> Result<Vec<GroupKey>, NotNow> {
         Marmot::groups(self)
+    }
+
+    fn keeps(&self, group: &GroupKey, token: &Token) -> Result<bool, NotNow> {
+        let Some(id) = group_id(group) else {
+            return Ok(false);
+        };
+        match self.status(&id, &token.mdk) {
+            Ok(None | Some(LocalSendStatus::Rejected)) => Ok(false),
+            Ok(Some(_)) => Ok(true),
+            Err(_) => Err(NotNow),
+        }
     }
 
     fn two_people(&self, group: &GroupKey) -> Result<Option<Vec<PubKey>>, NotNow> {

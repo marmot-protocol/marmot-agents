@@ -1251,6 +1251,24 @@ impl<D: Driver, M: Side> Core<D, M> {
             let Some((token, what)) = self.conversation.next_send(group) else {
                 break;
             };
+            // A send of the agent's full activity that MDK was handed while the chat was sent it,
+            // and the chat is not sent now (D-136): it goes on only as far as MDK has it, which
+            // posts nothing new, and else it is held back now. Held back as if it had never gone,
+            // it would settle its requests twice (ActivityHoldBack.tla).
+            if self.conversation.withheld(&token.send) {
+                match self.marmot.keeps(group, &token) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        self.conversation.hold_back_one(&token.send);
+                        self.save()?;
+                        continue;
+                    }
+                    Err(NotNow) => {
+                        self.wait_longer(group);
+                        return Ok(());
+                    }
+                }
+            }
             let made = self.drained.entry(group.clone()).or_default();
             if self.bounded && *made >= DRAIN {
                 // More is queued: come back to it in the loop's next turn, after other work.
@@ -1671,6 +1689,10 @@ mod tests {
             let next = self.answers.lock().unwrap().pop_front();
             next.unwrap_or(Err(FileFailed::Busy))
         }
+
+        fn keeps(&self, _group: &GroupKey, _token: &crate::Token) -> Result<bool, NotNow> {
+            unreachable!("only files are sent")
+        }
     }
 
     /// A stand-in for MDK with one group, whose `messages` were stored while the core was down,
@@ -1761,6 +1783,10 @@ mod tests {
             _turn: Option<&marmot_agent_events::TurnId>,
         ) -> Result<EventKey, FileFailed> {
             unreachable!("no file reaches MDK")
+        }
+
+        fn keeps(&self, _group: &GroupKey, _token: &crate::Token) -> Result<bool, NotNow> {
+            unreachable!("nothing is sent")
         }
     }
 

@@ -4495,7 +4495,8 @@ fn the_owners_chat_is_read_from_its_members_at_each_send() {
 // A send of the agent's full activity that MDK was handed before someone joined the owner's chat
 // may still go out, as MDK keeps it, or have gone with its answer lost: it is not held back with
 // what it settles moved to the turn, which would settle a request twice and, were the chat the
-// owner's again, start the item a second time (ActivityHoldBack.tla, H1 and H2; D-136).
+// owner's again, start the item a second time. It goes on only as far as MDK has it: one MDK does
+// not have is held back then (ActivityHoldBack.tla, H1 and H2; D-136).
 #[test]
 fn a_send_mdk_was_handed_is_not_held_back_with_what_it_settles() {
     let (mut talk, prompt) = started();
@@ -4526,6 +4527,33 @@ fn a_send_mdk_was_handed_is_not_held_back_with_what_it_settles() {
         vec![format!("{chat}/cmd")],
         "not held back"
     );
+    assert!(talk.withheld(&token.send), "the chat is not sent it now");
+    let Some((_, Sending::Item { item, .. })) = talk.next_send(&g) else {
+        panic!("no tool")
+    };
+    assert_eq!(
+        item.settles,
+        vec![EventKey::from("r1")],
+        "it settles r1 still"
+    );
+
+    // MDK has not got it: held back now, and what it settled is settled by the turn.
+    talk.hold_back_one(&token.send);
+    assert_eq!(queued_keys(&talk, &g), vec![format!("{chat}/t1")]);
+    let Some((_, Sending::Item { item, .. })) = talk.next_send(&g) else {
+        panic!("no turn")
+    };
+    assert_eq!(
+        item.settles,
+        vec![EventKey::from("r1")],
+        "settled by the turn"
+    );
+    assert!(!talk.withheld(&item_token(&talk, &g)));
+}
+
+/// The token of the next send queued for `group`.
+fn item_token(talk: &Conversation, group: &GroupKey) -> String {
+    talk.next_send(group).expect("a send").0.send
 }
 
 /// A turn's end as Claude Code reports a denied approval, with the tool's input in its native

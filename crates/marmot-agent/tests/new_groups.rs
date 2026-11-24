@@ -227,6 +227,11 @@ impl Side for Mdk {
     ) -> Result<EventKey, FileFailed> {
         Err(FileFailed::Failed)
     }
+
+    /// Every send the stand-in was handed went at once.
+    fn keeps(&self, _group: &GroupKey, _token: &Token) -> Result<bool, NotNow> {
+        Ok(true)
+    }
 }
 
 /// A harness that takes every prompt, after `slow` if it is slow, notes its text, and emits

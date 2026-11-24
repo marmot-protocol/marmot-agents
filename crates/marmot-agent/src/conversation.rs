@@ -1280,40 +1280,75 @@ impl Conversation {
     }
 
     /// Takes out of what is queued for `group`, which is not sent the agent's full activity, each
-    /// send of that activity, and settles what it would have settled by the next version of its
-    /// turn, or else of the chat's session (D-028, D-136). An item of it the chat was already sent
-    /// stays as it was last sent.
+    /// send of that activity that MDK was never handed, and settles what it would have settled by
+    /// the next version of its turn, or else of the chat's session (D-028, D-136). One MDK was
+    /// handed (`tried_at`) may have gone with its answer lost, or MDK may keep it to post: it
+    /// stays, and the program sends it on only as far as MDK has it, holding it back otherwise
+    /// ([`Conversation::withheld`], [`Conversation::hold_back_one`]). Held back as if it had never
+    /// gone, it would settle its requests twice, and an item whose first event it was would start
+    /// again (ActivityHoldBack.tla, H1 and H2). An item of it the chat was already sent stays as
+    /// it was last sent.
     fn hold_back(&mut self, group: &GroupKey) {
         let mut held = Vec::new();
         let mut at = 0;
         while at < self.saved.outbox.len() {
             let queued = &self.saved.outbox[at];
-            if queued.group == *group && self.full_activity_only(queued) {
+            if queued.group == *group
+                && queued.tried_at.is_none()
+                && self.full_activity_only(queued)
+            {
                 held.extend(self.saved.outbox.remove(at));
             } else {
                 at += 1;
             }
         }
         for queued in held {
-            let key = queued.what.key().to_string();
-            let settles = match queued.what {
-                Sending::Item { item, .. } => item.settles,
-                Sending::Words { settles, .. } => settles,
-            };
-            let Some(record) = self.saved.items.get(&key) else {
-                continue;
-            };
-            if settles.is_empty() {
-                continue;
+            self.settle_held(group, queued);
+        }
+    }
+
+    /// Whether the send named `token` is of the agent's full activity, to a chat that is no longer
+    /// sent it, as read last ([`Conversation::members_now`]): one MDK was handed before (D-136).
+    /// The program asks MDK whether it keeps it, tries it again under its token if so, which sends
+    /// nothing new, and holds it back if not ([`Conversation::hold_back_one`]).
+    pub fn withheld(&self, token: &str) -> bool {
+        (self.saved.outbox.iter())
+            .find(|q| q.token == token)
+            .is_some_and(|q| !self.sent_everything(&q.group) && self.full_activity_only(q))
+    }
+
+    /// MDK does not have the send named `token`, which [`Conversation::withheld`] says its chat is
+    /// no longer sent: it is held back now, as [`Conversation::members_now`] holds back the rest.
+    pub fn hold_back_one(&mut self, token: &str) {
+        let Some(at) = self.saved.outbox.iter().position(|q| q.token == token) else {
+            return;
+        };
+        let queued = self.saved.outbox.remove(at).expect("found");
+        let group = queued.group.clone();
+        self.settle_held(&group, queued);
+    }
+
+    /// What a send held back from `group` settled, settled by the next version of its turn, or
+    /// else of the chat's session, or else by a notice of the core's own.
+    fn settle_held(&mut self, group: &GroupKey, queued: Queued) {
+        let key = queued.what.key().to_string();
+        let settles = match queued.what {
+            Sending::Item { item, .. } => item.settles,
+            Sending::Words { settles, .. } => settles,
+        };
+        let Some(record) = self.saved.items.get(&key) else {
+            return;
+        };
+        if settles.is_empty() {
+            return;
+        }
+        let (chat, turn) = (record.chat.clone(), record.last.header().turn.clone());
+        match self.carrier_of(&chat, turn.as_ref()) {
+            Some(by) => {
+                let last = self.saved.items[&by].last.clone();
+                self.queue_versions(&by, group, last, settles, None);
             }
-            let (chat, turn) = (record.chat.clone(), record.last.header().turn.clone());
-            match self.carrier_of(&chat, turn.as_ref()) {
-                Some(by) => {
-                    let last = self.saved.items[&by].last.clone();
-                    self.queue_versions(&by, group, last, settles, None);
-                }
-                None => self.settle_unshown(group, &chat, settles),
-            }
+            None => self.settle_unshown(group, &chat, settles),
         }
     }
 
