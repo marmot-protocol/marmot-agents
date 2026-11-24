@@ -2520,6 +2520,58 @@ class Wrappers(unittest.TestCase):
         self.assertFalse((home / "connector.token").is_dir())
 
 
+class PutBack(unittest.TestCase):
+    """How lib.sh puts back an upgrade that did not end, with a step of it failing, which no stand-in
+    makes fail: run on lib.sh's own functions."""
+
+    def lib(self, script: str, **env) -> subprocess.CompletedProcess:
+        return subprocess.run(["bash", "-c", f'. "{HERE}/lib.sh"; DRY_RUN=0\n{script}'],
+                              capture_output=True, text=True, env={**os.environ, **env})
+
+    def test_a_plugin_change_that_fails_to_go_back_keeps_the_ones_before_it(self):
+        """The plugin changes an upgrade lists go back the last first, as each one's copies are of what
+        the one before it left. One that fails stops the rest, so an earlier one never puts back its
+        older copies while a later one is still to go back."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            upgrade = tmp / "upgrade"
+            upgrade.mkdir()
+            records = [tmp / name / "plugin-change" for name in ("first", "second")]
+            for record in records:
+                record.parent.mkdir()
+                record.write_text("")
+            (upgrade / "plugin-changes").write_text("".join(f"{r}\n" for r in records))
+            log = tmp / "put-back"
+            ran = self.lib(
+                'put_back_change() { case $1 in */second/*) return 1 ;; esac; printf "%s\\n" "$1" >>"$LOG"; }\n'
+                'upgrade_put_back_changes; echo "status $?"',
+                MA_UPGRADE=str(upgrade), LOG=str(log))
+            self.assertIn("status 1", ran.stdout, ran.stderr)
+            self.assertFalse(log.exists(), "nothing put back before the one that failed")
+            self.assertTrue(all(r.exists() for r in records))
+
+    def test_a_plugin_change_that_cannot_go_back_in_place_keeps_the_upgrade(self):
+        """A run stopped once it had moved its plugin change into the upgrade's record puts the change
+        back in its place as it ends. When it cannot, the upgrade's record is kept, the change in it,
+        and not retired with the core put back beside the changed plugin."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            data = tmp / "data"
+            upgrade = data / "upgrade"
+            upgrade.mkdir(parents=True)
+            (upgrade / "list").write_text("")
+            (upgrade / "plugin-change").write_text("")
+            # Its place is in a folder that is gone, so it cannot be put there.
+            (upgrade / "plugin-change.path").write_text(f"{tmp / 'gone/plugin-change'}\n")
+            ran = self.lib(
+                'image_put_back_from() { return 0; }\n'
+                'MA_UPGRADING=1 MA_CHANGING=0 MA_PREPARED=0 MA_WORK="" MA_STAGED=0\nfinish 1',
+                MA_DATA=str(data), MA_UPGRADE=str(upgrade), MA_CORE=str(tmp / "core"), MA_LIB=str(tmp / "lib"))
+            self.assertTrue((upgrade / "plugin-change").exists(), ran.stderr)
+            self.assertTrue((upgrade / "list").exists(), "the upgrade is still under way")
+            self.assertIn("Run this again", ran.stderr)
+
+
 class Download(unittest.TestCase):
     """The default: a release download, checked against its SHA256SUMS."""
 

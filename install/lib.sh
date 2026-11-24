@@ -516,7 +516,9 @@ finish() {
     local status=$1
     set +e
     trap '' HUP INT TERM
-    if [ "$status" -ne 0 ] && [ "${MA_UPGRADING:-0}" -eq 1 ]; then change_restore; fi
+    if [ "$status" -ne 0 ] && [ "${MA_UPGRADING:-0}" -eq 1 ]; then
+        change_restore || warn "the plugin change in $MA_UPGRADE could not be put back in its place"
+    fi
     if [ "$status" -ne 0 ] && [ "${MA_CHANGING:-0}" -eq 1 ]; then
         MA_CHANGING=0
         change_put_back "$status"
@@ -865,9 +867,10 @@ upgrade_retire() {
 
 # Puts back each plugin change the upgrade's record lists whose record is still there, the last first, as
 # that one's copies are of what the one before it left, and removes its record; prints the agents'
-# folders of those it put back, one a line, and fails if any could not be. One this run was making was
-# put back already, by change_put_back, unless that failed. The change moved into the upgrade's record as
-# it ended is back in its place by now (change_restore).
+# folders of those it put back, one a line, and fails if any could not be. One that could not stops the
+# rest, so that no change before it puts back its older copies while it is still to go back. One this run
+# was making was put back already, by change_put_back, unless that failed. The change moved into the
+# upgrade's record as it ended is back in its place by now (change_restore), unless that failed.
 upgrade_put_back_changes() {
     local list="$MA_UPGRADE/plugin-changes" record own ok=0
     [ -f "$list" ] || return 0
@@ -879,6 +882,7 @@ upgrade_put_back_changes() {
             dirname "$record"
         else
             ok=1
+            break
         fi
     done < <(awk '{ line[NR] = $0 } END { for (i = NR; i > 0; i--) print line[i] }' "$list")
     return "$ok"
@@ -893,6 +897,8 @@ upgrade_put_back() {
     # Gone already: upgrade_end took it away, and the upgrade is done.
     [ -f "$MA_UPGRADE/list" ] || return 0
     plugins=$(upgrade_put_back_changes) || ok=1
+    # A change change_restore could not put back in its place is in the record still, which is kept.
+    [ ! -f "$MA_UPGRADE/plugin-change" ] || ok=1
     if [ -n "$plugins" ]; then
         say "put back the gateway plugin that upgrade changed, for the agent in $(printf '%s' "$plugins" | tr '\n' ' ')"
     fi

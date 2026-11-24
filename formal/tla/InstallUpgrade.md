@@ -53,6 +53,10 @@ call `image_commit` and `change_begin` alike).
   `docker rmi` (both may be refused when docker is gone), nor a look at which image a tag names: when docker
   cannot say, `image_commit` stops the install before the tag moves, and `image_put_back_from` fails, which keeps
   the record (`image_id`; `install/test_install.py` stops the one at every step and checks the other).
+  Two such failures keep the record too, which `PutBack` in `install/test_install.py` checks on lib.sh's own
+  functions: a plugin change that cannot go back stops the ones listed before it, so none of them puts back
+  older copies while it is still to go back; and a change `change_restore` cannot put back in its place stays
+  in the record, which is not retired.
 - **The two renames of `replace_dir` without `mv --exchange`** (macOS): a kill between them leaves the person's
   gateway with neither plugin, which `docs/move.md` states. The model has the exchange, one step.
 - **Two agents of one harness in one home.** Each harness has one agent here, so one Hermes plugin change. With
