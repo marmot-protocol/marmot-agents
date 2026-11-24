@@ -620,7 +620,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          sparse-checkout: tools/ci
+          # The flake report's tests read the workflows' job names (D-143).
+          sparse-checkout: |
+            tools/ci
+            .github/workflows
 
       - name: The gate's own check passes its tests
         run: python3 -m unittest discover -s tools/ci -p 'test_*.py'

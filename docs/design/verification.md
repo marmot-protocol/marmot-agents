@@ -4,7 +4,8 @@ Status: the approach is decided
 ([D-093](../decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top)), and
 so is the CI budget ([D-094](../decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)),
 on 2026-11-21, and CI's three tiers ([D-130](../decisions.md#d-130-ci-runs-in-three-tiers-with-one-required-check)),
-on 2026-11-23, built with the nightly workflow the same day. The property list, the models and the layers below are the plan; their details are internal and
+on 2026-11-23, built with the nightly workflow the same day, and the flaky job tracker
+([D-143](../decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake)), on 2026-11-24. The property list, the models and the layers below are the plan; their details are internal and
 change as the work goes. It comes from reading all the code after M3 and the M4 work in progress, and from how MDK
 tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules). Under
 [first, fix what is known](#first-fix-what-is-known), the behaviour the fixes made visible is provisional: built,
@@ -655,8 +656,28 @@ runs in three tiers ([D-130](../decisions.md#d-130-ci-runs-in-three-tiers-with-o
 | --- | --- |
 | Every pull request, aimed at under 10 minutes | Formatting and Clippy; the workspace's tests in two jobs side by side, the core's and every other, with the conformance suite (about 30 s) and real Claude Code and Codex on the [model double](#11-a-model-double) in the core's; the socket connectors through the conformance suite, in a job of their own (about a minute once built); the simulator on a fixed set of seeds at its normal count (20 runs of each gate family from seed 0, in release, in its own job); TLC on small bounds, every model's cases in five jobs, only when the models or the code they follow changed; the TypeScript, Python, install-script, recording and document checks, and the cassettes' age as a warning. The property tests at 256 cases each, and every fuzz target's check over its seeds. Planned: the privacy scan |
 | The merge queue, and each push to `master`, aimed at under 30 minutes | All of the above whatever changed; the simulator at 200 runs of each family; the move-over tests that need Docker and no key (Hermes and OpenClaw installs moved over, on the model double, scripted); the Kani proofs |
-| Nightly (`.github/workflows/nightly.yml`) | The simulator on a new seed each night, 5,000 runs of each family, its capsules kept; TLC on `CoreLifecycle`'s larger bounds, safety only (liveness there takes hours and is run by hand); a coverage report (`cargo llvm-cov`, a report only); mutation testing on a 64th of the core's 1,639 mutants (the simulator's hooks left out, since only it exercises them), by the day of the year, so each shard runs about every two months; the cassettes' age, failing, with newer harness releases reported (`check_cassettes.py --strict`, [the model double](#11-a-model-double)). The property tests at 10,000 cases each; every fuzz target for five minutes. A failed job opens an issue, with the mutants missed, the cassettes due or the fuzz targets that failed |
+| Nightly (`.github/workflows/nightly.yml`) | The simulator on a new seed each night, 5,000 runs of each family, its capsules kept; TLC on `CoreLifecycle`'s larger bounds, safety only (liveness there takes hours and is run by hand); a coverage report (`cargo llvm-cov`, a report only); mutation testing on a 64th of the core's 1,639 mutants (the simulator's hooks left out, since only it exercises them), by the day of the year the run was created (so a rerun tests the same shard), so each shard runs about every two months; the cassettes' age, failing, with newer harness releases reported (`check_cassettes.py --strict`, [the model double](#11-a-model-double)). The property tests at 10,000 cases each; every fuzz target for five minutes. A failed job opens an issue, with the mutants missed, the cassettes due or the fuzz targets that failed |
 | Weekly (planned) | Long simulator campaigns |
+| After each run of CI or Nightly that was run again, and daily (`.github/workflows/flake-report.yml`) | The flaky job tracker: one issue that ranks the jobs that failed and then passed when they were run again, below |
+
+### Flaky tests
+
+A job that fails in one attempt of a run and passes when it is run again, on the same commit, is flaky, and one
+issue, "Flaky job tracker", counts them ([D-143](../decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake)).
+`tools/ci/flake_report.py` lists the runs of the last 14 days that were run again, and the jobs of each attempt,
+and counts each job that failed, or timed out, and then passed, by its workflow and name; the `CI passed` gate
+counts only when every other job's latest result up to its attempt passed. A job's name is shown only if the
+default branch's workflow files name a job so, since a pull request's CI runs the pull request's own workflow; any
+other is counted under one label. The issue ranks them by flakes in the last 30 days, then in all, with where they
+happened, when they were first and last seen and a link to the latest job. It reads no log, since a log holds what
+the tests printed too: which test in a job flaked is in the job's log behind the link, and naming it in the issue
+waits for CI to write machine-readable results
+([#184](https://github.com/marmot-protocol/marmot-agents/issues/184)). The script keeps its counts in the comment
+that ends the issue's body, so a job is counted once however often it runs; when that comment cannot be read, the
+body is empty, or the comment no longer fits, the run fails and the issue is left as it was. A job that failed in
+every attempt is not counted until a rerun passes. To fix a flake, start from the job's log, make the test fail on
+purpose under load (many copies at once, or the process stopped for a moment again and again), and fix what it
+waits on, not its timeout.
 
 ## In what order
 

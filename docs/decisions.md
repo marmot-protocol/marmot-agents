@@ -2837,6 +2837,50 @@ good. An app newer than the core will send actions the core does not know, and t
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
 
+## D-143 One issue tracks the CI jobs that flake
+
+**Decision.** One open issue, "Flaky job tracker", ranks the CI jobs that failed and then passed when they were run
+again in the same run, on the same commit: on pull requests, in the merge queue, on `master` and in the nightly
+runs. A workflow of its own, `.github/workflows/flake-report.yml`, brings it up to date after each run of CI or
+Nightly that was a rerun, once a day, and by hand. Its script, `tools/ci/flake_report.py`, lists the runs of the
+last 14 days that were run again and the jobs of each attempt, and counts each job that failed or timed out in one
+attempt and passed in a later one, by its workflow and its name, a matrix leg's name with its leg. The `CI passed`
+gate, which fails whenever another job does, counts only when every other job's latest result up to its attempt
+passed: a job a partial rerun did not run again keeps its earlier result, which the gate read. A job that failed in
+every attempt is not counted, since it may be a real failure; it is counted if a later rerun passes. The nightly
+mutation shard is chosen by the day the run was created, so a rerun tests the same mutants.
+
+It reads no log, and names no test. A job's log mixes what the runner printed with what the tests printed, so a
+test could put its own text into the public issue. Which test flaked is for machine-readable results that CI does
+not write yet, and is issue [#184](https://github.com/marmot-protocol/marmot-agents/issues/184). For each job the
+issue shows its workflow and name, its flakes in the last 30 days and in all, where they happened (pull request,
+merge queue, `master`, nightly), when it was first and last seen, and a link to the last job that flaked; each name
+is shown as code, as written. A name is shown only if the default branch's `ci.yml` or `nightly.yml` names a job
+so, a matrix leg's name with its leg filled in: a pull request's CI runs the pull request's own workflow, which can
+name a job anything, so a job named otherwise is counted under one label, "(a job not on the default branch)", with
+its link, and its own name is never kept. It is ranked by the flakes of the last 30 days, then by all. What the
+script keeps between runs (each job's count, its flakes by day over the last 30 days, its latest flake, and the
+jobs it has counted, so that none is counted twice) is in the HTML comment that ends the issue's body, on one line;
+the issue is its own store. If that comment cannot be read, the body is empty, or what it keeps no longer fits an
+issue, the run fails and leaves the issue as it was: no count is dropped to make room, and the table is shortened
+first. Only when no tracker is open does a count start afresh. A listing of runs or jobs longer than the script
+reads fails the run too, rather than count from part of it. The workflow runs the default branch's code only, also
+when started by hand, and its token may list the runs and their jobs and write issues, nothing more. It edits only
+an open tracker it opened itself and labelled `flaky-tracker`, found by that label and not by its body, so a
+tracker whose comment was mangled fails the run rather than lead to a second one. If there is none, it opens one,
+so closing it starts a new count.
+
+**Why.** Flaky tests were found one at a time, in builders' reports and in #86 and #96, and a rerun that passed hid
+each one. A job that fails and then passes on the same commit is a flake without anyone having to judge it, and a
+count over time shows which to fix first and whether a fix held. MDK keeps a leaderboard the same way
+(its `flake-report.yml`), from test reports; CI here writes none yet, and reading the test names from logs let a
+test's own output into the issue, which both reviews of the first version showed. The owner chose to track jobs
+now and name the tests from machine-readable results later. The state is in the issue, not in artifacts that
+expire.
+
+Decided 2026-11-24 by the project owner: a tracker like MDK's, jobs only for now, the tests later from
+machine-readable results. The details are the builder's, under the instruction to decide minor points.
+
 ## D-144 Property tests run on every pull request, Kani in the full gate, and fuzzing nightly on a pinned nightly compiler
 
 **Decision.** The fourth step of the verification plan runs in CI's tiers

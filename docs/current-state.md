@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-24, at `master` commit `81d95e0`, through [D-140](decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused), [D-144](decisions.md#d-144-property-tests-run-on-every-pull-request-kani-in-the-full-gate-and-fuzzing-nightly-on-a-pinned-nightly-compiler), [D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id), and [D-147](decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken). A change that adds or replaces
+Brought up to date on 2026-11-24, at `master` commit `aad1611`, through [D-140](decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused), [D-143](decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake), [D-144](decisions.md#d-144-property-tests-run-on-every-pull-request-kani-in-the-full-gate-and-fuzzing-nightly-on-a-pinned-nightly-compiler), [D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id), and [D-147](decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -244,6 +244,9 @@ Decided, and not built: the core, the drivers, MDK and the apps each have their 
   the Kani proofs run in the merge queue and on `master`; fuzzing, five minutes a target, and the property tests
   at 10,000 cases run nightly. cargo-fuzz and Kani are pinned with checksums and share one pinned nightly
   compiler ([D-144](decisions.md#d-144-property-tests-run-on-every-pull-request-kani-in-the-full-gate-and-fuzzing-nightly-on-a-pinned-nightly-compiler)).
+- One issue, "Flaky job tracker", ranks the CI jobs that failed and passed when they were run again, kept up to
+  date by a workflow from the runs' lists of jobs; it reads no log, and the tests are to be named later from
+  machine-readable results ([D-143](decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake)).
 - The Rust workspace builds with MDK's compiler and forbids unsafe code ([D-053](decisions.md#d-053-the-rust-workspace-builds-with-mdks-compiler-and-forbids-unsafe-code)).
 - Work follows `plan.md`; the builder decides what is internal and merges once CI passes and review left no
   blocker. Every commit is signed ([D-068](decisions.md#d-068-work-follows-the-plan-and-the-builder-decides-what-is-internal), [D-054](decisions.md#d-054-changes-arrive-as-small-signed-pull-requests-that-ci-checks)).
