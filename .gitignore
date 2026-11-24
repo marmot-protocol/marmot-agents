@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 target/
 tests.env
+# What cargo-fuzz finds and makes: the inputs that made a target fail, and its own corpus.
+crates/marmot-agent-fuzz/artifacts/
+crates/marmot-agent-fuzz/corpus/
+crates/marmot-agent-fuzz/coverage/

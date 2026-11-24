@@ -1,0 +1,127 @@
+[package]
+name = "marmot-agent-fuzz"
+description = "Fuzz targets for everything that reads input from outside the core, and the checks each makes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# cargo-fuzz finds its targets here (`cargo fuzz run --fuzz-dir crates/marmot-agent-fuzz`). The
+# checks are the library, which a stable test runs over the seeds; the targets are thin.
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+marmot-agent = { path = "../marmot-agent" }
+marmot-agent-acp = { path = "../marmot-agent-acp" }
+marmot-agent-codex = { path = "../marmot-agent-codex" }
+marmot-agent-driver = { path = "../marmot-agent-driver" }
+marmot-agent-events = { path = "../marmot-agent-events" }
+marmot-agent-pi = { path = "../marmot-agent-pi" }
+# MDK's own reader of kinds 1201 and 1202, which the core must agree with. The revision is the
+# core's.
+cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "6f6b427b34cc212be62d07517a6aff5879bf52e8" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+# The socket's target runs the real connection reader on a socket pair.
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "time"] }
+# Only the fuzz targets link libFuzzer, and only when cargo-fuzz builds them with this feature.
+libfuzzer-sys = { version = "0.4.13", optional = true }
+
+[features]
+libfuzzer = ["dep:libfuzzer-sys"]
+
+[[bin]]
+name = "socket_lines"
+path = "fuzz_targets/socket_lines.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "socket_hello"
+path = "fuzz_targets/socket_hello.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "socket_connector"
+path = "fuzz_targets/socket_connector.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "carrier_request"
+path = "fuzz_targets/carrier_request.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "carrier_item"
+path = "fuzz_targets/carrier_item.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "settings"
+path = "fuzz_targets/settings.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "saved_state"
+path = "fuzz_targets/saved_state.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "codex"
+path = "fuzz_targets/codex.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "acp"
+path = "fuzz_targets/acp.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "pi"
+path = "fuzz_targets/pi.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "import"
+path = "fuzz_targets/import.rs"
+test = false
+doc = false
+bench = false
+required-features = ["libfuzzer"]
+
+[[bin]]
+name = "marmot-agent-fuzz-seeds"
+path = "src/bin/marmot-agent-fuzz-seeds.rs"
+test = false
+doc = false
