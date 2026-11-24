@@ -40,7 +40,7 @@ use marmot_agent::EventKey;
 use marmot_agent::carrier::{self, Asked, EDIT_KIND, ITEM_KIND};
 use marmot_agent::import::{self, Connector, Options};
 use marmot_agent::rights::Who;
-use marmot_agent_events::body::Body;
+use marmot_agent_events::body::{Body, NoticeKind};
 use marmot_app::{AppMessageQuery, MarmotAppRuntime};
 use model_double::Double;
 use old_connector::{BEFORE, Noted, Unanswered, ask, chat_messages, local_app, places, setup};
@@ -632,18 +632,18 @@ impl Install {
 
     /// A new session asked for from the chat, which Hermes asks the person to confirm. Their
     /// answer goes to that confirmation by its id, through Hermes's own call for it (D-146),
-    /// never as a typed `/approve`: the confirmation is answered, Hermes's reply follows, and the
-    /// old session's end settles the request.
+    /// never as a typed `/approve`: the confirmation is answered, Hermes's reply to the answer
+    /// comes back as the command's output outside any turn, where a typed `/approve` would have
+    /// started one, and the old session's end settles the request.
     async fn new_session_confirmed(&self, group: &cgka_traits::GroupId, group_hex: &str) {
         let ended = |r: &carrier::Read| {
             matches!(r.item.event.body(), Body::Session(_))
                 && r.item.event.header().state == marmot_agent_events::State::Done
         };
-        let before = self
-            .items(group_hex)
-            .iter()
-            .filter(|(_, r)| ended(r))
-            .count();
+        let reset = |r: &carrier::Read| {
+            matches!(r.item.event.body(), Body::Notice(n) if n.kind == NoticeKind::CommandOutput)
+                && r.item.event.header().text.starts_with('✨')
+        };
         let request = self
             .ask(group, None, &Asked::NewSession, "New session")
             .await;
@@ -700,12 +700,18 @@ impl Install {
             "the old session ended: {}",
             replaced.item.event.header().text
         );
+        // The scenario resets no other session, so every reply of Hermes's to a reset is this one's.
+        self.wait_for(group_hex, "Hermes's reply to the answer", reset)
+            .await;
+        let turns: Vec<_> = self
+            .items(group_hex)
+            .into_iter()
+            .filter(|(_, r)| reset(r))
+            .map(|(_, r)| r.item.event.header().turn.clone())
+            .collect();
         assert!(
-            self.items(group_hex)
-                .iter()
-                .filter(|(_, r)| ended(r))
-                .count()
-                > before
+            turns.iter().all(Option::is_none),
+            "Hermes's reply to the answer is outside any turn, as no typed answer started one: {turns:?}"
         );
     }
 
