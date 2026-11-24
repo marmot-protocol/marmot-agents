@@ -610,6 +610,13 @@ fn cut(text: &str, over: usize, full: usize) -> String {
     if keep >= text.len() {
         return text.to_string();
     }
+    let (head, tail) = kept_ends(text, keep);
+    format!("{}{marker}{}", &text[..head], &text[tail..])
+}
+
+/// Where a cut that keeps about `keep` bytes of `text`, fewer than it has, ends its start and
+/// starts its end: half of `keep` from each end, each moved inwards to a whole character.
+fn kept_ends(text: &str, keep: usize) -> (usize, usize) {
     let mut head = keep / 2;
     while !text.is_char_boundary(head) {
         head -= 1;
@@ -618,7 +625,7 @@ fn cut(text: &str, over: usize, full: usize) -> String {
     while !text.is_char_boundary(tail) {
         tail += 1;
     }
-    format!("{}{marker}{}", &text[..head], &text[tail..])
+    (head, tail)
 }
 
 /// The type's own fields, as one tag of JSON: `{"type": ..., "body": ...}`.
@@ -1024,5 +1031,37 @@ mod tests {
             let shown = format!("{asked:?}");
             assert_eq!(shown, name);
         }
+    }
+}
+
+/// Bounded proofs (`docs/design/verification.md`, "5. Bounded proofs with Kani").
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    // How tags are read (D-140) has no proof here: Kani on a list of tags, each a `Vec<String>`,
+    // took more than 12 GB for three tags. The property test against MDK's reader
+    // (`tests/properties/requests.rs`) and the `carrier_request` fuzz target own it.
+
+    /// S7: a cut never splits a character: what it keeps of a text's start and end ends and
+    /// starts on whole characters, no more than it means to keep, and the two never overlap.
+    /// Every text of up to 8 bytes, of any characters, and every amount kept short of all of it.
+    #[kani::proof]
+    #[kani::unwind(10)]
+    fn s7_a_cut_keeps_whole_characters() {
+        let bytes: [u8; 8] = kani::any();
+        let length: usize = kani::any();
+        kani::assume(length <= 8);
+        let Ok(text) = std::str::from_utf8(&bytes[..length]) else {
+            return;
+        };
+        let keep: usize = kani::any();
+        kani::assume(keep < text.len());
+        let (head, tail) = kept_ends(text, keep);
+        assert!(text.is_char_boundary(head) && text.is_char_boundary(tail));
+        assert!(head <= keep / 2 && tail >= text.len() - keep / 2);
+        assert!(head <= tail);
+        // What is kept is a whole text: slicing there never fails.
+        let _ = (&text[..head], &text[tail..]);
     }
 }

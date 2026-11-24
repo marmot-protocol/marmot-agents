@@ -1157,3 +1157,24 @@ mod tests {
         assert_eq!(emitted.event.header().seq, 1);
     }
 }
+
+/// Bounded proofs (`docs/design/verification.md`, "5. Bounded proofs with Kani").
+#[cfg(kani)]
+mod proofs {
+    use super::same;
+
+    /// The connector's token is taken only when it is the core's, byte for byte (D-038): every
+    /// pair of byte strings of up to 4 bytes. The comparison looks at every byte whatever it
+    /// finds, so it takes as long for a near miss as for a far one.
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn the_token_is_taken_only_when_it_is_the_cores() {
+        let (a, b): ([u8; 4], [u8; 4]) = (kani::any(), kani::any());
+        let (n, m): (usize, usize) = (kani::any(), kani::any());
+        kani::assume(n <= 4 && m <= 4);
+        kani::assume(a[..n].is_ascii() && b[..m].is_ascii());
+        let given = std::str::from_utf8(&a[..n]).expect("ASCII");
+        let token = std::str::from_utf8(&b[..m]).expect("ASCII");
+        assert_eq!(same(given, token), given == token);
+    }
+}

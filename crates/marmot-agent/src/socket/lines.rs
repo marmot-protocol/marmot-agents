@@ -51,3 +51,49 @@ impl Splitter {
         self.line.len()
     }
 }
+
+/// Bounded proofs (`docs/design/verification.md`, "5. Bounded proofs with Kani"): two parts of up
+/// to 3 bytes each, after any line held so far, with a limit of up to 3.
+#[cfg(kani)]
+mod proofs {
+    use super::Splitter;
+
+    /// S11, D-033: each take takes something of a part that has something, within it; ends a line
+    /// at the first newline and only there, never over the limit; and holds no more than it.
+    #[kani::proof]
+    #[kani::unwind(8)]
+    fn s11_a_take_ends_lines_at_newlines_and_holds_no_more_than_the_limit() {
+        let max: usize = kani::any();
+        kani::assume(max <= 3);
+        let mut splitter = Splitter::new(max);
+        for _ in 0..2 {
+            let bytes: [u8; 3] = kani::any();
+            let length: usize = kani::any();
+            kani::assume(length <= 3);
+            let part = &bytes[..length];
+            let held = splitter.held();
+            let (used, line) = splitter.take(part);
+            assert!(splitter.held() <= max);
+            if part.is_empty() {
+                assert_eq!(used, 0);
+                continue;
+            }
+            assert!(used >= 1 && used <= part.len());
+            match part.iter().position(|&b| b == b'\n') {
+                Some(at) => {
+                    assert_eq!(used, at + 1);
+                    assert_eq!(splitter.held(), 0);
+                    if let Some(line) = line {
+                        assert!(line.len() <= max);
+                        assert_eq!(line.len(), held + at);
+                        assert!(line[held..] == part[..at]);
+                    }
+                }
+                None => {
+                    assert_eq!(used, part.len());
+                    assert!(line.is_none());
+                }
+            }
+        }
+    }
+}

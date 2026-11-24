@@ -58,6 +58,10 @@ tokio = { version = "1", features = ["process", "test-util"] }
 # The socket connectors run the driver conformance suite over the socket (tests/conformance_socket.rs).
 marmot-agent-conformance = { path = "../marmot-agent-conformance" }
 
+# Kani's bounded proofs are built only under `cargo kani`, which sets `cfg(kani)`.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }
+
 [features]
 # Bugs fixed before, put back on purpose for the simulator (`crates/marmot-agent-sim`), which
 # shows it finds each. Off by default, and never in a release.

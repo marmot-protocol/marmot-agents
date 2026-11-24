@@ -91,3 +91,85 @@ fn is_word_at(text: &str, at: usize, command: &str) -> bool {
             .next()
             .is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == '-'))
 }
+
+/// Bounded proofs (`docs/design/verification.md`, "5. Bounded proofs with Kani"), run with
+/// `cargo kani -p marmot-agent`. Keys are three, every one of them in every place: what the rights
+/// check asks of a key is only whether it is another, and three keys show every such case. At most
+/// 2 people are listed: every input of those sizes is checked.
+#[cfg(kani)]
+mod proofs {
+    use super::*;
+
+    /// One of three keys. Kani cannot reason in bounded memory about keys of symbolic text in a
+    /// list: it ran out of memory with keys of up to 3 bytes.
+    fn key() -> PubKey {
+        PubKey::from(match kani::any::<u8>() % 3 {
+            0 => "o",
+            1 => "a",
+            _ => "b",
+        })
+    }
+
+    fn who() -> Who {
+        match kani::any::<u8>() % 3 {
+            0 => Who::Owner,
+            1 => Who::Everyone,
+            _ => {
+                let mut people = vec![key()];
+                if kani::any() {
+                    people.push(key());
+                }
+                Who::People(people)
+            }
+        }
+    }
+
+    fn right() -> Right {
+        if kani::any() {
+            Right::Prompt
+        } else {
+            Right::Approve
+        }
+    }
+
+    /// S6: the owner holds both rights, whatever the settings give.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn s6_the_owner_always_passes() {
+        let rights = Rights {
+            owner: key(),
+            prompt: who(),
+            approve: who(),
+        };
+        assert!(rights.allows(&rights.owner.clone(), right()));
+    }
+
+    /// S6: nobody else is the owner: someone who is not holds a right only where the settings
+    /// give it them, by name or to everyone.
+    #[kani::proof]
+    #[kani::unwind(5)]
+    fn s6_nobody_else_is_the_owner() {
+        let rights = Rights {
+            owner: key(),
+            prompt: who(),
+            approve: who(),
+        };
+        let other = key();
+        kani::assume(other != rights.owner);
+        let right = right();
+        let given = match right {
+            Right::Prompt => &rights.prompt,
+            Right::Approve => &rights.approve,
+        };
+        let expected = match given {
+            Who::Owner => false,
+            Who::Everyone => true,
+            Who::People(people) => people.contains(&other),
+        };
+        assert_eq!(rights.allows(&other, right), expected);
+    }
+
+    // Typed commands (D-047) have no proof here: Kani on `needed_for` over every text of 4 bytes
+    // ran past half an hour and 7 GB, in its lowercasing and line splitting. The property tests
+    // (`tests/properties/rights.rs`) own it.
+}
