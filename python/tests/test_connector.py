@@ -87,6 +87,8 @@ class FakeHermes:
         async def finished():
             if self.pause is not None:
                 await self.pause.wait()
+            if isinstance(said, BaseException):
+                raise said
             return said
         return asyncio.Task(finished(), loop=asyncio.get_running_loop(), eager_start=True)
 
@@ -759,6 +761,22 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         notice = next(e for e in self.sent if e["item"] == settled[1][0])
         self.assertEqual((notice["session"], notice.get("turn"), notice["title"]), (session, None, "Command output"))
         self.assertEqual(notice["text"], "Hermes gave no reply to /new.")
+
+    async def test_a_failed_call_to_answer_a_confirmation_logs_only_what_kind_of_failure(self):
+        """D-071: the failure may hold a path or the command's words, so the log names only its type."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), said("Hi.", "m-1", notify=True), complete("m-1"))
+        session = self.of("session")[0]["session"]
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "new_session", "chat": CHAT, "session": session}})
+        typed = self.hermes.typed[-1]
+        self.feed(started(typed[2], "/new"))
+        self.asks_to_confirm(typed[2], "/new", "⚠️ **Confirm /new**\n\nThis starts a fresh session.", "k-1")
+        self.feed(complete(typed[2]))
+        self.hermes.confirmed = OSError("cannot close /home/someone/secret.txt")
+        with self.assertLogs("marmot_hermes") as logged:
+            await self.connector.serve("answer", {"request": "r-2", "item": "confirm:k-1", "by": ALICE, "given": YES})
+        self.assertEqual(logged.output, ["WARNING:marmot_hermes:Hermes's call to answer a confirmation failed: OSError"])
 
     async def slow_new_session_confirmed(self):
         """Alice asks for a new session, Hermes asks her to confirm it, and she does; the reset Hermes then

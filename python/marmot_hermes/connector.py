@@ -586,7 +586,9 @@ class Connector:
         which shows its outcome. When Hermes's call failed, nothing does, and the core settles what waited
         on it (D-087)."""
         if running.cancelled() or running.exception() is not None:
-            log.warning("Hermes's call to answer a confirmation failed: %r", None if running.cancelled() else running.exception())
+            # D-071: the failure's words may hold a path or the command's, so only its kind is logged.
+            kind = "cancelled" if running.cancelled() else type(running.exception()).__name__
+            log.warning("Hermes's call to answer a confirmation failed: %s", kind)
             return
         said = {"confirm_id": confirm_id, "session_key": session_key, "said": running.result()}
         self.record({"dir": "out", "via": "press", "msg": said}, chat.id)
