@@ -152,14 +152,17 @@ struct Waiting {
 /// each a task the core owns, and the rest waiting, [`FILES_HELD`] in all (D-145). A waiting file
 /// is only its path until its turn comes, so the bytes held are those of the files uploading.
 struct Files {
-    uploading: tokio::task::JoinSet<Uploaded>,
-    /// Which file each upload is, for one whose task did not end by itself.
+    uploading: tokio::task::JoinSet<Result<(), Refusal>>,
+    /// Which file each upload is.
     running: HashMap<tokio::task::Id, (String, marmot_agent_driver::ChatId)>,
     waiting: VecDeque<Waiting>,
     /// One for each file that may be read at once. A read holds one until it has returned, even
-    /// after its upload was stopped, since a read on its own thread cannot be stopped: the core
-    /// takes them all back before it ends, so no read outlives it.
+    /// after its upload was stopped, since a read on its own thread cannot be stopped.
     reads: Arc<tokio::sync::Semaphore>,
+    /// Whether the core takes them all back before it ends, so no read outlives it: it does
+    /// unless it shares them with the cores before and after it, as [`serve`]'s do, and then
+    /// whoever made them does.
+    owns_reads: bool,
 }
 
 impl Default for Files {
@@ -169,6 +172,7 @@ impl Default for Files {
             running: HashMap::new(),
             waiting: VecDeque::new(),
             reads: Arc::new(tokio::sync::Semaphore::new(FILES_AT_ONCE)),
+            owns_reads: true,
         }
     }
 }
@@ -181,27 +185,51 @@ impl Files {
 
     /// How an upload went, once its task has ended: a task that did not finish, as when it
     /// panicked or was stopped, failed with `detail`.
-    fn ended(
-        &mut self,
-        ended: Result<(tokio::task::Id, Uploaded), tokio::task::JoinError>,
-        detail: &str,
-    ) -> Option<Uploaded> {
-        let (task, uploaded) = match ended {
-            Ok((task, uploaded)) => (task, Some(uploaded)),
-            Err(error) => (error.id(), None),
+    fn ended(&mut self, ended: Ended, detail: &str) -> Option<Uploaded> {
+        let (task, result) = match ended {
+            Ok((task, result)) => (task, result),
+            Err(error) => {
+                let failed = Refusal {
+                    reason: Reason::Failed,
+                    detail: Some(detail.into()),
+                    unanswered: false,
+                };
+                (error.id(), Err(failed))
+            }
         };
         let (id, chat) = self.running.remove(&task)?;
-        Some(uploaded.unwrap_or(Uploaded {
-            id,
-            chat,
-            result: Err(Refusal {
-                reason: Reason::Failed,
-                detail: Some(detail.into()),
-                unanswered: false,
-            }),
-        }))
+        Some(Uploaded { id, chat, result })
+    }
+
+    /// Stops every upload, waits for each to end, and, if the core owns the reads, for every
+    /// read they started. It saves nothing, so it ends the files whether or not a save can be
+    /// made. Gives how each upload went, and whether it was stopped, for the driver and the chat.
+    async fn stop(&mut self) -> Vec<(Uploaded, bool)> {
+        self.uploading.abort_all();
+        let mut ended = Vec::new();
+        while let Some(done) = self.uploading.join_next_with_id().await {
+            let stopped = matches!(&done, Err(error) if error.is_cancelled());
+            let detail = if stopped {
+                "The agent stopped while the file was being sent."
+            } else {
+                "It could not be uploaded or sent."
+            };
+            if let Some(done) = self.ended(done, detail) {
+                ended.push((done, stopped));
+            }
+        }
+        // A read of a file whose upload was stopped goes on on its own thread until it returns:
+        // it is waited for, so none goes on after the core. Its file reaches no MDK, since the
+        // task that would have sent it is gone.
+        if self.owns_reads {
+            drop(self.reads.acquire_many(FILES_AT_ONCE as u32).await);
+        }
+        ended
     }
 }
+
+/// How an upload's task ended.
+type Ended = Result<(tokio::task::Id, Result<(), Refusal>), tokio::task::JoinError>;
 
 /// What the core keeps across a restart.
 #[derive(Default, Serialize, Deserialize)]
@@ -376,7 +404,7 @@ enum Woke {
     /// The driver's next event, or its end.
     Driver(Option<Output>),
     /// A file's upload ended.
-    Uploaded(Result<(tokio::task::Id, Uploaded), tokio::task::JoinError>),
+    Uploaded(Ended),
     /// A live event from the Marmot side.
     Marmot(Live),
     /// The core is asked to stop.
@@ -537,6 +565,16 @@ impl<D: Driver, M: Side> Core<D, M> {
         self
     }
 
+    /// Shares `reads`, the permits for the files read at once, with the cores before and after
+    /// it (D-145).
+    /// The core does not wait for a read left going as it ends, so a read stalled on a slow
+    /// folder holds up no next connector; it still holds its permit until it returns.
+    fn sharing_reads(mut self, reads: Arc<tokio::sync::Semaphore>) -> Self {
+        self.files.reads = reads;
+        self.files.owns_reads = false;
+        self
+    }
+
     /// A send is given up after MDK dropped `tries` of its tries: for the tests.
     pub fn rejected_sends(mut self, tries: u32) -> Self {
         self.rejected_tries = tries;
@@ -562,7 +600,7 @@ impl<D: Driver, M: Side> Core<D, M> {
 
     async fn run_until(
         &mut self,
-        mut events: M::Events,
+        events: M::Events,
         stop: impl Future<Output = ()>,
     ) -> Result<(), Unsaved> {
         // The agent's name goes out beside everything else, as a task the core ends when it stops.
@@ -570,6 +608,42 @@ impl<D: Driver, M: Side> Core<D, M> {
             let (marmot, relays) = (self.marmot.clone(), self.config.relays.clone());
             Ending(tokio::spawn(publish_name(marmot, name, relays)))
         });
+        if let Err(unsaved) = self.run_loop(events, stop).await {
+            // The core stops where it was, but its files end first: no upload or read it started
+            // goes on after it, whether or not what they did can be saved (D-145).
+            self.files.stop().await;
+            return Err(unsaved);
+        }
+        self.end_files().await?;
+        // Everything the stop closes is queued and saved at once, before any of it is sent: a
+        // crash in between sends what is left when the core starts again, and closes nothing
+        // twice.
+        let ended = self.conversation.ended();
+        self.retry.clear();
+        self.bounded = false;
+        self.carry_out(ended).await?;
+        self.flush_all().await?;
+        // What MDK has queued is asked after until its engine takes it, for a while, and what
+        // comes after it is sent then. What MDK is busy for waits for the next start.
+        let stopped = Instant::now();
+        while !self.queued.is_empty() && stopped.elapsed() < STOP_WAIT {
+            let next = (self.queued.iter())
+                .filter_map(|g| self.retry.get(g).map(|(at, _)| *at))
+                .min();
+            tokio::time::sleep_until(next.unwrap_or_else(Instant::now)).await;
+            for group in self.queued.clone() {
+                self.flush(&group).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Runs until the driver ends or `stop` resolves, or a save fails.
+    async fn run_loop(
+        &mut self,
+        mut events: M::Events,
+        stop: impl Future<Output = ()>,
+    ) -> Result<(), Unsaved> {
         // What a stopped core left queued goes first, then what it left open is closed.
         self.flush_all().await?;
         let recovered = self.conversation.recover();
@@ -676,27 +750,6 @@ impl<D: Driver, M: Side> Core<D, M> {
                 Woke::Marmot(Live::Closed) | Woke::Stop => break,
             }
         }
-        self.end_files().await?;
-        // Everything the stop closes is queued and saved at once, before any of it is sent: a
-        // crash in between sends what is left when the core starts again, and closes nothing
-        // twice.
-        let ended = self.conversation.ended();
-        self.retry.clear();
-        self.bounded = false;
-        self.carry_out(ended).await?;
-        self.flush_all().await?;
-        // What MDK has queued is asked after until its engine takes it, for a while, and what
-        // comes after it is sent then. What MDK is busy for waits for the next start.
-        let stopped = Instant::now();
-        while !self.queued.is_empty() && stopped.elapsed() < STOP_WAIT {
-            let next = (self.queued.iter())
-                .filter_map(|g| self.retry.get(g).map(|(at, _)| *at))
-                .min();
-            tokio::time::sleep_until(next.unwrap_or_else(Instant::now)).await;
-            for group in self.queued.clone() {
-                self.flush(&group).await?;
-            }
-        }
         Ok(())
     }
 
@@ -764,12 +817,9 @@ impl<D: Driver, M: Side> Core<D, M> {
                 turn,
                 folders,
             } = file;
-            let named = (id.clone(), chat.clone());
-            let task = self.files.uploading.spawn(async move {
-                let result = upload(marmot, reads, folders, path, &group, turn).await;
-                Uploaded { id, chat, result }
-            });
-            self.files.running.insert(task.id(), named);
+            let task = (self.files.uploading)
+                .spawn(async move { upload(marmot, reads, folders, path, &group, turn).await });
+            self.files.running.insert(task.id(), (id, chat));
         }
     }
 
@@ -777,27 +827,16 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// it (D-145). One uploading is stopped, and the driver hears it failed; MDK may have taken it
     /// already, so the chat is told nothing it may not be true of. One that ended meanwhile is told
     /// as it went. One waiting was never offered to MDK: the chat is told it was not sent.
+    /// Every upload and read has ended before any of it is told, so a save that fails while it
+    /// is told leaves none going.
     async fn end_files(&mut self) -> Result<(), Unsaved> {
-        self.files.uploading.abort_all();
-        while let Some(ended) = self.files.uploading.join_next_with_id().await {
-            let stopped = matches!(&ended, Err(error) if error.is_cancelled());
-            let detail = if stopped {
-                "The agent stopped while the file was being sent."
-            } else {
-                "It could not be uploaded or sent."
-            };
-            let Some(done) = self.files.ended(ended, detail) else {
-                continue;
-            };
+        for (done, stopped) in self.files.stop().await {
             if stopped {
                 self.driver.file_sent(done.id, done.result).await;
             } else {
                 self.file_done(done).await?;
             }
         }
-        // A read of a file whose upload was stopped goes on on its own thread until it returns:
-        // it is waited for, so none goes on after the core.
-        drop(self.files.reads.acquire_many(FILES_AT_ONCE as u32).await);
         for file in std::mem::take(&mut self.files.waiting) {
             let result = Err(Refusal {
                 reason: Reason::Failed,
@@ -1447,6 +1486,10 @@ async fn upload(
 /// for any driver that ends (D-058), and waits for the next. What arrives in between is stored by
 /// MDK, and read when the next connector has come. `since` is when the program subscribed to MDK
 /// ([`Subscribed`]), before any connector came: what arrives while one starts is not history.
+///
+/// The files being read are bounded across connectors: a read a connector's core left going, as
+/// one stalled on a slow folder, holds up no next connector, and keeps its permit until it
+/// returns. Its file reaches no MDK. Every read has returned before this does (D-145).
 pub async fn serve(
     marmot: Marmot,
     config: &Config,
@@ -1454,6 +1497,24 @@ pub async fn serve(
     listener: tokio::net::UnixListener,
     token: String,
     since: u64,
+    stop: impl std::future::Future<Output = ()>,
+) -> Result<(), String> {
+    let reads = Arc::new(tokio::sync::Semaphore::new(FILES_AT_ONCE));
+    let served = serve_on(marmot, config, store, listener, token, since, &reads, stop).await;
+    drop(reads.acquire_many(FILES_AT_ONCE as u32).await);
+    served
+}
+
+/// [`serve`], with the cores sharing `reads`.
+#[allow(clippy::too_many_arguments)]
+async fn serve_on(
+    marmot: Marmot,
+    config: &Config,
+    store: &Path,
+    listener: tokio::net::UnixListener,
+    token: String,
+    since: u64,
+    reads: &Arc<tokio::sync::Semaphore>,
     stop: impl std::future::Future<Output = ()>,
 ) -> Result<(), String> {
     let (stopping, stopped) = tokio::sync::watch::channel(false);
@@ -1486,7 +1547,8 @@ pub async fn serve(
             events: marmot.runtime.subscribe(),
             since,
         };
-        let core = Core::new(marmot.clone(), driver, config, Store::new(store))?;
+        let core = Core::new(marmot.clone(), driver, config, Store::new(store))?
+            .sharing_reads(reads.clone());
         let mut until = stopped.clone();
         let running = core.run(live, async move {
             let _ = until.wait_for(|stopping| *stopping).await;
@@ -2205,7 +2267,8 @@ mod tests {
         stop: tokio::sync::oneshot::Sender<()>,
         running: tokio::task::JoinHandle<Result<(), String>>,
         folder: tempfile::TempDir,
-        _state: tempfile::TempDir,
+        state: tempfile::TempDir,
+        config: Config,
     }
 
     /// A core on a [`Desk`], with a folder it may send `notes.txt` from, driving `driver` until
@@ -2217,10 +2280,50 @@ mod tests {
         running: tokio::task::JoinHandle<Result<(), String>>,
         folder: tempfile::TempDir,
         state: tempfile::TempDir,
+        config: Config,
+    }
+
+    /// Runs a core on `side` with `config`, keeping its state in `store`, driving `driver`, and
+    /// sharing `reads` with the cores before and after it, as [`serve`] does, if given. It runs
+    /// until the stop given back is sent.
+    fn run_on_desk(
+        side: &Desk,
+        config: &Config,
+        store: Store,
+        driver: impl Driver + 'static,
+        reads: Option<Arc<tokio::sync::Semaphore>>,
+    ) -> (
+        tokio::sync::oneshot::Sender<()>,
+        tokio::task::JoinHandle<Result<(), String>>,
+    ) {
+        let core = Core::new(side.clone(), driver, config, store).unwrap();
+        let core = match reads {
+            Some(reads) => core.sharing_reads(reads),
+            None => core,
+        };
+        let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+        let live = Subscribed {
+            events: (),
+            since: 0,
+        };
+        let running = tokio::spawn(core.run(live, async {
+            let _ = stopped.await;
+        }));
+        (stop, running)
     }
 
     impl OnDesk {
         fn start(driver: impl Driver + 'static) -> Self {
+            Self::start_with(driver, Store::new, None)
+        }
+
+        /// A core as [`OnDesk::start`] starts one, keeping its state in the store `store` makes
+        /// for a folder, and sharing `reads`, if given.
+        fn start_with(
+            driver: impl Driver + 'static,
+            store: impl FnOnce(&Path) -> Store,
+            reads: Option<Arc<tokio::sync::Semaphore>>,
+        ) -> Self {
             let folder = tempfile::tempdir().unwrap();
             std::fs::write(folder.path().join("notes.txt"), "hello").unwrap();
             let state = tempfile::tempdir().unwrap();
@@ -2244,15 +2347,7 @@ mod tests {
                 reads_open: Arc::new((Mutex::new(true), std::sync::Condvar::new())),
                 reading: Arc::default(),
             };
-            let core = Core::new(side.clone(), driver, &config, Store::new(state.path())).unwrap();
-            let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-            let live = Subscribed {
-                events: (),
-                since: 0,
-            };
-            let running = tokio::spawn(core.run(live, async {
-                let _ = stopped.await;
-            }));
+            let (stop, running) = run_on_desk(&side, &config, store(state.path()), driver, reads);
             Self {
                 side,
                 open,
@@ -2260,6 +2355,7 @@ mod tests {
                 running,
                 folder,
                 state,
+                config,
             }
         }
 
@@ -2278,16 +2374,36 @@ mod tests {
         }
     }
 
+    /// A [`Hand`], and what the test keeps to steer and watch it.
+    fn hand() -> (
+        Hand,
+        mpsc::UnboundedSender<Output>,
+        mpsc::UnboundedReceiver<marmot_agent_driver::Prompt>,
+        Told,
+    ) {
+        let (outputs, outputs_in) = mpsc::unbounded_channel();
+        let (prompts_out, prompts) = mpsc::unbounded_channel();
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let driver = Hand {
+            outputs: outputs_in,
+            prompts: prompts_out,
+            told: told.clone(),
+        };
+        (driver, outputs, prompts, told)
+    }
+
     impl Desked {
         fn start() -> Self {
-            let (outputs, outputs_in) = mpsc::unbounded_channel();
-            let (prompts_out, prompts) = mpsc::unbounded_channel();
-            let told = Arc::new(Mutex::new(Vec::new()));
-            let driver = Hand {
-                outputs: outputs_in,
-                prompts: prompts_out,
-                told: told.clone(),
-            };
+            Self::start_with(Store::new, None)
+        }
+
+        /// A core as [`Desked::start`] starts one, keeping its state in the store `store` makes
+        /// for a folder, and sharing `reads`, if given.
+        fn start_with(
+            store: impl FnOnce(&Path) -> Store,
+            reads: Option<Arc<tokio::sync::Semaphore>>,
+        ) -> Self {
+            let (driver, outputs, prompts, told) = hand();
             let OnDesk {
                 side,
                 open,
@@ -2295,7 +2411,8 @@ mod tests {
                 running,
                 folder,
                 state,
-            } = OnDesk::start(driver);
+                config,
+            } = OnDesk::start_with(driver, store, reads);
             Self {
                 side,
                 open,
@@ -2305,8 +2422,28 @@ mod tests {
                 stop,
                 running,
                 folder,
-                _state: state,
+                state,
+                config,
             }
+        }
+
+        /// The next core on the same desk, folder and state, driving a new [`Hand`] and sharing
+        /// `reads`, as the next connector's is: what this one's driver was told stays in
+        /// `told`, as the earlier driver's.
+        fn again(self, reads: Arc<tokio::sync::Semaphore>) -> (Self, Told) {
+            let (driver, outputs, prompts, told) = hand();
+            let store = Store::new(self.state.path());
+            let (stop, running) = run_on_desk(&self.side, &self.config, store, driver, Some(reads));
+            let earlier = self.told;
+            let next = Self {
+                outputs,
+                prompts,
+                told,
+                stop,
+                running,
+                ..self
+            };
+            (next, earlier)
         }
 
         /// The next prompt the driver is given, within a few seconds.
@@ -2457,6 +2594,102 @@ mod tests {
             assert!(told.iter().all(|(_, r)| r.is_err()), "none was sent");
             assert_eq!(desk.side.not_sent(), 0, "the chat is told nothing of them");
         }
+    }
+
+    // A save that fails while files are being read stops the core where it was, but not before
+    // every upload is stopped and every read has returned: none goes on after the core, and none
+    // of those files reaches MDK (D-145).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_failed_save_still_ends_every_upload_and_read() {
+        let failing = Arc::new(AtomicBool::new(false));
+        let fail = failing.clone();
+        let store = move |dir: &Path| Store::failing_when(dir, move |_| fail.load(SeqCst)).0;
+        let mut desk = Desked::start_with(store, None);
+        desk.side.say("go");
+        let chat = desk.prompted().await.chat.id;
+        desk.side.hold_reads(true);
+        desk.send_files(&chat, 0, FILES_AT_ONCE);
+        until(|| (desk.side.reading().0 == FILES_AT_ONCE).then_some(())).await;
+        // The disk fills, and the next message read is a save the core cannot make.
+        failing.store(true, SeqCst);
+        desk.side.say("and then");
+        let side = desk.side.clone();
+        let slow_disk = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            side.hold_reads(false);
+        });
+        let ended = tokio::time::timeout(Duration::from_secs(5), desk.running).await;
+        let reading = desk.side.reading().0;
+        desk.side.hold_reads(false);
+        slow_disk.await.unwrap();
+        let ran = ended.expect("the core ends once the reads have").unwrap();
+        assert_eq!(
+            ran,
+            Err(UNSAVED.to_string()),
+            "the save's error is the core's"
+        );
+        assert_eq!(reading, 0, "no read goes on after the core");
+        assert_eq!(desk.side.offers(), 0, "no file read was offered to MDK");
+    }
+
+    // A read left going when a connector goes holds up no next connector: the core it drove
+    // ends at once, the next is served while the read goes on, and the read, once it returns,
+    // reaches no MDK. It still holds its permit until then, so the reads under way stay bounded
+    // across connectors (D-145).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_read_left_going_holds_up_no_next_connector() {
+        let reads = Arc::new(tokio::sync::Semaphore::new(FILES_AT_ONCE));
+        let mut desk = Desked::start_with(Store::new, Some(reads.clone()));
+        desk.open.send(true).unwrap();
+        desk.side.say("go");
+        let chat = desk.prompted().await.chat.id;
+        desk.side.hold_reads(true);
+        desk.send_files(&chat, 0, 1);
+        until(|| (desk.side.reading().0 == 1).then_some(())).await;
+        // The connector goes.
+        let (outputs, _) = mpsc::unbounded_channel();
+        drop(std::mem::replace(&mut desk.outputs, outputs));
+        let running = std::mem::replace(&mut desk.running, tokio::spawn(async { Ok(()) }));
+        let ended = tokio::time::timeout(Duration::from_secs(2), running).await;
+        if ended.is_err() {
+            // Let the read go, so the failure is reported and does not hang the test.
+            desk.side.hold_reads(false);
+        }
+        ended
+            .expect("the core ends with the read still going")
+            .unwrap()
+            .unwrap();
+        assert_eq!(desk.side.reading().0, 1, "the read goes on");
+        let (mut desk, earlier) = desk.again(reads.clone());
+        desk.side.say("still there?");
+        let prompt = desk.prompted().await;
+        assert_eq!(prompt.text, "still there?");
+        assert_eq!(
+            reads.available_permits(),
+            FILES_AT_ONCE - 1,
+            "the read holds its permit"
+        );
+        // The disk comes back: the read returns, and its file goes nowhere.
+        desk.side.hold_reads(false);
+        until(|| (desk.side.reading().0 == 0).then_some(())).await;
+        until(|| (reads.available_permits() == FILES_AT_ONCE).then_some(())).await;
+        assert_eq!(
+            desk.side.offers(),
+            0,
+            "the file read was not offered to MDK"
+        );
+        let told = earlier.lock().unwrap().clone();
+        assert!(
+            matches!(told.as_slice(), [(_, Err(_))]),
+            "the driver it was for heard it failed: {told:?}"
+        );
+        // The next connector's files go as ever.
+        desk.send_files(&prompt.chat.id, 1, 1);
+        let told = desk.told(1).await;
+        assert!(told[0].1.is_ok(), "its file was sent: {told:?}");
+        assert_eq!(desk.side.offers(), 1);
+        let _ = desk.stop.send(());
+        desk.running.await.unwrap().unwrap();
     }
 
     /// A connector on the socket, as the test plays it: it has given its hello.
