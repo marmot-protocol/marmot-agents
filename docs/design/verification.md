@@ -433,7 +433,7 @@ counts.
 | `conversation.rs` | S3 and the outbox: over the driver's events, sends, refusals, drops and restarts from the state file, an item's versions rise by one skipping only refused ones, later versions name the first event, and a send keeps its name and its token across tries and restarts, with a new token only after a drop |
 | `debug.rs` | S8, D-071: no value of an event or a request appears in what any of their types prints |
 | `lines.rs` | S11, D-033: the socket's lines arrive whole in parts of any size |
-| `crates/marmot-agent-conformance/tests/translators.rs` | Codex's, the ACP agents' and Pi's translators over every recording with messages repeated, dropped, swapped, and the harness dying at any line: D-007 (each native message is text that arrived) and `seq` always; S2 (all closed after the harness stops) and no item reopening once ended, when messages were only repeated or the harness died |
+| `crates/marmot-agent-conformance/tests/translators.rs` | Codex's, the ACP agents' and Pi's translators over every recording with messages repeated, dropped, swapped, stripped of their `params` and `result`, and the harness dying at any line: D-007 (each native message is the message the translator was reading, or the whole value of one of its fields, byte for byte: `marmot_agent_conformance::native`, which the fuzz targets use too) and `seq` always; S2 (all closed after the harness stops) and no item reopening once ended, when messages were only repeated or the harness died |
 
 **What they found.** The request property found that the core read the first of repeated `p`, `e` or `details`
 tags of a kind 1202, and an `e` that is no event id, all of which MDK, and so every app, refuses: the core could
