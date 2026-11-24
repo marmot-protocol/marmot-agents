@@ -12,7 +12,9 @@ It reads the first line of every `*.jsonl` under `<folder>` (`{"cassette": 1, "h
   (unless `--offline`). A harness it has no lookup for is reported once, so the list stays complete.
 
 It prints one line per finding. It exits 0 whatever it finds, so a pull request is told and not held up,
-and with `--strict` exits 1 when it finds any, so a nightly job can fail and open an issue with the output.
+and with `--strict` exits 1 when a cassette is stale, so a nightly job can fail and open an issue with the output.
+A newer release alone is reported and does not fail (D-127): drift shows as a request the cassette cannot
+match, not as a forced recording, which needs a key, on every release.
 A `<folder>` that is not there is an error, exit 2, with or without `--strict`.
 It needs no key: the lookups are public. It uses the standard library only.
 """
@@ -87,7 +89,7 @@ def main() -> int:
     ap.add_argument("folder", type=Path)
     ap.add_argument("--max-age", type=int, default=14)
     ap.add_argument("--offline", action="store_true", help="do not look up releases")
-    ap.add_argument("--strict", action="store_true", help="exit 1 when anything is found")
+    ap.add_argument("--strict", action="store_true", help="exit 1 when a cassette is stale")
     ap.add_argument("--today", type=datetime.date.fromisoformat, default=datetime.date.today())
     args = ap.parse_args()
     if not args.folder.is_dir():
@@ -95,7 +97,12 @@ def main() -> int:
     found = check(args.folder, args.today, args.max_age, None if args.offline else npm_latest)
     for line in found:
         print(line)
-    return 1 if found and args.strict else 0
+    return 1 if args.strict and failing(found) else 0
+
+
+def failing(found: list[str]) -> bool:
+    """Whether the findings fail a `--strict` run: only a stale cassette does (D-127)."""
+    return any(line.startswith("stale:") for line in found)
 
 
 if __name__ == "__main__":

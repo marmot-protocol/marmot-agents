@@ -498,8 +498,9 @@ failing scenario, and the fix is in one file. Scripts drift with the scenarios t
 **Staleness.** `tools/model_double/check_cassettes.py` reports each cassette older than 14 days, and each harness
 whose latest release (npm) is newer than the version a cassette was recorded with. It needs no key. A pull
 request runs it offline, in the Recordings job, and each finding is a warning that does not fail it. The nightly
-run adds `--strict`, which exits 1 on a finding, and opens an issue with the output: a cassette due for its age,
-or for a newer release of its harness. The replay test prints the
+run adds `--strict`, which exits 1 when a cassette is due for its age, and opens an issue with the output,
+newer releases of its harness included. A newer release alone fails nothing: Claude Code ships most days, and
+recording needs a key. The replay test prints the
 Claude Code version when it differs from the cassette's, and does not fail on it: failing would make every pull
 request that bumps a harness re-record, which needs a key. A request the cassette has no exchange for still fails.
 
@@ -514,7 +515,7 @@ runs in three tiers ([D-130](../decisions.md#d-130-ci-runs-in-three-tiers-with-o
 | --- | --- |
 | Every pull request, aimed at under 10 minutes | Formatting and Clippy; the workspace's tests in two jobs side by side, the core's and every other, with the conformance suite (about 30 s) and real Claude Code and Codex on the [model double](#11-a-model-double) in the core's; the simulator on a fixed set of seeds at its normal count (20 runs of each gate family from seed 0, in release, in its own job); TLC on small bounds, every model's cases in five jobs, only when the models or the code they follow changed; the TypeScript, Python, install-script, recording and document checks, and the cassettes' age as a warning. Planned: property tests at normal counts, Kani on the small proofs, the privacy scan |
 | The merge queue, and each push to `master`, aimed at under 30 minutes | All of the above whatever changed; the simulator at 200 runs of each family; the move-over tests that need Docker and no key (Hermes and OpenClaw installs moved over, on the model double, scripted) |
-| Nightly (`.github/workflows/nightly.yml`) | The simulator on a new seed each night, 5,000 runs of each family, its capsules kept; TLC on `CoreLifecycle`'s larger bounds, safety only (liveness there takes hours and is run by hand); a coverage report (`cargo llvm-cov`, a report only); mutation testing on a 64th of the core's 1,639 mutants (the simulator's hooks left out, since only it exercises them), by the day of the year, so each shard runs about every two months; the cassettes' age and harness releases, failing (`check_cassettes.py --strict`, [the model double](#11-a-model-double)). Planned: property tests at high counts, fuzzing. A failed job opens an issue, with the mutants missed or the cassettes due |
+| Nightly (`.github/workflows/nightly.yml`) | The simulator on a new seed each night, 5,000 runs of each family, its capsules kept; TLC on `CoreLifecycle`'s larger bounds, safety only (liveness there takes hours and is run by hand); a coverage report (`cargo llvm-cov`, a report only); mutation testing on a 64th of the core's 1,639 mutants (the simulator's hooks left out, since only it exercises them), by the day of the year, so each shard runs about every two months; the cassettes' age, failing, with newer harness releases reported (`check_cassettes.py --strict`, [the model double](#11-a-model-double)). Planned: property tests at high counts, fuzzing. A failed job opens an issue, with the mutants missed or the cassettes due |
 | Weekly (planned) | Long simulator campaigns |
 
 ## In what order

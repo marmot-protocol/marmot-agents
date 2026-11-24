@@ -407,6 +407,15 @@ class Staleness(unittest.TestCase):
         self.assertEqual((strict.returncode, strict.stdout), (1, report.stdout))
         self.assertEqual((fresh.returncode, fresh.stdout), (0, ""))
 
+    def test_only_a_stale_cassette_fails_the_nightly_run(self):
+        # A newer release is reported, and fails nothing: a harness that drifts fails its replay (D-127).
+        newer = "newer: claude-code 2.1.331 is out; cassettes were recorded with 2.1.326"
+        stale = "stale: a.jsonl was recorded 22 days ago, on 2026-11-01; record it again"
+        unknown = "unknown: no release lookup for hermes; check it by hand"
+        self.assertFalse(check_cassettes.failing([newer, unknown]))
+        self.assertTrue(check_cassettes.failing([newer, stale]))
+        self.assertFalse(check_cassettes.failing([]))
+
     def test_a_folder_that_is_not_there_fails(self):
         # A mistyped folder is an error, even without --strict; an empty one finds nothing.
         script = Path(__file__).parent / "check_cassettes.py"

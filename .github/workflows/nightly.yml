@@ -253,11 +253,11 @@ jobs:
 
   cassettes:
     name: The model double's cassettes
-    # D-127: a cassette older than 14 days fails the nightly run, and so does a harness with a
-    # release newer than the one a cassette was recorded with, which the script looks up in npm's
-    # registry; both mean it is time to record it again, which needs a key and is done by hand
-    # (tools/model_double/README.md). Its findings are cassettes' names, dates and versions, and
-    # go to the issue.
+    # D-127: a cassette older than 14 days fails the nightly run, which means it is time to record
+    # it again; that needs a key and is done by hand (tools/model_double/README.md). A harness with
+    # a release newer than the one a cassette was recorded with, which the script looks up in npm's
+    # registry, is reported with it and fails nothing: drift shows as a replay that cannot match.
+    # Its findings are cassettes' names, dates and versions, and go to the issue.
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -267,7 +267,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Each cassette is younger than 14 days, and its harness has no newer release
+      - name: Each cassette is younger than 14 days; newer harness releases are reported
         id: check
         run: |
           set -euo pipefail

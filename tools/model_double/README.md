@@ -68,7 +68,9 @@ request body: only each request's key and the model's reply.
 `check_cassettes.py` reports every cassette older than 14 days and every harness with a release newer than the
 one a cassette was recorded with. It needs no key. A pull request runs it offline, and its findings are
 warnings that do not fail it. The nightly run (`.github/workflows/nightly.yml`) adds `--strict`, which exits 1
-on any finding, and opens an issue with the output
+when a cassette is stale, and opens an issue with the output, newer releases included. A newer release alone
+fails nothing: Claude Code ships most days, and each recording needs a key, so drift shows instead as a replay
+that cannot match
 ([D-127](../../docs/decisions.md#d-127-real-harnesses-run-in-ci-on-the-model-double-with-no-model-key)). A folder that is not there is an error, exit 2, in either.
 
 ```sh
