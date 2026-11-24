@@ -2358,18 +2358,68 @@ async fn a_stop_of_one_subagent_stops_it_and_those_it_started_alone() {
     assert_eq!(settling.event.header().state, State::Cancelled);
 }
 
-// A Stop of a nested subagent stops it alone, not the subagent that started it.
+// A Stop of a subagent that has finished stops what it started that still works, and the turns
+// that start under it while the Stop waits: its own next turn, and that of a subagent it starts
+// meanwhile. A new turn of another subagent's is left alone, and the Stop is settled once, by the
+// end of the last of them (D-123, D-149). That a nested subagent's Stop leaves its parent is the
+// conformance suite's `stop_stops_one_subagent`.
 #[tokio::test]
-async fn a_stop_of_a_nested_subagent_leaves_its_parent() {
-    let (codex, mut fake) = three_subagents().await;
+async fn a_stop_of_a_finished_subagent_stops_what_starts_under_it_while_it_waits() {
+    let (mut codex, mut fake) = three_subagents().await;
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "completed"))
+        .await;
+    read_so_far(&mut codex, &mut fake).await;
     let driver = tokio::spawn(async move {
         let mut codex = codex;
-        codex.control(stop_one("r1", "task:sub3")).await.unwrap();
+        codex.control(stop_one("r1", "task:sub1")).await.unwrap();
         codex
     });
     let mut codex = driver.await.unwrap();
-    let (written, _) = read_so_far(&mut codex, &mut fake).await;
-    assert_eq!(interrupted(&written), [("sub3".into(), "st3".into())]);
+    let (mut written, _) = read_so_far(&mut codex, &mut fake).await;
+    assert_eq!(
+        interrupted(&written),
+        [("sub3".into(), "st3".into())],
+        "what of it still works: {written:?}"
+    );
+    fake.say(sub_turn("turn/started", "sub1", "st4", "inProgress"))
+        .await;
+    fake.say(
+        json!({"method": "thread/started", "params": {"thread": {"id": "sub4",
+        "parentThreadId": "sub1"}}}),
+    )
+    .await;
+    fake.say(sub_turn("turn/started", "sub4", "st5", "inProgress"))
+        .await;
+    fake.say(sub_turn("turn/completed", "sub2", "st2", "completed"))
+        .await;
+    fake.say(sub_turn("turn/started", "sub2", "st6", "inProgress"))
+        .await;
+    let (more, events) = read_so_far(&mut codex, &mut fake).await;
+    assert!(!events.iter().any(settles_r1), "settled too soon");
+    written.extend(more);
+    assert_eq!(
+        interrupted(&written),
+        [
+            ("sub1".into(), "st4".into()),
+            ("sub3".into(), "st3".into()),
+            ("sub4".into(), "st5".into())
+        ],
+        "not sub2's: {written:?}"
+    );
+    for m in written.iter().filter(|m| m["method"] == "turn/interrupt") {
+        fake.say(json!({"id": m["id"], "result": {}})).await;
+    }
+    for (thread, turn) in [("sub3", "st3"), ("sub1", "st4")] {
+        fake.say(sub_turn("turn/completed", thread, turn, "interrupted"))
+            .await;
+    }
+    let (_, events) = read_so_far(&mut codex, &mut fake).await;
+    assert!(!events.iter().any(settles_r1), "settled while sub4 works");
+    fake.say(sub_turn("turn/completed", "sub4", "st5", "interrupted"))
+        .await;
+    let (_, events) = read_so_far(&mut codex, &mut fake).await;
+    let settling: Vec<&Emitted> = events.iter().filter(|e| settles_r1(e)).collect();
+    assert_eq!(settling.len(), 1, "settled once, by the last: {events:?}");
 }
 
 // A Stop of a subagent the driver does not know is refused as having nothing to do: it does not
