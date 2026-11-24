@@ -54,6 +54,11 @@ pub struct Knobs {
     /// The harness dies on reading the n-th frame from the driver, counted over every process of
     /// the fake ([`Fake::frames`]), before it answers that frame.
     pub die_after: Option<usize>,
+    /// For a connector on the socket, whose harness runs inside it: the connection to the core
+    /// drops when the harness reads the n-th frame, counted as for `die_after`, once the harness
+    /// has it and before the connector answers the core. A disconnect after delivery and before
+    /// the response. A driver built into the core has no such connection, and ignores it.
+    pub drop_after: Option<usize>,
 }
 
 /// What a fake harness understood the driver to say, the same for every harness.
@@ -363,6 +368,34 @@ impl Fake {
     /// The processes that died since this was last asked, by their tags.
     pub fn take_dead(&self) -> Vec<Option<String>> {
         std::mem::take(&mut self.shared().dead)
+    }
+
+    /// A harness that runs out of the suite's reach, inside a connector on the socket, understood
+    /// something, as it reports it.
+    pub fn record_heard(&self, heard: Heard) {
+        self.shared().heard.push(heard);
+    }
+
+    /// Such a harness read a frame, in the process with `tag`. Gives the count over every process,
+    /// as [`Fake::frames`] does.
+    pub fn record_frame(&self, tag: Option<String>) -> usize {
+        let mut shared = self.shared();
+        shared.frames += 1;
+        shared.log.push(Did::Read(tag));
+        shared.frames
+    }
+
+    /// Such a harness's process, with `tag`, died.
+    pub fn record_death(&self, tag: Option<String>) {
+        let mut shared = self.shared();
+        shared.deaths += 1;
+        shared.log.push(Did::Died(tag.clone()));
+        shared.dead.push(tag);
+    }
+
+    /// Changes whenever the knobs change, for a harness that must be told them.
+    pub fn knobs_changed(&self) -> watch::Receiver<u64> {
+        self.turned.subscribe()
     }
 
     /// Every running harness process dies now.

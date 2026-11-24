@@ -289,6 +289,16 @@ install scripts:
 cargo test --locked --all-features -p marmot-agent --test import_gateways -- --ignored --nocapture --test-threads=1
 ```
 
+The socket connectors, Claude Code, Hermes and OpenClaw, run the same conformance suite over the core's real
+socket, each with a scripted harness inside it (`crates/marmot-agent/tests/conformance_socket.rs`). They need
+Python 3.14 and Node 24 with `npm ci` run in both packages, so the test is ignored in the core's tests and CI
+runs it in a job of its own, `Conformance (socket)`. Run it for a change to a connector, the core's socket or
+the suite:
+
+```sh
+cargo test --locked --all-features -p marmot-agent --test conformance_socket -- --ignored
+```
+
 Every other ignored test needs a model key or a signed-in harness, and CI runs none of them.
 
 A failure prints the path of a capsule, and CI keeps the capsules as the run's `simulator-capsules` artifact;

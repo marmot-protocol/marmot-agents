@@ -89,19 +89,25 @@ pub fn covered(run: &[&str], left_out: &[&str]) -> Result<(), String> {
 }
 
 /// A turn of the chat's that responds to `message`.
-fn turn_of(message: &MessageId) -> impl Fn(&Emitted) -> bool + '_ {
+pub(crate) fn turn_of(message: &MessageId) -> impl Fn(&Emitted) -> bool + '_ {
     move |e| matches!(e.event.body(), Body::Turn(_)) && e.prompts.contains(message)
 }
 
-fn ended_turn_of(message: &MessageId) -> impl Fn(&Emitted) -> bool + '_ {
+pub(crate) fn ended_turn_of(message: &MessageId) -> impl Fn(&Emitted) -> bool + '_ {
     move |e| turn_ended(e) && e.prompts.contains(message)
 }
 
-fn of_chat<'a>(chat: &'a str, f: impl Fn(&Emitted) -> bool + 'a) -> impl Fn(&Emitted) -> bool + 'a {
+pub(crate) fn of_chat<'a>(
+    chat: &'a str,
+    f: impl Fn(&Emitted) -> bool + 'a,
+) -> impl Fn(&Emitted) -> bool + 'a {
     move |e| e.chat.as_ref().is_some_and(|c| c.0 == chat) && f(e)
 }
 
-fn taken<T>(result: Result<T, marmot_agent_driver::Refusal>, what: &str) -> Result<T, Violation> {
+pub(crate) fn taken<T>(
+    result: Result<T, marmot_agent_driver::Refusal>,
+    what: &str,
+) -> Result<T, Violation> {
     result.map_err(|r| broke("L3", format!("{what} was refused: {r:?}")))
 }
 

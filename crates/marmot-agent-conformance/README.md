@@ -12,7 +12,9 @@ tested (2026-11-23): five were real and are fixed, below; Pi's compaction was no
 A review of those fixes found four more, fixed the same day: an ACP approval repeated for one tool call could take
 the name of another's first, an ACP request id spelled with escapes was not found, two Pi new sessions asked for at
 once were both settled by the first, and Codex did not count a resolved request of another thread.
-Phase two, the socket connectors, is a design, below. Everything here is internal: it ships in no program.
+Phase two, the socket connectors, is built (2026-11-24), below, for the four contracts issue #154 named: chat
+isolation, a request settled once, what the next connection is handed, and a connection that drops after
+delivery. Everything here is internal: it ships in no program.
 
 ## How it fits
 
@@ -251,49 +253,91 @@ not compile.
 To add a driver: write a `Subject` for it in `tests/`, on a fake of its harness (a `Protocol`), and make its tests
 from `with_scenarios!`.
 
-## Phase two: the socket connectors (design)
+## Phase two: the socket connectors
 
-The Claude Code driver (`packages/claude-code`), the OpenClaw plugin (`packages/openclaw`) and the Hermes plugin
-(`python/marmot_hermes`) reach the core over the socket, and each carries its own copy of the settling logic. They
-join the suite by running **the real connector over the real socket**, as the core runs it, with a scripted fake
-harness inside it in place of the real one. The Rust suite drives it through `SocketDriver`, so the scenarios, the
-checker and the faults stay as they are.
+Built on 2026-11-24, as designed on 2026-11-22 but for what is said here. The Claude Code driver
+(`packages/claude-code`), the OpenClaw plugin (`packages/openclaw`) and the Hermes plugin (`python/marmot_hermes`)
+reach the core over the socket, and each carries its own copy of the settling logic. They run the suite as **the
+shipped connector over the real socket**, as the core runs it, with a scripted harness inside it in place of the real
+one, driven through the core's own `SocketDriver`, so the scenarios and the checker stay as they are. No model, no
+key and no network.
 
 ```text
- Rust test ──Run──▶ SocketDriver ══ the socket ══▶ connector (real) ──▶ fake harness (in the connector)
+ Rust test ──Run──▶ SocketDriver ══ the socket ══▶ connector (shipped) ──▶ scripted harness (in the connector)
      ▲                                                                       │
-     └────────────── control channel: knobs and kills in, Heard out ◀────────┘
+     └────────────── control channel: frames and Heard out, the suite's word in ◀──┘
 ```
 
-**The control channel.** One small protocol, the same for all three: JSON lines on the connector process's standard
-input and output, which the real connector does not use for anything else (its log goes elsewhere). In:
-`{"knobs": {...}}`, the same fields as `Knobs` (`late`, `slow`, `never`, `die_after`, …), and `{"kill": true}`. Out:
-`{"heard": {...}}` in the `Heard` shapes, `{"frame": "<kind>"}` for each call the connector made on the harness, and
-`{"died": true}`. The fake reads the same prompt words (`#ask`, `#quiz`, `#sleep`, `#die`) and echoes the prompt.
-
-**The Rust side.** A `Subject` named `SocketOnFake`, in a test of the core crate
-(`crates/marmot-agent/tests/conformance_socket.rs`, with this crate as a dev-dependency), since `SocketDriver` lives
-there and that crate's tests are already built in CI. `start` listens with `Endpoint::in_home` on a throwaway home, spawns
-the connector's fake-harness entry with `MARMOT_AGENT_HOME` set, accepts, and `greet`s, with `answer_within` short. A
-bridge task copies what comes on the channel into the `Fake` (which gains `record_heard`, `record_frame` and
-`record_death`) and sends it the knobs. A restart kills the connector process, which also exercises what the
-simulator leaves to this suite: a connector that drops mid-request, and the one that takes its place (L4).
-
-**What each connector needs**, the smallest way:
-
-| Connector | The seam it has | What to add |
+| Part | Where | What it does |
 | --- | --- | --- |
-| Hermes | `Connector(hermes, send_to_core, …)` takes the Hermes object; `FakeHermes` in `python/tests/test_connector.py` | `python/tests/conformance_harness.py`: a `ScriptedHermes` grown from `FakeHermes`, run by the adapter's real socket client, reading the channel. Standard library only, as the plugin is. The smallest of the three: do it first |
-| Claude Code | `connector.ts` takes the SDK's `query` as a parameter; `FakeQuery` in `test/transport.test.ts` | `test/conformance-harness.ts`: a scripted `QueryFn` grown from `FakeQuery` (an async generator of SDK messages: init, assistant text, `tool_use`, result; `canUseTool` for `#ask`, `AskUserQuestion` for `#quiz`, `interrupt()` for `#sleep`, a thrown error for `#die`), and an entry that runs `main.ts`'s transport with it. Run with the Node CI already pins |
-| OpenClaw | the connector talks to the gateway through a `Port`; `FakeOpenClaw` in `test/transport.test.ts` | `test/conformance-harness.ts`: a scripted `Port` grown from `FakeOpenClaw` (runs, approvals vouched as OpenClaw vouches them), and an entry that starts the plugin's connector without a gateway |
+| `OnSocket` | `crates/marmot-agent/tests/conformance_socket.rs` | The `Subject`: listens with `Endpoint::in_home` on a throwaway home, starts the connector's entry, takes its connection and `greet`s it; a restart drops the connection, as the core's restart does |
+| Hermes's entry | `python/tests/conformance_harness.py` | The plugin's own `MarmotAdapter` and its reconnecting socket client, with Hermes's `gateway` modules stood in for and what Hermes does played by a script |
+| Claude Code's entry | `packages/claude-code/test/conformance-harness.ts` | The driver's own `run`, with a scripted `query` in place of the SDK's: `init` at each turn, `canUseTool` for an approval, AskUserQuestion for a question, `interrupt()` |
+| OpenClaw's entry | `packages/openclaw/test/conformance-harness.ts`, `test/conformance-sdk.ts` | The plugin as OpenClaw loads it, its account started by `startAccount`, with a scripted channel runtime and plugin SDK: runs, an exec approval through the plugin's approval adapter, `ask_user`, `/stop` |
+| Socket scenarios | `src/socket.rs` | `reconnect` and `dropped_after_delivery`, below |
 
-Faults that need frames on the harness's side (`partial`, half a frame) do not apply: these harnesses are libraries
-called in process. In their place the channel can make the connector's own socket writes come in pieces, through its
-`socket.ts` or `core.py` writer, so the core's reader is tried the same way.
+**The control channel.** JSON lines on the connector process's standard input and output, which no connector uses
+for anything else (their logs go to standard error). Out: `{"heard": {...}}` in the `Heard` shapes, and
+`{"frame": <kind>, "wait": true}` for each call the connector made on its harness, written after what the harness
+heard in it. The harness then waits for the suite's word: `{"go": true}`, or `{"die": true}`, when it dies there.
+The process ending is the harness dying, unless the suite ended it. A frame is counted as `Fake::frames` counts
+them (`Fake::record_frame`), so `Knobs::die_after` applies, and a new knob, `Knobs::drop_after`, has the suite drop
+the connection, from the core's end, at that frame: once the harness has the request, and before the connector's
+response, where the connector answers only once its harness has it.
 
-**CI.** One job, `Conformance (socket)`, beside the Rust tests: Node and Python at the versions CI already pins, the Rust
-build from the shared cache, and the core crate's conformance test alone. It should take as long as the simulator's job,
-inside the 15 minutes (D-094).
+**Each connector, as it lives.** Hermes and OpenClaw run inside their gateway, which goes on when the connection
+drops: they connect again, and the next `start` takes that connection. Claude Code's connector ends with its
+connection, and the next is started, as the core starts it; its scripted Claude Code takes up a session it is
+asked to resume.
 
-**Owner questions, when it is built:** none expected; the entries are test-only and nothing the connectors send
-changes.
+**What each runs** (`conformance!` in the test):
+
+| Connector | Scenarios | Left out |
+| --- | --- | --- |
+| Hermes | `one_turn`, `two_chats`, `answered_once`, `reconnect`, `dropped_after_delivery` | `restart`: Hermes keeps its own sessions (`sessions: own`), so the core never names one, and the scenario checks that a named one is taken up |
+| Claude Code | the same, and `restart` | |
+| OpenClaw | as Hermes | as Hermes |
+
+The rest of `with_scenarios!` is not run yet: the faults on the harness's pipe (pieces, half frames, a harness that
+stops reading) do not apply, as these harnesses are libraries called in process, and deaths at each step, files,
+settings and new sessions are not scripted yet.
+
+| Scenario | What happens |
+| --- | --- |
+| `reconnect` | A turn, then an approval waits in another chat, and the connection drops: nothing of the first connection is settled on the next (S1) or shown there again (S13), an answer to the approval asked before is refused (S11), and the first chat's next prompt is answered |
+| `dropped_after_delivery` | The connection drops once the harness has a prompt; the connector connects again, and the chat's next prompt is answered, with the first heard once (S4). Then the same for an answer to an approval: whatever the core was told, it reached the harness once (S11), and nothing the old connection was handed is settled on the next (S1) |
+
+`Run` names a turn's prompts on its later events as its first event named them, as the core keeps them
+(`started_by`): the socket connectors name a turn's prompts only on its first event, and the suite's scenarios
+wait for a turn's end by its prompt.
+
+Found, each fixed after its scenario failed:
+
+- **The core counted a request as failed when its connection dropped after the event that showed its effect**
+  (`dropped_after_delivery`, OpenClaw). The plugin sends the event that settles an answer before its response; a
+  connection that dropped between them had the core refuse the answer as failed, then hand on the event that
+  settled it: settled twice (S1), and the chat told the answer failed though it was taken. The same held for a
+  prompt whose turn had started. Now `SocketDriver` counts a request as taken once an event it read while waiting
+  for the response settles it, or, for a prompt, names it as a turn's prompt
+  ([D-147](../../docs/decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken)).
+- **OpenClaw's plugin settled an interrupt with a turn end it made up** (`two_chats`). A stopped OpenClaw run
+  reports no outcome, so the plugin closes the turn on OpenClaw's reply to `/stop`, but marked the end as its own,
+  with no native message, and an event a driver makes up shows no effect (S1, D-059). The end now carries that
+  reply, the line it follows from, in the plugin's translator and the prototype; `stop.jsonl`'s expected events
+  changed by that one native message.
+
+Shown to catch a connector put wrong by hand: Hermes's plugin with its `core_gone` keeping the items the old core
+closed open, which `reconnect` reports as S11.
+
+Not a bug, and left as it is: when its connection drops, Hermes's plugin cancels a request it is still handing to
+Hermes (`core.py`), so a prompt then perhaps never reaches Hermes. The core already counts such a prompt as perhaps
+not delivered (D-129). The Hermes entry reports what Hermes heard before it waits for the suite's word, so the drop
+comes after delivery.
+
+**CI.** One job, `Conformance (socket)`, beside the Rust tests: Node and Python at the versions CI pins, both
+packages' `npm ci`, the core crate's build from the core's cache, and this test alone, which is ignored in the
+core's tests. About a minute once built.
+
+```sh
+cargo test --locked --all-features -p marmot-agent --test conformance_socket -- --ignored
+```
