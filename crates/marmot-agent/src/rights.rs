@@ -57,27 +57,70 @@ impl Rights {
 
 /// The right a message needs: to approve when it carries one of the harness's typed commands
 /// that approve or widen what the agent may do, where that command counts (D-047), and to prompt
-/// otherwise. A harness reads a command in any case and with a bot's name after it (`/yolo@bot`),
-/// so the match ignores case and ends at anything that cannot continue a command's name. A
-/// command that counts at the start counts at the start of any line, since a harness may drop
-/// lines before it, as Hermes drops lines naming attachments.
+/// otherwise. The match reads a message as any harness may read it, and when the harnesses differ
+/// it takes every reading, so it only ever asks for the right to approve more often (D-150):
+///
+/// - A harness reads a command in any case, so the match compares in each way one lowercases:
+///   ASCII only, Unicode's full lowercase (Python's `str.lower`, JavaScript's `toLowerCase`), and
+///   a case folding (Python's `str.casefold`, a JavaScript expression's `/iu`).
+/// - A command that counts at the start counts after anything a harness skips as space (Python's
+///   `str.strip`, JavaScript's `trim`, Rust's `trim`), and at the start of any line, by any
+///   harness's line breaks, since a harness may drop lines before it, as Hermes drops lines naming
+///   attachments.
+/// - A command counts with a bot's name or punctuation after it (`/yolo@bot`, `/yolo.`), and ends
+///   at anything that cannot continue a command's name.
 pub fn needed_for(text: &str, commands: &[ApprovalCommand]) -> Right {
     if commands.is_empty() {
         return Right::Prompt;
     }
-    let text = text.to_ascii_lowercase();
-    let found = commands.iter().any(|c| {
-        let command = c.command.to_ascii_lowercase();
-        match c.counts {
-            Position::Start => text
-                .lines()
-                .any(|line| is_word_at(line.trim_start(), 0, &command)),
-            Position::Anywhere => text
-                .match_indices(command.as_str())
-                .any(|(at, _)| is_word_at(&text, at, &command)),
-        }
+    let found = readings(text).iter().enumerate().any(|(n, text)| {
+        commands.iter().any(|c| {
+            let command = &readings(&c.command)[n];
+            match c.counts {
+                Position::Start => text
+                    .split(is_line_break)
+                    .any(|line| is_word_at(line.trim_start_matches(is_space), 0, command)),
+                Position::Anywhere => text
+                    .match_indices(command.as_str())
+                    .any(|(at, _)| is_word_at(text, at, command)),
+            }
+        })
     });
     if found { Right::Approve } else { Right::Prompt }
+}
+
+/// `text` lowercased in each way a harness may: ASCII only (Rust's `to_ascii_lowercase`),
+/// Unicode's full lowercase, and folded. The fold is the lowercase of the uppercase of the
+/// lowercase, which gives what Python's `str.casefold` gives wherever that is plain ASCII
+/// (`ß` and `ẞ` as `ss`, `ſ` as `s`, ligatures as their letters), and folds a little more than
+/// it (a dotless `ı` as `i`), which only asks more often.
+fn readings(text: &str) -> [String; 3] {
+    let lower = text.to_lowercase();
+    let folded = lower.to_uppercase().to_lowercase();
+    [text.to_ascii_lowercase(), lower, folded]
+}
+
+/// Whether a harness may skip `c` as space before a command: Rust's whitespace, and what Python's
+/// `str.isspace` (the information separators) and JavaScript's `trim` (the byte order mark) add.
+fn is_space(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '\u{1c}'..='\u{1f}' | '\u{feff}')
+}
+
+/// Whether `c` ends a line for some harness: Python's `str.splitlines` breaks at each of these,
+/// which take in JavaScript's and Rust's.
+fn is_line_break(c: char) -> bool {
+    matches!(
+        c,
+        '\n' | '\r'
+            | '\u{b}'
+            | '\u{c}'
+            | '\u{1c}'
+            | '\u{1d}'
+            | '\u{1e}'
+            | '\u{85}'
+            | '\u{2028}'
+            | '\u{2029}'
+    )
 }
 
 /// Whether `command` stands at `at` in `text` as a command of its own: what follows cannot
