@@ -517,7 +517,8 @@ request that bumps a harness re-record, which needs a key. A request the cassett
 Measured on 2026-11-24 (issue #155), by `crates/marmot-agent/tests/saves.rs`, an ignored test run by hand:
 
 ```sh
-MARMOT_AGENT_SAVES_DIR=<a folder on the disk to measure> MARMOT_AGENT_SAVES_BACKLOGS=0,50,500,2000 \
+# MARMOT_AGENT_SAVES_DIR is a folder on the disk to measure, such as /var/tmp
+MARMOT_AGENT_SAVES_DIR="/var/tmp" MARMOT_AGENT_SAVES_BACKLOGS=0,50,500,2000 \
     cargo test --release -p marmot-agent --test saves -- --ignored --nocapture
 ```
 
@@ -552,12 +553,27 @@ it showed:
 - **A backlog costs most while it grows.** Each new message in a chat that waits was saved twice, the second time
   unchanged: the core saves before each act and again at the end, and the send waited for its group's next try.
   So building a backlog of N wrote about 3.6 KB × N² in all: 0.9 GB for 500, 14 GB for 2,000.
-- **A stop** saved 12 times, five of them unchanged, and took 60 to 300 ms.
+- **A stop** saved 12 times, five of them unchanged, and took 60 to 300 ms. Those runs started counting the stop
+  when the driver had the answer, so one of the 12 may be the answering step's own last save.
 
 Built from this: a save of the state the store last wrote now writes nothing. A fault still meets every save, so
-the simulator and the crash tests put crashes where they did. On the same machine and load, that halves the
-writes per new message in a chat that waits (one, not two) and cuts the stop's writes from 12 to 7 (2,000
-waiting: 47 ms per new message, 32 ms to the answer, 306 ms to stop). The state file's format is unchanged.
+the simulator and the crash tests put crashes where they did. The state file's format is unchanged.
+
+After the change the bench counts what the store writes, at the write itself, and starts the stop once the
+answering step has ended. One run, at 12:53 on 2026-11-24, on the same machine and disk, with nothing else of this
+work running but at a load average of about 13 from other work on the machine:
+
+| Waiting in the outbox | Saves (writes) per new message there | Bytes written building it | Time per new message | Writes before the answer | Answer to driver | Saves (writes) in a stop | Stop | One save alone, of which JSON |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | (none) | (none) | | 1 | 5.5 ms | 11 (7) | 36 ms | 5.2 ms, 5 µs |
+| 50 | 2 (1) | 4.7 MB | 6.2 ms | 1 | 5.8 ms | 11 (7) | 50 ms | 6.0 ms, 0.2 ms |
+| 500 | 2 (1) | 455 MB | 12 ms | 1 | 9.8 ms | 11 (7) | 70 ms | 8.5 ms, 1.0 ms |
+| 2,000 | 2 (1) | 7.3 GB | 41 ms | 1 | 37 ms | 11 (7) | 286 ms | 34 ms, 4.9 ms |
+
+Each new message in a chat that waits is now written once, not twice, so building a backlog writes half what it
+did: 7.3 GB for 2,000, measured, where the runs before the change wrote about 14 GB. The answer still waits for
+its one write, as it must. A stop writes 7 times of the 11 saves it asks for. Its time is about what it was:
+each write is of the whole state.
 
 Not built, and proposed only if backlogs of thousands turn out to happen: a state written without its whole
 outbox each time, such as an outbox kept as a file appended to, so a save's cost no longer grows with what
