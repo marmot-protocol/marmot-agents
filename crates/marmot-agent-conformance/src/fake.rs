@@ -54,11 +54,30 @@ pub struct Knobs {
     /// The harness dies on reading the n-th frame from the driver, counted over every process of
     /// the fake ([`Fake::frames`]), before it answers that frame.
     pub die_after: Option<usize>,
-    /// For a connector on the socket, whose harness runs inside it: the connection to the core
-    /// drops when the harness reads the n-th frame, counted as for `die_after`, once the harness
-    /// has it and before the connector answers the core. A disconnect after delivery and before
-    /// the response. A driver built into the core has no such connection, and ignores it.
-    pub drop_after: Option<usize>,
+    /// For a connector on the socket, whose harness runs inside it: its responses to the core's
+    /// requests are held back on the socket, and never reach the core, while this is set; its
+    /// events go on. With [`Fake::drop_connection`], a disconnect after delivery and before the
+    /// response. A driver built into the core has no such connection, and ignores it.
+    pub withhold_responses: bool,
+}
+
+/// What was in flight on a connector's connection when [`Fake::drop_connection`] dropped it: each
+/// request the core had sent and had no response to, oldest first.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Dropped {
+    pub unanswered: Vec<Unanswered>,
+}
+
+/// A request a dropped connection left with no response.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unanswered {
+    /// `prompt`, `answer` or `control`.
+    pub method: String,
+    /// The connector had responded, and the response was held back ([`Knobs::withhold_responses`]).
+    pub withheld: bool,
+    /// An event the core read before the drop showed the request's effect: a turn of the prompt's
+    /// chat naming the prompt, or an event settling the answer or the control (D-147).
+    pub shown: bool,
 }
 
 /// What a fake harness understood the driver to say, the same for every harness.
@@ -270,6 +289,10 @@ struct Shared {
     dead: Vec<Option<String>>,
     /// Every line read and every death, in order, with the tag of the process.
     log: Vec<Did>,
+    /// Each response a connector on the socket gave that was held back.
+    withheld: usize,
+    /// Each connection [`Fake::drop_connection`] dropped, with what was in flight on it.
+    dropped: Vec<Dropped>,
 }
 
 /// How long a killed harness may go on writing what it had said before its output is cut off. A
@@ -291,6 +314,8 @@ pub struct Fake {
     kill: Arc<watch::Sender<Kill>>,
     /// Bumped whenever the knobs change, so a harness waiting to read sees it at once.
     turned: Arc<watch::Sender<u64>>,
+    /// Bumped to drop a connector's connection to the core.
+    drop_now: Arc<watch::Sender<u64>>,
 }
 
 impl Default for Fake {
@@ -304,10 +329,12 @@ impl Fake {
     pub fn new() -> Self {
         let (kill, _) = watch::channel(Kill::default());
         let (turned, _) = watch::channel(0);
+        let (drop_now, _) = watch::channel(0);
         Self {
             shared: Arc::default(),
             kill: Arc::new(kill),
             turned: Arc::new(turned),
+            drop_now: Arc::new(drop_now),
         }
     }
 
@@ -393,9 +420,35 @@ impl Fake {
         shared.dead.push(tag);
     }
 
-    /// Changes whenever the knobs change, for a harness that must be told them.
-    pub fn knobs_changed(&self) -> watch::Receiver<u64> {
-        self.turned.subscribe()
+    /// Drops a connector's connection to the core now, as the core's end going. A driver built
+    /// into the core has no such connection, and nothing happens.
+    pub fn drop_connection(&self) {
+        self.drop_now.send_modify(|n| *n += 1);
+    }
+
+    /// Changes at each [`Fake::drop_connection`], for what carries the connection.
+    pub fn drops(&self) -> watch::Receiver<u64> {
+        self.drop_now.subscribe()
+    }
+
+    /// A connector's response was held back on its way to the core.
+    pub fn record_withheld(&self) {
+        self.shared().withheld += 1;
+    }
+
+    /// How many responses were held back so far.
+    pub fn withheld(&self) -> usize {
+        self.shared().withheld
+    }
+
+    /// A connection was dropped with `dropped` in flight.
+    pub fn record_dropped(&self, dropped: Dropped) {
+        self.shared().dropped.push(dropped);
+    }
+
+    /// Each connection dropped so far, oldest first.
+    pub fn dropped(&self) -> Vec<Dropped> {
+        self.shared().dropped.clone()
     }
 
     /// Every running harness process dies now.

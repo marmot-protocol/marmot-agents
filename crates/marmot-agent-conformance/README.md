@@ -263,14 +263,14 @@ one, driven through the core's own `SocketDriver`, so the scenarios and the chec
 key and no network.
 
 ```text
- Rust test ──Run──▶ SocketDriver ══ the socket ══▶ connector (shipped) ──▶ scripted harness (in the connector)
-     ▲                                                                       │
-     └────────────── control channel: frames and Heard out, the suite's word in ◀──┘
+ Rust test ──Run──▶ SocketDriver ══ relay ══ the socket ══▶ connector (shipped) ──▶ scripted harness (in the connector)
+     ▲                                                                                 │
+     └──────────────────────── control channel: frames and Heard out, the suite's word in ◀──┘
 ```
 
 | Part | Where | What it does |
 | --- | --- | --- |
-| `OnSocket` | `crates/marmot-agent/tests/conformance_socket.rs` | The `Subject`: listens with `Endpoint::in_home` on a throwaway home, starts the connector's entry, takes its connection and `greet`s it; a restart drops the connection, as the core's restart does |
+| `OnSocket` | `crates/marmot-agent/tests/conformance_socket.rs` | The `Subject`: listens with `Endpoint::in_home` on a throwaway home, starts the connector's entry, takes its connection and `greet`s it through a relay of its own (below); a restart drops the connection, as the core's restart does |
 | Hermes's entry | `python/tests/conformance_harness.py` | The plugin's own `MarmotAdapter` and its reconnecting socket client, with Hermes's `gateway` modules stood in for and what Hermes does played by a script |
 | Claude Code's entry | `packages/claude-code/test/conformance-harness.ts` | The driver's own `run`, with a scripted `query` in place of the SDK's: `init` at each turn, `canUseTool` for an approval, AskUserQuestion for a question, `interrupt()` |
 | OpenClaw's entry | `packages/openclaw/test/conformance-harness.ts`, `test/conformance-sdk.ts` | The plugin as OpenClaw loads it, its account started by `startAccount`, with a scripted channel runtime and plugin SDK: runs, an exec approval through the plugin's approval adapter, `ask_user`, `/stop` |
@@ -281,9 +281,16 @@ for anything else (their logs go to standard error). Out: `{"heard": {...}}` in 
 `{"frame": <kind>, "wait": true}` for each call the connector made on its harness, written after what the harness
 heard in it. The harness then waits for the suite's word: `{"go": true}`, or `{"die": true}`, when it dies there.
 The process ending is the harness dying, unless the suite ended it. A frame is counted as `Fake::frames` counts
-them (`Fake::record_frame`), so `Knobs::die_after` applies, and a new knob, `Knobs::drop_after`, has the suite drop
-the connection, from the core's end, at that frame: once the harness has the request, and before the connector's
-response, where the connector answers only once its harness has it.
+them (`Fake::record_frame`), so `Knobs::die_after` applies.
+
+**The relay.** The connection runs through a relay in the test, line by line, which keeps each request of the
+core's until its response passes, and notes each event that shows a request's effect: a turn of the prompt's chat
+that names the prompt, or an event that settles the answer or the control. While a new knob,
+`Knobs::withhold_responses`, is set, it holds the connector's responses back, so they never reach the core; its
+events go on. `Fake::drop_connection` drops the connection at both ends, and keeps what was in flight
+(`Fake::dropped`). So a drop after delivery and before the response is one, whenever the connector responds: the
+scenario drops the connection once the harness has had the request and the connector has responded, and checks
+that the request was the one in flight, its response held back.
 
 **Each connector, as it lives.** Hermes and OpenClaw run inside their gateway, which goes on when the connection
 drops: they connect again, and the next `start` takes that connection. Claude Code's connector ends with its
@@ -296,7 +303,7 @@ asked to resume.
 | --- | --- | --- |
 | Hermes | `one_turn`, `two_chats`, `answered_once`, `reconnect`, `dropped_after_delivery` | `restart`: Hermes keeps its own sessions (`sessions: own`), so the core never names one, and the scenario checks that a named one is taken up |
 | Claude Code | the same, and `restart` | |
-| OpenClaw | as Hermes | as Hermes |
+| OpenClaw | as Hermes, with `dropped_after_delivery` run as `openclaw_dropped_after_delivery`, which also requires that the event settling the answer reached the core before the drop | as Hermes |
 
 The rest of `with_scenarios!` is not run yet: the faults on the harness's pipe (pieces, half frames, a harness that
 stops reading) do not apply, as these harnesses are libraries called in process, and deaths at each step, files,
@@ -305,7 +312,7 @@ settings and new sessions are not scripted yet.
 | Scenario | What happens |
 | --- | --- |
 | `reconnect` | A turn, then an approval waits in another chat, and the connection drops: nothing of the first connection is settled on the next (S1) or shown there again (S13), an answer to the approval asked before is refused (S11), and the first chat's next prompt is answered |
-| `dropped_after_delivery` | The connection drops once the harness has a prompt; the connector connects again, and the chat's next prompt is answered, with the first heard once (S4). Then the same for an answer to an approval: whatever the core was told, it reached the harness once (S11), and nothing the old connection was handed is settled on the next (S1) |
+| `dropped_after_delivery` | The connection drops once the harness has a prompt and the connector has responded, its response held back by the relay; a drop that does not happen there, or finds anything else in flight, fails the scenario (L3). The prompt is taken exactly when an event the core read before the drop showed it (S1, D-147). The connector connects again, and the chat's next prompt is answered, with the first heard once (S4). Then the same for an answer to an approval: whatever the core was told, it reached the harness once (S11), and nothing the old connection was handed is settled on the next (S1) |
 
 `Run` names a turn's prompts on its later events as its first event named them, as the core keeps them
 (`started_by`): the socket connectors name a turn's prompts only on its first event, and the suite's scenarios
@@ -318,7 +325,7 @@ Found, each fixed after its scenario failed:
   connection that dropped between them had the core refuse the answer as failed, then hand on the event that
   settled it: settled twice (S1), and the chat told the answer failed though it was taken. The same held for a
   prompt whose turn had started. Now `SocketDriver` counts a request as taken once an event it read while waiting
-  for the response settles it, or, for a prompt, names it as a turn's prompt
+  for the response settles it, or, for a prompt, is a turn of the prompt's chat that names it
   ([D-147](../../docs/decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken)).
 - **OpenClaw's plugin settled an interrupt with a turn end it made up** (`two_chats`). A stopped OpenClaw run
   reports no outcome, so the plugin closes the turn on OpenClaw's reply to `/stop`, but marked the end as its own,
@@ -327,12 +334,12 @@ Found, each fixed after its scenario failed:
   changed by that one native message.
 
 Shown to catch a connector put wrong by hand: Hermes's plugin with its `core_gone` keeping the items the old core
-closed open, which `reconnect` reports as S11.
+closed open, which `reconnect` reports as S11. And shown to catch a relay put wrong by hand: with the drop left
+out, `dropped_after_delivery` fails for each of the three connectors (L3); before the relay, it passed for each.
 
 Not a bug, and left as it is: when its connection drops, Hermes's plugin cancels a request it is still handing to
 Hermes (`core.py`), so a prompt then perhaps never reaches Hermes. The core already counts such a prompt as perhaps
-not delivered (D-129). The Hermes entry reports what Hermes heard before it waits for the suite's word, so the drop
-comes after delivery.
+not delivered (D-129). The scenario drops the connection only once the harness has heard the request.
 
 **CI.** One job, `Conformance (socket)`, beside the Rust tests: Node and Python at the versions CI pins, both
 packages' `npm ci`, the core crate's build from the core's cache, and this test alone, which is ignored in the
