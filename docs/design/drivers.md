@@ -5,7 +5,8 @@ Status: draft. Which driver each harness gets is decided
 libraries ([D-006](../decisions.md#d-006-prefer-official-interfaces-and-libraries)), and so are the trait and
 the capability flags ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)), and so is how
 the Codex driver splits its work ([D-060](../decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes)),
-and how it shows Codex's subagents ([D-117](../decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)).
+and how it shows Codex's subagents ([D-117](../decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them),
+in threads since [D-142](../decisions.md#d-142-how-subagent-threads-are-built)).
 So is how drivers are tested
 ([D-074](../decisions.md#d-074-every-driver-is-tested-by-replay-and-by-one-end-to-end-scenario)), and what the
 Pi driver builds on ([D-086](../decisions.md#d-086-the-pi-driver-reads-pis-rpc-messages-with-types-of-its-own)).
@@ -325,11 +326,14 @@ Codex reads a group message with its sender's name
 resumed ([D-063](../decisions.md#d-063-codex-keeps-a-session-so-it-can-be-resumed)), and a form from an MCP
 server is declined for now ([D-064](../decisions.md#d-064-the-codex-driver-declines-an-mcp-servers-form-until-forms-are-designed)). Both halves are written
 ([`crates/marmot-agent-codex`](../../crates/marmot-agent-codex)). The transport runs one Codex for every chat of an
-agent, with Codex's subagents on, shown flat in the chat of the turn that started them
-([D-117](../decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them);
-threads of their own are [a proposal](subagents.md)). Each subagent's thread gets a translator of its own in its
-parent's chat, whose turns are `task` items and whose words name the `subagent` tool item that started it as
-`parent`; a message for a thread not yet named is held until the item that names it arrives. Codex waits for a
+agent, with Codex's subagents on, shown in the chat of the turn that started them, each in a thread of its own
+([D-117](../decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them),
+[subagents as threads](subagents.md), [D-142](../decisions.md#d-142-how-subagent-threads-are-built)). Each
+subagent's thread gets a translator of its own in its parent's chat. The subagent is one `task` item, `task:` and
+its thread's id, which each of its turns opens again; everything else it does names that item in the event's
+`subagent` field, and a nested subagent's `task` item names the one that started it. Its words name the
+`subagent` tool item that started it as `parent`. The driver says its harness tells subagents apart
+(`subagents`), so the core puts all of it in the subagent's thread; a message for a thread not yet named is held until the item that names it arrives. Codex waits for a
 reply to each of its requests, so one no chat takes is refused with an error, which Codex takes as a refusal: one
 the driver cannot show, one for a thread a chat left, and one for a thread never seen once no session is being
 picked and no subagent being started (an open `spawnAgent` item), since until then it may be a subagent's not
@@ -693,7 +697,8 @@ These are the same as for every connector on the socket.
   check needs; the person's agent, model, approval mode and other channels stay theirs
   ([D-105](../decisions.md#d-105-which-gateway-settings-the-installers-change)).
 
-The seven flags, and where each plugin stands:
+The seven flags, and where each plugin stands. Neither plugin states the eighth, `subagents`
+([D-142](../decisions.md#d-142-how-subagent-threads-are-built)), so it is no:
 
 | Flag | A driver | A channel plugin | OpenClaw | Hermes |
 | --- | --- | --- | --- | --- |

@@ -2090,7 +2090,8 @@ for a subagent's thread.
 
 Replaced in part by [D-131](#d-131-the-codex-driver-refuses-a-request-of-codexs-that-no-chat-takes): a request
 of Codex's for a thread not known yet is held only while a session is being picked or a subagent started, and
-refused after. Replaced in part by
+refused after. Replaced in part by [D-142](#d-142-how-subagent-threads-are-built): Codex's subagents are shown in
+threads, each as one `task` item. Replaced in part by
 [D-132](#d-132-a-stop-waiting-for-a-subagent-is-settled-by-codex-after-a-new-session): a subagent a Stop waits
 for, when the chat's session ends, closes when Codex says what came of the Stop.
 
@@ -2836,6 +2837,80 @@ another, is not for this one, and the agent says nothing ([D-027](#d-027-answers
 good. An app newer than the core will send actions the core does not know, and the reason lets it say so.
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
+
+## D-141 Subagent threads are built before the swap
+
+**Decision.** Subagents as threads
+([D-121](#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them) to
+[D-126](#d-126-no-mls-group-for-subagents), and
+[D-133](#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags)) move out of the plan's
+"not before the swap" and into M4: they are built before the release. The Codex driver moves from showing its
+subagents flat ([D-117](#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)) to
+threads; a driver whose harness tells no subagents apart is unchanged.
+
+**Why.** MDK places agent items in subagent threads, keeps the agent's own words there quiet and shows a late
+joiner an item from its edits (MDK pull requests 3622, 3630 and 3640, at the revision the core uses), so what is
+left is this repository's part. Shown flat, a busy subagent fills the main chat, and the first release is what
+people will judge.
+
+Decided 2026-11-24 by the project owner.
+
+## D-142 How subagent threads are built
+
+**Decision.** The choices made in building
+[D-121](#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them) to
+[D-124](#d-124-what-keeps-subagents-reliable-closes-harnesses-that-do-not-tell-them-apart-and-late-joiners)
+and [D-133](#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags), where they left
+something open:
+
+1. **A driver names the subagent an event belongs to** in a new field of the event, `subagent`: the item id of
+   that subagent's `task` item, in the same chat. A nested subagent's `task` item names the subagent that started
+   it; a top-level one names none, and is in the main chat. The events stay in the chat's session, numbered as
+   before, and under the turn the person started. This is D-121's "a subagent's session names its `task` item",
+   as built: a subagent has no session of its own, since a session is what a chat resumes and sets.
+2. **One more capability flag, `subagents`**: whether the harness tells its subagents apart
+   ([D-124](#d-124-what-keeps-subagents-reliable-closes-harnesses-that-do-not-tell-them-apart-and-late-joiners)).
+   The core puts events in threads only for a driver that says yes. Codex's says yes; every other driver says no,
+   and a connector on the socket that leaves it out says no. Claude Code's driver says no until it is moved to
+   threads; its subagents stay flat.
+3. **The core places an item when its first event goes out**, under the first event of its subagent's `task`
+   item, in the tree that item is in or is the root of, and keeps that place with the item for every later
+   version, across a restart. A group's sends go out in order, and a driver makes a `task` item before the work
+   it names, so that item has gone out first. An item whose subagent's `task` item has not gone out to that chat,
+   as in a chat not sent the agent's full activity
+   ([D-136](#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group))
+   or after a dropped send, goes in the main chat with no thread tags, as any item does. Nothing is lost.
+4. **A subagent's words are MDK's thread message** under the subagent's `task` item
+   ([D-122](#d-122-a-subagents-words-what-alerts-and-the-apps-running-bar)). MDK writes their `E`, `K`, `P`, `e`
+   and `k` from that item's place and leaves NIP-22's parent `p` off, as on every comment it sends. An item
+   carries the parent `p`, naming the agent; MDK reads a `p` that names its sender as no mention (MDK pull
+   request 3622), which settles what D-121 left open about it.
+5. **Every item of a subagent's carries a `subagent` tag** with that field, as `turn` and `session` are carried.
+   An edit carries only the root's tags (D-133), so a member who joined late can place it in the tree but not
+   under its nested subagent; the tag lets an app find that subagent's view by its `task` item's id.
+6. **A Codex subagent is one `task` item**, `task:` and its thread's id, which each of its turns opens again, as
+   D-121's row "edited as it works"; under D-117 each turn was a `task` item of its own. The parent's `subagent`
+   tool items, which start a subagent or give it more work, stay in the main chat as the agent's own tool calls,
+   and the row names the newest as its `subject`.
+7. **Not built yet.** The flag and the `task` field for writing to a running subagent
+   ([D-123](#d-123-stop-and-writing-in-a-subagents-thread)) come with the first driver that says yes; until
+   then the core reads no comment in a thread, as it reads only chat messages and kind 1202. And Stop in a
+   thread: a Stop that names a subagent's item names its turn, the person's, so it stops the agent's turn and
+   every subagent under it, which is more than D-123 asks; stopping only that subagent and those it started needs
+   a Stop that names the subagent, which a later change adds.
+
+This replaces in part
+[D-117](#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them): Codex's subagents
+are shown in threads, each as one `task` item.
+
+**Why.** The core, not a driver, decides where an event goes (D-004), so a driver gives only which subagent's
+work it is, in terms it already has: its own item ids. A session of its own for each subagent would have changed
+how every chat's session is resumed and set. Placing an item when it goes out, from what has gone out, needs no
+event to be held, and falls back to the main chat whenever there is no thread to put it in. One row per subagent
+is what D-121 describes, and a subagent given more work is the same subagent.
+
+Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points. Points 5 and 6
+are visible to apps and provisional until the owner accepts them.
 
 ## D-143 One issue tracks the CI jobs that flake
 

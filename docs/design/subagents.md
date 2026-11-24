@@ -2,14 +2,15 @@
 
 Status: decided on 2026-11-23, as
 [D-121](../decisions.md#d-121-a-subagent-is-a-thread-in-the-agents-own-group-with-nip-22s-tags-as-nip-22-defines-them)
-to [D-126](../decisions.md#d-126-no-mls-group-for-subagents), which settle what was Q-30. Still open: what an edit
-carries of the thread tags, and what a parent `p` means, both MDK's to settle
-([what MDK has to do](#what-mdk-has-to-do)); and two proposals from the cases, which were not among the points
-decided ([still open](#still-open)). None of it is built: the core, the drivers, MDK and the White Noise apps each
-have their part to do ([what each part does](#what-each-part-does)).
+to [D-126](../decisions.md#d-126-no-mls-group-for-subagents), which settle what was Q-30, with what an edit carries
+settled by [D-133](../decisions.md#d-133-an-edit-of-an-item-in-a-subagents-thread-repeats-the-threads-root-tags).
+Built on 2026-11-24 in the core and the Codex driver
+([D-141](../decisions.md#d-141-subagent-threads-are-built-before-the-swap),
+[as built](#as-built), [D-142](../decisions.md#d-142-how-subagent-threads-are-built)), and in MDK at
+`029e0579f`; the White Noise apps have their part still to do. Still open: two proposals from the cases, which were
+not among the points decided ([still open](#still-open)).
 The direction was agreed with the project owner on 2026-11-20 and sharpened on 2026-11-23, after a research round
-written up in [subagents, threads and what others do](../reference/subagents-prior-art.md). Until threads are built, Codex's subagents are shown flat in the chat that started them
-([D-117](../decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)), over the Codex transport of D-125, which is built.
+written up in [subagents, threads and what others do](../reference/subagents-prior-art.md).
 
 An agent can start subagents: agents of its own that work on part of a task, often in parallel, and can start
 subagents in turn. Codex, Claude Code, OpenCode, Cursor, Goose, Hermes and OpenClaw all do, and four of them
@@ -111,7 +112,10 @@ still place it in its thread ([D-133](../decisions.md#d-133-an-edit-of-an-item-i
 
 ### What MDK has to do
 
-As read at MDK `6f6b427`:
+Done in MDK by pull requests 3622, 3630 and 3640 (in master at `029e0579f`, the revision the core uses): a kind
+1201 with `E` joins its thread under its `e`, an edit keeps its first event's place and may repeat `E`, `K` and
+`P`, the agent's own comments in its threads neither alert nor count as unread, a `p` naming the sender is no
+mention, and a late joiner is shown an item from its edits. What follows was the list as read at MDK `6f6b427`:
 
 - **Place a kind 1201 event in a thread.** Today only a comment, a chat message and a poll can be in one.
 - **Take the parent `e` on an item's first event.** Today MDK refuses any `e` on a kind 1201 event a program
@@ -132,6 +136,22 @@ As read at MDK `6f6b427`:
 | The core | Holds a subagent's events until its `task` item has been sent, then adds the thread tags. Takes a person's comment as a prompt for the subagent whose `task` item is first up its parents, when the driver allows it and the writer may prompt. Takes Stop as below |
 | MDK | Places a kind 1201 event and its edits in the thread its tags name, as it does a poll's. Takes the parent `e` on an item's first event. Keeps the agent's own comments in its threads silent |
 | White Noise | Draws the `task` item as the row and the thread under it, a nested subagent's view from the lowercase parent, the bar from the `task` items still open, and a waiting approval in the bar |
+
+## As built
+
+What [D-142](../decisions.md#d-142-how-subagent-threads-are-built) chose where the decisions left it open:
+
+- A driver names the subagent each event belongs to in the event's `subagent` field, its `task` item's id; a
+  nested subagent's `task` item names the one that started it. The events stay in the chat's session. A driver
+  says, in the capability flag `subagents`, whether its harness tells its subagents apart; only Codex's does.
+- The core places an item when its first event goes out, and keeps that place for its later versions. It holds
+  nothing back: a group's sends go out in order, after the `task` item. An item whose `task` item has not gone
+  out to that chat, as in a chat not sent the agent's full activity, goes in the main chat.
+- A subagent's words are MDK's thread message under its `task` item. Each item carries a `subagent` tag with the
+  `task` item's id, so an app can find a nested subagent's view from an edit, which names only the root.
+- Each Codex subagent is one `task` item, which each of its turns opens again.
+- Not built yet: writing to a running subagent, which no driver allows, and a Stop that stops only one subagent
+  and those it started; a Stop in a thread names the person's turn today, and stops every subagent under it.
 
 ## The cases
 
