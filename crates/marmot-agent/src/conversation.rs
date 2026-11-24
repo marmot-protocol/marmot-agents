@@ -424,7 +424,8 @@ struct Queued {
     tells: bool,
     /// Where it was placed when first handed to MDK under its token now, which MDK may have
     /// taken: every later try under that token, and its receipt, place it the same, whatever
-    /// the core has forgotten since (D-142). `None` until then.
+    /// the core has forgotten since (D-142). `None` until then, and from when MDK did not take
+    /// it until its next try under that token, which places it again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     placed: Option<Placed>,
 }
@@ -1678,18 +1679,21 @@ impl Conversation {
     /// The send named `token` is about to be handed to MDK, `now` (seconds since 1970). Whether
     /// that is new, the first try under its token, and so to be saved before it is: what MDK
     /// takes is on disk first, with the token it is taken under and when it was first tried.
-    /// Where it goes is chosen now, and kept for every try under its token (D-142).
+    /// Where it goes is chosen now, and kept for every try under its token (D-142). A send MDK did
+    /// not take and that is placed again under the same token, as a new first event or message,
+    /// is saved again: its new place is chosen now, and the time its token was first tried stays.
     pub fn attempting(&mut self, token: &str, now: u64) -> bool {
         let Some(at) = self.saved.outbox.iter().position(|q| q.token == token) else {
             return false;
         };
-        if self.saved.outbox[at].tried_at.is_some() {
+        let queued = &self.saved.outbox[at];
+        if queued.tried_at.is_some() && queued.placed.is_some() {
             return false;
         }
-        let thread = self.thread_of(self.saved.outbox[at].what.key());
+        let thread = self.thread_of(queued.what.key());
         let queued = &mut self.saved.outbox[at];
         queued.attempted = true;
-        queued.tried_at = Some(now);
+        queued.tried_at.get_or_insert(now);
         queued.placed = Some(Placed { thread });
         true
     }

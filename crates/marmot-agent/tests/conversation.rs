@@ -3948,6 +3948,48 @@ fn a_subagents_words_keep_their_place_when_the_task_item_is_forgotten_between_tr
     assert_eq!(token.edits, None, "a thread message's edit names no token");
 }
 
+// A version whose first event is gone goes out as a new first event under the same token, placed
+// again when it is next handed to MDK. That placement is saved before MDK has it, as a first try's
+// is, and kept for every later try under the token, without moving the time the token was first
+// tried: the `task` item aging out between two tries does not move the second to the main chat,
+// where it could show beside the first (D-142).
+#[test]
+fn a_new_first_event_keeps_its_place_when_the_task_item_is_forgotten_between_tries() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let group = direct().group;
+    a_finished_subagent(&mut talk, &chat, &hex_id(1).0);
+    let cmd = || of_subagent(event("cmd", State::Running, command()), "task:s1");
+    sent(&mut talk, &chat, cmd(), &hex_id(2).0);
+    talk.emitted(emitted(&chat, cmd()));
+    let (edit, _) = talk.next_send(&group).unwrap();
+    assert!(talk.attempting(&edit.send, 100));
+    talk.first_gone(&edit.send);
+
+    let (anew, what) = talk.next_send(&group).unwrap();
+    assert!(matches!(&what, Sending::Item { item, .. }
+        if item.first.is_none() && item.thread.as_ref().and_then(|t| t.parent.clone()) == Some(hex_id(1))));
+    assert!(
+        talk.attempting(&anew.send, 200),
+        "its new placement is saved before MDK has it"
+    );
+    assert!(!talk.attempting(&anew.send, 300), "and then kept");
+
+    finish_many(&mut talk, &chat, 5000);
+    let talk = conversation(talk.saved().clone());
+    let (again, what) = talk.next_send(&group).expect("tried again");
+    assert_eq!(again.mdk, anew.mdk, "under the same token");
+    assert_eq!(again.tried_at, Some(100), "first tried when it was");
+    let Sending::Item { item, .. } = what else {
+        panic!("not an item")
+    };
+    assert_eq!(
+        item.thread.and_then(|t| t.parent),
+        Some(hex_id(1)),
+        "still in its thread"
+    );
+}
+
 // A subagent's work that comes after its `task` item was forgotten still goes in its thread, from
 // what the core keeps of a forgotten item (D-121).
 #[test]
