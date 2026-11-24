@@ -88,14 +88,15 @@ fn change() -> impl Strategy<Value = Change> {
     ]
 }
 
-/// An event from the pool, with a few changes made to it, as long as it still reads as an event.
+/// An event from the pool, with a few changes made to it, as long as it still reads as an event
+/// and is no larger than [`MOST`].
 pub fn event() -> impl Strategy<Value = AgentEvent> {
     (0..pool().len(), prop::collection::vec(change(), 0..5)).prop_map(|(at, changes)| {
         let mut value = pool()[at].clone();
         for change in changes {
             let before = value.clone();
             apply(&mut value, &change);
-            if serde_json::from_value::<AgentEvent>(value.clone()).is_err() {
+            if size(&value) > MOST || serde_json::from_value::<AgentEvent>(value.clone()).is_err() {
                 value = before;
             }
         }
@@ -130,11 +131,15 @@ fn apply(value: &mut Value, change: &Change) {
                 return;
             }
             let pointer = &lists[at % lists.len()];
+            let room = MOST.saturating_sub(size(value));
             let list = value.pointer_mut(pointer).expect("found");
             let first = list[0].clone();
+            // Only as many copies as fit, each with its comma: copying them first could take far
+            // more memory than the runner has.
+            let n = (*n).min(room / (size(&first) + 1));
             list.as_array_mut()
                 .expect("a list")
-                .extend(std::iter::repeat_n(first, *n));
+                .extend(std::iter::repeat_n(first, n));
         }
     }
 }
@@ -177,4 +182,29 @@ fn pointers(value: &Value, at: &mut String, out: &mut Vec<String>, keep: &dyn Fn
 /// An event id as MDK writes one: 64 lowercase hex digits.
 pub fn hex64() -> impl Strategy<Value = String> {
     "[0-9a-f]{64}"
+}
+
+/// The most an event made here may take, written as JSON: room for many items over the 64 KB a
+/// carrier takes, and not so much that the cases fill a runner's memory.
+pub const MOST: usize = 2 << 20;
+
+fn size(value: &Value) -> usize {
+    serde_json::to_vec(value).map_or(0, |v| v.len())
+}
+
+/// No change makes an event larger than [`MOST`]. Repeating a list of long entries would: an
+/// option of 360 KB repeated 400 times, in a question repeated 400 times, is 57 GB.
+#[test]
+fn no_change_makes_an_event_larger_than_the_most() {
+    let mut value = serde_json::json!({"questions": [{"options": ["x"]}]});
+    let pump = Pump {
+        unit: "a",
+        times: 20_000,
+    };
+    apply(&mut value, &Change::Text(0, pump));
+    // The lists in order: the questions, then the first question's options.
+    apply(&mut value, &Change::Longer(1, 399));
+    assert!(size(&value) <= MOST, "{} bytes", size(&value));
+    apply(&mut value, &Change::Longer(0, 399));
+    assert!(size(&value) <= MOST, "{} bytes", size(&value));
 }
