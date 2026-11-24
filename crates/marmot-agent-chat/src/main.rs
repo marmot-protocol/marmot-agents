@@ -52,6 +52,8 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 /// The kind of a chat message.
 const CHAT: u64 = 9;
+/// A NIP-22 comment: a subagent's words, in its thread (D-122).
+const COMMENT: u64 = 1111;
 
 struct Client {
     runtime: MarmotAppRuntime,
@@ -371,16 +373,11 @@ impl Client {
         if message.sender == self.me {
             return;
         }
-        let name = clean(message.sender_display_name.as_deref().unwrap_or("agent"));
-        let group = hex::encode(message.group_id.as_slice());
-        if message.kind == CHAT {
-            println!(
-                "{} {name}: {}",
-                chat_label(&group, &message.sender),
-                clean(&message.plaintext)
-            );
+        if let Some(line) = self.items.words_line(&message) {
+            println!("{line}");
             return;
         }
+        let group = hex::encode(message.group_id.as_slice());
         let row = |first: &str| {
             let row = self
                 .runtime
@@ -402,6 +399,36 @@ impl Client {
 }
 
 impl Items {
+    /// The line for words an agent sent, or `None` for anything else: a chat message, or a
+    /// subagent's words, a thread comment (D-122), which this client, having no threads, shows
+    /// inline, marked as in the thread of the `task` item it answers, by that item's title once it
+    /// has shown.
+    fn words_line(&self, message: &marmot_app::ReceivedMessage) -> Option<String> {
+        let name = clean(message.sender_display_name.as_deref().unwrap_or("agent"));
+        let group = hex::encode(message.group_id.as_slice());
+        let chat = chat_label(&group, &message.sender);
+        let text = clean(&message.plaintext);
+        match message.kind {
+            CHAT => Some(format!("{chat} {name}: {text}")),
+            COMMENT => {
+                let parent = (message.tags.iter())
+                    .find(|t| t.first().map(String::as_str) == Some("e"))
+                    .and_then(|t| t.get(1))
+                    .map(|id| EventKey(id.clone()));
+                let task = parent.and_then(|p| self.known.get(&p));
+                let place = match task {
+                    Some(seen) => format!(
+                        "in the thread of {}",
+                        clean(&seen.read.item.event.header().title)
+                    ),
+                    None => "in a subagent's thread".to_string(),
+                };
+                Some(format!("{chat} {name}, {place}: {text}"))
+            }
+            _ => None,
+        }
+    }
+
     /// Takes in an item event that arrived, its first version or a later one, and gives the lines
     /// to show for it: none when it changes nothing the chat shows. `row` gives the item as MDK
     /// keeps it, by its first event.
@@ -1061,6 +1088,97 @@ mod tests {
         (items.known.values())
             .map(|s| (s.sender.clone(), s.read.item.version))
             .collect()
+    }
+
+    /// A subagent's `task` item, as event `id`, titled "look around".
+    fn task_row(id: &str) -> ReceivedVersion {
+        let header = Header {
+            harness: "stub".into(),
+            session: None,
+            turn: None,
+            subagent: None,
+            item: "task:a".into(),
+            seq: 1,
+            state: State::Running,
+            title: "look around".into(),
+            text: "Subagent working".into(),
+        };
+        let body = Body::Task(marmot_agent_events::body::Task {
+            kind: "subagent".into(),
+            description: None,
+            subject: None,
+        });
+        first_of(
+            id,
+            AGENT,
+            CHAT_A,
+            AgentEvent::new(header, body, None).unwrap(),
+        )
+    }
+
+    /// A message of the agent's, of `kind`, with `tags`, as MDK hands it over.
+    fn words(
+        id: &str,
+        kind: u64,
+        text: &str,
+        tags: Vec<Vec<String>>,
+    ) -> marmot_app::ReceivedMessage {
+        let mut message = received(
+            id,
+            AGENT,
+            CHAT_A,
+            carrier::Outgoing {
+                kind,
+                content: text.into(),
+                tags,
+            },
+        )
+        .0;
+        message.sender_display_name = Some("Codex".into());
+        message
+    }
+
+    // A subagent's words are a thread comment, kind 1111 (D-122): the terminal client, which has no
+    // threads, shows them inline as the agent's words, marked as in the thread of the subagent
+    // whose `task` item they answer; the agent's own words are shown as before.
+    #[test]
+    fn a_subagents_words_are_shown_inline_marked_as_in_its_thread() {
+        let mut items = Items::default();
+        let said = words("c1", 9, "all done", Vec::new());
+        assert_eq!(
+            items.words_line(&said),
+            Some(format!(
+                "{} Codex: all done",
+                chat_label(&group_hex(CHAT_A), AGENT)
+            ))
+        );
+        let comment = |parent: &str| {
+            let tags = vec![
+                vec!["E".into(), parent.into(), String::new(), AGENT.into()],
+                vec!["K".into(), "1201".into()],
+                vec!["P".into(), AGENT.into()],
+                vec!["e".into(), parent.into(), String::new(), AGENT.into()],
+                vec!["k".into(), "1201".into()],
+            ];
+            words("c2", 1111, "found two\nfiles", tags)
+        };
+        // Its subagent's row not seen yet: still shown, marked.
+        let line = items.words_line(&comment("t1")).unwrap();
+        assert!(line.contains("in a subagent's thread"), "{line}");
+        assert!(line.ends_with(": found two files"), "{line}");
+        items.arrived(&task_row("t1").0, None, DIRECT, |_| {
+            Some(task_row("t1").row())
+        });
+        let line = items.words_line(&comment("t1")).unwrap();
+        assert_eq!(
+            line,
+            format!(
+                "{} Codex, in the thread of look around: found two files",
+                chat_label(&group_hex(CHAT_A), AGENT)
+            )
+        );
+        // Anything else is not words.
+        assert_eq!(items.words_line(&words("c3", 7, "+", Vec::new())), None);
     }
 
     // An edit that comes before its first event shows nothing until the first event comes, and

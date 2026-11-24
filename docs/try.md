@@ -65,7 +65,8 @@ with a plain message. In a group, the agent hears only a message that mentions i
 harness's terminal. The shortcuts answer in the chat you talk in; an item from another chat says how it is answered
 there, and `:chat <label>` switches to that chat and shows again what waits in it. `:stop` interrupts a turn, `:new`
 starts a new session, and `:set <setting> <value>` changes one of the session's settings. A message that starts
-with a slash goes to Codex as typed.
+with a slash goes to Codex as typed. The client has no threads: a Codex subagent's words, which an app shows in the
+subagent's thread, are shown in line, as `<label> <agent>, in the thread of <its task>: <words>`.
 
 Your two-person chat with the agent is sent everything it does. A group is sent its words, its turns, what it
 asks and its errors, and its reasoning, tools, plans and notices only if its settings list the group under
