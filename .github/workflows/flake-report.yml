@@ -1,0 +1,118 @@
+name: Flaky tests
+
+# The flaky job tracker (D-143): one open issue, "Flaky job tracker", that ranks the CI jobs that
+# failed and passed when they were run again, on pull requests, in the merge queue, on master and in
+# the nightly runs. tools/ci/flake_report.py lists the runs of the last 14 days that were run again
+# and the jobs of each attempt, and keeps what it counted in the issue's body, so nothing is stored
+# anywhere else. It reads no log: which test flaked is for machine-readable results to say (#184).
+# It runs after each run of CI or Nightly that was itself a rerun, once a day in case one was
+# missed, and by hand. If no tracker is open, it opens one; closing the issue starts a new count.
+#
+# Rules for this file, as for ci.yml: every action is pinned to a commit, no secret is used, and
+# the token holds what this job needs and nothing more: to list the runs and their jobs, and to
+# write the one issue. It runs the default branch's code only, never a pull request's or another
+# branch's, even when started by hand. Only a job's workflow and name, counts, days, the kinds of
+# run and a link reach the issue, each name shown as code, and a name only if the default branch's
+# workflow files name a job so: a pull request's CI runs its own ci.yml, which can name a job
+# anything, so any other name is counted under one label and never kept. It edits only an open
+# issue it opened itself and labelled `flaky-tracker`; any other issue is left alone. A tracker whose state is mangled is
+# still found by its label, and the run fails, rather than open a second one.
+on:
+  workflow_run:
+    workflows:
+      - CI
+      - Nightly
+    types:
+      - completed
+  schedule:
+    # 04:41 UTC, off the hour, after the nightly run.
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: flake-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Update the flaky job tracker
+    # A run that was never run again has nothing to add. By hand, only on the default branch.
+    if: >-
+      (github.event_name != 'workflow_run' || github.event.workflow_run.run_attempt > 1)
+      && (github.event_name != 'workflow_dispatch'
+          || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # To list the runs and their jobs.
+      actions: read
+      # To edit, or open and label, the tracker.
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TITLE: Flaky job tracker
+      LABEL: flaky-tracker
+    steps:
+      - name: Find the default branch
+        id: default
+        run: |
+          set -euo pipefail
+          branch="$(gh api "repos/${GH_REPO}" --jq .default_branch)"
+          echo "branch=${branch}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The default branch's script and workflows, whatever ref the run was started on: the
+          # workflows give the job names the issue may show.
+          ref: ${{ steps.default.outputs.branch }}
+          persist-credentials: false
+          sparse-checkout: |
+            tools/ci
+            .github/workflows
+
+      - name: Read the tracker as it is
+        id: tracker
+        run: |
+          set -euo pipefail
+          # The list of issues, not a search: a search can miss an issue opened a moment ago, and
+          # a second tracker would follow. Only an open issue this workflow opened, with its
+          # label; not by its body, so a tracker whose state was mangled is still this one, and
+          # the script fails, writing nothing, when that state is not the last thing in the body.
+          # The body is written to the file even when it is empty, so a tracker whose body was
+          # cleared fails too; only no file, when no tracker is open, starts a new count.
+          # `$ENV.LABEL` is jq's, not the shell's.
+          # shellcheck disable=SC2016
+          number="$(gh api --paginate \
+            "repos/${GH_REPO}/issues?state=open&creator=github-actions%5Bbot%5D&labels=${LABEL}&per_page=100" \
+            --jq '.[] | select(.pull_request == null and .user.login == "github-actions[bot]"
+                    and any(.labels[]; .name == $ENV.LABEL)) | .number' \
+            | sort -n | awk 'NR == 1')"
+          echo "number=${number}" >> "${GITHUB_OUTPUT}"
+          if [ -n "${number}" ]; then
+            gh api "repos/${GH_REPO}/issues/${number}" --jq .body > "${RUNNER_TEMP}/previous.md"
+            echo "The tracker is #${number}."
+          else
+            echo "No tracker is open: this run opens one."
+          fi
+
+      - name: Count the jobs that failed and then passed
+        run: |
+          python3 tools/ci/flake_report.py --repo "${GH_REPO}" --workflows .github/workflows \
+            --previous "${RUNNER_TEMP}/previous.md" --output "${RUNNER_TEMP}/body.md"
+
+      - name: Write the tracker
+        env:
+          NUMBER: ${{ steps.tracker.outputs.number }}
+        run: |
+          set -euo pipefail
+          if [ -n "${NUMBER}" ]; then
+            gh issue edit "${NUMBER}" --body-file "${RUNNER_TEMP}/body.md"
+          else
+            gh label create "${LABEL}" --force --color d93f0b \
+              --description "The flaky job tracker's issue, edited by flake-report.yml (D-143)"
+            gh issue create --title "${TITLE}" --label "${LABEL}" --body-file "${RUNNER_TEMP}/body.md"
+          fi

@@ -80,6 +80,7 @@ being replaced by what is designed here, not extended.
 | Work on moving an install over | `crates/marmot-agent/src/import`, after `docs/move.md` and `docs/reference/current-connectors.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml`, `nightly.yml` and `.github/actions/rust` |
 | Plan or add tests, models or proofs | `docs/design/verification.md` |
+| See which jobs are flaky, or fix one | The open "Flaky job tracker" issue, then `docs/design/verification.md` ("Flaky tests") and `tools/ci/flake_report.py` |
 | Run a real harness on a scripted or recorded model, or record a cassette | `tools/model_double/README.md`, after `docs/design/verification.md` ("A model double") |
 | Work on the simulator, or replay one of its failure capsules | `crates/marmot-agent-sim/README.md`, after `docs/design/verification.md` |
 | Work on the driver conformance suite or its fake harnesses, or add a driver to it | `crates/marmot-agent-conformance/README.md`, after `docs/design/verification.md` |
@@ -385,7 +386,9 @@ which the `CI passed` job runs:
 
 ```sh
 python3 -m unittest discover -s tools/ci -p 'test_*.py'   # the gate passes each tier, and fails when a job
-                                                          # the tier expects never ran, was skipped or failed
+                                                          # the tier expects never ran, was skipped or failed;
+                                                          # the flaky job tracker counts each job that failed
+                                                          # and then passed, once, and reads no log
 ```
 
 For a change to a function a Kani proof covers (a `proofs` module under `#[cfg(kani)]` in the core: the rights
@@ -410,6 +413,13 @@ cargo +nightly-2026-08-21 fuzz run --fuzz-dir crates/marmot-agent-fuzz --feature
 
 An input that makes a target fail is written under `crates/marmot-agent-fuzz/artifacts/`, which git ignores.
 Never commit one as it is: make it a test, as small as it can be, the way the property tests' cases are kept.
+
+The same command tests `tools/ci/flake_report.py`, the script of the flaky job tracker
+([D-143](docs/decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake)); check its workflow,
+`.github/workflows/flake-report.yml`, with actionlint. It counts jobs and reads no log; naming the tests waits
+for machine-readable results ([#184](https://github.com/marmot-protocol/marmot-agents/issues/184)). The workflow
+runs only from `master`; once it is there, `gh workflow run flake-report.yml` brings the tracker up to date by
+hand, and opens it if none is open.
 
 For any change under `formal/` or `tools/tla/`, or to the code a model follows (the core for `CoreLifecycle`,
 `formal/tla/README.md`; the core's socket and the Claude Code, OpenClaw and Hermes connectors for
