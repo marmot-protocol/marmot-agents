@@ -39,6 +39,8 @@ cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "029e0
 rusqlite = { version = "0.40.1", default-features = false }
 
 [dev-dependencies]
+# Property tests (docs/design/verification.md, "6. Property tests"): tests/properties.
+proptest = "1.12"
 # The socket's JSON Schema, made from its message types (`fixtures/socket/schema.json`), with the
 # events crate's.
 schemars = "1"

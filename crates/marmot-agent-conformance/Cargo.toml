@@ -18,6 +18,9 @@ tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "
 tempfile = "3"
 
 [dev-dependencies]
+# The translators over recordings changed at random (tests/translators.rs).
+proptest = "1.12"
+serde = { version = "1", features = ["derive"] }
 marmot-agent-acp = { path = "../marmot-agent-acp" }
 marmot-agent-codex = { path = "../marmot-agent-codex" }
 marmot-agent-pi = { path = "../marmot-agent-pi" }

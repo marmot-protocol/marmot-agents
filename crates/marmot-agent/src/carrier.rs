@@ -107,6 +107,19 @@ pub struct Item {
     pub settles: Vec<EventKey>,
 }
 
+/// Prints the event as it prints itself, the version, and how many requests it settles: nothing
+/// anyone said, and no id (D-071).
+impl std::fmt::Debug for Item {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Item")
+            .field("event", &self.event)
+            .field("version", &self.version)
+            .field("edit", &self.first.is_some())
+            .field("settles", &self.settles.len())
+            .finish_non_exhaustive()
+    }
+}
+
 /// What the core left out of an item to keep it under the limit (D-057).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LeftOut {
