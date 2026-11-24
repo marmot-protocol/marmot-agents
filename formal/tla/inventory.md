@@ -20,7 +20,9 @@ cut anywhere, pays most.
    go with; both fixed.
 2. **The core's hold-back of the full activity** (D-136): modelled, [`ActivityHoldBack`](ActivityHoldBack.md). It
    found that a send MDK was already handed, held back when someone joins the chat, settles its request twice,
-   and can start its item twice; fixed. It also shows the privacy limit that MDK posts what it keeps, to whoever
+   and can start its item twice; fixed. In review, a send tried again without the native message it was first
+   handed with, which MDK refuses as another submission, settled its request twice too; fixed, and modelled
+   since. It also shows the privacy limit that MDK posts what it keeps, to whoever
    is in the chat then: an owner question.
 3. **The agent's words and the settles they carry** (`conversation.rs` `emitted` for `Body::Message`,
    `settle_by_turn`, `shown_by`, `refused` for words): a second model of the core, which `CoreLifecycle` leaves

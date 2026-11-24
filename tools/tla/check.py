@@ -414,6 +414,15 @@ CASES += [
               "someone joins the owner's chat, and the core holds the version back, not knowing "
               "it went; they leave, and the tool's next version goes as a first event too: the "
               "chat has the tool twice (H2). A version MDK keeps and posts later does the same."),
+    hold("bug-RetryChanged-H1", HPOSTED, invariant("H1"),
+         {"Bug": '"RetryChanged"', "INVARIANTS": "H1", **SAFETY},
+         counterexample="hold-retry-changed",
+         what="RetryChanged, conversation.rs as_sent before the second fix of 2026-11-24: the "
+              "tool's closing version, which settles r1, goes to MDK with its native message, "
+              "and MDK's answer is lost; someone joins the owner's chat, and the core tries it "
+              "again under its token without the native message; MDK refuses the token as bound "
+              "to another submission, and the core gives the send up with a notice that settles "
+              "r1, which MDK's post of the tool settled already (H1)."),
     hold("kept-posted-later", HFAIR, invariant("H4"), {"INVARIANTS": "H4", **SAFETY},
          counterexample="hold-kept-posted-later",
          what="The limit, the code as it is: MDK keeps a send of the tool to post later, which "
@@ -428,6 +437,7 @@ CASES += [
     hold_probe("NeverOwnersAgain"),
     hold_probe("NeverHeldAtSend"),
     hold_probe("NeverKeptPosted"),
+    hold_probe("NeverRetriedOtherwise"),
 ]
 
 # The larger bounds (formal/tla/README.md, "Larger bounds"): CoreLifecycle's fair configuration

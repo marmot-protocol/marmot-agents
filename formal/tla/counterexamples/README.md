@@ -141,11 +141,13 @@ run that took it (`slot`), with what the action says of itself: `Start(slot, har
 
 [`ActivityHoldBack`](../ActivityHoldBack.md)'s files start `hold-`. The steps: `Emit(item, shown)` (`shown`:
 queued, not held back), `Flip(members)`, `ReadMembers(owners)`, `Send(tok, outcome)` with the outcome `sent`,
-`pending`, `posted-lost`, `kept-lost`, `busy` or `held back`, and `MdkPosts(tok, members)`. A token is an item
+`pending`, `posted-lost`, `kept-lost`, `busy`, `held back` or `refused` (MDK refused the token as bound to
+another submission), and `MdkPosts(tok, members)`. A token is an item
 and a version.
 
 | File | Breaks | What it shows |
 | --- | --- | --- |
 | [`hold-settled-twice`](hold-settled-twice.json) | H1 | Found in the core, and fixed on 2026-11-24: MDK posts the tool's closing version, which settles `r1`, and the answer is lost; someone joins; the core holds the version back and settles `r1` by the turn too. Now the defect `HoldAttempted` |
 | [`hold-first-event-twice`](hold-first-event-twice.json) | H2 | The same defect: the tool's first version is posted and its answer lost, held back, and once the chat is the owner's again the tool's next version goes as a first event too |
+| [`hold-retry-changed`](hold-retry-changed.json) | H1 | Found in review, and fixed on 2026-11-24: MDK posts the tool's closing version, handed with its native message, and the answer is lost; someone joins; the core tries it again without the native message, MDK refuses the token, and the core's notice settles `r1` again. Now the defect `RetryChanged` |
 | [`hold-kept-posted-later`](hold-kept-posted-later.json) | H4 | The limit, for the owner: MDK keeps a send of the tool handed while the chat was the owner's, someone joins, and MDK posts it to them |

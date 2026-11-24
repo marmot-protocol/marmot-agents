@@ -413,6 +413,14 @@ struct Queued {
     /// When it was first handed to MDK under its token now, in seconds since 1970 ([`Token`]).
     #[serde(default)]
     tried_at: Option<u64>,
+    /// Whether it was handed to MDK under its token now without its item's native message, as a
+    /// chat not sent the agent's full activity is (D-136). MDK binds the token to what it was
+    /// handed, and refuses it for anything else, so the send is tried again under it as it was
+    /// first handed, whoever is in the chat now. `None` before its first try under the token, and
+    /// in a state an older core wrote, which left the native message out by who was in the chat
+    /// at each try.
+    #[serde(default)]
+    bare: Option<bool>,
     /// Whether it stands in for a send that was dropped: an item's close, or a notice that
     /// settles what a dropped notice settled. Nothing stands in for it in turn, so a group MDK
     /// refuses everything for, as one that is gone, ends the chain there.
@@ -1284,7 +1292,7 @@ impl Conversation {
     /// the next version of its turn, or else of the chat's session (D-028, D-136). One MDK was
     /// handed (`tried_at`) may have gone with its answer lost, or MDK may keep it to post: it
     /// stays, and the program sends it on only as far as MDK has it, holding it back otherwise
-    /// ([`Conversation::withheld`], [`Conversation::hold_back_one`]). Held back as if it had never
+    /// ([`Conversation::handed_otherwise`], [`Conversation::not_kept`]). Held back as if it had never
     /// gone, it would settle its requests twice, and an item whose first event it was would start
     /// again (ActivityHoldBack.tla, H1 and H2). An item of it the chat was already sent stays as
     /// it was last sent.
@@ -1307,24 +1315,38 @@ impl Conversation {
         }
     }
 
-    /// Whether the send named `token` is of the agent's full activity, to a chat that is no longer
-    /// sent it, as read last ([`Conversation::members_now`]): one MDK was handed before (D-136).
-    /// The program asks MDK whether it keeps it, tries it again under its token if so, which sends
-    /// nothing new, and holds it back if not ([`Conversation::hold_back_one`]).
-    pub fn withheld(&self, token: &str) -> bool {
+    /// Whether the send named `token` was handed to MDK otherwise than its chat is sent now, as
+    /// read last ([`Conversation::members_now`]): the agent's full activity, which the chat is no
+    /// longer sent, or an item with its native message or without, as the chat was sent then
+    /// (D-136). MDK binds the token to what it was handed. The program asks MDK whether it keeps
+    /// it: if so, it tries it again under its token as it was handed, which MDK answers from what
+    /// it keeps and which sends nothing new; if not, see [`Conversation::not_kept`].
+    pub fn handed_otherwise(&self, token: &str) -> bool {
         (self.saved.outbox.iter())
             .find(|q| q.token == token)
-            .is_some_and(|q| !self.sent_everything(&q.group) && self.full_activity_only(q))
+            .is_some_and(|q| {
+                let everything = self.sent_everything(&q.group);
+                q.tried_at.is_some()
+                    && ((!everything && self.full_activity_only(q))
+                        || (Self::native(q) && self.bare(q) == everything))
+            })
     }
 
-    /// MDK does not have the send named `token`, which [`Conversation::withheld`] says its chat is
-    /// no longer sent: it is held back now, as [`Conversation::members_now`] holds back the rest.
-    pub fn hold_back_one(&mut self, token: &str) {
+    /// MDK does not have the send named `token`, which [`Conversation::handed_otherwise`] says
+    /// was handed to it otherwise than its chat is sent now. The agent's full activity is held
+    /// back now, as [`Conversation::members_now`] holds back the rest; anything else goes as the
+    /// chat is sent now, which MDK has nothing under the token to hold it to.
+    pub fn not_kept(&mut self, token: &str) {
         let Some(at) = self.saved.outbox.iter().position(|q| q.token == token) else {
             return;
         };
+        let group = self.saved.outbox[at].group.clone();
+        let everything = self.sent_everything(&group);
+        if everything || !self.full_activity_only(&self.saved.outbox[at]) {
+            self.saved.outbox[at].bare = Some(!everything);
+            return;
+        }
         let queued = self.saved.outbox.remove(at).expect("found");
-        let group = queued.group.clone();
         self.settle_held(&group, queued);
     }
 
@@ -1738,23 +1760,31 @@ impl Conversation {
 
     /// The send named `token` is about to be handed to MDK, `now` (seconds since 1970). Whether
     /// that is new, the first try under its token, and so to be saved before it is: what MDK
-    /// takes is on disk first, with the token it is taken under and when it was first tried.
-    /// Where it goes is chosen now, and kept for every try under its token (D-142). A send MDK did
-    /// not take and that is placed again under the same token, as a new first event or message,
-    /// is saved again: its new place is chosen now, and the time its token was first tried stays.
+    /// takes is on disk first, with the token it is taken under, when it was first tried, and
+    /// whether it went without its item's native message. Where it goes is chosen now, and kept for
+    /// every try under its token (D-142); so is its form, since MDK binds a token to the request it
+    /// was first given. A send MDK did not take and that is placed again under the same token, as a
+    /// new first event or message, is saved again: its new place is chosen now, and the time its
+    /// token was first tried, and its form, stay.
     pub fn attempting(&mut self, token: &str, now: u64) -> bool {
         let Some(at) = self.saved.outbox.iter().position(|q| q.token == token) else {
             return false;
         };
         let queued = &self.saved.outbox[at];
-        if queued.tried_at.is_some() && queued.placed.is_some() {
+        if queued.tried_at.is_some() && queued.placed.is_some() && queued.bare.is_some() {
             return false;
         }
-        let thread = self.thread_of(queued.what.key());
+        let thread = queued.placed.is_none().then(|| self.thread_of(queued.what.key()));
+        let bare = queued.bare.is_none().then(|| self.bare(queued));
         let queued = &mut self.saved.outbox[at];
         queued.attempted = true;
         queued.tried_at.get_or_insert(now);
-        queued.placed = Some(Placed { thread });
+        if let Some(thread) = thread {
+            queued.placed = Some(Placed { thread });
+        }
+        if let Some(bare) = bare {
+            queued.bare = Some(bare);
+        }
         true
     }
 
@@ -1767,6 +1797,7 @@ impl Conversation {
                 queued.rejected += 1;
                 queued.tried_at = None;
                 queued.placed = None;
+                queued.bare = None;
                 queued.rejected
             }
             None => 0,
@@ -1822,8 +1853,9 @@ impl Conversation {
             }
         }
         // A chat that is not sent the agent's full activity is sent an item's shown fields, not
-        // its native message, which can hold what the chat is not sent (D-136).
-        if !self.sent_everything(&queued.group)
+        // its native message, which can hold what the chat is not sent (D-136). A send tried
+        // again under its token goes as MDK was first handed it, which is what MDK keeps.
+        if self.bare(queued)
             && let Sending::Item { item, .. } = &mut what
             && item.event.native().is_some()
         {
@@ -1836,6 +1868,17 @@ impl Conversation {
             tried_at: queued.tried_at,
         };
         (token, what)
+    }
+
+    /// Whether the send `queued` goes without its item's native message: as it was first handed
+    /// to MDK under its token, or else as its chat is sent now.
+    fn bare(&self, queued: &Queued) -> bool {
+        (queued.bare).unwrap_or_else(|| !self.sent_everything(&queued.group))
+    }
+
+    /// Whether `queued` carries a native message that only a chat sent the full activity is sent.
+    fn native(queued: &Queued) -> bool {
+        matches!(&queued.what, Sending::Item { item, .. } if item.event.native().is_some())
     }
 
     /// The token MDK keeps the send `queued` under, for its try now: made from the state file's
@@ -1960,6 +2003,7 @@ impl Conversation {
             attempted: false,
             rejected: 0,
             tried_at: None,
+            bare: None,
             last_resort,
             tells: false,
             placed: None,

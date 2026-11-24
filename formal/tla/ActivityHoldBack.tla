@@ -5,7 +5,7 @@
 (* what it holds back. It follows crates/marmot-agent/src/conversation.rs *)
 (* (`emitted`, `settle_for_hidden`, `members_now`, `hold_back`,            *)
 (* `next_send`, `attempting`, `sent`) and run.rs `flush`, as of master     *)
-(* 7118005 with the fix of branch t3/survey-and-model-state-machines      *)
+(* 7118005 with the fixes of branch t3/survey-and-model-state-machines    *)
 (* (2026-11-24), against MDK's sends under tokens (marmot.rs `send`).     *)
 (*                                                                         *)
 (* One chat, one group. The turn T is sent to every chat; its first       *)
@@ -18,7 +18,11 @@
 (* MDK takes a send under its token and posts it at once, keeps it to post *)
 (* later (the core is told `Pending`), or posts it or keeps it and the     *)
 (* answer is lost (`Unknown`). Tried again under the same token, MDK       *)
-(* answers from what it keeps, posting nothing again.                     *)
+(* answers from what it keeps, posting nothing again, if what it is handed *)
+(* is what it was handed first; anything else under the token it refuses  *)
+(* as another submission, and the core gives the send up with a notice    *)
+(* that settles what it settled. T and K carry a native message, which a  *)
+(* chat not sent the full activity is sent without (`as_sent`).           *)
 (*                                                                         *)
 (* Each step names itself in the variable `step`, which tools/tla/        *)
 (* schedule.py reads to write a counterexample as a schedule.             *)
@@ -33,14 +37,22 @@ CONSTANTS
     FairMdk,    \* MDK eventually posts a send it keeps
     Bug         \* a deliberate defect, or "none"
 
-ASSUME Bug \in {"none", "HoldAttempted", "NoMove", "HoldNothing"}
+ASSUME Bug \in {"none", "HoldAttempted", "NoMove", "HoldNothing", "RetryChanged"}
 
 \* The code before the fix of 2026-11-24: hold_back took every send of the full activity out of
 \* the outbox, a send MDK had already been handed too.
 HoldAttempted == Bug = "HoldAttempted"
 
-Items == {"T", "K"}
+\* The code before the second fix of 2026-11-24: a send tried again under its token left out its
+\* native message by who was in the chat at that try, not as MDK was first handed it.
+RetryChanged == Bug = "RetryChanged"
+
+\* The turn, the tool, and the core's notices of a send given up (`stand_in_for`), each a new
+\* item in the code, here one name: only what they settle is checked.
+Items == {"T", "K", "N"}
 Kind(i) == IF i = "K" THEN "full" ELSE "every"
+\* The items that carry a native message: the driver's.
+Native(i) == i # "N"
 NoEvent == <<>>
 
 \* What the driver emits, in order: an item, whether it closes, the requests it settles.
@@ -64,7 +76,9 @@ VARIABLES
 vars == <<members, owners, pending, version, first, outbox, mdk, chat, emitted, flips, lost, step>>
 
 Tok(i, v) == <<i, v>>
-Queued(i, v, s) == [tok |-> Tok(i, v), item |-> i, settles |-> s, attempted |-> FALSE]
+\* `bare`: whether its last try went without its native message (`Queued::bare`).
+Queued(i, v, s) == [tok |-> Tok(i, v), item |-> i, settles |-> s, attempted |-> FALSE,
+                    bare |-> FALSE]
 
 Init ==
     /\ members = "owners"
@@ -153,9 +167,22 @@ Took(q, rest) ==
     /\ outbox' = rest
     /\ first' = IF first[q.item] = NoEvent THEN [first EXCEPT ![q.item] = q.tok] ELSE first
 
+\* Whether a send goes without its native message, handed to MDK now: a try again under a token
+\* MDK keeps, as MDK was first handed it (`Conversation::bare`); a first try, or one MDK has
+\* nothing under the token for (`not_kept`), as the chat is sent now. Before the fix, every try
+\* as the chat is sent now.
+Bare(q) == IF q.tok \in DOMAIN mdk /\ ~RetryChanged THEN q.bare ELSE ~owners
+
 \* MDK answers a send under a token it keeps from what it keeps: the event it posted, or Pending.
+\* Handed anything else under the token, it refuses it as another submission, and the core gives
+\* the send up (`give_up`, `refused`): a notice settles in its place what it settled.
 Answered(q, rest) ==
-    IF mdk[q.tok].posted
+    IF Native(q.item) /\ Bare(q) # mdk[q.tok].bare
+    THEN /\ outbox' = Append(rest, Queued("N", version["N"] + 1, q.settles))
+         /\ version' = [version EXCEPT !["N"] = @ + 1]
+         /\ step' = [a |-> "Send", tok |-> q.tok, outcome |-> "refused"]
+         /\ UNCHANGED <<first, mdk, chat, lost>>
+    ELSE IF mdk[q.tok].posted
     THEN /\ Took(q, rest)
          /\ step' = [a |-> "Send", tok |-> q.tok, outcome |-> "sent"]
          /\ UNCHANGED <<version, mdk, chat, lost>>
@@ -189,13 +216,13 @@ Send ==
             /\ outcome \in {"posted-lost", "kept-lost", "busy"} => lost < MaxLost
             /\ lost' = IF outcome \in {"posted-lost", "kept-lost", "busy"} THEN lost + 1 ELSE lost
             /\ mdk' = IF outcome = "busy" THEN mdk
-                      ELSE q.tok :> [names |-> names, settles |-> q.settles,
+                      ELSE q.tok :> [names |-> names, settles |-> q.settles, bare |-> Bare(q),
                                      posted |-> outcome \in {"sent", "posted-lost"}] @@ mdk
             /\ chat' = IF outcome \in {"sent", "posted-lost"}
                        THEN Append(chat, Posted(q.tok, names, q.settles)) ELSE chat
             /\ IF outcome = "sent"
                THEN Took(q, rest)
-               ELSE /\ outbox' = <<[q EXCEPT !.attempted = TRUE]>> \o rest
+               ELSE /\ outbox' = <<[q EXCEPT !.attempted = TRUE, !.bare = Bare(q)]>> \o rest
                     /\ UNCHANGED first
             /\ step' = [a |-> "Send", tok |-> q.tok, outcome |-> outcome]
             /\ UNCHANGED version
@@ -232,7 +259,7 @@ TypeOK ==
 H1 == \A r \in {"r1"} : Cardinality({k \in DOMAIN chat : r \in chat[k].settles}) <= 1
 
 \* H2 (S3, for D-136): an item has one first event in the chat, and each later version names it.
-H2 == \A i \in Items :
+H2 == \A i \in Items \ {"N"} :
         \A k \in Posts(i) :
             (chat[k].names = NoEvent) <=> (\A j \in Posts(i) : j >= k)
 
@@ -254,4 +281,7 @@ NeverOwnersAgain == ~(step.a = "Send" /\ step.tok[1] = "K" /\ step.outcome = "se
                       /\ flips = 2 /\ members = "owners")
 NeverHeldAtSend == ~(step.a = "Send" /\ step.outcome = "held back")
 NeverKeptPosted == ~(step.a = "MdkPosts" /\ step.tok[1] = "K")
+\* The turn tried again, as MDK was handed it, in a chat sent otherwise now.
+NeverRetriedOtherwise == ~(step.a = "Send" /\ step.tok[1] = "T" /\ step.outcome \in {"sent", "pending"}
+                           /\ step.tok \in DOMAIN mdk /\ mdk[step.tok].bare = owners)
 =============================================================================
