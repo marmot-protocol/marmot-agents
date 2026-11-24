@@ -288,10 +288,13 @@ impl Translator {
         let body = Body::Task(Task {
             kind: task.kind.clone(),
             description: task.description.clone().or(sub.description.clone()),
-            subject: sub.subject.map(Into::into),
+            subject: sub.subject.clone().map(Into::into),
         });
-        let text = sub.description.unwrap_or_default();
+        let base = sub.description.clone().unwrap_or_default();
+        let text = sub.row_text(&base);
         let title = "Subagent working";
+        // The row as the latest turn shows it now, for an earlier turn's end read late.
+        self.remember_row(&body, State::Running, title, &base);
         self.emit(&mut out, &item, body, State::Running, title, &text, native);
         out
     }

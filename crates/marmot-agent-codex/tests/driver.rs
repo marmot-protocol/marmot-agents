@@ -2222,3 +2222,37 @@ async fn a_late_failure_of_a_subagents_earlier_turn_is_shown_on_its_row() {
     let (_, text) = row_of(&events);
     assert!(text.contains("the disk is full"), "kept: {text}");
 }
+
+// A subject given after the subagent's latest turn started survives the late end of an earlier
+// turn: the late end changes only what the row says of that turn. Here `st2` starts before the
+// item that names the subagent, which fills in its subject and description, and `st1`'s failure
+// is read after.
+#[tokio::test]
+async fn a_late_end_keeps_the_subject_given_while_the_next_turn_runs() {
+    let (mut codex, mut fake) = running().await;
+    until(&mut codex, is_turn(State::Running)).await;
+    fake.say(
+        json!({"method": "thread/started", "params": {"thread": {"id": "sub1",
+        "parentThreadId": "th1"}}}),
+    )
+    .await;
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
+        .await;
+    fake.say(started_by("a1", "sub1")).await;
+    fake.say(sub_turn_failed("sub1", "st1", "the disk is full"))
+        .await;
+    let (_, events) = read_so_far(&mut codex, &mut fake).await;
+    let row = (events.iter().rev())
+        .find(|e| matches!(e.event.body(), Body::Task(_)))
+        .expect("the row");
+    let Body::Task(task) = row.event.body() else {
+        unreachable!()
+    };
+    assert_eq!(task.subject, Some("a1".into()), "the subject survives");
+    let (state, text) = row_of(&events);
+    assert_eq!(state, State::Running, "the next turn runs");
+    assert!(text.contains("/root/a"), "the description survives: {text}");
+    assert!(text.contains("the disk is full"), "{text}");
+}
