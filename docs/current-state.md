@@ -112,8 +112,9 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
 ## Drivers
 
 - Each driver speaks its harness's official interface where one exists ([D-006](decisions.md#d-006-prefer-official-interfaces-and-libraries)), implements one trait, and
-  states seven capability flags ([D-058](decisions.md#d-058-the-driver-trait-and-the-capability-flags)), and an eighth, whether its harness tells
-  its subagents apart ([D-142](decisions.md#d-142-how-subagent-threads-are-built)).
+  states seven capability flags ([D-058](decisions.md#d-058-the-driver-trait-and-the-capability-flags)), an eighth, whether its harness tells
+  its subagents apart ([D-142](decisions.md#d-142-how-subagent-threads-are-built)), and a ninth, `stop_subagent`, whether a Stop can stop one
+  subagent while the turn goes on ([D-149](decisions.md#d-149-stop-in-a-subagents-thread-stops-that-subagent-alone)).
 - Codex: native, in Rust, on `codex app-server`, with types of its own. One translator per thread; a working
   folder and a narrow sandbox by default; sessions kept so they resume ([D-055](decisions.md#d-055-the-codex-driver-reads-codexs-messages-with-types-of-its-own), [D-060](decisions.md#d-060-a-codex-translator-follows-one-thread-and-the-transport-routes), [D-061](decisions.md#d-061-a-codex-session-starts-in-a-working-folder-with-a-safe-sandbox-unless-configured), [D-062](decisions.md#d-062-what-codex-reads-for-a-chat-message),
   [D-063](decisions.md#d-063-codex-keeps-a-session-so-it-can-be-resumed), [D-064](decisions.md#d-064-the-codex-driver-declines-an-mcp-servers-form-until-forms-are-designed)).
