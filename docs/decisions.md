@@ -2920,7 +2920,7 @@ Decided 2026-11-24 by the builder, under the project owner's instruction to deci
 meanwhile for later, and it holds the refusals it owes for a `send_file` that reused an unanswered id until its
 next write. All of that together is at most 32 MB, counted by the lines it came in, eight messages of the largest
 size ([D-033](#d-033-the-sockets-framing-is-json-rpc-20-one-message-per-line)). A connector that sends more is
-given up at once, as one that does not answer in time is
+given up at once, and the line that would pass the budget is not kept, as one that does not answer in time is
 ([D-138](#d-138-a-connector-that-stops-reading-is-given-up-in-a-requests-time)): the request waited on is told as
 perhaps taken ([D-129](#d-129-a-prompt-whose-answer-a-dropped-connection-lost-is-told-as-perhaps-not-delivered)),
 what was held still reaches the chat, and the messages it was never given wait for the next connector
@@ -2932,14 +2932,21 @@ others wait their turn, in order, as a path only. One more is refused as `busy`,
 the chat. Each upload is a task the core owns: when the core stops, or its driver ends as when a connector goes,
 the uploads under way are stopped and the driver is told they failed, with nothing in the chat, since MDK may
 already have taken the file; the files waiting were never offered to MDK, and the chat is told they were not sent.
-No upload goes on after the core.
+An upload starts only while the driver is waiting for more, so a file a driver hands over once it has ended, as
+one a connector asked for before the core gave it up, or one still waiting when telling the connector how a file
+went gives it up, is never offered to MDK, and is told in the chat as not sent. A file being read when its upload is
+stopped is waited for, since a read cannot be stopped: no read goes on after the core. MDK may still finish a send
+it was already handed after the core stops waiting for it, which is why the chat is told nothing of it. No upload
+goes on after the core.
 
 **Why.** The core answered only for single lines. A connector that went on writing while a request waited, as
 fast as a local socket carries, made the core hold all of it for up to 30 seconds, without bound; and each file
 the agent asked for started an upload of its own, holding up to 64 MB, with no limit on how many, which went on
 uploading after a lost connector, into a chat whose turn the core had already closed. The budget is far above what
 a connector sends while it hands a request to its harness, and giving up is what the protocol already does for a
-connector it cannot keep up with. Issue #150.
+connector it cannot keep up with. The files past the two uploading wait, rather than being refused as busy,
+because an agent often sends a few in one turn and no harness tries a refused one again by itself; a waiting file
+costs only its path. Issue #150.
 
 Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points.
 
