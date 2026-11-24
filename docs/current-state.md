@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-24, at `master` commit `13ce8aa`, through [D-140](decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused), [D-142](decisions.md#d-142-how-subagent-threads-are-built), [D-143](decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake), [D-144](decisions.md#d-144-property-tests-run-on-every-pull-request-kani-in-the-full-gate-and-fuzzing-nightly-on-a-pinned-nightly-compiler), [D-145](decisions.md#d-145-the-core-bounds-what-it-holds-for-a-connector-and-the-files-it-sends-at-once), [D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id), [D-147](decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken), [D-148](decisions.md#d-148-for-the-pilot-a-send-of-the-full-activity-that-mdk-keeps-and-posts-after-someone-joins-is-an-accepted-limit), [D-149](decisions.md#d-149-stop-in-a-subagents-thread-stops-that-subagent-alone), and [D-150](decisions.md#d-150-the-core-matches-a-typed-command-as-the-harness-reads-it-failing-towards-asking-for-the-right-to-approve). A change that adds or replaces
+Brought up to date on 2026-11-24, at `master` commit `8cc2c31`, through [D-140](decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused), [D-142](decisions.md#d-142-how-subagent-threads-are-built), [D-143](decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake), [D-144](decisions.md#d-144-property-tests-run-on-every-pull-request-kani-in-the-full-gate-and-fuzzing-nightly-on-a-pinned-nightly-compiler), [D-145](decisions.md#d-145-the-core-bounds-what-it-holds-for-a-connector-and-the-files-it-sends-at-once), [D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id), [D-147](decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken), [D-148](decisions.md#d-148-for-the-pilot-a-send-of-the-full-activity-that-mdk-keeps-and-posts-after-someone-joins-is-an-accepted-limit), [D-149](decisions.md#d-149-stop-in-a-subagents-thread-stops-that-subagent-alone), [D-150](decisions.md#d-150-the-core-matches-a-typed-command-as-the-harness-reads-it-failing-towards-asking-for-the-right-to-approve), and [D-151](decisions.md#d-151-the-hermes-plugin-asks-hermess-own-check-of-who-may-answer-an-approval-card-or-a-question). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -101,7 +101,9 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   request to confirm a command is a question; a standing approval is an ordinary answer ([D-047](decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts), [D-048](decisions.md#d-048-a-request-to-confirm-a-command-is-a-question),
   [D-049](decisions.md#d-049-a-standing-approval-is-an-ordinary-approval-answer)). Hermes's plugin answers a
   confirmation by its id, through Hermes's own call and after Hermes's own check of who may answer, so the
-  answer resolves that confirmation or nothing; the command it confirms runs on after the core is answered. For
+  answer resolves that confirmation or nothing; the command it confirms runs on after the core is answered.
+  An approval card and a question are answered only for someone Hermes's own check lets too
+  ([D-151](decisions.md#d-151-the-hermes-plugin-asks-hermess-own-check-of-who-may-answer-an-approval-card-or-a-question)). For
   the pilot, two people confirming at once in one group chat may settle each other's commands, and a command
   Hermes drops after a stall of over five seconds shows only that Hermes gave no reply
   ([D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id)).
@@ -186,7 +188,11 @@ Built in the core, the Codex driver and MDK ([D-141](decisions.md#d-141-subagent
   watched by the end-to-end scenario ([D-118](decisions.md#d-118-the-channel-plugin-contract-is-accepted-as-written)). The socket's chat section, for the gateways' message tools,
   is not designed, so OpenClaw's message tool is offered no actions
   ([Q-32](open-questions.md#q-32-what-does-the-sockets-chat-section-carry)).
-- The core decides who may prompt and approve; the gateway allows what the core lets through ([D-084](decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)).
+- The core decides who may prompt and approve; the gateway allows what the core lets through ([D-084](decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)),
+  except that Hermes's plugin also asks Hermes's own check of who may answer before it answers a request to confirm
+  a command, an approval card or a question, so where Hermes's own settings limit who may answer, an answer the
+  core allows can still be refused, and the item keeps waiting ([D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id),
+  [D-151](decisions.md#d-151-the-hermes-plugin-asks-hermess-own-check-of-who-may-answer-an-approval-card-or-a-question)).
 - What they send and how they behave was accepted from M3; OpenClaw's `/model status` may show the masked key
   ([D-092](decisions.md#d-092-the-choices-made-while-building-m3-are-accepted), [D-088](decisions.md#d-088-openclaws-model-status-may-show-the-masked-model-key)).
 

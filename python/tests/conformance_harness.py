@@ -226,7 +226,7 @@ class ScriptedAdapter(MarmotAdapter):
         asyncio.ensure_future(self.finish(turn))
         return 1
 
-    def resolve_question(self, clarify_id, text) -> bool:
+    def resolve_question(self, clarify_id, text, actor) -> bool:
         self.control.frame("resolve_question")
         turn = self.clarifies.pop(clarify_id, None)
         if turn is None or self.turns.get(turn.session) is not turn:

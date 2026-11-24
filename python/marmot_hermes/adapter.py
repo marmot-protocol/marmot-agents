@@ -424,14 +424,28 @@ class MarmotAdapter(BasePlatformAdapter):
         await self.handle_message(event)
 
     def resolve_card(self, session_key: str, choice: str, request_id: str, actor: str) -> int:
+        """Answers an approval card for `actor`, as Hermes's own button platforms do: first Hermes's own
+        check of who may answer it, with the chat's Hermes settings, which refuses someone Hermes would
+        not let answer it, and the card then still waits (D-151); then Hermes's call, given the same."""
+        from gateway.approval_actor import approval_refusal, refusal_text
         from tools.approval import resolve_gateway_approval_card
 
-        return int(resolve_gateway_approval_card(session_key, choice, request_id, actor_id=actor) or 0)
+        extra = getattr(self.config, "extra", None)
+        refused = approval_refusal(session_key, actor, request_id=request_id, extra=extra, choice=choice)
+        if refused:
+            raise Refusal("not_supported", refusal_text(refused))
+        return int(resolve_gateway_approval_card(session_key, choice, request_id, actor_id=actor, extra=extra) or 0)
 
-    def resolve_question(self, clarify_id: str, text: str) -> bool:
-        """Answers a question the way Hermes asks a platform to: False when it no longer waits."""
+    def resolve_question(self, clarify_id: str, text: str, actor: str) -> bool:
+        """Answers a question the way Hermes asks a platform to: False when it no longer waits. Refused,
+        and the question still waits, when Hermes's own check of who may answer it, with the chat's Hermes
+        settings, refuses `actor`, as Hermes's own platforms ask (D-151)."""
+        from gateway.approval_actor import clarify_refusal, refusal_text
         from tools.clarify_gateway import resolve_gateway_clarify
 
+        refused = clarify_refusal(clarify_id, actor, extra=getattr(self.config, "extra", None))
+        if refused:
+            raise Refusal("not_supported", refusal_text(refused))
         return bool(resolve_gateway_clarify(clarify_id, text))
 
     def resolve_confirm(self, session_key: str, confirm_id: str, choice: str, actor: str) -> asyncio.Task | None:
