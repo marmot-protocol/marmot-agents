@@ -1258,6 +1258,12 @@ impl World {
                     self.send_sub_event(&script, &sub_item, None, State::Running, task(), "sub");
                     let (of, running) = (Some(sub_item.as_str()), State::Running);
                     self.send_sub_event(&script, &sub_cmd, of, running, command(), "ls");
+                    // The subagent's words, which go in its thread as a comment (D-122).
+                    let (said, text) = (
+                        format!("subw-{}", script.turn),
+                        format!("w-{}-sub", script.turn),
+                    );
+                    self.send_sub_event(&script, &said, of, State::Done, words(), &text);
                 }
                 let text = format!("w-{}", script.turn);
                 self.send_event(
@@ -1491,6 +1497,9 @@ pub fn describe(row: &Row) -> String {
     }
     if row.kind == EDIT {
         return format!("c{} edit", row.chat);
+    }
+    if row.kind == COMMENT {
+        return format!("c{} words in thread {}", row.chat, row.content);
     }
     format!("c{} words {}", row.chat, row.content)
 }

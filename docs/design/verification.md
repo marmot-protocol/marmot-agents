@@ -346,7 +346,7 @@ clock, from a seed. It owns S1 to S4, S10, L1 to L3 for the core.
 **Built** (2026-11-22): [`crates/marmot-agent-sim`](../../crates/marmot-agent-sim/README.md). The seam is
 `marmot::Side`, which the real `Marmot` implements; the clock is tokio's, paused in a run; the run loop looks at
 what it waits for in turn rather than at random, so a schedule replays exactly. It checks S1, S3, S4, S5, S10,
-S12 and S14 after every step (every third scripted turn starts a subagent), and L1, L2, L3 and S2 at the end within 900 s of virtual time, from what the simulated MDK
+S12 and S14 after every step (every third scripted turn starts a subagent, which runs a command and speaks in its thread), and L1, L2, L3 and S2 at the end within 900 s of virtual time, from what the simulated MDK
 stored and what the harness saw. Its MDK refuses an item that MDK's own reading of an item refuses
 (`cgka_traits::agent_events`, at the revision the core depends on), and S3 fails on any such send. Runs are named `family/vVERSION/SEED/INDEX`; a failure leaves a capsule that
 replays exactly, shrunk greedily. Seven families form the gate and run on every pull request. One more shows

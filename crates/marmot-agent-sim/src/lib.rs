@@ -54,7 +54,7 @@ pub struct Campaign {
 }
 
 /// The kinds of event a campaign counts, each with what marks it in a trace entry.
-pub const MARKS: [(&str, &str); 27] = [
+pub const MARKS: [(&str, &str); 28] = [
     ("harness takes", "), Take"),
     ("crash before a save", "Crash(before Save)"),
     ("crash before a send", "Crash(before Send)"),
@@ -82,6 +82,7 @@ pub const MARKS: [(&str, &str); 27] = [
     ("driver stops", "DriverStops"),
     ("live event lost while down", "lost: no core"),
     ("item in a subagent's thread", " in thread): Sent"),
+    ("words in a subagent's thread", " words in thread "),
 ];
 
 /// Counts what a trace shows, by [`MARKS`].

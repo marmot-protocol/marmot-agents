@@ -73,7 +73,7 @@ fn settling(world: &World) -> Vec<(&Row, Vec<EventKey>)> {
             let settles: Vec<EventKey> =
                 if let Some(read) = carrier::read_item(row.kind, &row.content, &row.tags) {
                     read.item.settles
-                } else if row.kind == CHAT {
+                } else if row.kind == CHAT || row.kind == COMMENT {
                     (row.tags.iter())
                         .filter(|t| t.len() >= 2 && t[0] == "settles")
                         .map(|t| EventKey(t[1].clone()))
@@ -238,7 +238,9 @@ fn s3(world: &World) -> Option<Failure> {
         }
     }
     let mut words: BTreeSet<(usize, &str)> = BTreeSet::new();
-    for row in (world.rows.iter()).filter(|r| r.from_agent && r.kind == CHAT) {
+    // A subagent's words are a thread comment, a new message too (D-122).
+    let new = |r: &&Row| r.from_agent && (r.kind == CHAT || r.kind == COMMENT);
+    for row in world.rows.iter().filter(new) {
         if !words.insert((row.chat, row.content.as_str())) {
             return Some(fail(
                 "S3",
@@ -613,7 +615,7 @@ pub fn liveness(world: &World) -> Vec<Failure> {
             let reached = match &e.words {
                 Some(text) if world.refused.iter().any(|r| r.words.as_ref() == Some(text)) => true,
                 Some(text) => (world.rows.iter()).any(|r| {
-                    r.from_agent && r.content == *text && (r.kind == CHAT || r.kind == EDIT)
+                    r.from_agent && r.content == *text && [CHAT, COMMENT, EDIT].contains(&r.kind)
                 }),
                 None => (versions.iter()).any(|v| v.id == item && v.seq == e.seq),
             };

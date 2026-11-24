@@ -216,10 +216,11 @@ fn words_in_the_wrong_chat_fail_s5() {
 }
 
 // A subagent's words are a thread comment, and a later version MDK's plain edit of it (D-142):
-// the comment in another chat fails S5 as the agent's words there do, and an edit of the comment
-// in its own chat is an edit of the words' own message.
+// the comment in another chat fails S5 as the agent's words there do, an edit of the comment in
+// its own chat is an edit of the words' own message, and the words sent again as a new message
+// fail S3.
 #[test]
-fn a_subagents_words_in_the_wrong_chat_fail_s5() {
+fn a_subagents_words_are_checked_as_the_agents_words_are() {
     let base = || {
         let mut w = world(2, &[prompt(0), prompt(1)]);
         handed(&mut w, 0, "A");
@@ -236,6 +237,13 @@ fn a_subagents_words_in_the_wrong_chat_fail_s5() {
     let first = commented(&mut own, 0, "w-sub-2");
     said(&mut own, 0, "w-sub-2 more", Some(first));
     assert_eq!(property(oracle::safety(&own)), None);
+
+    // The comment, a new message, twice: in its thread and again, as when a retry under the same
+    // token went to the main chat.
+    let mut twice = base();
+    commented(&mut twice, 0, "w-sub-2");
+    said(&mut twice, 0, "w-sub-2", None);
+    assert_eq!(property(oracle::safety(&twice)), Some("S3".into()));
 }
 
 // Finding 3, requests. The old L1 let off a request when any refused send had settled it: a core
