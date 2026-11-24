@@ -1774,7 +1774,10 @@ impl Conversation {
         if queued.tried_at.is_some() && queued.placed.is_some() && queued.bare.is_some() {
             return false;
         }
-        let thread = queued.placed.is_none().then(|| self.thread_of(queued.what.key()));
+        let thread = queued
+            .placed
+            .is_none()
+            .then(|| self.thread_of(queued.what.key()));
         let bare = queued.bare.is_none().then(|| self.bare(queued));
         let queued = &mut self.saved.outbox[at];
         queued.attempted = true;

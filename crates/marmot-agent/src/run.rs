@@ -2206,6 +2206,11 @@ mod tests {
             Ok(Some(vec![self.agent.clone(), self.owner.clone()]))
         }
 
+        // Every send is taken, so this MDK keeps each token.
+        fn keeps(&self, _group: &GroupKey, _token: &crate::Token) -> Result<bool, NotNow> {
+            Ok(true)
+        }
+
         fn stored(&self, _group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {
             let stored = self.stored.lock().unwrap();
             let messages: Vec<Message> = (stored.iter())
