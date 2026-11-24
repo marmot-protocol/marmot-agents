@@ -1148,8 +1148,9 @@ export class Translator {
     const ev = this.emit(this.next("notice"), "notice", "done", "Stopped", text, { kind: "command_output" }, `${method} [final, reply to ${command}]`, p);
     this.answering.set(ev.item, command);
     if (this.turn !== null) {
-      // A stopped run reports no outcome.
-      this.closeTurn("cancelled", BY_DRIVER, { reason: "the run was stopped and reports no outcome" });
+      // A stopped run reports no outcome: this reply is OpenClaw's word that it stopped, and the turn's
+      // end carries it. One the plugin made up would show no effect, so it could settle nothing (D-059).
+      this.closeTurn("cancelled", `${method} [final, reply to ${command}]`, p);
     }
   }
 
