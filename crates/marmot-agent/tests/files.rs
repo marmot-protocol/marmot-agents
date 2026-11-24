@@ -258,7 +258,7 @@ async fn a_slow_upload_holds_up_nothing_else() {
     let work = tempfile::tempdir().unwrap();
     std::fs::write(work.path().join("notes.txt"), "hello from the agent\n").unwrap();
     let settings = format!("[codex]\ncwd = \"{}\"\n", work.path().display());
-    let world = World::with_held_files(&settings).await;
+    let (world, uploads) = World::with_held_files(&settings).await;
     world.runtime.start().await.unwrap();
     let results = Arc::new(Mutex::new(Vec::new()));
     let controls = Arc::new(Mutex::new(0));
@@ -287,14 +287,14 @@ async fn a_slow_upload_holds_up_nothing_else() {
         })
     })
     .await;
-    eventually(|| (world.uploads.started() == 1).then_some(())).await;
+    eventually(|| (uploads.started() == 1).then_some(())).await;
     chat.ask(None, &Asked::Interrupt, "Stop").await;
     eventually(|| (*controls.lock().unwrap() == 1).then_some(())).await;
     assert!(
         results.lock().unwrap().is_empty(),
         "the interrupt arrived while the file was still uploading"
     );
-    world.uploads.release();
+    uploads.release();
     world.words(&hex, "sent 1").await;
     assert_eq!(results.lock().unwrap().len(), 1, "one outcome for the file");
     assert_eq!(common::files_sent(&world, &group).await.len(), 1);

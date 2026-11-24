@@ -159,8 +159,6 @@ pub struct World {
     pub state: tempfile::TempDir,
     /// The test relay's address.
     pub relay: String,
-    /// The stand-in Blossom server's hold on uploads, for [`World::with_held_files`].
-    pub uploads: Arc<Uploads>,
     _home: tempfile::TempDir,
     _relay: nostr_relay_builder::LocalRelay,
 }
@@ -174,16 +172,20 @@ pub struct Running {
 impl World {
     /// The person owns the agent; `settings` are added to the agent's settings.
     pub async fn new(settings: &str) -> Self {
-        Self::on_blossom(settings, Uploads::open()).await
+        Self::on_blossom(settings, None).await
     }
 
-    /// As [`World::new`], with a Blossom server that holds each file it is sent until
-    /// [`Uploads::release`] lets it through.
-    pub async fn with_held_files(settings: &str) -> Self {
-        Self::on_blossom(settings, Uploads::held()).await
+    /// As [`World::new`], with a Blossom server that holds each file it is sent until the
+    /// [`HeldUploads`] given with it lets it through.
+    pub async fn with_held_files(settings: &str) -> (Self, Arc<HeldUploads>) {
+        let held = Arc::new(HeldUploads {
+            started: AtomicUsize::new(0),
+            through: tokio::sync::Semaphore::new(0),
+        });
+        (Self::on_blossom(settings, Some(held.clone())).await, held)
     }
 
-    async fn on_blossom(settings: &str, uploads: Arc<Uploads>) -> Self {
+    async fn on_blossom(settings: &str, held: Option<Arc<HeldUploads>>) -> Self {
         storage_sqlite::relax_storage_for_test_process();
         marmot_agent::marmot::start_sqlite();
         let home = tempfile::tempdir().unwrap();
@@ -193,7 +195,7 @@ impl World {
         // new group keeps its files, as a deployment names its own; the agent's files go there
         // as they would in use.
         let mut deployment = marmot_app::MarmotDeployment::white_noise();
-        deployment.new_group_media_endpoints = vec![blossom(uploads.clone()).await];
+        deployment.new_group_media_endpoints = vec![blossom(held).await];
         let app_settings = marmot_app::MarmotAppConfig::white_noise()
             .with_deployment(deployment)
             .with_allow_loopback_relay_endpoints(true)
@@ -232,7 +234,6 @@ impl World {
             config: Config::parse(&settings).unwrap(),
             state: tempfile::tempdir().unwrap(),
             relay: url,
-            uploads,
             _home: home,
             _relay: relay,
         }
@@ -420,31 +421,16 @@ pub async fn relay() -> nostr_relay_builder::LocalRelay {
     }
 }
 
-/// How the stand-in Blossom server takes the files it is sent: at once, or each held until the
-/// test lets it through, so that a test can act while an upload is under way however slow the
-/// machine is.
-pub struct Uploads {
+/// A stand-in Blossom server's hold on the files it is sent: each is held until the test lets it
+/// through, so that a test can act while an upload is under way however slow the machine is.
+pub struct HeldUploads {
     /// Files sent to the server so far, through or still held.
     started: AtomicUsize,
-    /// Files let through, when the server holds them.
-    through: Option<tokio::sync::Semaphore>,
+    /// Files let through.
+    through: tokio::sync::Semaphore,
 }
 
-impl Uploads {
-    fn open() -> Arc<Self> {
-        Arc::new(Self {
-            started: AtomicUsize::new(0),
-            through: None,
-        })
-    }
-
-    fn held() -> Arc<Self> {
-        Arc::new(Self {
-            started: AtomicUsize::new(0),
-            through: Some(tokio::sync::Semaphore::new(0)),
-        })
-    }
-
+impl HeldUploads {
     /// How many files have been sent to the server.
     pub fn started(&self) -> usize {
         self.started.load(Ordering::SeqCst)
@@ -452,22 +438,18 @@ impl Uploads {
 
     /// Lets one held file through.
     pub fn release(&self) {
-        if let Some(through) = &self.through {
-            through.add_permits(1);
-        }
+        self.through.add_permits(1);
     }
 
     async fn take(&self) {
         self.started.fetch_add(1, Ordering::SeqCst);
-        if let Some(through) = &self.through {
-            through.acquire().await.expect("never closed").forget();
-        }
+        self.through.acquire().await.expect("never closed").forget();
     }
 }
 
 /// A stand-in Blossom server, for the files an agent sends: it keeps each uploaded blob under its
-/// hash and serves it back, taking each as `uploads` says.
-pub async fn blossom(uploads: Arc<Uploads>) -> String {
+/// hash and serves it back, at once or, with `held`, once the test lets it through.
+pub async fn blossom(held: Option<Arc<HeldUploads>>) -> String {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -478,7 +460,7 @@ pub async fn blossom(uploads: Arc<Uploads>) -> String {
         while let Ok((mut stream, _)) = listener.accept().await {
             let blobs = blobs.clone();
             let base = base.clone();
-            let uploads = uploads.clone();
+            let held = held.clone();
             tokio::spawn(async move {
                 let mut request = Vec::new();
                 let mut buffer = [0u8; 8192];
@@ -513,7 +495,9 @@ pub async fn blossom(uploads: Arc<Uploads>) -> String {
                 let (method, path) = (words.next().unwrap_or(""), words.next().unwrap_or(""));
                 let (status, kind, reply) = match method {
                     "PUT" => {
-                        uploads.take().await;
+                        if let Some(held) = &held {
+                            held.take().await;
+                        }
                         let hash = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&body));
                         let descriptor = serde_json::json!({
                             "url": format!("{base}/{hash}.bin"), "sha256": hash,
