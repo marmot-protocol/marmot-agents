@@ -92,7 +92,9 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   request to confirm a command is a question; a standing approval is an ordinary answer ([D-047](decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts), [D-048](decisions.md#d-048-a-request-to-confirm-a-command-is-a-question),
   [D-049](decisions.md#d-049-a-standing-approval-is-an-ordinary-approval-answer)). Hermes's plugin answers a
   confirmation by its id, through Hermes's own call and after Hermes's own check of who may answer, so the
-  answer resolves that confirmation or nothing ([D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id)).
+  answer resolves that confirmation or nothing; the command it confirms runs on after the core is answered. For
+  the pilot, two people confirming at once in one group chat may settle each other's commands
+  ([D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id)).
 - Approval behaviour is the harness's own; the core adds no modes and answers nothing itself ([D-021](decisions.md#d-021-approval-behaviour-belongs-to-the-harness)).
 - In a group the agent answers when mentioned or replied to; in a two-person chat, always ([D-075](decisions.md#d-075-in-a-group-the-agent-answers-when-mentioned-or-replied-to-in-a-direct-chat-always)).
 - A message sent during a turn goes straight to the harness, which folds it in, restarts or queues it

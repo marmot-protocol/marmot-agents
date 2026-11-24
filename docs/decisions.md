@@ -2851,8 +2851,14 @@ person who answered and the chat's Hermes settings, as Hermes's own platforms do
 admins for the chat, only someone Hermes lets run the confirmed command may confirm it, whatever the core allows.
 A person Hermes refuses is refused as `not_supported`, with Hermes's words, and the confirmation still waits.
 
-Hermes hands back its reply to the answer instead of sending it, and the plugin sends it as the command's output,
-in the session Hermes asked in, outside any turn. That reply settles the command the confirmation is for, and no
+The plugin answers the core's request as soon as Hermes has taken the confirmation, which Hermes does before it
+runs the command: the question shows the answer at once, and the command runs on by itself, however long it takes
+(a `/new` first closes the old session's tools). A request is taken once the harness has it
+([D-058](#d-058-the-driver-trait-and-the-capability-flags)), and the core gives a connector up when one is not taken
+within 30 seconds ([socket protocol](design/socket-protocol.md#when-things-go-wrong)); the core going away
+meanwhile does not cancel the command.
+When the command finishes, Hermes hands back its reply to the answer instead of sending it, and the plugin sends it
+as the command's output, in the session Hermes asked in, outside any turn. That reply settles the command the confirmation is for, and no
 other: in a group, where each sender has a session and each can have a confirmation waiting, an answer to one
 settles nothing of another's. When Hermes ran the command and said nothing, a notice says so (`Hermes ran /new and
 said nothing.`), and settles the command.
@@ -2879,8 +2885,14 @@ Not closed: a `/approve` that a person who may only prompt types while a confirm
 D-049 describes, as typed text always will. Answers to an approval card and to a question do not yet ask Hermes's
 check with the chat's settings (`approval_refusal` and `clarify_refusal`); that is for a change of its own.
 
-Decided 2026-11-24 by the builder, under the project owner's instruction to build a fix only if it narrows what an
-answer can do. It concerns who may do what, so it is for the owner to confirm.
+A limit for the pilot: the plugin keeps its own record of which confirmation waits, and for whom, beside
+Hermes's. When two people confirm commands at once in one group chat, that record and Hermes's can disagree, so one
+person's answer may settle the other's command, or leave a confirmation that still waits in Hermes unanswerable
+from the chat. Neither lets anyone answer what Hermes would not let them answer. Issue #183 rebuilds the record
+from Hermes's own.
+
+Decided 2026-11-24 by the project owner.
+
 ## D-147 A request whose effect a connector showed before its connection dropped was taken
 
 **Decision.** While the core waits for a connector's response to a request, it holds the events it reads

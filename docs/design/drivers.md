@@ -862,8 +862,9 @@ does, and feeds it to the chat's translator:
   call Hermes gives a platform for it, by the question's id, and is closed only once Hermes has taken the
   answer. A request to confirm a typed command is answered through Hermes's own call for it, by the
   confirmation's id, never by typing `/approve`, and only for someone Hermes's own check of who may answer
-  lets: it answers that confirmation while it waits, and nothing else, and Hermes's reply to it, which Hermes
-  hands back, is sent as the command's output and settles that command alone
+  lets: it answers that confirmation while it waits, and nothing else. The core is answered as soon as Hermes
+  has taken it, and the command runs on by itself; Hermes's reply to it, which Hermes hands back once the
+  command finishes, is sent as the command's output and settles that command alone
   ([D-146](../decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id)).
 - For Hermes a control is a typed command. Interrupt types `/stop` in the turn's chat as its sender, new
   session types `/new`, and setting the model types `/model <id>`, after which, once Hermes's reply says it
