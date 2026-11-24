@@ -107,6 +107,9 @@ pub struct Run<S: Subject> {
     /// The folder each chat moved to, once the driver took the new session that moved it, as the
     /// core keeps it (D-101).
     pub folders: std::collections::HashMap<String, std::path::PathBuf>,
+    /// The prompts each turn item named first, by chat and item: the core keeps what a turn's
+    /// first event says it responds to, and a connector on the socket names them only there.
+    turn_prompts: std::collections::HashMap<(String, String), Vec<MessageId>>,
     next_message: u64,
     next_request: u64,
 }
@@ -152,6 +155,7 @@ impl<S: Subject> Run<S> {
             seen: Vec::new(),
             files: Default::default(),
             folders: Default::default(),
+            turn_prompts: Default::default(),
             next_message: 0,
             next_request: 0,
         }
@@ -501,12 +505,32 @@ impl<S: Subject> Run<S> {
         };
         self.notice_deaths();
         self.check.output(output.as_ref());
+        let output = output.map(|o| self.with_turn_prompts(o));
         match &output {
             Some(Output::Event(e)) => self.seen.push(e.clone()),
             Some(Output::SendFile(file)) => self.files.push_back(file.clone()),
             None => {}
         }
         output
+    }
+
+    /// A turn's later events, as the core reads them: naming the prompts its first event named.
+    fn with_turn_prompts(&mut self, output: Output) -> Output {
+        let Output::Event(mut e) = output else {
+            return output;
+        };
+        if matches!(e.event.body(), Body::Turn(_)) {
+            let chat = e.chat.as_ref().map(|c| c.0.clone()).unwrap_or_default();
+            let key = (chat, e.event.header().item.as_str().to_string());
+            if !e.prompts.is_empty() {
+                self.turn_prompts
+                    .entry(key)
+                    .or_insert_with(|| e.prompts.clone());
+            } else if let Some(first) = self.turn_prompts.get(&key) {
+                e.prompts = first.clone();
+            }
+        }
+        Output::Event(e)
     }
 
     /// The next file the driver asks the core to send, within the patience. If none comes, that

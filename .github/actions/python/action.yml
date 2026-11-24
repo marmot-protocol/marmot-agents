@@ -1,0 +1,26 @@
+# The one pinned Python release CI uses: for the Python job and the socket conformance job in ci.yml.
+name: Python
+description: Install the pinned Python release, checked against its checksum, and put it on the PATH.
+runs:
+  using: composite
+  steps:
+    - name: Install Python
+      # The release Hermes runs on (python/.python-version), as a standalone build. To move to another
+      # release, change the version, the build and the checksum together: the checksum is the `digest`
+      # of this file on the release page of astral-sh/python-build-standalone. The Hermes plugin uses
+      # the standard library only, so nothing else is installed.
+      shell: bash
+      env:
+        PYTHON_VERSION: 3.14.10
+        PYTHON_BUILD: "20261026"
+        PYTHON_SHA256: 1b38024924eb7f4cf0cab45d7b871d1f1991354190fccd2625ac7529a43786e2
+      run: |
+        set -euo pipefail
+        [ "$(cat python/.python-version)" = "${PYTHON_VERSION}" ]
+        name="cpython-${PYTHON_VERSION}%2B${PYTHON_BUILD}-x86_64-unknown-linux-gnu-install_only.tar.gz"
+        url="https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_BUILD}/${name}"
+        curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+          --output "${RUNNER_TEMP}/python.tar.gz" "${url}"
+        echo "${PYTHON_SHA256}  ${RUNNER_TEMP}/python.tar.gz" | sha256sum --check
+        tar -xzf "${RUNNER_TEMP}/python.tar.gz" -C "${RUNNER_TEMP}"
+        echo "${RUNNER_TEMP}/python/bin" >> "${GITHUB_PATH}"

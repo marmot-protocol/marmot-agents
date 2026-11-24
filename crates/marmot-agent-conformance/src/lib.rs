@@ -9,7 +9,8 @@
 //! tests had, and can answer late or never, out of order, in pieces, die at any step, serve two
 //! chats, restart, and replay a recording. [`faults`] puts bugs in on purpose, so a test shows
 //! each check catches its own. [`subagents`] holds the scenarios for a driver whose harness starts
-//! subagents.
+//! subagents, and [`socket`] those for a connector on the socket, whose connection to the core can
+//! drop while its harness goes on.
 //!
 //! The drivers are run against it in this crate's tests: `tests/codex.rs`, `tests/acp.rs`,
 //! `tests/pi.rs`, each with the deliberate faults it shows; the fakes themselves in
@@ -20,6 +21,7 @@ pub mod fake;
 pub mod faults;
 pub mod run;
 pub mod scenarios;
+pub mod socket;
 pub mod subagents;
 
 pub use check::{Checker, Violation};

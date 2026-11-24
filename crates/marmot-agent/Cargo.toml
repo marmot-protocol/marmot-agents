@@ -53,6 +53,8 @@ agent-connector = { git = "https://github.com/marmot-protocol/mdk.git", rev = "0
 agent-control = { git = "https://github.com/marmot-protocol/mdk.git", rev = "029e0579fdb7f59e85b3a4a55dd7a9e42091988a" }
 # The Claude Code scenario runs the driver as a program.
 tokio = { version = "1", features = ["process", "test-util"] }
+# The socket connectors run the driver conformance suite over the socket (tests/conformance_socket.rs).
+marmot-agent-conformance = { path = "../marmot-agent-conformance" }
 
 [features]
 # Bugs fixed before, put back on purpose for the simulator (`crates/marmot-agent-sim`), which

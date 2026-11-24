@@ -57,6 +57,11 @@ const AFTER: &str = "after the move";
 const BEFORE_ANSWER: &str = "first answer";
 const AFTER_ANSWER: &str = "second answer";
 const OTHER_ANSWER: &str = "some other answer";
+/// What the person writes for the agent to ask them a question, the question's choices, and what the
+/// scripted model says once it has the answer.
+const ASK: &str = "ask me which colour";
+const CHOICES: [&str; 2] = ["red", "blue"];
+const ASKED_ANSWER: &str = "colour taken";
 
 /// How long a gateway may take to answer, from its start: it loads its plugins and runtime first.
 const ANSWER: u64 = 300;
@@ -79,8 +84,12 @@ struct Model {
 impl Model {
     async fn serve() -> Self {
         let answer = |when: &str, text: &str| json!({"when": when, "replies": [[{"text": text}]], "repeat": true});
+        // Asked to, the model asks a question with Hermes's clarify tool, then answers once it has
+        // the reply.
+        let clarify = json!({"call": "clarify", "input": {"questions": [{"question": "Which colour?", "choices": CHOICES}]}});
+        let asks = json!({"when": ASK, "replies": [[clarify], [{"text": ASKED_ANSWER}]]});
         let script = json!({
-            "prompts": [answer(AFTER, AFTER_ANSWER), answer(BEFORE, BEFORE_ANSWER), answer("", OTHER_ANSWER)],
+            "prompts": [answer(AFTER, AFTER_ANSWER), answer(BEFORE, BEFORE_ANSWER), asks, answer("", OTHER_ANSWER)],
             "side": [{"text": OTHER_ANSWER}],
         });
         let double = Double::scripted_keeping_bodies(&script).await;
@@ -452,6 +461,151 @@ impl Install {
         }
         self.show_log();
         panic!("the agent never settled the model's {value:?}");
+    }
+
+    /// Every version of every item the agent sent in the chat, read back, oldest first, each with
+    /// its own event's id.
+    fn items(&self, group_hex: &str) -> Vec<(EventKey, carrier::Read)> {
+        let query = AppMessageQuery {
+            group_id_hex: Some(group_hex.to_string()),
+            kinds: Some(vec![ITEM_KIND, EDIT_KIND]),
+            limit: None,
+        };
+        (self.person_runtime.messages_with_query(&self.person, query))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|m| m.sender == self.agent)
+            .filter_map(|m| {
+                let read = carrier::read_item(m.kind, &m.plaintext, &m.tags)?;
+                Some((EventKey(m.message_id_hex.clone()), read))
+            })
+            .collect()
+    }
+
+    /// Waits for the item version `found` picks, and gives it with its item's first event.
+    async fn wait_for(
+        &self,
+        group_hex: &str,
+        what: &str,
+        found: impl Fn(&carrier::Read) -> bool,
+    ) -> (EventKey, carrier::Read) {
+        for _ in 0..ANSWER * 2 {
+            let hit = self.items(group_hex).into_iter().find(|(_, r)| found(r));
+            if let Some((event, read)) = hit {
+                return (read.item.first.clone().unwrap_or(event), read);
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        self.show_log();
+        panic!("the agent never sent {what}");
+    }
+
+    /// The session's item lists Hermes's commands, which the plugin reads from Hermes's command
+    /// registry (D-044, D-118).
+    async fn commands_listed(&self, group_hex: &str) {
+        let (_, read) = self
+            .wait_for(
+                group_hex,
+                "a session item that lists commands",
+                |r| matches!(r.item.event.body(), Body::Session(s) if !s.commands.is_empty()),
+            )
+            .await;
+        let Body::Session(session) = read.item.event.body() else {
+            unreachable!()
+        };
+        let names: Vec<&str> = session.commands.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            names.iter().any(|n| n.trim_start_matches('/') == "new"),
+            "Hermes's /new is among the commands: {names:?}"
+        );
+    }
+
+    /// The person asks the agent to ask them something: the question reaches the chat, their
+    /// answer, the second choice, reaches Hermes's clarify tool through Hermes's own call for a
+    /// platform's answer, and the model, given it, answers (D-118).
+    async fn question_answered(
+        &self,
+        group: &cgka_traits::GroupId,
+        group_hex: &str,
+        model: &Model,
+    ) {
+        let from = model.requests().await;
+        let sent = self
+            .person_runtime
+            .send_message(&self.person, group, ASK.as_bytes().to_vec())
+            .await
+            .unwrap();
+        let prompt = EventKey(sent.message_ids[0].clone());
+        let (target, read) = self
+            .wait_for(group_hex, "the question", |r| {
+                matches!(r.item.event.body(), Body::Question(_))
+                    && r.item.event.header().state == marmot_agent_events::State::Waiting
+            })
+            .await;
+        let Body::Question(question) = read.item.event.body() else {
+            unreachable!()
+        };
+        let asked = &question.questions()[0];
+        let blue = (asked.options.iter())
+            .find(|o| o.label.contains(CHOICES[1]))
+            .unwrap_or_else(|| {
+                panic!(
+                    "the choices are offered: {:?}",
+                    asked.options.iter().map(|o| &o.label).collect::<Vec<_>>()
+                )
+            });
+        let answer = Asked::Questions {
+            questions: vec![carrier::AskedReply {
+                question: asked.id.clone(),
+                options: vec![blue.id.clone()],
+                text: None,
+            }],
+        };
+        let out = carrier::request(
+            &marmot_agent::PubKey(self.agent.clone()),
+            Some(&target),
+            &answer,
+            CHOICES[1],
+        );
+        let sent = (self.person_runtime)
+            .send_custom_event(&self.person, group, out.kind, out.tags, out.content)
+            .await
+            .unwrap();
+        let answered = EventKey(sent.message_ids[0].clone());
+        let (_, done) = self
+            .wait_for(group_hex, "the answer's effect", |r| {
+                r.item.settles.contains(&answered)
+            })
+            .await;
+        assert!(
+            matches!(done.item.event.body(), Body::Question(_)),
+            "the question shows the answer: {}",
+            done.item.event.header().text
+        );
+        for _ in 0..ANSWER * 2 {
+            if self.answered_in(group_hex, &prompt, ASKED_ANSWER).is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        assert!(
+            self.answered_in(group_hex, &prompt, ASKED_ANSWER).is_some(),
+            "the agent answered once it had the reply"
+        );
+        // Hermes's tool result names it as `user_response`, inside the result's text.
+        let given = |body: &String| {
+            body.match_indices("user_response").any(|(at, _)| {
+                body[at..]
+                    .chars()
+                    .take(24)
+                    .collect::<String>()
+                    .contains(CHOICES[1])
+            })
+        };
+        assert!(
+            model.since(from).await.iter().any(given),
+            "the model was given the person's choice as the tool's result"
+        );
     }
 
     /// Stops the old connector as systemd stops it, at once: with MDK at the revision the core
@@ -946,6 +1100,12 @@ async fn a_hermes_install_moves_over() {
         .await;
     install.nothing_from_before(&model, moved).await;
     assert_eq!(install.answers(&group_hex, BEFORE_ANSWER), answered_before);
+
+    // Two things the plugin reads from Hermes that Hermes does not publish for plugins, which this
+    // is what fails when they change (D-118): its command registry, which the session's item lists,
+    // and its call for a platform's answer to a question.
+    install.commands_listed(&group_hex).await;
+    install.question_answered(&group, &group_hex, &model).await;
 
     // The model switched from the chat, and back. The plugin types `/model` for Hermes and tells
     // from its reply that it was taken, by Hermes's own catalog of replies (`agent.i18n.t`),

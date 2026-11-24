@@ -2671,8 +2671,10 @@ class OpenClaw(Translator):
             return
         self.emit(f"notice:{self.seq + 1}", "notice", "done", "Stopped", text, {"kind": "command_output"},
                   f"{method} [final, reply to {command}]", p)
-        if self.turn is not None:  # a stopped run reports no outcome
-            self.close_turn("cancelled", self.BY_DRIVER, {"reason": "the run was stopped and reports no outcome"})
+        if self.turn is not None:
+            # A stopped run reports no outcome: this reply is OpenClaw's word that it stopped, and the
+            # turn's end carries it. One the driver made up would show no effect (D-059).
+            self.close_turn("cancelled", f"{method} [final, reply to {command}]", p)
 
     # -- questions
 

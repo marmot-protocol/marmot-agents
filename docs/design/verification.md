@@ -11,7 +11,7 @@ tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules)
 and waiting for the owner. Of the models, `CoreLifecycle` is built (2026-11-22), and so are `SocketProtocol` and
 `DriverTransport` (2026-11-23); the others are planned. The
 conformance suite's first phase, for the built-in drivers, is built (2026-11-22); its second, for the socket
-connectors, is designed. The core's sends went over to MDK 0.19.0's token-based sends on 2026-11-22, which ends
+connectors, is built for four contracts (2026-11-24). The core's sends went over to MDK 0.19.0's token-based sends on 2026-11-22, which ends
 the duplicate a restart could make; how often a send is tried is decided
 ([D-109](../decisions.md#d-109-how-the-cores-sends-survive-a-crash-as-built)). The same day the core moved to MDK
 master after 0.19.0 (`7f7dcc6ca`) and reads each chat from its mark in MDK's insertion order. The
@@ -312,8 +312,15 @@ bugs, each fixed after its scenario failed: the ACP driver took, and showed as g
 answer the agent could no longer read; the Codex driver waited for ever on a Codex that never answered; and the ACP,
 Codex and Pi drivers waited for ever on a harness that stopped reading its input. Each of the last four held up
 every chat. Pi's driver now stops only the stuck chat's Pi, and the suite checks that another chat's Pi serves on
-meanwhile. Bounded result: one or two chats, up to two sessions each, one restart. Phase two, the socket connectors over the real socket with a fake harness
-inside each, is designed in the suite's README.
+meanwhile. Bounded result: one or two chats, up to two sessions each, one restart.
+
+**Built**, phase two (2026-11-24), in the suite's README: the shipped Claude Code, Hermes and OpenClaw connectors
+over the core's real socket (`crates/marmot-agent/tests/conformance_socket.rs`), each with a scripted harness inside
+it, for chat isolation, a request settled once, what the next connection is handed, and a connection that drops
+after delivery and before the response. It found two bugs, both fixed: the core refused as failed a request whose
+effect an event had already shown before the connection dropped
+([D-147](../decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken)),
+and the OpenClaw plugin settled an interrupt with a turn end it made up. It runs in CI's `Conformance (socket)` job.
 
 ### 3. A deterministic simulator
 
@@ -514,7 +521,7 @@ runs in three tiers ([D-130](../decisions.md#d-130-ci-runs-in-three-tiers-with-o
 
 | When | What |
 | --- | --- |
-| Every pull request, aimed at under 10 minutes | Formatting and Clippy; the workspace's tests in two jobs side by side, the core's and every other, with the conformance suite (about 30 s) and real Claude Code and Codex on the [model double](#11-a-model-double) in the core's; the simulator on a fixed set of seeds at its normal count (20 runs of each gate family from seed 0, in release, in its own job); TLC on small bounds, every model's cases in five jobs, only when the models or the code they follow changed; the TypeScript, Python, install-script, recording and document checks, and the cassettes' age as a warning. Planned: property tests at normal counts, Kani on the small proofs, the privacy scan |
+| Every pull request, aimed at under 10 minutes | Formatting and Clippy; the workspace's tests in two jobs side by side, the core's and every other, with the conformance suite (about 30 s) and real Claude Code and Codex on the [model double](#11-a-model-double) in the core's; the socket connectors through the conformance suite, in a job of their own (about a minute once built); the simulator on a fixed set of seeds at its normal count (20 runs of each gate family from seed 0, in release, in its own job); TLC on small bounds, every model's cases in five jobs, only when the models or the code they follow changed; the TypeScript, Python, install-script, recording and document checks, and the cassettes' age as a warning. Planned: property tests at normal counts, Kani on the small proofs, the privacy scan |
 | The merge queue, and each push to `master`, aimed at under 30 minutes | All of the above whatever changed; the simulator at 200 runs of each family; the move-over tests that need Docker and no key (Hermes and OpenClaw installs moved over, on the model double, scripted) |
 | Nightly (`.github/workflows/nightly.yml`) | The simulator on a new seed each night, 5,000 runs of each family, its capsules kept; TLC on `CoreLifecycle`'s larger bounds, safety only (liveness there takes hours and is run by hand); a coverage report (`cargo llvm-cov`, a report only); mutation testing on a 64th of the core's 1,639 mutants (the simulator's hooks left out, since only it exercises them), by the day of the year, so each shard runs about every two months; the cassettes' age, failing, with newer harness releases reported (`check_cassettes.py --strict`, [the model double](#11-a-model-double)). Planned: property tests at high counts, fuzzing. A failed job opens an issue, with the mutants missed or the cassettes due |
 | Weekly (planned) | Long simulator campaigns |

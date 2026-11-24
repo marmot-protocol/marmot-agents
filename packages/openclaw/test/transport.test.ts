@@ -336,6 +336,9 @@ test("an interrupt is /stop from the person who sent it, settled by the end of t
   stop.deliver({ text: "Agent was aborted." }, { kind: "final" });
   const end = events.at(-1)!;
   assert.deepEqual([end.type, end.state, end.settles], ["turn", "cancelled", ["r-5"]]);
+  // It shows OpenClaw's reply to /stop, which it carries: an end the plugin made up would show no
+  // effect, and could settle nothing (D-059).
+  assert.equal((end as unknown as { native?: { kind: string } }).native?.kind, "deliver [final, reply to /stop]");
   await refused(connector.serve("control", { request: "r-6", by: alice, action: { type: "interrupt", turn } }), "nothing_to_do");
 });
 

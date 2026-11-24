@@ -3006,6 +3006,7 @@ dependencies = [
  "marmot-account",
  "marmot-agent-acp",
  "marmot-agent-codex",
+ "marmot-agent-conformance",
  "marmot-agent-driver",
  "marmot-agent-events",
  "marmot-agent-pi",

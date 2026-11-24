@@ -2835,3 +2835,22 @@ another, is not for this one, and the agent says nothing ([D-027](#d-027-answers
 good. An app newer than the core will send actions the core does not know, and the reason lets it say so.
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
+
+## D-147 A request whose effect a connector showed before its connection dropped was taken
+
+**Decision.** While the core waits for a connector's response to a request, it holds the events it reads
+([D-058](#d-058-the-driver-trait-and-the-capability-flags)). When the connection then drops, or the connector is
+given up, before the response, a request that one of those events already settles, or a prompt that a turn of
+the prompt's own chat among them names, counts as taken: the event settles it, once, and the chat is not told it failed or was perhaps
+not delivered ([D-129](#d-129-a-prompt-whose-answer-a-dropped-connection-lost-is-told-as-perhaps-not-delivered)).
+A request no event showed is refused as failed, as before. Taken or not, nothing is sent again
+([D-037](#d-037-a-prompt-is-delivered-at-most-once)).
+
+**Why.** A connector may send the event that shows an answer's effect before its response to the answer; the
+OpenClaw plugin does. The core refused the answer as failed when the connection dropped between the two, then
+handed on the event that settled it: the request was settled twice, and the chat was told the answer failed
+though it was taken. The socket connectors' run of the conformance suite (`dropped_after_delivery`) found it.
+Issue #154.
+
+Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points.
+
