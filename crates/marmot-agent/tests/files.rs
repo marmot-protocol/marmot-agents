@@ -250,12 +250,15 @@ async fn the_agent_sends_a_file_from_its_folder_and_nothing_from_outside() {
 
 // A file that is slow to upload holds up nothing else: while it uploads, the person's interrupt
 // still reaches the harness, and the file's outcome reaches the harness once, when it is done.
+// The stand-in Blossom server holds the file until the interrupt has reached the harness, so the
+// upload cannot end first on a slow machine: the interrupt would then come after the turn ended,
+// and be refused as having nothing to stop.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_slow_upload_holds_up_nothing_else() {
     let work = tempfile::tempdir().unwrap();
     std::fs::write(work.path().join("notes.txt"), "hello from the agent\n").unwrap();
     let settings = format!("[codex]\ncwd = \"{}\"\n", work.path().display());
-    let world = World::with_slow_files(&settings, std::time::Duration::from_secs(4)).await;
+    let world = World::with_held_files(&settings).await;
     world.runtime.start().await.unwrap();
     let results = Arc::new(Mutex::new(Vec::new()));
     let controls = Arc::new(Mutex::new(0));
@@ -284,12 +287,14 @@ async fn a_slow_upload_holds_up_nothing_else() {
         })
     })
     .await;
+    eventually(|| (world.uploads.started() == 1).then_some(())).await;
     chat.ask(None, &Asked::Interrupt, "Stop").await;
     eventually(|| (*controls.lock().unwrap() == 1).then_some(())).await;
     assert!(
         results.lock().unwrap().is_empty(),
         "the interrupt arrived while the file was still uploading"
     );
+    world.uploads.release();
     world.words(&hex, "sent 1").await;
     assert_eq!(results.lock().unwrap().len(), 1, "one outcome for the file");
     assert_eq!(common::files_sent(&world, &group).await.len(), 1);
