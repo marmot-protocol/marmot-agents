@@ -43,7 +43,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::pin::pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::SeqCst};
 use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -146,12 +146,45 @@ pub struct Kept {
 /// Which save fails: one that would write a state it matches.
 type FailWhen = dyn Fn(&Kept) -> bool + Send + Sync;
 
+/// How many times a [`Store`] that counts them wrote its file, and how many bytes in all,
+/// counted once each write is synced: what a save costs is measured by them (#155). Only the
+/// store adds to them.
+#[derive(Clone, Debug, Default)]
+pub struct Writes(Arc<(AtomicU64, AtomicU64)>);
+
+impl Writes {
+    /// The writes so far.
+    pub fn count(&self) -> u64 {
+        self.0.0.load(SeqCst)
+    }
+
+    /// The bytes they wrote.
+    pub fn bytes(&self) -> u64 {
+        self.0.1.load(SeqCst)
+    }
+
+    fn add(&self, bytes: usize) {
+        self.0.0.fetch_add(1, SeqCst);
+        self.0.1.fetch_add(bytes as u64, SeqCst);
+    }
+}
+
 /// Where the kept state lives.
 pub struct Store {
     path: PathBuf,
+    /// The bytes on disk, as the last save wrote them, so a save of the same state writes
+    /// nothing (#155). `None` while the store does not know: before its first save, and after
+    /// one that failed partway.
+    written: std::sync::Mutex<Option<Vec<u8>>>,
+    /// What it wrote, if it counts it.
+    writes: Option<Writes>,
     /// A fault for the tests of a failed save, as the simulator will put one
     /// (`docs/design/verification.md`): none in use.
     fault: Option<(Arc<FailWhen>, Arc<AtomicBool>)>,
+    /// A fault for the tests at the last step of a save, the folder's sync, once the new file is
+    /// in place.
+    #[cfg(test)]
+    folder_sync_fails: AtomicBool,
 }
 
 impl Store {
@@ -159,8 +192,20 @@ impl Store {
     pub fn new(dir: &Path) -> Self {
         Self {
             path: dir.join("marmot-agent-state.json"),
+            written: std::sync::Mutex::new(None),
+            writes: None,
             fault: None,
+            #[cfg(test)]
+            folder_sync_fails: AtomicBool::new(false),
         }
+    }
+
+    /// This store, counting how many times it writes its file and how many bytes, which the
+    /// count given back shows.
+    pub fn counting_writes(mut self) -> (Self, Writes) {
+        let writes = Writes::default();
+        self.writes = Some(writes.clone());
+        (self, writes)
     }
 
     /// The state file in `dir`, where the first save of a state `when` matches fails, as on a
@@ -193,7 +238,10 @@ impl Store {
 
     /// Writes the state whole: to a file only its owner can read, flushed to disk, then put in
     /// place of the old one, so a crash leaves the old file or the new one and never half of one.
+    /// A state the same as the last one this store wrote is on disk already, so nothing is
+    /// written: what is durable is the same either way (#155).
     pub fn save(&self, kept: &Kept) -> std::io::Result<()> {
+        // A fault meets every save, written or not, so a crash can be put at any of them.
         if let Some((when, failed)) = &self.fault
             && (failed.load(SeqCst) || when(kept))
         {
@@ -201,14 +249,28 @@ impl Store {
             return Err(std::io::Error::other("a save made to fail"));
         }
         let bytes = serde_json::to_vec(kept).map_err(std::io::Error::other)?;
+        let mut written = self.written.lock().unwrap_or_else(|e| e.into_inner());
+        if written.as_ref() == Some(&bytes) {
+            return Ok(());
+        }
+        // Until this save has ended well, what is on disk may be the old state or the new one.
+        *written = None;
         let temporary = self.path.with_extension("json.new");
         let mut file = private_file(&temporary)?;
         file.write_all(&bytes)?;
         file.sync_all()?;
         std::fs::rename(&temporary, &self.path)?;
         if let Some(dir) = self.path.parent() {
+            #[cfg(test)]
+            if self.folder_sync_fails.load(SeqCst) {
+                return Err(std::io::Error::other("the folder's sync made to fail"));
+            }
             std::fs::File::open(dir)?.sync_all()?;
         }
+        if let Some(writes) = &self.writes {
+            writes.add(bytes.len());
+        }
+        *written = Some(bytes);
         Ok(())
     }
 }
@@ -1618,5 +1680,72 @@ mod tests {
         assert_eq!(refusal.reason, Reason::Failed);
         assert!(!refusal.detail.unwrap_or_default().contains('/'));
         assert_eq!(side.offers(), 1);
+    }
+
+    // A save of the state already on disk writes nothing, so a step that changed nothing costs no
+    // write and no sync; a state that changed is written whole, as before (#155).
+    #[test]
+    fn a_save_of_the_state_on_disk_writes_nothing() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let file = dir.path().join("marmot-agent-state.json");
+        let inode = || std::fs::metadata(&file).unwrap().ino();
+        let mut kept = Kept::default();
+        store.save(&kept).unwrap();
+        let first = inode();
+        store.save(&kept).unwrap();
+        assert_eq!(inode(), first, "the same state again is not written");
+        kept.read.insert(GroupKey::from("g"), 7);
+        store.save(&kept).unwrap();
+        assert_ne!(inode(), first, "a changed state is written");
+        assert_eq!(store.load().unwrap().read, kept.read);
+    }
+
+    // A save that failed once the new file was in place leaves the store not knowing what is on
+    // disk: the next save is written whole, even of the state saved before, so a save that
+    // returns well always leaves its own state on disk (#155).
+    #[test]
+    fn a_save_after_one_that_failed_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        let a = Kept::default();
+        let mut b = Kept::default();
+        b.read.insert(GroupKey::from("g"), 7);
+        store.save(&a).unwrap();
+        // The new file goes in place, and the folder's sync, the last step, fails.
+        store.folder_sync_fails.store(true, SeqCst);
+        let failed = store.save(&b);
+        store.folder_sync_fails.store(false, SeqCst);
+        assert!(failed.is_err(), "the folder's sync failed");
+        assert_eq!(
+            store.load().unwrap().read,
+            b.read,
+            "the new file is in place"
+        );
+        store.save(&a).unwrap();
+        assert_eq!(
+            store.load().unwrap().read,
+            a.read,
+            "the state saved is on disk"
+        );
+    }
+
+    // A fault meets a save whose state is the one on disk too, so the simulator can put a crash
+    // at any save, the end of a step that changed nothing included.
+    #[test]
+    fn a_fault_fails_a_save_that_would_write_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let armed = Arc::new(AtomicBool::new(false));
+        let when = armed.clone();
+        let (store, failed) = Store::failing_when(dir.path(), move |_| when.load(SeqCst));
+        let kept = Kept::default();
+        store.save(&kept).unwrap();
+        armed.store(true, SeqCst);
+        assert!(
+            store.save(&kept).is_err(),
+            "the same state again still fails"
+        );
+        assert!(failed.load(SeqCst));
     }
 }
