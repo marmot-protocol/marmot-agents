@@ -9,8 +9,9 @@
 //! everything the agent says there waits in the outbox, and the owner's two-person chat, where an
 //! approval waits. For each backlog the agent says that many things in the group, then the owner
 //! answers the approval, then the core stops. It prints, for each backlog: how big the state file
-//! is, how many saves each step made, the time from the owner's answer reaching the core to the
-//! driver getting it, the time a stop takes, and what one save of that state takes alone. The
+//! is, how many saves each step asked for and the writes and bytes the store made of them, the
+//! time from the owner's answer reaching the core to the driver getting it, the time a stop
+//! takes, once the answer's step has ended, and what one save of that state takes alone. The
 //! state is saved in `MARMOT_AGENT_SAVES_DIR` (by default the system's temporary folder), so it
 //! can be run on the file system to be measured; `MARMOT_AGENT_SAVES_BACKLOGS` lists the backlogs
 //! (by default `0,50,500`). Results, with the machine they came from, are in
@@ -21,7 +22,7 @@ use marmot_agent::config::Config;
 use marmot_agent::marmot::{
     FileFailed, Incoming, Live, Message, NotNow, Page, SendFailed, Side, Subscribed,
 };
-use marmot_agent::run::{Core, Kept, Store};
+use marmot_agent::run::{Core, Kept, Store, Writes};
 use marmot_agent::{EventKey, GroupKey, Heard, HeardRequest, PubKey, Sending, Token, Where};
 use marmot_agent_driver::{
     Answer, Capabilities, Control, Driver, Emitted, FilesIn, Harness, MidTurn, Output, Prompt,
@@ -204,8 +205,9 @@ struct Harnessed {
     prompts: mpsc::UnboundedSender<Prompt>,
     /// How many outputs the core has taken, and whether it waits for the next.
     taken: Arc<Mutex<(usize, bool)>>,
-    answered: Option<oneshot::Sender<(Instant, usize)>>,
+    answered: Option<oneshot::Sender<(Instant, Count)>>,
     saves: Arc<AtomicUsize>,
+    writes: Arc<Writes>,
 }
 
 impl Driver for Harnessed {
@@ -235,8 +237,15 @@ impl Driver for Harnessed {
 
     async fn answer(&mut self, _answer: Answer) -> Result<(), Refusal> {
         if let Some(answered) = self.answered.take() {
-            let _ = answered.send((Instant::now(), self.saves.load(SeqCst)));
+            let count = Count {
+                saves: self.saves.load(SeqCst),
+                writes: self.writes.count.load(SeqCst),
+                bytes: self.writes.bytes.load(SeqCst),
+            };
+            let _ = answered.send((Instant::now(), count));
         }
+        // The core is in a step until it asks for the next output.
+        self.taken.lock().unwrap().1 = false;
         Ok(())
     }
 
@@ -283,40 +292,62 @@ fn turn() -> Body {
     })
 }
 
+/// The saves the core asked for, and the writes and bytes the store made of them.
+#[derive(Clone, Copy, Default)]
+struct Count {
+    saves: usize,
+    writes: u64,
+    bytes: u64,
+}
+
+impl std::ops::Sub for Count {
+    type Output = Count;
+
+    fn sub(self, before: Count) -> Count {
+        Count {
+            saves: self.saves - before.saves,
+            writes: self.writes - before.writes,
+            bytes: self.bytes - before.bytes,
+        }
+    }
+}
+
+impl std::fmt::Display for Count {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({}, {} B)", self.saves, self.writes, self.bytes)
+    }
+}
+
 /// What one backlog measured.
 struct Measured {
     backlog: usize,
     state_bytes: u64,
-    build_saves_per_event: f64,
+    build: Count,
     build_last_event: Duration,
-    answer_saves: usize,
+    answer: Count,
     answer_handoff: Duration,
-    stop_saves: usize,
-    stop: Duration,
+    stop: Count,
+    stop_time: Duration,
     one_save: Duration,
     serialize: Duration,
 }
 
-/// Measures one backlog. The hook that counts the saves never fails one. With `writes`, it counts
-/// only those whose state differs from the last, which the store writes, and the others it skips;
-/// telling them apart takes making the bytes once more, so its times are not the ones reported.
-async fn measure(backlog: usize, under: &std::path::Path, writes: bool) -> Measured {
+/// Measures one backlog. The hook that counts the saves never fails one; the store counts the
+/// writes it makes of them.
+async fn measure(backlog: usize, under: &std::path::Path) -> Measured {
     let state = tempfile::tempdir_in(under).unwrap();
     let saves = Arc::new(AtomicUsize::new(0));
     let counting = saves.clone();
-    let last = Mutex::new(Vec::new());
-    let (store, _) = Store::failing_when(state.path(), move |kept: &Kept| {
-        if writes {
-            let bytes = serde_json::to_vec(kept).unwrap();
-            let mut last = last.lock().unwrap();
-            if *last == bytes {
-                return false;
-            }
-            *last = bytes;
-        }
+    let (store, _) = Store::failing_when(state.path(), move |_: &Kept| {
         counting.fetch_add(1, SeqCst);
         false
     });
+    let writes = store.writes();
+    let count = || Count {
+        saves: saves.load(SeqCst),
+        writes: writes.count.load(SeqCst),
+        bytes: writes.bytes.load(SeqCst),
+    };
     let settings = format!(
         "home = \"/unused\"\nrelays = [\"wss://relay.invalid\"]\nowner = \"{OWNER}\"\n[connector]\n"
     );
@@ -338,6 +369,7 @@ async fn measure(backlog: usize, under: &std::path::Path, writes: bool) -> Measu
         taken: taken.clone(),
         answered: Some(answered),
         saves: saves.clone(),
+        writes: writes.clone(),
     };
     let core = Core::new(mdk.clone(), driver, &config, store).unwrap();
     let (stop, stopped) = oneshot::channel::<()>();
@@ -397,7 +429,7 @@ async fn measure(backlog: usize, under: &std::path::Path, writes: bool) -> Measu
 
     // The backlog: each thing the agent says in the group waits in the outbox.
     let text = "w".repeat(WORDS);
-    let before = saves.load(SeqCst);
+    let before = count();
     let mut last_event = Duration::ZERO;
     for n in 0..backlog {
         let words = Body::Message(Words::default());
@@ -412,25 +444,27 @@ async fn measure(backlog: usize, under: &std::path::Path, writes: bool) -> Measu
         drained(at).await;
         last_event = started.elapsed();
     }
-    let build_saves = saves.load(SeqCst) - before;
+    let build = count() - before;
     let state_file = state.path().join("marmot-agent-state.json");
     let state_bytes = std::fs::metadata(&state_file).unwrap().len();
 
     // The owner answers the approval: from the message reaching the core to the driver's answer.
-    let before = saves.load(SeqCst);
+    let before = count();
     let started = Instant::now();
     mdk.owner_says(DIRECT, 1202, "");
-    let (handed, saves_then) = answer.await.unwrap();
+    let (handed, then) = answer.await.unwrap();
     let answer_handoff = handed - started;
-    let answer_saves = saves_then - before;
+    let answer = then - before;
+    // The step that answered ends before the stop is measured, its last save included.
+    drained(sent).await;
 
     // The core stops.
-    let before = saves.load(SeqCst);
+    let before = count();
     let started = Instant::now();
     stop.send(()).unwrap();
     running.await.unwrap().unwrap();
     let stop_time = started.elapsed();
-    let stop_saves = saves.load(SeqCst) - before;
+    let stop = count() - before;
 
     // One save of the state the core stopped with, alone, the median of a few.
     let kept = Store::new(state.path()).load().unwrap();
@@ -458,12 +492,12 @@ async fn measure(backlog: usize, under: &std::path::Path, writes: bool) -> Measu
     Measured {
         backlog,
         state_bytes,
-        build_saves_per_event: build_saves as f64 / backlog.max(1) as f64,
+        build,
         build_last_event: last_event,
-        answer_saves,
+        answer,
         answer_handoff,
-        stop_saves,
-        stop: stop_time,
+        stop,
+        stop_time,
         one_save: times[times.len() / 2],
         serialize: made[made.len() / 2],
     }
@@ -481,24 +515,23 @@ async fn what_a_save_costs_under_an_outbox_backlog() {
         .map(|n| n.trim().parse().unwrap())
         .collect();
     println!(
-        "backlog | state file | saves (writes) per backlog event | last backlog event | saves (writes) before answer | answer to driver | saves (writes) in stop | stop | one save alone | of which serializing"
+        "backlog | state file | saves (writes, bytes) building it | per backlog event | last backlog event | saves (writes, bytes) before answer | answer to driver | saves (writes, bytes) in stop | stop | one save alone | of which serializing"
     );
     for backlog in backlogs {
-        let m = measure(backlog, &under, false).await;
-        let w = measure(backlog, &under, true).await;
+        let m = measure(backlog, &under).await;
+        let per = |n: f64| n / m.backlog.max(1) as f64;
         println!(
-            "{} | {} B | {:.2} ({:.2}) | {:?} | {} ({}) | {:?} | {} ({}) | {:?} | {:?} | {:?}",
+            "{} | {} B | {} | {:.2} ({:.2}) | {:?} | {} | {:?} | {} | {:?} | {:?} | {:?}",
             m.backlog,
             m.state_bytes,
-            m.build_saves_per_event,
-            w.build_saves_per_event,
+            m.build,
+            per(m.build.saves as f64),
+            per(m.build.writes as f64),
             m.build_last_event,
-            m.answer_saves,
-            w.answer_saves,
+            m.answer,
             m.answer_handoff,
-            m.stop_saves,
-            w.stop_saves,
             m.stop,
+            m.stop_time,
             m.one_save,
             m.serialize,
         );
