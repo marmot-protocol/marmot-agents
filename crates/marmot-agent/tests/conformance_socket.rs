@@ -97,18 +97,17 @@ struct OnSocket {
     state: tempfile::TempDir,
     process: Option<Process>,
     listener: Option<UnixListener>,
-    /// Both ends of the relay of the connection there is, to drop it: on a restart, or when a
-    /// scenario says.
-    current: Current,
+    /// Both ends of the relay of the connection there is, so a restart drops it.
+    current: Option<Ends>,
     /// How long the relay waits, once it has held a response back, before it says so, and so before
     /// a scenario drops the connection: none but in the test that shows a drop too late to decide
     /// the request is caught.
     withheld_late: Duration,
 }
 
-/// The sockets of the connection there is, by the relay: the connector's, and the one towards
-/// the core.
-type Current = Arc<Mutex<Vec<std::os::unix::net::UnixStream>>>;
+/// The sockets of one connection, by its relay: the connector's, and the one towards the core.
+/// Each relay has its own, so one that ends late closes only its own connection, never the next.
+type Ends = Arc<Mutex<Vec<std::os::unix::net::UnixStream>>>;
 
 /// A request of the core's on its way, as the relay keeps it until its response passes.
 struct Pending {
@@ -131,7 +130,7 @@ impl OnSocket {
             state: tempfile::tempdir().unwrap(),
             process: None,
             listener: None,
-            current: Arc::default(),
+            current: None,
             withheld_late: Duration::ZERO,
         }
     }
@@ -140,9 +139,9 @@ impl OnSocket {
         (self.process.as_ref()).is_some_and(|p| p.alive.load(Ordering::SeqCst))
     }
 
-    /// Drops the connection there is, as the core's end going.
-    fn drop_connection(current: &Current) {
-        for stream in current.lock().unwrap().drain(..) {
+    /// Drops a connection, as the core's end going.
+    fn drop_connection(ends: &Ends) {
+        for stream in ends.lock().unwrap().drain(..) {
             let _ = stream.shutdown(std::net::Shutdown::Both);
         }
     }
@@ -154,7 +153,7 @@ impl OnSocket {
         fake: Fake,
         connector: std::os::unix::net::UnixStream,
         core: std::os::unix::net::UnixStream,
-        current: Current,
+        ends: Ends,
         withheld_late: Duration,
     ) {
         let pending: Arc<Mutex<Vec<Pending>>> = Arc::default();
@@ -166,7 +165,7 @@ impl OnSocket {
         let (from_core, mut to_core) = stream(core).into_split();
         let mut drops = fake.drops();
         drops.borrow_and_update();
-        let (fake_up, pending_up, current_up) = (fake.clone(), pending.clone(), current.clone());
+        let (fake_up, pending_up, ends_up) = (fake.clone(), pending.clone(), ends.clone());
         tokio::spawn(async move {
             let mut lines = BufReader::new(from_connector).lines();
             loop {
@@ -232,7 +231,7 @@ impl OnSocket {
                     break;
                 }
             }
-            Self::drop_connection(&current_up);
+            Self::drop_connection(&ends_up);
         });
         tokio::spawn(async move {
             let mut lines = BufReader::new(from_core).lines();
@@ -263,7 +262,7 @@ impl OnSocket {
                     break;
                 }
             }
-            Self::drop_connection(&current);
+            Self::drop_connection(&ends);
         });
     }
 
@@ -370,7 +369,9 @@ impl Subject for OnSocket {
         {
             process.expected.store(true, Ordering::SeqCst);
         }
-        Self::drop_connection(&self.current);
+        if let Some(ends) = self.current.take() {
+            Self::drop_connection(&ends);
+        }
         self.listener = None;
         if self.connector.ends_with_connection() {
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -394,12 +395,13 @@ impl Subject for OnSocket {
             .expect("the connection, as a plain socket");
         let (core, relayed) = std::os::unix::net::UnixStream::pair().expect("a socket pair");
         let handles = [&connector, &relayed].map(|s| s.try_clone().expect("a second handle on it"));
-        *self.current.lock().unwrap() = handles.into();
+        let ends: Ends = Arc::new(Mutex::new(handles.into()));
+        self.current = Some(ends.clone());
         Self::relay(
             self.fake.clone(),
             connector,
             relayed,
-            self.current.clone(),
+            ends,
             self.withheld_late,
         );
         core.set_nonblocking(true).unwrap();
