@@ -737,7 +737,9 @@ impl Codex {
     fn adopt(&mut self, chat: &ChatId, parent: &str, thread: &str) {
         let c = self.chats.get_mut(chat).expect("a chat that was fed");
         let session = c.translator.session().map(String::from);
-        let translator = Translator::subagent(thread, session.as_deref());
+        // A subagent another subagent started is shown in that one's thread (D-121).
+        let started_by = c.subagents.contains_key(parent).then_some(parent);
+        let translator = Translator::subagent(thread, session.as_deref(), started_by);
         c.subagents.insert(thread.to_string(), translator);
         c.parents.insert(thread.to_string(), parent.to_string());
         self.subthreads.insert(thread.to_string(), chat.clone());
@@ -1034,6 +1036,7 @@ impl Codex {
             .flatten()
             .filter(|m| m["method"] == "turn/completed")
             .and_then(|m| m["params"]["turn"]["id"].as_str().map(String::from));
+        let reported = named.is_some();
         let ended = named.or_else(|| turn.filter(|t| translator.turn() != Some(t.as_str())));
         let replies = translator.take_replies();
         if before != after && who.is_none() {
@@ -1047,11 +1050,17 @@ impl Codex {
                 self.threads.insert(new, chat.clone());
             }
         }
-        // The event that shows a turn's end: the last turn or subagent's task that ended.
+        // The event that shows a turn's end: the last turn or subagent's task that ended, or, for
+        // the end of a subagent's earlier turn read while its next one runs, its task, which
+        // stays open for that next turn (D-142).
         let ending = ended.as_ref().and_then(|_| {
-            events.iter().rposition(|e| {
+            let closed = events.iter().rposition(|e| {
                 matches!(e.body(), Body::Turn(_) | Body::Task(_))
                     && !matches!(e.header().state, State::Running | State::Waiting)
+            });
+            closed.or_else(|| {
+                let late = reported && who.is_some();
+                (events.iter()).rposition(|e| late && matches!(e.body(), Body::Task(_)))
             })
         });
         let ended = ended.map(|turn| (who.map(String::from), turn));
@@ -1631,6 +1640,7 @@ impl Driver for Codex {
             resume: true,
             approvals: true,
             files_in: FilesIn::Images,
+            subagents: true,
             approval_commands: Vec::new(),
         }
     }

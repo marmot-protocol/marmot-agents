@@ -76,6 +76,7 @@ fn header(item: &str, state: State) -> Header {
         harness: "sim".into(),
         session: None,
         turn: None,
+        subagent: None,
         item: item.into(),
         seq: 1,
         state,
@@ -135,6 +136,7 @@ fn the_net_window_starts_when_the_driver_acknowledges() {
             first: None,
             started_by: None,
             settles: vec![event(&w, 1)],
+            thread: None,
         };
         let out = carrier::item(&net).expect("fits");
         let row = w.store_sent(0, out.kind, out.content, out.tags, None);
@@ -231,6 +233,7 @@ fn an_answer_sees_an_approval_that_landed_while_no_core_looked() {
             first: None,
             started_by: None,
             settles: Vec::new(),
+            thread: None,
         };
         let out = carrier::item(&approval).expect("fits");
         let row = w.store_sent(0, out.kind, out.content, out.tags, None);
@@ -280,6 +283,7 @@ fn an_item_mdk_cannot_read_is_refused_and_fails_s3() {
                     first: None,
                     started_by: None,
                     settles: Vec::new(),
+                    thread: None,
                 }),
             }
         };
@@ -325,6 +329,7 @@ fn approval(
         first: first.cloned(),
         started_by: None,
         settles: Vec::new(),
+        thread: None,
     }
 }
 

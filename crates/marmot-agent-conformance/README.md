@@ -91,9 +91,10 @@ A driver whose harness starts subagents also runs the scenarios in `src/subagent
 The fake reads four more words: `#spawn` starts one subagent on Codex's newer runtime and waits for it, `#spawn1`
 the same on the older runtime, whose subagent's turn starts before the item that names it is complete, `#nest` a
 subagent that starts one of its own, and `#outlive` a subagent the turn does not wait for. The prompt's other
-words say what the subagent does, as for any turn. The checks are that the chat shows each subagent flat: a
-`subagent` tool item, a `subagent` task naming it, the subagent's words naming it as `parent`, all in the chat's
-one session.
+words say what the subagent does, as for any turn. The checks are that the chat shows each subagent: a
+`subagent` tool item, one `subagent` task naming it, the subagent's words naming it as `parent`, all in the chat's
+one session; and that every other event of the subagent names its task item as the subagent it belongs to, from
+its first version on, and a nested subagent's task item names the one that started it (D-121, D-142).
 
 | Scenario | What happens |
 | --- | --- |

@@ -61,6 +61,7 @@ mod tests {
             harness: "codex".into(),
             session: Some("s1".into()),
             turn: Some("t1".into()),
+            subagent: None,
             item: "i1".into(),
             seq: 3,
             state,

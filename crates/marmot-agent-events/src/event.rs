@@ -133,6 +133,12 @@ pub struct Header {
     /// The turn the event belongs to. A session item and some notices belong to none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn: Option<TurnId>,
+    /// For the work of a subagent: the `task` item that is that subagent's row, in the same
+    /// session (D-121, D-142). The core puts the event in that subagent's thread. A top-level
+    /// subagent's own `task` item names none; a nested one's names the subagent that started it.
+    /// Only a driver whose harness tells its subagents apart sets it (D-124).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<ItemId>,
     /// The item this event creates or replaces.
     pub item: ItemId,
     /// The event's place among the events of its session, from 1, in the order the driver

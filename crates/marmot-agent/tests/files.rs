@@ -53,6 +53,7 @@ impl Sender {
             harness: "sender".into(),
             session: Some("s1".into()),
             turn: Some(format!("t{n}").into()),
+            subagent: None,
             item: format!("{item}{n}").into(),
             seq: self.seq,
             state,
@@ -96,6 +97,7 @@ impl Driver for Sender {
             resume: false,
             approvals: false,
             files_in: FilesIn::None,
+            subagents: false,
             approval_commands: Vec::new(),
         }
     }

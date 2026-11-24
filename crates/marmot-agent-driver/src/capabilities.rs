@@ -25,6 +25,11 @@ pub struct Capabilities {
     pub approvals: bool,
     /// Which attachments a prompt may carry.
     pub files_in: FilesIn,
+    /// Whether the harness tells its subagents apart, so that the driver names the subagent each
+    /// event belongs to and the core shows it in that subagent's thread (D-121, D-124). Where it
+    /// does not, a subagent stays a `tool` item in the agent's own activity, and anything it asks
+    /// shows as the agent's own.
+    pub subagents: bool,
     /// Typed commands that need the right to approve (D-032, D-047). The core checks every
     /// message against this list, because a typed message otherwise needs only the right to
     /// prompt. A driver always states it, even when it is empty: leaving it out by mistake would

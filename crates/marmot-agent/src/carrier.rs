@@ -7,6 +7,12 @@
 //! `docs/design/agent-kinds.md`: the plain rendering in the content, everything else in tags. On an
 //! item, the chat message that started its turn is a `started_by` tag, MDK's name for it (D-112).
 //!
+//! An item in a subagent's thread carries NIP-22's tags (D-121): `E`, `K` and `P` name the thread's
+//! root, the top-level subagent's `task` item, and `e`, `k` and `p` the immediate parent, the
+//! `task` item of the subagent the item belongs to. Only a first event carries the parent: an
+//! edit's `e` is its target, so an edit repeats the root tags alone (D-133). The agent's words in
+//! a thread are MDK's thread message, which MDK tags itself from the parent it is given (D-122).
+//!
 //! The core applies the 64 KB limit here, because only here is an item's final size known
 //! (D-057).
 
@@ -105,6 +111,31 @@ pub struct Item {
     pub started_by: Option<EventKey>,
     /// The answers and controls whose effect this version shows (D-028).
     pub settles: Vec<EventKey>,
+    /// Where it goes in a subagent's thread, for an item of a subagent's (D-121).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<Thread>,
+}
+
+/// A place in a subagent's thread (D-121): the root of the whole tree, the first event of the
+/// top-level subagent's `task` item, and the parent, the first event of the `task` item of the
+/// subagent the event belongs to, which for a top-level subagent's own events is the root. Both
+/// were sent by the agent.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Thread {
+    /// The root, NIP-22's `E`.
+    pub root: EventKey,
+    /// The parent, NIP-22's `e`. An edit read back carries none (D-133).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<EventKey>,
+    /// The agent, which sent both: NIP-22's `P` and `p`.
+    pub agent: PubKey,
+}
+
+/// Prints nothing it holds: the ids are of events in a group (D-071).
+impl std::fmt::Debug for Thread {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Thread").finish_non_exhaustive()
+    }
 }
 
 /// Prints the event as it prints itself, the version, and how many requests it settles: nothing
@@ -653,6 +684,12 @@ fn write_item(item: &Item, left_out: &LeftOut) -> Outgoing {
     if let Some(turn) = &header.turn {
         tags.push(tag(["turn", turn.as_str()]));
     }
+    if let Some(subagent) = &header.subagent {
+        tags.push(tag(["subagent", subagent.as_str()]));
+    }
+    if let Some(thread) = &item.thread {
+        tags.extend(thread_tags(thread, item.first.is_none()));
+    }
     if let Some(started_by) = &item.started_by {
         tags.push(tag(["started_by", started_by.as_str()]));
     }
@@ -685,6 +722,27 @@ fn write_item(item: &Item, left_out: &LeftOut) -> Outgoing {
     }
 }
 
+/// NIP-22's tags for a place in a subagent's thread (D-121): the root's `E`, `K` and `P`, and, on a
+/// first event (`first`), the parent's `e`, `k` and `p`. An edit carries the root's alone (D-133).
+pub fn thread_tags(thread: &Thread, first: bool) -> Vec<Vec<String>> {
+    let kind = ITEM_KIND.to_string();
+    let agent = thread.agent.as_str();
+    let mut tags = vec![
+        tag(["E", thread.root.as_str(), "", agent]),
+        tag(["K", &kind]),
+        tag(["P", agent]),
+    ];
+    if first {
+        let parent = thread.parent.as_ref().unwrap_or(&thread.root);
+        tags.extend([
+            tag(["e", parent.as_str(), "", agent]),
+            tag(["k", &kind]),
+            tag(["p", agent]),
+        ]);
+    }
+    tags
+}
+
 /// Tags without an edit's `e` tag, its target, as MDK takes them for an edit it places
 /// ([`Outgoing::tags_but_target`]).
 pub fn but_target(tags: &[Vec<String>]) -> Vec<Vec<String>> {
@@ -713,14 +771,26 @@ pub fn read_item(kind: u64, content: &str, tags: &[Vec<String>]) -> Option<Read>
         EDIT_KIND => Some(edit_target(tags)?),
         _ => return None,
     };
-    if values(tags, "e").count() != usize::from(first.is_some()) {
+    // A first event names an event with `e` only as its parent in a thread, beside its root.
+    let root = value(tags, "E");
+    let parents = values(tags, "e").count() - usize::from(first.is_some());
+    if parents > usize::from(first.is_none() && root.is_some()) {
         return None;
     }
+    let thread = root.map(|root| Thread {
+        root: EventKey::from(root),
+        parent: first
+            .is_none()
+            .then(|| value(tags, "e").map(EventKey::from))
+            .flatten(),
+        agent: PubKey::from(value(tags, "P").unwrap_or_default()),
+    });
     let Fields(body) = serde_json::from_str(one("fields")?).ok()?;
     let header = Header {
         harness: one("harness")?.to_string(),
         session: one("session").map(SessionId::from),
         turn: one("turn").map(TurnId::from),
+        subagent: one("subagent").map(ItemId::from),
         item: ItemId::from(one("item_id")?),
         seq: one("seq")?.parse().ok()?,
         state: serde_json::from_value(serde_json::Value::String(one("state")?.into())).ok()?,
@@ -750,6 +820,7 @@ pub fn read_item(kind: u64, content: &str, tags: &[Vec<String>]) -> Option<Read>
             first: first.map(EventKey::from),
             started_by: one("started_by").map(EventKey::from),
             settles: values(tags, "settles").map(EventKey::from).collect(),
+            thread,
         },
         left_out: LeftOut {
             native: sized("native"),

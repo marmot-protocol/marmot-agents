@@ -252,6 +252,7 @@ impl Driver for Taker {
             resume: false,
             approvals: false,
             files_in: FilesIn::None,
+            subagents: false,
             approval_commands: Vec::new(),
         }
     }

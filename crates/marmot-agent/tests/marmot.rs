@@ -326,6 +326,7 @@ async fn a_send_tried_again_under_its_token_goes_out_once() {
         remark: true,
         edit: None,
         settles: vec![EventKey::from("e-r1")],
+        thread: None,
     };
     let token = Token {
         send: "w@1".into(),
@@ -384,6 +385,7 @@ async fn an_items_later_version_is_mdks_edit_of_its_first_event() {
             harness: "codex".into(),
             session: Some("s1".into()),
             turn: Some("t1".into()),
+            subagent: None,
             item: "call1".into(),
             seq: 3,
             state,
@@ -407,6 +409,7 @@ async fn an_items_later_version_is_mdks_edit_of_its_first_event() {
                 first,
                 started_by: None,
                 settles: Vec::new(),
+                thread: None,
             }),
         }
     };
@@ -446,6 +449,7 @@ async fn an_items_later_version_is_mdks_edit_of_its_first_event() {
         remark: true,
         edit: None,
         settles: Vec::new(),
+        thread: None,
     };
     world
         .send(&group, &remark, &token("w", None))
@@ -531,6 +535,7 @@ fn words_named(name: &str) -> (marmot_agent::Sending, marmot_agent::Token) {
         remark: true,
         edit: None,
         settles: Vec::new(),
+        thread: None,
     };
     let token = marmot_agent::Token {
         send: name.into(),
@@ -812,6 +817,7 @@ async fn an_edit_of_a_first_event_that_disappeared_is_told_apart() {
             harness: "codex".into(),
             session: Some("s1".into()),
             turn: Some("t1".into()),
+            subagent: None,
             item: "t1".into(),
             seq: version,
             state: State::Running,
@@ -831,6 +837,7 @@ async fn an_edit_of_a_first_event_that_disappeared_is_told_apart() {
                 first,
                 started_by: None,
                 settles: Vec::new(),
+                thread: None,
             }),
         }
     };
@@ -893,6 +900,7 @@ async fn the_agents_words_settle_as_many_as_mdk_takes() {
                 remark: true,
                 edit: None,
                 settles: requests[..count].to_vec(),
+                thread: None,
             };
             let token = Token {
                 send: format!("{name}{count}"),
@@ -936,6 +944,7 @@ impl marmot_agent_driver::Driver for Listener {
             resume: false,
             approvals: false,
             files_in: marmot_agent_driver::FilesIn::None,
+            subagents: false,
             approval_commands: Vec::new(),
         }
     }
@@ -1043,6 +1052,7 @@ async fn an_edit_without_an_edits_token_is_mdks_plain_edit() {
         remark: true,
         edit: Some(first.clone()),
         settles: Vec::new(),
+        thread: None,
     };
     let older = marmot_agent::Token {
         send: "a/2".into(),
@@ -1192,4 +1202,340 @@ async fn the_groups_command_reads_the_agents_home() {
         String::from_utf8(listed.stdout).unwrap(),
         "The agent is in no groups.\n"
     );
+}
+
+/// A stand-in for a harness whose subagents the test scripts: each prompt is handed to the test,
+/// and what the test hands back is what the driver says (D-121).
+struct Scripted {
+    events: tokio::sync::mpsc::UnboundedReceiver<marmot_agent_driver::Emitted>,
+    prompts: tokio::sync::mpsc::UnboundedSender<marmot_agent_driver::Prompt>,
+}
+
+impl marmot_agent_driver::Driver for Scripted {
+    fn harness(&self) -> marmot_agent_driver::Harness {
+        marmot_agent_driver::Harness {
+            name: "scripted".into(),
+            version: None,
+        }
+    }
+
+    fn capabilities(&self) -> marmot_agent_driver::Capabilities {
+        marmot_agent_driver::Capabilities {
+            interrupt: false,
+            mid_turn: marmot_agent_driver::MidTurn::Queue,
+            sessions: marmot_agent_driver::Sessions::Core,
+            resume: false,
+            approvals: false,
+            files_in: marmot_agent_driver::FilesIn::None,
+            subagents: true,
+            approval_commands: Vec::new(),
+        }
+    }
+
+    async fn prompt(
+        &mut self,
+        prompt: marmot_agent_driver::Prompt,
+    ) -> Result<(), marmot_agent_driver::Refusal> {
+        let _ = self.prompts.send(prompt);
+        Ok(())
+    }
+
+    async fn answer(
+        &mut self,
+        _answer: marmot_agent_driver::Answer,
+    ) -> Result<(), marmot_agent_driver::Refusal> {
+        Ok(())
+    }
+
+    async fn control(
+        &mut self,
+        _control: marmot_agent_driver::Control,
+    ) -> Result<(), marmot_agent_driver::Refusal> {
+        Ok(())
+    }
+
+    async fn next_event(&mut self) -> Option<marmot_agent_driver::Output> {
+        self.events
+            .recv()
+            .await
+            .map(marmot_agent_driver::Output::from)
+    }
+}
+
+// A subagent's work reaches a person in its thread, through MDK (D-121, D-122): the subagent's
+// `task` item is a row in the main chat, everything it does is in a thread under it, a nested
+// subagent's work in the same tree under its own `task` item, and its words are a thread message
+// that does not alert. Someone added to the chat while the subagents work sees each item from its
+// next edit, in its thread, as having started earlier (D-124, D-133).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_subagents_work_reaches_a_person_in_its_thread() {
+    use marmot_agent::carrier::ITEM_KIND;
+    use marmot_agent_driver::Emitted;
+    use marmot_agent_events::body::{Message, StartedBy, Task, Tool, ToolKind, Turn};
+    use marmot_agent_events::{AgentEvent, Header};
+    let mut world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.config.full_activity = FullActivity::All;
+    world.runtime.start().await.unwrap();
+    let setup = marmot_app::AccountSetupRequest {
+        default_relays: vec![cgka_traits::TransportEndpoint(world.relay.clone())],
+        bootstrap_relays: vec![cgka_traits::TransportEndpoint(world.relay.clone())],
+        publish_initial_key_package: true,
+        ..marmot_app::AccountSetupRequest::default()
+    };
+    let late = (world.runtime.create_identity(setup).await.unwrap())
+        .account
+        .account_id_hex;
+    (world.marmot.app)
+        .set_local_notifications_enabled(&world.person, true)
+        .unwrap();
+    let mut alerts = world.runtime.subscribe_notifications().unwrap();
+    let (say, events) = tokio::sync::mpsc::unbounded_channel();
+    let (prompts, mut prompted) = tokio::sync::mpsc::unbounded_channel();
+    let core = world.start(Scripted { events, prompts });
+    let team = (world.runtime)
+        .create_group(
+            &world.person,
+            "Team",
+            std::slice::from_ref(&world.agent),
+            None,
+        )
+        .await
+        .unwrap()
+        .operation
+        .expect("the group is made");
+    let team_hex = world.joined(&team).await;
+    // A message to a newly made group sometimes does not arrive, which is MDK's matter: it is sent
+    // again until the agent has it.
+    let mut prompt = None;
+    for _ in 0..5 {
+        let mention = vec![vec!["p".to_string(), world.agent.clone()]];
+        (world.runtime)
+            .send_tagged_text(&world.person, &team, "split it up".into(), mention)
+            .await
+            .unwrap();
+        let waited = tokio::time::timeout(std::time::Duration::from_secs(10), prompted.recv());
+        if let Ok(Some(got)) = waited.await {
+            prompt = Some(got);
+            break;
+        }
+    }
+    let prompt = prompt.expect("the agent was prompted in the group");
+    let mut seq = 0;
+    let mut emit = |item: &str, of: Option<&str>, state: State, body: Body, text: &str| {
+        seq += 1;
+        let header = Header {
+            harness: "scripted".into(),
+            session: Some("s1".into()),
+            turn: Some("t1".into()),
+            subagent: of.map(Into::into),
+            item: item.into(),
+            seq,
+            state,
+            title: item.into(),
+            text: text.into(),
+        };
+        let prompts = match body {
+            Body::Turn(_) => vec![prompt.message.clone()],
+            _ => Vec::new(),
+        };
+        let event = AgentEvent::new(header, body, None).unwrap();
+        say.send(Emitted {
+            event,
+            chat: Some(prompt.chat.id.clone()),
+            prompts,
+            settles: Vec::new(),
+        })
+        .unwrap();
+    };
+    let turn = || {
+        Body::Turn(Turn {
+            started_by: StartedBy::User,
+            duration_ms: None,
+            usage: None,
+        })
+    };
+    let task = || {
+        Body::Task(Task {
+            kind: "subagent".into(),
+            description: Some("look around".into()),
+            subject: None,
+        })
+    };
+    let command = || {
+        Body::Tool(Tool {
+            kind: ToolKind::Command,
+            name: "shell".into(),
+            command: Some("ls".into()),
+            cwd: None,
+            exit_code: None,
+            duration_ms: None,
+            output: None,
+            changes: Vec::new(),
+            query: None,
+            path: None,
+            input: None,
+            error: None,
+        })
+    };
+    let words = || Body::Message(Message::default());
+    emit("turn", None, State::Running, turn(), "Working");
+    emit("task:a", None, State::Running, task(), "look around");
+    emit("cmd:a", Some("task:a"), State::Running, command(), "ls");
+    emit(
+        "w:a",
+        Some("task:a"),
+        State::Done,
+        words(),
+        "found two files",
+    );
+    emit(
+        "task:b",
+        Some("task:a"),
+        State::Running,
+        task(),
+        "look deeper",
+    );
+    emit("cmd:b", Some("task:b"), State::Running, command(), "ls -R");
+
+    // The person's app has each item as the agent sent it, in its place.
+    let row_of = |account: &str, item: &str| {
+        let query = marmot_app::TimelineMessageQuery {
+            group_id_hex: Some(team_hex.clone()),
+            ..Default::default()
+        };
+        let page = (world.runtime)
+            .timeline_messages_with_query(account, query)
+            .unwrap();
+        (page.messages.into_iter()).find(|m| {
+            m.kind == ITEM_KIND && m.agent_item.as_ref().is_some_and(|i| i.item_id == item)
+        })
+    };
+    let rows: Vec<marmot_app::TimelineMessageRecord> = eventually(|| {
+        let rows: Vec<_> = ["task:a", "cmd:a", "task:b", "cmd:b"]
+            .iter()
+            .map(|item| row_of(&world.person, item))
+            .collect::<Option<_>>()?;
+        Some(rows)
+    })
+    .await;
+    let [task_a, cmd_a, task_b, cmd_b] = <[_; 4]>::try_from(rows).ok().unwrap();
+    let place = |row: &marmot_app::TimelineMessageRecord| {
+        let t = row.thread.as_ref()?;
+        Some((
+            t.root_message_id_hex.clone(),
+            t.parent_message_id_hex.clone(),
+        ))
+    };
+    let a = task_a.message_id_hex.clone();
+    let b = task_b.message_id_hex.clone();
+    assert_eq!(
+        place(&task_a),
+        None,
+        "the top-level task item is in the main chat"
+    );
+    assert_eq!(place(&cmd_a), Some((a.clone(), a.clone())));
+    assert_eq!(
+        place(&task_b),
+        Some((a.clone(), a.clone())),
+        "in the outer thread"
+    );
+    assert_eq!(
+        place(&cmd_b),
+        Some((a.clone(), b.clone())),
+        "under the nested task item"
+    );
+    // The subagent's words are a thread message under its task item.
+    let said = eventually(|| {
+        let query = marmot_app::TimelineMessageQuery {
+            group_id_hex: Some(team_hex.clone()),
+            ..Default::default()
+        };
+        let page = (world.runtime)
+            .timeline_messages_with_query(&world.person, query)
+            .unwrap();
+        (page.messages.into_iter()).find(|m| m.plaintext == "found two files")
+    })
+    .await;
+    assert_eq!(said.kind, 1111);
+    assert_eq!(place(&said), Some((a.clone(), a.clone())));
+    // The agent's words in its own thread alert nobody (D-122).
+    let alerted = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let update = alerts.recv().await.expect("notifications");
+            if update.message_id_hex.as_deref() == Some(said.message_id_hex.as_str()) {
+                return update;
+            }
+        }
+    });
+    assert!(alerted.await.is_err(), "the subagent's words alerted");
+
+    // Someone joins while the subagents work, and gets what comes after.
+    (world.runtime)
+        .invite_members(&world.person, &team, std::slice::from_ref(&late))
+        .await
+        .unwrap();
+    let mut accepted = false;
+    for _ in 0..300 {
+        if world
+            .runtime
+            .accept_group_invite(&late, &team)
+            .await
+            .is_ok()
+        {
+            accepted = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(accepted, "the late joiner accepted the invitation");
+    // Its copy of the group must have the agent's next edits: wait for a message of the person's.
+    (world.runtime)
+        .send_message(&world.person, &team, b"welcome".to_vec())
+        .await
+        .unwrap();
+    eventually(|| {
+        let query = marmot_app::TimelineMessageQuery {
+            group_id_hex: Some(team_hex.clone()),
+            ..Default::default()
+        };
+        let page = (world.runtime)
+            .timeline_messages_with_query(&late, query)
+            .ok()?;
+        page.messages
+            .iter()
+            .any(|m| m.plaintext == "welcome")
+            .then_some(())
+    })
+    .await;
+    emit("cmd:b", Some("task:b"), State::Done, command(), "ls -R");
+    emit("task:b", Some("task:a"), State::Done, task(), "look deeper");
+    emit("cmd:a", Some("task:a"), State::Done, command(), "ls");
+    emit("task:a", None, State::Done, task(), "look around");
+    emit("turn", None, State::Done, turn(), "Done");
+    let seen: Vec<marmot_app::TimelineMessageRecord> = eventually(|| {
+        let rows: Vec<_> = ["task:a", "cmd:a", "task:b", "cmd:b"]
+            .iter()
+            .map(|item| row_of(&late, item))
+            .collect::<Option<_>>()?;
+        rows.iter()
+            .all(|r| r.agent_item.as_ref().is_some_and(|i| i.version == 2))
+            .then_some(rows)
+    })
+    .await;
+    for row in &seen {
+        assert!(row.agent_item_first_event_missing, "shown from its edit");
+        assert_eq!(row.message_id_hex.len(), 64);
+    }
+    let [task_a, cmd_a, task_b, cmd_b] = <[_; 4]>::try_from(seen).ok().unwrap();
+    assert_eq!(
+        task_a.message_id_hex, a,
+        "the row is the item's, at its first event's id"
+    );
+    assert_eq!(place(&task_a), None);
+    // An edit names its root alone: the late joiner has each item in the outer thread.
+    for row in [&cmd_a, &task_b, &cmd_b] {
+        assert_eq!(place(row).map(|p| p.0), Some(a.clone()), "in the thread");
+    }
+    core.stop().await;
+    world.runtime.shutdown().await;
 }

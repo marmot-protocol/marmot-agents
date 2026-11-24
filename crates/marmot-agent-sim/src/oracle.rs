@@ -104,6 +104,7 @@ pub fn safety(world: &World) -> Option<Failure> {
         .or_else(|| s5(world))
         .or_else(|| s10(world))
         .or_else(|| s12(world))
+        .or_else(|| s14(world))
 }
 
 /// The earliest the core's `no_effect` net may settle a request after the harness took it, in
@@ -382,6 +383,68 @@ fn s10(world: &World) -> Option<Failure> {
             ));
         }
         last.insert(chat, (order, msg));
+    }
+    None
+}
+
+/// S14: a subagent's item goes in its thread or, failing that, in the main chat, and never moves
+/// (D-121, D-133, D-142). An item's first event that carries NIP-22's tags names, as its parent,
+/// the first event of its subagent's `task` item in the same chat, stored before it, and as its
+/// root that item's root, or that item when it is the root. Each edit of an item carries the root
+/// its first event carries, and none when that carries none.
+fn s14(world: &World) -> Option<Failure> {
+    let one = |row: &Row, name: &str| {
+        (row.tags.iter())
+            .find(|t| t.len() >= 2 && t[0] == name)
+            .map(|t| t[1].clone())
+    };
+    let items: Vec<(&Row, carrier::Read)> = (world.rows.iter())
+        .filter(|r| r.from_agent)
+        .filter_map(|r| Some((r, carrier::read_item(r.kind, &r.content, &r.tags)?)))
+        .collect();
+    let mut firsts: BTreeMap<(usize, String), &Row> = BTreeMap::new();
+    for (row, read) in items.iter().filter(|(r, _)| r.kind == carrier::ITEM_KIND) {
+        let id = read.item.event.header().item.as_str().to_string();
+        firsts.entry((row.chat, id)).or_insert(row);
+    }
+    for (row, read) in &items {
+        let (root, parent) = (one(row, "E"), one(row, "e"));
+        let name = read.item.event.header().item.as_str();
+        if row.kind == EDIT {
+            let first = (world.rows.iter()).find(|r| Some(&r.event) == row.edits.as_ref());
+            if let Some(first) = first
+                && one(first, "E") != root
+            {
+                return Some(fail("S14", format!("an edit of {name} moved it")));
+            }
+            continue;
+        }
+        let Some(root) = root else {
+            if parent.is_some() {
+                return Some(fail("S14", format!("{name} names a parent and no root")));
+            }
+            continue;
+        };
+        let task = read.item.event.header().subagent.as_ref();
+        let Some(task) = task.and_then(|t| firsts.get(&(row.chat, t.as_str().to_string()))) else {
+            return Some(fail(
+                "S14",
+                format!("{name} is in a thread of no subagent's"),
+            ));
+        };
+        let wanted_root = one(task, "E").unwrap_or_else(|| task.event.as_str().to_string());
+        if parent.as_deref() != Some(task.event.as_str()) || root != wanted_root {
+            return Some(fail(
+                "S14",
+                format!("{name} is in another subagent's thread"),
+            ));
+        }
+        if task.order >= row.order {
+            return Some(fail(
+                "S14",
+                format!("{name} is stored before its thread's root"),
+            ));
+        }
     }
     None
 }

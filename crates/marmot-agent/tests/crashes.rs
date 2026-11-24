@@ -65,6 +65,7 @@ impl Driver for Stub {
             resume: false,
             approvals: true,
             files_in: FilesIn::None,
+            subagents: false,
             approval_commands: Vec::new(),
         }
     }
@@ -98,6 +99,7 @@ fn event(item: &str, state: State, body: Body) -> AgentEvent {
         harness: "stub".into(),
         session: Some("s1".into()),
         turn: Some("t1".into()),
+        subagent: None,
         item: item.into(),
         seq: 1,
         state,
@@ -913,6 +915,7 @@ fn said_before(text: &str) -> Sending {
         remark: false,
         edit: None,
         settles: Vec::new(),
+        thread: None,
     }
 }
 

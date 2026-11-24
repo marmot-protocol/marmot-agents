@@ -30,6 +30,7 @@ emitted (`src/oracle.rs`).
 | S5 | every step | A chat id stands for one chat; an item, the agent's words and a settle reach only their own chat, and an edit of the agent's words edits their own message there |
 | S10 | every step | What reaches the harness from a chat comes in storage order, each message once: a prompt by its text, an answer or a control as the request message the core read last, which it hands on before reading another |
 | S12 | every step | A prompt names a session only on a driver's first prompt for the chat, only one the chat had, never one whose end was stored before the prompt reached the harness (by storage order) |
+| S14 | every step | A subagent's item, which every third scripted turn makes, is in its thread or in the main chat: a first event with NIP-22's tags names, as its parent, the first event of its subagent's `task` item in the chat, stored before it, and that item's root as its root; an edit carries the root its first event carries |
 | L1, L2, L3 | at the end | Every chat joined and everything posted stored; every request settled once; every turn ended, the latest emission of each item of the running driver stored or refused, known by its `seq` (nothing waits in the outbox for good), no harness work left and no send still to land; every prompt handled; within 900 s of virtual time from the start of the fair part |
 | S2 | at the end | Before the last stop, nothing an earlier driver left is open; after it, nothing at all |
 

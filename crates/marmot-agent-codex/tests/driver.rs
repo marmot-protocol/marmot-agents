@@ -1074,6 +1074,94 @@ async fn a_thread_started_under_a_chats_thread_is_its_subagent() {
     assert_eq!(codex.unrouted(), 0);
 }
 
+// Each subagent is one `task` item, its row, which each of its turns opens again, and everything
+// else it does names that item, so the core shows it in the subagent's thread; a subagent started
+// by another names that one's `task` item, and the outer one names none (D-121).
+#[tokio::test]
+async fn a_subagents_work_names_its_task_item_and_a_nested_ones_names_its_parent() {
+    let (mut codex, mut fake) = running().await;
+    until(&mut codex, is_turn(State::Running)).await;
+    let thread = |id: &str, parent: &str| {
+        json!({"method": "thread/started", "params": {"thread": {"id": id,
+            "parentThreadId": parent}}})
+    };
+    let words = |thread: &str, turn: &str, id: &str| {
+        json!({"method": "item/completed", "params": {"threadId": thread, "turnId": turn,
+            "item": {"type": "agentMessage", "id": id, "text": id, "phase": "final_answer"}}})
+    };
+    fake.say(thread("sub1", "th1")).await;
+    fake.say(sub_turn("turn/started", "sub1", "st1", "inProgress"))
+        .await;
+    fake.say(started_by("a1", "sub1")).await;
+    fake.say(words("sub1", "st1", "w1")).await;
+    fake.say(thread("sub2", "sub1")).await;
+    fake.say(sub_turn("turn/started", "sub2", "st2", "inProgress"))
+        .await;
+    fake.say(words("sub2", "st2", "w2")).await;
+    fake.say(sub_turn("turn/completed", "sub2", "st2", "completed"))
+        .await;
+    fake.say(sub_turn("turn/completed", "sub1", "st1", "completed"))
+        .await;
+    // Given more work, the same subagent works again on the same row.
+    fake.say(sub_turn("turn/started", "sub1", "st3", "inProgress"))
+        .await;
+    fake.say(words("sub1", "st3", "w3")).await;
+    fake.say(sub_turn("turn/completed", "sub1", "st3", "completed"))
+        .await;
+    let mut events = until(&mut codex, |e| e.event.header().text == "w3").await;
+    events.extend(until(&mut codex, is_task(State::Done)).await);
+    let of = |e: &Emitted| {
+        e.event
+            .header()
+            .subagent
+            .as_ref()
+            .map(|s| s.as_str().to_string())
+    };
+    let tasks: Vec<(String, Option<String>, State)> = (events.iter())
+        .filter(|e| matches!(e.event.body(), Body::Task(_)))
+        .map(|e| {
+            (
+                e.event.header().item.as_str().to_string(),
+                of(e),
+                e.event.header().state,
+            )
+        })
+        .collect();
+    let outer = "task:sub1".to_string();
+    let inner = "task:sub2".to_string();
+    let rows: std::collections::HashSet<&String> = tasks.iter().map(|t| &t.0).collect();
+    assert_eq!(
+        rows,
+        std::collections::HashSet::from([&outer, &inner]),
+        "{tasks:?}"
+    );
+    for (item, named, _) in &tasks {
+        let wanted = (*item == inner).then(|| outer.clone());
+        assert_eq!(*named, wanted, "{item} names the subagent that started it");
+    }
+    let outer_states: Vec<State> = (tasks.iter())
+        .filter(|t| t.0 == outer)
+        .map(|t| t.2)
+        .collect();
+    let opened = (outer_states.windows(2))
+        .filter(|w| w[0] == State::Done && w[1] == State::Running)
+        .count();
+    assert_eq!(
+        opened, 1,
+        "its second turn opens the row again: {outer_states:?}"
+    );
+    assert_eq!(outer_states.last(), Some(&State::Done));
+    for (said, by) in [("w1", &outer), ("w2", &inner), ("w3", &outer)] {
+        let e = (events.iter()).find(|e| e.event.header().text == said);
+        assert_eq!(
+            e.and_then(of).as_ref(),
+            Some(by),
+            "{said} names its subagent"
+        );
+    }
+    assert_eq!(codex.unrouted(), 0);
+}
+
 /// The parent's item that starts a subagent in `thread`, on Codex's newer runtime.
 fn started_by(item: &str, thread: &str) -> Value {
     let started = json!({"type": "subAgentActivity", "id": item, "kind": "started",
@@ -1997,20 +2085,25 @@ async fn work_given_during_a_subagents_turn_is_for_its_next() {
         .await;
     fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
         .await;
-    let events = until(&mut codex, |e| e.event.header().item.as_str() == "task:st2").await;
+    let mut events = until(&mut codex, is_task(State::Done)).await;
+    let first = events.last().unwrap().clone();
+    events.extend(until(&mut codex, is_task(State::Running)).await);
     let parent = (events.iter()).find_map(|e| match e.event.body() {
         Body::Message(m) if e.event.header().item.as_str() == "w1" => Some(m.parent.clone()),
         _ => None,
     });
     assert_eq!(parent, Some(Some("a1".into())), "the running turn's words");
-    let subject = |item: &str| {
-        (events.iter().rev()).find_map(|e| match e.event.body() {
-            Body::Task(t) if e.event.header().item.as_str() == item => Some(t.subject.clone()),
-            _ => None,
-        })
+    // The subagent's one task item, its row: its first turn worked for a1, its next for a2.
+    let subject = |e: &Emitted| match e.event.body() {
+        Body::Task(t) => (
+            e.event.header().item.as_str().to_string(),
+            t.subject.clone(),
+        ),
+        _ => panic!("a task"),
     };
-    assert_eq!(subject("task:st1"), Some(Some("a1".into())));
-    assert_eq!(subject("task:st2"), Some(Some("a2".into())));
+    let task = "task:sub1".to_string();
+    assert_eq!(subject(&first), (task.clone(), Some("a1".into())));
+    assert_eq!(subject(events.last().unwrap()), (task, Some("a2".into())));
 }
 
 // Work given after a subagent's turn has ended replaces work given while it ran: the next turn
@@ -2034,10 +2127,15 @@ async fn the_newest_work_given_is_the_next_turns() {
     fake.say(started_by("a1", "sub1")).await; // the first item again
     fake.say(sub_turn("turn/started", "sub1", "st2", "inProgress"))
         .await;
-    let events = until(&mut codex, |e| e.event.header().item.as_str() == "task:st2").await;
+    until(&mut codex, is_task(State::Done)).await;
+    let events = until(&mut codex, is_task(State::Running)).await;
     let Body::Task(task) = events.last().unwrap().event.body() else {
         panic!("a task");
     };
+    assert_eq!(
+        events.last().unwrap().event.header().item.as_str(),
+        "task:sub1"
+    );
     assert_eq!(task.subject, Some("a3".into()));
 }
 

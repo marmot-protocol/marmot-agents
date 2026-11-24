@@ -1661,6 +1661,7 @@ impl Translator {
             harness: self.harness.clone(),
             session: session.map(Into::into),
             turn: turn.map(Into::into),
+            subagent: None,
             item: item.into(),
             seq: *seq,
             state,

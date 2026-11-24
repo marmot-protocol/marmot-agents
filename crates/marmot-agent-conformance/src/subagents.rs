@@ -1,7 +1,10 @@
-//! Scenarios for a driver whose harness starts subagents (D-117). A subagent's activity is shown
-//! flat in the chat of the turn that started it: what started it is a `tool` item of kind
-//! `subagent`, its work a `task` item of kind `subagent` whose subject is that tool item, and its
-//! words a message whose `parent` is that tool item. Stop stops the agent and every subagent it
+//! Scenarios for a driver whose harness starts subagents (D-117, D-121). A subagent's activity is
+//! in the chat of the turn that started it, in that chat's session: what started it is a `tool`
+//! item of kind `subagent`, the subagent's row its one `task` item of kind `subagent`, whose
+//! subject is that tool item, and its words a message whose `parent` is that tool item. Every
+//! other event of a subagent's names its `task` item as the subagent it belongs to, so the core
+//! shows it in that subagent's thread; a nested subagent's `task` item names the subagent that
+//! started it, and a top-level one's names none. Stop stops the agent and every subagent it
 //! started, and is settled once, when the last of them has ended (D-028, D-029). Every subagent
 //! item closes when the harness stops (D-070).
 //!
@@ -19,6 +22,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 const FLAT: &str = "D-117";
+const THREADS: &str = "D-121";
 
 fn taken<T>(result: Result<T, marmot_agent_driver::Refusal>, what: &str) -> Result<T, Violation> {
     result.map_err(|r| broke("L3", format!("{what} was refused: {r:?}")))
@@ -141,12 +145,50 @@ pub fn shown_flat(
     one_session(seen, chat)
 }
 
+/// Every event of a subagent's names its `task` item, which is a subagent's `task` item of the
+/// chat and not the event's own, and names it from its first version on; and a subagent's words
+/// name one (D-121).
+fn in_threads(seen: &[Emitted], chat: &str) -> Result<(), Violation> {
+    let last = items(seen, chat);
+    let tasks: Vec<&str> = (last.iter())
+        .filter(|e| matches!(e.event.body(), Body::Task(t) if t.kind == "subagent"))
+        .map(|e| e.event.header().item.as_str())
+        .collect();
+    let fail = |detail: String| Err(broke(THREADS, detail));
+    for e in &last {
+        let header = e.event.header();
+        if let Some(of) = &header.subagent
+            && (!tasks.contains(&of.as_str()) || *of == header.item)
+        {
+            let item = header.item.as_str();
+            return fail(format!("{item} names {}, no subagent's task", of.as_str()));
+        }
+        let words = matches!(e.event.body(), Body::Message(m) if m.parent.is_some());
+        if words && header.subagent.is_none() {
+            return fail("a subagent's words name no subagent".into());
+        }
+    }
+    // An event names its subagent from its first version on: an item never moves.
+    for e in seen
+        .iter()
+        .filter(|e| e.chat.as_ref().is_some_and(|c| c.0 == chat))
+    {
+        let item = e.event.header().item.as_str();
+        let now = (last.iter()).find(|l| l.event.header().item.as_str() == item);
+        if now.is_some_and(|l| l.event.header().subagent != e.event.header().subagent) {
+            return fail(format!("{item} moved to another subagent"));
+        }
+    }
+    Ok(())
+}
+
 fn subagents_shown(
     seen: &[Emitted],
     chat: &str,
     count: usize,
     state: State,
 ) -> Result<(), Violation> {
+    in_threads(seen, chat)?;
     let s = shown(seen, chat);
     let fail = |detail: String| Err(broke(FLAT, detail));
     if let Some(item) = s.turnless.first() {
@@ -220,7 +262,31 @@ pub async fn nested_subagents<S: Subject>(subject: S) -> Result<(), Violation> {
     if s.tasks.first().map(|t| &t.0) == s.tasks.get(1).map(|t| &t.0) {
         return Err(broke(FLAT, "both subagents name the same item"));
     }
+    nested_once(&run.seen, "c-1")?;
     run.end().await
+}
+
+/// Of a chat's two subagents' `task` items, the inner one names the outer as the subagent that
+/// started it, and the outer names none: it is in the main chat (D-121).
+pub fn nested_once(seen: &[Emitted], chat: &str) -> Result<(), Violation> {
+    let tasks: Vec<&Emitted> = (items(seen, chat).into_iter())
+        .filter(|e| matches!(e.event.body(), Body::Task(t) if t.kind == "subagent"))
+        .collect();
+    let outer: Vec<&str> = (tasks.iter())
+        .filter(|e| e.event.header().subagent.is_none())
+        .map(|e| e.event.header().item.as_str())
+        .collect();
+    let inner = (tasks.iter()).filter_map(|e| e.event.header().subagent.as_ref());
+    let inner: Vec<&str> = inner.map(|s| s.as_str()).collect();
+    if outer.len() != 1 || inner != outer {
+        let detail = format!(
+            "{} top-level subagents and {} nested",
+            outer.len(),
+            inner.len()
+        );
+        return Err(broke(THREADS, detail));
+    }
+    Ok(())
 }
 
 /// A subagent asks for approval: it waits in the chat, is answered there, and the answer reaches

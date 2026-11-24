@@ -61,7 +61,10 @@ fn gate(family: Family, expected: &[&str]) {
 
 #[test]
 fn calm() {
-    gate(Family::Calm, &["harness takes"]);
+    gate(
+        Family::Calm,
+        &["harness takes", "item in a subagent's thread"],
+    );
 }
 
 #[test]
@@ -133,6 +136,7 @@ fn mixed() {
             "send ambiguous, gone",
             "lag",
             "driver stops",
+            "item in a subagent's thread",
         ],
     );
 }

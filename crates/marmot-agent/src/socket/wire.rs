@@ -318,7 +318,8 @@ pub struct HelloParams {
     pub harness: Harness,
     /// The connector's token (D-038).
     pub token: String,
-    /// What the harness can do: the seven flags, every one (D-058).
+    /// What the harness can do: the seven flags, every one (D-058), and `subagents` when its
+    /// harness tells them apart (D-142).
     pub capabilities: Capabilities,
     /// The folder the harness works in when a chat chose none, as a whole path, for a harness a
     /// chat may move to another folder (D-101; provisional). A gateway's plugin leaves it out.
@@ -374,6 +375,11 @@ pub struct Capabilities {
     pub files_in: FilesIn,
     /// Typed commands that need the right to approve, even when there are none (D-032, D-047).
     pub approval_commands: Vec<ApprovalCommand>,
+    /// Whether the harness tells its subagents apart, so each event of one names its `task` item
+    /// and is shown in its thread (D-124, D-142). False when left out: a connector written
+    /// before it shows subagents in the agent's own activity.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub subagents: bool,
 }
 
 impl From<Capabilities> for driver::Capabilities {
@@ -386,9 +392,11 @@ impl From<Capabilities> for driver::Capabilities {
             approvals,
             files_in,
             approval_commands,
+            subagents,
         } = c;
         Self {
             interrupt,
+            subagents,
             mid_turn: match mid_turn {
                 MidTurn::Fold => driver::MidTurn::Fold,
                 MidTurn::Restart => driver::MidTurn::Restart,

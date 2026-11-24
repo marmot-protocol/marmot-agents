@@ -177,6 +177,7 @@ impl fmt::Debug for SendFile {
 ///             approvals: false,
 ///             files_in: FilesIn::None,
 ///             // A harness with no such command still says so. This one has one, to show how.
+///             subagents: false,
 ///             approval_commands: vec![ApprovalCommand { command: "/approve".into(), counts: Position::Start }],
 ///         }
 ///     }
@@ -389,6 +390,7 @@ mod tests {
             harness: "codex".into(),
             session: Some("s-1".into()),
             turn: Some("t-1".into()),
+            subagent: None,
             item: "item-9".into(),
             seq: 1,
             state: State::Done,

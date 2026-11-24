@@ -18,6 +18,8 @@ An agent event:
       "harness": "codex",          which harness produced it
       "session": "...",            the harness's session or thread id
       "turn": "...",               the turn it belongs to
+      "subagent": "...",           for a subagent's work, its task item (D-142); left out otherwise.
+                                   This prototype follows one thread, so it never sets it
       "item": "...",               stable id; a later event with the same id replaces this one
       "seq": 7,                    order within the session, from 1
       "type": "tool",              one of ITEM_TYPES

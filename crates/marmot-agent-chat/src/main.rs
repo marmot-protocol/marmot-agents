@@ -715,6 +715,7 @@ mod tests {
             harness: "stub".into(),
             session: None,
             turn: None,
+            subagent: None,
             item: "t".into(),
             seq: 1,
             state: State::Running,
@@ -732,6 +733,7 @@ mod tests {
             first: first.map(EventKey::from),
             started_by: None,
             settles: Vec::new(),
+            thread: None,
         };
         received(id, sender, CHAT_A, carrier::item(&item).unwrap())
     }
@@ -744,6 +746,7 @@ mod tests {
             first: None,
             started_by: None,
             settles: Vec::new(),
+            thread: None,
         };
         received(id, sender, chat, carrier::item(&item).unwrap())
     }

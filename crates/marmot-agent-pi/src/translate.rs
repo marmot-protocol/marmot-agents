@@ -989,6 +989,7 @@ impl Translator {
             harness: "pi".into(),
             session: session.map(Into::into),
             turn: turn.map(Into::into),
+            subagent: None,
             item: item.into(),
             seq: *seq,
             state,

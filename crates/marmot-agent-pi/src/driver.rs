@@ -988,6 +988,7 @@ impl Driver for Pi {
             // Pi asks nobody before it acts.
             approvals: false,
             files_in: FilesIn::None,
+            subagents: false,
             approval_commands: Vec::new(),
         }
     }

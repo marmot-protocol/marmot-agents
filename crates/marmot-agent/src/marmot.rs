@@ -515,13 +515,30 @@ impl Marmot {
                 turn,
                 remark,
                 settles,
+                thread,
                 ..
             } => {
                 let tags = carrier::words_tags(turn.as_ref(), *remark, settles);
-                let text = carrier::fit_words(text, &tags).map_err(|_| too_large())?;
-                (self.runtime)
-                    .submit_tagged_text(label, id, text, tags, mdk)
-                    .await?
+                // Sized with the thread's tags too, which MDK adds to a thread message.
+                let sized: Vec<Vec<String>> = (tags.iter().cloned())
+                    .chain(thread.iter().flat_map(|t| carrier::thread_tags(t, true)))
+                    .collect();
+                let text = carrier::fit_words(text, &sized).map_err(|_| too_large())?;
+                match thread.as_ref().and_then(|t| t.parent.as_ref()) {
+                    // A subagent's words are a thread message under its `task` item, which MDK
+                    // tags from that item's place (D-122).
+                    Some(parent) => {
+                        let parent = parent.as_str().to_string();
+                        (self.runtime)
+                            .submit_thread_message(label, id, parent, text, Vec::new(), tags, mdk)
+                            .await?
+                    }
+                    None => {
+                        (self.runtime)
+                            .submit_tagged_text(label, id, text, tags, mdk)
+                            .await?
+                    }
+                }
             }
         };
         Ok(Taken::Kept(EventKey(accepted.message_id_hex)))

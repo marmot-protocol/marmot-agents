@@ -97,7 +97,7 @@ pub fn for_every_chat(event: &AgentEvent, settles: bool) -> bool {
         | Body::Question(_)
         | Body::Error(_)
         | Body::Session(_) => true,
-        Body::Message(message) => message.parent.is_none(),
+        Body::Message(message) => message.parent.is_none() && event.header().subagent.is_none(),
         Body::Notice(_) => settles,
         Body::Reasoning(_) | Body::Tool(_) | Body::Plan(_) | Body::Task(_) => false,
     }

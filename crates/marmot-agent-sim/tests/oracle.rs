@@ -46,6 +46,7 @@ fn header(item: &str, state: State) -> Header {
         harness: "sim".into(),
         session: None,
         turn: None,
+        subagent: None,
         item: item.into(),
         seq: 1,
         state,
@@ -77,6 +78,7 @@ fn item(id: &str, version: u64, state: State, body: Body, settles: Vec<EventKey>
         first: None,
         started_by: None,
         settles,
+        thread: None,
     }
 }
 
@@ -506,4 +508,45 @@ fn a_closing_version_dropped_after_a_close_is_let_off_l2() {
     assert_eq!(properties(oracle::liveness(&open)), vec!["L2"]);
     let (closed, _events) = make(true);
     assert_eq!(properties(oracle::liveness(&closed)), Vec::<String>::new());
+}
+
+// S14: a subagent's item in a thread is under its own subagent's `task` item; one under another
+// subagent's fails (D-121, D-142).
+#[test]
+fn an_item_in_another_subagents_thread_fails_s14() {
+    let task = |id: &str| {
+        let body = Body::Task(marmot_agent_events::body::Task {
+            kind: "subagent".into(),
+            description: None,
+            subject: None,
+        });
+        item(id, 1, State::Running, body, vec![])
+    };
+    let under = |task: &str, place: &EventKey| {
+        let mut child = item("subcmd-t", 1, State::Running, turn(), vec![]);
+        let header = Header {
+            subagent: Some(task.into()),
+            ..child.event.header().clone()
+        };
+        child.event = AgentEvent::new(header, child.event.body().clone(), None).unwrap();
+        child.thread = Some(marmot_agent::carrier::Thread {
+            root: place.clone(),
+            parent: Some(place.clone()),
+            agent: marmot_agent::PubKey::from("agent"),
+        });
+        child
+    };
+    let make = |right: bool| {
+        let mut w = world(1, &[]);
+        let own = sent(&mut w, 0, &task("sub-t"));
+        let other = sent(&mut w, 0, &task("sub-u"));
+        sent(
+            &mut w,
+            0,
+            &under("sub-t", if right { &own } else { &other }),
+        );
+        w
+    };
+    assert_eq!(property(oracle::safety(&make(true))), None);
+    assert_eq!(property(oracle::safety(&make(false))), Some("S14".into()));
 }
