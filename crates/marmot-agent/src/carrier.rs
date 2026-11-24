@@ -938,3 +938,50 @@ fn values<'a>(tags: &'a [Vec<String>], name: &str) -> impl Iterator<Item = &'a s
         .filter(move |t| t.len() >= 2 && t[0] == name)
         .map(|t| t[1].as_str())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // What a person wrote or chose never reaches a log; the action it was does (D-071).
+    #[test]
+    fn debug_names_the_action_and_leaves_out_what_was_asked() {
+        let asked = [
+            (
+                Asked::Choice {
+                    choice: "secret-choice".into(),
+                },
+                "Asked::Choice",
+            ),
+            (
+                Asked::Questions {
+                    questions: vec![AskedReply {
+                        question: "secret-question".into(),
+                        options: vec!["secret-option".into()],
+                        text: Some("secret-text".into()),
+                    }],
+                },
+                "Asked::Questions",
+            ),
+            (Asked::Interrupt, "Asked::Interrupt"),
+            (Asked::NewSession, "Asked::NewSession"),
+            (
+                Asked::Set {
+                    setting: "secret-setting".into(),
+                    value: "secret-value".into(),
+                },
+                "Asked::Set",
+            ),
+            (
+                Asked::Own {
+                    id: "secret-own".into(),
+                },
+                "Asked::Own",
+            ),
+        ];
+        for (asked, name) in asked {
+            let shown = format!("{asked:?}");
+            assert_eq!(shown, name);
+        }
+    }
+}
