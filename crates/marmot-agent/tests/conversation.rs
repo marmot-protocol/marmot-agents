@@ -4492,6 +4492,42 @@ fn the_owners_chat_is_read_from_its_members_at_each_send() {
     assert!(!queued_keys(&again, &g).contains(&format!("{chat}/r3")));
 }
 
+// A send of the agent's full activity that MDK was handed before someone joined the owner's chat
+// may still go out, as MDK keeps it, or have gone with its answer lost: it is not held back with
+// what it settles moved to the turn, which would settle a request twice and, were the chat the
+// owner's again, start the item a second time (ActivityHoldBack.tla, H1 and H2; D-136).
+#[test]
+fn a_send_mdk_was_handed_is_not_held_back_with_what_it_settles() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let g = direct().group;
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    let request = interrupt_taken(&mut talk, "r1");
+    let (tool, _) = every_type().swap_remove(7);
+    let mut queued_tool = emitted(&chat, tool);
+    queued_tool.settles = vec![request];
+    talk.emitted(queued_tool);
+    let both = [PubKey::from(AGENT), PubKey::from(OWNER)];
+    talk.members_now(&g, Some(&both));
+    let Some((token, Sending::Item { .. })) = talk.next_send(&g) else {
+        panic!("no tool")
+    };
+    assert!(talk.attempting(&token.send, 1), "handed to MDK");
+
+    // A third person is added before MDK's answer is known.
+    talk.members_now(&g, None);
+    assert_eq!(
+        queued_keys(&talk, &g),
+        vec![format!("{chat}/cmd")],
+        "not held back"
+    );
+}
+
 /// A turn's end as Claude Code reports a denied approval, with the tool's input in its native
 /// message.
 fn denied_turn_end() -> AgentEvent {
