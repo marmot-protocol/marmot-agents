@@ -171,7 +171,7 @@ struct Install {
     root: tempfile::TempDir,
     /// The old connector's account home.
     home: PathBuf,
-    relay: nostr_relay_builder::MockRelay,
+    relay: nostr_relay_builder::LocalRelay,
     url: String,
     person_runtime: MarmotAppRuntime,
     person: String,
@@ -185,7 +185,7 @@ impl Install {
     async fn new(name: &str, label: &str) -> Self {
         storage_sqlite::relax_storage_for_test_process();
         marmot_agent::marmot::start_sqlite();
-        let relay = nostr_relay_builder::MockRelay::run().await.unwrap();
+        let relay = common::relay().await;
         let url = relay.url().await.to_string();
         let root = tempfile::tempdir().unwrap();
         let home = root.path().join(".marmot-agents").join(name);

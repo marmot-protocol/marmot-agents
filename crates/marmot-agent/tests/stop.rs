@@ -26,7 +26,7 @@ async fn a_stop_during_start_up_ends_the_core() {
     marmot_agent::marmot::start_sqlite();
     let dir = tempfile::tempdir().unwrap();
     let home = dir.path().join("home");
-    let relay = nostr_relay_builder::MockRelay::run().await.unwrap();
+    let relay = relay().await;
     let url = relay.url().await.to_string();
     // The agent's identity, made as `marmot-agent init` makes it.
     let settings = MarmotAppConfig::default().with_allow_loopback_relay_endpoints(true);

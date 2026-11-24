@@ -187,7 +187,7 @@ pub struct Invited {
     pub group: GroupId,
     pub group_hex: String,
     /// The test relay, which stops once this is dropped: keep it as long as the test runs.
-    pub relay: nostr_relay_builder::MockRelay,
+    pub relay: nostr_relay_builder::LocalRelay,
 }
 
 /// Today's connector on a home in `folder` under a fresh person's folder, as the installer's
@@ -198,7 +198,7 @@ pub struct Invited {
 pub async fn invited(folder: &str, label: &str) -> Invited {
     storage_sqlite::relax_storage_for_test_process();
     marmot_agent::marmot::start_sqlite();
-    let relay = nostr_relay_builder::MockRelay::run().await.unwrap();
+    let relay = crate::common::relay().await;
     let url = relay.url().await.to_string();
     let root = tempfile::tempdir().unwrap();
     let old = root.path().join(folder);

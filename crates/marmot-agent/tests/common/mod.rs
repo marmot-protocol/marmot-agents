@@ -385,6 +385,11 @@ impl Running {
 
 /// MDK's test relay, without the limit it puts by default on how many events each connection may
 /// send a minute (60), as MDK's own harness relay does: a long scenario would otherwise stall on it.
+///
+/// The relay picks a port at random that it finds free, lets it go, and binds it again a moment
+/// later. On a busy machine something else, such as one of the many connections the tests make,
+/// can take the port in between, and the bind fails as in use. Nothing was bound then, so a relay
+/// that cannot bind is made again, on another port.
 pub async fn relay() -> nostr_relay_builder::LocalRelay {
     use nostr_relay_builder::builder::RateLimit;
     let unlimited = RateLimit {
@@ -392,9 +397,19 @@ pub async fn relay() -> nostr_relay_builder::LocalRelay {
         ..RateLimit::default()
     };
     let builder = nostr_relay_builder::RelayBuilder::default().rate_limit(unlimited);
-    let relay = nostr_relay_builder::LocalRelay::new(builder);
-    relay.run().await.unwrap();
-    relay
+    let mut tries = 0;
+    loop {
+        let relay = nostr_relay_builder::LocalRelay::new(builder.clone());
+        match relay.run().await {
+            Ok(()) => return relay,
+            Err(nostr_relay_builder::Error::IO(e))
+                if e.kind() == std::io::ErrorKind::AddrInUse && tries < 20 =>
+            {
+                tries += 1
+            }
+            Err(e) => panic!("the test relay could not start: {e}"),
+        }
+    }
 }
 
 /// A stand-in Blossom server, for the files an agent sends: it keeps each uploaded blob under its
