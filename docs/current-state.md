@@ -31,7 +31,9 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   [D-079](decisions.md#d-079-the-settings-name-the-agent)).
 - The core reads each group from its own mark. A group it has never read starts after what arrived before the
   core did. A group MDK cannot read for a moment is read again, backing off to 10 s ([D-111](decisions.md#d-111-a-group-the-core-has-never-read-starts-after-what-arrived-before-the-core-did), [D-106](decisions.md#d-106-the-core-keeps-reading-again-a-group-mdk-cannot-read-for-a-moment)).
-- Every send but a file's goes through MDK's token-based sends, so it can be tried again safely. A send that is dropped for
+- Every send but a file's, and but a later version of a subagent's words in its thread, goes through MDK's
+  token-based sends, so it can be tried again safely. That later version is MDK's plain edit of the thread message,
+  which keeps no token: tried again after an answer that was lost, it shows the same words again ([D-142](decisions.md#d-142-how-subagent-threads-are-built), point 4). A send that is dropped for
   good is stood in for once; four limits are accepted ([D-109](decisions.md#d-109-how-the-cores-sends-survive-a-crash-as-built), [D-097](decisions.md#d-097-what-stands-in-for-a-send-that-is-dropped), [D-096](decisions.md#d-096-four-limits-of-the-core-that-the-simulator-and-the-model-accept)).
 - A restart closes the running turn and its open items as interrupted, and settles open requests as failed.
   Nothing is sent again, and a prompt is delivered at most once ([D-070](decisions.md#d-070-a-restart-closes-the-turn-as-interrupted), [D-037](decisions.md#d-037-a-prompt-is-delivered-at-most-once)).
