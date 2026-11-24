@@ -8,30 +8,22 @@
 // a command (`canUseTool`), `#quiz` asks a question (AskUserQuestion), `#sleep` runs until interrupted;
 // anything else is answered in words that echo the prompt. Each turn opens with `init`, as the SDK's does.
 //
-// The suite drives it through a control channel on standard input and output, one JSON object a line,
-// which the driver uses for nothing else (it says what went wrong on standard error):
+// It tells the suite what it does on standard output, one JSON object a line, which the driver uses for
+// nothing else (it says what went wrong on standard error), and ends when its standard input closes, as
+// when the suite goes:
 //
-// - out `{"heard": {...}}`: what this Claude Code understood, in the suite's shapes (`Heard`);
-// - out `{"frame": <kind>, "wait": true}`: each call the driver made on it, after what it heard in it;
-//   it goes on once the suite answers `{"go": true}`, and dies there on `{"die": true}`;
+// - `{"heard": {...}}`: what this Claude Code understood, in the suite's shapes (`Heard`);
+// - `{"frame": <kind>}`: each call the driver made on it, after what it heard in it;
 // - the process ending is Claude Code ending: the driver ends with its connection, as it does.
 
 import { randomUUID } from "node:crypto";
-import { createInterface } from "node:readline";
 import { run, type CanUseTool, type PermissionResult, type QueryFn, type QueryLike, type UserMessage } from "../src/connector.ts";
 
 type Json = Record<string, unknown>;
 
-const verdicts: ((word: Json) => void)[] = [];
-const words: Json[] = [];
-createInterface({ input: process.stdin }).on("line", (line) => {
-  const word = JSON.parse(line) as Json;
-  const waiting = verdicts.shift();
-  if (waiting !== undefined) waiting(word);
-  else words.push(word);
-});
 // The suite has gone: so does Claude Code.
 process.stdin.on("end", () => process.exit(0));
+process.stdin.resume();
 
 function out(message: Json): void {
   process.stdout.write(JSON.stringify(message) + "\n");
@@ -41,11 +33,9 @@ function heard(kind: string, fields: Json): void {
   out({ heard: { [kind]: fields } });
 }
 
-/** A call the driver made, after what Claude Code heard in it: it goes on once the suite says so. */
-async function frame(kind: string): Promise<void> {
-  out({ frame: kind, wait: true });
-  const word = words.shift() ?? (await new Promise<Json>((r) => verdicts.push(r)));
-  if (word["die"] === true) process.exit(1);
+/** A call the driver made, after what Claude Code heard in it, counted as the suite counts what a harness reads. */
+function frame(kind: string): void {
+  out({ frame: kind });
 }
 
 const WORDS = ["#ask", "#quiz", "#sleep"] as const;
@@ -71,7 +61,7 @@ class Scripted implements QueryLike {
         if (this.closed) return;
         const text = m.message.content;
         heard("prompt", { session, text, refused: false });
-        await frame("prompt");
+        frame("prompt");
         await this.turn(text);
       }
     })();
@@ -128,7 +118,7 @@ class Scripted implements QueryLike {
         const answers = result.behavior === "allow" ? (result.updatedInput?.["answers"] as Record<string, string> | undefined) : undefined;
         heard("answer", { session: this.session, text: Object.values(answers ?? {})[0] ?? null });
       }
-      await frame("permission_result");
+      frame("permission_result");
       this.say({
         type: "user",
         message: { role: "user", content: [{ tool_use_id: tool, type: "tool_result", content: "ok", is_error: result.behavior !== "allow" }] },
@@ -158,7 +148,7 @@ class Scripted implements QueryLike {
 
   async interrupt(): Promise<unknown> {
     heard("control", { session: this.session, what: "interrupt" });
-    await frame("interrupt");
+    frame("interrupt");
     const ends = this.interrupted;
     this.interrupted = undefined;
     ends?.();
@@ -167,12 +157,12 @@ class Scripted implements QueryLike {
 
   async setPermissionMode(mode: string): Promise<void> {
     heard("control", { session: this.session, what: `set permission_mode=${mode}` });
-    await frame("setPermissionMode");
+    frame("setPermissionMode");
   }
 
   async setModel(model?: string): Promise<void> {
     heard("control", { session: this.session, what: `set model=${model}` });
-    await frame("setModel");
+    frame("setModel");
   }
 
   close(): void {

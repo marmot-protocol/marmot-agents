@@ -9,18 +9,17 @@
 // command (an exec approval, through the plugin's approval adapter), `#quiz` asks a question (`ask_user`),
 // `#sleep` runs until `/stop`; anything else is answered in words that echo the prompt.
 //
-// The suite drives it through a control channel on standard input and output, one JSON object a line,
-// which the plugin uses for nothing else (it says what went wrong on standard error):
+// It tells the suite what it does on standard output, one JSON object a line, which the plugin uses for
+// nothing else (it says what went wrong on standard error), and ends when its standard input closes, as
+// when the suite goes:
 //
-// - out `{"heard": {...}}`: what this OpenClaw understood, in the suite's shapes (`Heard`);
-// - out `{"frame": <kind>, "wait": true}`: each call the plugin made on it, after what it heard in it;
-//   it goes on once the suite answers `{"go": true}`, and dies there on `{"die": true}`;
+// - `{"heard": {...}}`: what this OpenClaw understood, in the suite's shapes (`Heard`);
+// - `{"frame": <kind>}`: each call the plugin made on it, after what it heard in it;
 // - the process ending is OpenClaw dying, as the plugin runs inside OpenClaw.
 
 import { mkdirSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { join } from "node:path";
-import { createInterface } from "node:readline";
 
 type Json = Record<string, unknown>;
 type Callback = (...args: unknown[]) => unknown;
@@ -44,26 +43,17 @@ mkdirSync(join(state, ".openclaw"), { recursive: true });
 
 // -- the control channel
 
-const verdicts: ((word: Json) => void)[] = [];
-const words: Json[] = [];
-createInterface({ input: process.stdin }).on("line", (line) => {
-  const word = JSON.parse(line) as Json;
-  const waiting = verdicts.shift();
-  if (waiting !== undefined) waiting(word);
-  else words.push(word);
-});
 // The suite has gone: so does OpenClaw.
 process.stdin.on("end", () => process.exit(0));
+process.stdin.resume();
 
 function heard(kind: string, fields: Json): void {
   process.stdout.write(JSON.stringify({ heard: { [kind]: fields } }) + "\n");
 }
 
-/** A call the plugin made, after what OpenClaw heard in it: it goes on once the suite says so. */
-async function frame(kind: string): Promise<void> {
-  process.stdout.write(JSON.stringify({ frame: kind, wait: true }) + "\n");
-  const word = words.shift() ?? (await new Promise<Json>((r) => verdicts.push(r)));
-  if (word["die"] === true) process.exit(1);
+/** A call the plugin made, after what OpenClaw heard in it, counted as the suite counts what a harness reads. */
+function frame(kind: string): void {
+  process.stdout.write(JSON.stringify({ frame: kind }) + "\n");
 }
 
 function object(value: unknown): Json {
@@ -123,7 +113,7 @@ async function dispatch(params: Json): Promise<unknown> {
 
   if (text.startsWith("/")) {
     heard("control", { session, what: text === "/stop" ? "interrupt" : text.slice(1) });
-    await frame("inbound.run");
+    frame("inbound.run");
     const stop = sleeping.get(session);
     if (text === "/stop" && stop !== undefined) {
       sleeping.delete(session);
@@ -136,7 +126,7 @@ async function dispatch(params: Json): Promise<unknown> {
   }
 
   heard("prompt", { session, text, refused: false });
-  await frame("inbound.run");
+  frame("inbound.run");
   const runId = next("run");
   on("onModelSelected", { provider: "p", model: "m", thinkLevel: "low" });
   on("onPreparedAgentRunStart", { runId, transcriptStart: { sessionKey: session, sessionId: "s-1" } });
@@ -170,7 +160,7 @@ async function dispatch(params: Json): Promise<unknown> {
     }
     if (asking) heard("answer", { session, allow: value !== "deny" });
     else heard("answer", { session, text: value });
-    await frame(asking ? "resolveApproval" : "resolveQuestion");
+    frame(asking ? "resolveApproval" : "resolveQuestion");
   }
   await deliver({ text: `Done: ${text}` }, { kind: "final", assistantMessageIndex: 0 });
   on("onAgentRunTerminalOutcome", "completed");

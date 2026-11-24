@@ -5,9 +5,9 @@
 //! one. No model, no key and no network.
 //!
 //! Each connector is started from its package's conformance entry (`python/tests/conformance_harness.py`,
-//! `packages/*/test/conformance-harness.ts`), which speaks to this test on its standard input and
-//! output: what its harness heard and each call the connector made on it come out, and the test's
-//! word on a call comes back, so a death lands exactly where a scenario puts it. The connection runs
+//! `packages/*/test/conformance-harness.ts`), which reports on its standard output what its harness
+//! heard and each call the connector made on it, and ends when its standard input closes, as when
+//! the test goes. The connection runs
 //! through a relay of the test's, which holds the connector's responses back when a scenario says,
 //! keeps what was in flight, and drops the connection on the scenario's word, so a drop after
 //! delivery and before the response is one. A restart drops the connection, as the core's restart
@@ -25,7 +25,7 @@ use marmot_agent::socket::{Endpoint, SocketDriver};
 use marmot_agent_conformance::fake::{Dropped, Fake, Heard, Unanswered};
 use marmot_agent_conformance::{Subject, scenarios, socket};
 use marmot_agent_driver::ChatId;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -82,6 +82,8 @@ impl Connector {
 /// The connector's process, while it runs.
 struct Process {
     child: Child,
+    /// Held open: the connector's entry ends when it closes.
+    _input: tokio::process::ChildStdin,
     /// Cleared once its output closes.
     alive: Arc<AtomicBool>,
     /// Set when the suite ends it on purpose: it ending then is no death.
@@ -266,7 +268,7 @@ impl OnSocket {
         });
     }
 
-    /// Starts the connector, and the task that carries the control channel.
+    /// Starts the connector, and the task that reads what its harness reports.
     fn spawn(&mut self) {
         let (mut command, _) = self.connector.program();
         command
@@ -280,7 +282,7 @@ impl OnSocket {
             .spawn()
             .expect("the connector's conformance entry starts");
         let stdout = child.stdout.take().expect("its output");
-        let mut stdin = child.stdin.take().expect("its input");
+        let input = child.stdin.take().expect("its input");
         let alive = Arc::new(AtomicBool::new(true));
         let expected = Arc::new(AtomicBool::new(false));
         let fake = self.fake.clone();
@@ -293,24 +295,11 @@ impl OnSocket {
                 };
                 if let Some(heard) = message.get("heard") {
                     fake.record_heard(heard_of(heard));
-                    continue;
+                } else if message.get("frame").is_some() {
+                    fake.record_frame(None);
+                } else {
+                    panic!("the connector's entry wrote a line the suite does not know: {line}");
                 }
-                let Some(kind) = message["frame"].as_str() else {
-                    continue;
-                };
-                let total = fake.record_frame(None);
-                let knobs = fake.knobs();
-                if message["wait"] == true {
-                    let die = knobs.die_after == Some(total);
-                    let word = if die {
-                        json!({"die": true})
-                    } else {
-                        json!({"go": true})
-                    };
-                    let _ = stdin.write_all(format!("{word}\n").as_bytes()).await;
-                    let _ = stdin.flush().await;
-                }
-                let _ = kind;
             }
             still.store(false, Ordering::SeqCst);
             if !ended.load(Ordering::SeqCst) {
@@ -319,6 +308,7 @@ impl OnSocket {
         });
         self.process = Some(Process {
             child,
+            _input: input,
             alive,
             expected,
         });

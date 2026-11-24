@@ -7,16 +7,15 @@ Hermes behind them in place of the real one. No model and no network.
 Hermes's `gateway` module is replaced by a stand-in that holds what the adapter imports, as in
 `test_adapter.py`, and what Hermes itself does with a message is played by `ScriptedAdapter`: it reads
 the same words in a prompt as every fake of the suite (`#ask` an approval card, `#quiz` a question,
-`#sleep` a turn that runs until `/stop`, `#die` a crash), and echoes the prompt in its reply.
+`#sleep` a turn that runs until `/stop`), and echoes the prompt in its reply.
 
-The suite drives it through a control channel on its standard input and output, one JSON object a
-line, which the plugin uses for nothing else (its log goes to standard error):
+It tells the suite what it does on its standard output, one JSON object a line, which the plugin uses for
+nothing else (its log goes to standard error):
 
-- out `{"heard": {...}}`: what this Hermes understood, in the suite's shapes (`Heard`);
-- out `{"frame": <kind>, "wait": <bool>}`: each call the plugin made on Hermes, after what Hermes heard
-  in it. With `wait`, Hermes goes on only once the suite answers `{"go": true}`, or `{"die": true}`,
-  when it dies there;
-- the process ending is Hermes dying, as the plugin runs inside Hermes.
+- `{"heard": {...}}`: what this Hermes understood, in the suite's shapes (`Heard`);
+- `{"frame": <kind>}`: each call the plugin made on Hermes, after what Hermes heard in it;
+- the process ending is Hermes dying, as the plugin runs inside Hermes. It ends when its standard input
+  closes, as when the suite goes.
 """
 
 from __future__ import annotations
@@ -111,11 +110,7 @@ IDS = itertools.count(1)
 
 
 class Control:
-    """The suite's side of the channel: what Hermes heard, and each call it took, out; the suite's word
-    on a call Hermes waits on, in."""
-
-    def __init__(self):
-        self.verdicts: asyncio.Queue = asyncio.Queue()
+    """The suite's side: what Hermes heard, and each call it took, out; the suite going, in."""
 
     @staticmethod
     def out(message: dict) -> None:
@@ -125,23 +120,17 @@ class Control:
     def heard(self, kind: str, **fields) -> None:
         self.out({"heard": {kind: fields}})
 
-    async def frame(self, kind: str) -> None:
-        """A call Hermes takes, and goes on with once the suite says; it dies there if the suite says so."""
-        self.out({"frame": kind, "wait": True})
-        verdict = await self.verdicts.get()
-        if verdict.get("die"):
-            os._exit(1)
+    def frame(self, kind: str) -> None:
+        """A call the plugin made on Hermes, counted as the suite counts what a harness reads."""
+        self.out({"frame": kind})
 
-    def frame_now(self, kind: str) -> None:
-        """A call Hermes answers at once, as the plugin waits for it without yielding: counted only."""
-        self.out({"frame": kind, "wait": False})
-
-    async def read(self) -> None:
+    @staticmethod
+    async def read() -> None:
         loop = asyncio.get_running_loop()
         reader = asyncio.StreamReader()
         await loop.connect_read_pipe(lambda: asyncio.StreamReaderProtocol(reader), sys.stdin)
-        while line := await reader.readline():
-            self.verdicts.put_nowait(json.loads(line))
+        while await reader.readline():
+            pass
         # The suite has gone: so does Hermes.
         os._exit(0)
 
@@ -171,16 +160,15 @@ class ScriptedAdapter(MarmotAdapter):
         source = event.source
         session = f"{source.chat_type}:{source.chat_id}:{source.user_id}"
         text = event.text or ""
-        # Hermes has the message once it is handed over; the suite's word comes after, so a connection
-        # it drops there drops after delivery.
+        # Hermes has the message once it is handed over.
         if text.startswith("/"):
-            await self.control.frame("handle_message")
+            self.control.frame("handle_message")
             return await self.command(event, session, text)
         self.control.heard("prompt", session=session, text=text, refused=False)
-        await self.control.frame("handle_message")
+        self.control.frame("handle_message")
         if session in self.turns:
             return  # Hermes steers a running turn with it
-        script = next((w for w in ("#ask", "#quiz", "#sleep", "#die") if w in text), "")
+        script = next((w for w in ("#ask", "#quiz", "#sleep") if w in text), "")
         turn = Turn(event, session, text, script)
         self.turns[session] = turn
         await self.on_processing_start(event)
@@ -195,9 +183,6 @@ class ScriptedAdapter(MarmotAdapter):
             clarify = f"cl-{next(IDS)}"
             self.clarifies[clarify] = turn
             await self.send_clarify(source.chat_id, f"{text}?", ["yes", "no"], clarify, self.key(source))
-        elif script == "#die":
-            await self.send(source.chat_id, "Running a command.", reply_to=event.message_id)
-            os._exit(1)
         elif script != "#sleep":
             await self.finish(turn)
 
@@ -230,7 +215,7 @@ class ScriptedAdapter(MarmotAdapter):
         return f"agent:main:marmot:dm:{source.chat_id}"
 
     def resolve_card(self, session_key, choice, request_id, actor) -> int:
-        self.control.frame_now("resolve_card")
+        self.control.frame("resolve_card")
         turn = self.cards.pop(request_id, None)
         if turn is None or self.turns.get(turn.session) is not turn:
             return 0
@@ -239,7 +224,7 @@ class ScriptedAdapter(MarmotAdapter):
         return 1
 
     def resolve_question(self, clarify_id, text) -> bool:
-        self.control.frame_now("resolve_question")
+        self.control.frame("resolve_question")
         turn = self.clarifies.pop(clarify_id, None)
         if turn is None or self.turns.get(turn.session) is not turn:
             return False

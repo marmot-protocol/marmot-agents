@@ -276,12 +276,13 @@ key and no network.
 | OpenClaw's entry | `packages/openclaw/test/conformance-harness.ts`, `test/conformance-sdk.ts` | The plugin as OpenClaw loads it, its account started by `startAccount`, with a scripted channel runtime and plugin SDK: runs, an exec approval through the plugin's approval adapter, `ask_user`, `/stop` |
 | Socket scenarios | `src/socket.rs` | `reconnect` and `dropped_after_delivery`, below |
 
-**The control channel.** JSON lines on the connector process's standard input and output, which no connector uses
-for anything else (their logs go to standard error). Out: `{"heard": {...}}` in the `Heard` shapes, and
-`{"frame": <kind>, "wait": true}` for each call the connector made on its harness, written after what the harness
-heard in it. The harness then waits for the suite's word: `{"go": true}`, or `{"die": true}`, when it dies there.
-The process ending is the harness dying, unless the suite ended it. A frame is counted as `Fake::frames` counts
-them (`Fake::record_frame`), so `Knobs::die_after` applies.
+**What the harness reports.** JSON lines on the connector process's standard output, which no connector uses for
+anything else (their logs go to standard error): `{"heard": {...}}` in the `Heard` shapes, and `{"frame": <kind>}`
+for each call the connector made on its harness, written after what the harness heard in it and counted as
+`Fake::frames` counts them (`Fake::record_frame`), so a request is known to have reached the harness. The entry
+ends when its standard input closes, as when the suite goes. The process ending is the harness dying, unless the
+suite ended it. No socket scenario kills the harness at a frame, so `Knobs::die_after` does not apply: a drop is
+placed by what the harness heard and the response held back (below).
 
 **The relay.** The connection runs through a relay in the test, line by line, which keeps each request of the
 core's until its response passes, and notes each event that shows a request's effect: a turn of the prompt's chat
