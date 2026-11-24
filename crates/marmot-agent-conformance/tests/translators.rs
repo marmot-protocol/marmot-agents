@@ -1,8 +1,8 @@
 //! Every built-in driver's translator over its recordings changed at random
 //! (`docs/design/verification.md`, "6. Property tests"): messages repeated, dropped, swapped with
-//! the next, and the harness dying after any of them (nothing of a harness that died reaches the
-//! translator after; the recordings' own restarts stay). After each, with the harness stopped at
-//! the end:
+//! the next, stripped of their `params` and `result`, and the harness dying after any of them
+//! (nothing of a harness that died reaches the translator after; the recordings' own restarts
+//! stay). After each, with the harness stopped at the end:
 //!
 //! - D-007: every native message arrived, unchanged: the message the translator was reading, or
 //!   the whole value of one of its fields (a streamed one, a list of such values of the chunks that
@@ -12,8 +12,9 @@
 //! - Nothing reopens an item once it ended: no later event of it is running or waiting.
 //!
 //! The last two are checked when messages were only repeated or the harness died: a harness writes
-//! its messages in order on one stream, which loses none, so a message dropped, or an item's end
-//! swapped before its start, is not a case a driver meets. Those are checked for the first two,
+//! its messages in order on one stream, which loses none, so a message dropped, an item's end
+//! swapped before its start, or a message without the field that carries what it says, is not a
+//! case a driver meets. Those are checked for the first two,
 //! and for not failing: a translator reads whatever arrives.
 //!
 //! The case count comes from `PROPTEST_CASES`; a failing case is kept in
@@ -120,6 +121,9 @@ enum Change {
     Drop(usize),
     SwapWithNext(usize),
     DiesAt(usize),
+    /// A message without its `params` or `result`: not one a harness or the driver writes, but
+    /// one a translator must read without making up the field.
+    Bare(usize),
 }
 
 fn change() -> impl Strategy<Value = Change> {
@@ -128,6 +132,7 @@ fn change() -> impl Strategy<Value = Change> {
         any::<usize>().prop_map(Change::Drop),
         any::<usize>().prop_map(Change::SwapWithNext),
         any::<usize>().prop_map(Change::DiesAt),
+        any::<usize>().prop_map(Change::Bare),
     ]
 }
 
@@ -147,6 +152,15 @@ fn changed(lines: &[Line], changes: &[Change]) -> Vec<Line> {
             Change::SwapWithNext(at) if n > 1 => lines.swap(at % (n - 1), at % (n - 1) + 1),
             Change::SwapWithNext(_) => {}
             Change::DiesAt(at) => lines.truncate(at % (n + 1)),
+            Change::Bare(at) => {
+                if let Line::Message { text, .. } = &mut lines[at % n]
+                    && let Ok(serde_json::Value::Object(mut message)) = serde_json::from_str(text)
+                {
+                    message.remove("params");
+                    message.remove("result");
+                    *text = serde_json::Value::Object(message).to_string();
+                }
+            }
         }
     }
     lines

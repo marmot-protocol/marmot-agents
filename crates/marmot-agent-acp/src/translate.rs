@@ -1299,11 +1299,26 @@ impl Translator {
                 Some(native(&kind, error.get())),
             );
             if method.as_deref() == Some("session/prompt") && self.turn_request == Some(id) {
-                self.end_turn(State::Failed, &message, None, &kind, error.get(), out);
+                let native = native(&kind, error.get());
+                self.end_turn(State::Failed, &message, None, Some(native), out);
             }
             return;
         }
-        let result = m.result.map_or("{}", RawValue::get);
+        // A reply holds a result or an error. Read from nothing, one with neither would make an
+        // event whose native message never arrived (D-007), so it is unreadable. A turn it was
+        // to end still ends, as failed, as one that stopped for a reason nobody can read; and as
+        // an event the driver makes up, it carries no native message.
+        let Some(result) = m.result.map(RawValue::get) else {
+            self.unreadable += 1;
+            match method.as_deref() {
+                Some("session/load") => self.loading = None,
+                Some("session/prompt") if self.turn_request.as_deref() == Some(id.as_str()) => {
+                    self.end_turn(State::Failed, "The turn stopped", None, None, out);
+                }
+                _ => {}
+            }
+            return;
+        };
         let kind = format!("response to {shown}");
         match method.as_deref() {
             Some("initialize") => match serde_json::from_str::<InitializeResponse>(result) {
@@ -1388,7 +1403,7 @@ impl Translator {
                         input_tokens: Some(u.input_tokens),
                         output_tokens: Some(u.output_tokens),
                     });
-                    self.end_turn(state, &text, usage, &kind, result, out);
+                    self.end_turn(state, &text, usage, Some(native(&kind, result)), out);
                 }
                 Err(_) => {
                     // A reply the types cannot read, such as a stop reason they do not know, still
@@ -1404,7 +1419,8 @@ impl Translator {
                         output_tokens: u.get("outputTokens").and_then(Value::as_u64),
                     });
                     let text = format!("The turn stopped: {stop}");
-                    self.end_turn(State::Failed, &text, usage, &kind, result, out);
+                    let native = native(&kind, result);
+                    self.end_turn(State::Failed, &text, usage, Some(native), out);
                 }
             },
             _ => {}
@@ -1433,8 +1449,7 @@ impl Translator {
         state: State,
         text: &str,
         usage: Option<Usage>,
-        kind: &str,
-        payload: &str,
+        native: Option<Native>,
         out: &mut Vec<AgentEvent>,
     ) {
         self.close_open_items(out);
@@ -1449,15 +1464,7 @@ impl Translator {
             duration_ms: None,
             usage,
         });
-        self.emit(
-            out,
-            &item,
-            body,
-            state,
-            title,
-            text,
-            Some(native(kind, payload)),
-        );
+        self.emit(out, &item, body, state, title, text, native);
         self.forget_turn();
     }
 
