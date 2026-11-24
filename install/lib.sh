@@ -375,11 +375,12 @@ change_begin() {
     MA_CHANGING=1
 }
 
-# Ends a change; one stopped before its record is gone is put back.
+# Ends a change; one stopped before its record is gone is put back. Its record went with the upgrade's
+# (upgrade_end), which every install makes; the copies of our own plugin it named go now.
 change_end() {
     local own
     if [ "$DRY_RUN" -eq 0 ]; then
-        own=$(own_copies)
+        if [ -f "$MA_CHANGE" ]; then own=$(own_copies); else own=${MA_OWN_COPIES:-}; fi
         act rm -f "$MA_CHANGE"
         drop_copies "$own"
     fi
@@ -417,6 +418,8 @@ put_back_change() {
 # saying what happened and what to do.
 change_put_back() {
     local status=$1 kind path copy what="your $HARNESS_TITLE's settings" took="" copies="" how="" why again own
+    # Gone already: it ended with the upgrade (upgrade_end).
+    [ -f "$MA_CHANGE" ] || return 0
     while IFS='	' read -r kind path copy; do
         if [ "$kind" = folder ] && [ -n "$copy" ]; then what="$what and its old plugin"; fi
         if [ "$kind" = folder ] && [ -z "$copy" ]; then took=", and took our plugin out of it"; fi
@@ -494,6 +497,7 @@ finish() {
     local status=$1
     set +e
     trap '' HUP INT TERM
+    if [ "$status" -ne 0 ] && [ "${MA_UPGRADING:-0}" -eq 1 ]; then change_restore; fi
     if [ "$status" -ne 0 ] && [ "${MA_CHANGING:-0}" -eq 1 ]; then
         MA_CHANGING=0
         change_put_back "$status"
@@ -721,6 +725,7 @@ upgrade_begin() {
     local making kind part others=""
     [ "${MA_UPGRADING:-0}" -eq 0 ] || return 0
     if [ -d "$MA_UPGRADE" ]; then
+        change_restore || die "a plugin change left in $MA_UPGRADE could not be put back in its place"
         while IFS='	' read -r kind part _; do
             [ "$kind" = part ] || continue
             lib_parts | grep -qxF "$part" || others="$others $part"
@@ -790,11 +795,29 @@ empty_above() {
     while [ "$folder" != "$MA_LIB" ] && rmdir "$folder" 2>/dev/null; do folder=$(dirname "$folder"); done
 }
 
-# Ends an upgrade: what it replaced is no longer needed.
+# Ends an upgrade: what it replaced is no longer needed. A change to the gateway's plugin this run
+# makes ends with it, in the same step: its record is moved into the upgrade's first, with where it goes
+# back to, so that the rename that ends the one ends the other. Ended apart, a run stopped between the
+# two would put back the old plugin over the new core, or the old core under the new plugin. The copies
+# of our own plugin it names are removed after (change_end).
 upgrade_end() {
+    if [ "$DRY_RUN" -eq 0 ] && [ "${MA_CHANGING:-0}" -eq 1 ] && [ -f "$MA_CHANGE" ]; then
+        MA_OWN_COPIES=$(own_copies)
+        printf '%s\n' "$MA_CHANGE" | put "$MA_UPGRADE/plugin-change.path" 600
+        mv -f "$MA_CHANGE" "$MA_UPGRADE/plugin-change"
+    fi
     [ "$DRY_RUN" -eq 1 ] || upgrade_retire
     MA_UPGRADING=0
     [ "$DRY_RUN" -eq 1 ] || rm -rf "$MA_DATA/.upgrade.done.$$"
+}
+
+# A change to a gateway's plugin moved into an upgrade's record as the upgrade ended, by a run stopped
+# before the record was gone, goes back to its place: the upgrade and the change are both under way
+# again, as they were, for whatever finishes or puts them back.
+change_restore() {
+    local to
+    [ -f "$MA_UPGRADE/plugin-change" ] || return 0
+    to=$(cat "$MA_UPGRADE/plugin-change.path") && [ -n "$to" ] && mv -f "$MA_UPGRADE/plugin-change" "$to"
 }
 
 # Takes the record of an upgrade out of its place in one step, under a name a later run removes
@@ -1252,7 +1275,10 @@ uninstall() {
     fi
     if declare -F harness_uninstall >/dev/null; then harness_uninstall; fi
     # A change a run killed outright left unfinished is given up, so that no later run puts back what
-    # that run found over what the gateway has by then.
+    # that run found over what the gateway has by then: also one it had moved into the upgrade's record.
+    if [ "$DRY_RUN" -eq 0 ] && [ "$(cat "$MA_UPGRADE/plugin-change.path" 2>/dev/null)" = "$MA_AGENT_DIR/plugin-change" ]; then
+        change_restore || warn "the plugin change in $MA_UPGRADE could not be put back in its place"
+    fi
     if [ -f "$MA_AGENT_DIR/plugin-change" ]; then
         say "giving up the change to your $HARNESS_TITLE's plugin that a run before this one left unfinished, noted in $MA_AGENT_DIR/plugin-change"
         act rm -f "$MA_AGENT_DIR/plugin-change"
