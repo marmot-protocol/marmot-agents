@@ -73,8 +73,10 @@ if [ -n "${FAKE_PAUSE:-}" ]; then case "$(basename "$0") $*" in "$FAKE_PAUSE"*)
     n=0; while [ ! -e "$FAKE_PAUSE_AT" ] && [ "$n" -lt 1200 ]; do sleep 0.05; n=$((n + 1)); done ;;
 esac; fi
 """
-# A stand-in for docker that keeps its images' tags, in docker-tags beside FAKE_LOG: each build makes a new
-# image. It says nothing of the containers it does not run.
+# A stand-in for docker that keeps its images' tags, in docker-tags beside FAKE_LOG, and its images, in
+# docker-images: each build makes a new image. An image a tag no longer names is kept, as docker keeps it
+# (dangling), and may be tagged again by its id; `rmi` of its last tag removes it. It says nothing of the
+# containers it does not run.
 FAKE_DOCKER = r'''#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
@@ -83,7 +85,9 @@ args = sys.argv[1:]
 with open(os.environ["FAKE_LOG"], "a") as log:
     log.write("docker " + " ".join(args) + "\n")
 store = Path(os.environ["FAKE_LOG"]).parent / "docker-tags"
+kept = Path(os.environ["FAKE_LOG"]).parent / "docker-images"
 tags = json.loads(store.read_text()) if store.exists() else {}
+images = json.loads(kept.read_text()) if kept.exists() else sorted(set(tags.values()))
 
 
 def name(tag):
@@ -91,17 +95,21 @@ def name(tag):
 
 
 if args[:1] == ["build"]:
-    built = 1 + max([int(i.split(":")[1]) for i in tags.values()] + [0])
+    built = 1 + max([int(i.split(":")[1]) for i in images] + [0])
     tags[name(args[args.index("-t") + 1])] = f"image:{built}"
+    images.append(f"image:{built}")
 elif args[:1] == ["tag"]:
-    source = tags.get(name(args[1])) or (args[1] if args[1] in tags.values() else None)
+    source = tags.get(name(args[1])) or (args[1] if args[1] in images else None)
     tags[name(args[2])] = source or sys.exit(f"Error: No such image: {args[1]}")
 elif args[:2] == ["image", "inspect"]:
     print(tags.get(name(args[-1])) or sys.exit(f"Error: No such image: {args[-1]}"))
 elif args[:1] == ["rmi"]:
     for tag in args[1:]:
-        tags.pop(name(tag), None) or sys.exit(f"Error: No such image: {tag}")
+        image = tags.pop(name(tag), None) or sys.exit(f"Error: No such image: {tag}")
+        if image not in tags.values():
+            images.remove(image)
 store.write_text(json.dumps(tags))
+kept.write_text(json.dumps(images))
 '''
 # npm ci makes the packages it installs, and npm pack the archive, as the real one does.
 FAKE_NPM = """#!/bin/sh
@@ -1862,6 +1870,95 @@ exec {rm} "$@"
                 self.assertEqual((m.home / ".local/bin/marmot-agent").read_text(), FAKE_CORE)
                 self.assertEqual(list((m.data / f"agents/{harness}/backups").glob("marmot.*")), [],
                                  "no copy of our own plugin is kept once the update is done")
+
+    def every_step_together(self, harness: str, args, older, together) -> None:
+        """What goes with the core, Pi's image or the person's Hermes plugin, stays with the files it
+        was made for, whatever step an upgrade is stopped at (InstallUpgrade.tla, U1): stopped by TERM;
+        killed, then run again, or run again and failing, or followed by Codex's install. older(m) puts
+        in an older install; together(m) says what is wrong, or None. Checked only once nothing is left
+        under way, as the next run of the same harness finishes or puts back what is."""
+        m = Machine(self)
+        m.write(m.bin / "docker", FAKE_DOCKER)
+        older(m)
+        m.run(harness, *args(m), stop=("KILL", 0))
+        steps = int(m.steps.read_text())
+        self.assertGreater(steps, 10)
+        cases = [(signal, step) for signal in ("TERM", "KILL") for step in range(1, steps + 1)]
+
+        def under_way(m: Machine) -> bool:
+            return (m.data / "upgrade").exists() or (m.data / f"agents/{harness}/plugin-change").exists()
+
+        def one(case):
+            signal, step = case
+            found = []
+            for then in (None, "again", "failing", "codex"):
+                m = Machine(self)
+                m.write(m.bin / "docker", FAKE_DOCKER)
+                older(m)
+                stopped = m.run(harness, *args(m), stop=(signal, step), check=False)
+                said = f"after SIG{signal} at step {step}"
+                if then is None:
+                    if not under_way(m):
+                        found.append((said, together(m), stopped.stderr))
+                    continue
+                if signal == "TERM" or not under_way(m):
+                    break
+                if then == "codex":
+                    ran = m.run("codex", *m.args("codex", "--binary", str(m.core), "--name", "other"), check=False)
+                else:
+                    env = {"FAKE_FAIL": "systemctl --user restart"} if then == "failing" else {}
+                    ran = m.run(harness, *args(m), env=env, check=False)
+                if not under_way(m):
+                    found.append((f"{said}, then {then}", together(m), ran.stderr))
+            return found
+
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+            for found in pool.map(one, cases):
+                for said, wrong, stderr in found:
+                    with self.subTest(said):
+                        self.assertIsNone(wrong, f"{said}:\n{stderr}")
+
+    def test_every_step_keeps_the_image_with_its_scripts(self):
+        def args(m: Machine) -> list:
+            return m.args("pi", "--binary", str(m.core), container=True)
+
+        def older(m: Machine) -> None:
+            first = m.dir / "older-core"
+            m.write(first, FAKE_CORE + "# an older core\n")
+            m.run("pi", *m.args("pi", "--binary", str(first), container=True))
+            (m.data / "lib/tools/pi/OLDER").write_text("an older file\n")
+            m.older_image = json.loads((m.dir / "docker-tags").read_text())["marmot-agents-pi:latest"]
+
+        def together(m: Machine):
+            tag = json.loads((m.dir / "docker-tags").read_text()).get("marmot-agents-pi:latest")
+            scripts_older = (m.data / "lib/tools/pi/OLDER").exists()
+            if scripts_older != (tag == m.older_image):
+                return f"the scripts are {'older' if scripts_older else 'new'}, the image tagged {tag}"
+            return None
+
+        self.every_step_together("pi", args, older, together)
+
+    def test_every_step_keeps_the_hermes_plugin_with_its_core(self):
+        plugin = ".hermes/plugins/marmot"
+
+        def args(m: Machine) -> list:
+            return m.args("hermes", "--binary", str(m.core))
+
+        def older(m: Machine) -> None:
+            first = m.dir / "older-core"
+            m.write(first, FAKE_CORE + "# an older core\n")
+            m.run("hermes", *m.args("hermes", "--binary", str(first)))
+            (m.data / "lib/python/marmot_hermes/OLDER").write_text("an older file\n")
+            (m.home / plugin / "OLDER").write_text("an older file\n")
+
+        def together(m: Machine):
+            files_older = (m.data / "lib/python/marmot_hermes/OLDER").exists()
+            plugin_older = (m.home / plugin / "OLDER").exists()
+            if files_older != plugin_older:
+                return f"the files are {'older' if files_older else 'new'}, the plugin {'older' if plugin_older else 'new'}"
+            return None
+
+        self.every_step_together("hermes", args, older, together)
 
     def test_every_step(self):
         m = Machine(self)
