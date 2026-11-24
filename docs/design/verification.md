@@ -559,20 +559,24 @@ Built from this: a save of the state the store last wrote now writes nothing. A 
 the simulator and the crash tests put crashes where they did. The state file's format is unchanged.
 
 After the change the bench counts what the store writes, at the write itself, and starts the stop once the
-answering step has ended. One run, at 12:53 on 2026-11-24, on the same machine and disk, with nothing else of this
-work running but at a load average of about 13 from other work on the machine:
+answering step has ended. The last backlog event is timed from handing it to the core to the driver being asked
+for the next, so it is one step: the core reading the event and saving. The table before the change started that
+clock once the event was handed over and stopped it when the bench next looked, a millisecond at most later. One
+run, at 15:10 on 2026-11-24, on the same machine and disk, with nothing else of this work running but at a load
+average of 12 to 13 from other work on the machine:
 
 | Waiting in the outbox | Saves (writes) per new message there | Bytes written building it | Last backlog event | Writes before the answer | Answer to driver | Saves (writes) in a stop | Stop | One save alone, of which JSON |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 0 | (none) | (none) | | 1 | 5.5 ms | 11 (7) | 36 ms | 5.2 ms, 5 µs |
-| 50 | 2 (1) | 4.7 MB | 6.2 ms | 1 | 5.8 ms | 11 (7) | 50 ms | 6.0 ms, 0.2 ms |
-| 500 | 2 (1) | 455 MB | 12 ms | 1 | 9.8 ms | 11 (7) | 70 ms | 8.5 ms, 1.0 ms |
-| 2,000 | 2 (1) | 7.3 GB | 41 ms | 1 | 37 ms | 11 (7) | 286 ms | 34 ms, 4.9 ms |
+| 0 | (none) | (none) | | 1 | 5.5 ms | 11 (7) | 43 ms | 5.4 ms, 4 µs |
+| 50 | 2 (1) | 4.7 MB | 6.6 ms | 1 | 6.2 ms | 11 (7) | 47 ms | 6.3 ms, 0.2 ms |
+| 500 | 2 (1) | 455 MB | 18 ms | 1 | 9.3 ms | 11 (7) | 84 ms | 9.5 ms, 2.2 ms |
+| 2,000 | 2 (1) | 7.3 GB | 39 ms | 1 | 32 ms | 11 (7) | 276 ms | 73 ms, 5.3 ms |
 
 Each new message in a chat that waits is now written once, not twice, so building a backlog writes half what it
 did: 7.3 GB for 2,000, measured, where the runs before the change wrote about 14 GB. The answer still waits for
 its one write, as it must. A stop writes 7 times of the 11 saves it asks for. Its time is about what it was:
-each write is of the whole state.
+each write is of the whole state. One save alone of the largest state took 73 ms here and 34 ms in an earlier run
+at the same load, so a single run's times on this shared machine move by up to twice.
 
 Not built, and proposed only if backlogs of thousands turn out to happen: a state written without its whole
 outbox each time, such as an outbox kept as a file appended to, so a save's cost no longer grows with what
