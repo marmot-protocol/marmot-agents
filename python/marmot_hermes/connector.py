@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import secrets
@@ -25,7 +26,9 @@ import tempfile
 from pathlib import Path
 
 from .core import Refusal
-from .translate import CONFIRM, OPEN, VERSION, Translator
+from .translate import CONFIRM, CONFIRM_CHOICES, OPEN, VERSION, Translator, key_of, names_session
+
+log = logging.getLogger("marmot_hermes")
 
 # Hermes can report a turn complete and start it again a moment later, for the first message of a
 # session (`docs/reference/hermes-messages.md`). The end of a turn that showed nothing is held this
@@ -80,8 +83,9 @@ class Chat:
         # Model switches waiting for the read after Hermes took them, one a session: {"request", "session",
         # "taken": Hermes said it took it, "at": as for a reset}
         self.sets: list[dict] = []
-        # What waits for Hermes's reply to a command Hermes asked to confirm: the reply to the answer.
-        self.confirming = None
+        # Request to confirm a command -> the command it confirms, which waits for Hermes's reply to the
+        # answer to that request, and to no other: in a group each sender's session can have one waiting.
+        self.confirming: dict[str, tuple] = {}
         self.answered: set[str] = set()
         self.held = None  # (the event, its timer) for a turn's end that showed nothing
         self.quiet: dict[str, bool] = {}  # turn -> nothing but the turn itself was shown since it started
@@ -105,7 +109,7 @@ class Chat:
         self.by_turn.clear()
         self.new_session.clear()
         self.sets.clear()
-        self.confirming = None
+        self.confirming.clear()
         self.answered.clear()
         self.quiet.clear()
 
@@ -125,8 +129,11 @@ class Connector:
         self.prompted: set[str] = set()  # the core's prompts not yet tied to a turn
         self.session_sender: dict[str, dict] = {}  # session -> the sender whose session it is
         self.cards: dict[str, tuple[str, str]] = {}  # approval item -> (Hermes's session key, request id)
-        # A command typed for a request -> (its chat, the request, whether Hermes's reply settles it)
-        self.awaiting: dict[str, tuple[str, str, object]] = {}
+        self.confirms: dict[str, str] = {}  # request to confirm a command -> Hermes's session key
+        # A command typed for a request -> (its chat, the request, whether Hermes's reply settles it, the
+        # chat and sender it was typed as)
+        self.awaiting: dict[str, tuple[str, str, object, str]] = {}
+        self.typed_confirm: dict[str, str] = {}  # a typed answer -> the request to confirm it answers
         self.tasks: set[asyncio.Task] = set()  # what the plugin asks Hermes in the background
         self.typed_n = 0
         self.commands: list | None = None  # Hermes's command registry, once the adapter has read it
@@ -202,24 +209,37 @@ class Connector:
             if m.get("method") == "_send_exec_approval_prompt":
                 prompt = obj(p.get("prompt"))
                 self.cards[f"approval:{prompt.get('request_id')}"] = (prompt.get("session_key"), prompt.get("request_id"))
+            if m.get("method") == "send_slash_confirm":
+                self.confirms[f"confirm:{p.get('confirm_id')}"] = text_of(p.get("session_key"))
             if m.get("method") == "send":
                 awaiting = self.awaiting.pop(text_of(p.get("reply_to")), None)
+                self.typed_confirm.pop(text_of(p.get("reply_to")), None)
                 content = text_of(p.get("content"))
-                asking = chat.translator.open.get(chat.translator.confirm or "")
                 if awaiting is not None and awaiting[0] == chat.id:
-                    if asking is not None and content == asking["text"]:
+                    asking = self.asking(chat, awaiting[3], content)
+                    if asking is not None:
                         # Hermes asks first (`send_slash_confirm`, then the same words as the reply): the
-                        # outcome is its reply to the answer.
-                        chat.confirming = awaiting
+                        # outcome is its reply to the answer to that request.
+                        chat.confirming[asking] = awaiting
                     elif awaiting[2](content):
                         settled_by_reply = awaiting[1] or None
                 if content.startswith(LOST_TURN):
                     self.discard(chat, text_of(p.get("reply_to")))
-        if line.get("via") == "inbound" and chat.confirming is not None:
+        if line.get("via") == "press" and m.get("confirm_id") is not None and "said" in m:
+            # Hermes's reply to the answer, which it handed the plugin, is the outcome of the command that
+            # request confirmed, and of no other. When Hermes gave no reply, the notice saying so is.
+            awaiting = chat.confirming.pop(f"confirm:{m['confirm_id']}", None)
+            if awaiting is not None and awaiting[2](text_of(m.get("said"))):
+                settled_by_reply = awaiting[1] or None
+        if line.get("via") == "inbound" and chat.confirming:
             word = (text_of(m.get("text")).split() or [""])[0]
-            if word in CONFIRM and chat.translator.confirm in chat.translator.open:
-                self.awaiting[text_of(m.get("message_id"))] = chat.confirming
-                chat.confirming = None
+            # Typed, the answer goes to the request Hermes waits on in the sender's own session.
+            key = key_of({"chat_type": m.get("chat_type"), "chat_id": m.get("chat"), "user_id": m.get("user")})
+            asking = next((item for item in reversed(list(chat.confirming))
+                           if names_session(self.confirms.get(item), key) and item in chat.translator.open), None)
+            if word in CONFIRM and asking is not None:
+                self.awaiting[text_of(m.get("message_id"))] = chat.confirming.pop(asking)
+                self.typed_confirm[text_of(m.get("message_id"))] = asking
         before = dict(self.generations)
         events = chat.translator.feed(line)
         model_read = chat.translator.model_read
@@ -237,6 +257,7 @@ class Connector:
         for chat in self.chats.values():
             chat.core_gone()
         self.awaiting.clear()
+        self.typed_confirm.clear()
 
     def discard(self, chat: Chat, reply_to: str) -> None:
         """Hermes paused a session because a crash cut a turn off. The core has already closed that
@@ -393,12 +414,23 @@ class Connector:
         Otherwise an effect does, or, failing one, the core (D-087)."""
         self.typed_n += 1
         message_id = f"hermes-{self.boot}-{self.typed_n}"
-        self.awaiting[message_id] = (chat.id, request, replied)
+        self.awaiting[message_id] = (chat.id, request, replied, self.key_of(where, sender))
         try:
             await self.type(where, sender, text, message_id)
         except BaseException:
             self.awaiting.pop(message_id, None)
             raise
+
+    def asking(self, chat: Chat, key: str, content: str) -> str | None:
+        """The request to confirm a command that Hermes's reply `content`, to a command typed in the session
+        of `key`, repeats: one still waiting in that session, with those words, that no command waits on
+        yet, the latest first. None when the reply is not one."""
+        for item in reversed(list(self.confirms)):
+            asked = chat.translator.open.get(item)
+            if (asked is not None and asked["type"] == "question" and asked["text"] == content
+                    and item not in chat.confirming and names_session(self.confirms[item], key)):
+                return item
+        return None
 
     def taken_by(self, keys) -> re.Pattern | None:
         """The replies of Hermes's that say it took a command: the catalog's texts of `keys`, each value in
@@ -490,7 +522,7 @@ class Connector:
             if item.startswith("confirm:"):
                 if len(chosen) != 1:
                     raise Refusal("invalid")
-                await self.typed_answer(chat, item, request, where, sender, CONFIRM[options[chosen[0]]])
+                await self.confirm(chat, item, request, by, CONFIRM_CHOICES[options[chosen[0]]])
                 return
             parts = [asked["options"][options[o]]["label"] for o in chosen]
             if text_of(reply.get("text")):
@@ -510,6 +542,57 @@ class Connector:
             return
         raise Refusal("unknown_item")
 
+    async def confirm(self, chat: Chat, item: str, request: str, by: dict, choice: str) -> None:
+        """Answers Hermes's request to confirm a command through Hermes's own call, which answers only the
+        confirmation it names, by its id (D-146). A typed `/approve` would answer whatever Hermes waits on
+        when it reads it: an approval that started meanwhile, or another command's confirmation. One that
+        no longer waits is refused, and nothing else is answered. The item counts as answered from the
+        call on, so a second answer is refused, unless Hermes did not take it.
+
+        The core's request is answered as soon as Hermes has taken the confirmation: the command it
+        confirms, which can take a while (a `/new` closes the old session's tools first), runs on and
+        shows its outcome when it finishes, and a core that goes away meanwhile does not cancel it
+        (D-058)."""
+        session_key = self.confirms.get(item)
+        if not session_key:
+            raise Refusal("not_waiting")
+        chat.answered.add(item)
+        if request:
+            chat.by_item.setdefault(item, []).append(request)
+        try:
+            running = self.hermes.resolve_confirm(session_key, item.removeprefix("confirm:"), choice, text_of(by.get("id")))
+        except BaseException:
+            chat.answered.discard(item)
+            unsettle(chat.by_item, item, request)
+            raise
+        if running is None:
+            chat.answered.discard(item)
+            unsettle(chat.by_item, item, request)
+            raise Refusal("not_waiting")
+        confirm_id = item.removeprefix("confirm:")
+        taken = {"confirm_id": confirm_id, "choice": choice, "user": by.get("id"), "session_key": session_key}
+        self.record({"dir": "out", "via": "press", "msg": taken}, chat.id)
+        if running.done():
+            self.confirm_said(chat, confirm_id, session_key, running)
+        else:
+            self.background(self.confirm_finished(chat, confirm_id, session_key, running))
+
+    async def confirm_finished(self, chat: Chat, confirm_id: str, session_key: str, running) -> None:
+        await asyncio.wait({running})
+        self.confirm_said(chat, confirm_id, session_key, running)
+
+    def confirm_said(self, chat: Chat, confirm_id: str, session_key: str, running) -> None:
+        """What Hermes said to the answer to its request to confirm a command, once the command finished,
+        which shows its outcome. When Hermes's call failed, nothing does, and the core settles what waited
+        on it (D-087)."""
+        if running.cancelled() or running.exception() is not None:
+            # D-071: the failure's words may hold a path or the command's, so only its kind is logged.
+            kind = "cancelled" if running.cancelled() else type(running.exception()).__name__
+            log.warning("Hermes's call to answer a confirmation failed: %s", kind)
+            return
+        said = {"confirm_id": confirm_id, "session_key": session_key, "said": running.result()}
+        self.record({"dir": "out", "via": "press", "msg": said}, chat.id)
+
     async def typed_answer(self, chat: Chat, item: str, request: str, where: dict, sender: dict, text: str) -> None:
         """Types an answer. The item counts as answered from then on, so a second answer is refused, unless
         Hermes did not take it: then it waits for another, and the command it confirms waits for the reply
@@ -525,8 +608,9 @@ class Connector:
             chat.answered.discard(item)
             unsettle(chat.by_item, item, request)
             confirming = self.awaiting.pop(message_id, None)
-            if confirming is not None:
-                chat.confirming = confirming
+            asking = self.typed_confirm.pop(message_id, None)
+            if confirming is not None and asking is not None:
+                chat.confirming[asking] = confirming
             raise
 
     async def control(self, params: dict) -> None:

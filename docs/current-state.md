@@ -5,7 +5,7 @@ What is true of the system now, in one page, so that nobody has to read every de
 links to the decisions behind it; what a later decision replaced is left out. What is not decided is in
 [`open-questions.md`](open-questions.md), and what is built next in [`plan.md`](plan.md).
 
-Brought up to date on 2026-11-24, at `master` commit `062491e`, through [D-140](decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused), and [D-147](decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken). A change that adds or replaces
+Brought up to date on 2026-11-24, at `master` commit `641d0b9`, through [D-140](decisions.md#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused), [D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id) and [D-147](decisions.md#d-147-a-request-whose-effect-a-connector-showed-before-its-connection-dropped-was-taken). A change that adds or replaces
 a decision updates this page in the same change ([D-114](decisions.md#d-114-a-current-state-page-sits-beside-this-record-and-every-new-decision-updates-it)).
 
 ## What it is for
@@ -90,7 +90,12 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   [D-032](decisions.md#d-032-every-action-needs-one-of-two-rights), [D-039](decisions.md#d-039-controls-need-the-right-to-prompt), [D-043](decisions.md#d-043-a-setting-says-which-right-it-needs)).
 - Each connector lists the typed commands that need the right to approve, and where in a message each counts. A
   request to confirm a command is a question; a standing approval is an ordinary answer ([D-047](decisions.md#d-047-a-listed-command-says-where-in-a-message-it-counts), [D-048](decisions.md#d-048-a-request-to-confirm-a-command-is-a-question),
-  [D-049](decisions.md#d-049-a-standing-approval-is-an-ordinary-approval-answer)).
+  [D-049](decisions.md#d-049-a-standing-approval-is-an-ordinary-approval-answer)). Hermes's plugin answers a
+  confirmation by its id, through Hermes's own call and after Hermes's own check of who may answer, so the
+  answer resolves that confirmation or nothing; the command it confirms runs on after the core is answered. For
+  the pilot, two people confirming at once in one group chat may settle each other's commands, and a command
+  Hermes drops after a stall of over five seconds shows only that Hermes gave no reply
+  ([D-146](decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id)).
 - Approval behaviour is the harness's own; the core adds no modes and answers nothing itself ([D-021](decisions.md#d-021-approval-behaviour-belongs-to-the-harness)).
 - In a group the agent answers when mentioned or replied to; in a two-person chat, always ([D-075](decisions.md#d-075-in-a-group-the-agent-answers-when-mentioned-or-replied-to-in-a-direct-chat-always)).
 - A message sent during a turn goes straight to the harness, which folds it in, restarts or queues it

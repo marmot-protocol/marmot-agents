@@ -40,7 +40,7 @@ use marmot_agent::EventKey;
 use marmot_agent::carrier::{self, Asked, EDIT_KIND, ITEM_KIND};
 use marmot_agent::import::{self, Connector, Options};
 use marmot_agent::rights::Who;
-use marmot_agent_events::body::Body;
+use marmot_agent_events::body::{Body, NoticeKind};
 use marmot_app::{AppMessageQuery, MarmotAppRuntime};
 use model_double::Double;
 use old_connector::{BEFORE, Noted, Unanswered, ask, chat_messages, local_app, places, setup};
@@ -482,6 +482,28 @@ impl Install {
             .collect()
     }
 
+    /// Sends what an app sends for `asked`, on the item whose first event is `target` if one is
+    /// named, and gives the request's event.
+    async fn ask(
+        &self,
+        group: &cgka_traits::GroupId,
+        target: Option<&EventKey>,
+        asked: &Asked,
+        words: &str,
+    ) -> EventKey {
+        let out = carrier::request(
+            &marmot_agent::PubKey(self.agent.clone()),
+            target,
+            asked,
+            words,
+        );
+        let sent = (self.person_runtime)
+            .send_custom_event(&self.person, group, out.kind, out.tags, out.content)
+            .await
+            .unwrap();
+        EventKey(sent.message_ids[0].clone())
+    }
+
     /// Waits for the item version `found` picks, and gives it with its item's first event.
     async fn wait_for(
         &self,
@@ -605,6 +627,91 @@ impl Install {
         assert!(
             model.since(from).await.iter().any(given),
             "the model was given the person's choice as the tool's result"
+        );
+    }
+
+    /// A new session asked for from the chat, which Hermes asks the person to confirm. Their
+    /// answer goes to that confirmation by its id, through Hermes's own call for it (D-146),
+    /// never as a typed `/approve`: the confirmation is answered, Hermes's reply to the answer
+    /// comes back as the command's output outside any turn, where a typed `/approve` would have
+    /// started one, and the old session's end settles the request.
+    async fn new_session_confirmed(&self, group: &cgka_traits::GroupId, group_hex: &str) {
+        let ended = |r: &carrier::Read| {
+            matches!(r.item.event.body(), Body::Session(_))
+                && r.item.event.header().state == marmot_agent_events::State::Done
+        };
+        let reset = |r: &carrier::Read| {
+            matches!(r.item.event.body(), Body::Notice(n) if n.kind == NoticeKind::CommandOutput)
+                && r.item.event.header().text.starts_with('✨')
+        };
+        let request = self
+            .ask(group, None, &Asked::NewSession, "New session")
+            .await;
+        let (target, read) = self
+            .wait_for(group_hex, "a request to confirm the new session", |r| {
+                matches!(r.item.event.body(), Body::Question(_))
+                    && r.item.event.header().item.as_str().starts_with("confirm:")
+                    && r.item.event.header().state == marmot_agent_events::State::Waiting
+            })
+            .await;
+        let Body::Question(question) = read.item.event.body() else {
+            unreachable!()
+        };
+        let asked = &question.questions()[0];
+        let once = asked
+            .options
+            .iter()
+            .find(|o| o.label == "Approve once")
+            .unwrap();
+        let answer = Asked::Questions {
+            questions: vec![carrier::AskedReply {
+                question: asked.id.clone(),
+                options: vec![once.id.clone()],
+                text: None,
+            }],
+        };
+        let answered = self
+            .ask(group, Some(&target), &answer, "Approve once")
+            .await;
+        let (_, done) = self
+            .wait_for(group_hex, "the confirmation answered", |r| {
+                r.item.settles.contains(&answered)
+            })
+            .await;
+        assert_eq!(
+            (
+                done.item.event.header().item.as_str(),
+                done.item.event.header().state
+            ),
+            (
+                read.item.event.header().item.as_str(),
+                marmot_agent_events::State::Done
+            ),
+            "the answer settles on the confirmation it answers: {}",
+            done.item.event.header().text
+        );
+        let (_, replaced) = self
+            .wait_for(group_hex, "the new session's effect", |r| {
+                r.item.settles.contains(&request)
+            })
+            .await;
+        assert!(
+            ended(&replaced),
+            "the old session ended: {}",
+            replaced.item.event.header().text
+        );
+        // The scenario resets no other session, so every reply of Hermes's to a reset is this one's.
+        self.wait_for(group_hex, "Hermes's reply to the answer", reset)
+            .await;
+        let turns: Vec<_> = self
+            .items(group_hex)
+            .into_iter()
+            .filter(|(_, r)| reset(r))
+            .map(|(_, r)| r.item.event.header().turn.clone())
+            .collect();
+        assert!(
+            turns.iter().all(Option::is_none),
+            "Hermes's reply to the answer is outside any turn, as no typed answer started one: {turns:?}"
         );
     }
 
@@ -1116,6 +1223,11 @@ async fn a_hermes_install_moves_over() {
     install
         .set_model(&group, &group_hex, "reset", "scripted")
         .await;
+
+    // A new session from the chat, which Hermes asks to confirm. The plugin answers that
+    // confirmation by its id with Hermes's own call, `tools.slash_confirm`, which Hermes does not
+    // publish for plugins: this is what fails when that changes.
+    install.new_session_confirmed(&group, &group_hex).await;
 
     let _ = core.kill().await;
     install.end().await;

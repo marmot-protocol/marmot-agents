@@ -1031,7 +1031,8 @@ An approval command does not say when it needs the right to approve.
 only while an approval is waiting. A flag with that test was tried and taken out, because an approval can
 start after the core's check and before the harness reads the message, and the same word then approves the
 agent's action. Closing that gap needs a way to tie a confirmation to the exact request it confirms. That is
-for the Hermes connector to design, and until a replacement is accepted D-048 is the rule.
+for the Hermes connector to design, and until a replacement is accepted D-048 is the rule. For an answer sent as an
+answer, not typed, [D-146](#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id) closes it.
 
 The socket's driver section is a draft and has not caught up. Its answer has a flat list of choices, its
 events have no chat and settle nothing, its requests carry no id, and its `files_in` is yes or no. When the
@@ -2835,6 +2836,70 @@ another, is not for this one, and the agent says nothing ([D-027](#d-027-answers
 good. An app newer than the core will send actions the core does not know, and the reason lets it say so.
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
+
+## D-146 The Hermes plugin answers a request to confirm a command by its id
+
+**Decision.** An answer to Hermes's request to confirm a command, the `question` item of
+[D-048](#d-048-a-request-to-confirm-a-command-is-a-question), goes to Hermes through Hermes's own call for it,
+`tools.slash_confirm.resolve`, which names the session and the confirmation's id. The plugin never types `/approve`,
+`/always` or `/cancel` for it. It answers only while that confirmation still waits in Hermes; when it does not,
+because it was answered, a newer one replaced it or it waited longer than Hermes waits, the answer is refused as
+`not_waiting` and nothing else is answered: not an approval that started meanwhile, and not another command's
+confirmation. The plugin stops five seconds before Hermes's own limit, so that an answer it hands Hermes is one
+Hermes runs. Before it answers, the plugin asks Hermes's own check of who may answer, `slash_confirm_refusal`, with the
+person who answered and the chat's Hermes settings, as Hermes's own platforms do: where Hermes's settings name
+admins for the chat, only someone Hermes lets run the confirmed command may confirm it, whatever the core allows.
+A person Hermes refuses is refused as `not_supported`, with Hermes's words, and the confirmation still waits.
+
+The plugin answers the core's request as soon as Hermes has taken the confirmation, which Hermes does before it
+runs the command: the question shows the answer at once, and the command runs on by itself, however long it takes
+(a `/new` first closes the old session's tools). A request is taken once the harness has it
+([D-058](#d-058-the-driver-trait-and-the-capability-flags)), and the core gives a connector up when one is not taken
+within 30 seconds ([socket protocol](design/socket-protocol.md#when-things-go-wrong)); the core going away
+meanwhile does not cancel the command.
+When the command finishes, Hermes hands back its reply to the answer instead of sending it, and the plugin sends it
+as the command's output, in the session Hermes asked in, outside any turn. That reply settles the command the confirmation is for, and no
+other: in a group, where each sender has a session and each can have a confirmation waiting, an answer to one
+settles nothing of another's. When Hermes gives no reply, a notice says so (`Hermes gave no reply to /new.`), and
+settles the command. The notice never says the command ran, as the remaining limit below explains.
+
+Nothing else changes. Answering the confirmation still needs the right to prompt, and answering an approval the
+right to approve. The confirmation and its answer show as before; the one difference people see is that the
+answer no longer starts a turn of its own, which the typed `/approve` did. The plugin does not claim Hermes's
+confirmation buttons, so Hermes still sends the question as text, and a person who types `/approve` in the chat is
+still read as [D-048](#d-048-a-request-to-confirm-a-command-is-a-question) says, by the core and then by Hermes,
+which runs the same check of who may answer on typed text.
+
+**Why.** A structured answer names the item it answers, but typed text names nothing. Hermes reads a typed
+`/approve` as the answer to an approval when one waits in the session, and otherwise to the session's current
+confirmation, whatever its id. So between the core's check and Hermes reading the text, an approval that started
+or a confirmation that replaced the first would take the answer, and someone who may only prompt could approve
+what the agent does ([D-049](#d-049-a-standing-approval-is-an-ordinary-approval-answer) records this gap). Hermes's
+call checks the id, and its own platforms with buttons answer through it, after asking its check of who may
+answer, which the call itself does not ask: without that check, an answer through the call could do what the
+same person typing `/approve` could not. The call is not on Hermes's list of what a plugin may use, so it is
+listed in [what the plugin relies on](reference/hermes-messages.md#what-the-plugin-relies-on-outside-the-published-plugin-interface),
+and the Hermes move-over test fails when it changes. Issue #153.
+
+Not closed: a `/approve` that a person who may only prompt types while a confirmation waits still has the gap
+D-049 describes, as typed text always will. Answers to an approval card and to a question do not yet ask Hermes's
+check with the chat's settings (`approval_refusal` and `clarify_refusal`); that is for a change of its own.
+
+A limit for the pilot: the plugin keeps its own record of which confirmation waits, and for whom, beside
+Hermes's. When two people confirm commands at once in one group chat, that record and Hermes's can disagree, so one
+person's answer may settle the other's command, or leave a confirmation that still waits in Hermes unanswerable
+from the chat. Neither lets anyone answer what Hermes would not let them answer. Issue #183 rebuilds the record
+from Hermes's own.
+
+A remaining limit: Hermes's call says `None` both when it ran nothing and when the command it ran gave no reply, and
+at the pinned commit Hermes offers no other way to learn that it ran the command. Hermes checks the confirmation's
+age again when it runs it, so if the gateway stalls longer than the plugin's five seconds between the plugin's check
+and Hermes's, a confirmation the plugin handed over can be one Hermes drops without running it. The answer then
+shows as given, and the notice says only that Hermes gave no reply, which is true either way; a person who sees the
+command did not happen asks again. The plugin does not pass Hermes's call a longer `timeout` to close this gap:
+that would override Hermes's own 300-second rule for confirmations, and Hermes's rule stands.
+
+Decided 2026-11-24 by the project owner.
 
 ## D-147 A request whose effect a connector showed before its connection dropped was taken
 
