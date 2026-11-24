@@ -592,6 +592,103 @@ async fn a_send_whose_reply_was_lost_is_not_sent_twice() {
     world.runtime.shutdown().await;
 }
 
+// A send MDK was handed while the chat was the owner's, and still keeps, is tried again as MDK was
+// handed it, its native message too, after someone joins the chat: MDK binds its token to what it
+// was handed, and refuses the token for anything else. Tried again without the native message, as
+// the chat is sent now, it was refused and given up, and a notice settled again what MDK still
+// posted (D-136, H1 of ActivityHoldBack.tla).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_mdk_keeps_is_tried_again_as_it_was_handed_after_someone_joins() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, id) = a_chat(&world, &seen).await;
+    let third = world.someone_else().await;
+    events
+        .send(Emitted {
+            event: event("t", State::Running, turn()),
+            chat: Some(id.clone()),
+            prompts: Vec::new(),
+            settles: Vec::new(),
+        })
+        .unwrap();
+    let (target, read) = within(30, || {
+        let items = chat.latest().into_iter();
+        items
+            .into_iter()
+            .find(|(_, r)| r.item.event.header().item.as_str() == "t")
+    })
+    .await;
+    let target = first(&target, &read);
+    let request = chat.ask(Some(&target), &Asked::Interrupt, "Stop").await;
+    let store = Store::new(world.state.path());
+    let state = || json(&store.load().unwrap());
+    let taken = within(20, || {
+        let pending = state()["conversation"]["pending"].as_object().cloned();
+        pending.and_then(|p| p.keys().next().cloned())
+    })
+    .await;
+
+    // The tool, done, with its native message, settling the request: MDK takes it, and keeps it
+    // queued while someone is added to the chat.
+    world
+        .marmot
+        .faults
+        .push(Fault::Held(Duration::from_secs(20)));
+    let native = marmot_agent_events::Native {
+        kind: "item/completed".into(),
+        payload: serde_json::value::RawValue::from_string(r#"{"command":"ls"}"#.into()).unwrap(),
+    };
+    let header = event("k", State::Done, turn()).header().clone();
+    let tool: Body =
+        serde_json::from_str(r#"{"type":"tool","body":{"kind":"command","name":"shell"}}"#)
+            .expect("a tool");
+    events
+        .send(Emitted {
+            event: AgentEvent::new(header, tool, Some(native)).unwrap(),
+            chat: Some(id.clone()),
+            prompts: Vec::new(),
+            settles: vec![marmot_agent_driver::RequestId(taken)],
+        })
+        .unwrap();
+    let tried = |state: serde_json::Value| {
+        (state["conversation"]["outbox"].as_array()).is_some_and(|queue| {
+            (queue.iter()).any(|q| q["tried_at"].is_u64() && q["what"]["Item"].is_object())
+        })
+    };
+    within(20, || tried(state()).then_some(())).await;
+    let group = GroupKey(chat.hex.clone());
+    world
+        .runtime
+        .invite_members(&world.person, &chat.group, std::slice::from_ref(&third))
+        .await
+        .unwrap();
+    within(15, || {
+        matches!(world.marmot.two_people(&group), Ok(None)).then_some(())
+    })
+    .await;
+
+    // MDK posts it once it lets it go, and the core takes the event it made.
+    let queued = || (state()["conversation"]["outbox"].as_array()).map(Vec::len);
+    within(40, || (queued() == Some(0)).then_some(())).await;
+    within(10, || (!versions(&chat, "k").is_empty()).then_some(())).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let settling: Vec<AgentEvent> = (chat.items().into_iter())
+        .filter(|(_, r)| r.item.settles.contains(&request))
+        .map(|(_, r)| r.item.event)
+        .collect();
+    assert_eq!(settling.len(), 1, "settled once");
+    assert_eq!(settling[0].header().item.as_str(), "k", "by the tool");
+    assert!(settling[0].native().is_some(), "as MDK was handed it");
+    assert!(
+        (chat.items().iter()).all(|(_, r)| refused(&r.item.event).is_none()),
+        "nothing was given up"
+    );
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
 // A send that went out just before a crash, before the core marked it sent, is tried again when
 // the core starts, under the token it went under: MDK gives back the event it made, sends nothing,
 // and the send is not made a second time (S3).

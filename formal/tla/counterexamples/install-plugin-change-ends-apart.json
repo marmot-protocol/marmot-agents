@@ -1,0 +1,32 @@
+{
+  "case": "install-plugin-change-ends-apart",
+  "model": "InstallUpgrade",
+  "config": "InstallUpgrade.hermes.cfg",
+  "breaks": "U1",
+  "what": "ChangeEndsApart, install/lib.sh before 2026-11-24: Hermes's install ends the upgrade, then the plugin change; a TERM between the two, and the exit trap puts the old plugin back over the new core (U1). Killed there instead, the next run that fails does the same, as its own upgrade record holds the new core.",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"Harnesses": ["codex", "hermes"], "Main": "hermes", "Older": true, "FirstRuns": 1, "Slots": [1], "MaxKills": 2, "MaxFails": 2, "FairPerson": true, "Bug": "ChangeEndsApart"},
+  "steps": [
+    {"action": "Start", "slot": 1, "harness": "hermes"},
+    {"action": "Lock", "slot": 1},
+    {"action": "Prepare", "slot": 1},
+    {"action": "Publish", "slot": 1},
+    {"action": "Begin", "slot": 1, "how": "records"},
+    {"action": "Core", "slot": 1},
+    {"action": "Keep", "slot": 1, "part": "S"},
+    {"action": "Put", "slot": 1, "part": "S"},
+    {"action": "Keep", "slot": 1, "part": "hermes"},
+    {"action": "Put", "slot": 1, "part": "hermes"},
+    {"action": "Note", "slot": 1},
+    {"action": "Connect", "slot": 1, "finishes": false},
+    {"action": "Replace", "slot": 1},
+    {"action": "StartServices", "slot": 1},
+    {"action": "Commit", "slot": 1},
+    {"action": "End", "slot": 1, "change": false},
+    {"action": "Retire", "slot": 1},
+    {"action": "Fail", "slot": 1, "at": "change_end"},
+    {"action": "PutBackPlugin", "slot": 1},
+    {"action": "Kill", "slot": 1, "at": "f_chg_rm"}
+  ],
+  "end": {"kind": "violation"}
+}

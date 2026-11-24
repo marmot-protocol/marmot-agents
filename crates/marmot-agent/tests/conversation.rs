@@ -4492,6 +4492,135 @@ fn the_owners_chat_is_read_from_its_members_at_each_send() {
     assert!(!queued_keys(&again, &g).contains(&format!("{chat}/r3")));
 }
 
+// A send of the agent's full activity that MDK was handed before someone joined the owner's chat
+// may still go out, as MDK keeps it, or have gone with its answer lost: it is not held back with
+// what it settles moved to the turn, which would settle a request twice and, were the chat the
+// owner's again, start the item a second time. It goes on only as far as MDK has it: one MDK does
+// not have is held back then (ActivityHoldBack.tla, H1 and H2; D-136).
+#[test]
+fn a_send_mdk_was_handed_is_not_held_back_with_what_it_settles() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let g = direct().group;
+    sent(
+        &mut talk,
+        &chat,
+        event("t1", State::Running, turn()),
+        "e-t1",
+    );
+    let request = interrupt_taken(&mut talk, "r1");
+    let (tool, _) = every_type().swap_remove(7);
+    let native = marmot_agent_events::Native {
+        kind: "item/completed".into(),
+        payload: serde_json::value::RawValue::from_string(r#"{"command":"ls"}"#.into()).unwrap(),
+    };
+    let tool = AgentEvent::new(tool.header().clone(), tool.body().clone(), Some(native)).unwrap();
+    let mut queued_tool = emitted(&chat, tool);
+    queued_tool.settles = vec![request];
+    talk.emitted(queued_tool);
+    let both = [PubKey::from(AGENT), PubKey::from(OWNER)];
+    talk.members_now(&g, Some(&both));
+    let Some((token, Sending::Item { .. })) = talk.next_send(&g) else {
+        panic!("no tool")
+    };
+    assert!(talk.attempting(&token.send, 1), "handed to MDK");
+
+    // A third person is added before MDK's answer is known.
+    talk.members_now(&g, None);
+    assert_eq!(
+        queued_keys(&talk, &g),
+        vec![format!("{chat}/cmd")],
+        "not held back"
+    );
+    assert!(
+        talk.handed_otherwise(&token.send),
+        "the chat is not sent it now"
+    );
+    let Some((_, Sending::Item { item, .. })) = talk.next_send(&g) else {
+        panic!("no tool")
+    };
+    assert_eq!(
+        item.settles,
+        vec![EventKey::from("r1")],
+        "it settles r1 still"
+    );
+    assert!(item.event.native().is_some(), "as MDK was handed it");
+
+    // MDK has not got it: held back now, and what it settled is settled by the turn.
+    talk.not_kept(&token.send);
+    assert_eq!(queued_keys(&talk, &g), vec![format!("{chat}/t1")]);
+    let Some((_, Sending::Item { item, .. })) = talk.next_send(&g) else {
+        panic!("no turn")
+    };
+    assert_eq!(
+        item.settles,
+        vec![EventKey::from("r1")],
+        "settled by the turn"
+    );
+    assert!(!talk.handed_otherwise(&item_token(&talk, &g)));
+}
+
+// MDK binds a send's token to what it was handed, and refuses the token for anything else: a send
+// tried again goes as MDK was first handed it, with its native message or without, whoever is in
+// the chat now. Only once MDK says it has nothing under the token does it go as the chat is sent
+// now (D-136).
+#[test]
+fn a_send_is_tried_again_as_mdk_was_first_handed_it() {
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    let g = direct().group;
+    let both = [PubKey::from(AGENT), PubKey::from(OWNER)];
+    let has_native = |talk: &Conversation| match talk.next_send(&g) {
+        Some((_, Sending::Item { item, .. })) => item.event.native().is_some(),
+        _ => panic!("no item"),
+    };
+
+    // Handed to MDK with its native message, in the owner's chat; then a third person is added.
+    talk.members_now(&g, Some(&both));
+    talk.emitted(emitted(&chat, denied_turn_end()));
+    let token = item_token(&talk, &g);
+    assert!(has_native(&talk));
+    assert!(talk.attempting(&token, 1));
+    talk.members_now(&g, None);
+    assert!(
+        talk.handed_otherwise(&token),
+        "MDK is asked whether it keeps it"
+    );
+    assert!(has_native(&talk), "tried again as it was handed");
+    // Read again from what the core saved, as after a restart.
+    let saved = talk.saved().clone();
+    let mut again = conversation(saved);
+    again.members_now(&g, None);
+    assert!(has_native(&again), "after a restart too");
+
+    // MDK has nothing under the token: it goes as the chat is sent now.
+    talk.not_kept(&token);
+    assert!(!has_native(&talk));
+    assert!(!talk.handed_otherwise(&token));
+    assert_eq!(item_token(&talk, &g), token, "the same send");
+
+    // Handed without it while the third person was there, it goes without it once they leave.
+    let (mut talk, prompt) = started();
+    let chat = prompt.chat.id.0.clone();
+    talk.members_now(&g, None);
+    talk.emitted(emitted(&chat, denied_turn_end()));
+    let token = item_token(&talk, &g);
+    assert!(!has_native(&talk));
+    assert!(talk.attempting(&token, 1));
+    talk.members_now(&g, Some(&both));
+    assert!(!has_native(&talk), "tried again as it was handed");
+    assert!(talk.handed_otherwise(&token));
+    // MDK never took it: it goes with its native message, as the owner's chat is sent.
+    talk.not_kept(&token);
+    assert!(has_native(&talk));
+    assert!(!talk.handed_otherwise(&token));
+}
+
+/// The token of the next send queued for `group`.
+fn item_token(talk: &Conversation, group: &GroupKey) -> String {
+    talk.next_send(group).expect("a send").0.send
+}
+
 /// A turn's end as Claude Code reports a denied approval, with the tool's input in its native
 /// message.
 fn denied_turn_end() -> AgentEvent {

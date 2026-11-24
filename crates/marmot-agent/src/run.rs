@@ -1251,6 +1251,27 @@ impl<D: Driver, M: Side> Core<D, M> {
             let Some((token, what)) = self.conversation.next_send(group) else {
                 break;
             };
+            // A send MDK was handed otherwise than the chat is sent now: the agent's full
+            // activity, or an item with its native message or without (D-136). It goes on as far
+            // as MDK has it, as MDK was handed it, which posts nothing new and which MDK takes for
+            // the same send. Else the full activity is held back now, and anything else goes as
+            // the chat is sent now. Held back as if it had never gone, it would settle its
+            // requests twice; tried again as the chat is sent now, MDK would refuse its token as
+            // bound to another send (ActivityHoldBack.tla).
+            if self.conversation.handed_otherwise(&token.send) {
+                match self.marmot.keeps(group, &token) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        self.conversation.not_kept(&token.send);
+                        self.save()?;
+                        continue;
+                    }
+                    Err(NotNow) => {
+                        self.wait_longer(group);
+                        return Ok(());
+                    }
+                }
+            }
             let made = self.drained.entry(group.clone()).or_default();
             if self.bounded && *made >= DRAIN {
                 // More is queued: come back to it in the loop's next turn, after other work.
@@ -1671,6 +1692,10 @@ mod tests {
             let next = self.answers.lock().unwrap().pop_front();
             next.unwrap_or(Err(FileFailed::Busy))
         }
+
+        fn keeps(&self, _group: &GroupKey, _token: &crate::Token) -> Result<bool, NotNow> {
+            unreachable!("only files are sent")
+        }
     }
 
     /// A stand-in for MDK with one group, whose `messages` were stored while the core was down,
@@ -1761,6 +1786,10 @@ mod tests {
             _turn: Option<&marmot_agent_events::TurnId>,
         ) -> Result<EventKey, FileFailed> {
             unreachable!("no file reaches MDK")
+        }
+
+        fn keeps(&self, _group: &GroupKey, _token: &crate::Token) -> Result<bool, NotNow> {
+            unreachable!("nothing is sent")
         }
     }
 
@@ -2175,6 +2204,11 @@ mod tests {
 
         fn two_people(&self, _group: &GroupKey) -> Result<Option<Vec<PubKey>>, NotNow> {
             Ok(Some(vec![self.agent.clone(), self.owner.clone()]))
+        }
+
+        // Every send is taken, so this MDK keeps each token.
+        fn keeps(&self, _group: &GroupKey, _token: &crate::Token) -> Result<bool, NotNow> {
+            Ok(true)
         }
 
         fn stored(&self, _group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {

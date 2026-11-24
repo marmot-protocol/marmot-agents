@@ -28,6 +28,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// The kind of a chat message.
 const CHAT: u64 = 9;
 
+/// How long, in seconds, the core may take from asking MDK whether it keeps a send to handing the
+/// send to it again ([`Side::keeps`]), saves and a busy MDK included, with room to spare.
+const HANDED_AGAIN_WITHIN: u64 = 60;
+
 /// Opens the account home the settings name: its accounts, and MDK's app and runtime on it.
 /// This is what first opens the store, which MDK upgrades forward only. MDK holds the home for as
 /// long as the app or a runtime made from it lives, so a second core on the same home is refused
@@ -419,7 +423,7 @@ impl Marmot {
             _ => {}
         }
         if let Some(tried) = token.tried_at
-            && self.may_have_let_go(group, tried)?
+            && self.may_have_let_go(group, tried, 0)?
         {
             match self.status(&id, &token.mdk) {
                 // MDK still keeps it: tried again, it is answered from what MDK keeps.
@@ -546,17 +550,22 @@ impl Marmot {
         Ok(Taken::Kept(EventKey(accepted.message_id_hex)))
     }
 
-    /// Whether MDK may have let go of a token first tried at `tried` (seconds since 1970). MDK
-    /// forgets a token with the message it made, and a group's messages disappear once they are
-    /// as old as the group says; a message is never older than its first try. An error when MDK
-    /// cannot say for a moment.
-    fn may_have_let_go(&self, group: &GroupKey, tried: u64) -> Result<bool, SendFailed> {
+    /// Whether MDK may have let go of a token first tried at `tried` (seconds since 1970), or may
+    /// within `within` seconds from now. MDK forgets a token with the message it made, and a
+    /// group's messages disappear once they are as old as the group says; a message is never
+    /// older than its first try. An error when MDK cannot say for a moment.
+    fn may_have_let_go(
+        &self,
+        group: &GroupKey,
+        tried: u64,
+        within: u64,
+    ) -> Result<bool, SendFailed> {
         let record = (self.app)
             .group(&self.label, group.as_str())
             .map_err(|_| SendFailed::Unknown)?;
         let keep = record.map_or(0, |r| r.message_retention.disappearing_message_secs);
         let now = SystemTime::now().duration_since(UNIX_EPOCH);
-        let now = now.map_or(0, |d| d.as_secs());
+        let now = now.map_or(0, |d| d.as_secs()).saturating_add(within);
         Ok(keep > 0 && now.saturating_sub(tried) >= keep)
     }
 
@@ -823,6 +832,11 @@ pub trait Side: Clone + Send + Sync + 'static {
     fn read_file(&self, folders: &Folders, path: &Path) -> Result<Outgoing, Refusal> {
         folders.read(path)
     }
+
+    /// Whether MDK keeps a send under `token`, to post or posted, and will still keep it when the
+    /// send is handed to it again: not one it never took, nor one it took and dropped, nor one it
+    /// may let go of meanwhile. [`NotNow`] when MDK could not say.
+    fn keeps(&self, group: &GroupKey, token: &Token) -> Result<bool, NotNow>;
 }
 
 /// Live events, and when they were subscribed to: what a group the core has no read mark for
@@ -1064,6 +1078,27 @@ impl Side for Marmot {
 
     fn groups(&self) -> Result<Vec<GroupKey>, NotNow> {
         Marmot::groups(self)
+    }
+
+    fn keeps(&self, group: &GroupKey, token: &Token) -> Result<bool, NotNow> {
+        let Some(id) = group_id(group) else {
+            return Ok(false);
+        };
+        // MDK takes a token it has let go of as a new send. Let go of between this answer and the
+        // send, the send would go out again, as it was handed, to the chat as it is now: a token
+        // MDK may let go of before then is not kept.
+        if let Some(tried) = token.tried_at {
+            match self.may_have_let_go(group, tried, HANDED_AGAIN_WITHIN) {
+                Ok(true) => return Ok(false),
+                Ok(false) => {}
+                Err(_) => return Err(NotNow),
+            }
+        }
+        match self.status(&id, &token.mdk) {
+            Ok(None | Some(LocalSendStatus::Rejected)) => Ok(false),
+            Ok(Some(_)) => Ok(true),
+            Err(_) => Err(NotNow),
+        }
     }
 
     fn two_people(&self, group: &GroupKey) -> Result<Option<Vec<PubKey>>, NotNow> {

@@ -1,0 +1,16 @@
+{
+  "case": "hold-kept-posted-later",
+  "model": "ActivityHoldBack",
+  "config": "ActivityHoldBack.fair.cfg",
+  "breaks": "H4",
+  "what": "The limit, the code as it is, accepted for the pilot (D-148): MDK keeps a send of the tool to post later, which the core handed it while the chat was the owner's; someone joins, and MDK posts it to them (H4). The core cannot take back what MDK keeps.",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"MaxFlips": 3, "MaxLost": 2, "MdkKeeps": true, "FairMdk": true, "Bug": "none"},
+  "steps": [
+    {"action": "Emit", "item": "K", "shown": true},
+    {"action": "Send", "tok": ["K", 1], "outcome": "pending"},
+    {"action": "Flip", "members": "more"},
+    {"action": "MdkPosts", "members": "more", "tok": ["K", 1]}
+  ],
+  "end": {"kind": "violation"}
+}

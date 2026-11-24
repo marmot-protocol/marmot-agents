@@ -2770,6 +2770,11 @@ core reads them, is read from MDK's source and not tested against MDK.
 
 Decided 2026-11-23. The project owner decided the rule; the builder decided the points above, on 2026-11-23.
 
+"Not what was queued before they came" is narrowed by
+[D-148](#d-148-for-the-pilot-a-send-of-the-full-activity-that-mdk-keeps-and-posts-after-someone-joins-is-an-accepted-limit):
+a send of the full activity that the core handed to MDK while the chat was the owner's, and that MDK keeps and
+posts later, can reach someone who joined in between.
+
 ## D-137 A secret answer's membership check is not bound to the epoch it is sent under
 
 **Decision.** Secret answers stay as they are
@@ -3122,6 +3127,32 @@ Issue #154.
 
 Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points.
 
+## D-148 For the pilot, a send of the full activity that MDK keeps and posts after someone joins is an accepted limit
+
+**Decision.** A send of the agent's full activity that the core handed to MDK while a chat was the owner's
+two-person chat, and that MDK keeps and posts later, can reach someone who joined the chat in between. This goes
+against [D-136](#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)'s
+"none of what was queued before they came", and is accepted for the pilot. The core cannot take back a send MDK
+holds; it holds back everything it has not yet handed to MDK, and a send MDK was handed goes on only as MDK was
+handed it. The owner will ask MDK for a way out, either a call that withdraws a queued send or MDK refusing to
+post a send queued before a member joined, and the core will use whichever MDK offers. The model
+`ActivityHoldBack` shows the limit as the counterexample
+[`hold-kept-posted-later`](../formal/tla/counterexamples/hold-kept-posted-later.json)
+([its page](../formal/tla/ActivityHoldBack.md#what-the-model-found)).
+
+The limit also covers a narrower path to the same outcome. To learn what became of a send MDK was handed, the
+core asks MDK whether it still holds the token, and if so hands the same send again under it; it treats a token
+MDK may forget within 60 seconds as gone. If the core stalls for longer than that between the two calls, MDK may
+have forgotten the token and take the send as new, posting it to the chat as it is then. That too is accepted for
+the pilot, and the request to MDK covers it. Issue #194 is the core's own fix, to make before the release: never
+hand MDK such a send again, and learn its outcome by asking only.
+
+**Why.** MDK keeps a send under its token from the moment it takes it, and posts it to whoever is in the group
+when its engine sends it. Nothing the core can call at MDK's pinned revision withdraws it. The moment is short,
+and so is the one between the core's read of a chat's members and MDK taking a send, which is the same limit.
+
+Decided 2026-11-24 by the project owner.
+
 ## D-149 Stop in a subagent's thread stops that subagent alone
 
 **Decision.** This builds the Stop in a thread of
@@ -3157,6 +3188,7 @@ before it passes the Stop on, and a driver that cannot stop one subagent need do
 
 Decided 2026-11-24 by the builder, under the project owner's instruction to decide minor points. It is visible to
 apps and connectors, and provisional until the owner accepts it.
+
 
 ## D-150 The core matches a typed command as the harness reads it, failing towards asking for the right to approve
 

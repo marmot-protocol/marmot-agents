@@ -242,6 +242,19 @@ impl World {
         }
     }
 
+    /// A third account on the test relay, with a key package to be invited with, and its id.
+    pub async fn someone_else(&self) -> String {
+        let endpoint = cgka_traits::TransportEndpoint(self.relay.clone());
+        let setup = AccountSetupRequest {
+            default_relays: vec![endpoint.clone()],
+            bootstrap_relays: vec![endpoint],
+            publish_initial_key_package: true,
+            ..AccountSetupRequest::default()
+        };
+        let made = self.runtime.create_identity(setup).await.unwrap();
+        made.account.account_id_hex
+    }
+
     /// Starts the core with `driver`, as a restart does: from the state it kept.
     pub fn start(&self, driver: impl Driver + 'static) -> Running {
         self.start_with(driver, Store::new(self.state.path()))

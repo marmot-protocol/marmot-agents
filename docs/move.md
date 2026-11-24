@@ -80,7 +80,9 @@ There is no release of `marmot-agent` yet: build it from a checkout first, as th
    before it ends, and says so; run it again once what failed is fixed. It notes the copies in
    `plugin-change` in the agent's folder until the move is done, so if it is killed outright, run it
    again: it finishes the move from the copies the killed run kept, and takes none of its own, and if
-   that run fails, it puts back what the gateway had before the killed run.
+   that run fails, it puts back what the gateway had before the killed run. Another harness's installer,
+   run before then, cannot finish it: it puts the move back from those copies, with the core and support
+   files the killed run found, as a run that fails does, and says so; run this one again after.
 
    Killed outright, the gateway has the old plugin or the new one, set up to start, but for these moments,
    in which it has no plugin that works until the installer runs again:

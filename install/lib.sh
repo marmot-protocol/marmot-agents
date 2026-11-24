@@ -335,6 +335,11 @@ backup_file() {
 # connector's services are stopped by then: change_end then removes the record. --uninstall removes it
 # too, so a move given up is not put back over the gateway later.
 #
+# A change is made only during an upgrade (upgrade_begin), and goes with it: the upgrade's record lists
+# the change's record before the first change (change_note), so that whatever puts the upgrade back puts
+# the plugin back with the core, another harness's install too (upgrade_put_back), and the rename that
+# ends the upgrade ends the change (upgrade_end).
+#
 # Replacing the old connector's plugin, the copies are also listed in backups/before-move, which a
 # person going back to that connector puts back (docs/move.md). It lists what the gateway had before
 # the latest run that found the old plugin and finished, or noted, its change.
@@ -357,6 +362,7 @@ change_begin() {
         say "would note in $MA_CHANGE what to put back should this fail"
         return 0
     fi
+    change_note
     if [ -f "$MA_CHANGE" ]; then
         say "a run before this one stopped part way through changing your $HARNESS_TITLE's plugin; this one finishes it, and puts back what that run found if it fails"
         MA_CHANGING=1
@@ -375,20 +381,33 @@ change_begin() {
     MA_CHANGING=1
 }
 
-# Ends a change; one stopped before its record is gone is put back.
+# Lists the change's record in the upgrade's, unless it is there already, before the record is written:
+# killed between the two, nothing has changed yet, and a record listed and not there puts nothing back.
+# Written beside the list and renamed over it.
+change_note() {
+    local list="$MA_UPGRADE/plugin-changes"
+    [ -d "$MA_UPGRADE" ] || return 0
+    if [ -f "$list" ] && grep -qxF "$MA_CHANGE" "$list"; then return 0; fi
+    { if [ -f "$list" ]; then cat "$list"; fi && printf '%s\n' "$MA_CHANGE"; } >"$list.new"
+    mv -f "$list.new" "$list"
+}
+
+# Ends a change; one stopped before its record is gone is put back. Its record went with the upgrade's
+# (upgrade_end), which every install makes; the copies of our own plugin it named go now.
 change_end() {
     local own
     if [ "$DRY_RUN" -eq 0 ]; then
-        own=$(own_copies)
+        if [ -f "$MA_CHANGE" ]; then own=$(own_copies); else own=${MA_OWN_COPIES:-}; fi
         act rm -f "$MA_CHANGE"
         drop_copies "$own"
     fi
     MA_CHANGING=0
 }
 
-# The copies of our own plugin the record names, one a line.
+# The copies of our own plugin the record names (that of this run's change, or the one given), one a
+# line.
 own_copies() {
-    awk -F '\t' '$1 == "own" && $3 != "" { print $3 }' "$MA_CHANGE"
+    awk -F '\t' '$1 == "own" && $3 != "" { print $3 }' "${1:-$MA_CHANGE}"
 }
 
 # Removes the copies named, one a line, once the record that names them is gone.
@@ -401,7 +420,8 @@ $1
 EOF
 }
 
-# Puts back what the record names, in its order; fails if any of it could not be put back.
+# Puts back what the record names (that of this run's change, or the one given), in its order; fails if
+# any of it could not be put back.
 put_back_change() {
     local kind path copy ok=0
     while IFS='	' read -r kind path copy; do
@@ -409,7 +429,7 @@ put_back_change() {
             file) put_back_file "$copy" "$path" || ok=1 ;;
             folder | own) replace_dir "$copy" "$path" || ok=1 ;;
         esac
-    done <"$MA_CHANGE"
+    done <"${1:-$MA_CHANGE}"
     return "$ok"
 }
 
@@ -417,6 +437,8 @@ put_back_change() {
 # saying what happened and what to do.
 change_put_back() {
     local status=$1 kind path copy what="your $HARNESS_TITLE's settings" took="" copies="" how="" why again own
+    # Gone already: it ended with the upgrade (upgrade_end).
+    [ -f "$MA_CHANGE" ] || return 0
     while IFS='	' read -r kind path copy; do
         if [ "$kind" = folder ] && [ -n "$copy" ]; then what="$what and its old plugin"; fi
         if [ "$kind" = folder ] && [ -z "$copy" ]; then took=", and took our plugin out of it"; fi
@@ -494,6 +516,9 @@ finish() {
     local status=$1
     set +e
     trap '' HUP INT TERM
+    if [ "$status" -ne 0 ] && [ "${MA_UPGRADING:-0}" -eq 1 ]; then
+        change_restore || warn "the plugin change in $MA_UPGRADE could not be put back in its place"
+    fi
     if [ "$status" -ne 0 ] && [ "${MA_CHANGING:-0}" -eq 1 ]; then
         MA_CHANGING=0
         change_put_back "$status"
@@ -545,27 +570,58 @@ lock_fd() {
 #
 # Pi's and Goose's scripts in $MA_LIB run the image tagged NAME. An install builds the new image as
 # NAME:staging and tags it NAME only once the upgrade is done (main), so one that fails leaves NAME on the
-# image the scripts it puts back were made for, and takes NAME:staging away.
+# image the scripts it puts back were made for, and takes NAME:staging away. The image NAME named before
+# is written into the upgrade's record before the tag moves, so that whatever puts the upgrade back puts
+# the tag back with the scripts: this run's exit trap, the next run after a kill, or another harness's
+# install (upgrade_put_back). The tag goes with the record, never apart from it: a run stopped once the
+# upgrade is done leaves the new image with the new scripts.
 
-# Tags NAME:staging as NAME, noting the image NAME was, for image_put_back.
+# Prints the id of the image the tag NAME (NAME:latest) names, or nothing once docker has said there is
+# none; fails when docker cannot say, as when it cannot be reached for a moment. `docker image inspect`
+# fails both ways, so an image it does not find is taken as none only once `docker image ls` lists none.
+image_id() {
+    local image=$1 id listed
+    if id=$(docker image inspect -f '{{.Id}}' "$image" 2>/dev/null 9>&-); then
+        printf '%s\n' "$id"
+        return 0
+    fi
+    listed=$(docker image ls --quiet "$image:latest" 2>/dev/null 9>&-) || return 1
+    [ -z "$listed" ]
+}
+
+# Tags NAME:staging as NAME, the image NAME was noted first in the record, unless a run before this one
+# that was killed noted it: that one is the image the scripts in the record were made for. Noted as none
+# only once docker says there is none: noted so by mistake, putting the upgrade back would take the tag
+# off the image the old scripts run. When docker cannot say, the install stops, and puts back the
+# upgrade, under which the tag has not moved.
 image_commit() {
-    local image=$1
-    if [ "$DRY_RUN" -eq 0 ]; then
-        IMAGE_BEFORE=$(docker image inspect -f '{{.Id}}' "$image" 2>/dev/null 9>&-) || IMAGE_BEFORE=""
+    local image=$1 before=""
+    if [ "$DRY_RUN" -eq 0 ] && [ ! -f "$MA_UPGRADE/image" ]; then
+        before=$(image_id "$image") || die "docker could not say which image $image names; run this again once docker answers"
+        printf '%s\t%s\n' "$image" "$before" >"$MA_UPGRADE/image.new"
+        mv -f "$MA_UPGRADE/image.new" "$MA_UPGRADE/image"
     fi
     act docker tag "$image:staging" "$image"
-    IMAGE_TAGGED=1
     act docker rmi "$image:staging" >/dev/null || warn "docker could not take the tag $image:staging away"
 }
 
-# After a run that did not end: NAME back on the image it was, should image_commit have moved it, and
-# NAME:staging taken away.
+# After a run that did not end: NAME:staging taken away. NAME itself is put back with the upgrade.
 image_put_back() {
-    local image=$1
-    if [ "${IMAGE_TAGGED:-0}" -eq 1 ] && [ -n "${IMAGE_BEFORE:-}" ]; then
-        docker tag "$IMAGE_BEFORE" "$image" 9>&- || warn "docker could not tag $IMAGE_BEFORE as $image again: run this again"
-    elif [ "${IMAGE_TAGGED:-0}" -eq 1 ]; then
-        docker rmi "$image" >/dev/null 9>&- || true
+    docker rmi "$1:staging" >/dev/null 2>&1 9>&- || true
+}
+
+# Puts the tag an upgrade's record names back on the image it named, or takes it away when it named
+# none, and takes the staging tag away; fails if docker cannot, or cannot say whether the tag is there,
+# so that the record is kept for a run after this one.
+image_put_back_from() {
+    local record=$1 image before now
+    [ -f "$record" ] || return 0
+    IFS='	' read -r image before <"$record" || return 1
+    if [ -n "$before" ]; then
+        docker tag "$before" "$image" 9>&- || return 1
+    else
+        now=$(image_id "$image") || return 1
+        if [ -n "$now" ]; then docker rmi "$image" >/dev/null 9>&- || return 1; fi
     fi
     docker rmi "$image:staging" >/dev/null 2>&1 9>&- || true
 }
@@ -708,6 +764,7 @@ upgrade_begin() {
     local making kind part others=""
     [ "${MA_UPGRADING:-0}" -eq 0 ] || return 0
     if [ -d "$MA_UPGRADE" ]; then
+        change_restore || die "a plugin change left in $MA_UPGRADE could not be put back in its place"
         while IFS='	' read -r kind part _; do
             [ "$kind" = part ] || continue
             lib_parts | grep -qxF "$part" || others="$others $part"
@@ -777,11 +834,29 @@ empty_above() {
     while [ "$folder" != "$MA_LIB" ] && rmdir "$folder" 2>/dev/null; do folder=$(dirname "$folder"); done
 }
 
-# Ends an upgrade: what it replaced is no longer needed.
+# Ends an upgrade: what it replaced is no longer needed. A change to the gateway's plugin this run
+# makes ends with it, in the same step: its record is moved into the upgrade's first, with where it goes
+# back to, so that the rename that ends the one ends the other. Ended apart, a run stopped between the
+# two would put back the old plugin over the new core, or the old core under the new plugin. The copies
+# of our own plugin it names are removed after (change_end).
 upgrade_end() {
+    if [ "$DRY_RUN" -eq 0 ] && [ "${MA_CHANGING:-0}" -eq 1 ] && [ -f "$MA_CHANGE" ]; then
+        MA_OWN_COPIES=$(own_copies)
+        printf '%s\n' "$MA_CHANGE" | put "$MA_UPGRADE/plugin-change.path" 600
+        mv -f "$MA_CHANGE" "$MA_UPGRADE/plugin-change"
+    fi
     [ "$DRY_RUN" -eq 1 ] || upgrade_retire
     MA_UPGRADING=0
     [ "$DRY_RUN" -eq 1 ] || rm -rf "$MA_DATA/.upgrade.done.$$"
+}
+
+# A change to a gateway's plugin moved into an upgrade's record as the upgrade ended, by a run stopped
+# before the record was gone, goes back to its place: the upgrade and the change are both under way
+# again, as they were, for whatever finishes or puts them back.
+change_restore() {
+    local to
+    [ -f "$MA_UPGRADE/plugin-change" ] || return 0
+    to=$(cat "$MA_UPGRADE/plugin-change.path") && [ -n "$to" ] && mv -f "$MA_UPGRADE/plugin-change" "$to"
 }
 
 # Takes the record of an upgrade out of its place in one step, under a name a later run removes
@@ -790,13 +865,43 @@ upgrade_retire() {
     rm -rf "$MA_DATA/.upgrade.done.$$" && mv "$MA_UPGRADE" "$MA_DATA/.upgrade.done.$$"
 }
 
-# After an upgrade that did not end: the core and the parts of $MA_LIB there before it put back, a part
-# that was not there removed, and what happened said. Given "other", the upgrade is one a run before
-# this one left, which this one puts back before it starts, and the status says whether it could.
+# Puts back each plugin change the upgrade's record lists whose record is still there, the last first, as
+# that one's copies are of what the one before it left, and removes its record; prints the agents'
+# folders of those it put back, one a line, and fails if any could not be. One that could not stops the
+# rest, so that no change before it puts back its older copies while it is still to go back. One this run
+# was making was put back already, by change_put_back, unless that failed. The change moved into the
+# upgrade's record as it ended is back in its place by now (change_restore), unless that failed.
+upgrade_put_back_changes() {
+    local list="$MA_UPGRADE/plugin-changes" record own ok=0
+    [ -f "$list" ] || return 0
+    while IFS= read -r record; do
+        if [ -z "$record" ] || [ ! -f "$record" ]; then continue; fi
+        own=$(own_copies "$record")
+        if put_back_change "$record" >&2 && rm -f "$record"; then
+            drop_copies "$own"
+            dirname "$record"
+        else
+            ok=1
+            break
+        fi
+    done < <(awk '{ line[NR] = $0 } END { for (i = NR; i > 0; i--) print line[i] }' "$list")
+    return "$ok"
+}
+
+# After an upgrade that did not end: the plugin changes it lists, the core and the parts of $MA_LIB
+# there before it put back, a part that was not there removed, and what happened said. Given "other",
+# the upgrade is one a run before this one left, which this one puts back before it starts, and the
+# status says whether it could.
 upgrade_put_back() {
-    local why=${1:-} kind part found ok=0
+    local why=${1:-} kind part found ok=0 plugins
     # Gone already: upgrade_end took it away, and the upgrade is done.
     [ -f "$MA_UPGRADE/list" ] || return 0
+    plugins=$(upgrade_put_back_changes) || ok=1
+    # A change change_restore could not put back in its place is in the record still, which is kept.
+    [ ! -f "$MA_UPGRADE/plugin-change" ] || ok=1
+    if [ -n "$plugins" ]; then
+        say "put back the gateway plugin that upgrade changed, for the agent in $(printf '%s' "$plugins" | tr '\n' ' ')"
+    fi
     while IFS='	' read -r kind part found; do
         case $kind in
             core)
@@ -817,6 +922,7 @@ upgrade_put_back() {
                 ;;
         esac
     done <"$MA_UPGRADE/list"
+    image_put_back_from "$MA_UPGRADE/image" || ok=1
     if [ "$why" = other ]; then
         if [ "$ok" -eq 0 ] && upgrade_retire; then
             rm -rf "$MA_DATA/.upgrade.done.$$"
@@ -1238,7 +1344,10 @@ uninstall() {
     fi
     if declare -F harness_uninstall >/dev/null; then harness_uninstall; fi
     # A change a run killed outright left unfinished is given up, so that no later run puts back what
-    # that run found over what the gateway has by then.
+    # that run found over what the gateway has by then: also one it had moved into the upgrade's record.
+    if [ "$DRY_RUN" -eq 0 ] && [ "$(cat "$MA_UPGRADE/plugin-change.path" 2>/dev/null)" = "$MA_AGENT_DIR/plugin-change" ]; then
+        change_restore || warn "the plugin change in $MA_UPGRADE could not be put back in its place"
+    fi
     if [ -f "$MA_AGENT_DIR/plugin-change" ]; then
         say "giving up the change to your $HARNESS_TITLE's plugin that a run before this one left unfinished, noted in $MA_AGENT_DIR/plugin-change"
         act rm -f "$MA_AGENT_DIR/plugin-change"
@@ -1783,7 +1892,7 @@ main() {
     set_paths
     check_harness
     # MA_STAGED says whether this run made the folder in MA_STAGE: a dry run names the installed one.
-    MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0 MA_UPGRADING=0 MA_PREPARED=0 IMAGE_TAGGED=0 IMAGE_BEFORE=""
+    MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0 MA_UPGRADING=0 MA_PREPARED=0
     trap 'finish $?' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT

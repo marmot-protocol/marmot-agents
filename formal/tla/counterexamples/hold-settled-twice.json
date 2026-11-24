@@ -1,0 +1,19 @@
+{
+  "case": "hold-settled-twice",
+  "model": "ActivityHoldBack",
+  "config": "ActivityHoldBack.posted.cfg",
+  "breaks": "H1",
+  "what": "HoldAttempted, conversation.rs hold_back before 2026-11-24: the tool's closing version, which settles r1, is posted by MDK and its answer lost; someone joins the owner's chat before the core tries it again; the core holds it back and settles r1 by the turn's next version, so the chat sees r1 settled twice (H1).",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"MaxFlips": 3, "MaxLost": 2, "MdkKeeps": false, "FairMdk": true, "Bug": "HoldAttempted"},
+  "steps": [
+    {"action": "Emit", "item": "K", "shown": true},
+    {"action": "Emit", "item": "K", "shown": true},
+    {"action": "Send", "tok": ["K", 1], "outcome": "sent"},
+    {"action": "Send", "tok": ["K", 2], "outcome": "posted-lost"},
+    {"action": "Flip", "members": "more"},
+    {"action": "ReadMembers", "owners": false, "held": 1},
+    {"action": "Send", "tok": ["T", 2], "outcome": "sent"}
+  ],
+  "end": {"kind": "violation"}
+}

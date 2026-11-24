@@ -153,6 +153,11 @@ impl Side for Mdk {
         Ok((group.as_str() == DIRECT).then(|| vec![self.agent.clone(), PubKey::from(OWNER)]))
     }
 
+    // Every send this MDK was handed waits in it, so it still holds each token.
+    fn keeps(&self, _group: &GroupKey, _token: &Token) -> Result<bool, NotNow> {
+        Ok(true)
+    }
+
     fn stored(&self, group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {
         let stored = self.stored.lock().unwrap();
         let messages: Vec<Message> = (stored.iter())

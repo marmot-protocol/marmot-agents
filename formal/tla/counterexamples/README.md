@@ -121,3 +121,36 @@ A step lists the lines it wrote (`writes`) and the requests it settled (`settles
 
 Driving the code with them is step 5, as for `CoreLifecycle`'s: the conformance suite's fake harnesses would
 play the `Harness…` steps, and the driver take the others.
+
+## InstallUpgrade
+
+[`InstallUpgrade`](../InstallUpgrade.md)'s files start `install-`. Each step names its action and the slot of the
+run that took it (`slot`), with what the action says of itself: `Start(slot, harness)`, `Lock`, `Begin` (`how`:
+`records`, `takes over`, `puts back another's` or `already`), `Prepare`, `Publish`, `Core`, `Keep(part)`,
+`Put(part)`, `Note` (the plugin change listed in the upgrade's record), `Connect` (`finishes`: a change a killed
+run left), `Replace`, `StartServices`, `Commit`, `Tag`,
+`End` (`change`: the plugin change moved into the record), `Retire`, `Done`; on a stop, `Fail(at)`, then
+`PutBackPlugin` or `Trap`, `DropChange`, `Finish`, `PutBackChange` or `PutBackNoChange` (then `DropChange`),
+`PutBackCore`, `PutBackRemove(part)`, `PutBackMove(part)`,
+`PutBackLeave(part)`, `PutBackParts`, `PutBackImage`, `PutBackRetire`, `Exit`; `Restore`; and `Kill(at)`.
+
+| File | Breaks | What it shows |
+| --- | --- | --- |
+| [`install-image-put-back-apart`](install-image-put-back-apart.json) | U1 | Found in `install/lib.sh`, and fixed on 2026-11-24: Pi's install is stopped once the upgrade is done, and its exit trap puts the image tag back on the old image under the new scripts. Now the defect `ImageOutsideRecord` |
+| [`install-plugin-change-ends-apart`](install-plugin-change-ends-apart.json) | U1 | Found in `install/lib.sh`, and fixed on 2026-11-24: Hermes's install is stopped between the end of the upgrade and the end of the plugin change, and puts the old plugin back over the new core. Now the defect `ChangeEndsApart` |
+| [`install-plugin-put-back-apart`](install-plugin-put-back-apart.json) | U1 | Found in review, and fixed on 2026-11-24: Hermes's install is killed once our new plugin is in; Codex's install puts back the core and the support files, and leaves the plugin. Now the defect `ChangeOutsideRecord` |
+
+## ActivityHoldBack
+
+[`ActivityHoldBack`](../ActivityHoldBack.md)'s files start `hold-`. The steps: `Emit(item, shown)` (`shown`:
+queued, not held back), `Flip(members)`, `ReadMembers(owners)`, `Send(tok, outcome)` with the outcome `sent`,
+`pending`, `posted-lost`, `kept-lost`, `busy`, `held back` or `refused` (MDK refused the token as bound to
+another submission), and `MdkPosts(tok, members)`. A token is an item
+and a version.
+
+| File | Breaks | What it shows |
+| --- | --- | --- |
+| [`hold-settled-twice`](hold-settled-twice.json) | H1 | Found in the core, and fixed on 2026-11-24: MDK posts the tool's closing version, which settles `r1`, and the answer is lost; someone joins; the core holds the version back and settles `r1` by the turn too. Now the defect `HoldAttempted` |
+| [`hold-first-event-twice`](hold-first-event-twice.json) | H2 | The same defect: the tool's first version is posted and its answer lost, held back, and once the chat is the owner's again the tool's next version goes as a first event too |
+| [`hold-retry-changed`](hold-retry-changed.json) | H1 | Found in review, and fixed on 2026-11-24: MDK posts the tool's closing version, handed with its native message, and the answer is lost; someone joins; the core tries it again without the native message, MDK refuses the token, and the core's notice settles `r1` again. Now the defect `RetryChanged` |
+| [`hold-kept-posted-later`](hold-kept-posted-later.json) | H4 | The limit, accepted for the pilot ([D-148](../../../docs/decisions.md#d-148-for-the-pilot-a-send-of-the-full-activity-that-mdk-keeps-and-posts-after-someone-joins-is-an-accepted-limit)): MDK keeps a send of the tool handed while the chat was the owner's, someone joins, and MDK posts it to them |
