@@ -77,3 +77,33 @@ fn a_command_counts_as_any_harness_reads_it() {
         assert_eq!(needed_for(text, &commands), Right::Prompt, "{text:?}");
     }
 }
+
+// A command whose name ends in what cannot continue a name, such as a shorthand of one mark,
+// counts whatever follows it, as a harness runs the rest of the line after it; a name that ends
+// in a letter still needs its end.
+#[test]
+fn a_command_that_ends_in_a_mark_counts_whatever_follows() {
+    let commands = [
+        ApprovalCommand {
+            command: "!".into(),
+            counts: Position::Start,
+        },
+        ApprovalCommand {
+            command: "/bash".into(),
+            counts: Position::Start,
+        },
+    ];
+    for text in [
+        "!",
+        "!ls",
+        " !ls -la",
+        "\u{3000}!config",
+        "! ls",
+        "hi\n!pwd",
+    ] {
+        assert_eq!(needed_for(text, &commands), Right::Approve, "{text:?}");
+    }
+    for text in ["/bashful", "hello!", "say !ls"] {
+        assert_eq!(needed_for(text, &commands), Right::Prompt, "{text:?}");
+    }
+}

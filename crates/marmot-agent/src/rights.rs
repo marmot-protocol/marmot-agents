@@ -68,7 +68,8 @@ impl Rights {
 ///   harness's line breaks, since a harness may drop lines before it, as Hermes drops lines naming
 ///   attachments.
 /// - A command counts with a bot's name or punctuation after it (`/yolo@bot`, `/yolo.`), and ends
-///   at anything that cannot continue a command's name.
+///   at anything that cannot continue a command's name; one whose name ends in such a mark
+///   counts whatever follows it.
 pub fn needed_for(text: &str, commands: &[ApprovalCommand]) -> Right {
     if commands.is_empty() {
         return Right::Prompt;
@@ -125,14 +126,17 @@ fn is_line_break(c: char) -> bool {
 
 /// Whether `command` stands at `at` in `text` as a command of its own: what follows cannot
 /// continue its name (a letter, a digit, `_` or `-`), so `/approve`, `/approve.` and
-/// `/approve@bot` count and `/approved` does not. Before it may be anything, since a command can
-/// follow punctuation.
+/// `/approve@bot` count and `/approved` does not. A name that ends in what cannot continue a name,
+/// such as a shorthand of one mark, counts whatever follows it, as a harness runs the rest of the
+/// line after it. Before it may be anything, since a command can follow punctuation.
 fn is_word_at(text: &str, at: usize, command: &str) -> bool {
+    let continues = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
     text[at..].starts_with(command)
-        && text[at + command.len()..]
-            .chars()
-            .next()
-            .is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == '-'))
+        && (command.chars().next_back().is_some_and(|c| !continues(c))
+            || text[at + command.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| !continues(c)))
 }
 
 /// Bounded proofs (`docs/design/verification.md`, "5. Bounded proofs with Kani"), run with
