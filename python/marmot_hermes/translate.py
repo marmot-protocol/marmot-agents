@@ -38,6 +38,9 @@ HOOKS_NOT_SENT = {"pre_command", "on_session_end", "on_session_finalize", "on_se
 # the options the question offers.
 CONFIRM = ("/approve", "/always", "/cancel")
 CONFIRM_LABELS = ("Approve once", "Always approve", "Cancel")
+# The same answers, as the plugin hands them to Hermes's own call for them (`tools.slash_confirm.resolve`),
+# which answers only the confirmation it names (D-146).
+CONFIRM_CHOICES = ("once", "always", "cancel")
 # What a person types to answer an approval Hermes sent as text, in the order of its choices.
 TEXT_CHOICES = [("Allow once", "allow", "/approve"), ("Allow for this session", "allow", "/approve session"),
                 ("Always allow", "allow", "/approve always"), ("Deny", "deny", "/deny")]
@@ -312,9 +315,12 @@ class Translator:
 
     def press(self, m):
         """An answer the plugin handed Hermes directly, which Hermes took: a press on an approval
-        card, by its request id, or the answer to a question, by its id."""
+        card, by its request id, the answer to a question, by its id, or to a request to confirm a
+        command, by its id, with what Hermes said to it."""
         if "pick_model" in m:
             return
+        if m.get("confirm_id") is not None:
+            return self.confirmed(m)
         if m.get("clarify_id") is not None:
             item = f"question:{m['clarify_id']}"
             if item in self.open:
@@ -492,8 +498,29 @@ class Translator:
 
     # -- text
 
-    def command_reply(self, item, content, typed, key):
-        """Hermes's reply to a command typed in the session of `key`."""
+    def confirmed(self, m):
+        """Hermes took the answer to its request to confirm a command (D-146). Its reply to the answer,
+        which it hands the plugin and not the chat, is the command's output, in the session of the
+        command, outside any turn: the answer started none."""
+        item = f"confirm:{m['confirm_id']}"
+        prev = self.open.get(item)
+        if prev is None or m.get("choice") not in CONFIRM_CHOICES:
+            return
+        q = prev["body"]["questions"][0]
+        chosen = q["options"][CONFIRM_CHOICES.index(m["choice"])]
+        self.emit(item, "question", "done", prev["title"], f"Answered: {chosen['label']}",
+                  {**prev["body"], "answer": [{"question": q["id"], "options": [chosen["id"]]}]},
+                  owner=(prev.get("session"), prev.get("turn")))
+        if self.confirm == item:
+            self.confirm = None
+        said = str(m.get("said") or "")
+        if said and prev.get("session"):
+            key = str(prev["session"]).split("#")[0]
+            self.command_reply(f"sent:{self.ids}{self.seq + 1}", said, None, key, alone=True)
+
+    def command_reply(self, item, content, typed, key, alone=False):
+        """Hermes's reply to a command typed in the session of `key`: in the latest turn, or `alone`, in
+        that session outside any turn."""
         title = "Command output"
         if content.startswith("⛔"):
             title = "Not allowed"
@@ -515,7 +542,8 @@ class Translator:
                 self.put(key, f"{what}_write_approval", f"Ask before writing {what}", content.split("'")[1],
                          ["on", "off"], approve=True)
             self.session_changed(key)
-        self.last_send = self.emit(item, "notice", "done", title, content, {"kind": "command_output"})
+        owner = (self.name(key), None) if alone else None
+        self.last_send = self.emit(item, "notice", "done", title, content, {"kind": "command_output"}, owner=owner)
 
     def send(self, p):
         content = str(p.get("content") or "")

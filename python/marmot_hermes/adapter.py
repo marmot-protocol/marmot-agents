@@ -426,6 +426,21 @@ class MarmotAdapter(BasePlatformAdapter):
 
         return bool(resolve_gateway_clarify(clarify_id, text))
 
+    async def resolve_confirm(self, session_key: str, confirm_id: str, choice: str) -> str | None:
+        """Answers Hermes's request to confirm a command, the one named by `confirm_id` and no other, as
+        Hermes's own button platforms do (`tools.slash_confirm`, D-146). None when it no longer waits:
+        answered, replaced by another, or expired. Otherwise what Hermes says to the answer, which it hands
+        back instead of sending; empty when it says nothing."""
+        from tools import slash_confirm
+
+        # As Hermes does with the next message: a confirmation older than it waits is dropped, not run.
+        slash_confirm.clear_if_stale(session_key)
+        waiting = slash_confirm.get_pending(session_key)
+        if not waiting or str(waiting.get("confirm_id")) != confirm_id:
+            return None
+        said = await slash_confirm.resolve(session_key, confirm_id, choice)
+        return "" if said is None else str(said)
+
     def phrase(self, key: str, **fields) -> str:
         """What Hermes says under `key` of its catalog, in the language it is set to, as its commands
         make their replies. It answers a command only in text, and this is how the plugin knows which."""

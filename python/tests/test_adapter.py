@@ -218,6 +218,84 @@ class Phrases(unittest.TestCase):
             self.assertEqual(adapter.phrase("gateway.model.switched", model="m"), "gateway.model.switched|m")
 
 
+def stand_in_for_slash_confirm():
+    """Hermes's `tools.slash_confirm`, as the pinned commit has it: one confirmation waits in a session,
+    a new one replaces it, and `resolve` runs the one it names and no other, once, while it is fresh."""
+    module = types.ModuleType("tools.slash_confirm")
+    module.waiting, module.now = {}, 0.0
+
+    def register(session_key, confirm_id, handler):
+        module.waiting[session_key] = {"confirm_id": confirm_id, "handler": handler, "created_at": module.now}
+
+    def get_pending(session_key):
+        entry = module.waiting.get(session_key)
+        return dict(entry) if entry else None
+
+    def clear_if_stale(session_key, timeout=300):
+        entry = module.waiting.get(session_key)
+        stale = bool(entry and module.now - entry["created_at"] > timeout)
+        if stale:
+            module.waiting.pop(session_key)
+        return stale
+
+    async def resolve(session_key, confirm_id, choice, timeout=300):
+        entry = module.waiting.get(session_key)
+        if not entry or entry["confirm_id"] != confirm_id:
+            return None
+        module.waiting.pop(session_key)
+        if module.now - entry["created_at"] > timeout:
+            return None
+        result = await entry["handler"](choice)
+        return result if isinstance(result, str) else None
+
+    module.register, module.get_pending, module.clear_if_stale, module.resolve = (
+        register, get_pending, clear_if_stale, resolve)
+    return module
+
+
+class Confirmations(unittest.IsolatedAsyncioTestCase):
+    """The adapter answers Hermes's request to confirm a command by its id, through Hermes's own call
+    (D-146): never another confirmation, and never one that no longer waits."""
+
+    async def asyncSetUp(self):
+        self.module = stand_in_for_slash_confirm()
+        patch = mock.patch.dict(sys.modules, {"tools": types.ModuleType("tools"), "tools.slash_confirm": self.module})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        with mock.patch.dict("os.environ", {"HERMES_HOME": self.folder.name}):
+            self.adapter = MarmotAdapter({})
+        self.ran = []
+
+    def asks(self, confirm_id, says="✨ Session reset! Starting fresh."):
+        async def handler(choice):
+            self.ran.append((confirm_id, choice))
+            return says
+        self.module.register("agent:main:marmot:dm:c-1", confirm_id, handler)
+
+    async def test_only_the_confirmation_named_is_answered(self):
+        self.asks("k-1")
+        self.asks("k-2")
+        self.assertIsNone(await self.adapter.resolve_confirm("agent:main:marmot:dm:c-1", "k-1", "once"))
+        self.assertEqual(self.ran, [], "a confirmation another replaced runs nothing, nor the other")
+        said = await self.adapter.resolve_confirm("agent:main:marmot:dm:c-1", "k-2", "cancel")
+        self.assertEqual((said, self.ran), ("✨ Session reset! Starting fresh.", [("k-2", "cancel")]))
+        self.assertIsNone(await self.adapter.resolve_confirm("agent:main:marmot:dm:c-1", "k-2", "once"))
+        self.assertEqual(self.ran, [("k-2", "cancel")], "once only")
+
+    async def test_one_that_waited_too_long_is_not_run(self):
+        self.asks("k-1")
+        self.module.now = 301
+        self.assertIsNone(await self.adapter.resolve_confirm("agent:main:marmot:dm:c-1", "k-1", "once"))
+        self.assertEqual((self.ran, self.module.waiting), ([], {}))
+
+    async def test_a_confirmation_hermes_says_nothing_to_is_still_answered(self):
+        self.asks("k-1", says=None)
+        self.assertEqual(await self.adapter.resolve_confirm("agent:main:marmot:dm:c-1", "k-1", "once"), "")
+        self.assertEqual(self.ran, [("k-1", "once")])
+
+
 class FakeCore:
     """The core's side of the socket, on a real Unix socket: it takes the hello, and answers each
     `send_file` with `answer(path)`, None for sent or a (reason, detail) refusal."""

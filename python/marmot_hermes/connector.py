@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 
 from .core import Refusal
-from .translate import CONFIRM, OPEN, VERSION, Translator
+from .translate import CONFIRM, CONFIRM_CHOICES, OPEN, VERSION, Translator
 
 # Hermes can report a turn complete and start it again a moment later, for the first message of a
 # session (`docs/reference/hermes-messages.md`). The end of a turn that showed nothing is held this
@@ -125,6 +125,7 @@ class Connector:
         self.prompted: set[str] = set()  # the core's prompts not yet tied to a turn
         self.session_sender: dict[str, dict] = {}  # session -> the sender whose session it is
         self.cards: dict[str, tuple[str, str]] = {}  # approval item -> (Hermes's session key, request id)
+        self.confirms: dict[str, str] = {}  # request to confirm a command -> Hermes's session key
         # A command typed for a request -> (its chat, the request, whether Hermes's reply settles it)
         self.awaiting: dict[str, tuple[str, str, object]] = {}
         self.tasks: set[asyncio.Task] = set()  # what the plugin asks Hermes in the background
@@ -202,6 +203,8 @@ class Connector:
             if m.get("method") == "_send_exec_approval_prompt":
                 prompt = obj(p.get("prompt"))
                 self.cards[f"approval:{prompt.get('request_id')}"] = (prompt.get("session_key"), prompt.get("request_id"))
+            if m.get("method") == "send_slash_confirm":
+                self.confirms[f"confirm:{p.get('confirm_id')}"] = text_of(p.get("session_key"))
             if m.get("method") == "send":
                 awaiting = self.awaiting.pop(text_of(p.get("reply_to")), None)
                 content = text_of(p.get("content"))
@@ -215,6 +218,11 @@ class Connector:
                         settled_by_reply = awaiting[1] or None
                 if content.startswith(LOST_TURN):
                     self.discard(chat, text_of(p.get("reply_to")))
+        if line.get("via") == "press" and m.get("confirm_id") is not None and chat.confirming is not None:
+            # Hermes's reply to the answer, which it handed the plugin, is the outcome of the command it confirmed.
+            awaiting, chat.confirming = chat.confirming, None
+            if awaiting[2](text_of(m.get("said"))):
+                settled_by_reply = awaiting[1] or None
         if line.get("via") == "inbound" and chat.confirming is not None:
             word = (text_of(m.get("text")).split() or [""])[0]
             if word in CONFIRM and chat.translator.confirm in chat.translator.open:
@@ -490,7 +498,7 @@ class Connector:
             if item.startswith("confirm:"):
                 if len(chosen) != 1:
                     raise Refusal("invalid")
-                await self.typed_answer(chat, item, request, where, sender, CONFIRM[options[chosen[0]]])
+                await self.confirm(chat, item, request, by, CONFIRM_CHOICES[options[chosen[0]]])
                 return
             parts = [asked["options"][options[o]]["label"] for o in chosen]
             if text_of(reply.get("text")):
@@ -509,6 +517,32 @@ class Connector:
             self.record({"dir": "out", "via": "press", "msg": press}, chat.id)
             return
         raise Refusal("unknown_item")
+
+    async def confirm(self, chat: Chat, item: str, request: str, by: dict, choice: str) -> None:
+        """Answers Hermes's request to confirm a command through Hermes's own call, which answers only the
+        confirmation it names, by its id (D-146). A typed `/approve` would answer whatever Hermes waits on
+        when it reads it: an approval that started meanwhile, or another command's confirmation. One that
+        no longer waits is refused, and nothing else is answered. The item counts as answered from the
+        call on, so a second answer is refused, unless Hermes did not take it."""
+        session_key = self.confirms.get(item)
+        if not session_key:
+            raise Refusal("not_waiting")
+        chat.answered.add(item)
+        if request:
+            chat.by_item.setdefault(item, []).append(request)
+        try:
+            said = await self.hermes.resolve_confirm(session_key, item.removeprefix("confirm:"), choice)
+        except BaseException:
+            chat.answered.discard(item)
+            unsettle(chat.by_item, item, request)
+            raise
+        if said is None:
+            chat.answered.discard(item)
+            unsettle(chat.by_item, item, request)
+            raise Refusal("not_waiting")
+        press = {"confirm_id": item.removeprefix("confirm:"), "choice": choice, "user": by.get("id"),
+                 "session_key": session_key, "said": said}
+        self.record({"dir": "out", "via": "press", "msg": press}, chat.id)
 
     async def typed_answer(self, chat: Chat, item: str, request: str, where: dict, sender: dict, text: str) -> None:
         """Types an answer. The item counts as answered from then on, so a second answer is refused, unless

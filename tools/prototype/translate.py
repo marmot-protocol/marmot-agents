@@ -1580,6 +1580,8 @@ class Hermes(Translator):
     # order of the options the question offers.
     CONFIRM = ("/approve", "/always", "/cancel")
     CONFIRM_LABELS = ("Approve once", "Always approve", "Cancel")
+    # The same answers, as the plugin hands them to Hermes's own call for them (D-146).
+    CONFIRM_CHOICES = ("once", "always", "cancel")
     # What a person can type to answer an approval Hermes sent as text, in the order of its choices.
     TEXT_CHOICES = [("Allow once", "allow", "/approve"), ("Allow for this session", "allow", "/approve session"),
                     ("Always allow", "allow", "/approve always"), ("Deny", "deny", "/deny")]
@@ -1730,10 +1732,13 @@ class Hermes(Translator):
 
     def press(self, m):
         """An answer the plugin handed Hermes directly, which Hermes took: a press on an approval
-        card, by its request id, or the answer to a question, by its id."""
+        card, by its request id, the answer to a question, by its id, or to a request to confirm a
+        command, by its id, with what Hermes said to it (D-146)."""
         if "pick_model" in m:
             self.control("set model", "on_model_selected(), from the model picker")
             return self.skip("client: a pick from the model picker")
+        if m.get("confirm_id") is not None:
+            return self.confirmed(m)
         if m.get("clarify_id") is not None:
             item = f"question:{m['clarify_id']}"
             if item not in self.open:
@@ -1752,6 +1757,26 @@ class Hermes(Translator):
                   owner=(prev["session"], prev["turn"]))
         if self.approval == item:
             self.approval = None
+
+    def confirmed(self, m):
+        """Hermes took the answer to its request to confirm a command, given through its own call for it,
+        which names the confirmation by its id. Hermes hands its reply back instead of sending it: the
+        command's output, in the command's session and outside any turn, as the answer started none."""
+        item = f"confirm:{m['confirm_id']}"
+        prev = self.open.get(item)
+        if prev is None or m.get("choice") not in self.CONFIRM_CHOICES:
+            return self.skip("client: answer to a command confirmation no longer open")
+        q = prev["body"]["questions"][0]
+        chosen = q["options"][self.CONFIRM_CHOICES.index(m["choice"])]
+        self.emit(item, "question", "done", prev["title"], f"Answered: {chosen['label']}",
+                  {**prev["body"], "answer": [{"question": q["id"], "options": [chosen["id"]]}]},
+                  "answer to a command confirmation", m, owner=(prev["session"], prev["turn"]))
+        if self.confirm == item:
+            self.confirm = None
+        said = str(m.get("said") or "")
+        if said and prev["session"]:
+            self.key = str(prev["session"]).split("#")[0]
+            self.command_reply(f"sent:{self.seq + 1}", said, self.confirm_command, None, m, alone=True)
 
     # -- sessions
 
@@ -1925,9 +1950,10 @@ class Hermes(Translator):
 
     # -- everything that arrives as text
 
-    def command_reply(self, item, content, command, typed, p):
+    def command_reply(self, item, content, command, typed, p, alone=False):
         """Hermes's own answer to a slash command. What it says exists only as wording, so a setting
-        the answer confirms is read from the words, and from the command that was typed."""
+        the answer confirms is read from the words, and from the command that was typed. `alone`: in
+        the session of the command outside any turn, and not the latest turn."""
         title = "Command output"
         if content.startswith("⛔"):
             # Hermes refused: the sender is not on its own list of admins for slash commands.
@@ -1956,8 +1982,9 @@ class Hermes(Translator):
                 self.put(self.key, f"{what}_write_approval", f"Ask before writing {what}", content.split("'")[1],
                          ["on", "off"], approve=True)
             self.session_changed(self.key, f"send [reply to {command}, read from its wording]", self.msg)
+        owner = (self.name(self.key), None) if alone else None
         self.last_send = self.emit(item, "notice", "done", title, content, {"kind": "command_output"},
-                                   f"send [reply to {command}]", self.msg)
+                                   f"send [reply to {command}]", self.msg, owner=owner)
 
     def send(self, method, p):
         content = str(p.get("content") or "")
