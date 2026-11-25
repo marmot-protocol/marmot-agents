@@ -295,8 +295,9 @@ enum Effecting {
 pub struct Harness {
     /// The current life, from 1; each restart starts a new one.
     pub life: u32,
-    /// Where the current life's events go; `None` once it has stopped.
-    pub out: Option<mpsc::UnboundedSender<Output>>,
+    /// Where the current life's events go, each with when it was emitted, on the virtual clock;
+    /// `None` once it has stopped.
+    pub out: Option<mpsc::UnboundedSender<(std::time::Instant, Output)>>,
     /// What the next requests meet.
     pub moves: VecDeque<Move>,
     next: u64,
@@ -820,7 +821,7 @@ impl World {
     // ------------------------------------------------------------------------------ the harness
 
     /// Starts the harness's next life, and gives where its events come from.
-    pub fn new_life(&mut self) -> (u32, mpsc::UnboundedReceiver<Output>) {
+    pub fn new_life(&mut self) -> (u32, mpsc::UnboundedReceiver<(std::time::Instant, Output)>) {
         let h = &mut self.harness;
         h.life += 1;
         let (out, events) = mpsc::unbounded_channel();
@@ -1460,7 +1461,7 @@ impl World {
         };
         self.note(format!("Emit({item} {}{named})", state_word(state)));
         if let Some(out) = &self.harness.out {
-            let _ = out.send(Output::from(emitted));
+            let _ = out.send((Instant::now().into_std(), Output::from(emitted)));
         }
     }
 

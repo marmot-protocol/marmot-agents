@@ -209,6 +209,7 @@ impl<'a> Sim<'a> {
             world: self.world.clone(),
             life,
             events,
+            arrived: None,
         };
         let saves = self.world.clone();
         let (store, _) = Store::failing_when(self.dir.path(), move |_| {

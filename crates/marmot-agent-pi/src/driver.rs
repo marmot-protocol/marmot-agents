@@ -34,12 +34,12 @@ use crate::translate::DIALOGS;
 use crate::{Direction, Translator};
 use marmot_agent_driver::{
     Action, Answer, Capabilities, ChatId, Control, Driver, Emitted, FilesIn, Harness, MessageId,
-    MidTurn, Output, Prompt, Reason, Refusal, RequestId, SendFile, Sessions,
+    MidTurn, Output, Prompt, Ready, Reason, Refusal, RequestId, SendFile, Sessions,
 };
 use marmot_agent_events::{AgentEvent, Body, State};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -131,6 +131,8 @@ struct Line {
     chat: ChatId,
     generation: u64,
     text: Option<String>,
+    /// When it was read from Pi.
+    at: std::time::Instant,
 }
 
 /// What shows that a control has had its effect.
@@ -306,7 +308,9 @@ pub struct Pi {
     lines: mpsc::UnboundedReceiver<Line>,
     sender: mpsc::UnboundedSender<Line>,
     /// Events, and files to send, read and not yet handed to the core.
-    ready: VecDeque<Output>,
+    ready: Ready,
+    /// When the line being taken now was read from its Pi, for what it makes ready.
+    read_at: Option<std::time::Instant>,
     /// Files the agent asked to send that the core has not answered for, by the driver's id.
     files: HashMap<String, FileCall>,
     /// The folder that holds the driver's extension, removed with the driver.
@@ -346,7 +350,8 @@ impl Pi {
             held: HashSet::new(),
             lines,
             sender,
-            ready: VecDeque::new(),
+            ready: Ready::default(),
+            read_at: None,
             files: HashMap::new(),
             extension,
             next_id: 1,
@@ -406,6 +411,7 @@ impl Pi {
                     chat: who.clone(),
                     generation,
                     text: Some(text),
+                    at: now(),
                 };
                 if sender.send(line).is_err() {
                     return;
@@ -415,6 +421,7 @@ impl Pi {
                 chat: who,
                 generation,
                 text: None,
+                at: now(),
             });
         });
         let (writes, queue) = mpsc::unbounded_channel::<Write>();
@@ -593,7 +600,14 @@ impl Pi {
         }
     }
 
+    /// Takes a line from a Pi: what it makes ready arrived when the line was read.
     fn handle(&mut self, line: Line) {
+        self.read_at = Some(line.at);
+        self.take(line);
+        self.read_at = None;
+    }
+
+    fn take(&mut self, line: Line) {
         let chat = line.chat;
         let Some(c) = self.chats.get_mut(&chat) else {
             return;
@@ -747,12 +761,16 @@ impl Pi {
             }
             _ => Vec::new(),
         };
-        self.ready.push_back(Output::Event(Emitted {
-            event,
-            chat: Some(chat.clone()),
-            prompts,
-            settles,
-        }));
+        let at = self.read_at.unwrap_or_else(now);
+        self.ready.push(
+            at,
+            Output::Event(Emitted {
+                event,
+                chat: Some(chat.clone()),
+                prompts,
+                settles,
+            }),
+        );
     }
 
     /// The extension's `send_file` tool asks to send a file: the request goes to the core, or, if
@@ -783,11 +801,15 @@ impl Pi {
             dialog,
         };
         self.files.insert(id.clone(), call);
-        self.ready.push_back(Output::SendFile(SendFile {
-            id,
-            chat: chat.clone(),
-            path: folder.join(path),
-        }));
+        let at = self.read_at.unwrap_or_else(now);
+        self.ready.push(
+            at,
+            Output::SendFile(SendFile {
+                id,
+                chat: chat.clone(),
+                path: folder.join(path),
+            }),
+        );
     }
 
     /// A chat's Pi has gone, or is let go: its translator closes what it can. Nothing Pi sends can
@@ -1142,11 +1164,15 @@ impl Driver for Pi {
 
     async fn next_event(&mut self) -> Option<Output> {
         loop {
-            if let Some(output) = self.ready.pop_front() {
+            if let Some(output) = self.ready.pop() {
                 return Some(output);
             }
             self.read().await;
         }
+    }
+
+    fn arrived(&self) -> Option<std::time::Instant> {
+        self.ready.arrived()
     }
 
     /// The core says how a file the agent asked to send went: the tool's dialog is answered, in
@@ -1163,6 +1189,11 @@ impl Driver for Pi {
         let reply = file_reply(&call.dialog, &result);
         let _ = self.write(&call.chat, None, &reply).await;
     }
+}
+
+/// Now, on the runtime's clock, as [`Driver::arrived`] gives it.
+fn now() -> std::time::Instant {
+    tokio::time::Instant::now().into_std()
 }
 
 #[cfg(test)]

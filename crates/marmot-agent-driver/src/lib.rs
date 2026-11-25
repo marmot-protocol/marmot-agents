@@ -32,9 +32,11 @@ pub use request::{
     Action, Answer, Attachment, Chat, ChatId, Control, Given, MessageId, Person, PersonId, Prompt,
     Quoted, Reason, Refusal, Reply, RequestId,
 };
+use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
 use std::path::PathBuf;
+use std::time::Instant;
 
 /// A harness's name and version.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -255,6 +257,63 @@ pub trait Driver: Send {
     ) -> impl Future<Output = ()> + Send {
         let _ = (id, result);
         async {}
+    }
+
+    /// When the output the last call of [`next_event`](Driver::next_event) returned reached the
+    /// driver: when the driver read it from its harness, or, for a connector, when the core read
+    /// its line from the socket. On the clock of the runtime the driver runs in, as tokio's
+    /// `Instant::now().into_std()` gives it, which a simulation makes virtual.
+    ///
+    /// The core settles a control as having had no effect only once it has read every output
+    /// that reached it by the control's deadline (D-087), so an effect the driver read while the
+    /// core waited on it, and held for later, still counts as in time. A driver that holds what it
+    /// reads says when it read each, as [`Ready`] keeps it. `None`, the default, has the core take
+    /// an output as reaching it when it was handed over.
+    fn arrived(&self) -> Option<Instant> {
+        None
+    }
+}
+
+/// What a driver has read from its harness and not yet handed to the core, oldest first, each
+/// with when it was read, so that the driver can say when the output it handed over last
+/// arrived ([`Driver::arrived`]).
+#[derive(Debug, Default)]
+pub struct Ready {
+    outputs: VecDeque<(Instant, Output)>,
+    handed: Option<Instant>,
+}
+
+impl Ready {
+    /// Holds `output`, read at `at`.
+    pub fn push(&mut self, at: Instant, output: Output) {
+        self.outputs.push_back((at, output));
+    }
+
+    /// The oldest output held, which is then handed over.
+    pub fn pop(&mut self) -> Option<Output> {
+        let (at, output) = self.outputs.pop_front()?;
+        self.handed = Some(at);
+        Some(output)
+    }
+
+    /// When the output handed over last was read: what [`Driver::arrived`] gives.
+    pub fn arrived(&self) -> Option<Instant> {
+        self.handed
+    }
+
+    /// How many outputs are held.
+    pub fn len(&self) -> usize {
+        self.outputs.len()
+    }
+
+    /// Whether none is held.
+    pub fn is_empty(&self) -> bool {
+        self.outputs.is_empty()
+    }
+
+    /// The outputs held, oldest first.
+    pub fn iter(&self) -> impl Iterator<Item = &Output> {
+        self.outputs.iter().map(|(_, output)| output)
     }
 }
 

@@ -209,8 +209,10 @@ pub struct SocketDriver {
     folder: Option<PathBuf>,
     next_id: i64,
     /// Events, and files to send, read while a request waited for its response, for the next call
-    /// of `next_event`, each with the length of the line it came in.
-    held: VecDeque<(Output, usize)>,
+    /// of `next_event`, each with the length of the line it came in and when it was read.
+    held: VecDeque<(Output, usize, std::time::Instant)>,
+    /// When the output `next_event` returned last was read from the socket ([`Driver::arrived`]).
+    arrived: Option<std::time::Instant>,
     /// The bytes of the lines behind what is held, and behind the duplicates to answer: at most
     /// [`HELD_MAX`], or the connector is given up (D-145).
     holding: usize,
@@ -321,6 +323,7 @@ impl SocketDriver {
             folder,
             next_id: 0,
             held: VecDeque::new(),
+            arrived: None,
             holding: 0,
             files: HashMap::new(),
             duplicates: Vec::new(),
@@ -428,7 +431,8 @@ impl SocketDriver {
                         Shows::Settles(r) => e.settles.contains(r),
                     };
                 }
-                self.held.push_back((output, size));
+                let at = tokio::time::Instant::now().into_std();
+                self.held.push_back((output, size, at));
             }
             // A repeated `send_file` whose refusal would not fit gave the connector up.
             if self.gone {
@@ -614,8 +618,9 @@ impl Driver for SocketDriver {
 
     async fn next_event(&mut self) -> Option<Output> {
         loop {
-            if let Some((output, size)) = self.held.pop_front() {
+            if let Some((output, size, at)) = self.held.pop_front() {
                 self.holding -= size;
+                self.arrived = Some(at);
                 return Some(output);
             }
             // Reading keeps what it has read in `self`, and nothing is written here, so this
@@ -624,6 +629,7 @@ impl Driver for SocketDriver {
             // reading.
             let (envelope, size) = self.read().await?;
             if let Some(output) = self.output(&envelope, size) {
+                self.arrived = Some(tokio::time::Instant::now().into_std());
                 return Some(output);
             }
         }
@@ -658,6 +664,10 @@ impl Driver for SocketDriver {
         if written.is_err() {
             self.gone = true;
         }
+    }
+
+    fn arrived(&self) -> Option<std::time::Instant> {
+        self.arrived
     }
 }
 

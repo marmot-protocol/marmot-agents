@@ -37,7 +37,7 @@ use crate::{
 };
 use marmot_agent_driver::{
     Action, Answer, Capabilities, ChatId, Control, Driver, Emitted, FilesIn, Harness, MessageId,
-    MidTurn, Output, Prompt, Reason, Refusal, RequestId, SendFile, Sessions,
+    MidTurn, Output, Prompt, Ready, Reason, Refusal, RequestId, SendFile, Sessions,
 };
 use marmot_agent_events::{AgentEvent, Body, State};
 use serde_json::{Value, json};
@@ -266,7 +266,7 @@ pub struct Codex {
     /// the session's own (D-059, point 4).
     seq: HashMap<(ChatId, Option<String>), u64>,
     /// Events, and files to send, read and not yet handed to the core.
-    ready: VecDeque<Output>,
+    ready: Ready,
     /// Codex's calls of the driver's own tool that the core has not answered yet: the chat each
     /// came from, the subagent's thread if it was one's, and Codex's id for it, by the id the core
     /// was given.
@@ -331,7 +331,7 @@ impl Codex {
             resuming: HashSet::new(),
             leaving: HashMap::new(),
             seq: HashMap::new(),
-            ready: VecDeque::new(),
+            ready: Ready::default(),
             calls: HashMap::new(),
             gone: false,
             patience: PATIENCE,
@@ -906,11 +906,14 @@ impl Codex {
         let key = id.to_string();
         self.calls
             .insert(key.clone(), (chat.clone(), who.map(String::from), id));
-        self.ready.push_back(Output::SendFile(SendFile {
-            id: key,
-            chat: chat.clone(),
-            path,
-        }));
+        self.ready.push(
+            now(),
+            Output::SendFile(SendFile {
+                id: key,
+                chat: chat.clone(),
+                path,
+            }),
+        );
     }
 
     /// No Stop of the chat waits for `part` any longer: Codex refused to stop it. Those that waited
@@ -1259,12 +1262,15 @@ impl Codex {
             }
             _ => Vec::new(),
         };
-        self.ready.push_back(Output::Event(Emitted {
-            event,
-            chat: Some(chat.clone()),
-            prompts,
-            settles,
-        }));
+        self.ready.push(
+            now(),
+            Output::Event(Emitted {
+                event,
+                chat: Some(chat.clone()),
+                prompts,
+                settles,
+            }),
+        );
         for (request, refusal) in failed {
             self.ready_event(chat, refusal, vec![request], false, None);
         }
@@ -1816,13 +1822,17 @@ impl Driver for Codex {
 
     async fn next_event(&mut self) -> Option<Output> {
         loop {
-            if let Some(event) = self.ready.pop_front() {
+            if let Some(event) = self.ready.pop() {
                 return Some(event);
             }
             if !self.read().await {
-                return self.ready.pop_front();
+                return self.ready.pop();
             }
         }
+    }
+
+    fn arrived(&self) -> Option<std::time::Instant> {
+        self.ready.arrived()
     }
 
     async fn file_sent(&mut self, id: String, result: Result<(), Refusal>) {
@@ -1834,4 +1844,9 @@ impl Driver for Codex {
         // A reply Codex cannot be given is lost with Codex, which `send` notes.
         let _ = (self.send(&chat, who.as_deref(), None, &reply, Vec::new())).await;
     }
+}
+
+/// Now, on the runtime's clock, as [`Driver::arrived`] gives it.
+fn now() -> std::time::Instant {
+    tokio::time::Instant::now().into_std()
 }

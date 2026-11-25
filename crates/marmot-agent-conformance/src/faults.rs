@@ -583,4 +583,9 @@ impl<D: Driver> Driver for FaultyDriver<D> {
         }
         self.inner.file_sent(id, result).await;
     }
+
+    // An output made up here is taken as arriving with the one the driver handed over last.
+    fn arrived(&self) -> Option<std::time::Instant> {
+        self.inner.arrived()
+    }
 }
