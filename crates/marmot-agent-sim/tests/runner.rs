@@ -3,6 +3,9 @@
 //! ends, each made by hand ([`Faults`]), fail the run with its trace; without the fault the same
 //! schedule passes.
 
+#[path = "runner/regressions.rs"]
+mod regressions;
+
 use marmot_agent_sim::{
     Action, BugSet, Family, Faults, Outcome, Posted, Report, RunName, Schedule, What, run,
 };
