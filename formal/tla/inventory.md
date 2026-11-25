@@ -19,7 +19,8 @@ cut anywhere, pays most.
    windows in which a TERM or a kill left Pi's image tag, or the person's Hermes plugin, apart from the files they
    go with; both fixed. Review found a third, which U1 as first stated let through: another harness's install
    put back the core and left the Hermes plugin; fixed, and U1 restated so the model catches it. Its second
-   review found a case the model leaves out, two agents of one harness in one home: issue [#180](https://github.com/marmot-protocol/marmot-agents/issues/180).
+   review found a case the model left out, two agents of one harness in one home: issue [#180](https://github.com/marmot-protocol/marmot-agents/issues/180),
+   fixed on 2026-11-25 ([D-154](../../docs/decisions.md#d-154-an-install-takes-over-a-killed-upgrade-only-for-the-same-agent-and-the-same-gateway)), with a configuration of two Hermes agents that catches it.
 2. **The core's hold-back of the full activity** (D-136): modelled, [`ActivityHoldBack`](ActivityHoldBack.md). It
    found that a send MDK was already handed, held back when someone joins the chat, settles its request twice,
    and can start its item twice; fixed. In review, a send tried again without the native message it was first

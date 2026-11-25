@@ -5,9 +5,9 @@
   "breaks": "U1",
   "what": "ChangeEndsApart, install/lib.sh before 2026-11-24: Hermes's install ends the upgrade, then the plugin change; a TERM between the two, and the exit trap puts the old plugin back over the new core (U1). Killed there instead, the next run that fails does the same, as its own upgrade record holds the new core.",
   "generated_by": "python3 tools/tla/check.py --counterexamples",
-  "constants": {"Harnesses": ["codex", "hermes"], "Main": "hermes", "Older": true, "FirstRuns": 1, "Slots": [1], "MaxKills": 2, "MaxFails": 2, "FairPerson": true, "Bug": "ChangeEndsApart"},
+  "constants": {"Harnesses": ["codex", "hermes"], "Main": "hermes", "Older": true, "FirstRuns": 1, "Slots": [1], "MaxKills": 2, "MaxFails": 2, "FairPerson": true, "Agents": ["a"], "Bug": "ChangeEndsApart"},
   "steps": [
-    {"action": "Start", "slot": 1, "harness": "hermes"},
+    {"action": "Start", "slot": 1, "harness": "hermes", "agent": "a"},
     {"action": "Lock", "slot": 1},
     {"action": "Prepare", "slot": 1},
     {"action": "Publish", "slot": 1},

@@ -5,9 +5,9 @@
   "breaks": "U1",
   "what": "ChangeOutsideRecord, install/lib.sh before the second fix of 2026-11-24: Hermes's install is killed once it has put our new plugin in; Codex's install, which cannot finish that upgrade, puts back the core and the support files, and leaves the new plugin over the old core, as the upgrade's record does not list the plugin change (U1).",
   "generated_by": "python3 tools/tla/check.py --counterexamples",
-  "constants": {"Harnesses": ["codex", "hermes"], "Main": "hermes", "Older": true, "FirstRuns": 1, "Slots": [1], "MaxKills": 2, "MaxFails": 2, "FairPerson": true, "Bug": "ChangeOutsideRecord"},
+  "constants": {"Harnesses": ["codex", "hermes"], "Main": "hermes", "Older": true, "FirstRuns": 1, "Slots": [1], "MaxKills": 2, "MaxFails": 2, "FairPerson": true, "Agents": ["a"], "Bug": "ChangeOutsideRecord"},
   "steps": [
-    {"action": "Start", "slot": 1, "harness": "hermes"},
+    {"action": "Start", "slot": 1, "harness": "hermes", "agent": "a"},
     {"action": "Lock", "slot": 1},
     {"action": "Prepare", "slot": 1},
     {"action": "Publish", "slot": 1},
