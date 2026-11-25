@@ -57,8 +57,8 @@ cannot close it).
   for at least another minute (`Side::lasts`,
   [D-152](../../docs/decisions.md#d-152-a-send-mdk-was-handed-in-a-form-its-chat-is-no-longer-sent-is-asked-after-never-handed-again)).
   The model makes the ask and the hand-over one step; a stall of more than that minute between them is the
-  narrower path D-148 accepts, which `hold-handed-again` shows for the code before #194. Whether to keep that
-  hand-over is the owner's choice. Nor does the model's MDK say its engine has a send it has not posted yet:
+  narrower path D-148 accepts, which `hold-handed-again` shows for the code before #194. The owner chose on
+  2026-11-25 to keep that hand-over. Nor does the model's MDK say its engine has a send it has not posted yet:
   the core treats that as a send MDK keeps queued, but for the one hand-over, which MDK answers from what it
   keeps.
 - **A token MDK lets go of before it posts the send**, and the group's disappearing time changed after a send

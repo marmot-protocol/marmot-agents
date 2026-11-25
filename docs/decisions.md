@@ -3280,8 +3280,8 @@ to MDK again. The core learns what became of it by asking MDK (`local_send_statu
   token, as it was handed, while MDK will keep the token for at least another minute: that gives its event at
   once. This is the narrower path of
   [D-148](#d-148-for-the-pilot-a-send-of-the-full-activity-that-mdk-keeps-and-posts-after-someone-joins-is-an-accepted-limit),
-  left only there, and still accepted under it. Whether to keep it is the owner's choice; without it, such a send
-  is asked after as above.
+  left only there, and still accepted under it. The project owner chose to keep it, and to ask MDK for its status
+  to name the event while its engine holds a send, which would make it unneeded.
 - **A send MDK's engine keeps for good**, as one whose publish failed after its engine took it, keeps a status
   that names no event until MDK lets go of its token. Asked after, it holds up its chat's later sends until then:
   in a group whose messages never disappear, for good, unless the one path left hands it again. Other chats go
@@ -3301,4 +3301,4 @@ D-109 already says how the chat is told of one; one MDK's engine has has not bee
 might be settled its requests twice once MDK posted it (found in review, 2026-11-25).
 
 Decided 2026-11-25 by the builder, under the project owner's instruction to decide minor points. What the chat is
-told, and that the one path left stays, follow D-109 and D-148; the owner has not yet seen them.
+told follows D-109. That the one path left stays was decided 2026-11-25 by the project owner.
