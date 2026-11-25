@@ -3346,28 +3346,41 @@ two-agent configuration now check both.
 
 **Decision.** The Hermes plugin keeps each request to confirm a command, the `question` item of
 [D-048](#d-048-a-request-to-confirm-a-command-is-a-question), by Hermes's own session key and the
-confirmation's id, and reads from Hermes whether it still waits. Hermes holds one confirmation in a session, and
-a new one replaces it (`tools.slash_confirm`). So the question:
+confirmation's id. Hermes holds one confirmation in a session, and a new one replaces it (`tools.slash_confirm`).
+The question closes only on evidence of what became of it:
 
-- waits until Hermes holds it no longer, whatever becomes of a turn: the end of its sender's turn or of another
-  sender's, interrupted or not, does not close it;
-- shows as cancelled when Hermes asks a newer one in the same session (provisional);
-- is answered by a typed answer only in its sender's own session, as Hermes reads it, in any of the words Hermes
-  reads as one in English (`/approve`, `/cancel`, `yes`, `no` and the rest), and is not answered when Hermes
-  did not take the answer: before and after a message reaches a session where one waits, the plugin asks
-  Hermes (`get_pending`) whether it still does, and when Hermes cannot be asked, it still waits;
-- shows as cancelled when Hermes dropped it, too old, without a word, or holds it too old to run when a
-  message of that session comes, a typed answer too, which Hermes then takes and runs nothing: when the plugin
-  next looks, before or after a message of that session or when someone answers it (provisional).
+- answered, by Hermes taking an answer given on it
+  ([D-146](#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id)), or by Hermes's reply to
+  a typed answer, matched by the message it replies to. As that reply comes, the plugin asks Hermes
+  (`get_pending`) whether it still holds that confirmation: when it does, or cannot be asked, Hermes refused
+  the sender or an approval took the word, and the question still waits;
+- replaced, by a newer one in the same session, and it shows as cancelled (provisional);
+- expired, by Hermes's own limit passing, 300 seconds by `tools.slash_confirm`, after which Hermes never runs
+  it: the plugin counts from when Hermes offers it, and a second more, and it shows as cancelled.
+
+That Hermes no longer holds a confirmation says nothing of why: approved and still running, expired, replaced
+or answered. On its own it closes nothing and settles nothing. The end of a turn, its sender's or another's,
+interrupted or not, closes none.
+
+A typed answer answers only the confirmation in its sender's own session, as Hermes reads it, in any of the
+words Hermes reads as one in English (`/approve`, `/cancel`, `yes`, `no` and the rest).
+
+Every reply of Hermes's goes by the message it replies to: to that message's turn while it runs, or else to its
+sender's session outside any turn, never to the chat's latest turn. Only a turn that a slash command started
+makes its replies that command's output.
 
 The command a confirmation is for settles as other effects do
 ([D-087](#d-087-the-core-settles-a-request-whose-effect-never-shows)), not from Hermes's reply to the answer.
-When it will not run, because the answer was Cancel, or the confirmation was replaced or dropped, the event that
+When it will not run, because the answer was Cancel, or the confirmation was replaced or expired, the event that
 closes the question settles it. When it runs, its own effect settles it, as for a command Hermes did not ask
 about: the end of the old session for a new session, the model read for a change of model. Hermes's words then
 settle it only when they say it was refused, as for any typed command; when Hermes gives no reply, the notice
 that says so settles nothing, and the core settles the command as having no effect after two minutes, unless
 its effect shows first (provisional; before, that notice settled it at once).
+
+The cost accepted: a question can show waiting until Hermes's limit passes after Hermes has dropped it without a
+word, as it does at a session boundary, when a connector declines its send, or for one too old when the
+session's next message comes.
 
 Nothing changes in who may answer: the core's rights and Hermes's own check, as D-146 and
 [D-151](#d-151-the-hermes-plugin-asks-hermess-own-check-of-who-may-answer-an-approval-card-or-a-question) say.
@@ -3376,18 +3389,25 @@ Nothing changes in who may answer: the core's rights and Hermes's own check, as 
 turn's end, and a typed answer read as answering the latest one. With two people confirming at once in one
 group, a typed `/cancel` from one closed the other's question, a confirmation Hermes replaced stayed open, and
 another sender's interrupted turn closed one that still waited in Hermes, which then could not be answered from
-the chat. Hermes's session and id name the confirmation as Hermes does, and Hermes says which one waits. A reply
-says less than an effect: Hermes says nothing both when it ran nothing and when the command gave no reply. This
-closes D-146's limit for the pilot, that two people confirming at once in one group may settle each other's
-commands or leave one unanswerable from the chat; D-146's remaining limit stands, except that a command Hermes
-dropped after a stall now ends as having no effect rather than as settled. Issue #183.
+the chat. Hermes's session and id name the confirmation as Hermes does. A first fix also read a confirmation's
+absence from `get_pending` as its outcome, and two rounds of review found the same fault each time: an expired
+confirmation shown as approved, and an approved `/new` shown as cancelled while Hermes ran the reset, because
+Hermes takes a confirmation before it runs the command and a message sent meanwhile found none waiting. Replies
+that fell back to the chat's latest turn put one person's answer and its settlement on another's turn, and made
+an ordinary reply the output of someone else's command (#201). A reply says less than an effect: Hermes says
+nothing both when it ran nothing and when the command gave no reply. This closes D-146's limit for the pilot,
+that two people confirming at once in one group may settle each other's commands or leave one unanswerable
+from the chat; D-146's remaining limit stands, except that a command Hermes dropped after a stall now ends as
+having no effect rather than as settled. Issues #183 and #201.
 
 Not closed: Hermes reads a typed answer in the language it is set to as well as in English, and a word only
-that language has shows as the confirmation dropped, not answered. A typed answer that comes in the last
-moment before Hermes's limit, fresh when the plugin looks and too old when Hermes reads it, shows as answered,
-and its command settles as having no effect after two minutes. A typed `/approve` while an approval waits
-in the same session goes to the approval, as D-146 says.
+that language has leaves the question waiting until Hermes's limit passes, and then cancelled, not answered. A
+typed answer Hermes takes in the last moments before its limit, whose reply comes after the plugin's count
+ends, shows the question cancelled and settles its command as not run, though Hermes ran it; its effect still
+shows. A typed answer word that Hermes read as an ordinary message, because it had dropped the confirmation
+without a word just before, shows the question answered by Hermes's reply (inferred from Hermes's source, not
+seen). A typed `/approve` while an approval waits in the same session goes to the approval, as D-146 says.
 
-
-Decided 2026-11-25 by the builder, under the project owner's instruction to decide minor points.
-
+The question closing only on evidence, every reply going by the message it replies to, and the cost they
+accept were decided 2026-11-25 by the project owner. The rest was decided 2026-11-25 by the builder, under the
+project owner's instruction to decide minor points.

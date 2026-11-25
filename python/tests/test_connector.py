@@ -98,8 +98,8 @@ class FakeHermes:
         return asyncio.Task(finished(), loop=asyncio.get_running_loop(), eager_start=True)
 
     def confirm_waiting(self, session_key):
-        """As `tools.slash_confirm.get_pending`, by Hermes's own limit: the id of the confirmation that waits
-        in that session, or None."""
+        """As `tools.slash_confirm.get_pending`: the id of the confirmation Hermes holds in that session, whatever
+        its age, or None."""
         if self.look_fails is not None:
             raise self.look_fails
         return self.waiting_confirm.get(session_key)
