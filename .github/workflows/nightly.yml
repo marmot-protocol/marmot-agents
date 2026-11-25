@@ -368,7 +368,9 @@ jobs:
         # file, a line and the change, nothing from a test's output.
         # The simulator's hooks (`with_bugs`, the `bug_…` functions and their stubs without the
         # `sim-bugs` feature, `settles_only_from_items`) are left out: only the simulator puts a
-        # bug back, so the core's tests cannot catch a change to them. `--output target` writes
+        # bug back, so the core's tests cannot catch a change to them. Nor are the Kani proofs (the
+        # `proofs` modules, built only under `cfg(kani)`): the tests never build them, and the Kani
+        # job checks them. `--output target` writes
         # target/mutants.out and leaves the build beside it.
         # The shard is chosen from the day the run was created, not the day it runs: a run started
         # again the next day tests the same mutants, so the flaky job tracker (D-143) never
@@ -383,7 +385,7 @@ jobs:
           echo "Shard ${shard} of 64." | tee -a "${GITHUB_STEP_SUMMARY}"
           status=0
           cargo mutants --package marmot-agent --all-features --in-place --no-shuffle \
-            --exclude-re '::(with_bugs|bug_[a-z_]+|settles_only_from_items)\b' \
+            --exclude-re '::(with_bugs|bug_[a-z_]+|settles_only_from_items)\b' --exclude-re '\bproofs::' \
             --shard "${shard}/64" --output target || status=$?
           missed=target/mutants.out/missed.txt
           if [ -s "${missed}" ]; then
