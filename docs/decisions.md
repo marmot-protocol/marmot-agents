@@ -1550,6 +1550,11 @@ control the harness quietly dropped, produced no event, so the person's press st
 driver can close the cases it knows, but a net in the core keeps a new driver from leaving one open. Two minutes
 is long enough for a slow harness to stop a turn, and short enough that a press does not look stuck.
 
+Replaced in part by
+[D-156](#d-156-the-no_effect-net-counts-when-output-reached-the-core-not-when-the-core-read-it): the two minutes
+count when the effect reached the core, not when the core read it, and an effect the core reads before it settles
+the control still settles it, even after the two minutes. The two minutes and the `no_effect` reason stand.
+
 Decided 2026-11-21. The project owner accepted the recommendation.
 
 ## D-088 OpenClaw's `/model status` may show the masked model key
