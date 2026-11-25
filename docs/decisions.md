@@ -3342,6 +3342,8 @@ later change's copies, taken of what the earlier one left, go back over the olde
 older core. Found by review of the model of the installer (issue #180); the install tests and the model's
 two-agent configuration now check both.
 
+Decided 2026-11-25 by the builder, under the project owner's instruction to decide minor points.
+
 ## D-155 The Hermes plugin keeps each request to confirm a command as Hermes keeps it
 
 **Decision.** The Hermes plugin keeps each request to confirm a command, the `question` item of
