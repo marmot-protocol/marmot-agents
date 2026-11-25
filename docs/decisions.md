@@ -3108,6 +3108,13 @@ shows as given, and the notice says only that Hermes gave no reply, which is tru
 command did not happen asks again. The plugin does not pass Hermes's call a longer `timeout` to close this gap:
 that would override Hermes's own 300-second rule for confirmations, and Hermes's rule stands.
 
+Replaced in part by
+[D-155](#d-155-the-hermes-plugin-keeps-each-request-to-confirm-a-command-as-hermes-keeps-it): the plugin keeps
+each confirmation by Hermes's session and id rather than its own record, which closes the pilot limit above, and a
+command Hermes confirmed is settled by its effect, or by the answer or close that says it will not run, not by
+Hermes's reply or the no-reply notice, except a reply that says the command was refused. Answering by id through
+Hermes's call, Hermes's own check of who may answer, and Hermes's 300-second rule stand.
+
 Decided 2026-11-24 by the project owner.
 
 ## D-147 A request whose effect a connector showed before its connection dropped was taken
