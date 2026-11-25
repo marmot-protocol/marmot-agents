@@ -844,7 +844,9 @@ changes_ours() {
     while IFS= read -r record; do
         if [ -z "$record" ] || [ ! -f "$record" ]; then continue; fi
         [ "$record" = "$MA_AGENT_DIR/plugin-change" ] && [ -n "${MA_GATEWAY:-}" ] || return 1
-        awk -F '\t' -v path="$MA_GATEWAY" '$2 == path { found = 1 } END { exit !found }' "$record" || return 1
+        # Given in the environment, not with -v, which reads backslashes in it as escapes.
+        GATEWAY=$MA_GATEWAY awk -F '\t' '$2 == ENVIRON["GATEWAY"] { found = 1 } END { exit !found }' "$record" ||
+            return 1
     done <"$list"
 }
 

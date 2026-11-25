@@ -2823,6 +2823,24 @@ class PutBack(unittest.TestCase):
             self.assertTrue(copy.exists(), ran.stderr)
             self.assertTrue((upgrade / "plugin-changes").exists(), ran.stderr)
 
+    def test_a_change_names_this_gateway_only_when_its_path_is_the_same(self):
+        """changes_ours compares the settings file a plugin change names with this run's gateway as they
+        are written: a backslash in a path is a backslash, not an escape. Before, awk -v read the path
+        given, so /profiles/\\141/config.yaml was taken for the gateway /profiles/a/config.yaml."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            upgrade = tmp / "upgrade"
+            upgrade.mkdir()
+            record = tmp / "agents" / "a" / "plugin-change"
+            record.parent.mkdir(parents=True)
+            record.write_text(f"file\t{tmp}/profiles/a/config.yaml\t\n")
+            (upgrade / "plugin-changes").write_text(f"{record}\n")
+            for gateway, ours in ((f"{tmp}/profiles/a/config.yaml", True), (f"{tmp}/profiles/\\141/config.yaml", False)):
+                with self.subTest(gateway=gateway):
+                    ran = self.lib('if changes_ours; then echo ours; else echo other; fi',
+                                   MA_UPGRADE=str(upgrade), MA_AGENT_DIR=str(record.parent), MA_GATEWAY=gateway)
+                    self.assertEqual(ran.stdout.strip(), "ours" if ours else "other", ran.stderr)
+
     def test_a_plugin_change_that_cannot_go_back_in_place_keeps_the_upgrade(self):
         """A run stopped once it had moved its plugin change into the upgrade's record puts the change
         back in its place as it ends. When it cannot, the upgrade's record is kept, the change in it,
