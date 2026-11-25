@@ -63,6 +63,8 @@ case $1 in
     run) echo "with MODEL_BASE_URL=${{MODEL_BASE_URL:-}}" >> "$FAKE_LOG" ;;
 esac
 """
+# An older core, which the upgrade tests install first.
+OLDER_CORE = FAKE_CORE + "# an older core\n"
 # A stand-in fails a command that starts as FAKE_FAIL says, such as "systemctl --user restart". One that
 # starts as FAKE_PAUSE says makes the file FAKE_PAUSE_AT.reached, then waits until FAKE_PAUSE_AT is there.
 FAKE_LOGGER = """#!/bin/sh
@@ -1695,7 +1697,7 @@ class Upgrade(unittest.TestCase):
     def older(self, m: Machine) -> None:
         """An agent installed with an older core and older support files."""
         older = m.dir / "older-core"
-        m.write(older, FAKE_CORE + "# an older core\n")
+        m.write(older, OLDER_CORE)
         m.run(self.HARNESS, *m.args(self.HARNESS, "--binary", str(older), "--name", "first"))
         lib = m.data / "lib"
         (lib / "LICENSE").write_text((lib / "LICENSE").read_text() + "an older licence\n")
@@ -1886,7 +1888,7 @@ exec {rm} "$@"
             with self.subTest(harness=harness):
                 m = Machine(self)
                 older = m.dir / "older-core"
-                m.write(older, FAKE_CORE + "# an older core\n")
+                m.write(older, OLDER_CORE)
                 args = m.args(harness, "--binary", str(older))
                 m.run(harness, *args)
                 (m.home / plugin / "OLDER").write_text("an older file\n")
@@ -1894,7 +1896,7 @@ exec {rm} "$@"
                 failed = m.run(harness, *args, env={"FAKE_FAIL": "systemctl --user restart"}, check=False)
                 self.assertNotEqual(failed.returncode, 0)
                 self.assertTrue((m.home / plugin / "OLDER").exists(), failed.stderr)
-                self.assertIn("an older core", (m.home / ".local/bin/marmot-agent").read_text())
+                self.assertEqual((m.home / ".local/bin/marmot-agent").read_text(), OLDER_CORE, failed.stderr)
                 m.run(harness, *args)
                 self.assertFalse((m.home / plugin / "OLDER").exists())
                 self.assertEqual((m.home / ".local/bin/marmot-agent").read_text(), FAKE_CORE)
@@ -1962,6 +1964,8 @@ exec {rm} "$@"
                     ran = m.run(harness, *args(m), env=env, check=False)
                 if then == "again" and ran.returncode != 0:
                     found.append((f"{said}, then {then}", "the run failed", ran.stderr))
+                elif then == "failing" and (ran.returncode == 0 or "failing, as asked" not in ran.stderr):
+                    found.append((f"{said}, then {then}", "the run did not fail as asked", ran.stderr))
                 elif under_way(m):
                     found.append((f"{said}, then {then}", "something is left under way", ran.stderr))
                 else:
@@ -1984,7 +1988,7 @@ exec {rm} "$@"
             core_is = "not there"
         else:
             text = core.read_text()
-            core_is = "older" if "# an older core" in text else "new" if text == FAKE_CORE else "another core"
+            core_is = "older" if text == OLDER_CORE else "new" if text == FAKE_CORE else "another core"
         install = m.data / "lib/install"
         files_are = "not there" if not (install / "lib.sh").is_file() else \
             "older" if (install / "OLDER").exists() else "new"
@@ -2011,7 +2015,7 @@ exec {rm} "$@"
 
         def older(m: Machine) -> None:
             first = m.dir / "older-core"
-            m.write(first, FAKE_CORE + "# an older core\n")
+            m.write(first, OLDER_CORE)
             m.run("pi", *m.args("pi", "--binary", str(first), container=True))
             (m.data / "lib/tools/pi/OLDER").write_text("an older file\n")
             self.mark_older(m)
@@ -2028,7 +2032,7 @@ exec {rm} "$@"
 
         def older(m: Machine) -> None:
             first = m.dir / "older-core"
-            m.write(first, FAKE_CORE + "# an older core\n")
+            m.write(first, OLDER_CORE)
             m.run("pi", *m.args("pi", "--binary", str(first), container=True))
             (m.data / "lib/tools/pi/OLDER").write_text("an older file\n")
             self.mark_older(m)
@@ -2071,7 +2075,7 @@ exec {rm} "$@"
 
         def older(m: Machine) -> None:
             first = m.dir / "older-core"
-            m.write(first, FAKE_CORE + "# an older core\n")
+            m.write(first, OLDER_CORE)
             m.run("hermes", *m.args("hermes", "--binary", str(first)))
             (m.data / "lib/python/marmot_hermes/OLDER").write_text("an older file\n")
             (m.home / plugin / "OLDER").write_text("an older file\n")
@@ -2162,7 +2166,7 @@ class TwoAgents(unittest.TestCase):
     def older(self, m: Machine) -> None:
         """Two Hermes agents, a and b, each in a Hermes of its own, installed with an older core."""
         first = m.dir / "older-core"
-        m.write(first, FAKE_CORE + "# an older core\n")
+        m.write(first, OLDER_CORE)
         m.run("hermes", *self.args(m, "a", first))
         m.run("hermes", *self.args(m, "b", first), env=self.own_hermes(m))
         for marked in (m.data / "lib/python/marmot_hermes", m.data / "lib/install",
@@ -2236,7 +2240,7 @@ class TwoAgents(unittest.TestCase):
         second gets the plugin, with copies of its own settings."""
         m = Machine(self)
         first = m.dir / "older-core"
-        m.write(first, FAKE_CORE + "# an older core\n")
+        m.write(first, OLDER_CORE)
         m.run("codex", *m.args("codex", "--binary", str(first), "--name", "c"))
         before = self.gateway(m)
         killed = m.run("hermes", *self.args(m, "a"), env={"FAKE_HERMES_KILL": "plugins enable"}, check=False)
@@ -2255,7 +2259,7 @@ class TwoAgents(unittest.TestCase):
         beside the older core."""
         m = Machine(self)
         first = m.dir / "older-core"
-        m.write(first, FAKE_CORE + "# an older core\n")
+        m.write(first, OLDER_CORE)
         m.run("codex", *m.args("codex", "--binary", str(first), "--name", "c"))
         before = (Upgrade.snapshot(m), self.gateway(m))
         kill = {"FAKE_HERMES_KILL": "plugins enable"}
@@ -2280,7 +2284,7 @@ class TwoAgents(unittest.TestCase):
             with self.subTest(harness=harness):
                 m = Machine(self)
                 first = m.dir / "older-core"
-                m.write(first, FAKE_CORE + "# an older core\n")
+                m.write(first, OLDER_CORE)
                 m.run("codex", *m.args("codex", "--binary", str(first), "--name", "c"))
                 args = lambda name: m.args(harness, "--binary", str(m.core), "--name", name)
                 killed = m.run(harness, *args("a"), env=kill, check=False)
