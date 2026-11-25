@@ -3288,6 +3288,14 @@ to MDK again. The core learns what became of it by asking MDK (`local_send_statu
   that names no event until MDK lets go of its token. Asked after, it holds up its chat's later sends until then:
   in a group whose messages never disappear, for good, unless the one path left hands it again. Other chats go
   on.
+- **A known limit: a stall for good in a chat whose messages disappear within a minute.** A current core's send
+  can also hold up its chat for good. It takes all of these: the core crashed after MDK took a send of the full
+  activity and before it saved MDK's answer, so it kept no event; MDK's publish of it then failed for good, so
+  its engine keeps it and names no event; someone joined the chat since; and the group's messages disappear
+  within a minute, so the one path left is not allowed (`Side::lasts` is false), while MDK keeps the token of
+  the failed send. That chat's later sends wait, after a restart too; other chats go on. The project owner
+  accepted this on 2026-11-25 until MDK's status names the event while its engine holds a send, which has been
+  asked of MDK. When MDK's pin moves to a release that does, this stall and the one path left both go.
 
 The model `ActivityHoldBack` lets MDK forget a token, and catches a second hand-over after someone joins
 ([`hold-handed-again`](../formal/tla/counterexamples/hold-handed-again.json)), a forgotten send held back
@@ -3303,4 +3311,5 @@ D-109 already says how the chat is told of one; one MDK's engine has has not bee
 might be settled its requests twice once MDK posted it (found in review, 2026-11-25).
 
 Decided 2026-11-25 by the builder, under the project owner's instruction to decide minor points. What the chat is
-told follows D-109. That the one path left stays was decided 2026-11-25 by the project owner.
+told follows D-109. That the one path left stays, and the known limit above, were decided 2026-11-25 by the
+project owner.
