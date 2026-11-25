@@ -695,16 +695,18 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.hermes.typed, before, "nothing typed, so nothing Hermes could take as /approve")
         self.assertEqual(self.hermes.cards, [], "the approval is not answered")
         self.assertEqual(self.hermes.waiting_confirm, {KEY: "k-2"}, "the other confirmation still waits")
-        # Hermes holds the first no longer: it shows as cancelled, and settles the `/new` it was for (D-155).
-        dropped = [(e["item"], e["state"], e["settles"]) for e in self.sent if "settles" in e]
-        self.assertEqual(dropped, [("confirm:k-1", "cancelled", ["r-1"])])
+        # Hermes no longer holding it says nothing of why: the question still shows waiting (D-155).
+        self.assertEqual([e for e in self.sent if "settles" in e], [])
         # An answer shaped as a question's, on the approval, is not an approval's answer.
         with self.assertRaises(Refusal) as shaped:
             await self.connector.serve("answer", {"request": "r-3", "item": "approval:rq", "by": BOB, "given": YES})
         self.assertEqual(shaped.exception.reason, "invalid")
         self.assertEqual(self.hermes.cards, [])
-        # The confirmation that waits, offered now, is answered by its id while it is live.
+        # The confirmation that waits, offered now, replaces the first, which shows as cancelled and settles the
+        # `/new` it was for, and is answered by its id while it is live.
         self.asks_to_confirm(typed[2], "/new", "⚠️ **Confirm /new**\n\nThis starts a fresh session.", "k-2")
+        dropped = [(e["item"], e["state"], e["settles"]) for e in self.sent if "settles" in e]
+        self.assertEqual(dropped, [("confirm:k-1", "cancelled", ["r-1"])])
         await self.connector.serve("answer", {"request": "r-4", "item": "confirm:k-2", "by": BOB,
                                               "given": {"questions": [{"question": "q0", "options": ["o2"]}]}})
         self.assertEqual(self.hermes.confirms[-1], (KEY, "k-2", "cancel", "u-2"))
@@ -1046,25 +1048,20 @@ class Connected(unittest.IsolatedAsyncioTestCase):
                                           ("confirm:k-b", "group:c-2:u-2", ["r-b2"]),
                                           ("session:group:c-2:u-2", "group:c-2:u-2", ["r-b"])])
 
-    async def test_a_confirmation_hermes_dropped_is_closed_when_the_plugin_next_looks(self):
-        """Hermes drops a confirmation that waited too long when the session's next message comes, and says
-        nothing of it. The plugin looks once that message is answered: the question shows as cancelled, and
-        settles the `/new` it was for."""
-        await self.connector.serve("prompt", prompt("m-1"))
-        self.feed(started("m-1"), said("Hi.", "m-1", notify=True), complete("m-1"))
-        session = self.of("session")[0]["session"]
-        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
-            "type": "new_session", "chat": CHAT, "session": session}})
-        typed = self.hermes.typed[-1]
-        self.feed(started(typed[2], "/new"))
-        self.asks_to_confirm(typed[2], "/new", "⚠️ **Confirm /new**\n\nThis starts a fresh session.", "k-1")
-        self.feed(complete(typed[2]))
+    async def test_a_confirmation_hermes_dropped_without_a_word_waits_until_its_limit(self):
+        """Hermes drops a confirmation without a word, here when the session's next message comes: the plugin
+        cannot tell why one stopped waiting, so the question still shows waiting until Hermes's own limit
+        passes, and then shows as cancelled, and settles the `/new` it was for (D-155)."""
+        with mock.patch("marmot_hermes.connector.EXPIRY_SECONDS", 0.05, create=True):
+            await self.asked_to_confirm_a_new_session()
         await self.connector.serve("prompt", prompt("m-2", "hello again"))
         del self.hermes.waiting_confirm[KEY]
         self.feed(started("m-2", "hello again"), said("Hi again.", "m-2", notify=True), complete("m-2"))
+        self.assertEqual(self.last_of("confirm:k-1")["state"], "waiting")
+        self.assertEqual(self.of("message")[-1]["text"], "Hi again.")
+        await asyncio.sleep(0.1)
         dropped = self.last_of("confirm:k-1")
         self.assertEqual((dropped["state"], dropped.get("settles")), ("cancelled", ["r-1"]))
-        self.assertEqual(self.of("message")[-1]["text"], "Hi again.")
 
     async def asked_to_confirm_a_new_session(self):
         """Alice asks for a new session in a direct chat, and Hermes asks her to confirm it, as `k-1`."""
@@ -1108,15 +1105,50 @@ class Connected(unittest.IsolatedAsyncioTestCase):
                          [("confirm:k-1", ["r-2"]), (f"session:{session}", ["r-1"])])
 
     async def test_a_typed_answer_to_a_confirmation_hermes_found_too_old_shows_it_cancelled(self):
-        """Hermes drops a confirmation older than it waits when the session's next message comes, a typed
-        `/approve` too, and runs nothing (`tools.slash_confirm.resolve`). The plugin looks before Hermes has
-        the message: the question shows as cancelled, not answered, and settles the `/new`, which will not run."""
-        await self.asked_to_confirm_a_new_session()
-        del self.hermes.waiting_confirm[KEY]  # older than Hermes's limit: `confirm_waiting` says none
+        """Hermes takes a typed `/approve` to a confirmation older than its limit, runs nothing, and says
+        nothing (`tools.slash_confirm.resolve`, `_hm_slash_confirm_reply`). With no reply, nothing shows the
+        question answered: it shows as cancelled once Hermes's limit passes, and settles the `/new`, which will
+        not run (round 1: it showed as approved)."""
+        with mock.patch("marmot_hermes.connector.EXPIRY_SECONDS", 0.05, create=True):
+            await self.asked_to_confirm_a_new_session()
+        del self.hermes.waiting_confirm[KEY]
         await self.connector.serve("prompt", prompt("m-2", "/approve"))
         self.feed(started("m-2", "/approve"), complete("m-2"))
+        self.assertEqual(self.last_of("confirm:k-1")["state"], "waiting")
+        await asyncio.sleep(0.1)
         dropped = self.last_of("confirm:k-1")
         self.assertEqual((dropped["state"], dropped.get("settles")), ("cancelled", ["r-1"]))
+        with self.assertRaises(Refusal) as refused:
+            await self.connector.serve("answer", {"request": "r-2", "item": "confirm:k-1", "by": ALICE, "given": YES})
+        self.assertEqual(refused.exception.reason, "not_waiting")
+
+    async def test_a_confirmation_no_one_answers_closes_when_hermess_limit_passes(self):
+        """Hermes never runs a confirmation older than its limit (`tools.slash_confirm`), and says nothing when
+        it drops one: once the limit passes, the question shows as cancelled, and settles the `/new` it was
+        for, which will not run (D-155)."""
+        with mock.patch("marmot_hermes.connector.EXPIRY_SECONDS", 0.05, create=True):
+            await self.asked_to_confirm_a_new_session()
+        self.assertEqual(self.last_of("confirm:k-1")["state"], "waiting")
+        await asyncio.sleep(0.1)
+        dropped = self.last_of("confirm:k-1")
+        self.assertEqual((dropped["state"], dropped.get("settles")), ("cancelled", ["r-1"]))
+        self.assertEqual([(e["item"], e["settles"]) for e in self.sent if "settles" in e], [("confirm:k-1", ["r-1"])])
+
+    async def test_a_message_while_an_approved_reset_runs_leaves_the_question_to_hermess_reply(self):
+        """Round 2's blocker. Hermes takes a typed `/approve` before it runs the `/new` it confirms, which can
+        take a while. A message Alice sends meanwhile finds no confirmation waiting in Hermes, which says
+        nothing of why: the question still shows waiting, never cancelled, until Hermes's reply to the answer
+        shows it answered, and the reset settles the `/new` by its effect (D-087)."""
+        session = await self.asked_to_confirm_a_new_session()
+        await self.connector.serve("prompt", prompt("m-2", "/approve"))
+        self.feed(started("m-2", "/approve"))
+        del self.hermes.waiting_confirm[KEY]  # Hermes took it, and runs the reset
+        await self.connector.serve("prompt", prompt("m-3", "and then?"))
+        self.assertEqual(self.last_of("confirm:k-1")["state"], "waiting")
+        self.feed(said(phrase("gateway.reset.header_default"), "m-2", notify=True), complete("m-2"))
+        self.assertEqual([e["state"] for e in self.sent if e["item"] == "confirm:k-1"], ["waiting", "done"])
+        self.assertEqual(self.last_of("confirm:k-1")["text"], "Answered: Approve once")
+        self.assertEqual([(e["item"], e["settles"]) for e in self.sent if "settles" in e], [(f"session:{session}", ["r-1"])])
 
     async def test_a_confirmation_asked_while_another_turn_of_its_session_runs_waits_for_its_answer(self):
         """Hermes asks to confirm a typed `/new` while the session's turn still runs, so the `/new` has no

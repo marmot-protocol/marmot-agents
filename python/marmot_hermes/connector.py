@@ -10,9 +10,10 @@ For Hermes a control is a typed command (`docs/reference/hermes-messages.md`): a
 `/stop`, a new session `/new` and a new model `/model <id>`, each typed in the session's own chat by
 its own sender. An approval is answered through Hermes's approval card, and a question through the
 call Hermes gives a platform for it; each is settled once Hermes has taken the answer. A request to
-confirm a command is answered by its id (D-146), and is Hermes's: before and after a message of a session
-where one shows waiting, the plugin asks Hermes whether it still does, and the command it confirms is settled by
-the answer that cancels it, the event that shows it replaced or dropped, or else by its own effect (D-155).
+confirm a command is answered by its id (D-146), and is Hermes's: it closes only on evidence, Hermes's reply
+to an answer, a newer one in its session, or Hermes's own limit passing, never because Hermes no longer
+holds it, which says nothing of why. The command it confirms is settled by the answer that cancels it or
+the event that shows it replaced or expired, or else by its own effect (D-155).
 
 Nothing here touches Hermes directly: `hermes` is the adapter, or a stand-in for it in the tests.
 """
@@ -29,7 +30,7 @@ import tempfile
 from pathlib import Path
 
 from .core import Refusal
-from .translate import CONFIRM_CHOICES, CONFIRM_LOOK, OPEN, VERSION, Translator, key_of, names_session
+from .translate import CONFIRM_CHOICES, CONFIRM_LOOK, OPEN, VERSION, Translator, names_session
 
 log = logging.getLogger("marmot_hermes")
 
@@ -49,6 +50,10 @@ MARK = "\x00"
 # How long a control waits for its effect, from when the plugin handed it to Hermes, before the core
 # settles it as having none (D-087). A control still waiting after this settles nothing.
 EFFECT_SECONDS = 120.0
+# Hermes's own limit for a confirmation (`tools.slash_confirm.DEFAULT_TIMEOUT_SECONDS`, 300 at the pinned
+# commit): it never runs one older, and drops one silently. The plugin counts from when Hermes offers it,
+# which is after Hermes started counting, and a second more, so that by Hermes's clock it has passed too.
+EXPIRY_SECONDS = 301.0
 # What Hermes says, on the first message after it restarted, about a session whose turn a crash cut off.
 # The session stays paused until someone sends `/discard`, which drops the lost turn without running it
 # again, or `/reset` (read in Hermes's source, `gateway/session_ingress.py`).
@@ -168,7 +173,7 @@ class Connector:
         chat = self.chats.get(id_)
         if chat is None:
             ids = f"{self.boot}-{len(self.chats) + 1}-"
-            chat = Chat(id_, Translator(self.version, ids, self.generations, looks=True))
+            chat = Chat(id_, Translator(self.version, ids, self.generations))
             self.chats[id_] = chat
             if self.commands is not None:
                 self.record(self.registry_line(), id_)
@@ -211,11 +216,12 @@ class Connector:
                 prompt = obj(p.get("prompt"))
                 self.cards[f"approval:{prompt.get('request_id')}"] = (prompt.get("session_key"), prompt.get("request_id"))
             if m.get("method") == "send_slash_confirm":
-                self.asked_to_confirm(chat, text_of(p.get("session_key")), f"confirm:{p.get('confirm_id')}")
+                item = f"confirm:{p.get('confirm_id')}"
+                self.asked_to_confirm(chat, text_of(p.get("session_key")), item)
+                asyncio.get_running_loop().call_later(EXPIRY_SECONDS, self.expired, chat, item)
             if m.get("method") == "send":
                 content = text_of(p.get("content"))
-                # What Hermes says to a message can follow its taking a confirmation: Hermes is asked first.
-                settled_by_reply += self.look(chat, text_of(p.get("reply_to")), content)
+                settled_by_reply += self.typed_answer_replied(chat, text_of(p.get("reply_to")), content)
                 awaiting = self.awaiting.pop(text_of(p.get("reply_to")), None)
                 if awaiting is not None and awaiting[0] == chat.id:
                     asking = self.asking(chat, awaiting[3], content)
@@ -226,13 +232,6 @@ class Connector:
                         settled_by_reply.append(awaiting[1])
                 if content.startswith(LOST_TURN):
                     self.discard(chat, text_of(p.get("reply_to")))
-            if m.get("method") == "on_processing_complete":
-                self.look(chat, text_of(p.get("message_id")), None)
-        if line.get("via") == "inbound" and m.get("chat_type"):
-            # Before Hermes has the message: a confirmation Hermes no longer holds, or holds too old to run,
-            # is not one this message answers, whatever it says (D-155).
-            key = key_of({"chat_type": m["chat_type"], "chat_id": m.get("chat"), "user_id": m.get("user")})
-            self.look(chat, text_of(m.get("message_id")), None, key)
         if line.get("via") == "press" and m.get("confirm_id") is not None and "said" in m:
             # Hermes's reply to the answer, which it handed the plugin, is the outcome of the command that
             # request confirmed, and of no other, when it says the command was refused. Otherwise the
@@ -263,7 +262,7 @@ class Connector:
     # -- Hermes's requests to confirm a command, kept by Hermes's session and id (D-155)
 
     def dropped(self, chat: Chat, item: str) -> None:
-        """The confirmation `item` will not run its command: cancelled, replaced or dropped. The event that
+        """The confirmation `item` will not run its command: cancelled, replaced or expired. The event that
         closes it settles that command."""
         awaiting = chat.confirming.pop(item, None)
         if awaiting is not None and awaiting[2](None) and awaiting[1]:
@@ -285,47 +284,40 @@ class Connector:
                      if names_session(session_key, key) and item not in chat.confirming
                      and (translator.open.get(item) or {}).get("text") == content), None)
 
-    def waiting(self, session_key: str) -> str | None:
-        """The confirmation Hermes holds in a session, or `MARK` when that cannot be read. The look runs
-        inside Hermes's own calls on the platform, which must not fail for it."""
-        try:
-            return self.hermes.confirm_waiting(session_key)
-        except Exception:
-            self.warn("Hermes's waiting confirmation could not be read")
-            return MARK
+    def expired(self, chat: Chat, item: str) -> None:
+        """Hermes's own limit for the confirmation `item` passed (`EXPIRY_SECONDS`): Hermes will never run it,
+        and it shows as cancelled, unless something closed it first."""
+        if item in chat.translator.open:
+            self.dropped(chat, item)
+            self.record({"dir": "in", "via": "expired", "msg": {"confirm_id": item.removeprefix("confirm:")}}, chat.id)
 
-    def look(self, chat: Chat, message: str, reply: str | None, key: str | None = None) -> list[str]:
-        """Hermes reached `message`, or is about to: asks Hermes which confirmation waits in that message's
-        session (`key`, or the one it was typed in) when the chat shows one waiting there, and records what it
-        says, so the chat shows the one Hermes holds (`Translator.looked`). When that one is gone, the message
-        answered it, if Hermes reads an answer in it, or Hermes dropped it. A command it would not run is
-        settled by the event that closes it; one it runs by its effect, or by Hermes's words `reply` when they
-        say it was refused, which are returned. When Hermes cannot be asked, the chat shows what it did."""
+    def typed_answer_replied(self, chat: Chat, message: str, reply: str) -> list[str]:
+        """Hermes replies `reply` to `message`, a typed answer to the confirmation shown waiting in its sender's
+        session (`Translator.typed_confirm`). Hermes is asked which one it holds there, and that is recorded:
+        when it still holds that one, or cannot say, the answer did not answer it (Hermes refused the sender,
+        or an approval took the word). Otherwise the reply shows it answered. A Cancel settles the command it
+        was for, which will not run; one that runs is settled by its effect, or by `reply` when it says the
+        command was refused, which is returned (D-155)."""
         translator = chat.translator
-        key = key or translator.typed_key.get(message)
-        if not message or key is None:
+        item, choice = translator.typed_confirm.get(message, (None, None))
+        if item not in translator.open:
             return []
-        replies = []
-        for session_key, item in list(translator.confirm_waiting.items()):
-            if not names_session(session_key, key) or item not in translator.open or item in chat.answered:
-                continue
-            waiting = self.waiting(session_key)
-            if waiting is MARK:
-                continue
-            asked, choice = translator.typed_confirm.get(message, (None, None))
-            if waiting is not None and f"confirm:{waiting}" == item:
-                pass
-            elif asked == item and choice in ("once", "always"):
-                awaiting = chat.confirming.pop(item, None)
-                if awaiting is not None and reply and awaiting[2](reply):
-                    replies.append(awaiting[1])
-            else:
-                self.dropped(chat, item)
-            result = {"confirm_id": waiting} if waiting is not None else None
-            self.record({"dir": "in", "via": "call", "msg": {
-                "method": CONFIRM_LOOK, "params": {"session_key": session_key, "message": message}, "result": result}},
-                chat.id)
-        return replies
+        session_key = translator.confirm_key[item]
+        look = {"method": CONFIRM_LOOK, "params": {"session_key": session_key, "message": message}}
+        try:
+            held = self.hermes.confirm_waiting(session_key)
+            look["result"] = None if held is None else {"confirm_id": held}
+        except Exception:  # the look runs inside Hermes's own call on the platform, which must not fail for it
+            self.warn("Hermes's waiting confirmation could not be read")
+            held, look["error"] = item.removeprefix("confirm:"), "unreadable"
+        self.record({"dir": "in", "via": "call", "msg": look}, chat.id)
+        if f"confirm:{held}" == item:
+            return []
+        if choice == "cancel":
+            self.dropped(chat, item)
+            return []
+        awaiting = chat.confirming.pop(item, None)
+        return [awaiting[1]] if awaiting is not None and awaiting[2](reply) else []
 
     def discard(self, chat: Chat, reply_to: str) -> None:
         """Hermes paused a session because a crash cut a turn off. The core has already closed that
@@ -624,14 +616,9 @@ class Connector:
             unsettle(chat.by_item, item, request)
             raise
         if running is None:
+            # Hermes holds it no longer, which says nothing of why: the question shows what closes it (D-155).
             chat.answered.discard(item)
             unsettle(chat.by_item, item, request)
-            waiting = self.waiting(session_key)
-            if waiting is not MARK and waiting != confirm_id:
-                # Hermes holds it no longer, replaced or too old: the chat shows it so (D-155).
-                self.dropped(chat, item)
-                self.record({"dir": "in", "via": "call", "msg": {
-                    "method": CONFIRM_LOOK, "params": {"session_key": session_key}, "result": None}}, chat.id)
             raise Refusal("not_waiting")
         if choice == "cancel":
             # The command will not run: the answer that shows so settles it.

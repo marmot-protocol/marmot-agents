@@ -486,18 +486,12 @@ class MarmotAdapter(BasePlatformAdapter):
         return asyncio.Task(said(), loop=asyncio.get_running_loop(), eager_start=True)
 
     def confirm_waiting(self, session_key: str) -> str | None:
-        """The id of the confirmation Hermes holds in the session `session_key`, while Hermes would still run
-        it by its own limit, or None (D-155). It only looks: Hermes drops one that waited too long itself,
-        when the session's next message comes."""
+        """The id of the confirmation Hermes holds in the session `session_key`, whatever its age, or None
+        (D-155). It only looks: Hermes drops one that waited too long itself."""
         from tools import slash_confirm
 
         waiting = slash_confirm.get_pending(session_key)
-        if not waiting:
-            return None
-        limit = float(getattr(slash_confirm, "DEFAULT_TIMEOUT_SECONDS", 300))
-        if time.time() - float(waiting.get("created_at") or 0) > limit:
-            return None
-        return str(waiting.get("confirm_id"))
+        return str(waiting.get("confirm_id")) if waiting else None
 
     def phrase(self, key: str, **fields) -> str:
         """What Hermes says under `key` of its catalog, in the language it is set to, as its commands
