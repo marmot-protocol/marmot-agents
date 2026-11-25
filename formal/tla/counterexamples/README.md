@@ -125,12 +125,14 @@ play the `Harness…` steps, and the driver take the others.
 ## InstallUpgrade
 
 [`InstallUpgrade`](../InstallUpgrade.md)'s files start `install-`. Each step names its action and the slot of the
-run that took it (`slot`), with what the action says of itself: `Start(slot, harness)`, `Lock`, `Begin` (`how`:
-`records`, `takes over`, `puts back another's` or `already`), `Prepare`, `Publish`, `Core`, `Keep(part)`,
+run that took it (`slot`), with what the action says of itself: `Start(slot, harness)`, with the `agent` for
+Hermes, `Lock`, `Begin` (`how`: `records`, `takes over`, `puts back another's`, `puts back another agent's` or
+`already`), `Prepare`, `Publish`, `Core`, `Keep(part)`,
 `Put(part)`, `Note` (the plugin change listed in the upgrade's record), `Connect` (`finishes`: a change a killed
 run left), `Replace`, `StartServices`, `Commit`, `Tag`,
 `End` (`change`: the plugin change moved into the record), `Retire`, `Done`; on a stop, `Fail(at)`, then
-`PutBackPlugin` or `Trap`, `DropChange`, `Finish`, `PutBackChange` or `PutBackNoChange` (then `DropChange`),
+`PutBackPlugin` or `Trap`, `DropChange`, `Finish`, `PutBackChange(agent)` then `DropChange` for each plugin change
+the record lists, then `PutBackNoChange`,
 `PutBackCore`, `PutBackRemove(part)`, `PutBackMove(part)`,
 `PutBackLeave(part)`, `PutBackParts`, `PutBackImage`, `PutBackRetire`, `Exit`; `Restore`; and `Kill(at)`.
 
@@ -139,6 +141,7 @@ run left), `Replace`, `StartServices`, `Commit`, `Tag`,
 | [`install-image-put-back-apart`](install-image-put-back-apart.json) | U1 | Found in `install/lib.sh`, and fixed on 2026-11-24: Pi's install is stopped once the upgrade is done, and its exit trap puts the image tag back on the old image under the new scripts. Now the defect `ImageOutsideRecord` |
 | [`install-plugin-change-ends-apart`](install-plugin-change-ends-apart.json) | U1 | Found in `install/lib.sh`, and fixed on 2026-11-24: Hermes's install is stopped between the end of the upgrade and the end of the plugin change, and puts the old plugin back over the new core. Now the defect `ChangeEndsApart` |
 | [`install-plugin-put-back-apart`](install-plugin-put-back-apart.json) | U1 | Found in review, and fixed on 2026-11-24: Hermes's install is killed once our new plugin is in; Codex's install puts back the core and the support files, and leaves the plugin. Now the defect `ChangeOutsideRecord` |
+| [`install-another-agents-change-left`](install-another-agents-change-left.json) | U1 | Found in review (#180), and fixed on 2026-11-25: Hermes agent a's install is killed once our new plugin is in a's Hermes; agent b's install takes the upgrade over and ends it with its own change only, leaving a's Hermes changed by a run that never ended, and a's record of the change under way. Now the defect `TakesOverAnother` |
 
 ## ActivityHoldBack
 

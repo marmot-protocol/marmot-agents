@@ -63,6 +63,8 @@ case $1 in
     run) echo "with MODEL_BASE_URL=${{MODEL_BASE_URL:-}}" >> "$FAKE_LOG" ;;
 esac
 """
+# An older core, which the upgrade tests install first.
+OLDER_CORE = FAKE_CORE + "# an older core\n"
 # A stand-in fails a command that starts as FAKE_FAIL says, such as "systemctl --user restart". One that
 # starts as FAKE_PAUSE says makes the file FAKE_PAUSE_AT.reached, then waits until FAKE_PAUSE_AT is there.
 FAKE_LOGGER = """#!/bin/sh
@@ -142,7 +144,7 @@ echo "$(basename "$0") $*" >> "$FAKE_LOG"
 """
 FAKE_OPENCLAW = r'''#!/usr/bin/env python3
 """A stand-in for `openclaw`: the commands the installer runs, on a JSON file as OpenClaw keeps it."""
-import json, os, shutil, sys
+import json, os, shutil, signal, sys
 from pathlib import Path
 
 args = sys.argv[1:]
@@ -216,6 +218,9 @@ elif args[:2] == ["config", "set"]:
     parent, last = walk(c, args[2], make=True)
     parent[last] = json.loads(args[3]) if "--strict-json" in args else args[3]
     save(c)
+    if os.environ.get("FAKE_OPENCLAW_KILL_AFTER") == f"config set {args[2]}":
+        # The installer killed outright once this command has done its work.
+        os.kill(os.getppid(), signal.SIGKILL)
 elif args[:2] == ["config", "unset"]:
     note()
     valid()
@@ -280,7 +285,7 @@ else:
 '''
 FAKE_HERMES = r'''#!/usr/bin/env python3
 """A stand-in for `hermes`: the commands the installer runs. Its config.yaml is JSON, which is YAML."""
-import json, os, signal, sys
+import json, os, signal, sys, time
 from pathlib import Path
 
 args = sys.argv[1:]
@@ -341,6 +346,15 @@ elif args[:2] == ["config", "get"]:
         c, last = walk(load(), key)
         value = c.get(last, "") if c is not None else ""
         print(str(value).lower() if isinstance(value, bool) else value)
+    if os.environ.get("FAKE_HERMES_PAUSE_AFTER") == f"config get {key}":
+        # The installer held up once it has read this, as FAKE_PAUSE holds up the other stand-ins.
+        sys.stdout.flush()
+        at = Path(os.environ["FAKE_PAUSE_AT"])
+        Path(f"{at}.reached").touch()
+        for _ in range(1200):
+            if at.exists():
+                break
+            time.sleep(0.05)
 elif args[:2] == ["config", "set"]:
     note()
     key, value = args[2], args[3]
@@ -352,6 +366,9 @@ elif args[:2] == ["config", "set"]:
         parent, last = walk(c, key, make=True)
         parent[last] = {"true": True, "false": False}.get(value, value)
         save(c)
+    if os.environ.get("FAKE_HERMES_KILL_AFTER") == f"config set {key}":
+        # The installer killed outright once this command has done its work.
+        os.kill(os.getppid(), signal.SIGKILL)
 elif args[:2] == ["config", "unset"]:
     note()
     key = args[2]
@@ -500,6 +517,14 @@ class Machine:
     @staticmethod
     def output(process: subprocess.Popen) -> str:
         return process.output_path.read_text()
+
+    @staticmethod
+    def until(*conditions) -> None:
+        """Waits, for up to a minute, until one of the conditions holds."""
+        for _ in range(1200):
+            if any(condition() for condition in conditions):
+                return
+            time.sleep(0.05)
 
     def args(self, harness: str, *more: str, container=False) -> list:
         args = ["--yes", "--owner", OWNER]
@@ -1672,7 +1697,7 @@ class Upgrade(unittest.TestCase):
     def older(self, m: Machine) -> None:
         """An agent installed with an older core and older support files."""
         older = m.dir / "older-core"
-        m.write(older, FAKE_CORE + "# an older core\n")
+        m.write(older, OLDER_CORE)
         m.run(self.HARNESS, *m.args(self.HARNESS, "--binary", str(older), "--name", "first"))
         lib = m.data / "lib"
         (lib / "LICENSE").write_text((lib / "LICENSE").read_text() + "an older licence\n")
@@ -1758,7 +1783,7 @@ class Upgrade(unittest.TestCase):
             tried += 1
             untouched += not (m.data / "upgrade/lib/packages").exists()
             out = m.run("codex", *m.args("codex", "--binary", str(m.core))).stdout
-            self.assertIn("a run of another installer before this one stopped part way", out, f"killed at step {step}")
+            self.assertIn("a run of another installer, or for another agent, before this one stopped part way", out, f"killed at step {step}")
             self.assertEqual(self.snapshot(m), expected, f"killed at step {step}")
             self.assertEqual(self.leftovers(m), [])
         self.assertGreater(untouched, 0, "some step leaves the upgrade under way before Claude Code's own files")
@@ -1863,7 +1888,7 @@ exec {rm} "$@"
             with self.subTest(harness=harness):
                 m = Machine(self)
                 older = m.dir / "older-core"
-                m.write(older, FAKE_CORE + "# an older core\n")
+                m.write(older, OLDER_CORE)
                 args = m.args(harness, "--binary", str(older))
                 m.run(harness, *args)
                 (m.home / plugin / "OLDER").write_text("an older file\n")
@@ -1871,23 +1896,39 @@ exec {rm} "$@"
                 failed = m.run(harness, *args, env={"FAKE_FAIL": "systemctl --user restart"}, check=False)
                 self.assertNotEqual(failed.returncode, 0)
                 self.assertTrue((m.home / plugin / "OLDER").exists(), failed.stderr)
-                self.assertIn("an older core", (m.home / ".local/bin/marmot-agent").read_text())
+                self.assertEqual((m.home / ".local/bin/marmot-agent").read_text(), OLDER_CORE, failed.stderr)
                 m.run(harness, *args)
                 self.assertFalse((m.home / plugin / "OLDER").exists())
                 self.assertEqual((m.home / ".local/bin/marmot-agent").read_text(), FAKE_CORE)
                 self.assertEqual(list((m.data / f"agents/{harness}/backups").glob("marmot.*")), [],
                                  "no copy of our own plugin is kept once the update is done")
 
+    @staticmethod
+    def judged(found: dict, expected: tuple):
+        """None if what together(m) found is all of one of the installs expected: "older", "new", or
+        "codex", the core and the shared files new beside this harness's older ones; else what is wrong."""
+        shared = ("core", "install files")
+        wanted = {"older": lambda part: "older", "new": lambda part: "new",
+                  "codex": lambda part: "new" if part in shared else "older"}
+        for install in expected:
+            if all(found[part] == wanted[install](part) for part in found):
+                return None
+        return f"expected the {' or the '.join(expected)} install, found " + \
+            ", ".join(f"the {part} {state}" for part, state in found.items())
+
     def every_step_together(self, harness: str, args, older, together, stopped_env=None) -> None:
         """What goes with the core, Pi's image or the person's Hermes plugin, stays with the files it
         was made for, whatever step an upgrade is stopped at (InstallUpgrade.tla, U1): stopped by TERM;
         killed, then run again, or run again and failing, or followed by Codex's install. older(m) puts
-        in an older install; together(m) says what is wrong, or None. Checked once nothing is left under
-        way. A run stopped by TERM puts back what it changed as it ends, so it leaves nothing under way;
-        only a kill does. After a kill, the next run of the same harness finishes the install, and leaves
-        nothing under way; a run that fails, and Codex's install, which cannot finish another harness's
-        upgrade, put back all of it, a plugin change too. stopped_env is the stopped run's, not the runs'
-        after it."""
+        in an older install, marking each part of it; together(m) says which install each part is of,
+        older or new (generations). Checked once nothing is left under way. A run stopped by TERM puts
+        back what it changed as it ends, so it leaves nothing under way, and the whole of one install:
+        the older or the new; only a kill leaves something under way. After a kill, the next run of the
+        same harness finishes the install, all of it new; a run that fails puts back all of it, the core
+        and a plugin change too, all of it older; and Codex's install, which cannot finish another
+        harness's upgrade, puts it all back, then installs the core and the files every install
+        replaces, new, beside the older ones of this harness. stopped_env is the stopped run's, not the
+        runs' after it (#197)."""
         m = Machine(self)
         m.write(m.bin / "docker", FAKE_DOCKER)
         older(m)
@@ -1910,7 +1951,7 @@ exec {rm} "$@"
                 said = f"after SIG{signal} at step {step}"
                 if then is None:
                     if not under_way(m):
-                        found.append((said, together(m), stopped.stderr))
+                        found.append((said, self.judged(together(m), ("older", "new")), stopped.stderr))
                     elif signal == "TERM":
                         found.append((said, "something is left under way", stopped.stderr))
                     continue
@@ -1923,10 +1964,13 @@ exec {rm} "$@"
                     ran = m.run(harness, *args(m), env=env, check=False)
                 if then == "again" and ran.returncode != 0:
                     found.append((f"{said}, then {then}", "the run failed", ran.stderr))
+                elif then == "failing" and (ran.returncode == 0 or "failing, as asked" not in ran.stderr):
+                    found.append((f"{said}, then {then}", "the run did not fail as asked", ran.stderr))
                 elif under_way(m):
                     found.append((f"{said}, then {then}", "something is left under way", ran.stderr))
                 else:
-                    found.append((f"{said}, then {then}", together(m), ran.stderr))
+                    expected = {"again": ("new",), "failing": ("older",), "codex": ("codex",)}[then]
+                    found.append((f"{said}, then {then}", self.judged(together(m), expected), ran.stderr))
             return found
 
         with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
@@ -1936,15 +1980,34 @@ exec {rm} "$@"
                         self.assertIsNone(wrong, f"{said}:\n{stderr}")
 
     @staticmethod
-    def pi_together(m: Machine):
-        """Whether Pi's scripts and the image tagged for them are of one install, the older or the new."""
+    def shared_generations(m: Machine) -> dict:
+        """Which install the core and the files every install replaces are of: older, new, or what is
+        wrong with them. older(m) marks the older install's."""
+        core = m.home / ".local/bin/marmot-agent"
+        if not core.is_file():
+            core_is = "not there"
+        else:
+            text = core.read_text()
+            core_is = "older" if text == OLDER_CORE else "new" if text == FAKE_CORE else "another core"
+        install = m.data / "lib/install"
+        files_are = "not there" if not (install / "lib.sh").is_file() else \
+            "older" if (install / "OLDER").exists() else "new"
+        return {"core": core_is, "install files": files_are}
+
+    @staticmethod
+    def mark_older(m: Machine) -> None:
+        """Marks the core and the shared files of the install there as older."""
+        (m.data / "lib/install/OLDER").write_text("an older file\n")
+
+    @classmethod
+    def pi_together(cls, m: Machine) -> dict:
+        """Which install Pi's scripts, the image tagged for them, the core and the shared files are of."""
         tag = json.loads((m.dir / "docker-tags").read_text()).get("marmot-agents-pi:latest")
-        if not tag:
-            return "no image is tagged for the scripts"
-        scripts_older = (m.data / "lib/tools/pi/OLDER").exists()
-        if scripts_older != (tag == m.older_image):
-            return f"the scripts are {'older' if scripts_older else 'new'}, the image tagged {tag}"
-        return None
+        scripts = m.data / "lib/tools/pi"
+        return {**cls.shared_generations(m),
+                "Pi's scripts": "not there" if not scripts.is_dir() else
+                "older" if (scripts / "OLDER").exists() else "new",
+                "image": "not tagged" if not tag else "older" if tag == m.older_image else "new"}
 
     def test_every_step_keeps_the_image_with_its_scripts(self):
         def args(m: Machine) -> list:
@@ -1952,9 +2015,10 @@ exec {rm} "$@"
 
         def older(m: Machine) -> None:
             first = m.dir / "older-core"
-            m.write(first, FAKE_CORE + "# an older core\n")
+            m.write(first, OLDER_CORE)
             m.run("pi", *m.args("pi", "--binary", str(first), container=True))
             (m.data / "lib/tools/pi/OLDER").write_text("an older file\n")
+            self.mark_older(m)
             m.older_image = json.loads((m.dir / "docker-tags").read_text())["marmot-agents-pi:latest"]
 
         self.every_step_together("pi", args, older, self.pi_together)
@@ -1968,9 +2032,10 @@ exec {rm} "$@"
 
         def older(m: Machine) -> None:
             first = m.dir / "older-core"
-            m.write(first, FAKE_CORE + "# an older core\n")
+            m.write(first, OLDER_CORE)
             m.run("pi", *m.args("pi", "--binary", str(first), container=True))
             (m.data / "lib/tools/pi/OLDER").write_text("an older file\n")
+            self.mark_older(m)
             m.older_image = json.loads((m.dir / "docker-tags").read_text())["marmot-agents-pi:latest"]
 
         self.every_step_together("pi", args, older, self.pi_together, stopped_env={"FAKE_DOCKER_FAIL": "image inspect"})
@@ -2010,20 +2075,18 @@ exec {rm} "$@"
 
         def older(m: Machine) -> None:
             first = m.dir / "older-core"
-            m.write(first, FAKE_CORE + "# an older core\n")
+            m.write(first, OLDER_CORE)
             m.run("hermes", *m.args("hermes", "--binary", str(first)))
             (m.data / "lib/python/marmot_hermes/OLDER").write_text("an older file\n")
             (m.home / plugin / "OLDER").write_text("an older file\n")
+            self.mark_older(m)
 
-        def together(m: Machine):
-            for name, folder in (("support files", m.data / "lib/python/marmot_hermes"), ("plugin", m.home / plugin)):
-                if not (folder / "plugin.yaml").is_file():
-                    return f"the {name} are not there" if name.endswith("s") else f"the {name} is not there"
-            files_older = (m.data / "lib/python/marmot_hermes/OLDER").exists()
-            plugin_older = (m.home / plugin / "OLDER").exists()
-            if files_older != plugin_older:
-                return f"the files are {'older' if files_older else 'new'}, the plugin {'older' if plugin_older else 'new'}"
-            return None
+        def together(m: Machine) -> dict:
+            found = self.shared_generations(m)
+            for name, folder in (("Hermes files", m.data / "lib/python/marmot_hermes"), ("plugin", m.home / plugin)):
+                found[name] = "not there" if not (folder / "plugin.yaml").is_file() else \
+                    "older" if (folder / "OLDER").exists() else "new"
+            return found
 
         self.every_step_together("hermes", args, older, together)
 
@@ -2072,6 +2135,227 @@ exec {rm} "$@"
                     self.assertEqual(finished, "new", again.stdout)
                     self.assertFalse(any(name.startswith((".upgrade", "upgrade")) for name in left), left)
         self.assertGreater(taken_over, 0, "some step leaves an upgrade under way for the next run")
+
+
+class TwoAgents(unittest.TestCase):
+    """Two agents of one gateway harness in one home share the core and the support files, and each
+    has its own change to a gateway's plugin. A run for one agent never finishes an upgrade that holds
+    another agent's plugin change, or one to another gateway: it puts that upgrade back first, the
+    other's change with it, so no change is left to put stale copies back later (#180)."""
+
+    @staticmethod
+    def args(m: Machine, name: str, core=None) -> list:
+        return m.args("hermes", "--binary", str(core or m.core), "--name", name)
+
+    @staticmethod
+    def own_hermes(m: Machine) -> dict:
+        """The second agent's Hermes, beside the first's in ~/.hermes."""
+        return {"HERMES_HOME": str(m.home / ".hermes-b")}
+
+    @staticmethod
+    def gateway(m: Machine, folder: str = ".hermes") -> dict:
+        """The files of a Hermes. A folder put back empty may stay: replace_dir makes the one above."""
+        root = m.home / folder
+        return {str(p.relative_to(root)): p.read_text() for p in sorted(root.rglob("*")) if p.is_file()}
+
+    @staticmethod
+    def under_way(m: Machine) -> list:
+        return sorted(str(p.relative_to(m.data)) for p in [*m.data.glob("agents/*/plugin-change"), m.data / "upgrade"]
+                      if p.exists())
+
+    def older(self, m: Machine) -> None:
+        """Two Hermes agents, a and b, each in a Hermes of its own, installed with an older core."""
+        first = m.dir / "older-core"
+        m.write(first, OLDER_CORE)
+        m.run("hermes", *self.args(m, "a", first))
+        m.run("hermes", *self.args(m, "b", first), env=self.own_hermes(m))
+        for marked in (m.data / "lib/python/marmot_hermes", m.data / "lib/install",
+                       m.home / ".hermes/plugins/marmot", m.home / ".hermes-b/plugins/marmot"):
+            (marked / "OLDER").write_text("an older file\n")
+
+    def test_another_agent_puts_back_an_upgrade_it_cannot_finish(self):
+        """Agent a's upgrade is killed at any step; then agent b's install, into its own Hermes, puts a's
+        upgrade back, a's Hermes as it was with it, and installs its own. Before, b took the upgrade over
+        and ended it with only its own change, leaving a's Hermes changed and a's record of the change
+        under way, to put back stale copies over a later install."""
+        counting = Machine(self)
+        self.older(counting)
+        counting.run("hermes", *self.args(counting, "a"), stop=("KILL", 0))
+        steps = int(counting.steps.read_text())
+
+        def one(step):
+            m = Machine(self)
+            self.older(m)
+            before = self.gateway(m)
+            m.run("hermes", *self.args(m, "a"), stop=("KILL", step), check=False)
+            left = (m.data / "upgrade").exists()
+            killed = self.gateway(m)
+            ran = m.run("hermes", *self.args(m, "b"), env=self.own_hermes(m), check=False)
+            core = (m.home / ".local/bin/marmot-agent").read_text()
+            return (step, left, before, killed, ran, self.gateway(m), self.gateway(m, ".hermes-b"), core,
+                    (m.data / "lib/install/OLDER").exists(), self.under_way(m))
+
+        put_back = 0
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+            for step, left, before, killed, ran, a, b, core, files_older, under_way in pool.map(one, range(1, steps + 1)):
+                put_back += left and killed != before
+                with self.subTest(step=step):
+                    said = f"a killed at step {step}, then b:\n{ran.stdout}\n{ran.stderr}"
+                    self.assertEqual(ran.returncode, 0, said)
+                    self.assertEqual(under_way, [], said)
+                    # A run of a stopped part way through its upgrade is put back with it; one stopped
+                    # after, its upgrade done, is left as it is.
+                    self.assertEqual(a, before if left else killed, said)
+                    self.assertNotIn("plugins/marmot/OLDER", b, said)
+                    self.assertEqual((core, files_older), (FAKE_CORE, False), said)
+        self.assertGreater(put_back, 0, "some step leaves a's Hermes changed and its upgrade under way")
+
+    def test_the_same_agent_and_gateway_finish_the_upgrade(self):
+        """The agent whose run was killed part way through changing its gateway's plugin, run again with
+        the same gateway, takes the upgrade over and finishes the change: what it finds names its own
+        gateway's settings file (MA_GATEWAY)."""
+        for harness in ("hermes", "openclaw"):
+            if harness == "openclaw" and not REAL_NODE:
+                continue
+            with self.subTest(harness=harness):
+                counting = Machine(self)
+                args = counting.args(harness, "--binary", str(counting.core))
+                counting.run(harness, *args, stop=("KILL", 0))
+                for step in range(1, int(counting.steps.read_text()) + 1):
+                    m = Machine(self)
+                    args = m.args(harness, "--binary", str(m.core))
+                    m.run(harness, *args, stop=("KILL", step), check=False)
+                    if (m.data / f"agents/{harness}/plugin-change").exists() and (m.data / "upgrade").exists():
+                        break
+                else:
+                    self.fail("no step leaves a plugin change under way")
+                out = m.run(harness, *args).stdout
+                self.assertIn("this one finishes that", out)
+                self.assertIn("plugin; this one finishes it", out)
+                self.assertEqual(self.under_way(m), [])
+
+    def test_the_same_agent_into_another_hermes_puts_back_the_first(self):
+        """An agent's run killed once our plugin is in its Hermes, then its run again into another Hermes:
+        the first Hermes is put back as it was, not left with half a change no run finishes, and the
+        second gets the plugin, with copies of its own settings."""
+        m = Machine(self)
+        first = m.dir / "older-core"
+        m.write(first, OLDER_CORE)
+        m.run("codex", *m.args("codex", "--binary", str(first), "--name", "c"))
+        before = self.gateway(m)
+        killed = m.run("hermes", *self.args(m, "a"), env={"FAKE_HERMES_KILL": "plugins enable"}, check=False)
+        self.assertNotEqual(killed.returncode, 0, killed.stdout)
+        ran = m.run("hermes", *self.args(m, "a"), env=self.own_hermes(m), check=False)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual(self.gateway(m), before, ran.stdout)
+        self.assertIn("plugins/marmot/plugin.yaml", self.gateway(m, ".hermes-b"))
+        self.assertEqual(self.under_way(m), [], ran.stdout)
+
+    def test_runs_for_two_agents_into_one_hermes_then_a_failure_put_back_all_of_it(self):
+        """Agents a and b put into one Hermes, a's run killed once our plugin is in and before the
+        Hermes names a's home, then b's the same way, then a's again, failing: the core, the support
+        files and the Hermes are all as they were before a's first run. Before, a's last run put back
+        its own change first, and then b's, whose copies are of what a's first run left: our plugin,
+        beside the older core."""
+        m = Machine(self)
+        first = m.dir / "older-core"
+        m.write(first, OLDER_CORE)
+        m.run("codex", *m.args("codex", "--binary", str(first), "--name", "c"))
+        before = (Upgrade.snapshot(m), self.gateway(m))
+        kill = {"FAKE_HERMES_KILL": "plugins enable"}
+        for name in ("a", "b"):
+            killed = m.run("hermes", *self.args(m, name), env=kill, check=False)
+            self.assertNotEqual(killed.returncode, 0, killed.stdout)
+            self.assertTrue((m.home / ".hermes/plugins/marmot/plugin.yaml").exists(), killed.stdout)
+        failed = m.run("hermes", *self.args(m, "a"), env={"FAKE_FAIL": "systemctl --user restart"}, check=False)
+        self.assertNotEqual(failed.returncode, 0, failed.stdout)
+        self.assertEqual((Upgrade.snapshot(m), self.gateway(m)), before, failed.stderr)
+        self.assertEqual(self.under_way(m), [], failed.stderr)
+
+    def test_another_agent_into_a_gateway_a_killed_run_named_puts_that_run_back(self):
+        """Agent a's run into a gateway no agent had, killed just after the gateway names a's home, then
+        agent b's into the same gateway: b's puts a's upgrade back, the gateway's settings with it, before
+        it reads whom the gateway serves, and installs. Before, b read a's half-made settings first and
+        stopped, saying the gateway was a's, and the recovery that would take them out never ran."""
+        for harness, kill in (("hermes", {"FAKE_HERMES_KILL_AFTER": "config set platforms.marmot.home"}),
+                              ("openclaw", {"FAKE_OPENCLAW_KILL_AFTER": "config set channels.marmot"})):
+            if harness == "openclaw" and not REAL_NODE:
+                continue
+            with self.subTest(harness=harness):
+                m = Machine(self)
+                first = m.dir / "older-core"
+                m.write(first, OLDER_CORE)
+                m.run("codex", *m.args("codex", "--binary", str(first), "--name", "c"))
+                args = lambda name: m.args(harness, "--binary", str(m.core), "--name", name)
+                killed = m.run(harness, *args("a"), env=kill, check=False)
+                self.assertNotEqual(killed.returncode, 0, killed.stdout)
+                self.assertIn(str(m.data / "agents/a/home"), (m.home / CHANGED[harness][0] / CHANGED[harness][1][0]).read_text())
+                ran = m.run(harness, *args("b"), check=False)
+                said = f"{ran.stdout}\n{ran.stderr}"
+                self.assertEqual(ran.returncode, 0, said)
+                self.assertIn("or for another agent, before this one stopped part way", ran.stdout)
+                settings = (m.home / CHANGED[harness][0] / CHANGED[harness][1][0]).read_text()
+                self.assertIn(str(m.data / "agents/b/home"), settings, said)
+                self.assertNotIn(str(m.data / "agents/a/home"), settings, said)
+                self.assertEqual(self.under_way(m), [], said)
+
+    def test_a_first_install_reads_the_gateway_only_under_the_lock(self):
+        """Agents a and b installed at once into one Hermes, in a home with no agent yet: b's run held
+        up just after it reads whom the Hermes serves, then a's run. a's waits for b's to end, then
+        finds b's home in the Hermes and stops; b's installs. Before, a first install took the lock
+        only once it put the core in, so a's ran to its end while b's was held up, and b's then put
+        its home over a's in the Hermes, which a's agent was left cut off from."""
+        m = Machine(self)
+        pause = m.dir / "pause"
+        b = m.start("hermes", *self.args(m, "b"), env={"FAKE_HERMES_PAUSE_AFTER": "config get platforms.marmot.home",
+                                                      "FAKE_PAUSE_AT": str(pause)})
+        self.addCleanup(b.kill)
+        reached = pause.with_name("pause.reached")
+        m.until(reached.exists, lambda: b.poll() is not None)
+        self.assertTrue(reached.exists(), m.output(b))
+        a = m.start("hermes", *self.args(m, "a"))
+        self.addCleanup(a.kill)
+        m.until(lambda: "waiting for it" in m.output(a), lambda: a.poll() is not None)
+        pause.touch()
+        self.assertEqual(b.wait(timeout=120), 0, m.output(b))
+        self.assertNotEqual(a.wait(timeout=120), 0, m.output(a))
+        self.assertIn("waiting for it", m.output(a))
+        self.assertIn(f"already connects to the agent whose home is {m.data / 'agents/b/home'}", m.output(a))
+        config = json.loads((m.home / ".hermes/config.yaml").read_text())
+        self.assertEqual(config["platforms"]["marmot"]["home"], str(m.data / "agents/b/home"))
+
+    def test_a_refused_first_install_hands_the_lock_on(self):
+        """A first install into a Hermes that serves another agent is refused, and takes away the data
+        folder it made for the lock, the lock file with it. A run that waited for that lock opens the
+        file again, so a run after it waits for it in turn, not taking a lock of its own on a new file
+        while it holds one on a file that is gone."""
+        m = Machine(self)
+        (m.home / ".hermes").mkdir()
+        (m.home / ".hermes/config.yaml").write_text(json.dumps({"platforms": {"marmot": {"home": "/elsewhere"}}}))
+        held, holds = m.dir / "held", m.dir / "holds"
+        refused = m.start("hermes", *self.args(m, "a"), env={"FAKE_HERMES_PAUSE_AFTER": "config get platforms.marmot.home",
+                                                            "FAKE_PAUSE_AT": str(held)})
+        self.addCleanup(refused.kill)
+        m.until(held.with_name("held.reached").exists, lambda: refused.poll() is not None)
+        self.assertTrue(m.data.exists(), m.output(refused))
+        codex = lambda name, env: m.start("codex", *m.args("codex", "--binary", str(m.core), "--name", name), env=env)
+        waited = codex("c", {"FAKE_PAUSE": "systemctl --user restart", "FAKE_PAUSE_AT": str(holds)})
+        self.addCleanup(waited.kill)
+        reached = holds.with_name("holds.reached")
+        m.until(lambda: "waiting for it" in m.output(waited), reached.exists, lambda: waited.poll() is not None)
+        self.assertIn("waiting for it", m.output(waited))
+        held.touch()
+        self.assertNotEqual(refused.wait(timeout=120), 0, m.output(refused))
+        self.assertIn("already connects to the agent whose home is /elsewhere", m.output(refused))
+        m.until(reached.exists, lambda: waited.poll() is not None)
+        self.assertTrue(reached.exists(), m.output(waited))
+        after = codex("d", {})
+        self.addCleanup(after.kill)
+        m.until(lambda: "waiting for it" in m.output(after), lambda: after.poll() is not None)
+        self.assertIn("waiting for it", m.output(after))
+        holds.touch()
+        self.assertEqual(waited.wait(timeout=120), 0, m.output(waited))
+        self.assertEqual(after.wait(timeout=120), 0, m.output(after))
 
 
 class FilesFrom(unittest.TestCase):
@@ -2555,6 +2839,101 @@ class PutBack(unittest.TestCase):
             self.assertIn("status 1", ran.stdout, ran.stderr)
             self.assertFalse(log.exists(), "nothing put back before the one that failed")
             self.assertTrue(all(r.exists() for r in records))
+
+    def test_the_change_of_a_run_that_fails_goes_back_in_its_turn(self):
+        """A run that fails puts its own plugin change back in the same replay as the others its upgrade
+        lists, the last first: listed before another, it goes back after it, as the other's copies may
+        be of what this one left. Before, it went back first, and the other's copies over it (#180). One
+        that fails to go back still stops those before it."""
+        for failing, expected in ((None, ["second", "first"]), ("second", [])):
+            with self.subTest(failing=failing), tempfile.TemporaryDirectory() as tmp:
+                tmp = Path(tmp)
+                data = tmp / "data"
+                upgrade = data / "upgrade"
+                upgrade.mkdir(parents=True)
+                (upgrade / "list").write_text("")
+                records = [tmp / name / "plugin-change" for name in ("first", "second")]
+                for record in records:
+                    record.parent.mkdir()
+                    record.write_text("")
+                (upgrade / "plugin-changes").write_text("".join(f"{r}\n" for r in records))
+                log = tmp / "put-back"
+                ran = self.lib(
+                    'put_back_change() { r=${1:-$MA_CHANGE}; case $r in */$FAILING/*) return 1 ;; esac\n'
+                    '    basename "$(dirname "$r")" >>"$LOG"; }\n'
+                    'image_put_back_from() { return 0; }\n'
+                    'HARNESS_TITLE=Hermes MA_UPGRADING=1 MA_CHANGING=1 MA_PREPARED=0 MA_WORK="" MA_STAGED=0\n'
+                    'finish 1',
+                    MA_DATA=str(data), MA_UPGRADE=str(upgrade), MA_CORE=str(tmp / "core"), MA_LIB=str(tmp / "lib"),
+                    MA_CHANGE=str(records[0]), LOG=str(log), FAILING=failing or "none")
+                self.assertEqual(log.read_text().split() if log.exists() else [], expected, ran.stderr)
+                self.assertEqual([r.exists() for r in records], [bool(failing)] * 2, ran.stderr)
+
+    def test_a_record_of_this_runs_change_that_cannot_be_removed_keeps_the_upgrade(self):
+        """A run that fails puts its own plugin change back, and then cannot remove the record of it: the
+        record stays, with the copy of our plugin it names, the replay stops before the changes listed
+        before it, and the upgrade's record is kept, for the next run to put the same copies back. Before,
+        the copy went and the replay went on, retiring the upgrade with the record naming a copy gone."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            data = tmp / "data"
+            upgrade = data / "upgrade"
+            upgrade.mkdir(parents=True)
+            (upgrade / "list").write_text("")
+            records = [tmp / name / "plugin-change" for name in ("first", "second")]
+            copy = tmp / "second" / "backups" / "marmot.copy"
+            copy.mkdir(parents=True)
+            records[0].parent.mkdir()
+            records[0].write_text("")
+            records[1].write_text(f"own\t{tmp / 'plugin'}\t{copy}\n")
+            (upgrade / "plugin-changes").write_text("".join(f"{r}\n" for r in records))
+            log = tmp / "put-back"
+            ran = self.lib(
+                'put_back_change() { basename "$(dirname "${1:-$MA_CHANGE}")" >>"$LOG"; }\n'
+                'image_put_back_from() { return 0; }\n'
+                'rm() { if [ "$#" -eq 2 ] && [ "$2" = "$MA_CHANGE" ]; then echo "rm: cannot remove" >&2; return 1; fi\n'
+                '    command rm "$@"; }\n'
+                'HARNESS_TITLE=Hermes MA_UPGRADING=1 MA_CHANGING=1 MA_PREPARED=0 MA_WORK="" MA_STAGED=0\n'
+                'finish 1',
+                MA_DATA=str(data), MA_UPGRADE=str(upgrade), MA_CORE=str(tmp / "core"), MA_LIB=str(tmp / "lib"),
+                MA_CHANGE=str(records[1]), LOG=str(log))
+            self.assertEqual(log.read_text().split(), ["second"], ran.stderr)
+            self.assertEqual([r.exists() for r in records], [True, True], ran.stderr)
+            self.assertTrue(copy.exists(), ran.stderr)
+            self.assertTrue((upgrade / "plugin-changes").exists(), ran.stderr)
+
+    def test_a_change_names_this_gateway_only_when_its_path_is_the_same(self):
+        """changes_ours compares the settings file a plugin change names with this run's gateway as they
+        are written: a backslash in a path is a backslash, not an escape. Before, awk -v read the path
+        given, so /profiles/\\141/config.yaml was taken for the gateway /profiles/a/config.yaml."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            upgrade = tmp / "upgrade"
+            upgrade.mkdir()
+            record = tmp / "agents" / "a" / "plugin-change"
+            record.parent.mkdir(parents=True)
+            record.write_text(f"file\t{tmp}/profiles/a/config.yaml\t\n")
+            (upgrade / "plugin-changes").write_text(f"{record}\n")
+            for gateway, ours in ((f"{tmp}/profiles/a/config.yaml", True), (f"{tmp}/profiles/\\141/config.yaml", False)):
+                with self.subTest(gateway=gateway):
+                    ran = self.lib('if changes_ours; then echo ours; else echo other; fi',
+                                   MA_UPGRADE=str(upgrade), MA_AGENT_DIR=str(record.parent), MA_GATEWAY=gateway)
+                    self.assertEqual(ran.stdout.strip(), "ours" if ours else "other", ran.stderr)
+
+    def test_an_upgrade_of_this_harness_is_ours_however_its_parts_are_written(self):
+        """upgrade_ours looks each part of the upgrade up in lib_parts, through a pipe, with pipefail on as
+        the scripts run: grep reads all of it, so lib_parts never writes into a pipe grep has left. Before,
+        grep -q left at the first match, and lib_parts, writing after it, failed with SIGPIPE: the part
+        was taken for another harness's, and the run put back an upgrade it was to finish, now and then."""
+        with tempfile.TemporaryDirectory() as tmp:
+            upgrade = Path(tmp) / "upgrade"
+            upgrade.mkdir()
+            (upgrade / "list").write_text("core\tpresent\npart\tLICENSE\tpresent\n")
+            ran = self.lib("set -o pipefail\n"
+                           "lib_parts() { printf 'LICENSE\\n'; sleep 0.2; printf 'install\\n'; }\n"
+                           "if upgrade_ours; then echo ours; else echo other; fi",
+                           MA_UPGRADE=str(upgrade))
+            self.assertEqual(ran.stdout.strip(), "ours", ran.stderr)
 
     def test_a_plugin_change_that_cannot_go_back_in_place_keeps_the_upgrade(self):
         """A run stopped once it had moved its plugin change into the upgrade's record puts the change

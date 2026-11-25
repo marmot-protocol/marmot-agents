@@ -335,7 +335,7 @@ CASES += [
     driver_probe("NeverStrayAnswered", f"{DT}.stray.cfg"),
 ]
 # InstallUpgrade (formal/tla/InstallUpgrade.md): an install script's upgrade, stopped anywhere.
-IPI, IHERMES, ILOCK = (f"{IU}.{shape}.cfg" for shape in ("pi", "hermes", "lock"))
+IPI, IHERMES, ILOCK, IAGENTS = (f"{IU}.{shape}.cfg" for shape in ("pi", "hermes", "lock", "agents"))
 
 
 def install(name, cfg, expected, changes=None, counterexample=None, what=None):
@@ -357,6 +357,7 @@ CASES += [
     install("lock", ILOCK, PASS),
     install("first", f"{IU}.first.cfg", PASS),
     install("all", f"{IU}.all.cfg", PASS),
+    install("agents", IAGENTS, PASS),
     install("unfair", f"{IU}.unfair.cfg", TEMPORAL, {"INVARIANTS": None}),
     install_mutant("ImageOutsideRecord", IPI, "install-image-put-back-apart",
                    "ImageOutsideRecord, install/lib.sh before 2026-11-24: Pi's install moves the "
@@ -376,6 +377,12 @@ CASES += [
                    "cannot finish that upgrade, puts back the core and the support files, and leaves "
                    "the new plugin over the old core, as the upgrade's record does not list the "
                    "plugin change (U1)."),
+    install_mutant("TakesOverAnother", IAGENTS, "install-another-agents-change-left",
+                   "TakesOverAnother, install/lib.sh before 2026-11-25 (#180): agent a's Hermes install "
+                   "is killed once it has put our new plugin into a's Hermes; agent b's install takes "
+                   "the upgrade over, as it replaces the same parts, and ends it with its own plugin "
+                   "change only. a's Hermes is left with the plugin of a run that did not end, and a's "
+                   "record of the change under way, to put back older copies later (U1)."),
     install_mutant("NoLock", ILOCK),
     install_mutant("FreshRecord", IPI),
     install_mutant("KeepOverwrites", IPI),
@@ -387,6 +394,7 @@ CASES += [
     install_probe("NeverRestored"),
     install_probe("NeverChangeFinished", IHERMES),
     install_probe("NeverPluginPutBack", IHERMES),
+    install_probe("NeverPutBackAnotherAgent", IAGENTS),
     install_probe("NeverWaited", ILOCK),
 ]
 

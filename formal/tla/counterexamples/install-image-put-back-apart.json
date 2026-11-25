@@ -5,7 +5,7 @@
   "breaks": "U1",
   "what": "ImageOutsideRecord, install/lib.sh before 2026-11-24: Pi's install moves the image tag once the agent is started and ends the upgrade; a TERM then, as the summary is printed, and the exit trap puts the tag back on the image it found, under the new scripts (U1). Killed between the two instead, the next run that fails, or another harness's install, puts the old scripts back under the new image.",
   "generated_by": "python3 tools/tla/check.py --counterexamples",
-  "constants": {"Harnesses": ["codex", "pi"], "Main": "pi", "Older": true, "FirstRuns": 1, "Slots": [1], "MaxKills": 2, "MaxFails": 2, "FairPerson": true, "Bug": "ImageOutsideRecord"},
+  "constants": {"Harnesses": ["codex", "pi"], "Main": "pi", "Older": true, "FirstRuns": 1, "Slots": [1], "MaxKills": 2, "MaxFails": 2, "FairPerson": true, "Agents": ["a"], "Bug": "ImageOutsideRecord"},
   "steps": [
     {"action": "Start", "slot": 1, "harness": "pi"},
     {"action": "Lock", "slot": 1},
