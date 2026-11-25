@@ -938,6 +938,9 @@ async fn engine_has_it(keep: u64, owned: u64, within_secs: u64) -> Vec<String> {
             .then_some(())
     })
     .await;
+    // The person's side receives the post a moment later.
+    within(10, || (!versions(&chat, "k").is_empty()).then_some(())).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
     let told: Vec<String> = (chat.items().into_iter())
         .filter(|(_, r)| matches!(r.item.event.body(), Body::Notice(_)))
         .map(|(_, r)| r.item.event.header().text.clone())
@@ -1045,6 +1048,9 @@ async fn a_send_of_unknown_form_is_never_handed_again() {
             .then_some(())
     })
     .await;
+    // The person's side receives the post a moment later.
+    within(10, || (!versions(&chat, "t").is_empty()).then_some(())).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(
         (chat.items().iter()).all(|(_, r)| refused(&r.item.event).is_none()),
         "nothing was given up"
