@@ -23,11 +23,11 @@ use crate::{Direction, Translator};
 use agent_client_protocol_schema::v1 as acp;
 use marmot_agent_driver::{
     Action, Answer, Capabilities, ChatId, Control, Driver, Emitted, FilesIn, Harness, MessageId,
-    MidTurn, Output, Prompt, Reason, Refusal, RequestId, SendFile, Sessions,
+    MidTurn, Output, Prompt, Ready, Reason, Refusal, RequestId, SendFile, Sessions,
 };
 use marmot_agent_events::{AgentEvent, Body, State};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -134,7 +134,7 @@ pub struct Acp {
     /// name or its tool call, kept while a session is being picked.
     early: Vec<(String, String)>,
     /// Events read, and files asked to be sent, not yet handed to the core.
-    ready: VecDeque<Output>,
+    ready: Ready,
     /// The agent has gone.
     gone: bool,
     /// Messages for no chat.
@@ -244,7 +244,7 @@ impl Acp {
             starting: HashMap::new(),
             prompts: HashMap::new(),
             early: Vec::new(),
-            ready: VecDeque::new(),
+            ready: Ready::default(),
             gone: false,
             unrouted: 0,
             cancelling: HashSet::new(),
@@ -503,8 +503,7 @@ impl Acp {
         self.next_file += 1;
         let id = format!("file-{}", self.next_file);
         self.files.insert(id.clone(), (chat.clone(), call.reply));
-        self.ready
-            .push_back(Output::SendFile(SendFile { id, chat, path }));
+        (self.ready).push(now(), Output::SendFile(SendFile { id, chat, path }));
     }
 
     /// The folder a chat's session works in: the one the agent last opened it in, or else the
@@ -807,12 +806,15 @@ impl Acp {
             }
             _ => Vec::new(),
         };
-        self.ready.push_back(Output::Event(Emitted {
-            event,
-            chat: Some(chat.clone()),
-            prompts,
-            settles,
-        }));
+        self.ready.push(
+            now(),
+            Output::Event(Emitted {
+                event,
+                chat: Some(chat.clone()),
+                prompts,
+                settles,
+            }),
+        );
     }
 
     /// The agent has gone: each translator closes what it can, and nothing more will come.
@@ -1229,13 +1231,17 @@ impl Driver for Acp {
 
     async fn next_event(&mut self) -> Option<Output> {
         loop {
-            if let Some(output) = self.ready.pop_front() {
+            if let Some(output) = self.ready.pop() {
                 return Some(output);
             }
             if !self.read().await {
-                return self.ready.pop_front();
+                return self.ready.pop();
             }
         }
+    }
+
+    fn arrived(&self) -> Option<std::time::Instant> {
+        self.ready.arrived()
     }
 
     async fn file_sent(&mut self, id: String, result: Result<(), Refusal>) {
@@ -1244,4 +1250,9 @@ impl Driver for Acp {
             let _ = reply.send(result);
         }
     }
+}
+
+/// Now, on the runtime's clock, as [`Driver::arrived`] gives it.
+fn now() -> std::time::Instant {
+    tokio::time::Instant::now().into_std()
 }

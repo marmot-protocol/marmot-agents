@@ -742,3 +742,48 @@ async fn a_file_the_agent_sends_goes_to_the_core_and_the_result_back_to_pi() {
         serde_json::json!({"sent": false, "text": text})
     );
 }
+
+// Review of #198: the core settles a control as having had no effect once the driver hands over
+// an output that reached it after the control's deadline, so the driver must hand its outputs over
+// in the order they reached it (D-156). Here chat c-1's Pi shows a setting's effect while the core
+// is busy, and the driver has read it but not yet handed it over when the core answers a question
+// in chat c-2. The answer's edit is made then, after the effect reached the driver: it may be
+// handed over first, but not as having reached the driver later than the effect behind it.
+#[tokio::test]
+async fn outputs_are_handed_over_in_the_order_they_reached_the_driver() {
+    let (mut pi, _work) = start().await;
+    pi.prompt(prompt("c-1", "m-1", "hello")).await.unwrap();
+    let done = until(&mut pi, |e| is_turn(e, State::Done)).await;
+    let session = session_of(&done);
+    pi.prompt(prompt("c-2", "m-2", "ask")).await.unwrap();
+    let question = until(&mut pi, |e| matches!(e.event.body(), Body::Question(_))).await;
+    pi.control(set("r-1", &session, "thinking", "high"))
+        .await
+        .unwrap();
+    // c-1's Pi responds, and its effect reaches the driver, while the core does other work.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let answer = Answer {
+        request: "r-2".into(),
+        item: question.event.header().item.clone(),
+        by: person(),
+        given: Given::Questions(vec![Reply {
+            question: "q0".into(),
+            options: vec!["o0".into()],
+            text: None,
+        }]),
+    };
+    pi.answer(answer).await.unwrap();
+    let mut handed: Vec<(std::time::Instant, Option<String>)> = Vec::new();
+    while !(["r-1", "r-2"].iter()).all(|r| handed.iter().any(|(_, s)| s.as_deref() == Some(*r))) {
+        let event = next(&mut pi).await;
+        let at = pi
+            .arrived()
+            .expect("the driver says when each output reached it");
+        handed.push((at, event.settles.first().map(|r| r.as_str().to_string())));
+        let handed = &handed;
+        assert!(
+            handed.windows(2).all(|w| w[0].0 <= w[1].0),
+            "an output was handed over after one that reached the driver later: {handed:?}"
+        );
+    }
+}

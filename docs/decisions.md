@@ -1550,6 +1550,11 @@ control the harness quietly dropped, produced no event, so the person's press st
 driver can close the cases it knows, but a net in the core keeps a new driver from leaving one open. Two minutes
 is long enough for a slow harness to stop a turn, and short enough that a press does not look stuck.
 
+Replaced in part by
+[D-156](#d-156-the-no_effect-net-counts-when-output-reached-the-core-not-when-the-core-read-it): the two minutes
+count when the effect reached the core, not when the core read it, and an effect the core reads before it settles
+the control still settles it, even after the two minutes. The two minutes and the `no_effect` reason stand.
+
 Decided 2026-11-21. The project owner accepted the recommendation.
 
 ## D-088 OpenClaw's `/model status` may show the masked model key
@@ -3425,3 +3430,31 @@ seen). A typed `/approve` while an approval waits in the same session goes to th
 The question closing only on evidence, every reply going by the message it replies to, and the cost they
 accept were decided 2026-11-25 by the project owner. The rest was decided 2026-11-25 by the builder, under the
 project owner's instruction to decide minor points.
+
+## D-156 The no_effect net counts when output reached the core, not when the core read it
+
+**Decision.** The core settles a control as `no_effect`
+([D-087](#d-087-the-core-settles-a-request-whose-effect-never-shows)) only once it has read every output of the
+driver that reached it by the control's deadline. A driver says when the output it hands over reached it, through a
+method of the driver trait with a default ([D-058](#d-058-the-driver-trait-and-the-capability-flags)): a built-in
+driver that reads its harness while a request waits, and holds what it read, says when it read each output; a driver
+that does not say is taken to have read it when it hands it over. For a connector the core notes the time as it
+reads each line from the socket, so the socket has no field for it and no connector changes. Output that reaches the
+core after a deadline does not hold the net, so a driver that is never idle cannot keep a control pending. The core
+reads that output one at a time in its loop, as it always did, with nothing read ahead, so a stop loses nothing the
+driver handed over. A driver hands its outputs over in the order they reached it. An effect the core reads before
+the net settles the control settles it, even after the deadline, as before this decision.
+
+Not closed: a Codex message held until its thread is named is noted when the driver releases it, not when it read it,
+so an effect inside one released after the deadline does not count as in time. And a driver that reads without end
+lines that give no output, as a connector that floods its socket, holds the net, though not the rest of the core:
+the core cannot tell it has read everything that reached the driver.
+
+**Why.** The nightly simulator found a control settled `no_effect` though its effect reached the core in time: the
+core was blocked on a slow request of the driver, and when it went on, the clock's tick came before the event
+(issue #198). Two fixes that guessed where to stop reading, waiting for the driver to be idle and reading at most a
+set number of outputs, each failed review: the first let a busy driver hold the net off for good, the second still
+missed an effect behind a deep queue and could drop file requests on a stop. When each output reached the core is
+the question D-087 asks, and the set of outputs that reached it by a deadline is finite.
+
+Decided 2026-11-25 by the project owner.

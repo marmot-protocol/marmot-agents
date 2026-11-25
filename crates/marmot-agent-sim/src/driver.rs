@@ -16,8 +16,11 @@ pub struct SimDriver {
     pub world: Shared,
     /// The harness's life this driver belongs to.
     pub life: u32,
-    /// What the harness emits.
-    pub events: mpsc::UnboundedReceiver<Output>,
+    /// What the harness emits, each with when it did: the driver's boundary, where an output
+    /// reaches the core.
+    pub events: mpsc::UnboundedReceiver<(std::time::Instant, Output)>,
+    /// When the output handed over last was emitted.
+    pub arrived: Option<std::time::Instant>,
 }
 
 impl SimDriver {
@@ -71,7 +74,13 @@ impl Driver for SimDriver {
     }
 
     async fn next_event(&mut self) -> Option<Output> {
-        self.events.recv().await
+        let (at, output) = self.events.recv().await?;
+        self.arrived = Some(at);
+        Some(output)
+    }
+
+    fn arrived(&self) -> Option<std::time::Instant> {
+        self.arrived
     }
 }
 

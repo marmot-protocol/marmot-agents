@@ -100,7 +100,11 @@ exactly one event that points back at it ([D-028](../decisions.md#d-028-an-answe
   reader. Before, the core acted on the first of each, so it could act on a press no app shows.)
 - **If the harness took a control and two minutes pass with nothing to show for it**, a notice with the reason
   `no_effect` ([D-087](../decisions.md#d-087-the-core-settles-a-request-whose-effect-never-shows)). An effect
-  that shows later is still shown.
+  that shows later is still shown. What counts is when the harness's output reached the core, not when the core
+  read it: the core settles a control this way only once it has read everything that reached it by the
+  deadline, so an effect shown in time while the core was busy, as when it waited on the driver, still settles
+  it. Output that arrives after the deadline does not hold the notice up
+  ([D-156](../decisions.md#d-156-the-no_effect-net-counts-when-output-reached-the-core-not-when-the-core-read-it)).
 
 So there is one place to look for the truth: the agent's own items. An app shows a press as pending until the
 agent's reply arrives. If the agent's machine is off, the press stays pending and nothing is assumed.

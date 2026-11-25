@@ -34,7 +34,7 @@ use crate::translate::DIALOGS;
 use crate::{Direction, Translator};
 use marmot_agent_driver::{
     Action, Answer, Capabilities, ChatId, Control, Driver, Emitted, FilesIn, Harness, MessageId,
-    MidTurn, Output, Prompt, Reason, Refusal, RequestId, SendFile, Sessions,
+    MidTurn, Output, Prompt, Ready, Reason, Refusal, RequestId, SendFile, Sessions,
 };
 use marmot_agent_events::{AgentEvent, Body, State};
 use serde_json::{Value, json};
@@ -131,6 +131,8 @@ struct Line {
     chat: ChatId,
     generation: u64,
     text: Option<String>,
+    /// When it was read from Pi.
+    at: std::time::Instant,
 }
 
 /// What shows that a control has had its effect.
@@ -305,8 +307,17 @@ pub struct Pi {
     held: HashSet<String>,
     lines: mpsc::UnboundedReceiver<Line>,
     sender: mpsc::UnboundedSender<Line>,
+    /// Held while a reader stamps a line and sends it, and while [`Pi::arrival`] looks, so that no
+    /// line is stamped and not yet sent when it does: each chat's Pi has a reader task of its own,
+    /// and on a runtime of several threads two could otherwise send out of the order they stamped.
+    stamping: std::sync::Arc<std::sync::Mutex<()>>,
+    /// Lines taken off `lines` to see when the oldest reached the driver, and not yet handled:
+    /// handled next, in order ([`Pi::arrival`]).
+    backlog: VecDeque<Line>,
     /// Events, and files to send, read and not yet handed to the core.
-    ready: VecDeque<Output>,
+    ready: Ready,
+    /// When the line being taken now was read from its Pi, for what it makes ready.
+    read_at: Option<std::time::Instant>,
     /// Files the agent asked to send that the core has not answered for, by the driver's id.
     files: HashMap<String, FileCall>,
     /// The folder that holds the driver's extension, removed with the driver.
@@ -346,7 +357,10 @@ impl Pi {
             held: HashSet::new(),
             lines,
             sender,
-            ready: VecDeque::new(),
+            stamping: std::sync::Arc::default(),
+            backlog: VecDeque::new(),
+            ready: Ready::default(),
+            read_at: None,
             files: HashMap::new(),
             extension,
             next_id: 1,
@@ -398,24 +412,31 @@ impl Pi {
         c.generation += 1;
         c.translator.set_version(version);
         let (sender, generation, who) = (self.sender.clone(), c.generation, chat.clone());
+        let stamping = self.stamping.clone();
         let reader = tokio::spawn(async move {
+            // A line is stamped and sent as one step (`stamping`), so lines reach the channel in
+            // the order they were stamped, whichever chat's Pi they came from.
+            let send = |text: Option<String>| {
+                let _order = stamping
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                sender
+                    .send(Line {
+                        chat: who.clone(),
+                        generation,
+                        text,
+                        at: now(),
+                    })
+                    .is_ok()
+            };
             // Split on LF only, as Pi's framing asks: tokio's lines do.
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(text)) = lines.next_line().await {
-                let line = Line {
-                    chat: who.clone(),
-                    generation,
-                    text: Some(text),
-                };
-                if sender.send(line).is_err() {
+                if !send(Some(text)) {
                     return;
                 }
             }
-            let _ = sender.send(Line {
-                chat: who,
-                generation,
-                text: None,
-            });
+            send(None);
         });
         let (writes, queue) = mpsc::unbounded_channel::<Write>();
         let writer = tokio::spawn(write_records(stdin, queue));
@@ -585,15 +606,48 @@ impl Pi {
         Err(Refusal::new(Reason::Failed))
     }
 
-    /// Reads one line from any chat's Pi and handles it. The driver holds a sender, so the
-    /// channel never closes.
+    /// Reads one line from any chat's Pi and handles it, the oldest first. The driver holds a
+    /// sender, so the channel never closes.
     async fn read(&mut self) {
-        if let Some(line) = self.lines.recv().await {
-            self.handle(line);
-        }
+        let line = match self.backlog.pop_front() {
+            Some(line) => line,
+            None => match self.lines.recv().await {
+                Some(line) => line,
+                None => return,
+            },
+        };
+        self.handle(line);
     }
 
+    /// When what the driver makes ready now reached it, for [`Driver::arrived`]: when the line
+    /// being handled was read from its Pi, or else, for what a request of the core makes, now,
+    /// but no later than any line read and not yet handled. The core takes an output that
+    /// reached the driver after a control's deadline to mean that everything before it has been
+    /// handed over (D-156), so what a request makes, which is handed over first, must not seem to
+    /// have come after a line read before it, as another chat's Pi's effect read while an
+    /// answer was written.
+    fn arrival(&mut self) -> std::time::Instant {
+        if let Some(at) = self.read_at {
+            return at;
+        }
+        let _order = self
+            .stamping
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while let Ok(line) = self.lines.try_recv() {
+            self.backlog.push_back(line);
+        }
+        self.backlog.front().map_or_else(now, |line| line.at)
+    }
+
+    /// Takes a line from a Pi: what it makes ready arrived when the line was read.
     fn handle(&mut self, line: Line) {
+        self.read_at = Some(line.at);
+        self.take(line);
+        self.read_at = None;
+    }
+
+    fn take(&mut self, line: Line) {
         let chat = line.chat;
         let Some(c) = self.chats.get_mut(&chat) else {
             return;
@@ -747,12 +801,16 @@ impl Pi {
             }
             _ => Vec::new(),
         };
-        self.ready.push_back(Output::Event(Emitted {
-            event,
-            chat: Some(chat.clone()),
-            prompts,
-            settles,
-        }));
+        let at = self.arrival();
+        self.ready.push(
+            at,
+            Output::Event(Emitted {
+                event,
+                chat: Some(chat.clone()),
+                prompts,
+                settles,
+            }),
+        );
     }
 
     /// The extension's `send_file` tool asks to send a file: the request goes to the core, or, if
@@ -783,11 +841,15 @@ impl Pi {
             dialog,
         };
         self.files.insert(id.clone(), call);
-        self.ready.push_back(Output::SendFile(SendFile {
-            id,
-            chat: chat.clone(),
-            path: folder.join(path),
-        }));
+        let at = self.arrival();
+        self.ready.push(
+            at,
+            Output::SendFile(SendFile {
+                id,
+                chat: chat.clone(),
+                path: folder.join(path),
+            }),
+        );
     }
 
     /// A chat's Pi has gone, or is let go: its translator closes what it can. Nothing Pi sends can
@@ -1142,11 +1204,15 @@ impl Driver for Pi {
 
     async fn next_event(&mut self) -> Option<Output> {
         loop {
-            if let Some(output) = self.ready.pop_front() {
+            if let Some(output) = self.ready.pop() {
                 return Some(output);
             }
             self.read().await;
         }
+    }
+
+    fn arrived(&self) -> Option<std::time::Instant> {
+        self.ready.arrived()
     }
 
     /// The core says how a file the agent asked to send went: the tool's dialog is answered, in
@@ -1163,6 +1229,11 @@ impl Driver for Pi {
         let reply = file_reply(&call.dialog, &result);
         let _ = self.write(&call.chat, None, &reply).await;
     }
+}
+
+/// Now, on the runtime's clock, as [`Driver::arrived`] gives it.
+fn now() -> std::time::Instant {
+    tokio::time::Instant::now().into_std()
 }
 
 #[cfg(test)]
