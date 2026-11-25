@@ -111,7 +111,8 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   ([D-151](decisions.md#d-151-the-hermes-plugin-asks-hermess-own-check-of-who-may-answer-an-approval-card-or-a-question)).
   The plugin keeps each confirmation by Hermes's session and id, and closes it only on evidence: Hermes's reply
   to an answer, a newer one in its session, or Hermes's own 300-second limit passing (both shown cancelled),
-  never because Hermes no longer holds it, and never with a turn; so one Hermes dropped without a word shows
+  never because Hermes no longer holds it, and never with a turn; while a typed answer waits for Hermes's
+  reply, only that reply or the limit closes it; so one Hermes dropped without a word shows
   waiting until that limit. The command it confirms settles by its effect, or by the answer or close that says
   it will not run. Every Hermes reply goes to the turn of the message it replies to, or else to that sender's
   session outside any turn

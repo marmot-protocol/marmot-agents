@@ -270,9 +270,10 @@ class Connector:
 
     def asked_to_confirm(self, chat: Chat, session_key: str, item: str) -> None:
         """Hermes asks to confirm a command in the session `session_key`: one that Hermes held there before is
-        replaced, and will not run its command."""
+        replaced, and will not run its command, unless a typed answer to it still waits for Hermes's reply
+        (`Translator.answering`)."""
         replaced = chat.translator.confirm_waiting.get(session_key)
-        if replaced is not None and replaced != item:
+        if replaced is not None and replaced != item and chat.translator.answering(replaced) is None:
             self.dropped(chat, replaced)
 
     def asking(self, chat: Chat, key: str, content: str) -> str | None:
@@ -297,10 +298,11 @@ class Connector:
         when it still holds that one, or cannot say, the answer did not answer it (Hermes refused the sender,
         or an approval took the word). Otherwise the reply shows it answered. A Cancel settles the command it
         was for, which will not run; one that runs is settled by its effect, or by `reply` when it says the
-        command was refused, which is returned (D-155)."""
+        command was refused, which is returned (D-155). Only the first answer still waiting for its reply is
+        asked about: while it waits, a later one's reply closes nothing."""
         translator = chat.translator
         item, choice = translator.typed_confirm.get(message, (None, None))
-        if item not in translator.open:
+        if item not in translator.open or translator.answering(item) != message:
             return []
         session_key = translator.confirm_key[item]
         look = {"method": CONFIRM_LOOK, "params": {"session_key": session_key, "message": message}}

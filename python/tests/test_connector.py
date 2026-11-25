@@ -1150,6 +1150,46 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.last_of("confirm:k-1")["text"], "Answered: Approve once")
         self.assertEqual([(e["item"], e["settles"]) for e in self.sent if "settles" in e], [(f"session:{session}", ["r-1"])])
 
+    async def approved_reset_running(self):
+        """Alice types `/approve` for `/new`, and Hermes takes it and runs the reset, which has not replied yet."""
+        session = await self.asked_to_confirm_a_new_session()
+        await self.connector.serve("prompt", prompt("m-2", "/approve"))
+        self.feed(started("m-2", "/approve"))
+        del self.hermes.waiting_confirm[KEY]
+        return session
+
+    def reset_replies(self, session):
+        """Hermes's reply to the `/approve` comes once the reset is done: it answers the question, and the reset
+        settles the `/new` by its effect."""
+        self.feed(said(phrase("gateway.reset.header_default"), "m-2", notify=True), complete("m-2"))
+        self.assertEqual(self.last_of("confirm:k-1")["text"], "Answered: Approve once")
+        self.assertEqual([(e["item"], e["settles"]) for e in self.sent if "settles" in e], [(f"session:{session}", ["r-1"])])
+
+    async def test_a_later_answers_reply_while_an_approved_reset_runs_leaves_the_question_to_the_first(self):
+        """Round 3's blocker. While the approved reset runs, Alice types `/deny`, which Hermes answers at once,
+        finding no confirmation to deny. While an answer waits for Hermes's reply, nothing else closes the
+        question: it still waits, and the `/new` is unsettled, until the `/approve`'s reply (the project owner,
+        2026-11-25)."""
+        session = await self.approved_reset_running()
+        await self.connector.serve("prompt", prompt("m-3", "/deny"))
+        self.feed(said("No pending command to deny.", "m-3", notify=True))
+        self.assertEqual(self.last_of("confirm:k-1")["state"], "waiting")
+        self.assertEqual([e for e in self.sent if "settles" in e], [])
+        self.reset_replies(session)
+
+    async def test_a_new_confirmation_while_an_approved_reset_runs_leaves_the_question_to_its_answer(self):
+        """Round 3. While the approved reset runs, Alice types `/reload-mcp`, which Hermes asks her to confirm in
+        the same session. That one does not replace the confirmation Hermes already took: the question still
+        waits, and the `/new` is unsettled, until the `/approve`'s reply; the newer one waits for its own
+        answer (the project owner, 2026-11-25)."""
+        session = await self.approved_reset_running()
+        await self.connector.serve("prompt", prompt("m-3", "/reload-mcp"))
+        self.asks_to_confirm("m-3", "/reload-mcp", "⚠️ **Confirm /reload-mcp**\n\nThis reloads the tools.", "k-2")
+        self.assertEqual([self.last_of(i)["state"] for i in ("confirm:k-1", "confirm:k-2")], ["waiting", "waiting"])
+        self.assertEqual([e for e in self.sent if "settles" in e], [])
+        self.reset_replies(session)
+        self.assertEqual(self.last_of("confirm:k-2")["state"], "waiting")
+
     async def test_an_answer_hermes_reads_inline_is_its_senders_while_another_turn_is_latest(self):
         """Round 2. Hermes answers a `/deny` at once while Alice's session is busy (`_dispatch_inline_reply`):
         the answer has no turn of its own. Bob's turn is the latest, but the answer, Hermes's reply to it and

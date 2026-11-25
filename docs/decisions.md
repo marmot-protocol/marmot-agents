@@ -3362,6 +3362,11 @@ That Hermes no longer holds a confirmation says nothing of why: approved and sti
 or answered. On its own it closes nothing and settles nothing. The end of a turn, its sender's or another's,
 interrupted or not, closes none.
 
+While a typed answer to a confirmation still waits for Hermes's reply, Hermes may have taken it and be running
+the command, so nothing else closes that question: not a later answer's reply, not a newer confirmation in its
+session; only that answer's own reply, as above, or Hermes's limit. A newer confirmation still replaces an older
+one that no answer waits on. The project owner decided this on 2026-11-25.
+
 A typed answer answers only the confirmation in its sender's own session, as Hermes reads it, in any of the
 words Hermes reads as one in English (`/approve`, `/cancel`, `yes`, `no` and the rest).
 

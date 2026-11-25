@@ -217,9 +217,8 @@ class Translator:
         """A turn ended: anything still open will never report again (the turn closes itself), except
         what belongs to another turn still running, and a confirmation, which waits in Hermes's session,
         not in a turn, until it is answered, replaced or expired (D-155)."""
-        waiting = set(self.confirm_waiting.values())
         for item, ev in list(self.open.items()):
-            if ev["type"] in ("turn", "task", "session") or ev.get("turn") in keep_turns or item in waiting:
+            if ev["type"] in ("turn", "task", "session") or ev.get("turn") in keep_turns or item.startswith("confirm:"):
                 continue
             self.emit(item, ev["type"], "cancelled", ev["title"], ev["text"], ev["body"], native=None,
                       owner=(ev.get("session"), ev.get("turn")))
@@ -350,6 +349,12 @@ class Translator:
             if key is None and (str(session_key).endswith(f":{chat}:{user}") or str(session_key).endswith(f":dm:{chat}")):
                 return item
         return None
+
+    def answering(self, item):
+        """The first typed answer to the confirmation `item` still waiting for Hermes's reply, or None. Hermes
+        may have taken it and be running the command: until that reply, nothing else closes `item`, neither a
+        later answer's reply nor a newer confirmation in its session (D-155)."""
+        return next((t for t, (asked, _) in self.typed_confirm.items() if asked == item), None)
 
     def confirm_done(self, item, choice, native=True, message=None):
         """The confirmation `item` waits no more: answered with `choice`, or, with none, replaced or expired,
@@ -676,13 +681,15 @@ class Translator:
                 self.last_send = prev
                 return
         # Hermes's reply to a typed answer to a confirmation shows it answered, unless the plugin found Hermes
-        # still holding it (`looked`): the reply is then the confirmed command's.
+        # still holding it (`looked`): the reply is then the confirmed command's. Only the first answer still
+        # waiting for its reply can show it answered (`answering`).
         answer = p.get("reply_to") or self.turn or ""
-        asked, choice = self.typed_confirm.pop(answer, (None, None))
-        confirmed = asked in self.open
+        asked, choice = self.typed_confirm.get(answer, (None, None))
+        confirmed = asked in self.open and self.answering(asked) == answer
+        self.typed_confirm.pop(answer, None)
         if confirmed:
             self.confirm_done(asked, choice, message=answer)
-        if typed or ((confirmed or answer in self.slash) and (meta.get("notify") or final)):
+        if typed or ((asked is not None or answer in self.slash) and (meta.get("notify") or final)):
             return self.command_reply(item, content, typed, key, turn=answer)
         owner = self.owner_of(p.get("reply_to") or meta.get("reply_to_message_id"))
         if content.startswith(WARNINGS):
@@ -723,12 +730,13 @@ class Translator:
 
     def confirm_card(self, p):
         """Hermes asks to confirm a command in a session: a confirmation it already held there is replaced,
-        and will never run (D-155)."""
+        and will never run, unless a typed answer to it still waits for Hermes's reply (`answering`): Hermes
+        took that one, and its reply closes it (D-155)."""
         options = [{"id": f"o{n}", "label": label} for n, label in enumerate(CONFIRM_LABELS)]
         item = f"confirm:{p.get('confirm_id')}"
         session_key = str(p.get("session_key") or "")
         replaced = self.confirm_waiting.get(session_key)
-        if replaced is not None and replaced != item:
+        if replaced is not None and replaced != item and self.answering(replaced) is None:
             self.confirm_done(replaced, None, native=None)
         self.confirm_waiting[session_key] = item
         self.confirm_key[item] = session_key

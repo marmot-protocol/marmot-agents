@@ -882,7 +882,8 @@ does, and feeds it to the chat's translator:
   Each confirmation is kept by Hermes's session key and its id, one in each session as Hermes keeps it, and
   closes only on evidence: Hermes taking an answer given on it, Hermes's reply to a typed answer, a newer one in
   the same session, which shows the older as cancelled, or Hermes's own 300-second limit passing, which shows it
-  as cancelled too. That Hermes no longer holds one closes nothing, and a turn's end closes none. A typed
+  as cancelled too. While a typed answer still waits for Hermes's reply, only that reply or the limit closes
+  its confirmation: not a later answer's reply, nor a newer one in the session. That Hermes no longer holds one closes nothing, and a turn's end closes none. A typed
   answer, in any of the words Hermes reads as one, answers only the sender's own; as Hermes replies to it, the
   plugin asks Hermes whether it still holds that confirmation, and when it does, or cannot be asked, the
   question still waits. Every reply of Hermes's goes to the turn of the message it replies to while that runs,
