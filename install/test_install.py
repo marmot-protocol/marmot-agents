@@ -1878,16 +1878,32 @@ exec {rm} "$@"
                 self.assertEqual(list((m.data / f"agents/{harness}/backups").glob("marmot.*")), [],
                                  "no copy of our own plugin is kept once the update is done")
 
+    @staticmethod
+    def judged(found: dict, expected: tuple):
+        """None if what together(m) found is all of one of the installs expected: "older", "new", or
+        "codex", the core and the shared files new beside this harness's older ones; else what is wrong."""
+        shared = ("core", "install files")
+        wanted = {"older": lambda part: "older", "new": lambda part: "new",
+                  "codex": lambda part: "new" if part in shared else "older"}
+        for install in expected:
+            if all(found[part] == wanted[install](part) for part in found):
+                return None
+        return f"expected the {' or the '.join(expected)} install, found " + \
+            ", ".join(f"the {part} {state}" for part, state in found.items())
+
     def every_step_together(self, harness: str, args, older, together, stopped_env=None) -> None:
         """What goes with the core, Pi's image or the person's Hermes plugin, stays with the files it
         was made for, whatever step an upgrade is stopped at (InstallUpgrade.tla, U1): stopped by TERM;
         killed, then run again, or run again and failing, or followed by Codex's install. older(m) puts
-        in an older install; together(m) says what is wrong, or None. Checked once nothing is left under
-        way. A run stopped by TERM puts back what it changed as it ends, so it leaves nothing under way;
-        only a kill does. After a kill, the next run of the same harness finishes the install, and leaves
-        nothing under way; a run that fails, and Codex's install, which cannot finish another harness's
-        upgrade, put back all of it, a plugin change too. stopped_env is the stopped run's, not the runs'
-        after it."""
+        in an older install, marking each part of it; together(m) says which install each part is of,
+        older or new (generations). Checked once nothing is left under way. A run stopped by TERM puts
+        back what it changed as it ends, so it leaves nothing under way, and the whole of one install:
+        the older or the new; only a kill leaves something under way. After a kill, the next run of the
+        same harness finishes the install, all of it new; a run that fails puts back all of it, the core
+        and a plugin change too, all of it older; and Codex's install, which cannot finish another
+        harness's upgrade, puts it all back, then installs the core and the files every install
+        replaces, new, beside the older ones of this harness. stopped_env is the stopped run's, not the
+        runs' after it (#197)."""
         m = Machine(self)
         m.write(m.bin / "docker", FAKE_DOCKER)
         older(m)
@@ -1910,7 +1926,7 @@ exec {rm} "$@"
                 said = f"after SIG{signal} at step {step}"
                 if then is None:
                     if not under_way(m):
-                        found.append((said, together(m), stopped.stderr))
+                        found.append((said, self.judged(together(m), ("older", "new")), stopped.stderr))
                     elif signal == "TERM":
                         found.append((said, "something is left under way", stopped.stderr))
                     continue
@@ -1926,7 +1942,8 @@ exec {rm} "$@"
                 elif under_way(m):
                     found.append((f"{said}, then {then}", "something is left under way", ran.stderr))
                 else:
-                    found.append((f"{said}, then {then}", together(m), ran.stderr))
+                    expected = {"again": ("new",), "failing": ("older",), "codex": ("codex",)}[then]
+                    found.append((f"{said}, then {then}", self.judged(together(m), expected), ran.stderr))
             return found
 
         with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
@@ -1936,15 +1953,34 @@ exec {rm} "$@"
                         self.assertIsNone(wrong, f"{said}:\n{stderr}")
 
     @staticmethod
-    def pi_together(m: Machine):
-        """Whether Pi's scripts and the image tagged for them are of one install, the older or the new."""
+    def shared_generations(m: Machine) -> dict:
+        """Which install the core and the files every install replaces are of: older, new, or what is
+        wrong with them. older(m) marks the older install's."""
+        core = m.home / ".local/bin/marmot-agent"
+        if not core.is_file():
+            core_is = "not there"
+        else:
+            text = core.read_text()
+            core_is = "older" if "# an older core" in text else "new" if text == FAKE_CORE else "another core"
+        install = m.data / "lib/install"
+        files_are = "not there" if not (install / "lib.sh").is_file() else \
+            "older" if (install / "OLDER").exists() else "new"
+        return {"core": core_is, "install files": files_are}
+
+    @staticmethod
+    def mark_older(m: Machine) -> None:
+        """Marks the core and the shared files of the install there as older."""
+        (m.data / "lib/install/OLDER").write_text("an older file\n")
+
+    @classmethod
+    def pi_together(cls, m: Machine) -> dict:
+        """Which install Pi's scripts, the image tagged for them, the core and the shared files are of."""
         tag = json.loads((m.dir / "docker-tags").read_text()).get("marmot-agents-pi:latest")
-        if not tag:
-            return "no image is tagged for the scripts"
-        scripts_older = (m.data / "lib/tools/pi/OLDER").exists()
-        if scripts_older != (tag == m.older_image):
-            return f"the scripts are {'older' if scripts_older else 'new'}, the image tagged {tag}"
-        return None
+        scripts = m.data / "lib/tools/pi"
+        return {**cls.shared_generations(m),
+                "Pi's scripts": "not there" if not scripts.is_dir() else
+                "older" if (scripts / "OLDER").exists() else "new",
+                "image": "not tagged" if not tag else "older" if tag == m.older_image else "new"}
 
     def test_every_step_keeps_the_image_with_its_scripts(self):
         def args(m: Machine) -> list:
@@ -1955,6 +1991,7 @@ exec {rm} "$@"
             m.write(first, FAKE_CORE + "# an older core\n")
             m.run("pi", *m.args("pi", "--binary", str(first), container=True))
             (m.data / "lib/tools/pi/OLDER").write_text("an older file\n")
+            self.mark_older(m)
             m.older_image = json.loads((m.dir / "docker-tags").read_text())["marmot-agents-pi:latest"]
 
         self.every_step_together("pi", args, older, self.pi_together)
@@ -1971,6 +2008,7 @@ exec {rm} "$@"
             m.write(first, FAKE_CORE + "# an older core\n")
             m.run("pi", *m.args("pi", "--binary", str(first), container=True))
             (m.data / "lib/tools/pi/OLDER").write_text("an older file\n")
+            self.mark_older(m)
             m.older_image = json.loads((m.dir / "docker-tags").read_text())["marmot-agents-pi:latest"]
 
         self.every_step_together("pi", args, older, self.pi_together, stopped_env={"FAKE_DOCKER_FAIL": "image inspect"})
@@ -2014,16 +2052,14 @@ exec {rm} "$@"
             m.run("hermes", *m.args("hermes", "--binary", str(first)))
             (m.data / "lib/python/marmot_hermes/OLDER").write_text("an older file\n")
             (m.home / plugin / "OLDER").write_text("an older file\n")
+            self.mark_older(m)
 
-        def together(m: Machine):
-            for name, folder in (("support files", m.data / "lib/python/marmot_hermes"), ("plugin", m.home / plugin)):
-                if not (folder / "plugin.yaml").is_file():
-                    return f"the {name} are not there" if name.endswith("s") else f"the {name} is not there"
-            files_older = (m.data / "lib/python/marmot_hermes/OLDER").exists()
-            plugin_older = (m.home / plugin / "OLDER").exists()
-            if files_older != plugin_older:
-                return f"the files are {'older' if files_older else 'new'}, the plugin {'older' if plugin_older else 'new'}"
-            return None
+        def together(m: Machine) -> dict:
+            found = self.shared_generations(m)
+            for name, folder in (("Hermes files", m.data / "lib/python/marmot_hermes"), ("plugin", m.home / plugin)):
+                found[name] = "not there" if not (folder / "plugin.yaml").is_file() else \
+                    "older" if (folder / "OLDER").exists() else "new"
+            return found
 
         self.every_step_together("hermes", args, older, together)
 
