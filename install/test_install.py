@@ -142,7 +142,7 @@ echo "$(basename "$0") $*" >> "$FAKE_LOG"
 """
 FAKE_OPENCLAW = r'''#!/usr/bin/env python3
 """A stand-in for `openclaw`: the commands the installer runs, on a JSON file as OpenClaw keeps it."""
-import json, os, shutil, sys
+import json, os, shutil, signal, sys
 from pathlib import Path
 
 args = sys.argv[1:]
@@ -216,6 +216,9 @@ elif args[:2] == ["config", "set"]:
     parent, last = walk(c, args[2], make=True)
     parent[last] = json.loads(args[3]) if "--strict-json" in args else args[3]
     save(c)
+    if os.environ.get("FAKE_OPENCLAW_KILL_AFTER") == f"config set {args[2]}":
+        # The installer killed outright once this command has done its work.
+        os.kill(os.getppid(), signal.SIGKILL)
 elif args[:2] == ["config", "unset"]:
     note()
     valid()
@@ -352,6 +355,9 @@ elif args[:2] == ["config", "set"]:
         parent, last = walk(c, key, make=True)
         parent[last] = {"true": True, "false": False}.get(value, value)
         save(c)
+    if os.environ.get("FAKE_HERMES_KILL_AFTER") == f"config set {key}":
+        # The installer killed outright once this command has done its work.
+        os.kill(os.getppid(), signal.SIGKILL)
 elif args[:2] == ["config", "unset"]:
     note()
     key = args[2]
@@ -2244,6 +2250,33 @@ class TwoAgents(unittest.TestCase):
         self.assertNotEqual(failed.returncode, 0, failed.stdout)
         self.assertEqual((Upgrade.snapshot(m), self.gateway(m)), before, failed.stderr)
         self.assertEqual(self.under_way(m), [], failed.stderr)
+
+    def test_another_agent_into_a_gateway_a_killed_run_named_puts_that_run_back(self):
+        """Agent a's run into a gateway no agent had, killed just after the gateway names a's home, then
+        agent b's into the same gateway: b's puts a's upgrade back, the gateway's settings with it, before
+        it reads whom the gateway serves, and installs. Before, b read a's half-made settings first and
+        stopped, saying the gateway was a's, and the recovery that would take them out never ran."""
+        for harness, kill in (("hermes", {"FAKE_HERMES_KILL_AFTER": "config set platforms.marmot.home"}),
+                              ("openclaw", {"FAKE_OPENCLAW_KILL_AFTER": "config set channels.marmot"})):
+            if harness == "openclaw" and not REAL_NODE:
+                continue
+            with self.subTest(harness=harness):
+                m = Machine(self)
+                first = m.dir / "older-core"
+                m.write(first, FAKE_CORE + "# an older core\n")
+                m.run("codex", *m.args("codex", "--binary", str(first), "--name", "c"))
+                args = lambda name: m.args(harness, "--binary", str(m.core), "--name", name)
+                killed = m.run(harness, *args("a"), env=kill, check=False)
+                self.assertNotEqual(killed.returncode, 0, killed.stdout)
+                self.assertIn(str(m.data / "agents/a/home"), (m.home / CHANGED[harness][0] / CHANGED[harness][1][0]).read_text())
+                ran = m.run(harness, *args("b"), check=False)
+                said = f"{ran.stdout}\n{ran.stderr}"
+                self.assertEqual(ran.returncode, 0, said)
+                self.assertIn("or for another agent, before this one stopped part way", ran.stdout)
+                settings = (m.home / CHANGED[harness][0] / CHANGED[harness][1][0]).read_text()
+                self.assertIn(str(m.data / "agents/b/home"), settings, said)
+                self.assertNotIn(str(m.data / "agents/a/home"), settings, said)
+                self.assertEqual(self.under_way(m), [], said)
 
 
 class FilesFrom(unittest.TestCase):

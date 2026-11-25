@@ -556,11 +556,15 @@ finish() {
 # run starts do not get the descriptor (act).
 lock_installs() {
     [ "$DRY_RUN" -eq 0 ] || return 0
+    # Taken once: opened again, the descriptor would let the lock go for a moment.
+    [ "${MA_LOCKED:-0}" -eq 0 ] || return 0
     mkdir -p "$MA_DATA"
     exec 9>>"$MA_DATA/install.lock"
-    if lock_fd -n; then return 0; fi
-    say "another install of marmot-agent in this home is under way; waiting for it to end"
-    lock_fd || die "waiting for the other install of marmot-agent in this home failed"
+    if ! lock_fd -n; then
+        say "another install of marmot-agent in this home is under way; waiting for it to end"
+        lock_fd || die "waiting for the other install of marmot-agent in this home failed"
+    fi
+    MA_LOCKED=1
 }
 
 # Locks descriptor 9; given -n, fails at once if another run holds it.
@@ -772,15 +776,11 @@ publish_support() {
 # this run does not, as another harness's install does, or that holds a plugin change of another agent,
 # or to another gateway, this run cannot finish: it puts it back first.
 upgrade_begin() {
-    local making kind part others=""
+    local making
     [ "${MA_UPGRADING:-0}" -eq 0 ] || return 0
     if [ -d "$MA_UPGRADE" ]; then
         change_restore || die "a plugin change left in $MA_UPGRADE could not be put back in its place"
-        while IFS='	' read -r kind part _; do
-            [ "$kind" = part ] || continue
-            lib_parts | grep -qxF "$part" || others="$others $part"
-        done <"$MA_UPGRADE/list"
-        if [ -z "$others" ] && changes_ours; then
+        if upgrade_ours; then
             MA_UPGRADING=1
             say "a run before this one stopped part way through installing marmot-agent; this one finishes that, and puts back the core and support files that run found if it fails"
             upgrade_list "$MA_UPGRADE"
@@ -801,6 +801,31 @@ upgrade_begin() {
     fi
     upgrade_list "$making"
     mv "$making" "$MA_UPGRADE"
+}
+
+# Before a gateway's script reads whom its gateway serves and which plugin it has, once MA_GATEWAY names
+# the gateway: the lock taken, and an upgrade a run before this one left that this one cannot finish put
+# back, the plugin changes it holds with it, as upgrade_begin would. Read before, another agent's change
+# half made would be taken for the gateway's own: its home named in the settings stops this run, which
+# then never puts that change back (#180). One this run can finish is left to upgrade_begin. With no
+# $MA_DATA there is none, and a run that stops at a check leaves nothing.
+upgrade_recover() {
+    [ "$DRY_RUN" -eq 0 ] && [ -d "$MA_DATA" ] || return 0
+    lock_installs
+    [ -d "$MA_UPGRADE" ] || return 0
+    change_restore || die "a plugin change left in $MA_UPGRADE could not be put back in its place"
+    upgrade_ours || upgrade_put_back other || die "fix what stops it, then run this again"
+}
+
+# Whether this run can finish the upgrade a run before it left: it replaces no part this run does not,
+# and every plugin change it holds is this run's (changes_ours).
+upgrade_ours() {
+    local kind part
+    while IFS='	' read -r kind part _; do
+        [ "$kind" = part ] || continue
+        lib_parts | grep -qxF "$part" || return 1
+    done <"$MA_UPGRADE/list"
+    changes_ours
 }
 
 # Whether each plugin change the upgrade's record lists that is not done, its record still there, is
@@ -1065,7 +1090,8 @@ install_core() {
         return 0
     fi
     # Nothing is written before the checks above, and nothing is read that another install changes
-    # before the lock is held.
+    # before the lock is held: a gateway's script takes it sooner, before it reads the gateway
+    # (upgrade_recover).
     lock_installs
     # An upgrade a run before this one left under way is finished by this one, or put back should this
     # one fail before it is.
@@ -1924,7 +1950,7 @@ main() {
     set_paths
     check_harness
     # MA_STAGED says whether this run made the folder in MA_STAGE: a dry run names the installed one.
-    MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0 MA_UPGRADING=0 MA_PREPARED=0 MA_CHANGE_STATUS=""
+    MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0 MA_UPGRADING=0 MA_PREPARED=0 MA_CHANGE_STATUS="" MA_LOCKED=0
     trap 'finish $?' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT

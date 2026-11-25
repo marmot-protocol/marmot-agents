@@ -65,10 +65,11 @@ call `image_commit` and `change_begin` alike).
   gateway with neither plugin, which `docs/move.md` states. The model has the exchange, one step.
 - **Two agents with one gateway, and one agent moved to another gateway.** Each Hermes agent here has a Hermes
   of its own, so the order in which the plugin changes an upgrade lists go back changes nothing, and the model
-  takes them in any order. The installer allows two agents into one Hermes only in a window (before the first
-  has written its home into the Hermes's settings), and an agent may be run again with another `HERMES_HOME`;
-  with the fourth fix, neither can leave a change listed behind another's, as `changes_ours` also asks that a
-  change name this run's gateway. `install/test_install.py` `TwoAgents` checks both: two agents into one
+  takes them in any order. The installer allows a second agent into one Hermes only while its settings name
+  no other agent's home, read once an upgrade the run cannot finish is put back (`upgrade_recover`): so after
+  the first's run was killed, before or after it wrote its home there, and not once it finished. An agent may
+  also be run again with another `HERMES_HOME`; with the fourth fix, neither can leave a change listed behind
+  another's, as `changes_ours` also asks that a change name this run's gateway. `install/test_install.py` `TwoAgents` checks both: two agents into one
   Hermes in the order A, B, A, the last failing, and one agent into a second Hermes. The order of the replay,
   the last first, which matters there, is checked on lib.sh's own functions (`PutBack`).
 - **OpenClaw's agents**, which work as Hermes's do (`MA_GATEWAY` is the file `openclaw config file` names).

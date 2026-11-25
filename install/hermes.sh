@@ -47,8 +47,10 @@ harness_check() {
         /*/config.yaml) ;;
         *) missing "Hermes's configuration" "hermes config path named no config.yaml. $HERMES_HOW"; return 0 ;;
     esac
-    # Which Hermes this is, that a change of its plugin a run before left under way names (lib.sh).
+    # Which Hermes this is, that a change of its plugin a run before left under way names; an upgrade
+    # this run cannot finish goes back before anything below reads the Hermes (lib.sh).
     MA_GATEWAY=$HERMES_CONFIG
+    upgrade_recover
     hermes_files_from
     PLUGIN=$(dirname "$HERMES_CONFIG")/plugins/marmot
     no_control "Hermes's plugins folder" "$PLUGIN"

@@ -3322,6 +3322,8 @@ An install takes such an upgrade over, and finishes it, only when every change i
 the same agent and to the same gateway, the one whose settings file the install changes (for Hermes, its
 `config.yaml`; for OpenClaw, the file `openclaw config file` names). Otherwise, as for another harness's install,
 it puts the whole upgrade back first, each plugin change with it, says so, and then installs as if none had run.
+It does so before it reads whom the gateway serves or which plugin it has, as what it would read there may be
+another agent's change half made.
 So an install for a second Hermes or OpenClaw agent, or for the same agent pointed at another gateway, never ends
 another agent's change half made. An install that fails puts its own plugin change back in the same order as the
 others its upgrade holds, the last made first, and stops at the first that cannot go back.
