@@ -1758,7 +1758,7 @@ class Upgrade(unittest.TestCase):
             tried += 1
             untouched += not (m.data / "upgrade/lib/packages").exists()
             out = m.run("codex", *m.args("codex", "--binary", str(m.core))).stdout
-            self.assertIn("a run of another installer before this one stopped part way", out, f"killed at step {step}")
+            self.assertIn("a run of another installer, or for another agent, before this one stopped part way", out, f"killed at step {step}")
             self.assertEqual(self.snapshot(m), expected, f"killed at step {step}")
             self.assertEqual(self.leftovers(m), [])
         self.assertGreater(untouched, 0, "some step leaves the upgrade under way before Claude Code's own files")
@@ -2108,6 +2108,142 @@ exec {rm} "$@"
                     self.assertEqual(finished, "new", again.stdout)
                     self.assertFalse(any(name.startswith((".upgrade", "upgrade")) for name in left), left)
         self.assertGreater(taken_over, 0, "some step leaves an upgrade under way for the next run")
+
+
+class TwoAgents(unittest.TestCase):
+    """Two agents of one gateway harness in one home share the core and the support files, and each
+    has its own change to a gateway's plugin. A run for one agent never finishes an upgrade that holds
+    another agent's plugin change, or one to another gateway: it puts that upgrade back first, the
+    other's change with it, so no change is left to put stale copies back later (#180)."""
+
+    @staticmethod
+    def args(m: Machine, name: str, core=None) -> list:
+        return m.args("hermes", "--binary", str(core or m.core), "--name", name)
+
+    @staticmethod
+    def own_hermes(m: Machine) -> dict:
+        """The second agent's Hermes, beside the first's in ~/.hermes."""
+        return {"HERMES_HOME": str(m.home / ".hermes-b")}
+
+    @staticmethod
+    def gateway(m: Machine, folder: str = ".hermes") -> dict:
+        """The files of a Hermes. A folder put back empty may stay: replace_dir makes the one above."""
+        root = m.home / folder
+        return {str(p.relative_to(root)): p.read_text() for p in sorted(root.rglob("*")) if p.is_file()}
+
+    @staticmethod
+    def under_way(m: Machine) -> list:
+        return sorted(str(p.relative_to(m.data)) for p in [*m.data.glob("agents/*/plugin-change"), m.data / "upgrade"]
+                      if p.exists())
+
+    def older(self, m: Machine) -> None:
+        """Two Hermes agents, a and b, each in a Hermes of its own, installed with an older core."""
+        first = m.dir / "older-core"
+        m.write(first, FAKE_CORE + "# an older core\n")
+        m.run("hermes", *self.args(m, "a", first))
+        m.run("hermes", *self.args(m, "b", first), env=self.own_hermes(m))
+        for marked in (m.data / "lib/python/marmot_hermes", m.data / "lib/install",
+                       m.home / ".hermes/plugins/marmot", m.home / ".hermes-b/plugins/marmot"):
+            (marked / "OLDER").write_text("an older file\n")
+
+    def test_another_agent_puts_back_an_upgrade_it_cannot_finish(self):
+        """Agent a's upgrade is killed at any step; then agent b's install, into its own Hermes, puts a's
+        upgrade back, a's Hermes as it was with it, and installs its own. Before, b took the upgrade over
+        and ended it with only its own change, leaving a's Hermes changed and a's record of the change
+        under way, to put back stale copies over a later install."""
+        counting = Machine(self)
+        self.older(counting)
+        counting.run("hermes", *self.args(counting, "a"), stop=("KILL", 0))
+        steps = int(counting.steps.read_text())
+
+        def one(step):
+            m = Machine(self)
+            self.older(m)
+            before = self.gateway(m)
+            m.run("hermes", *self.args(m, "a"), stop=("KILL", step), check=False)
+            left = (m.data / "upgrade").exists()
+            killed = self.gateway(m)
+            ran = m.run("hermes", *self.args(m, "b"), env=self.own_hermes(m), check=False)
+            core = (m.home / ".local/bin/marmot-agent").read_text()
+            return (step, left, before, killed, ran, self.gateway(m), self.gateway(m, ".hermes-b"), core,
+                    (m.data / "lib/install/OLDER").exists(), self.under_way(m))
+
+        put_back = 0
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+            for step, left, before, killed, ran, a, b, core, files_older, under_way in pool.map(one, range(1, steps + 1)):
+                put_back += left and killed != before
+                with self.subTest(step=step):
+                    said = f"a killed at step {step}, then b:\n{ran.stdout}\n{ran.stderr}"
+                    self.assertEqual(ran.returncode, 0, said)
+                    self.assertEqual(under_way, [], said)
+                    # A run of a stopped part way through its upgrade is put back with it; one stopped
+                    # after, its upgrade done, is left as it is.
+                    self.assertEqual(a, before if left else killed, said)
+                    self.assertNotIn("plugins/marmot/OLDER", b, said)
+                    self.assertEqual((core, files_older), (FAKE_CORE, False), said)
+        self.assertGreater(put_back, 0, "some step leaves a's Hermes changed and its upgrade under way")
+
+    def test_the_same_agent_and_gateway_finish_the_upgrade(self):
+        """The agent whose run was killed part way through changing its gateway's plugin, run again with
+        the same gateway, takes the upgrade over and finishes the change: what it finds names its own
+        gateway's settings file (MA_GATEWAY)."""
+        for harness in ("hermes", "openclaw"):
+            if harness == "openclaw" and not REAL_NODE:
+                continue
+            with self.subTest(harness=harness):
+                counting = Machine(self)
+                args = counting.args(harness, "--binary", str(counting.core))
+                counting.run(harness, *args, stop=("KILL", 0))
+                for step in range(1, int(counting.steps.read_text()) + 1):
+                    m = Machine(self)
+                    args = m.args(harness, "--binary", str(m.core))
+                    m.run(harness, *args, stop=("KILL", step), check=False)
+                    if (m.data / f"agents/{harness}/plugin-change").exists() and (m.data / "upgrade").exists():
+                        break
+                else:
+                    self.fail("no step leaves a plugin change under way")
+                out = m.run(harness, *args).stdout
+                self.assertIn("this one finishes that", out)
+                self.assertIn("plugin; this one finishes it", out)
+                self.assertEqual(self.under_way(m), [])
+
+    def test_the_same_agent_into_another_hermes_puts_back_the_first(self):
+        """An agent's run killed once our plugin is in its Hermes, then its run again into another Hermes:
+        the first Hermes is put back as it was, not left with half a change no run finishes, and the
+        second gets the plugin, with copies of its own settings."""
+        m = Machine(self)
+        first = m.dir / "older-core"
+        m.write(first, FAKE_CORE + "# an older core\n")
+        m.run("codex", *m.args("codex", "--binary", str(first), "--name", "c"))
+        before = self.gateway(m)
+        killed = m.run("hermes", *self.args(m, "a"), env={"FAKE_HERMES_KILL": "plugins enable"}, check=False)
+        self.assertNotEqual(killed.returncode, 0, killed.stdout)
+        ran = m.run("hermes", *self.args(m, "a"), env=self.own_hermes(m), check=False)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual(self.gateway(m), before, ran.stdout)
+        self.assertIn("plugins/marmot/plugin.yaml", self.gateway(m, ".hermes-b"))
+        self.assertEqual(self.under_way(m), [], ran.stdout)
+
+    def test_runs_for_two_agents_into_one_hermes_then_a_failure_put_back_all_of_it(self):
+        """Agents a and b put into one Hermes, a's run killed once our plugin is in and before the
+        Hermes names a's home, then b's the same way, then a's again, failing: the core, the support
+        files and the Hermes are all as they were before a's first run. Before, a's last run put back
+        its own change first, and then b's, whose copies are of what a's first run left: our plugin,
+        beside the older core."""
+        m = Machine(self)
+        first = m.dir / "older-core"
+        m.write(first, FAKE_CORE + "# an older core\n")
+        m.run("codex", *m.args("codex", "--binary", str(first), "--name", "c"))
+        before = (Upgrade.snapshot(m), self.gateway(m))
+        kill = {"FAKE_HERMES_KILL": "plugins enable"}
+        for name in ("a", "b"):
+            killed = m.run("hermes", *self.args(m, name), env=kill, check=False)
+            self.assertNotEqual(killed.returncode, 0, killed.stdout)
+            self.assertTrue((m.home / ".hermes/plugins/marmot/plugin.yaml").exists(), killed.stdout)
+        failed = m.run("hermes", *self.args(m, "a"), env={"FAKE_FAIL": "systemctl --user restart"}, check=False)
+        self.assertNotEqual(failed.returncode, 0, failed.stdout)
+        self.assertEqual((Upgrade.snapshot(m), self.gateway(m)), before, failed.stderr)
+        self.assertEqual(self.under_way(m), [], failed.stderr)
 
 
 class FilesFrom(unittest.TestCase):
@@ -2591,6 +2727,35 @@ class PutBack(unittest.TestCase):
             self.assertIn("status 1", ran.stdout, ran.stderr)
             self.assertFalse(log.exists(), "nothing put back before the one that failed")
             self.assertTrue(all(r.exists() for r in records))
+
+    def test_the_change_of_a_run_that_fails_goes_back_in_its_turn(self):
+        """A run that fails puts its own plugin change back in the same replay as the others its upgrade
+        lists, the last first: listed before another, it goes back after it, as the other's copies may
+        be of what this one left. Before, it went back first, and the other's copies over it (#180). One
+        that fails to go back still stops those before it."""
+        for failing, expected in ((None, ["second", "first"]), ("second", [])):
+            with self.subTest(failing=failing), tempfile.TemporaryDirectory() as tmp:
+                tmp = Path(tmp)
+                data = tmp / "data"
+                upgrade = data / "upgrade"
+                upgrade.mkdir(parents=True)
+                (upgrade / "list").write_text("")
+                records = [tmp / name / "plugin-change" for name in ("first", "second")]
+                for record in records:
+                    record.parent.mkdir()
+                    record.write_text("")
+                (upgrade / "plugin-changes").write_text("".join(f"{r}\n" for r in records))
+                log = tmp / "put-back"
+                ran = self.lib(
+                    'put_back_change() { r=${1:-$MA_CHANGE}; case $r in */$FAILING/*) return 1 ;; esac\n'
+                    '    basename "$(dirname "$r")" >>"$LOG"; }\n'
+                    'image_put_back_from() { return 0; }\n'
+                    'HARNESS_TITLE=Hermes MA_UPGRADING=1 MA_CHANGING=1 MA_PREPARED=0 MA_WORK="" MA_STAGED=0\n'
+                    'finish 1',
+                    MA_DATA=str(data), MA_UPGRADE=str(upgrade), MA_CORE=str(tmp / "core"), MA_LIB=str(tmp / "lib"),
+                    MA_CHANGE=str(records[0]), LOG=str(log), FAILING=failing or "none")
+                self.assertEqual(log.read_text().split() if log.exists() else [], expected, ran.stderr)
+                self.assertEqual([r.exists() for r in records], [bool(failing)] * 2, ran.stderr)
 
     def test_a_plugin_change_that_cannot_go_back_in_place_keeps_the_upgrade(self):
         """A run stopped once it had moved its plugin change into the upgrade's record puts the change

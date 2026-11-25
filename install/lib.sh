@@ -338,7 +338,9 @@ backup_file() {
 # A change is made only during an upgrade (upgrade_begin), and goes with it: the upgrade's record lists
 # the change's record before the first change (change_note), so that whatever puts the upgrade back puts
 # the plugin back with the core, another harness's install too (upgrade_put_back), and the rename that
-# ends the upgrade ends the change (upgrade_end).
+# ends the upgrade ends the change (upgrade_end). An upgrade ends with the change of the run that ends
+# it, and with no other: a run takes over an upgrade only when every change it lists that is not done is
+# of this agent and to this gateway (MA_GATEWAY), and puts back any other first (changes_ours).
 #
 # Replacing the old connector's plugin, the copies are also listed in backups/before-move, which a
 # person going back to that connector puts back (docs/move.md). It lists what the gateway had before
@@ -350,7 +352,6 @@ backup_file() {
 # there is taken away should the change be put back. The copy of our own plugin is removed once it is
 # not needed. A record a run before left is kept as it is.
 change_begin() {
-    MA_CHANGE="$MA_AGENT_DIR/plugin-change"
     local why=$1 arg record=""
     shift
     for arg in "$@"; do no_control "a path to put back" "$arg"; done
@@ -434,7 +435,7 @@ put_back_change() {
 }
 
 # After a change that did not end, its status given: what it changed put back, and the run ended,
-# saying what happened and what to do.
+# saying what happened and what to do. Fails if it could not be put back.
 change_put_back() {
     local status=$1 kind path copy what="your $HARNESS_TITLE's settings" took="" copies="" how="" why again own
     # Gone already: it ended with the upgrade (upgrade_end).
@@ -461,8 +462,10 @@ $again, or go back to today's connector (docs/move.md)" >&2
     elif [ -n "$how" ]; then
         printf 'error: %s\n' "$why, and putting $what back failed too: copy $how yourself (docs/move.md). \
 $again after, and it puts back the same copies should it fail" >&2
+        return 1
     else
         printf 'error: %s\n' "$why, and putting $what back as they were failed too (above). $again" >&2
+        return 1
     fi
     return 0
 }
@@ -511,7 +514,9 @@ replace_dir() {
 }
 
 # What every run does as it ends, with its status: puts back a plugin change and an upgrade that did
-# not end, and removes what it staged.
+# not end, and removes what it staged. A change the upgrade lists goes back with the others it lists,
+# in their order (upgrade_put_back_changes): put back first, the copies of another listed after it, of
+# what this change left, would go back over the older ones.
 finish() {
     local status=$1
     set +e
@@ -521,7 +526,12 @@ finish() {
     fi
     if [ "$status" -ne 0 ] && [ "${MA_CHANGING:-0}" -eq 1 ]; then
         MA_CHANGING=0
-        change_put_back "$status"
+        if [ "${MA_UPGRADING:-0}" -eq 1 ] && [ -f "$MA_UPGRADE/plugin-changes" ] &&
+            grep -qxF "$MA_CHANGE" "$MA_UPGRADE/plugin-changes"; then
+            MA_CHANGE_STATUS=$status
+        else
+            change_put_back "$status"
+        fi
     fi
     if [ "$status" -ne 0 ] && [ "${MA_UPGRADING:-0}" -eq 1 ]; then
         MA_UPGRADING=0
@@ -759,7 +769,8 @@ publish_support() {
 # under way until it ends, so no run takes over, finishes or puts back an upgrade another is making.
 
 # Starts an upgrade, or takes over one a run before this one left under way. One that replaces a part
-# this run does not, as another harness's install does, this run cannot finish: it puts it back first.
+# this run does not, as another harness's install does, or that holds a plugin change of another agent,
+# or to another gateway, this run cannot finish: it puts it back first.
 upgrade_begin() {
     local making kind part others=""
     [ "${MA_UPGRADING:-0}" -eq 0 ] || return 0
@@ -769,7 +780,7 @@ upgrade_begin() {
             [ "$kind" = part ] || continue
             lib_parts | grep -qxF "$part" || others="$others $part"
         done <"$MA_UPGRADE/list"
-        if [ -z "$others" ]; then
+        if [ -z "$others" ] && changes_ours; then
             MA_UPGRADING=1
             say "a run before this one stopped part way through installing marmot-agent; this one finishes that, and puts back the core and support files that run found if it fails"
             upgrade_list "$MA_UPGRADE"
@@ -790,6 +801,20 @@ upgrade_begin() {
     fi
     upgrade_list "$making"
     mv "$making" "$MA_UPGRADE"
+}
+
+# Whether each plugin change the upgrade's record lists that is not done, its record still there, is
+# this run's to finish: this agent's, to the gateway this run changes, whose settings file its record
+# names (MA_GATEWAY, which the harness's script sets). Ended by this run, another would be left under
+# way after the upgrade, to put back copies older than what its gateway has by then (#180).
+changes_ours() {
+    local list="$MA_UPGRADE/plugin-changes" record
+    [ -f "$list" ] || return 0
+    while IFS= read -r record; do
+        if [ -z "$record" ] || [ ! -f "$record" ]; then continue; fi
+        [ "$record" = "$MA_AGENT_DIR/plugin-change" ] && [ -n "${MA_GATEWAY:-}" ] || return 1
+        awk -F '\t' -v path="$MA_GATEWAY" '$2 == path { found = 1 } END { exit !found }' "$record" || return 1
+    done <"$list"
 }
 
 # Names in the list of the upgrade in a folder each part of $MA_LIB this run replaces that it does not
@@ -869,13 +894,18 @@ upgrade_retire() {
 # that one's copies are of what the one before it left, and removes its record; prints the agents'
 # folders of those it put back, one a line, and fails if any could not be. One that could not stops the
 # rest, so that no change before it puts back its older copies while it is still to go back. One this run
-# was making was put back already, by change_put_back, unless that failed. The change moved into the
-# upgrade's record as it ended is back in its place by now (change_restore), unless that failed.
+# was making goes back in its turn, saying what happened as change_put_back says it (finish). The change
+# moved into the upgrade's record as it ended is back in its place by now (change_restore), unless that
+# failed.
 upgrade_put_back_changes() {
     local list="$MA_UPGRADE/plugin-changes" record own ok=0
     [ -f "$list" ] || return 0
     while IFS= read -r record; do
         if [ -z "$record" ] || [ ! -f "$record" ]; then continue; fi
+        if [ -n "${MA_CHANGE_STATUS:-}" ] && [ "$record" = "$MA_CHANGE" ]; then
+            change_put_back "$MA_CHANGE_STATUS" >&2 || { ok=1 && break; }
+            continue
+        fi
         own=$(own_copies "$record")
         if put_back_change "$record" >&2 && rm -f "$record"; then
             drop_copies "$own"
@@ -926,11 +956,12 @@ upgrade_put_back() {
     if [ "$why" = other ]; then
         if [ "$ok" -eq 0 ] && upgrade_retire; then
             rm -rf "$MA_DATA/.upgrade.done.$$"
-            say "a run of another installer before this one stopped part way through installing marmot-agent; this put back the core and support files that run found"
+            say "a run of another installer, or for another agent, before this one stopped part way through installing marmot-agent; this put back the core and support files that run found"
             return 0
         fi
-        printf 'error: %s\n' "a run of another installer before this one stopped part way through installing \
-marmot-agent, and putting back the core and support files that run found failed (above); they are in $MA_UPGRADE" >&2
+        printf 'error: %s\n' "a run of another installer, or for another agent, before this one stopped part way \
+through installing marmot-agent, and putting back the core and support files that run found failed (above); they \
+are in $MA_UPGRADE" >&2
         return 1
     fi
     if [ "$ok" -eq 0 ] && upgrade_retire; then
@@ -1524,6 +1555,7 @@ set_paths() {
     MA_LIB=$MA_DATA/lib
     MA_UPGRADE=$MA_DATA/upgrade
     MA_AGENT_DIR=$MA_DATA/agents/$NAME
+    MA_CHANGE=$MA_AGENT_DIR/plugin-change
     MA_SETTINGS=$MA_AGENT_DIR/settings.toml
     MA_HOME=$MA_AGENT_DIR/home
     MA_UNIT=marmot-agent-$NAME
@@ -1892,7 +1924,7 @@ main() {
     set_paths
     check_harness
     # MA_STAGED says whether this run made the folder in MA_STAGE: a dry run names the installed one.
-    MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0 MA_UPGRADING=0 MA_PREPARED=0
+    MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0 MA_UPGRADING=0 MA_PREPARED=0 MA_CHANGE_STATUS=""
     trap 'finish $?' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT
@@ -1914,6 +1946,8 @@ main() {
     FILES_CHOSEN=0 FILES_KEPT=0 FILES_ALSO=0 FILES_ADD=0 FILES_FROM="" FILES_WHY=""
     GATEWAY_STATE=()
     GATEWAY_CACHE=()
+    # The settings file of the gateway this run changes the plugin of, which harness_check sets.
+    MA_GATEWAY=""
     harness_check
     if [ "$NO_SERVICE" -eq 0 ]; then
         if [ "$OS" = Linux ]; then

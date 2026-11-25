@@ -3313,3 +3313,26 @@ might be settled its requests twice once MDK posted it (found in review, 2026-11
 Decided 2026-11-25 by the builder, under the project owner's instruction to decide minor points. What the chat is
 told follows D-109. That the one path left stays, and the known limit above, were decided 2026-11-25 by the
 project owner.
+
+## D-154 An install takes over a killed upgrade only for the same agent and the same gateway
+
+**Decision.** An upgrade a killed install left under way may hold a change to a gateway's plugin
+([D-134](#d-134-an-upgrade-of-the-core-and-its-support-files-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)).
+An install takes such an upgrade over, and finishes it, only when every change it holds that is not done is of
+the same agent and to the same gateway, the one whose settings file the install changes (for Hermes, its
+`config.yaml`; for OpenClaw, the file `openclaw config file` names). Otherwise, as for another harness's install,
+it puts the whole upgrade back first, each plugin change with it, says so, and then installs as if none had run.
+So an install for a second Hermes or OpenClaw agent, or for the same agent pointed at another gateway, never ends
+another agent's change half made. An install that fails puts its own plugin change back in the same order as the
+others its upgrade holds, the last made first, and stops at the first that cannot go back.
+
+**Why.** Two agents of one gateway harness replace the same support files, so a second agent's install took over
+the first's killed upgrade and ended it with only its own change. The first agent's gateway was left changed by a
+run that never ended, and its record of the change stayed, to put back copies older than what that gateway had
+by then over a later install, settings included. Putting the install's own change back before the others let a
+later change's copies, taken of what the earlier one left, go back over the older ones: our plugin beside the
+older core. Found by review of the model of the installer (issue #180); the install tests and the model's
+two-agent configuration now check both.
+
+Decided 2026-11-25 by the builder, under the project owner's instruction to decide minor points.
+

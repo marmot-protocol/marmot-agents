@@ -45,6 +45,8 @@ harness_check() {
         return 0
     fi
     say "found OpenClaw $version at $OPENCLAW"
+    # Which OpenClaw this is, that a change of its plugin a run before left under way names (lib.sh).
+    MA_GATEWAY=$("$OPENCLAW" config file 2>/dev/null) || MA_GATEWAY=""
     finish_half_done_move
     openclaw_files_from
     # One OpenClaw serves one agent: its marmot channel names one agent's home.
