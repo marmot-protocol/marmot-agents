@@ -2841,6 +2841,21 @@ class PutBack(unittest.TestCase):
                                    MA_UPGRADE=str(upgrade), MA_AGENT_DIR=str(record.parent), MA_GATEWAY=gateway)
                     self.assertEqual(ran.stdout.strip(), "ours" if ours else "other", ran.stderr)
 
+    def test_an_upgrade_of_this_harness_is_ours_however_its_parts_are_written(self):
+        """upgrade_ours looks each part of the upgrade up in lib_parts, through a pipe, with pipefail on as
+        the scripts run: grep reads all of it, so lib_parts never writes into a pipe grep has left. Before,
+        grep -q left at the first match, and lib_parts, writing after it, failed with SIGPIPE: the part
+        was taken for another harness's, and the run put back an upgrade it was to finish, now and then."""
+        with tempfile.TemporaryDirectory() as tmp:
+            upgrade = Path(tmp) / "upgrade"
+            upgrade.mkdir()
+            (upgrade / "list").write_text("core\tpresent\npart\tLICENSE\tpresent\n")
+            ran = self.lib("set -o pipefail\n"
+                           "lib_parts() { printf 'LICENSE\\n'; sleep 0.2; printf 'install\\n'; }\n"
+                           "if upgrade_ours; then echo ours; else echo other; fi",
+                           MA_UPGRADE=str(upgrade))
+            self.assertEqual(ran.stdout.strip(), "ours", ran.stderr)
+
     def test_a_plugin_change_that_cannot_go_back_in_place_keeps_the_upgrade(self):
         """A run stopped once it had moved its plugin change into the upgrade's record puts the change
         back in its place as it ends. When it cannot, the upgrade's record is kept, the change in it,

@@ -829,7 +829,8 @@ upgrade_ours() {
     local kind part
     while IFS='	' read -r kind part _; do
         [ "$kind" = part ] || continue
-        lib_parts | grep -qxF "$part" || return 1
+        # Not grep -q: one that leaves at the first match, with pipefail, fails lib_parts still writing.
+        lib_parts | grep -xF "$part" >/dev/null || return 1
     done <"$MA_UPGRADE/list"
     changes_ours
 }
