@@ -361,7 +361,7 @@ class Translator:
         so it shows as cancelled. Answered by a `message` typed, it shows where Hermes's reply to that message
         does (`owner_of`)."""
         prev = self.open.get(item)
-        key = self.confirm_key.get(item)
+        key = self.confirm_key.pop(item, None)
         if self.confirm_waiting.get(key) == item:
             del self.confirm_waiting[key]
         for typed in [t for t, (asked, _) in self.typed_confirm.items() if asked == item]:

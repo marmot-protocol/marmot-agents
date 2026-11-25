@@ -941,6 +941,12 @@ class Connected(unittest.IsolatedAsyncioTestCase):
     def last_of(self, item):
         return [e for e in self.sent if e["item"] == item][-1]
 
+    def expire(self, item):
+        """Hermes's own limit for the confirmation `item` passes: runs what the plugin's timer for it runs
+        (`EXPIRY_SECONDS`), so nothing depends on how fast the test runs."""
+        chat = next(c for c in self.connector.chats.values() if item in c.translator.open)
+        self.connector.expired(chat, item)
+
     async def test_a_typed_cancel_answers_only_the_senders_own_confirmation(self):
         """Both confirmations wait, Bob's asked last. Alice types `/cancel`: Hermes reads it in her own session,
         so it cancels her `/new` alone. Her question shows the answer and settles her `/new`, which will not
@@ -1052,14 +1058,13 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         """Hermes drops a confirmation without a word, here when the session's next message comes: the plugin
         cannot tell why one stopped waiting, so the question still shows waiting until Hermes's own limit
         passes, and then shows as cancelled, and settles the `/new` it was for (D-155)."""
-        with mock.patch("marmot_hermes.connector.EXPIRY_SECONDS", 0.05, create=True):
-            await self.asked_to_confirm_a_new_session()
+        await self.asked_to_confirm_a_new_session()
         await self.connector.serve("prompt", prompt("m-2", "hello again"))
         del self.hermes.waiting_confirm[KEY]
         self.feed(started("m-2", "hello again"), said("Hi again.", "m-2", notify=True), complete("m-2"))
         self.assertEqual(self.last_of("confirm:k-1")["state"], "waiting")
         self.assertEqual(self.of("message")[-1]["text"], "Hi again.")
-        await asyncio.sleep(0.1)
+        self.expire("confirm:k-1")
         dropped = self.last_of("confirm:k-1")
         self.assertEqual((dropped["state"], dropped.get("settles")), ("cancelled", ["r-1"]))
 
@@ -1109,13 +1114,12 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         nothing (`tools.slash_confirm.resolve`, `_hm_slash_confirm_reply`). With no reply, nothing shows the
         question answered: it shows as cancelled once Hermes's limit passes, and settles the `/new`, which will
         not run (round 1: it showed as approved)."""
-        with mock.patch("marmot_hermes.connector.EXPIRY_SECONDS", 0.05, create=True):
-            await self.asked_to_confirm_a_new_session()
+        await self.asked_to_confirm_a_new_session()
         del self.hermes.waiting_confirm[KEY]
         await self.connector.serve("prompt", prompt("m-2", "/approve"))
         self.feed(started("m-2", "/approve"), complete("m-2"))
         self.assertEqual(self.last_of("confirm:k-1")["state"], "waiting")
-        await asyncio.sleep(0.1)
+        self.expire("confirm:k-1")
         dropped = self.last_of("confirm:k-1")
         self.assertEqual((dropped["state"], dropped.get("settles")), ("cancelled", ["r-1"]))
         with self.assertRaises(Refusal) as refused:
@@ -1125,11 +1129,16 @@ class Connected(unittest.IsolatedAsyncioTestCase):
     async def test_a_confirmation_no_one_answers_closes_when_hermess_limit_passes(self):
         """Hermes never runs a confirmation older than its limit (`tools.slash_confirm`), and says nothing when
         it drops one: once the limit passes, the question shows as cancelled, and settles the `/new` it was
-        for, which will not run (D-155)."""
-        with mock.patch("marmot_hermes.connector.EXPIRY_SECONDS", 0.05, create=True):
+        for, which will not run (D-155). The plugin counts the limit from when Hermes offers it, and a second more:
+        the timer it sets then is run here by hand."""
+        loop = asyncio.get_running_loop()
+        with mock.patch.object(loop, "call_later", wraps=loop.call_later) as timers:
             await self.asked_to_confirm_a_new_session()
+        limits = [c.args for c in timers.call_args_list if c.args[1] == self.connector.expired]
+        self.assertEqual([(delay, item) for delay, _, _, item in limits], [(301.0, "confirm:k-1")])
         self.assertEqual(self.last_of("confirm:k-1")["state"], "waiting")
-        await asyncio.sleep(0.1)
+        _, expired, *args = limits[0]
+        expired(*args)
         dropped = self.last_of("confirm:k-1")
         self.assertEqual((dropped["state"], dropped.get("settles")), ("cancelled", ["r-1"]))
         self.assertEqual([(e["item"], e["settles"]) for e in self.sent if "settles" in e], [("confirm:k-1", ["r-1"])])
