@@ -92,11 +92,6 @@ const READS: usize = 8;
 /// MDK, does not hold up the others.
 const DRAIN: usize = 8;
 
-/// How many of the driver's outputs the `no_effect` net takes, when it looks, to read before it
-/// settles anything ([`Core::look_overdue`]): a bound on how long it waits for them, and on what
-/// it holds, should a driver hand over more than the core can read.
-const NET_READS: usize = 256;
-
 /// When to read again what MDK could not read for a moment, and how long that waited.
 struct Again {
     /// When it is read again; `None` while it is being read.
@@ -467,13 +462,10 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// turn, so when several are ready at once none waits behind the others for long, and the
     /// same inputs always give the same order, which a simulation replays.
     first: usize,
-    /// What the driver gave while a catch-up looked whether it had ended ([`Core::driver_ready`]),
-    /// one output, or what the `no_effect` net took to read first ([`Core::look_overdue`]): the
-    /// loop takes them in the driver's turn, oldest first.
-    early: VecDeque<Output>,
-    /// The `no_effect` net that waits for what it took: when it looked, and how many of `early`
-    /// are still to be read before it settles what was overdue then.
-    net: Option<(u64, usize)>,
+    /// What the driver gave while a catch-up, or the `no_effect` net, looked whether it had
+    /// anything ready ([`Core::driver_ready`]): one output at most, with when it reached the
+    /// driver on the core's clock, which the loop takes in the driver's turn.
+    early: Option<(Output, u64)>,
     /// Whether the driver has ended: the loop ends, and nothing more is read for it.
     ended: bool,
     /// Faults put back for the simulator, to show its checks find them: none in use.
@@ -558,8 +550,7 @@ impl<D: Driver, M: Side> Core<D, M> {
             drained: HashMap::new(),
             bounded: true,
             first: 0,
-            early: VecDeque::new(),
-            net: None,
+            early: None,
             ended: false,
             #[cfg(feature = "sim-bugs")]
             bugs: Bugs::default(),
@@ -624,6 +615,11 @@ impl<D: Driver, M: Side> Core<D, M> {
             self.files.stop().await;
             return Err(unsaved);
         }
+        // What the core took from the driver to look at is read before the stop, so a file it asks
+        // to send is answered with the others (D-145).
+        if let Some((output, _)) = self.early.take() {
+            self.take(output).await?;
+        }
         self.end_files().await?;
         // Everything the stop closes is queued and saved at once, before any of it is sent: a
         // crash in between sends what is left when the core starts again, and closes nothing
@@ -684,22 +680,17 @@ impl<D: Driver, M: Side> Core<D, M> {
             self.start_uploads().await;
             // A driver a catch-up, or the files, found ended is handed nothing more, once what it
             // gave before its end is read.
-            if self.ended && self.early.is_empty() {
+            if self.ended && self.early.is_none() {
                 break;
             }
             let woke = {
                 let mut tick = pin!(clock.tick());
                 let mut retry = pin!(retry);
                 // What the driver gave while a catch-up looked comes first in the driver's turn.
-                let (early, driver, net) = (&mut self.early, &mut self.driver, &mut self.net);
+                let (early, driver) = (&mut self.early, &mut self.driver);
                 let mut driver = pin!(async move {
-                    match early.pop_front() {
-                        Some(output) => {
-                            if let Some((_, left)) = net {
-                                *left = left.saturating_sub(1);
-                            }
-                            Some(output)
-                        }
+                    match early.take() {
+                        Some((output, _)) => Some(output),
                         None => driver.next_event().await,
                     }
                 });
@@ -730,7 +721,7 @@ impl<D: Driver, M: Side> Core<D, M> {
             };
             match woke {
                 Woke::Tick => {
-                    self.look_overdue().await?;
+                    self.settle_overdue().await?;
                     // MDK can store a message with no notice, as one imported: every group is
                     // read from its mark now and then, unless a catch-up waits to list them.
                     if self.listing.is_none() {
@@ -742,13 +733,7 @@ impl<D: Driver, M: Side> Core<D, M> {
                     self.read_again().await?;
                 }
                 Woke::Driver(Some(output)) => {
-                    match output {
-                        Output::Event(emitted) => {
-                            let acts = self.conversation.emitted(emitted);
-                            self.carry_out(acts).await?;
-                        }
-                        Output::SendFile(file) => self.send_file(file).await?,
-                    }
+                    self.take(output).await?;
                     self.settle_overdue().await?;
                 }
                 Woke::Driver(None) => break,
@@ -1055,58 +1040,70 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// waiting: its next event is asked for and dropped as soon as it is not ready, which the
     /// trait allows (D-058). One output given meanwhile is kept for the loop, which takes it in
     /// the driver's turn, and no more is asked for until it has. A connector whose connection
-    /// went, or that the core gave up, has ended once its socket says so.
+    /// went, or that the core gave up, has ended once its socket says so. Tokio's budget for a
+    /// task, which can make a channel or a socket with something ready look empty once the core
+    /// has read a lot in one go, is set aside for the look: the `no_effect` net takes "nothing
+    /// ready" to mean that nothing more has reached the driver.
     async fn driver_ready(&mut self) -> bool {
-        if self.ended || !self.early.is_empty() {
+        if self.ended || self.early.is_some() {
             return true;
         }
-        self.take_ready().await
-    }
-
-    /// Takes the driver's next output into `early` if it has one ready, without waiting, or notes
-    /// that it ended. Whether it had either.
-    async fn take_ready(&mut self) -> bool {
         let polled = {
-            let mut next = pin!(self.driver.next_event());
+            let mut next = pin!(tokio::task::unconstrained(self.driver.next_event()));
             std::future::poll_fn(|cx| Poll::Ready(next.as_mut().poll(cx))).await
         };
         match polled {
-            Poll::Ready(Some(output)) => self.early.push_back(output),
+            Poll::Ready(Some(output)) => self.early = Some((output, self.arrival())),
             Poll::Ready(None) => self.ended = true,
             Poll::Pending => return false,
         }
         true
     }
 
-    /// The `no_effect` net looks (D-087). It settles nothing before the core has read what the
-    /// driver handed over by now: the core may have been busy past a deadline, as when it waited
-    /// on the driver to take a slow request, while the effect it waits for was handed over in
-    /// time, and settled first that would be untrue (S1). So it takes what the driver has ready,
-    /// at most [`NET_READS`], to be read first in the driver's turn as usual, and settles what is
-    /// overdue now once the last of those is read: it waits for them and not for what the driver
-    /// hands over after, so a driver that is never idle holds up no deadline. A net that waits
-    /// already looks no further; what is overdue after it looked waits for the next tick.
-    async fn look_overdue(&mut self) -> Result<(), Unsaved> {
-        let now = self.clock();
-        if self.net.is_some() || !self.conversation.is_overdue(now) {
-            return Ok(());
+    /// When the output the driver handed over last reached it, in seconds on the core's clock:
+    /// when the driver says, or else now ([`Driver::arrived`]).
+    fn arrival(&self) -> u64 {
+        match self.driver.arrived() {
+            Some(at) => Instant::from_std(at)
+                .saturating_duration_since(self.started)
+                .as_secs(),
+            None => self.clock(),
         }
-        let mut taken = 0;
-        while !self.ended && taken < NET_READS && self.take_ready().await {
-            taken += 1;
-        }
-        self.net = Some((now, self.early.len()));
-        self.settle_overdue().await
     }
 
-    /// Settles what was overdue when the net looked, once what it took to read first is read.
+    /// An output the driver handed over: an event, or a file to send.
+    async fn take(&mut self, output: Output) -> Result<(), Unsaved> {
+        match output {
+            Output::Event(emitted) => {
+                let acts = self.conversation.emitted(emitted);
+                self.carry_out(acts).await
+            }
+            Output::SendFile(file) => self.send_file(file).await,
+        }
+    }
+
+    /// The `no_effect` net (D-087): settles each control the driver took whose effect has not
+    /// shown by its deadline, once the core has read every output that reached the driver by
+    /// then. The core may have been busy past a deadline, as when it waited on the driver to take
+    /// a slow request, while the effect was handed over in time: settled first, that would be
+    /// untrue (S1). The driver hands its outputs over in the order they reached it, so the next
+    /// one, which the core takes to look at if it is ready, is the oldest not read: a control
+    /// whose deadline came before it reached the driver is settled now, and the rest wait while
+    /// the core reads on, one output at a time in the driver's turn, looking again after each.
+    /// What reaches the driver after a deadline does not hold it up, so a driver that is never
+    /// idle holds up no deadline (L1).
     async fn settle_overdue(&mut self) -> Result<(), Unsaved> {
-        let Some((at, 0)) = self.net else {
+        let now = self.clock();
+        if !self.conversation.is_overdue(now) {
             return Ok(());
+        }
+        self.driver_ready().await;
+        let by = match &self.early {
+            Some((_, arrived)) => now.min(arrived.saturating_sub(1)),
+            None => now,
         };
-        self.net = None;
         loop {
-            let acts = self.conversation.overdue(at);
+            let acts = self.conversation.overdue(by);
             if acts.is_empty() {
                 return Ok(());
             }
@@ -2314,13 +2311,26 @@ mod tests {
         }
 
         async fn incoming(&self, message: Message) -> Result<Option<Incoming>, NotNow> {
+            let chat = crate::conversation::Where {
+                group: message.group,
+                name: None,
+                direct: true,
+                members: 2,
+            };
+            // `/new` stands for the owner's request for a new session, a control.
+            if message.content == "/new" {
+                return Ok(Some(Incoming::Asked(crate::conversation::HeardRequest {
+                    chat,
+                    event: message.event,
+                    author: message.sender,
+                    author_name: "Owner".into(),
+                    age_secs: 0,
+                    target: None,
+                    asked: Ok(crate::carrier::Asked::NewSession),
+                })));
+            }
             Ok(Some(Incoming::Heard(crate::conversation::Heard {
-                chat: crate::conversation::Where {
-                    group: message.group,
-                    name: None,
-                    direct: true,
-                    members: 2,
-                },
+                chat,
                 event: message.event,
                 author: message.sender,
                 author_name: "Owner".into(),
@@ -3073,5 +3083,233 @@ mod tests {
         );
         assert_eq!(side.offers(), FILES_AT_ONCE, "and offered");
         assert_eq!(side.not_sent(), 1, "the chat is told the last was not sent");
+    }
+
+    /// A driver that takes every control at once, and each prompt but `go` at once too, which it
+    /// takes only after `slow`. It hands the core what the test gives it, and counts the files
+    /// among them it handed over.
+    struct Slowed {
+        outputs: mpsc::UnboundedReceiver<Output>,
+        slow: Duration,
+        /// Each request it takes, by its kind, and the chat of each prompt.
+        seen: mpsc::UnboundedSender<(&'static str, Option<marmot_agent_driver::ChatId>)>,
+        handed: Arc<Mutex<usize>>,
+        told: Told,
+    }
+
+    impl Driver for Slowed {
+        fn harness(&self) -> marmot_agent_driver::Harness {
+            marmot_agent_driver::Harness {
+                name: "slowed".into(),
+                version: None,
+            }
+        }
+
+        fn capabilities(&self) -> marmot_agent_driver::Capabilities {
+            marmot_agent_driver::Capabilities {
+                interrupt: false,
+                mid_turn: marmot_agent_driver::MidTurn::Queue,
+                sessions: marmot_agent_driver::Sessions::Core,
+                resume: false,
+                approvals: false,
+                files_in: marmot_agent_driver::FilesIn::None,
+                approval_commands: Vec::new(),
+                subagents: false,
+                stop_subagent: false,
+            }
+        }
+
+        async fn prompt(&mut self, prompt: marmot_agent_driver::Prompt) -> Result<(), Refusal> {
+            let slow = prompt.text == "go";
+            let kind = if slow { "slow" } else { "prompt" };
+            let _ = self.seen.send((kind, Some(prompt.chat.id)));
+            if slow {
+                tokio::time::sleep(self.slow).await;
+            }
+            Ok(())
+        }
+
+        async fn answer(&mut self, _answer: marmot_agent_driver::Answer) -> Result<(), Refusal> {
+            unreachable!("no answer")
+        }
+
+        async fn control(&mut self, _control: marmot_agent_driver::Control) -> Result<(), Refusal> {
+            let _ = self.seen.send(("control", None));
+            Ok(())
+        }
+
+        async fn next_event(&mut self) -> Option<Output> {
+            let output = self.outputs.recv().await;
+            if let Some(Output::SendFile(_)) = &output {
+                *self.handed.lock().unwrap() += 1;
+            }
+            output
+        }
+
+        async fn file_sent(&mut self, id: String, result: Result<(), Refusal>) {
+            self.told.lock().unwrap().push((id, result));
+        }
+    }
+
+    // Review of #198: when a control was overdue, the `no_effect` net took what the driver had
+    // ready, to read before it settled, and a stop that came then dropped the files among them:
+    // the driver was never told how they went, nor the chat that they were not sent (D-145).
+    // Here a control waits past its deadline while a prompt holds the core, the agent asks to
+    // send files meanwhile, and the core is asked to stop. The prompts before shift where in the
+    // loop's turn the core comes out of the slow prompt, so the tick, the driver's files and the
+    // stop meet in each order. Every file the driver handed over is answered.
+    #[tokio::test(start_paused = true)]
+    async fn a_stop_as_the_net_looks_answers_every_file_handed_over() {
+        let asked = FILES_AT_ONCE + 3;
+        for before in 0..2 * WAITS {
+            let (outputs, outputs_in) = mpsc::unbounded_channel();
+            let (seen_out, mut seen) = mpsc::unbounded_channel();
+            let (handed, told) = (Arc::new(Mutex::new(0)), Told::default());
+            let driver = Slowed {
+                outputs: outputs_in,
+                slow: Duration::from_secs(150),
+                seen: seen_out,
+                handed: handed.clone(),
+                told: told.clone(),
+            };
+            let desk = OnDesk::start(driver);
+            for n in 0..before {
+                desk.side.say(&format!("hi {n}"));
+                assert_eq!(seen.recv().await.unwrap().0, "prompt");
+            }
+            desk.side.say("/new");
+            assert_eq!(seen.recv().await.unwrap().0, "control");
+            desk.side.say("go");
+            let (kind, chat) = seen.recv().await.unwrap();
+            assert_eq!(kind, "slow");
+            for n in 0..asked {
+                let file = SendFile {
+                    id: format!("f{n}"),
+                    chat: chat.clone().unwrap(),
+                    path: desk.notes(),
+                };
+                outputs.send(Output::SendFile(file)).unwrap();
+            }
+            let _ = desk.stop.send(());
+            desk.running.await.unwrap().unwrap();
+            let handed = *handed.lock().unwrap();
+            let told = told.lock().unwrap().clone();
+            assert_eq!(
+                told.len(),
+                handed,
+                "{before} before: each file handed over is answered: {told:?}"
+            );
+            assert!(told.iter().all(|(_, r)| r.is_err()), "none was sent");
+            assert_eq!(
+                desk.side.not_sent(),
+                handed - desk.side.offers(),
+                "{before} before: the chat hears of each file never offered"
+            );
+            drop(outputs);
+        }
+    }
+
+    /// A driver that takes every control at once, and, once a control names a chat, always has
+    /// the agent's words for it ready, so it is never idle, until `ends`.
+    struct Chatty {
+        chat: Option<marmot_agent_driver::ChatId>,
+        said: u64,
+        ends: Instant,
+    }
+
+    impl Driver for Chatty {
+        fn harness(&self) -> marmot_agent_driver::Harness {
+            marmot_agent_driver::Harness {
+                name: "chatty".into(),
+                version: None,
+            }
+        }
+
+        fn capabilities(&self) -> marmot_agent_driver::Capabilities {
+            marmot_agent_driver::Capabilities {
+                interrupt: false,
+                mid_turn: marmot_agent_driver::MidTurn::Queue,
+                sessions: marmot_agent_driver::Sessions::Core,
+                resume: false,
+                approvals: false,
+                files_in: marmot_agent_driver::FilesIn::None,
+                approval_commands: Vec::new(),
+                subagents: false,
+                stop_subagent: false,
+            }
+        }
+
+        async fn prompt(&mut self, _prompt: marmot_agent_driver::Prompt) -> Result<(), Refusal> {
+            Ok(())
+        }
+
+        async fn answer(&mut self, _answer: marmot_agent_driver::Answer) -> Result<(), Refusal> {
+            unreachable!("no answer")
+        }
+
+        async fn control(&mut self, control: marmot_agent_driver::Control) -> Result<(), Refusal> {
+            if let marmot_agent_driver::Action::NewSession { chat, .. } = control.action {
+                self.chat = Some(chat.id);
+            }
+            Ok(())
+        }
+
+        async fn next_event(&mut self) -> Option<Output> {
+            let Some(chat) = self.chat.clone() else {
+                return std::future::pending().await;
+            };
+            if Instant::now() >= self.ends {
+                return None;
+            }
+            self.said += 1;
+            let n = self.said;
+            let header = marmot_agent_events::Header {
+                harness: "chatty".into(),
+                session: Some("s1".into()),
+                turn: None,
+                subagent: None,
+                item: format!("w{n}").into(),
+                seq: n,
+                state: marmot_agent_events::State::Done,
+                title: "words".into(),
+                text: format!("word {n}"),
+            };
+            let body = marmot_agent_events::Body::Message(Default::default());
+            Some(Output::Event(marmot_agent_driver::Emitted {
+                event: marmot_agent_events::AgentEvent::new(header, body, None).unwrap(),
+                chat: Some(chat),
+                prompts: Vec::new(),
+                settles: Vec::new(),
+            }))
+        }
+    }
+
+    // Review of #198: a driver that is never idle, whose output keeps reaching the core after a
+    // control's deadline, does not hold off the `no_effect` net (D-087, L1): what reached the core
+    // after the deadline is not waited for. Here the driver talks for 200 s after it takes a
+    // control whose effect it never shows, and has words ready each time the core looks, while
+    // the clock moves on two seconds each time the core lets the test run.
+    #[tokio::test(start_paused = true)]
+    async fn a_driver_never_idle_after_the_deadline_does_not_hold_off_the_net() {
+        let driver = Chatty {
+            chat: None,
+            said: 0,
+            ends: Instant::now() + Duration::from_secs(200),
+        };
+        let desk = OnDesk::start(driver);
+        desk.side.say("/new");
+        let side = desk.side.clone();
+        let mut running = desk.running;
+        loop {
+            tokio::select! {
+                ran = &mut running => break ran.unwrap().unwrap(),
+                () = tokio::time::advance(Duration::from_secs(2)) => {}
+            }
+        }
+        let notices = side.notices.lock().unwrap().clone();
+        assert!(
+            notices.iter().any(|n| n.starts_with("The agent took this")),
+            "the net fired while the driver talked: {notices:?}"
+        );
     }
 }

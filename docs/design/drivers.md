@@ -109,6 +109,13 @@ one only to resume it, so opening and resuming one happen when a prompt arrives
 ([D-065](../decisions.md#d-065-a-prompt-names-a-session-only-to-resume-one)). A message sent during a turn is a prompt like any other, so there
 is no "steer". And "new session" is a control.
 
+A driver also says when each output it hands back reached it (`arrived`): one that reads its harness while a
+request waits, and holds what it read, says when it read it. For a connector the core notes it itself, as it
+reads each line from the socket, so the socket has no field for it. The core settles a control as having had no
+effect only once it has read everything that reached it by the control's deadline
+([D-087](../decisions.md#d-087-the-core-settles-a-request-whose-effect-never-shows); decided by the project owner
+on 2026-11-25, for [#198](https://github.com/marmot-protocol/marmot-agents/issues/198)).
+
 It is decided ([D-058](../decisions.md#d-058-the-driver-trait-and-the-capability-flags)). The core waits for
 every request to return
 ([D-066](../decisions.md#d-066-the-core-finishes-every-request-it-starts)).

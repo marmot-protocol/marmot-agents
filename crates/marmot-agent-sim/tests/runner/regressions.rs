@@ -127,3 +127,67 @@ fn a_busy_driver_does_not_hold_off_the_net() {
     );
     assert_eq!(property(&report), None, "{:#?}", report.trace);
 }
+
+// Review of #198: the net read first what the driver had ready when it looked, at most 256
+// outputs, and settled once it had read them. Here the harness shows a setting's effect in time,
+// as in the regression above, but behind the events of 90 other turns, more than 256 outputs, all
+// handed over while the core waited on the driver. The net settles only once the core has read
+// every output that reached it by the setting's deadline, so the effect settles it. Before, the
+// net settled it as having no effect after the first 256, and then the effect came (S1).
+#[test]
+fn an_effect_shown_in_time_behind_many_outputs_is_not_settled_by_the_net() {
+    let turns = 90;
+    let mut messages = vec![PROMPT, SET];
+    messages.extend(std::iter::repeat_n(PROMPT, turns + 1));
+    let slow = messages.len() - 1;
+    // As above, each wait comes out of the slow request at another place in the loop's turn.
+    for wait in (55_000..=115_000).step_by(20_000) {
+        let mut steps = vec![
+            Action::Invite { chat: 0 },
+            Action::Store { msg: 0 },
+            Action::Hear { msg: 0 },
+            Action::Emit {
+                pick: 0,
+                force: false,
+            },
+            Action::Store { msg: 1 },
+            Action::Ask { msg: 1 },
+        ];
+        // The other turns, each taken at once and shown only later.
+        for msg in 2..slow {
+            steps.extend([Action::Store { msg }, Action::Hear { msg }]);
+        }
+        steps.extend([
+            Action::Tick { ms: wait },
+            Action::Slow { ms: 70_000 },
+            Action::Store { msg: slow },
+            Action::Hear { msg: slow },
+        ]);
+        // Meanwhile the harness shows every turn it has, at least three events each, and then the
+        // setting's effect, the one thing left to emit.
+        let first = steps.len();
+        steps.extend(std::iter::repeat_n(
+            Action::Emit {
+                pick: 0,
+                force: false,
+            },
+            4 * turns,
+        ));
+        let report = run(&schedule(messages.clone(), steps));
+        let effect = (report.trace.iter()).find(|t| {
+            t.step.is_some_and(|s| s >= first)
+                && t.what.starts_with("Emit(sess-")
+                && t.what.contains("settles")
+        });
+        let behind = (report.trace.iter())
+            .filter(|t| t.step.is_some_and(|s| s >= first) && t.what.starts_with("Emit("))
+            .take_while(|t| !(t.what.starts_with("Emit(sess-") && t.what.contains("settles")))
+            .count();
+        assert!(
+            effect.is_some_and(|t| t.ms < 120_000) && behind > 256,
+            "wait {wait}: the effect is not shown in time behind {behind} outputs\n{:#?}",
+            report.trace
+        );
+        assert_eq!(property(&report), None, "wait {wait}\n{:#?}", report.trace);
+    }
+}

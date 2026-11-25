@@ -75,7 +75,8 @@ tries a send again is not modelled: a send may be tried again at once.
   the core was busy, as waiting on the driver to take a slow request, and read only after the deadline. The
   simulator's S1 checks that, against the harness's clock; it found the case on the nightly run
   `driver/v2/45539714087/3755` ([#198](https://github.com/marmot-protocol/marmot-agents/issues/198)), and
-  `run.rs` now has the net read first what the driver had ready when it looked, and only that.
+  `run.rs` now notes when each output reached the driver, and settles a control only once it has read every
+  output that reached it by the control's deadline.
 - **Files the agent sends** (D-090).
 
 ## Trusted assumptions
