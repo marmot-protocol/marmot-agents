@@ -3437,10 +3437,13 @@ that does not say is taken to have read it when it hands it over. For a connecto
 reads each line from the socket, so the socket has no field for it and no connector changes. Output that reaches the
 core after a deadline does not hold the net, so a driver that is never idle cannot keep a control pending. The core
 reads that output one at a time in its loop, as it always did, with nothing read ahead, so a stop loses nothing the
-driver handed over.
+driver handed over. A driver hands its outputs over in the order they reached it. An effect the core reads before
+the net settles the control settles it, even after the deadline, as before this decision.
 
 Not closed: a Codex message held until its thread is named is noted when the driver releases it, not when it read it,
-so an effect inside one released after the deadline does not count as in time.
+so an effect inside one released after the deadline does not count as in time. And a driver that reads without end
+lines that give no output, as a connector that floods its socket, holds the net, though not the rest of the core:
+the core cannot tell it has read everything that reached the driver.
 
 **Why.** The nightly simulator found a control settled `no_effect` though its effect reached the core in time: the
 core was blocked on a slow request of the driver, and when it went on, the clock's tick came before the event

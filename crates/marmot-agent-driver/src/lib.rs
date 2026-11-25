@@ -267,8 +267,10 @@ pub trait Driver: Send {
     /// The core settles a control as having had no effect only once it has read every output
     /// that reached it by the control's deadline (D-087), so an effect the driver read while the
     /// core waited on it, and held for later, still counts as in time. A driver that holds what it
-    /// reads says when it read each, as [`Ready`] keeps it. `None`, the default, has the core take
-    /// an output as reaching it when it was handed over.
+    /// reads says when it read each, as [`Ready`] keeps it. It hands its outputs over in the order
+    /// they reached it: the core takes one that reached the driver after a deadline to mean that
+    /// it has read every output that came before. `None`, the default, has the core take an output
+    /// as reaching it when it was handed over.
     fn arrived(&self) -> Option<Instant> {
         None
     }
