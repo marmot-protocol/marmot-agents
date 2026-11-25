@@ -964,14 +964,23 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         await self.connector.serve("prompt", prompt("m-y", "/approve", GROUP, ALICE))
         await self.answer_bobs()
         del self.hermes.waiting_confirm[self.group_key("u-1")]
-        self.feed(started("m-y", "/approve", "c-2", "u-1", "group"),
-                  said(phrase("gateway.reset.header_default"), "m-y", True, "c-2"), complete("m-y"), chat="c-2")
+        await self.connector.serve("prompt", prompt("m-h", "hello", GROUP, BOB))
+        # Bob's turn starts while Alice's `/new` runs: Hermes's reply to her answer is hers, in her turn, and
+        # Bob's reply to his message is his.
+        self.feed(started("m-y", "/approve", "c-2", "u-1", "group"), started("m-h", "hello", "c-2", "u-2", "group"),
+                  said(phrase("gateway.reset.header_default"), "m-y", True, "c-2"), complete("m-y"),
+                  said("Hi Bob.", "m-h", True, "c-2"), complete("m-h"), chat="c-2")
         alices = self.last_of("confirm:k-a")
         self.assertEqual((alices["state"], alices["text"]), ("done", "Answered: Approve once"))
         self.assertEqual(self.last_of("confirm:k-b")["text"], "Answered: Approve once")
         self.assertEqual(self.settled(), [("confirm:k-b", "group:c-2:u-2", ["r-b2"]),
                                           ("session:group:c-2:u-2", "group:c-2:u-2", ["r-b"]),
                                           ("session:group:c-2:u-1", "group:c-2:u-1", ["r-a"])])
+        reset = self.of("notice")[-1]
+        self.assertEqual((reset["session"], reset["turn"], reset["text"]),
+                         ("group:c-2:u-1#2", "m-y", phrase("gateway.reset.header_default")))
+        bobs = self.of("message")[-1]
+        self.assertEqual((bobs["session"], bobs["turn"], bobs["text"]), ("group:c-2:u-2", "m-h", "Hi Bob."))
 
     async def test_an_answer_typed_in_hermess_own_words_answers_the_confirmation(self):
         """Hermes reads more than `/approve` as the answer (`approval.inputs.confirm_once`): a `yes` from the

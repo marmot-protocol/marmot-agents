@@ -882,8 +882,9 @@ does, and feeds it to the chat's translator:
   Each confirmation is kept by Hermes's session key and its id, one in each session as Hermes keeps it: a newer
   one in the same session shows the older as cancelled, a turn's end closes none, and before and after a message
   reaches a session where one waits, the plugin asks Hermes whether it still does, so a typed answer, in any of
-  the words Hermes reads as one, answers only the sender's own; one Hermes dropped, or held too old to run when
-  the message came, shows as cancelled; and when Hermes cannot be asked, the question still waits. The command a
+  the words Hermes reads as one, answers only the sender's own, and shows in its own turn with Hermes's reply to
+  it; one Hermes dropped, or held too old to run when the message came, shows as cancelled; and when Hermes
+  cannot be asked, the question still waits. The command a
   confirmation is for is settled by the answer or the close that says it will not run, or else by its own
   effect, as below; Hermes's words settle it only when they say it was refused
   ([D-155](../decisions.md#d-155-the-hermes-plugin-keeps-each-request-to-confirm-a-command-as-hermes-keeps-it)).

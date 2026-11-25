@@ -175,6 +175,7 @@ class Translator:
         # A message typed in a session with a confirmation waiting -> that confirmation, and the answer
         # Hermes reads in it, if any (`confirm_choice`)
         self.typed_confirm: dict[str, tuple[str, str | None]] = {}
+        self.confirmed_by: dict[str, str] = {}  # a typed answer that answered a confirmation -> its command
         self.final_next = False
         self.key = None
         self.turn_command = None
@@ -390,8 +391,8 @@ class Translator:
         answered = asked == item and choice is not None
         self.confirm_done(item, choice if answered else None, message=str(p.get("message")) if answered else None)
         if answered:
-            # What Hermes says next to that message is the confirmed command's.
-            self.turn_command = self.confirm_commands.get(item)
+            # What Hermes says to that message is the confirmed command's.
+            self.confirmed_by[str(p.get("message"))] = self.confirm_commands.get(item)
 
     def question_for(self, chat, user):
         """The latest open question that a message from `user` in `chat` answers: Hermes takes a
@@ -624,9 +625,9 @@ class Translator:
             said = str(m.get("said") or "") or f"Hermes gave no reply to {self.confirm_commands.get(item) or 'the command'}."
             self.command_reply(f"sent:{self.ids}{self.seq + 1}", said, None, key, alone=True)
 
-    def command_reply(self, item, content, typed, key, alone=False):
-        """Hermes's reply to a command typed in the session of `key`: in the latest turn, or `alone`, in
-        that session outside any turn."""
+    def command_reply(self, item, content, typed, key, alone=False, turn=None):
+        """Hermes's reply to a command typed in the session of `key`: in its `turn` while that runs, or else
+        in the latest, or `alone`, in that session outside any turn."""
         title = "Command output"
         if content.startswith("⛔"):
             title = "Not allowed"
@@ -649,6 +650,9 @@ class Translator:
                          ["on", "off"], approve=True)
             self.session_changed(key)
         owner = (self.name(key), None) if alone else None
+        if not alone and self.owner_of(turn) is not None:
+            # In a group another sender's turn can be the latest; a reset's words are its new session's.
+            owner = (self.name(key), turn)
         self.last_send = self.emit(item, "notice", "done", title, content, {"kind": "command_output"}, owner=owner)
 
     def send(self, p):
@@ -682,16 +686,16 @@ class Translator:
                 self.last_send = prev
                 return
         # The reply to a typed answer to a confirmation, when the plugin did not look at Hermes, as in a
-        # recording: the confirmation is answered, and what follows is the confirmed command's.
+        # recording: the confirmation is answered, and the reply is the confirmed command's.
         answer = p.get("reply_to") or self.turn or ""
         asked, choice = self.typed_confirm.get(answer, (None, None))
         if not self.looks and asked in self.open and choice is not None:
             self.confirm_done(asked, choice, message=answer)
-            self.turn_command = self.confirm_commands.get(asked)
-        if self.turn_command and (meta.get("notify") or final):
-            return self.command_reply(item, content, typed, key)
+            self.confirmed_by[answer] = self.confirm_commands.get(asked)
+        if (answer in self.confirmed_by or self.turn_command) and (meta.get("notify") or final):
+            return self.command_reply(item, content, typed, key, turn=answer)
         if typed:
-            return self.command_reply(item, content, typed, key)
+            return self.command_reply(item, content, typed, key, turn=answer)
         if content.startswith(WARNINGS):
             self.last_send = self.emit(item, "notice", "done", "Notice", content, {"kind": "warning"})
             return
