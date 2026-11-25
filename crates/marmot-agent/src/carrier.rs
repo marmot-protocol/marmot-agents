@@ -1103,6 +1103,22 @@ mod tests {
             assert_eq!(shown, name);
         }
     }
+
+    // MDK takes a chat message whose tags reach its limits exactly, so the agent's words carry
+    // the `settles` that land on either limit, and none past it. `tests/marmot.rs` checks the
+    // limits against MDK itself; this checks the edge, which no message there lands on.
+    #[test]
+    fn the_settles_that_land_exactly_on_a_limit_fit() {
+        let requests: Vec<EventKey> = (0..WORDS_TAGS_MAX + 1)
+            .map(|n| EventKey::from(format!("{n:064x}").as_str()))
+            .collect();
+        let settles_bytes = "settles".len() + requests[0].as_str().len();
+        // The count: no turn, no phase, and every tag a `settles`.
+        assert_eq!(words_settles_fit(None, false, &requests), WORDS_TAGS_MAX);
+        // The bytes: a turn long enough that its tag and one `settles` come to the limit.
+        let turn = TurnId("t".repeat(WORDS_TAG_BYTES_MAX - "turn".len() - settles_bytes));
+        assert_eq!(words_settles_fit(Some(&turn), false, &requests), 1);
+    }
 }
 
 /// Bounded proofs (`docs/design/verification.md`, "5. Bounded proofs with Kani").
