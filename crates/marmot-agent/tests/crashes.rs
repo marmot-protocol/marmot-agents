@@ -936,11 +936,12 @@ async fn a_send_an_older_core_handed_over_goes_on_as_mdk_took_it_after_someone_j
 }
 
 /// A tool MDK was handed while the chat was the owner's, whose answer the core lost to a stop, and
-/// which MDK's engine has for good, in a group whose messages last `keep` seconds (or for ever, for
-/// 0), which someone joined since: the core is started on that state, and the outbox empties, the
-/// tool having gone out once, as MDK took it, and nothing handed to MDK again. What the chat was
+/// which MDK keeps queued for `queued` and then its engine has for good, in a group whose messages
+/// last `keep` seconds (or for ever, for 0), which someone joined since: the core is started on that
+/// state, and the outbox empties, the tool having gone out once, as MDK took it, and nothing handed
+/// to MDK again. While MDK keeps it queued, the core saves the event MDK names. What the chat was
 /// told.
-async fn engine_has_it(keep: u64) -> Vec<String> {
+async fn engine_has_it(keep: u64, queued: Duration) -> Vec<String> {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     world.runtime.start().await.unwrap();
     let (driver, _events, seen) = stub(false);
@@ -974,10 +975,13 @@ async fn engine_has_it(keep: u64) -> Vec<String> {
     let (token, what) = talk.next_send(&group).unwrap();
     talk.attempting(&token.send, unix_now());
     world.marmot.faults.push(Fault::Owned {
-        queued: Duration::ZERO,
+        queued,
         owned: Duration::from_secs(3600),
     });
-    let went = world.send(&group, &what, &token).await.unwrap();
+    let went = match world.marmot.send(&group, &what, &token).await {
+        Ok(event) | Err(marmot_agent::marmot::SendFailed::Pending(event)) => event,
+        Err(failed) => panic!("MDK took it: {failed:?}"),
+    };
     save_conversation(&store, kept, &talk);
     // Were the tool handed to MDK again, this would meet it, and it would be given up.
     world.marmot.faults.push(Fault::Refuse(
@@ -986,7 +990,15 @@ async fn engine_has_it(keep: u64) -> Vec<String> {
 
     let (driver, _events, _) = stub(false);
     let core = world.start(driver);
-    within(20, || {
+    if !queued.is_zero() {
+        within(10, || {
+            let state = json(&store.load().unwrap());
+            let queue = state["conversation"]["outbox"].as_array().cloned()?;
+            (queue.len() == 1 && queue[0]["event"].as_str() == Some(went.as_str())).then_some(())
+        })
+        .await;
+    }
+    within(20 + queued.as_secs(), || {
         let state = json(&store.load().unwrap());
         (state["conversation"]["outbox"].as_array())
             .is_some_and(|q| q.is_empty())
@@ -1015,15 +1027,17 @@ async fn engine_has_it(keep: u64) -> Vec<String> {
 // the chat for good in a group whose messages disappear within a minute (D-152's known limit).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_send_mdks_engine_keeps_goes_on_with_the_event_mdk_names() {
-    let told = engine_has_it(60).await;
+    let told = engine_has_it(60, Duration::ZERO).await;
     assert!(told.is_empty(), "nothing is told of it: {told:?}");
 }
 
 // The same in a group whose messages never disappear, where the core used to hand the send to MDK
-// again to learn its event (D-152's one path left, `hand_again`).
+// again to learn its event (D-152's one path left, `hand_again`), here first kept queued: the core
+// saves the event MDK names meanwhile, so the send is known to have been taken should MDK later
+// let go of its token (#203).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_send_mdks_engine_keeps_is_never_handed_again() {
-    let told = engine_has_it(0).await;
+    let told = engine_has_it(0, Duration::from_secs(8)).await;
     assert!(told.is_empty(), "nothing is told of it: {told:?}");
 }
 

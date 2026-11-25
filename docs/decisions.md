@@ -3479,10 +3479,8 @@ core uses it so:
   and the chat is told it may not have been delivered
   ([D-109](#d-109-how-the-cores-sends-survive-a-crash-as-built)), even if the group's messages were made to last
   longer since.
-- **Done with, naming no event.** MDK's status for a send its engine is done with names no event when no relay
-  took it then. The core goes on with the event it kept. If it kept none, which takes a crash between MDK taking the
-  send and the core saving MDK's answer, the chat is told it may not have been delivered (D-109). Should MDK still
-  post it later, what the send settles shows settled twice. It is never handed to MDK again.
+- **Done with.** MDK names the event in the status of every send under a token that its engine is done with, sent
+  or kept to post later, as before. A status that named none would be no answer, and the core would ask again.
 - **Refused for a member it does not list.** MDK can now refuse a send that would reach a member account its list
   leaves out. The core does not give such a list yet; such a refusal is taken as MDK's drop of a try.
 
@@ -3494,10 +3492,8 @@ chat, whatever the group's disappearing time.
 engine held a send. The project owner asked MDK to name it, and decided on 2026-11-25 that both would go once MDK's
 pin moved to a release that did. Without the second hand-over, the narrower path of
 [D-148](#d-148-for-the-pilot-a-send-of-the-full-activity-that-mdk-keeps-and-posts-after-someone-joins-is-an-accepted-limit),
-a send handed again after MDK let go of its token, is closed too. A send MDK is done with naming no event is told as
-perhaps not delivered, rather than asked after, because nothing MDK says of it will change, and asked after, it
-would hold up its chat for good.
+a send handed again after MDK let go of its token, is closed too.
 
-That the one path left and the stall go was decided 2026-11-25 by the project owner, in D-152. How a send MDK is done
-with, naming no event, is told, and taking a refusal for a member as a drop, were decided 2026-11-25 by the
-builder, under the project owner's instruction to decide minor points.
+That the one path left and the stall go was decided 2026-11-25 by the project owner, in D-152. Taking a refusal for
+a member as a drop was decided 2026-11-25 by the builder, under the project owner's instruction to decide minor
+points.

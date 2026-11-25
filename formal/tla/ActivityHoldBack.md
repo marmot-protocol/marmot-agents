@@ -31,7 +31,7 @@ and version (`{key}@{version}`). `N` names the core's notices of a send it gave 
 | `Send` | `flush`: the oldest send, its first event filled in (`next_send`), noted as handed to MDK and saved (`attempting`), and handed to MDK under its token (`Marmot::send`); MDK posts it and answers (`sent`), keeps it to post later (`Pending`), posts or keeps it and the answer is lost (`Unknown`), or does not take it (`Busy`); tried again under the same token, MDK answers from what it keeps if it is handed what it was handed first, and refuses anything else as another submission, which the core gives up with a notice settling what the send settled (`give_up`, `refused`). A send whose token MDK let go of is not handed again, and the chat is told it may not have been delivered, by a notice settling what it settled (`SendFailed::Forgotten`, `lost`, D-109) |
 | `Ask` | `flush`, since the fixes of 2026-11-25, for a send MDK was handed otherwise than the chat is sent now (`handed_otherwise`: the full activity, or an item with its native message or without): it is never handed to MDK again. MDK is asked what became of it (`Side::outcome`, MDK's `local_send_status`): the event it posted (`went`, `sent`), or that it keeps it queued; one MDK let go of is told as one that may not have been delivered (`lost`); one MDK never took is held back then if it is the full activity, and else goes as the chat is sent now (`not_kept`). MDK's status names the event of a send its engine has, so one whose answer the core lost goes on with it too ([D-157](../../docs/decisions.md#d-157-the-core-goes-on-with-the-event-mdk-names-for-a-send-it-holds-and-never-hands-such-a-send-to-mdk-again)); before MDK did, it could name none (`named`), now only with the defect `SettleOwned` |
 | `MdkPosts(t)` | MDK posts a send it kept, as it was handed, to whoever is in the chat then |
-| `Forget(t)` | MDK lets go of the token of a send it posted, before the core learnt what became of it, as it does once the group's messages disappear: the post leaves the chat, and handed the send again, MDK takes it as new. The driver's items only. `Spec` makes MDK let go of a token the core read it may let go of within the minute (`LetsGo`) |
+| `Forget(t)` | MDK lets go of the token of a send it posted, before the core learnt what became of it, as it does once the group's messages disappear: the post leaves the chat, and handed the send again, MDK takes it as new. The driver's items only |
 
 The members are read just before each send, as `flush` does: the model's `Send` needs the last read to be fresh.
 Between that read and MDK taking the send, someone could still join; the model leaves that race out (the core
@@ -50,10 +50,9 @@ cannot close it).
   naming no event, was still handed again in full, which MDK refuses if the older core had left its native
   message out, in a chat whose members never changed; **fixed** the same day, first shown by
   `a_send_of_unknown_form_is_never_handed_again`: a send whose form was not noted is asked after only.
-- **A send MDK is done with, naming no event**, as when no relay took it then, whose event the core did not keep:
-  the chat is told it may not have been delivered ([D-157](../../docs/decisions.md#d-157-the-core-goes-on-with-the-event-mdk-names-for-a-send-it-holds-and-never-hands-such-a-send-to-mdk-again)). The model's MDK names the event of every send it
-  posted. Nor does the model's MDK say its engine has a send it has not posted yet: the core treats that as a
-  send MDK keeps queued.
+- **A send MDK's engine has and has not posted yet.** The model's MDK does not say its engine has such a send:
+  the core treats that as a send MDK keeps queued, as both name the event
+  ([D-157](../../docs/decisions.md#d-157-the-core-goes-on-with-the-event-mdk-names-for-a-send-it-holds-and-never-hands-such-a-send-to-mdk-again)).
 - **A token MDK lets go of before it posts the send**, and the group's disappearing time changed after a send
   went: MDK forgets a token with the message it made, and the core reads the period as it is now (D-109's
   limit), except for a send whose event it saved, which MDK certainly took (D-152).

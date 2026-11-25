@@ -1335,19 +1335,6 @@ impl<D: Driver, M: Side> Core<D, M> {
                         self.went(group, &key, event)?;
                         continue;
                     }
-                    Ok(Outcome::Taken) => match self.conversation.event_of(&token.send) {
-                        Some(event) => {
-                            self.went(group, &key, event)?;
-                            continue;
-                        }
-                        // MDK is done with it, naming no event, and the core lost the event MDK
-                        // named when it took it: it may not have reached the chat, and the chat
-                        // is told so (D-109). It is never handed to MDK again.
-                        None => {
-                            self.forgotten(&token.send)?;
-                            continue;
-                        }
-                    },
                     // MDK names the event while it keeps the send: kept, should MDK later let go
                     // of the token, the send is known to have been taken (#203).
                     Ok(Outcome::Queued(event)) => {
@@ -2346,9 +2333,9 @@ mod tests {
             Ok(Some(vec![self.agent.clone(), self.owner.clone()]))
         }
 
-        // Every send is taken, so this MDK keeps each token.
-        fn outcome(&self, _group: &GroupKey, _token: &crate::Token) -> Result<Outcome, NotNow> {
-            Ok(Outcome::Taken)
+        // Every send went at once, as the event named after its token.
+        fn outcome(&self, _group: &GroupKey, token: &crate::Token) -> Result<Outcome, NotNow> {
+            Ok(Outcome::Went(EventKey::from(token.mdk.as_str())))
         }
 
         fn stored(&self, _group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {

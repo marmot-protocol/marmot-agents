@@ -880,9 +880,6 @@ pub enum Outcome {
     /// It went out, or goes out, as MDK was handed it: MDK's engine took it, and this is the
     /// event it is.
     Went(EventKey),
-    /// MDK's engine took it and is done with it, and MDK does not say its event: no relay took
-    /// it then, and MDK may still post it as it was handed.
-    Taken,
     /// MDK keeps it queued, to post as it was handed, as this event.
     Queued(EventKey),
     /// MDK took it and dropped it before it went out: nothing of it went, and MDK refuses its
@@ -1144,10 +1141,12 @@ impl Side for Marmot {
         };
         match self.status(&id, &token.mdk) {
             // What MDK posts is the event it named when it took the send (`retained_event`).
-            Ok(Some(LocalSendStatus::Completed(summary))) => {
-                Ok((summary.message_ids.into_iter().next())
-                    .map_or(Outcome::Taken, |event| Outcome::Went(EventKey(event))))
-            }
+            // MDK names the event in every token send it completes; one naming none is not an
+            // answer, and is asked again.
+            Ok(Some(LocalSendStatus::Completed(summary))) => (summary.message_ids.into_iter())
+                .next()
+                .map(|event| Outcome::Went(EventKey(event)))
+                .ok_or(NotNow),
             // MDK names the event while it holds the send, its engine's or queued (mdk#3712).
             Ok(Some(LocalSendStatus::EngineOwned { message_id_hex })) => {
                 Ok(Outcome::Went(EventKey(message_id_hex)))
