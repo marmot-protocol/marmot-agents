@@ -92,6 +92,11 @@ const READS: usize = 8;
 /// MDK, does not hold up the others.
 const DRAIN: usize = 8;
 
+/// How many of the driver's outputs the `no_effect` net takes, when it looks, to read before it
+/// settles anything ([`Core::look_overdue`]): a bound on how long it waits for them, and on what
+/// it holds, should a driver hand over more than the core can read.
+const NET_READS: usize = 256;
+
 /// When to read again what MDK could not read for a moment, and how long that waited.
 struct Again {
     /// When it is read again; `None` while it is being read.
@@ -462,9 +467,13 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// turn, so when several are ready at once none waits behind the others for long, and the
     /// same inputs always give the same order, which a simulation replays.
     first: usize,
-    /// What the driver gave while a catch-up looked whether it had ended ([`Core::driver_ready`]):
-    /// one output at most, which the loop takes in the driver's turn.
-    early: Option<Output>,
+    /// What the driver gave while a catch-up looked whether it had ended ([`Core::driver_ready`]),
+    /// one output, or what the `no_effect` net took to read first ([`Core::look_overdue`]): the
+    /// loop takes them in the driver's turn, oldest first.
+    early: VecDeque<Output>,
+    /// The `no_effect` net that waits for what it took: when it looked, and how many of `early`
+    /// are still to be read before it settles what was overdue then.
+    net: Option<(u64, usize)>,
     /// Whether the driver has ended: the loop ends, and nothing more is read for it.
     ended: bool,
     /// Faults put back for the simulator, to show its checks find them: none in use.
@@ -549,7 +558,8 @@ impl<D: Driver, M: Side> Core<D, M> {
             drained: HashMap::new(),
             bounded: true,
             first: 0,
-            early: None,
+            early: VecDeque::new(),
+            net: None,
             ended: false,
             #[cfg(feature = "sim-bugs")]
             bugs: Bugs::default(),
@@ -672,18 +682,24 @@ impl<D: Driver, M: Side> Core<D, M> {
             self.first = (first + 1) % WAITS;
             // The files waiting go once the driver waits for more.
             self.start_uploads().await;
-            // A driver a catch-up, or the files, found ended is handed nothing more.
-            if self.ended {
+            // A driver a catch-up, or the files, found ended is handed nothing more, once what it
+            // gave before its end is read.
+            if self.ended && self.early.is_empty() {
                 break;
             }
             let woke = {
                 let mut tick = pin!(clock.tick());
                 let mut retry = pin!(retry);
                 // What the driver gave while a catch-up looked comes first in the driver's turn.
-                let (early, driver) = (&mut self.early, &mut self.driver);
+                let (early, driver, net) = (&mut self.early, &mut self.driver, &mut self.net);
                 let mut driver = pin!(async move {
-                    match early.take() {
-                        Some(output) => Some(output),
+                    match early.pop_front() {
+                        Some(output) => {
+                            if let Some((_, left)) = net {
+                                *left = left.saturating_sub(1);
+                            }
+                            Some(output)
+                        }
                         None => driver.next_event().await,
                     }
                 });
@@ -714,18 +730,7 @@ impl<D: Driver, M: Side> Core<D, M> {
             };
             match woke {
                 Woke::Tick => {
-                    // The net waits while the driver has something the core has not read: the
-                    // core may have been busy past a deadline, as when it waited on the driver
-                    // to take a slow request, while the effect it waits for was handed over in
-                    // time. Settled now, that would be untrue (S1, D-087). What is ready is read
-                    // first, in the driver's turn, and the net looks again on the next tick.
-                    while !self.driver_ready().await {
-                        let acts = self.conversation.overdue(self.clock());
-                        if acts.is_empty() {
-                            break;
-                        }
-                        self.carry_out(acts).await?;
-                    }
+                    self.look_overdue().await?;
                     // MDK can store a message with no notice, as one imported: every group is
                     // read from its mark now and then, unless a catch-up waits to list them.
                     if self.listing.is_none() {
@@ -736,11 +741,16 @@ impl<D: Driver, M: Side> Core<D, M> {
                     self.flush_all().await?;
                     self.read_again().await?;
                 }
-                Woke::Driver(Some(Output::Event(emitted))) => {
-                    let acts = self.conversation.emitted(emitted);
-                    self.carry_out(acts).await?;
+                Woke::Driver(Some(output)) => {
+                    match output {
+                        Output::Event(emitted) => {
+                            let acts = self.conversation.emitted(emitted);
+                            self.carry_out(acts).await?;
+                        }
+                        Output::SendFile(file) => self.send_file(file).await?,
+                    }
+                    self.settle_overdue().await?;
                 }
-                Woke::Driver(Some(Output::SendFile(file))) => self.send_file(file).await?,
                 Woke::Driver(None) => break,
                 Woke::Uploaded(ended) => {
                     let failed = "It could not be uploaded or sent.";
@@ -1047,19 +1057,61 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// the driver's turn, and no more is asked for until it has. A connector whose connection
     /// went, or that the core gave up, has ended once its socket says so.
     async fn driver_ready(&mut self) -> bool {
-        if self.ended || self.early.is_some() {
+        if self.ended || !self.early.is_empty() {
             return true;
         }
+        self.take_ready().await
+    }
+
+    /// Takes the driver's next output into `early` if it has one ready, without waiting, or notes
+    /// that it ended. Whether it had either.
+    async fn take_ready(&mut self) -> bool {
         let polled = {
             let mut next = pin!(self.driver.next_event());
             std::future::poll_fn(|cx| Poll::Ready(next.as_mut().poll(cx))).await
         };
         match polled {
-            Poll::Ready(Some(output)) => self.early = Some(output),
+            Poll::Ready(Some(output)) => self.early.push_back(output),
             Poll::Ready(None) => self.ended = true,
             Poll::Pending => return false,
         }
         true
+    }
+
+    /// The `no_effect` net looks (D-087). It settles nothing before the core has read what the
+    /// driver handed over by now: the core may have been busy past a deadline, as when it waited
+    /// on the driver to take a slow request, while the effect it waits for was handed over in
+    /// time, and settled first that would be untrue (S1). So it takes what the driver has ready,
+    /// at most [`NET_READS`], to be read first in the driver's turn as usual, and settles what is
+    /// overdue now once the last of those is read: it waits for them and not for what the driver
+    /// hands over after, so a driver that is never idle holds up no deadline. A net that waits
+    /// already looks no further; what is overdue after it looked waits for the next tick.
+    async fn look_overdue(&mut self) -> Result<(), Unsaved> {
+        let now = self.clock();
+        if self.net.is_some() || !self.conversation.is_overdue(now) {
+            return Ok(());
+        }
+        let mut taken = 0;
+        while !self.ended && taken < NET_READS && self.take_ready().await {
+            taken += 1;
+        }
+        self.net = Some((now, self.early.len()));
+        self.settle_overdue().await
+    }
+
+    /// Settles what was overdue when the net looked, once what it took to read first is read.
+    async fn settle_overdue(&mut self) -> Result<(), Unsaved> {
+        let Some((at, 0)) = self.net else {
+            return Ok(());
+        };
+        self.net = None;
+        loop {
+            let acts = self.conversation.overdue(at);
+            if acts.is_empty() {
+                return Ok(());
+            }
+            self.carry_out(acts).await?;
+        }
     }
 
     /// Where a group with no mark starts, saved with the mark: what arrived by the time the core

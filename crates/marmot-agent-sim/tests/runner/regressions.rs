@@ -78,3 +78,52 @@ fn an_effect_shown_while_the_core_waits_on_the_driver_is_not_settled_by_the_net(
         assert_eq!(property(&report), None, "wait {wait}\n{:#?}", report.trace);
     }
 }
+
+// Review of #198: the net waited for the driver to have nothing ready, and a driver that keeps
+// output ready, a busy chat, held it off for as long as it did (D-087, L1). Here a setting the
+// harness takes but never shows waits past its deadline while every prompt holds the core for
+// 15 s, and the harness shows the other turns meanwhile, so the driver has output ready each time
+// the core looks. Before, the net settled it only once the schedule was over and the harness
+// went quiet.
+#[test]
+fn a_busy_driver_does_not_hold_off_the_net() {
+    let mut messages = vec![PROMPT, SET];
+    let mut steps = vec![
+        Action::Invite { chat: 0 },
+        Action::Store { msg: 0 },
+        Action::Hear { msg: 0 },
+        Action::Emit {
+            pick: 0,
+            force: false,
+        },
+        Action::Ignore,
+        Action::Store { msg: 1 },
+        Action::Ask { msg: 1 },
+    ];
+    for _ in 0..12 {
+        let msg = messages.len();
+        messages.push(PROMPT);
+        steps.extend([
+            Action::Slow { ms: 15_000 },
+            Action::Store { msg },
+            Action::Hear { msg },
+        ]);
+        steps.extend(
+            [Action::Emit {
+                pick: 0,
+                force: false,
+            }; 3],
+        );
+        steps.push(Action::Tick { ms: 15_000 });
+    }
+    let report = run(&schedule(messages, steps));
+    // The core's own item in this chat is the net's notice: nothing else here makes one.
+    let net = (report.trace.iter()).find(|t| t.what.starts_with("Send(c0 core-"));
+    let settled = net.is_some_and(|t| t.step.is_some() && t.ms < 140_000);
+    assert!(
+        settled,
+        "the net waited for the driver to go quiet\n{:#?}",
+        report.trace
+    );
+    assert_eq!(property(&report), None, "{:#?}", report.trace);
+}

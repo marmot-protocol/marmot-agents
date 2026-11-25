@@ -1022,6 +1022,12 @@ impl Conversation {
         }
     }
 
+    /// Whether a control the driver took waits past its deadline at `now`, so that
+    /// [`Self::overdue`] would settle one.
+    pub fn is_overdue(&self, now: u64) -> bool {
+        (self.saved.pending.values()).any(|p| p.deadline.is_some_and(|deadline| now >= deadline))
+    }
+
     /// The time is `now` on the core's clock, in seconds: settles with a notice one control the
     /// driver took whose effect has not shown by its deadline, as when a setting is set to the
     /// value it already had and the harness shows nothing (D-087). One at a time, so each is saved
