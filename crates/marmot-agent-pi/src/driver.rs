@@ -39,7 +39,7 @@ use marmot_agent_driver::{
 use marmot_agent_events::{AgentEvent, Body, State};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -307,6 +307,9 @@ pub struct Pi {
     held: HashSet<String>,
     lines: mpsc::UnboundedReceiver<Line>,
     sender: mpsc::UnboundedSender<Line>,
+    /// Lines taken off `lines` to see when the oldest reached the driver, and not yet handled:
+    /// handled next, in order ([`Pi::arrival`]).
+    backlog: VecDeque<Line>,
     /// Events, and files to send, read and not yet handed to the core.
     ready: Ready,
     /// When the line being taken now was read from its Pi, for what it makes ready.
@@ -350,6 +353,7 @@ impl Pi {
             held: HashSet::new(),
             lines,
             sender,
+            backlog: VecDeque::new(),
             ready: Ready::default(),
             read_at: None,
             files: HashMap::new(),
@@ -592,12 +596,34 @@ impl Pi {
         Err(Refusal::new(Reason::Failed))
     }
 
-    /// Reads one line from any chat's Pi and handles it. The driver holds a sender, so the
-    /// channel never closes.
+    /// Reads one line from any chat's Pi and handles it, the oldest first. The driver holds a
+    /// sender, so the channel never closes.
     async fn read(&mut self) {
-        if let Some(line) = self.lines.recv().await {
-            self.handle(line);
+        let line = match self.backlog.pop_front() {
+            Some(line) => line,
+            None => match self.lines.recv().await {
+                Some(line) => line,
+                None => return,
+            },
+        };
+        self.handle(line);
+    }
+
+    /// When what the driver makes ready now reached it, for [`Driver::arrived`]: when the line
+    /// being handled was read from its Pi, or else, for what a request of the core makes, now,
+    /// but no later than any line read and not yet handled. The core takes an output that
+    /// reached the driver after a control's deadline to mean that everything before it has been
+    /// handed over (D-156), so what a request makes, which is handed over first, must not seem to
+    /// have come after a line read before it, as another chat's Pi's effect read while an
+    /// answer was written.
+    fn arrival(&mut self) -> std::time::Instant {
+        if let Some(at) = self.read_at {
+            return at;
         }
+        while let Ok(line) = self.lines.try_recv() {
+            self.backlog.push_back(line);
+        }
+        self.backlog.front().map_or_else(now, |line| line.at)
     }
 
     /// Takes a line from a Pi: what it makes ready arrived when the line was read.
@@ -761,7 +787,7 @@ impl Pi {
             }
             _ => Vec::new(),
         };
-        let at = self.read_at.unwrap_or_else(now);
+        let at = self.arrival();
         self.ready.push(
             at,
             Output::Event(Emitted {
@@ -801,7 +827,7 @@ impl Pi {
             dialog,
         };
         self.files.insert(id.clone(), call);
-        let at = self.read_at.unwrap_or_else(now);
+        let at = self.arrival();
         self.ready.push(
             at,
             Output::SendFile(SendFile {
