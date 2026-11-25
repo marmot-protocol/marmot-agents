@@ -31,9 +31,9 @@ use crate::chat_folder::FolderRule;
 use crate::config::Config;
 use crate::conversation::{Act, Conversation, Saved, Sending};
 use crate::files::Folders;
-use crate::keys::GroupKey;
+use crate::keys::{EventKey, GroupKey};
 use crate::marmot::{
-    FileFailed, Incoming, Live, Marmot, Message, NotNow, SendFailed, Side, Subscribed,
+    FileFailed, Incoming, Live, Marmot, Message, NotNow, Outcome, SendFailed, Side, Subscribed,
 };
 use crate::socket::SocketDriver;
 use marmot_agent_driver::{Driver, Output, Reason, Refusal, SendFile};
@@ -1251,19 +1251,67 @@ impl<D: Driver, M: Side> Core<D, M> {
             let Some((token, what)) = self.conversation.next_send(group) else {
                 break;
             };
+            let key = match &what {
+                Sending::Item { key, .. } | Sending::Words { key, .. } => key.clone(),
+            };
             // A send MDK was handed otherwise than the chat is sent now: the agent's full
-            // activity, or an item with its native message or without (D-136). It goes on as far
-            // as MDK has it, as MDK was handed it, which posts nothing new and which MDK takes for
-            // the same send. Else the full activity is held back now, and anything else goes as
-            // the chat is sent now. Held back as if it had never gone, it would settle its
-            // requests twice; tried again as the chat is sent now, MDK would refuse its token as
-            // bound to another send (ActivityHoldBack.tla).
+            // activity, or an item with its native message or without (D-136). It is never
+            // handed to MDK again: MDK takes a token it has let go of as a new send, and would
+            // post it to the chat as it is now (#194). MDK is asked what became of it, and it
+            // goes on as MDK has it. One MDK no longer knows may have gone out, and the chat is
+            // told so (D-109, #182). One MDK never took is held back now if it is the full
+            // activity, and else goes as the chat is sent now. Held back as if it had never gone,
+            // it would settle its requests twice; tried again as the chat is sent now, MDK would
+            // refuse its token as bound to another send (ActivityHoldBack.tla).
             if self.conversation.handed_otherwise(&token.send) {
-                match self.marmot.keeps(group, &token) {
-                    Ok(true) => {}
-                    Ok(false) => {
+                match self.marmot.outcome(group, &token) {
+                    Ok(Outcome::Went(event)) => {
+                        self.went(group, &key, event)?;
+                        continue;
+                    }
+                    Ok(Outcome::Taken) => match self.conversation.event_of(&token.send) {
+                        Some(event) => {
+                            self.went(group, &key, event)?;
+                            continue;
+                        }
+                        // MDK's answer when it took the send was lost, and MDK names no event
+                        // while its engine has it. MDK still posts it, so it is never told as
+                        // lost while MDK has it, which would settle its requests twice: it is
+                        // asked after again until MDK names its event or lets go of its token,
+                        // a little later each time. A stop does not wait for it: MDK's engine has
+                        // it, and it goes out as it was handed, whatever the core does.
+                        None => match self.hand_again(group, &token) {
+                            Ok(true) => {}
+                            Ok(false) | Err(NotNow) => {
+                                self.wait_longer(group);
+                                return Ok(());
+                            }
+                        },
+                    },
+                    Ok(Outcome::Queued) => {
+                        self.wait_queued(group);
+                        return Ok(());
+                    }
+                    Ok(Outcome::Dropped) => {
+                        if self.dropped_try(group, &token.send)? {
+                            continue;
+                        }
+                        return Ok(());
+                    }
+                    // A send whose event the core saved was taken by MDK: MDK having no record of
+                    // its token means it let go of it since, as under a disappearing time made
+                    // longer after, and it may have gone out (D-109).
+                    Ok(Outcome::NotTaken) if self.conversation.event_of(&token.send).is_some() => {
+                        self.forgotten(&token.send)?;
+                        continue;
+                    }
+                    Ok(Outcome::NotTaken) => {
                         self.conversation.not_kept(&token.send);
                         self.save()?;
+                        continue;
+                    }
+                    Ok(Outcome::Forgotten) => {
+                        self.forgotten(&token.send)?;
                         continue;
                     }
                     Err(NotNow) => {
@@ -1280,21 +1328,13 @@ impl<D: Driver, M: Side> Core<D, M> {
                 return Ok(());
             }
             *made += 1;
-            let key = match &what {
-                Sending::Item { key, .. } | Sending::Words { key, .. } => key.clone(),
-            };
             // Saved before MDK has it, so the token MDK keeps it under is on disk first.
             if self.conversation.attempting(&token.send, unix_now()) && !self.bug_save_after_send()
             {
                 self.save()?;
             }
             match self.marmot.send(group, &what, &token).await {
-                Ok(event) => {
-                    self.retry.remove(group);
-                    self.queued.remove(group);
-                    self.conversation.sent(&key, event);
-                    self.save()?;
-                }
+                Ok(event) => self.went(group, &key, event)?,
                 Err(failed) => match self.bug_new_token(&token.send, failed) {
                     SendFailed::Refused { gone } => self.give_up(&token.send, gone)?,
                     SendFailed::FirstGone => {
@@ -1307,32 +1347,20 @@ impl<D: Driver, M: Side> Core<D, M> {
                         self.conversation.thread_gone(&token.send);
                         self.save()?;
                     }
-                    SendFailed::Forgotten => {
-                        // MDK's own words can name a group, so they are not printed (D-071).
-                        eprintln!(
-                            "marmot-agent: a send's outcome can no longer be known; the chat is told"
-                        );
-                        self.conversation.lost(&token.send);
-                        self.save()?;
-                    }
+                    SendFailed::Forgotten => self.forgotten(&token.send)?,
                     SendFailed::Rejected => {
-                        // Nothing went: the next try is under a new token, saved first. The last
-                        // try is saved with the give-up and what stands in for it, in one write.
-                        let tries = self.conversation.rejected(&token.send);
-                        if tries >= self.rejected_tries {
-                            self.give_up(&token.send, false)?;
+                        if self.dropped_try(group, &token.send)? {
                             continue;
                         }
-                        self.save()?;
-                        eprintln!(
-                            "marmot-agent: a send was dropped by MDK; it will be tried again"
-                        );
-                        self.wait_longer(group);
                         return Ok(());
                     }
                     // MDK has it queued: asked after again soon, under the same token, and the
-                    // core goes on meanwhile.
-                    SendFailed::Pending => {
+                    // core goes on meanwhile. The event MDK named is kept, should the send be
+                    // asked after without being handed to MDK again.
+                    SendFailed::Pending(event) => {
+                        if self.conversation.took(&token.send, event) {
+                            self.save()?;
+                        }
                         self.wait_queued(group);
                         return Ok(());
                     }
@@ -1359,6 +1387,54 @@ impl<D: Driver, M: Side> Core<D, M> {
         eprintln!("marmot-agent: a send was refused; the chat is told");
         self.conversation.refused(token, gone);
         self.save()
+    }
+
+    /// The oldest send queued for `group`, of the item named `key`, went out as `event`.
+    fn went(&mut self, group: &GroupKey, key: &str, event: EventKey) -> Result<(), Unsaved> {
+        self.retry.remove(group);
+        self.queued.remove(group);
+        self.conversation.sent(key, event);
+        self.save()
+    }
+
+    /// MDK took the send named `token` and dropped it before it went out: nothing went, and the
+    /// next try is under a new token, saved first, after a wait. The last try is saved with the
+    /// give-up and what stands in for it, in one write. Whether the group's sends go on now, as
+    /// the send was given up.
+    fn dropped_try(&mut self, group: &GroupKey, token: &str) -> Result<bool, Unsaved> {
+        let tries = self.conversation.rejected(token);
+        if tries >= self.rejected_tries {
+            self.give_up(token, false)?;
+            return Ok(true);
+        }
+        self.save()?;
+        eprintln!("marmot-agent: a send was dropped by MDK; it will be tried again");
+        self.wait_longer(group);
+        Ok(false)
+    }
+
+    /// The send named `token` is given up without knowing whether it went out, as MDK no longer
+    /// knows it, or may let go of it before it could be handed to it again: the chat is told it
+    /// may not have been delivered (D-109).
+    fn forgotten(&mut self, token: &str) -> Result<(), Unsaved> {
+        // MDK's own words can name a group, so they are not printed (D-071).
+        eprintln!("marmot-agent: a send's outcome can no longer be known; the chat is told");
+        self.conversation.lost(token);
+        self.save()
+    }
+
+    /// Whether the send under `token`, which MDK's engine has without naming its event and whose
+    /// event the core did not keep, is handed to MDK again under its token to learn its event:
+    /// only in the form it was handed, which the core noted ([`Conversation::form_known`]), and
+    /// while MDK will still know the token then ([`Side::lasts`]), since MDK takes a token it has
+    /// let go of as a new send. This is the one second hand-over left (D-152), which the owner
+    /// may yet remove: answering `false` always leaves the send asked after until MDK names its
+    /// event or lets go of its token, and changes nothing else.
+    fn hand_again(&self, group: &GroupKey, token: &crate::Token) -> Result<bool, NotNow> {
+        if !self.conversation.form_known(&token.send) {
+            return Ok(false);
+        }
+        self.marmot.lasts(group, token)
     }
 
     /// The group's sends wait before they are tried again, longer each time.
@@ -1693,7 +1769,11 @@ mod tests {
             next.unwrap_or(Err(FileFailed::Busy))
         }
 
-        fn keeps(&self, _group: &GroupKey, _token: &crate::Token) -> Result<bool, NotNow> {
+        fn outcome(&self, _group: &GroupKey, _token: &crate::Token) -> Result<Outcome, NotNow> {
+            unreachable!("only files are sent")
+        }
+
+        fn lasts(&self, _group: &GroupKey, _token: &crate::Token) -> Result<bool, NotNow> {
             unreachable!("only files are sent")
         }
     }
@@ -1788,7 +1868,11 @@ mod tests {
             unreachable!("no file reaches MDK")
         }
 
-        fn keeps(&self, _group: &GroupKey, _token: &crate::Token) -> Result<bool, NotNow> {
+        fn outcome(&self, _group: &GroupKey, _token: &crate::Token) -> Result<Outcome, NotNow> {
+            unreachable!("nothing is sent")
+        }
+
+        fn lasts(&self, _group: &GroupKey, _token: &crate::Token) -> Result<bool, NotNow> {
             unreachable!("nothing is sent")
         }
     }
@@ -2207,7 +2291,11 @@ mod tests {
         }
 
         // Every send is taken, so this MDK keeps each token.
-        fn keeps(&self, _group: &GroupKey, _token: &crate::Token) -> Result<bool, NotNow> {
+        fn outcome(&self, _group: &GroupKey, _token: &crate::Token) -> Result<Outcome, NotNow> {
+            Ok(Outcome::Taken)
+        }
+
+        fn lasts(&self, _group: &GroupKey, _token: &crate::Token) -> Result<bool, NotNow> {
             Ok(true)
         }
 

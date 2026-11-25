@@ -26,8 +26,13 @@ cut anywhere, pays most.
    handed with, which MDK refuses as another submission, settled its request twice too; fixed, and modelled
    since. It also shows the privacy limit that MDK posts what it keeps, to whoever
    is in the chat then: a limit accepted for the pilot (D-148). Its second review found two cases the model
-   leaves out: an outbox saved by an older core (issue [#181](https://github.com/marmot-protocol/marmot-agents/issues/181)), and a send MDK forgot (issue
-   [#182](https://github.com/marmot-protocol/marmot-agents/issues/182)).
+   left out: an outbox saved by an older core (issue [#181](https://github.com/marmot-protocol/marmot-agents/issues/181)), and a send MDK forgot (issue
+   [#182](https://github.com/marmot-protocol/marmot-agents/issues/182)); and review found that the core handed MDK
+   again a send it was handed in the owner's chat, which MDK could take as new (issue
+   [#194](https://github.com/marmot-protocol/marmot-agents/issues/194)). All three fixed on 2026-11-25; the model now
+   has MDK let go of a token, and the second hand-over and the forgotten send as defects it catches (D-152). A
+   further review found a send MDK's engine had, naming no event, told to the chat as lost; fixed, and modelled
+   since, with MDK's status naming no event as a defect it catches.
 3. **The agent's words and the settles they carry** (`conversation.rs` `emitted` for `Body::Message`,
    `settle_by_turn`, `shown_by`, `refused` for words): a second model of the core, which `CoreLifecycle` leaves
    out on purpose. The requests words name move between the words' next new message, the turn's next version and
@@ -54,7 +59,7 @@ The rest pay little now: their states are few, a test walks each step, or a mode
 | An item's versions (`Record`: `version`, `first`, `closed_in_chat`, `forgotten`) | queued versions → sent (first event known) → edits; closed by the driver, the stop, a restart, or a stand-in; forgotten after `KEPT` finished items | crash, refusal, give-up, MDK forgetting a token (`lost`), a first event that disappeared (`first_gone`) | `CoreLifecycle` (S2, S3, L2); the simulator | Covered, but for the cache of finished items and disappearing messages, which `CoreLifecycle` leaves out (no clock). Little |
 | The agent's words (`held`, `words`, `settle_by_turn`, `shown_by`) | words new → edits; the settles they name held for the next new message, or moved to the turn; a refused edit sent as a new message | MDK refusing either; a turn closed meanwhile | the conversation's tests; the simulator | Rank 3 |
 | The outbox and its tokens (`flush`, `attempting`, `rejected`, `give_up`, `refused`) | queued → attempted (saved first) → sent, pending, busy, unknown, rejected (new token), refused or given up (stand-in, last resort) | crash at any point; MDK's answers lost; MDK dropping a try | `CoreLifecycle` (S1, S3, S3Told); `crashes.rs`; the simulator | Covered |
-| The hold-back of the full activity (`members_now`, `hold_back`, `settle_for_hidden`, `full_activity_only`) | per group: the owner's chat or not, read before each send; queued sends of the full activity taken out, their settles moved to the turn or the session or a `not_shown` notice | people joining and leaving at any time; MDK holding a send already handed; a restart | the conversation's tests (no send in flight); not the simulator (every chat is the owner's) | Rank 2, modelled |
+| The hold-back of the full activity (`members_now`, `hold_back`, `settle_for_hidden`, `full_activity_only`, `handed_otherwise`, `not_kept`) | per group: the owner's chat or not, read before each send; queued sends of the full activity taken out, their settles moved to the turn or the session or a `not_shown` notice; a send already handed asked after, never handed again | people joining and leaving at any time; MDK holding a send already handed, or letting go of its token; a restart | the conversation's tests (no send in flight); `crashes.rs`; not the simulator (every chat is the owner's) | Rank 2, modelled |
 | Read marks and readers (`read`, `catch_up`, `catch_up_group`, `history`, `unread`) | a group's mark → each message after it handled once, oldest first, the mark saved with what it led to | live messages in any order or before they are stored (MDK #3606); a lagging stream; crash | `CoreLifecycle` (S10, L3); `new_groups.rs`; the simulator | Covered |
 | Invitations (`consider_invitations`) | invited → mark 0 saved → accepted or declined → read from its start | a crash between saving the mark and accepting; a decline that fails | `marmot.rs` (against MDK); the simulator (its `Invite` step, with crashes) | Little: two steps, and a crash on either side is safe by the order (judgement) |
 | Sessions (`sessions`, `taken`, `ended_sessions`) | a chat's saved session → named by the next prompt after a restart → taken, ended, or new by control | crash; a driver taking a new-session control | `CoreLifecycle` (S12) | Covered |

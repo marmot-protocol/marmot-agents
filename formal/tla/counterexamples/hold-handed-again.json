@@ -1,0 +1,19 @@
+{
+  "case": "hold-handed-again",
+  "model": "ActivityHoldBack",
+  "config": "ActivityHoldBack.posted.cfg",
+  "breaks": "H4",
+  "what": "HandAgain, run.rs flush before #194 (2026-11-25): the tool goes to MDK in the owner's chat and MDK's answer is lost; someone joins; the core asks MDK whether it keeps the token, and before it hands the tool again, MDK lets go of it, as it does once the group's messages disappear; handed again, MDK takes it as new and posts it to the chat as it is now, with someone in it who joined after it went (H4).",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"MaxFlips": 3, "MaxLost": 2, "MdkKeeps": false, "FairMdk": true, "MdkForgets": true, "Bug": "HandAgain"},
+  "steps": [
+    {"action": "Emit", "item": "K", "shown": true},
+    {"action": "Send", "tok": ["K", 1], "outcome": "posted-lost"},
+    {"action": "Flip", "members": "more"},
+    {"action": "ReadMembers", "owners": false, "held": 0},
+    {"action": "Send", "tok": ["K", 1], "outcome": "asked"},
+    {"action": "Forget", "tok": ["K", 1]},
+    {"action": "Send", "tok": ["K", 1], "outcome": "taken as new"}
+  ],
+  "end": {"kind": "violation"}
+}

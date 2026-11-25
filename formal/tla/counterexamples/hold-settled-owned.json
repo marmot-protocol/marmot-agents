@@ -1,0 +1,20 @@
+{
+  "case": "hold-settled-owned",
+  "model": "ActivityHoldBack",
+  "config": "ActivityHoldBack.posted.cfg",
+  "breaks": "H1",
+  "what": "SettleOwned, run.rs flush before the review of 2026-11-25: the tool's closing version, which settles r1, goes to MDK in the owner's chat, MDK posts it and the answer is lost, and MDK's status names no event for it; someone joins; asked, MDK says its engine has it, and, as MDK may let go of the token within the minute, the core tells the chat it may not have been delivered, with a notice that settles r1, which MDK's post of the tool settled already (H1).",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"MaxFlips": 3, "MaxLost": 2, "MdkKeeps": false, "FairMdk": true, "MdkForgets": true, "Bug": "SettleOwned"},
+  "steps": [
+    {"action": "Emit", "item": "K", "shown": true},
+    {"action": "Emit", "item": "K", "shown": true},
+    {"action": "Send", "tok": ["K", 1], "outcome": "sent"},
+    {"action": "Send", "tok": ["K", 2], "outcome": "posted-lost"},
+    {"action": "Flip", "members": "more"},
+    {"action": "ReadMembers", "owners": false, "held": 0},
+    {"action": "Ask", "tok": ["K", 2], "outcome": "lost"},
+    {"action": "Send", "tok": ["N", 1], "outcome": "posted-lost"}
+  ],
+  "end": {"kind": "violation"}
+}
