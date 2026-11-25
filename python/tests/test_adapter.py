@@ -386,6 +386,19 @@ class Confirmations(unittest.IsolatedAsyncioTestCase):
         self.asks("k-2", says=object())
         self.assertEqual(await self.resolve("k-2", "once"), "")
 
+    async def test_which_confirmation_waits_is_read_from_hermes_and_left_as_it_is(self):
+        """D-155. The plugin asks Hermes which confirmation it holds in a session: the latest, whatever its
+        age, since one Hermes still holds is one a typed answer did not answer. It only looks: Hermes drops
+        one that waited too long itself."""
+        key = "agent:main:marmot:dm:c-1"
+        self.assertIsNone(self.adapter.confirm_waiting(key))
+        self.asks("k-1")
+        self.asks("k-2")
+        with mock.patch("time.time", return_value=300.5):
+            self.assertEqual(self.adapter.confirm_waiting(key), "k-2")
+        self.assertEqual(self.module.get_pending(key)["confirm_id"], "k-2")
+        self.assertEqual(self.ran, [])
+
     async def test_hermes_own_check_of_who_may_answer_is_asked_first(self):
         """D-146. With an admin list for the chat, Hermes lets only an admin answer, as its own platforms
         ask (`gateway.approval_actor.slash_confirm_refusal`): a person the core lets prompt is refused, and

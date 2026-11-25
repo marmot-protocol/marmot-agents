@@ -485,6 +485,14 @@ class MarmotAdapter(BasePlatformAdapter):
         # and before anything else can come between: once this returns, Hermes has it.
         return asyncio.Task(said(), loop=asyncio.get_running_loop(), eager_start=True)
 
+    def confirm_waiting(self, session_key: str) -> str | None:
+        """The id of the confirmation Hermes holds in the session `session_key`, whatever its age, or None
+        (D-155). It only looks: Hermes drops one that waited too long itself."""
+        from tools import slash_confirm
+
+        waiting = slash_confirm.get_pending(session_key)
+        return str(waiting.get("confirm_id")) if waiting else None
+
     def phrase(self, key: str, **fields) -> str:
         """What Hermes says under `key` of its catalog, in the language it is set to, as its commands
         make their replies. It answers a command only in text, and this is how the plugin knows which."""
