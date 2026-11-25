@@ -3169,6 +3169,7 @@ Decided 2026-11-24 by the project owner.
 The narrower path is narrowed further by
 [D-152](#d-152-a-send-mdk-was-handed-in-a-form-its-chat-is-no-longer-sent-is-asked-after-never-handed-again): the core
 no longer hands such a send to MDK again, but for one case, a send whose first answer from MDK the core lost.
+It is closed by [D-157](#d-157-the-core-goes-on-with-the-event-mdk-names-for-a-send-it-holds-and-never-hands-such-a-send-to-mdk-again): the core hands no such send to MDK again on any path. The limit itself stands.
 
 ## D-149 Stop in a subagent's thread stops that subagent alone
 
@@ -3326,6 +3327,10 @@ Decided 2026-11-25 by the builder, under the project owner's instruction to deci
 told follows D-109. That the one path left stays, and the known limit above, were decided 2026-11-25 by the
 project owner.
 
+Replaced in part by [D-157](#d-157-the-core-goes-on-with-the-event-mdk-names-for-a-send-it-holds-and-never-hands-such-a-send-to-mdk-again): MDK's status names the event of a send it holds, so a send its engine has goes
+on with that event, the one path left and the known limit are gone, and so is the stall of a send MDK's engine
+keeps for good.
+
 ## D-154 An install takes over a killed upgrade only for the same agent and the same gateway
 
 **Decision.** An upgrade a killed install left under way may hold a change to a gateway's plugin
@@ -3458,3 +3463,41 @@ missed an effect behind a deep queue and could drop file requests on a stop. Whe
 the question D-087 asks, and the set of outputs that reached it by a deadline is finite.
 
 Decided 2026-11-25 by the project owner.
+
+## D-157 The core goes on with the event MDK names for a send it holds, and never hands such a send to MDK again
+
+**Decision.** MDK's `local_send_status` names the event of a send it holds, whether it keeps it queued or its
+engine has it (MDK pull request 3712, in MDK `master` at `bea7b40`, the revision the core now uses). For a send
+handed to MDK in a form its chat is no longer sent
+([D-152](#d-152-a-send-mdk-was-handed-in-a-form-its-chat-is-no-longer-sent-is-asked-after-never-handed-again)), the
+core uses it so:
+
+- **Its engine has it.** The send goes on to the core's record with that event, as MDK was handed it, as one MDK's
+  engine has sent does. So does one whose first answer the core lost to a crash.
+- **Queued.** The core keeps the event with the send in its state file, if it had not, and asks again later; the
+  chat's later sends wait for it, as before. Should MDK let go of the token later, the core knows MDK took the send,
+  and the chat is told it may not have been delivered
+  ([D-109](#d-109-how-the-cores-sends-survive-a-crash-as-built)), even if the group's messages were made to last
+  longer since.
+- **Done with, naming no event.** MDK's status for a send its engine is done with names no event when no relay
+  took it then. The core goes on with the event it kept. If it kept none, which takes a crash between MDK taking the
+  send and the core saving MDK's answer, the chat is told it may not have been delivered (D-109). Should MDK still
+  post it later, what the send settles shows settled twice. It is never handed to MDK again.
+- **Refused for a member it does not list.** MDK can now refuse a send that would reach a member account its list
+  leaves out. The core does not give such a list yet; such a refusal is taken as MDK's drop of a try.
+
+So the core hands no such send to MDK again, on any path: the one path left of D-152 (`Core::hand_again`,
+`Side::lasts`) is gone. So is the stall D-152 accepts: a send MDK's engine keeps for good no longer holds up its
+chat, whatever the group's disappearing time.
+
+**Why.** D-152 kept one second hand-over, and accepted a stall, only because MDK's status named no event while its
+engine held a send. The project owner asked MDK to name it, and decided on 2026-11-25 that both would go once MDK's
+pin moved to a release that did. Without the second hand-over, the narrower path of
+[D-148](#d-148-for-the-pilot-a-send-of-the-full-activity-that-mdk-keeps-and-posts-after-someone-joins-is-an-accepted-limit),
+a send handed again after MDK let go of its token, is closed too. A send MDK is done with naming no event is told as
+perhaps not delivered, rather than asked after, because nothing MDK says of it will change, and asked after, it
+would hold up its chat for good.
+
+That the one path left and the stall go was decided 2026-11-25 by the project owner, in D-152. How a send MDK is done
+with, naming no event, is told, and taking a refusal for a member as a drop, were decided 2026-11-25 by the
+builder, under the project owner's instruction to decide minor points.

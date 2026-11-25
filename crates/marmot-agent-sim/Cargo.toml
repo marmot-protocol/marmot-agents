@@ -17,7 +17,7 @@ marmot-agent-driver = { path = "../marmot-agent-driver" }
 marmot-agent-events = { path = "../marmot-agent-events" }
 # MDK's reading of an agent item, so the simulated MDK refuses what MDK would. At the revision the
 # core depends on, and moved with it.
-cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "029e0579fdb7f59e85b3a4a55dd7a9e42091988a" }
+cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bea7b400b78f3ec6d1abb3894d1d8162bdf409da" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The virtual clock is tokio's paused time, which needs `test-util`.

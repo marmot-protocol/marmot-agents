@@ -232,10 +232,6 @@ impl Side for Mdk {
     fn outcome(&self, _group: &GroupKey, token: &Token) -> Result<Outcome, NotNow> {
         Ok(Outcome::Went(EventKey::from(token.mdk.as_str())))
     }
-
-    fn lasts(&self, _group: &GroupKey, _token: &Token) -> Result<bool, NotNow> {
-        Ok(true)
-    }
 }
 
 /// A harness that takes every prompt, after `slow` if it is slow, notes its text, and emits

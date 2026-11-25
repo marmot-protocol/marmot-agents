@@ -112,7 +112,7 @@ still place it in its thread ([D-133](../decisions.md#d-133-an-edit-of-an-item-i
 
 ### What MDK has to do
 
-Done in MDK by pull requests 3622, 3630 and 3640 (in master at `029e0579f`, the revision the core uses): a kind
+Done in MDK by pull requests 3622, 3630 and 3640 (in master at `029e0579f`, and in `bea7b40`, which the core uses now): a kind
 1201 with `E` joins its thread under its `e`, an edit keeps its first event's place and may repeat `E`, `K` and
 `P`, the agent's own comments in its threads neither alert nor count as unread, a `p` naming the sender is no
 mention, and a late joiner is shown an item from its edits. What follows was the list as read at MDK `6f6b427`:

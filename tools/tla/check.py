@@ -480,9 +480,6 @@ CASES += [
     hold_probe("NeverKeptPosted"),
     hold_probe("NeverAskedOtherwise"),
     hold_probe("NeverToldLost"),
-    hold_probe("NeverKeptEvent"),
-    hold_probe("NeverHandedAgainOwned"),
-    hold_probe("NeverOwnedWaited"),
 ]
 
 # The larger bounds (formal/tla/README.md, "Larger bounds"): CoreLifecycle's fair configuration

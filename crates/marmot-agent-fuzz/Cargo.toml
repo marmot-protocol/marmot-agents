@@ -25,7 +25,7 @@ marmot-agent-events = { path = "../marmot-agent-events" }
 marmot-agent-pi = { path = "../marmot-agent-pi" }
 # MDK's own reader of kinds 1201 and 1202, which the core must agree with. The revision is the
 # core's.
-cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "029e0579fdb7f59e85b3a4a55dd7a9e42091988a" }
+cgka-traits = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bea7b400b78f3ec6d1abb3894d1d8162bdf409da" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 # The socket's target runs the real connection reader on a socket pair.
