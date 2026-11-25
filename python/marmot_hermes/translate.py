@@ -11,7 +11,8 @@ notice. Approvals, questions and requests to confirm a command arrive in a struc
 `approval` and `question` items (D-048). Hermes names no session to a platform, so a session is named
 after the chat and the sender, and counted when Hermes replaces it. In a group Hermes keeps a session
 for each sender, so turns can overlap: what names its session or its turn (an approval card, a
-question, the end of a turn, a reply to a message) goes to that turn, and the rest to the latest. A
+question, the end of a turn) goes to that turn, and the rest to the latest. A reply goes by the message it
+replies to: to that message's turn while it runs, or else to its sender's session outside any turn. A
 request to confirm a command is kept by Hermes's session key and its id, as Hermes keeps one in each
 session, and closes only on evidence: Hermes's reply to an answer, a newer one in its session, or Hermes's
 own limit passing (`expired`, from the plugin). It never closes with a turn (D-155).
@@ -175,7 +176,7 @@ class Translator:
         self.typed_confirm: dict[str, tuple[str, str]] = {}
         self.final_next = False
         self.key = None
-        self.turn_command = None
+        self.slash: set[str] = set()  # messages whose turn a slash command started
         self.settings: dict[str, dict] = {}
         self.hermes_ids: dict[str, str] = {}
         self.commands: list[dict] = []
@@ -352,8 +353,8 @@ class Translator:
 
     def confirm_done(self, item, choice, native=True, message=None):
         """The confirmation `item` waits no more: answered with `choice`, or, with none, replaced or expired,
-        so it shows as cancelled. Answered by a `message` typed, it shows in that message's turn, as Hermes's
-        reply to it does."""
+        so it shows as cancelled. Answered by a `message` typed, it shows where Hermes's reply to that message
+        does (`owner_of`)."""
         prev = self.open.get(item)
         key = self.confirm_key.get(item)
         if self.confirm_waiting.get(key) == item:
@@ -544,8 +545,8 @@ class Translator:
         ev = p.get("event") or {}
         self.key = key_of(ev.get("source") or {})
         self.session = self.name(self.key)
-        text = str(ev.get("text") or "").strip()
-        self.turn_command = text.split()[0] if text.startswith("/") else None
+        if str(ev.get("text") or "").strip().startswith("/"):
+            self.slash.add(ev.get("message_id"))
         self.session_changed(self.key, native=None)
         self.turn = ev.get("message_id")
         self.turn_key.pop(self.turn, None)
@@ -573,11 +574,14 @@ class Translator:
             self.turn, self.key = others[-1], self.turn_key[others[-1]]
             self.session = self.open[f"turn:{self.turn}"]["session"]
 
-    def owner_of(self, turn):
-        """The session and turn to give an event of `turn` when that turn is running and is not the
-        latest, or else None: the latest turn's."""
-        ev = self.open.get(f"turn:{turn}") if turn is not None and turn != self.turn else None
-        return (ev["session"], turn) if ev is not None else None
+    def owner_of(self, message):
+        """The session and turn of what Hermes says to `message`: that message's turn while it runs, or else,
+        when the plugin says whose message it is (`typed_key`), its sender's session outside any turn. None,
+        the latest turn's, when neither is known, as in a recording."""
+        if message is not None and f"turn:{message}" in self.open:
+            return self.name(self.turn_key[message]), message
+        key = self.typed_key.get(message)
+        return (self.name(key), None) if key else None
 
     def turn_of_session(self, session_key):
         """The running turn of the Hermes session `session_key` (`names_session`), if one is running."""
@@ -615,8 +619,8 @@ class Translator:
             self.command_reply(f"sent:{self.ids}{self.seq + 1}", said, None, key, alone=True)
 
     def command_reply(self, item, content, typed, key, alone=False, turn=None):
-        """Hermes's reply to a command typed in the session of `key`: in its `turn` while that runs, or else
-        in the latest, or `alone`, in that session outside any turn."""
+        """Hermes's reply to a command typed in the session of `key`, as `turn`: where `owner_of` puts it, or
+        `alone`, in that session outside any turn. A reset's words are its new session's."""
         title = "Command output"
         if content.startswith("⛔"):
             title = "Not allowed"
@@ -638,10 +642,7 @@ class Translator:
                 self.put(key, f"{what}_write_approval", f"Ask before writing {what}", content.split("'")[1],
                          ["on", "off"], approve=True)
             self.session_changed(key)
-        owner = (self.name(key), None) if alone else None
-        if not alone and self.owner_of(turn) is not None:
-            # In a group another sender's turn can be the latest; a reset's words are its new session's.
-            owner = (self.name(key), turn)
+        owner = (self.name(key), None) if alone else self.owner_of(turn)
         self.last_send = self.emit(item, "notice", "done", title, content, {"kind": "command_output"}, owner=owner)
 
     def send(self, p):
@@ -681,13 +682,13 @@ class Translator:
         confirmed = asked in self.open
         if confirmed:
             self.confirm_done(asked, choice, message=answer)
-        if typed or ((confirmed or self.turn_command) and (meta.get("notify") or final)):
+        if typed or ((confirmed or answer in self.slash) and (meta.get("notify") or final)):
             return self.command_reply(item, content, typed, key, turn=answer)
+        owner = self.owner_of(p.get("reply_to") or meta.get("reply_to_message_id"))
         if content.startswith(WARNINGS):
-            self.last_send = self.emit(item, "notice", "done", "Notice", content, {"kind": "warning"})
+            self.last_send = self.emit(item, "notice", "done", "Notice", content, {"kind": "warning"}, owner=owner)
             return
         phase = "final" if (final or meta.get("notify")) else "commentary"
-        owner = self.owner_of(p.get("reply_to") or meta.get("reply_to_message_id"))
         self.last_send = self.emit(item, "message", "done", "Message", content, {"phase": phase}, owner=owner)
 
     def edit(self, p):

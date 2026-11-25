@@ -1150,6 +1150,45 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.last_of("confirm:k-1")["text"], "Answered: Approve once")
         self.assertEqual([(e["item"], e["settles"]) for e in self.sent if "settles" in e], [(f"session:{session}", ["r-1"])])
 
+    async def test_an_answer_hermes_reads_inline_is_its_senders_while_another_turn_is_latest(self):
+        """Round 2. Hermes answers a `/deny` at once while Alice's session is busy (`_dispatch_inline_reply`):
+        the answer has no turn of its own. Bob's turn is the latest, but the answer, Hermes's reply to it and
+        the settlement of the `/new` it cancels are Alice's, in her session outside any turn."""
+        alice = self.group_key("u-1")
+        await self.connector.serve("prompt", prompt("m-a", chat=GROUP, sender=ALICE))
+        self.feed(started("m-a", chat="c-2", user="u-1", chat_type="group"), chat="c-2")
+        await self.connector.serve("control", {"request": "r-a", "by": ALICE, "action": {
+            "type": "new_session", "chat": GROUP, "session": "group:c-2:u-1"}})
+        asking = "⚠️ **Confirm /new**\n\nThis starts a fresh session."
+        self.hermes.waiting_confirm[alice] = "k-a"
+        self.feed(hook("send_slash_confirm", chat_id="c-2", title="/new", message=asking, session_key=alice,
+                       confirm_id="k-a", metadata=None), said(asking, self.hermes.typed[-1][2], True, "c-2"), chat="c-2")
+        await self.connector.serve("prompt", prompt("m-b", chat=GROUP, sender=BOB))
+        self.feed(started("m-b", chat="c-2", user="u-2", chat_type="group"), chat="c-2")
+        await self.connector.serve("prompt", prompt("m-d", "/deny", GROUP, ALICE))
+        del self.hermes.waiting_confirm[alice]
+        self.feed(said("🟡 /new cancelled. Conversation unchanged.", "m-d", True, "c-2"), chat="c-2")
+        alices = self.last_of("confirm:k-a")
+        self.assertEqual((alices["state"], alices["text"], alices["session"], alices.get("turn"), alices.get("settles")),
+                         ("done", "Answered: Cancel", "group:c-2:u-1", None, ["r-a"]))
+        reply = self.of("notice")[-1]
+        self.assertEqual((reply["session"], reply.get("turn"), reply["text"]),
+                         ("group:c-2:u-1", None, "🟡 /new cancelled. Conversation unchanged."))
+        self.assertEqual([e["item"] for e in self.sent if e.get("turn") == "m-b"], ["turn:m-b"], "nothing on Bob's turn")
+
+    async def test_replies_to_two_senders_go_to_the_messages_they_reply_to(self):
+        """#201. Bob's turn runs when Alice's slash command becomes the latest turn: Hermes's reply to Bob is
+        his message, in his turn, not the output of her command, and her command's output is hers."""
+        for message, text, sender in (("m-b", "hello", BOB), ("m-a", "/status", ALICE)):
+            await self.connector.serve("prompt", prompt(message, text, GROUP, sender))
+        self.feed(started("m-b", "hello", "c-2", "u-2", "group"), started("m-a", "/status", "c-2", "u-1", "group"),
+                  said("Hi Bob.", "m-b", True, "c-2"), said("Status: fine.", "m-a", True, "c-2"),
+                  said("And more, Bob.", "m-b", True, "c-2"), complete("m-a"), complete("m-b"), chat="c-2")
+        self.assertEqual([(e["session"], e["turn"], e["text"], e["body"]["phase"]) for e in self.of("message")],
+                         [("group:c-2:u-2", "m-b", "Hi Bob.", "final"), ("group:c-2:u-2", "m-b", "And more, Bob.", "final")])
+        self.assertEqual([(e["session"], e["turn"], e["text"], e["title"]) for e in self.of("notice")],
+                         [("group:c-2:u-1", "m-a", "Status: fine.", "Command output")])
+
     async def test_a_confirmation_asked_while_another_turn_of_its_session_runs_waits_for_its_answer(self):
         """Hermes asks to confirm a typed `/new` while the session's turn still runs, so the `/new` has no
         turn of its own: the question Hermes sends in reply to the `/new` names it, and the answer, not
