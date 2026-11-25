@@ -29,7 +29,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const CHAT: u64 = 9;
 
 /// How long, in seconds, the core may take from asking MDK whether it keeps a send to handing the
-/// send to it again ([`Side::keeps`]), saves and a busy MDK included, with room to spare.
+/// send to it again ([`Side::lasts`]), saves and a busy MDK included, with room to spare.
 const HANDED_AGAIN_WITHIN: u64 = 60;
 
 /// Opens the account home the settings name: its accounts, and MDK's app and runtime on it.
@@ -833,10 +833,35 @@ pub trait Side: Clone + Send + Sync + 'static {
         folders.read(path)
     }
 
-    /// Whether MDK keeps a send under `token`, to post or posted, and will still keep it when the
-    /// send is handed to it again: not one it never took, nor one it took and dropped, nor one it
-    /// may let go of meanwhile. [`NotNow`] when MDK could not say.
-    fn keeps(&self, group: &GroupKey, token: &Token) -> Result<bool, NotNow>;
+    /// What became of a send handed to MDK under `token`, as MDK says when asked: the send is
+    /// not handed to it again. [`NotNow`] when MDK could not say.
+    fn outcome(&self, group: &GroupKey, token: &Token) -> Result<Outcome, NotNow>;
+
+    /// Whether MDK will still know `token` when the send is handed to it again, a minute from
+    /// now at most: MDK takes a token it has let go of as a new send. [`NotNow`] when MDK could
+    /// not say.
+    fn lasts(&self, group: &GroupKey, token: &Token) -> Result<bool, NotNow>;
+}
+
+/// What became of a send handed to MDK under its token, as MDK says when asked
+/// ([`Side::outcome`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// It went out, or goes out, as MDK was handed it: MDK's engine took it, and this is the
+    /// event it is.
+    Went(EventKey),
+    /// MDK's engine took it, and it goes out as MDK was handed it; MDK does not say its event.
+    Taken,
+    /// MDK keeps it queued, to post as it was handed.
+    Queued,
+    /// MDK took it and dropped it before it went out: nothing of it went, and MDK refuses its
+    /// token from now on.
+    Dropped,
+    /// MDK never took it.
+    NotTaken,
+    /// MDK no longer knows its token: it was first tried so long ago that its group's messages
+    /// have disappeared since, and it may have gone out (D-109).
+    Forgotten,
 }
 
 /// Live events, and when they were subscribed to: what a group the core has no read mark for
@@ -1080,23 +1105,41 @@ impl Side for Marmot {
         Marmot::groups(self)
     }
 
-    fn keeps(&self, group: &GroupKey, token: &Token) -> Result<bool, NotNow> {
+    fn outcome(&self, group: &GroupKey, token: &Token) -> Result<Outcome, NotNow> {
         let Some(id) = group_id(group) else {
-            return Ok(false);
+            return Ok(Outcome::NotTaken);
         };
-        // MDK takes a token it has let go of as a new send. Let go of between this answer and the
-        // send, the send would go out again, as it was handed, to the chat as it is now: a token
-        // MDK may let go of before then is not kept.
-        if let Some(tried) = token.tried_at {
-            match self.may_have_let_go(group, tried, HANDED_AGAIN_WITHIN) {
-                Ok(true) => return Ok(false),
-                Ok(false) => {}
-                Err(_) => return Err(NotNow),
-            }
-        }
         match self.status(&id, &token.mdk) {
-            Ok(None | Some(LocalSendStatus::Rejected)) => Ok(false),
-            Ok(Some(_)) => Ok(true),
+            // What MDK posts is the event it named when it took the send (`retained_event`).
+            Ok(Some(LocalSendStatus::Completed(summary))) => {
+                Ok((summary.message_ids.into_iter().next())
+                    .map_or(Outcome::Taken, |event| Outcome::Went(EventKey(event))))
+            }
+            Ok(Some(LocalSendStatus::EngineOwned)) => Ok(Outcome::Taken),
+            Ok(Some(LocalSendStatus::Queued)) => Ok(Outcome::Queued),
+            Ok(Some(LocalSendStatus::Rejected)) => Ok(Outcome::Dropped),
+            // MDK lets go of a token with the message it made, once its group's messages
+            // disappear; before then, it never had it.
+            Ok(None) => match token.tried_at {
+                Some(tried) => match self.may_have_let_go(group, tried, 0) {
+                    Ok(true) => Ok(Outcome::Forgotten),
+                    Ok(false) => Ok(Outcome::NotTaken),
+                    Err(_) => Err(NotNow),
+                },
+                None => Ok(Outcome::NotTaken),
+            },
+            Err(_) => Err(NotNow),
+        }
+    }
+
+    fn lasts(&self, group: &GroupKey, token: &Token) -> Result<bool, NotNow> {
+        // Let go of between this answer and the send, the send would go out again, as it was
+        // handed, to the chat as it is now.
+        let Some(tried) = token.tried_at else {
+            return Ok(true);
+        };
+        match self.may_have_let_go(group, tried, HANDED_AGAIN_WITHIN) {
+            Ok(gone) => Ok(!gone),
             Err(_) => Err(NotNow),
         }
     }

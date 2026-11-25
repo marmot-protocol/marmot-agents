@@ -7,7 +7,9 @@ use crate::schedule::{Outcome, ReadStep};
 use crate::world::{CHAT, COMMENT, EDIT, Kept, Landing, RefusedSend, World, describe};
 use marmot_agent::carrier::{self, REQUEST_KIND};
 use marmot_agent::files::Outgoing;
-use marmot_agent::marmot::{FileFailed, Incoming, Live, Message, NotNow, Page, SendFailed, Side};
+use marmot_agent::marmot::{
+    FileFailed, Incoming, Live, Message, NotNow, Outcome as Asked, Page, SendFailed, Side,
+};
 use marmot_agent::run::REJECTED_TRIES;
 use marmot_agent::{EventKey, GroupKey, Heard, HeardRequest, PubKey, Sending, Token, Where};
 use marmot_agent_events::TurnId;
@@ -253,13 +255,29 @@ impl Side for SimSide {
         Err(FileFailed::Failed)
     }
 
-    /// What MDK keeps under the token, unless it dropped it. Every chat of a simulation is the
-    /// owner's two-person chat, so the core never asks.
-    fn keeps(&self, group: &GroupKey, token: &Token) -> Result<bool, NotNow> {
-        let world = lock(&self.world);
-        Ok(world.chat_of(group).is_some_and(|chat| {
-            (world.tokens.get(&(chat, token.mdk.clone()))).is_some_and(|kept| !kept.rejected)
-        }))
+    /// What became of what MDK keeps under the token. Every chat of a simulation is the owner's
+    /// two-person chat, so the core never asks.
+    fn outcome(&self, group: &GroupKey, token: &Token) -> Result<Asked, NotNow> {
+        let mut world = lock(&self.world);
+        world.land();
+        let Some(chat) = world.chat_of(group) else {
+            return Ok(Asked::NotTaken);
+        };
+        let Some(kept) = world.tokens.get(&(chat, token.mdk.clone())) else {
+            return Ok(Asked::NotTaken);
+        };
+        Ok(if kept.rejected {
+            Asked::Dropped
+        } else if (world.landings.iter()).any(|l| l.row.event == kept.event) {
+            Asked::Queued
+        } else {
+            Asked::Went(kept.event.clone())
+        })
+    }
+
+    /// The simulated MDK lets go of no token.
+    fn lasts(&self, _group: &GroupKey, _token: &Token) -> Result<bool, NotNow> {
+        Ok(true)
     }
 }
 

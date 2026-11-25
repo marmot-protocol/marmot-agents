@@ -20,7 +20,7 @@
 use marmot_agent::carrier::Asked;
 use marmot_agent::config::Config;
 use marmot_agent::marmot::{
-    FileFailed, Incoming, Live, Message, NotNow, Page, SendFailed, Side, Subscribed,
+    FileFailed, Incoming, Live, Message, NotNow, Outcome, Page, SendFailed, Side, Subscribed,
 };
 use marmot_agent::run::{Core, Kept, Store, Writes};
 use marmot_agent::{EventKey, GroupKey, Heard, HeardRequest, PubKey, Sending, Token, Where};
@@ -154,7 +154,11 @@ impl Side for Mdk {
     }
 
     // Every send this MDK was handed waits in it, so it still holds each token.
-    fn keeps(&self, _group: &GroupKey, _token: &Token) -> Result<bool, NotNow> {
+    fn outcome(&self, _group: &GroupKey, _token: &Token) -> Result<Outcome, NotNow> {
+        Ok(Outcome::Queued)
+    }
+
+    fn lasts(&self, _group: &GroupKey, _token: &Token) -> Result<bool, NotNow> {
         Ok(true)
     }
 

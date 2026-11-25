@@ -9,7 +9,7 @@
 use marmot_agent::config::Config;
 use marmot_agent::files::Outgoing;
 use marmot_agent::marmot::{
-    FileFailed, Incoming, Live, Message, NotNow, Page, SendFailed, Side, Subscribed,
+    FileFailed, Incoming, Live, Message, NotNow, Outcome, Page, SendFailed, Side, Subscribed,
 };
 use marmot_agent::run::{Core, Store};
 use marmot_agent::{EventKey, GroupKey, Heard, PubKey, Sending, Token, Where};
@@ -229,7 +229,11 @@ impl Side for Mdk {
     }
 
     /// Every send the stand-in was handed went at once.
-    fn keeps(&self, _group: &GroupKey, _token: &Token) -> Result<bool, NotNow> {
+    fn outcome(&self, _group: &GroupKey, token: &Token) -> Result<Outcome, NotNow> {
+        Ok(Outcome::Went(EventKey::from(token.mdk.as_str())))
+    }
+
+    fn lasts(&self, _group: &GroupKey, _token: &Token) -> Result<bool, NotNow> {
         Ok(true)
     }
 }
