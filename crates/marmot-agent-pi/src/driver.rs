@@ -307,6 +307,10 @@ pub struct Pi {
     held: HashSet<String>,
     lines: mpsc::UnboundedReceiver<Line>,
     sender: mpsc::UnboundedSender<Line>,
+    /// Held while a reader stamps a line and sends it, and while [`Pi::arrival`] looks, so that no
+    /// line is stamped and not yet sent when it does: each chat's Pi has a reader task of its own,
+    /// and on a runtime of several threads two could otherwise send out of the order they stamped.
+    stamping: std::sync::Arc<std::sync::Mutex<()>>,
     /// Lines taken off `lines` to see when the oldest reached the driver, and not yet handled:
     /// handled next, in order ([`Pi::arrival`]).
     backlog: VecDeque<Line>,
@@ -353,6 +357,7 @@ impl Pi {
             held: HashSet::new(),
             lines,
             sender,
+            stamping: std::sync::Arc::default(),
             backlog: VecDeque::new(),
             ready: Ready::default(),
             read_at: None,
@@ -407,26 +412,31 @@ impl Pi {
         c.generation += 1;
         c.translator.set_version(version);
         let (sender, generation, who) = (self.sender.clone(), c.generation, chat.clone());
+        let stamping = self.stamping.clone();
         let reader = tokio::spawn(async move {
+            // A line is stamped and sent as one step (`stamping`), so lines reach the channel in
+            // the order they were stamped, whichever chat's Pi they came from.
+            let send = |text: Option<String>| {
+                let _order = stamping
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                sender
+                    .send(Line {
+                        chat: who.clone(),
+                        generation,
+                        text,
+                        at: now(),
+                    })
+                    .is_ok()
+            };
             // Split on LF only, as Pi's framing asks: tokio's lines do.
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(text)) = lines.next_line().await {
-                let line = Line {
-                    chat: who.clone(),
-                    generation,
-                    text: Some(text),
-                    at: now(),
-                };
-                if sender.send(line).is_err() {
+                if !send(Some(text)) {
                     return;
                 }
             }
-            let _ = sender.send(Line {
-                chat: who,
-                generation,
-                text: None,
-                at: now(),
-            });
+            send(None);
         });
         let (writes, queue) = mpsc::unbounded_channel::<Write>();
         let writer = tokio::spawn(write_records(stdin, queue));
@@ -620,6 +630,10 @@ impl Pi {
         if let Some(at) = self.read_at {
             return at;
         }
+        let _order = self
+            .stamping
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while let Ok(line) = self.lines.try_recv() {
             self.backlog.push_back(line);
         }
