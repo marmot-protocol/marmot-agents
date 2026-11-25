@@ -63,7 +63,7 @@ cannot close it).
   keeps.
 - **A token MDK lets go of before it posts the send**, and the group's disappearing time changed after a send
   went: MDK forgets a token with the message it made, and the core reads the period as it is now (D-109's
-  limit).
+  limit), except for a send whose event it saved, which MDK certainly took (D-152).
 - **Refusals and give-ups**, and what stands in for them, but for MDK refusing a token handed another submission
   and a send MDK let go of: `CoreLifecycle`'s. Those two are modelled as a notice settling what the send settled;
   the version that closes an item the core then sends in its place is left out.
