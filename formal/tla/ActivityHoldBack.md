@@ -50,8 +50,9 @@ cannot close it).
   naming no event, was still handed again in full, which MDK refuses if the older core had left its native
   message out, in a chat whose members never changed; **fixed** the same day, first shown by
   `a_send_of_unknown_form_is_never_handed_again`: a send whose form was not noted is asked after only.
-- **A send MDK's engine has and has not posted yet.** The model's MDK does not say its engine has such a send:
-  the core treats that as a send MDK keeps queued, as both name the event
+- **A send MDK's engine has and has not posted yet.** The model's MDK says nothing of such a send apart from one
+  it keeps queued. The core takes it as gone, with the event MDK names, as it takes a send MDK posted, and goes on
+  to the chat's next send
   ([D-157](../../docs/decisions.md#d-157-the-core-goes-on-with-the-event-mdk-names-for-a-send-it-holds-and-never-hands-such-a-send-to-mdk-again)).
 - **A token MDK lets go of before it posts the send**, and the group's disappearing time changed after a send
   went: MDK forgets a token with the message it made, and the core reads the period as it is now (D-109's
