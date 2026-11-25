@@ -884,6 +884,91 @@ async fn a_send_an_older_core_handed_over_goes_on_as_mdk_took_it_after_someone_j
     world.runtime.shutdown().await;
 }
 
+/// A tool MDK was handed while the chat was the owner's, whose answer the core lost to a stop, and
+/// which MDK's engine has for `owned`, naming no event, in a group whose messages last `keep`
+/// seconds (or for ever, for 0), which someone joined since: the core is started on that state, and
+/// the outbox empties within `within_secs`, the tool having gone out once, as MDK took it. What
+/// the chat was told.
+async fn engine_has_it(keep: u64, owned: u64, within_secs: u64) -> Vec<String> {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, _events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, id) = a_chat(&world, &seen).await;
+    core.stop().await;
+    if keep > 0 {
+        (world.runtime)
+            .update_message_retention(&world.person, &chat.group, keep)
+            .await
+            .unwrap();
+        let marmot = &world.marmot;
+        within(30, || {
+            let record = marmot.app.group(&marmot.label, &chat.hex).ok().flatten()?;
+            (record.message_retention.disappearing_message_secs == keep).then_some(())
+        })
+        .await;
+    }
+    someone_joins(&world, &chat).await;
+
+    let group = GroupKey(chat.hex.clone());
+    let store = Store::new(world.state.path());
+    let kept = store.load().unwrap();
+    let mut talk = conversation_of(&world, &kept, &group);
+    talk.emitted(Emitted {
+        event: a_tool(),
+        chat: Some(id),
+        prompts: Vec::new(),
+        settles: Vec::new(),
+    });
+    let (token, what) = talk.next_send(&group).unwrap();
+    talk.attempting(&token.send, unix_now());
+    world.marmot.faults.push(Fault::Owned {
+        queued: Duration::ZERO,
+        owned: Duration::from_secs(owned),
+    });
+    let went = world.send(&group, &what, &token).await.unwrap();
+    save_conversation(&store, kept, &talk);
+
+    let (driver, _events, _) = stub(false);
+    let core = world.start(driver);
+    within(within_secs, || {
+        let state = json(&store.load().unwrap());
+        (state["conversation"]["outbox"].as_array())
+            .is_some_and(|q| q.is_empty())
+            .then_some(())
+    })
+    .await;
+    let told: Vec<String> = (chat.items().into_iter())
+        .filter(|(_, r)| matches!(r.item.event.body(), Body::Notice(_)))
+        .map(|(_, r)| r.item.event.header().text.clone())
+        .collect();
+    let firsts: Vec<EventKey> = (versions(&chat, "k").into_iter()).map(|v| v.0).collect();
+    assert_eq!(firsts, vec![went], "the tool went out once, as MDK took it");
+    core.stop().await;
+    world.runtime.shutdown().await;
+    told
+}
+
+// A send of the agent's full activity that MDK was handed while the chat was the owner's, whose
+// answer the core lost, and which MDK's engine has without naming its event, is not told as one that
+// may not have been delivered while MDK has it, even in a group whose messages last a minute or less,
+// where MDK may let go of its token within the minute: MDK still posts it, and the notice would
+// settle again what it settled (S1, H1). The core asks again until MDK names its event.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_mdks_engine_has_is_not_told_as_lost_while_it_has_it() {
+    let told = engine_has_it(60, 15, 40).await;
+    assert!(told.is_empty(), "nothing is told of it: {told:?}");
+}
+
+// The one second hand-over left (D-152), which the owner may yet remove: such a send, in the form
+// the core noted it was handed, is handed to MDK again under its token while MDK will still know
+// the token, and goes on with the event MDK names, before MDK's status names it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_mdks_engine_has_is_handed_again_as_it_was_while_its_token_lasts() {
+    let told = engine_has_it(0, 3600, 20).await;
+    assert!(told.is_empty(), "nothing is told of it: {told:?}");
+}
+
 // A send that went out just before a crash, before the core marked it sent, is tried again when
 // the core starts, under the token it went under: MDK gives back the event it made, sends nothing,
 // and the send is not made a second time (S3).

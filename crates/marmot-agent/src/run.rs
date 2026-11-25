@@ -1275,16 +1275,17 @@ impl<D: Driver, M: Side> Core<D, M> {
                             continue;
                         }
                         // MDK's answer when it took the send was lost, and MDK names no event
-                        // while its engine has it: only handing it again under its token, as it
-                        // was handed, gives its event, which is safe only while MDK will still
-                        // know the token then (D-152).
+                        // while its engine has it. MDK still posts it, so it is never told as
+                        // lost while MDK has it, which would settle its requests twice: it is
+                        // asked after again until MDK names its event or lets go of its token,
+                        // a little later each time. A stop does not wait for it: MDK's engine has
+                        // it, and it goes out as it was handed, whatever the core does. Only
+                        // handing it again under its token, as it was handed, gives its event at
+                        // once, which is safe only while MDK will still know the token then: the
+                        // one second hand-over left, which the owner may yet remove (D-152).
                         None => match self.marmot.lasts(group, &token) {
                             Ok(true) => {}
-                            Ok(false) => {
-                                self.forgotten(&token.send)?;
-                                continue;
-                            }
-                            Err(NotNow) => {
+                            Ok(false) | Err(NotNow) => {
                                 self.wait_longer(group);
                                 return Ok(());
                             }
