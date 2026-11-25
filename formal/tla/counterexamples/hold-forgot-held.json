@@ -1,0 +1,18 @@
+{
+  "case": "hold-forgot-held",
+  "model": "ActivityHoldBack",
+  "config": "ActivityHoldBack.posted.cfg",
+  "breaks": "H5",
+  "what": "ForgotHeld, run.rs flush before #182 (2026-11-25): the tool goes to MDK in the owner's chat and MDK's answer is lost; MDK lets go of its token, the post disappearing with it; someone joins; asked, MDK has no such token, and the core holds the tool back as a send MDK never took, where D-109 tells the chat it may not have been delivered (H5).",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"MaxFlips": 3, "MaxLost": 2, "MdkKeeps": false, "FairMdk": true, "MdkForgets": true, "Bug": "ForgotHeld"},
+  "steps": [
+    {"action": "Emit", "item": "K", "shown": true},
+    {"action": "Send", "tok": ["K", 1], "outcome": "posted-lost"},
+    {"action": "Flip", "members": "more"},
+    {"action": "ReadMembers", "owners": false, "held": 0},
+    {"action": "Forget", "tok": ["K", 1]},
+    {"action": "Ask", "tok": ["K", 1], "outcome": "held back"}
+  ],
+  "end": {"kind": "violation"}
+}

@@ -459,7 +459,9 @@ impl Marmot {
             Ok(Some(LocalSendStatus::EngineOwned | LocalSendStatus::Completed(_))) => {}
             Ok(Some(LocalSendStatus::Rejected)) => return Err(SendFailed::Rejected),
             // Queued, or not to be read for a moment: MDK has it, and goes on with it.
-            Ok(Some(LocalSendStatus::Queued) | None) | Err(_) => return Err(SendFailed::Pending),
+            Ok(Some(LocalSendStatus::Queued) | None) | Err(_) => {
+                return Err(SendFailed::Pending(taken));
+            }
         }
         if let Some(Fault::LoseReply) = fault {
             return Err(SendFailed::Unknown);
@@ -902,7 +904,7 @@ pub enum Live {
 }
 
 /// What a failed send means.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SendFailed {
     /// MDK did not take it, and may later: it is tried again.
     Busy,
@@ -918,8 +920,11 @@ pub enum SendFailed {
     /// from now on, so it is tried again under a new one.
     Rejected,
     /// MDK keeps it under its token, queued, and its engine has not taken it yet: it is tried
-    /// again soon under the same token, which MDK answers from what it keeps.
-    Pending,
+    /// again soon under the same token, which MDK answers from what it keeps. MDK named the event
+    /// it will be when it took it, which the core keeps: should someone join the chat meanwhile,
+    /// the send is not handed to MDK again, and MDK says no event while its engine has it
+    /// ([`Outcome::Taken`]).
+    Pending(EventKey),
     /// It was an edit, and MDK no longer has the event it edits, nor the token that event went
     /// under: the group's messages disappeared since it went. MDK did not take this edit. A
     /// later version of an item then goes out as a new first event, and the agent's words as a

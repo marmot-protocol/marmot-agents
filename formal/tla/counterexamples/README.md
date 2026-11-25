@@ -144,13 +144,17 @@ run left), `Replace`, `StartServices`, `Commit`, `Tag`,
 
 [`ActivityHoldBack`](../ActivityHoldBack.md)'s files start `hold-`. The steps: `Emit(item, shown)` (`shown`:
 queued, not held back), `Flip(members)`, `ReadMembers(owners)`, `Send(tok, outcome)` with the outcome `sent`,
-`pending`, `posted-lost`, `kept-lost`, `busy`, `held back` or `refused` (MDK refused the token as bound to
-another submission), and `MdkPosts(tok, members)`. A token is an item
-and a version.
+`pending`, `posted-lost`, `kept-lost`, `busy`, `held back`, `not kept`, `lost` (told as perhaps not delivered),
+`refused` (MDK refused the token as bound to another submission), and, in the code before #194, `asked` and
+`taken as new`; `Ask(tok, outcome)`, MDK asked what became of a send, with the outcome `went`, `queued`, `lost`,
+`held back` or `not kept`; `MdkPosts(tok, members)`; and `Forget(tok)`, MDK letting go of a token whose send it
+posted. A token is an item and a version.
 
 | File | Breaks | What it shows |
 | --- | --- | --- |
 | [`hold-settled-twice`](hold-settled-twice.json) | H1 | Found in the core, and fixed on 2026-11-24: MDK posts the tool's closing version, which settles `r1`, and the answer is lost; someone joins; the core holds the version back and settles `r1` by the turn too. Now the defect `HoldAttempted` |
 | [`hold-first-event-twice`](hold-first-event-twice.json) | H2 | The same defect: the tool's first version is posted and its answer lost, held back, and once the chat is the owner's again the tool's next version goes as a first event too |
 | [`hold-retry-changed`](hold-retry-changed.json) | H1 | Found in review, and fixed on 2026-11-24: MDK posts the tool's closing version, handed with its native message, and the answer is lost; someone joins; the core tries it again without the native message, MDK refuses the token, and the core's notice settles `r1` again. Now the defect `RetryChanged` |
+| [`hold-handed-again`](hold-handed-again.json) | H4 | Found in review, and fixed on 2026-11-25 (#194): the tool goes to MDK in the owner's chat and the answer is lost; someone joins; the core asks MDK whether it keeps the token, MDK lets go of it, and the core hands the tool again, which MDK takes as new and posts to the chat as it is now. Now the defect `HandAgain` |
+| [`hold-forgot-held`](hold-forgot-held.json) | H5 | Found in review, and fixed on 2026-11-25 (#182): the tool goes to MDK in the owner's chat and the answer is lost; MDK lets go of its token; someone joins; asked, MDK has no such token, and the core holds the tool back as one MDK never took, where D-109 tells the chat it may not have been delivered. Now the defect `ForgotHeld` |
 | [`hold-kept-posted-later`](hold-kept-posted-later.json) | H4 | The limit, accepted for the pilot ([D-148](../../../docs/decisions.md#d-148-for-the-pilot-a-send-of-the-full-activity-that-mdk-keeps-and-posts-after-someone-joins-is-an-accepted-limit)): MDK keeps a send of the tool handed while the chat was the owner's, someone joins, and MDK posts it to them |

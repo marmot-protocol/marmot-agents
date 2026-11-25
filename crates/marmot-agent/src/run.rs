@@ -31,7 +31,7 @@ use crate::chat_folder::FolderRule;
 use crate::config::Config;
 use crate::conversation::{Act, Conversation, Saved, Sending};
 use crate::files::Folders;
-use crate::keys::GroupKey;
+use crate::keys::{EventKey, GroupKey};
 use crate::marmot::{
     FileFailed, Incoming, Live, Marmot, Message, NotNow, Outcome, SendFailed, Side, Subscribed,
 };
@@ -1251,30 +1251,56 @@ impl<D: Driver, M: Side> Core<D, M> {
             let Some((token, what)) = self.conversation.next_send(group) else {
                 break;
             };
+            let key = match &what {
+                Sending::Item { key, .. } | Sending::Words { key, .. } => key.clone(),
+            };
             // A send MDK was handed otherwise than the chat is sent now: the agent's full
-            // activity, or an item with its native message or without (D-136). It goes on as far
-            // as MDK has it, as MDK was handed it, which posts nothing new and which MDK takes for
-            // the same send. Else the full activity is held back now, and anything else goes as
-            // the chat is sent now. Held back as if it had never gone, it would settle its
-            // requests twice; tried again as the chat is sent now, MDK would refuse its token as
-            // bound to another send (ActivityHoldBack.tla).
-            // One MDK no longer knows may have gone out: the chat is told so, as D-109 says, and
-            // it is not taken for one MDK never took (#182).
+            // activity, or an item with its native message or without (D-136). It is never
+            // handed to MDK again: MDK takes a token it has let go of as a new send, and would
+            // post it to the chat as it is now (#194). MDK is asked what became of it, and it
+            // goes on as MDK has it. One MDK no longer knows may have gone out, and the chat is
+            // told so (D-109, #182). One MDK never took is held back now if it is the full
+            // activity, and else goes as the chat is sent now. Held back as if it had never gone,
+            // it would settle its requests twice; tried again as the chat is sent now, MDK would
+            // refuse its token as bound to another send (ActivityHoldBack.tla).
             if self.conversation.handed_otherwise(&token.send) {
-                let lasts = || self.marmot.lasts(group, &token);
                 match self.marmot.outcome(group, &token) {
-                    Ok(Outcome::Went(_) | Outcome::Taken | Outcome::Queued) => match lasts() {
-                        Ok(true) => {}
-                        Ok(false) => {
-                            self.forgotten(&token.send)?;
+                    Ok(Outcome::Went(event)) => {
+                        self.went(group, &key, event)?;
+                        continue;
+                    }
+                    Ok(Outcome::Taken) => match self.conversation.event_of(&token.send) {
+                        Some(event) => {
+                            self.went(group, &key, event)?;
                             continue;
                         }
-                        Err(NotNow) => {
-                            self.wait_longer(group);
-                            return Ok(());
-                        }
+                        // MDK's answer when it took the send was lost, and MDK names no event
+                        // while its engine has it: only handing it again under its token, as it
+                        // was handed, gives its event, which is safe only while MDK will still
+                        // know the token then (D-152).
+                        None => match self.marmot.lasts(group, &token) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                self.forgotten(&token.send)?;
+                                continue;
+                            }
+                            Err(NotNow) => {
+                                self.wait_longer(group);
+                                return Ok(());
+                            }
+                        },
                     },
-                    Ok(Outcome::Dropped | Outcome::NotTaken) => {
+                    Ok(Outcome::Queued) => {
+                        self.wait_queued(group);
+                        return Ok(());
+                    }
+                    Ok(Outcome::Dropped) => {
+                        if self.dropped_try(group, &token.send)? {
+                            continue;
+                        }
+                        return Ok(());
+                    }
+                    Ok(Outcome::NotTaken) => {
                         self.conversation.not_kept(&token.send);
                         self.save()?;
                         continue;
@@ -1297,21 +1323,13 @@ impl<D: Driver, M: Side> Core<D, M> {
                 return Ok(());
             }
             *made += 1;
-            let key = match &what {
-                Sending::Item { key, .. } | Sending::Words { key, .. } => key.clone(),
-            };
             // Saved before MDK has it, so the token MDK keeps it under is on disk first.
             if self.conversation.attempting(&token.send, unix_now()) && !self.bug_save_after_send()
             {
                 self.save()?;
             }
             match self.marmot.send(group, &what, &token).await {
-                Ok(event) => {
-                    self.retry.remove(group);
-                    self.queued.remove(group);
-                    self.conversation.sent(&key, event);
-                    self.save()?;
-                }
+                Ok(event) => self.went(group, &key, event)?,
                 Err(failed) => match self.bug_new_token(&token.send, failed) {
                     SendFailed::Refused { gone } => self.give_up(&token.send, gone)?,
                     SendFailed::FirstGone => {
@@ -1326,23 +1344,18 @@ impl<D: Driver, M: Side> Core<D, M> {
                     }
                     SendFailed::Forgotten => self.forgotten(&token.send)?,
                     SendFailed::Rejected => {
-                        // Nothing went: the next try is under a new token, saved first. The last
-                        // try is saved with the give-up and what stands in for it, in one write.
-                        let tries = self.conversation.rejected(&token.send);
-                        if tries >= self.rejected_tries {
-                            self.give_up(&token.send, false)?;
+                        if self.dropped_try(group, &token.send)? {
                             continue;
                         }
-                        self.save()?;
-                        eprintln!(
-                            "marmot-agent: a send was dropped by MDK; it will be tried again"
-                        );
-                        self.wait_longer(group);
                         return Ok(());
                     }
                     // MDK has it queued: asked after again soon, under the same token, and the
-                    // core goes on meanwhile.
-                    SendFailed::Pending => {
+                    // core goes on meanwhile. The event MDK named is kept, should the send be
+                    // asked after without being handed to MDK again.
+                    SendFailed::Pending(event) => {
+                        if self.conversation.took(&token.send, event) {
+                            self.save()?;
+                        }
                         self.wait_queued(group);
                         return Ok(());
                     }
@@ -1369,6 +1382,30 @@ impl<D: Driver, M: Side> Core<D, M> {
         eprintln!("marmot-agent: a send was refused; the chat is told");
         self.conversation.refused(token, gone);
         self.save()
+    }
+
+    /// The oldest send queued for `group`, of the item named `key`, went out as `event`.
+    fn went(&mut self, group: &GroupKey, key: &str, event: EventKey) -> Result<(), Unsaved> {
+        self.retry.remove(group);
+        self.queued.remove(group);
+        self.conversation.sent(key, event);
+        self.save()
+    }
+
+    /// MDK took the send named `token` and dropped it before it went out: nothing went, and the
+    /// next try is under a new token, saved first, after a wait. The last try is saved with the
+    /// give-up and what stands in for it, in one write. Whether the group's sends go on now, as
+    /// the send was given up.
+    fn dropped_try(&mut self, group: &GroupKey, token: &str) -> Result<bool, Unsaved> {
+        let tries = self.conversation.rejected(token);
+        if tries >= self.rejected_tries {
+            self.give_up(token, false)?;
+            return Ok(true);
+        }
+        self.save()?;
+        eprintln!("marmot-agent: a send was dropped by MDK; it will be tried again");
+        self.wait_longer(group);
+        Ok(false)
     }
 
     /// The send named `token` is given up without knowing whether it went out, as MDK no longer

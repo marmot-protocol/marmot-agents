@@ -645,19 +645,19 @@ fn save_conversation(store: &Store, kept: Kept, talk: &Conversation) {
         .unwrap();
 }
 
-// A send MDK was handed while the chat was the owner's, and still keeps, is tried again as MDK was
-// handed it, its native message too, after someone joins the chat: MDK binds its token to what it
-// was handed, and refuses the token for anything else. Tried again without the native message, as
-// the chat is sent now, it was refused and given up, and a notice settled again what MDK still
-// posted (D-136, H1 of ActivityHoldBack.tla).
+// A send MDK was handed while the chat was the owner's, and still keeps, is not handed to MDK again
+// after someone joins the chat: its outcome is learnt by asking MDK only. Handed again, it could go
+// out as new, to the chat as it is now, were MDK to let go of its token in between (#194); and
+// tried again as the chat is sent now, without its native message, MDK would refuse its token as
+// bound to another submission, and a notice would settle again what MDK still posted (D-136, H1 of
+// ActivityHoldBack.tla). It goes on to the core's record as MDK was handed it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_send_mdk_keeps_is_tried_again_as_it_was_handed_after_someone_joins() {
+async fn a_send_mdk_keeps_is_not_handed_to_it_again_after_someone_joins() {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     world.runtime.start().await.unwrap();
     let (driver, events, seen) = stub(false);
     let core = world.start(driver);
     let (chat, id) = a_chat(&world, &seen).await;
-    let third = world.someone_else().await;
     events
         .send(Emitted {
             event: event("t", State::Running, turn()),
@@ -689,17 +689,9 @@ async fn a_send_mdk_keeps_is_tried_again_as_it_was_handed_after_someone_joins() 
         .marmot
         .faults
         .push(Fault::Held(Duration::from_secs(20)));
-    let native = marmot_agent_events::Native {
-        kind: "item/completed".into(),
-        payload: serde_json::value::RawValue::from_string(r#"{"command":"ls"}"#.into()).unwrap(),
-    };
-    let header = event("k", State::Done, turn()).header().clone();
-    let tool: Body =
-        serde_json::from_str(r#"{"type":"tool","body":{"kind":"command","name":"shell"}}"#)
-            .expect("a tool");
     events
         .send(Emitted {
-            event: AgentEvent::new(header, tool, Some(native)).unwrap(),
+            event: a_tool(),
             chat: Some(id.clone()),
             prompts: Vec::new(),
             settles: vec![marmot_agent_driver::RequestId(taken)],
@@ -711,16 +703,11 @@ async fn a_send_mdk_keeps_is_tried_again_as_it_was_handed_after_someone_joins() 
         })
     };
     within(20, || tried(state()).then_some(())).await;
-    let group = GroupKey(chat.hex.clone());
-    world
-        .runtime
-        .invite_members(&world.person, &chat.group, std::slice::from_ref(&third))
-        .await
-        .unwrap();
-    within(15, || {
-        matches!(world.marmot.two_people(&group), Ok(None)).then_some(())
-    })
-    .await;
+    someone_joins(&world, &chat).await;
+    // Were the tool handed to MDK again, this would meet it, and it would be given up.
+    world.marmot.faults.push(Fault::Refuse(
+        marmot_app::AppError::InvalidAppMessagePayload("handed again".into()),
+    ));
 
     // MDK posts it once it lets it go, and the core takes the event it made.
     let queued = || (state()["conversation"]["outbox"].as_array()).map(Vec::len);
@@ -738,6 +725,7 @@ async fn a_send_mdk_keeps_is_tried_again_as_it_was_handed_after_someone_joins() 
         (chat.items().iter()).all(|(_, r)| refused(&r.item.event).is_none()),
         "nothing was given up"
     );
+    assert!(!world.marmot.faults.is_empty(), "not handed to MDK again");
     core.stop().await;
     world.runtime.shutdown().await;
 }

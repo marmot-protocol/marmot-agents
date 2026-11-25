@@ -303,7 +303,7 @@ impl World {
     ) -> Result<EventKey, marmot_agent::marmot::SendFailed> {
         for _ in 0..3000 {
             match self.marmot.send(group, what, token).await {
-                Err(marmot_agent::marmot::SendFailed::Pending) => {
+                Err(marmot_agent::marmot::SendFailed::Pending(_)) => {
                     tokio::time::sleep(Duration::from_millis(10)).await
                 }
                 done => return done,
