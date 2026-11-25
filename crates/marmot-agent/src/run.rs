@@ -1298,6 +1298,13 @@ impl<D: Driver, M: Side> Core<D, M> {
                         }
                         return Ok(());
                     }
+                    // A send whose event the core saved was taken by MDK: MDK having no record of
+                    // its token means it let go of it since, as under a disappearing time made
+                    // longer after, and it may have gone out (D-109).
+                    Ok(Outcome::NotTaken) if self.conversation.event_of(&token.send).is_some() => {
+                        self.forgotten(&token.send)?;
+                        continue;
+                    }
                     Ok(Outcome::NotTaken) => {
                         self.conversation.not_kept(&token.send);
                         self.save()?;

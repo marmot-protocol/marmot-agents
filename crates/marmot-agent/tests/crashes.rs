@@ -793,6 +793,57 @@ async fn a_send_mdk_no_longer_knows_is_told_as_not_known_after_someone_joins() {
     world.runtime.shutdown().await;
 }
 
+// A send of the agent's full activity whose event the core saved when MDK took it, and whose token
+// MDK no longer knows, was taken by MDK and let go of since, as under a disappearing time that was
+// lengthened after: it may have gone out. After someone joins the chat, the chat is told so, as
+// D-109 says, however long the group's messages last now: it is not taken for a send MDK never
+// took and held back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_whose_event_was_saved_is_told_as_not_known_when_mdk_no_longer_knows_it() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, _events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, id) = a_chat(&world, &seen).await;
+    core.stop().await;
+
+    // As the core left it, had MDK taken the tool a moment ago and named its event, which the core
+    // saved, and let go of it since. MDK has no record of it now.
+    let group = GroupKey(chat.hex.clone());
+    let store = Store::new(world.state.path());
+    let kept = store.load().unwrap();
+    let mut talk = conversation_of(&world, &kept, &group);
+    talk.emitted(Emitted {
+        event: a_tool(),
+        chat: Some(id),
+        prompts: Vec::new(),
+        settles: Vec::new(),
+    });
+    let (token, _) = talk.next_send(&group).unwrap();
+    talk.attempting(&token.send, unix_now());
+    talk.took(&token.send, EventKey("ab".repeat(32)));
+    save_conversation(&store, kept, &talk);
+    someone_joins(&world, &chat).await;
+
+    let (driver, _events, _) = stub(false);
+    let core = world.start(driver);
+    let told = within(30, || {
+        (chat.items().into_iter())
+            .map(|(_, r)| r.item.event)
+            .find(|e| matches!(e.body(), Body::Notice(_)))
+    })
+    .await;
+    assert!(
+        told.header().text.contains("may not have been delivered"),
+        "told as not known: {}",
+        told.header().text
+    );
+    nothing_queued(&world).await;
+    assert!(versions(&chat, "k").is_empty(), "the tool is not sent");
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
 // A send an older core queued and handed to MDK, which noted no form for it (`bare`), was handed
 // over in full: the older core sent the native message by who was in the chat at each try. After
 // someone joins the chat, before the newer core starts, it is not tried again changed, without

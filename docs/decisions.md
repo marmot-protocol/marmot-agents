@@ -3265,7 +3265,9 @@ to MDK again. The core learns what became of it by asking MDK (`local_send_statu
   first try, may have gone out. The chat is told so with the `failed` notice of
   [D-109](#d-109-how-the-cores-sends-survive-a-crash-as-built), "Something the agent sent may not have been
   delivered to the chat.", which settles what the send settled; it is no longer held back as a send MDK never took
-  (issue 182).
+  (issue 182). So is one whose event the core kept, whose token MDK no longer knows, however long the group's
+  messages last now: MDK took it, so it let go of it since, as when the group's messages were made to last longer
+  after it went (found in review, 2026-11-25).
 - **A send an older core handed to MDK**, whose state file noted no form for it, is asked after the same way
   whoever is in the chat now, and is never handed to MDK again: the older core may have left its native message
   out, and MDK would refuse it in another form, settling what it settled a second time (issue 181). Where MDK has
