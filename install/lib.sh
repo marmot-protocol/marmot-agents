@@ -454,19 +454,25 @@ change_put_back() {
         129 | 130 | 143) why="the install was stopped" again="Run this again" ;;
         *) why="putting our plugin into your $HARNESS_TITLE failed (above)" again="Run this again once what failed is fixed" ;;
     esac
-    if put_back_change; then
-        rm -f "$MA_CHANGE"
-        drop_copies "$own"
-        printf 'error: %s\n' "$why, so this put $what back as they were$took${copies:+; the copies are $copies}. \
-$again, or go back to today's connector (docs/move.md)" >&2
-    elif [ -n "$how" ]; then
-        printf 'error: %s\n' "$why, and putting $what back failed too: copy $how yourself (docs/move.md). \
+    if ! put_back_change; then
+        if [ -n "$how" ]; then
+            printf 'error: %s\n' "$why, and putting $what back failed too: copy $how yourself (docs/move.md). \
 $again after, and it puts back the same copies should it fail" >&2
-        return 1
-    else
-        printf 'error: %s\n' "$why, and putting $what back as they were failed too (above). $again" >&2
+        else
+            printf 'error: %s\n' "$why, and putting $what back as they were failed too (above). $again" >&2
+        fi
         return 1
     fi
+    # The record kept, with every copy it names, puts the same copies back again: the replay stops here
+    # (upgrade_put_back_changes), and the upgrade is kept with it.
+    if ! rm -f "$MA_CHANGE"; then
+        printf 'error: %s\n' "$why, so this put $what back as they were$took, but removing $MA_CHANGE, which \
+names the copies, failed (above). $again, and it puts back the same copies should it fail" >&2
+        return 1
+    fi
+    drop_copies "$own"
+    printf 'error: %s\n' "$why, so this put $what back as they were$took${copies:+; the copies are $copies}. \
+$again, or go back to today's connector (docs/move.md)" >&2
     return 0
 }
 

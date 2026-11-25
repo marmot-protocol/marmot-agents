@@ -2790,6 +2790,39 @@ class PutBack(unittest.TestCase):
                 self.assertEqual(log.read_text().split() if log.exists() else [], expected, ran.stderr)
                 self.assertEqual([r.exists() for r in records], [bool(failing)] * 2, ran.stderr)
 
+    def test_a_record_of_this_runs_change_that_cannot_be_removed_keeps_the_upgrade(self):
+        """A run that fails puts its own plugin change back, and then cannot remove the record of it: the
+        record stays, with the copy of our plugin it names, the replay stops before the changes listed
+        before it, and the upgrade's record is kept, for the next run to put the same copies back. Before,
+        the copy went and the replay went on, retiring the upgrade with the record naming a copy gone."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            data = tmp / "data"
+            upgrade = data / "upgrade"
+            upgrade.mkdir(parents=True)
+            (upgrade / "list").write_text("")
+            records = [tmp / name / "plugin-change" for name in ("first", "second")]
+            copy = tmp / "second" / "backups" / "marmot.copy"
+            copy.mkdir(parents=True)
+            records[0].parent.mkdir()
+            records[0].write_text("")
+            records[1].write_text(f"own\t{tmp / 'plugin'}\t{copy}\n")
+            (upgrade / "plugin-changes").write_text("".join(f"{r}\n" for r in records))
+            log = tmp / "put-back"
+            ran = self.lib(
+                'put_back_change() { basename "$(dirname "${1:-$MA_CHANGE}")" >>"$LOG"; }\n'
+                'image_put_back_from() { return 0; }\n'
+                'rm() { if [ "$#" -eq 2 ] && [ "$2" = "$MA_CHANGE" ]; then echo "rm: cannot remove" >&2; return 1; fi\n'
+                '    command rm "$@"; }\n'
+                'HARNESS_TITLE=Hermes MA_UPGRADING=1 MA_CHANGING=1 MA_PREPARED=0 MA_WORK="" MA_STAGED=0\n'
+                'finish 1',
+                MA_DATA=str(data), MA_UPGRADE=str(upgrade), MA_CORE=str(tmp / "core"), MA_LIB=str(tmp / "lib"),
+                MA_CHANGE=str(records[1]), LOG=str(log))
+            self.assertEqual(log.read_text().split(), ["second"], ran.stderr)
+            self.assertEqual([r.exists() for r in records], [True, True], ran.stderr)
+            self.assertTrue(copy.exists(), ran.stderr)
+            self.assertTrue((upgrade / "plugin-changes").exists(), ran.stderr)
+
     def test_a_plugin_change_that_cannot_go_back_in_place_keeps_the_upgrade(self):
         """A run stopped once it had moved its plugin change into the upgrade's record puts the change
         back in its place as it ends. When it cannot, the upgrade's record is kept, the change in it,
