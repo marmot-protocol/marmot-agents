@@ -192,8 +192,9 @@ pub struct Marmot {
 #[derive(Clone, Default)]
 pub struct Faults {
     next: Arc<Mutex<VecDeque<Fault>>>,
-    /// The tokens of sends MDK keeps queued ([`Fault::Held`]), and until when.
-    held: Arc<Mutex<HashMap<String, std::time::Instant>>>,
+    /// The tokens of sends MDK keeps queued ([`Fault::Held`], [`Fault::Owned`]), until when, and
+    /// until when its engine has them after that, naming no event ([`Fault::Owned`]).
+    held: Arc<Mutex<HashMap<String, (std::time::Instant, std::time::Instant)>>>,
 }
 
 /// What a send meets.
@@ -219,6 +220,15 @@ pub enum Fault {
     /// MDK takes the send and keeps it queued this long before its engine takes it, as when the
     /// engine is held up: until then MDK says it is queued.
     Held(Duration),
+    /// MDK takes the send and keeps it queued for `queued`, and then says for `owned` that its
+    /// engine has it without naming its event, as it says for good of a send whose publish
+    /// failed once its engine took it. After that, MDK says what it says.
+    Owned {
+        /// How long MDK says it is queued, from its first try.
+        queued: Duration,
+        /// How long MDK then says its engine has it.
+        owned: Duration,
+    },
 }
 
 impl Faults {
@@ -246,18 +256,27 @@ impl Faults {
         })
     }
 
-    /// Keeps the send under `token` queued for `long`, from its first try.
-    fn hold(&self, token: &str, long: Duration) {
+    /// Keeps the send under `token` queued for `queued`, from its first try, and then owned by
+    /// MDK's engine, naming no event, for `owned`.
+    fn hold(&self, token: &str, queued: Duration, owned: Duration) {
         let mut held = self.held.lock().expect("never poisoned");
-        let until = std::time::Instant::now() + long;
-        held.entry(token.to_string()).or_insert(until);
+        let until = std::time::Instant::now() + queued;
+        held.entry(token.to_string())
+            .or_insert((until, until + owned));
     }
 
-    /// Whether the send under `token` is kept queued now.
-    fn held(&self, token: &str) -> bool {
+    /// What MDK says of the send under `token` now, if a fault decides it.
+    fn held(&self, token: &str) -> Option<LocalSendStatus> {
         let held = self.held.lock().expect("never poisoned");
-        held.get(token)
-            .is_some_and(|until| *until > std::time::Instant::now())
+        let (queued, owned) = held.get(token)?;
+        let now = std::time::Instant::now();
+        if *queued > now {
+            Some(LocalSendStatus::Queued)
+        } else if *owned > now {
+            Some(LocalSendStatus::EngineOwned)
+        } else {
+            None
+        }
     }
 
     /// The oldest fault `which` picks.
@@ -419,7 +438,8 @@ impl Marmot {
         match fault {
             Some(Fault::Refuse(error)) => return Err(send_failed(&error)),
             Some(Fault::Reject) => return Err(SendFailed::Rejected),
-            Some(Fault::Held(long)) => self.faults.hold(&token.mdk, long),
+            Some(Fault::Held(long)) => self.faults.hold(&token.mdk, long, Duration::ZERO),
+            Some(Fault::Owned { queued, owned }) => self.faults.hold(&token.mdk, queued, owned),
             _ => {}
         }
         if let Some(tried) = token.tried_at
@@ -573,8 +593,8 @@ impl Marmot {
 
     /// What MDK says became of the send it keeps under `token`.
     fn status(&self, id: &GroupId, token: &str) -> Result<Option<LocalSendStatus>, AppError> {
-        if self.faults.held(token) {
-            return Ok(Some(LocalSendStatus::Queued));
+        if let Some(status) = self.faults.held(token) {
+            return Ok(Some(status));
         }
         (self.runtime).local_send_status(&self.label, id, token)
     }

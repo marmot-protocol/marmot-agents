@@ -684,11 +684,13 @@ async fn a_send_mdk_keeps_is_not_handed_to_it_again_after_someone_joins() {
     .await;
 
     // The tool, done, with its native message, settling the request: MDK takes it, and keeps it
-    // queued while someone is added to the chat.
-    world
-        .marmot
-        .faults
-        .push(Fault::Held(Duration::from_secs(20)));
+    // queued while someone is added to the chat. Then MDK's engine has it, and MDK names no event
+    // for it from then on, as for a send whose publish failed: the core goes on with the event
+    // MDK named when it took it, which it kept.
+    world.marmot.faults.push(Fault::Owned {
+        queued: Duration::from_secs(20),
+        owned: Duration::from_secs(3600),
+    });
     events
         .send(Emitted {
             event: a_tool(),
@@ -709,7 +711,7 @@ async fn a_send_mdk_keeps_is_not_handed_to_it_again_after_someone_joins() {
         marmot_app::AppError::InvalidAppMessagePayload("handed again".into()),
     ));
 
-    // MDK posts it once it lets it go, and the core takes the event it made.
+    // The core takes the event MDK named when it took it, handing nothing again.
     let queued = || (state()["conversation"]["outbox"].as_array()).map(Vec::len);
     within(40, || (queued() == Some(0)).then_some(())).await;
     within(10, || (!versions(&chat, "k").is_empty()).then_some(())).await;
