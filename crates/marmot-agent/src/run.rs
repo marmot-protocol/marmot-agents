@@ -701,6 +701,10 @@ impl<D: Driver, M: Side> Core<D, M> {
                 let uploads = &mut self.files.uploading;
                 let mut live = pin!(self.marmot.next(&mut events));
                 let mut stop = stop.as_mut();
+                // A wait that used up tokio's budget for the task leaves the waits after it none
+                // to look with, until the task is polled again: then the next one looks first, so
+                // a driver that always has more to read, and gives nothing, holds up no other.
+                let mut first = first;
                 std::future::poll_fn(|cx| {
                     for wait in (0..WAITS).map(|i| (first + i) % WAITS) {
                         let woke = match wait {
@@ -718,6 +722,9 @@ impl<D: Driver, M: Side> Core<D, M> {
                         if woke.is_ready() {
                             return woke;
                         }
+                    }
+                    if !tokio::task::coop::has_budget_remaining() {
+                        first = (first + 1) % WAITS;
                     }
                     Poll::Pending
                 })
@@ -1044,16 +1051,13 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// waiting: its next event is asked for and dropped as soon as it is not ready, which the
     /// trait allows (D-058). One output given meanwhile is kept for the loop, which takes it in
     /// the driver's turn, and no more is asked for until it has. A connector whose connection
-    /// went, or that the core gave up, has ended once its socket says so. Tokio's budget for a
-    /// task, which can make a channel or a socket with something ready look empty once the core
-    /// has read a lot in one go, is set aside for the look: the `no_effect` net takes "nothing
-    /// ready" to mean that nothing more has reached the driver.
+    /// went, or that the core gave up, has ended once its socket says so.
     async fn driver_ready(&mut self) -> bool {
         if self.ended || self.early.is_some() {
             return true;
         }
         let polled = {
-            let mut next = pin!(tokio::task::unconstrained(self.driver.next_event()));
+            let mut next = pin!(self.driver.next_event());
             std::future::poll_fn(|cx| Poll::Ready(next.as_mut().poll(cx))).await
         };
         match polled {
@@ -1095,13 +1099,17 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// whose deadline came before it reached the driver is settled now, and the rest wait while
     /// the core reads on, one output at a time in the driver's turn, looking again after each.
     /// What reaches the driver after a deadline does not hold it up, so a driver that is never
-    /// idle holds up no deadline (L1).
+    /// idle holds up no deadline (L1). Tokio's budget for a task can make a channel or a socket
+    /// with something ready look empty once the core has done a lot in one go: a look cut short
+    /// by it cannot tell, and settles nothing, until the next tick or output looks again.
     async fn settle_overdue(&mut self) -> Result<(), Unsaved> {
         let now = self.clock();
         if !self.conversation.is_overdue(now) {
             return Ok(());
         }
-        self.driver_ready().await;
+        if !self.driver_ready().await && !tokio::task::coop::has_budget_remaining() {
+            return Ok(());
+        }
         let by = match &self.early {
             Some((_, arrived)) => now.min(arrived.saturating_sub(1)),
             None => now,
@@ -3316,6 +3324,138 @@ mod tests {
                 "{before} before: {ran:?}"
             );
             drop(outputs);
+        }
+    }
+
+    /// A driver that takes every control at once, and, once a control names a chat, reads lines
+    /// that give nothing, one at a time, for as long as `noisy` says: a connector that keeps its
+    /// socket readable. Each prompt's text goes to `seen`.
+    struct Noisy {
+        chat: Option<marmot_agent_driver::ChatId>,
+        noisy: Arc<AtomicBool>,
+        lines: tokio::io::Lines<tokio::io::BufReader<tokio::io::Repeat>>,
+        seen: mpsc::UnboundedSender<String>,
+    }
+
+    impl Driver for Noisy {
+        fn harness(&self) -> marmot_agent_driver::Harness {
+            marmot_agent_driver::Harness {
+                name: "noisy".into(),
+                version: None,
+            }
+        }
+
+        fn capabilities(&self) -> marmot_agent_driver::Capabilities {
+            marmot_agent_driver::Capabilities {
+                interrupt: false,
+                mid_turn: marmot_agent_driver::MidTurn::Queue,
+                sessions: marmot_agent_driver::Sessions::Core,
+                resume: false,
+                approvals: false,
+                files_in: marmot_agent_driver::FilesIn::None,
+                approval_commands: Vec::new(),
+                subagents: false,
+                stop_subagent: false,
+            }
+        }
+
+        async fn prompt(&mut self, prompt: marmot_agent_driver::Prompt) -> Result<(), Refusal> {
+            let _ = self.seen.send(prompt.text);
+            Ok(())
+        }
+
+        async fn answer(&mut self, _answer: marmot_agent_driver::Answer) -> Result<(), Refusal> {
+            unreachable!("no answer")
+        }
+
+        async fn control(&mut self, control: marmot_agent_driver::Control) -> Result<(), Refusal> {
+            if let marmot_agent_driver::Action::NewSession { chat, .. } = control.action {
+                self.chat = Some(chat.id);
+                let _ = self.seen.send("/new".into());
+            }
+            Ok(())
+        }
+
+        async fn next_event(&mut self) -> Option<Output> {
+            while self.chat.is_some() && self.noisy.load(SeqCst) {
+                let _ = self.lines.next_line().await;
+            }
+            std::future::pending().await
+        }
+    }
+
+    // Review of #198: the `no_effect` net looked whether the driver had anything ready with tokio's
+    // budget set aside, so a connector that kept its socket readable with lines that give nothing
+    // held that one look, and with it the core: its ticks, what MDK has and a stop all waited. Here
+    // a control waits past its deadline while the driver reads such lines without end. The core
+    // still hears the owner, and, once the driver goes quiet, the net settles the control, and the
+    // core stops. The test runs on a thread of its own, so a core held up fails it and does not
+    // hang it.
+    #[test]
+    fn a_driver_reading_lines_that_give_nothing_holds_up_no_tick_nor_stop() {
+        let (done, finished) = std::sync::mpsc::channel();
+        let test = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .start_paused(true)
+                .build()
+                .unwrap();
+            for before in 0..2 * WAITS {
+                runtime.block_on(async {
+                    let noisy = Arc::new(AtomicBool::new(true));
+                    let (seen_out, mut seen) = mpsc::unbounded_channel();
+                    let lines = tokio::io::BufReader::with_capacity(1, tokio::io::repeat(b'\n'));
+                    let driver = Noisy {
+                        chat: None,
+                        noisy: noisy.clone(),
+                        lines: tokio::io::AsyncBufReadExt::lines(lines),
+                        seen: seen_out,
+                    };
+                    let desk = OnDesk::start(driver);
+                    for n in 0..before {
+                        desk.side.say(&format!("hi {n}"));
+                        assert_eq!(seen.recv().await.unwrap(), format!("hi {n}"));
+                    }
+                    desk.side.say("/new");
+                    assert_eq!(seen.recv().await.unwrap(), "/new");
+                    // The clock moves on only when told: the core always has more to read.
+                    for _ in 0..130 {
+                        tokio::time::advance(Duration::from_secs(1)).await;
+                    }
+                    desk.side.say("still there?");
+                    assert_eq!(seen.recv().await.unwrap(), "still there?");
+                    noisy.store(false, SeqCst);
+                    let settled = || {
+                        (desk.side.notices.lock().unwrap().iter())
+                            .any(|n| n.starts_with("The agent took this"))
+                    };
+                    for _ in 0..30 {
+                        if settled() {
+                            break;
+                        }
+                        tokio::time::advance(Duration::from_secs(1)).await;
+                    }
+                    assert!(
+                        settled(),
+                        "the net settles the control once the driver is quiet"
+                    );
+                    // A stop is heard while the driver reads on.
+                    noisy.store(true, SeqCst);
+                    tokio::time::advance(Duration::from_secs(1)).await;
+                    let _ = desk.stop.send(());
+                    desk.running.await.unwrap().unwrap();
+                });
+            }
+            let _ = done.send(());
+        });
+        match finished.recv_timeout(Duration::from_secs(30)) {
+            Ok(()) => test.join().unwrap(),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                std::panic::resume_unwind(test.join().unwrap_err())
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                panic!("the core was held up by a driver reading lines that give nothing")
+            }
         }
     }
 
