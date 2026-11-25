@@ -3266,26 +3266,39 @@ to MDK again. The core learns what became of it by asking MDK (`local_send_statu
   [D-109](#d-109-how-the-cores-sends-survive-a-crash-as-built), "Something the agent sent may not have been
   delivered to the chat.", which settles what the send settled; it is no longer held back as a send MDK never took
   (issue 182).
-- **A send an older core handed to MDK**, whose state file noted no form for it, is taken as handed in full, as
-  it was in the owner's chat, and is asked after the same way whoever is in the chat now: it is never tried again
-  changed, which MDK would refuse, settling what it settled a second time (issue 181).
-- **The one path left.** When the core lost MDK's answer to its first hand-over, which takes a crash between MDK
-  taking the send and the core saving its answer, and MDK's engine has the send but its status names no event yet,
-  only a hand-over gives the event. Then the core hands the send again under its token, as it was handed, while MDK
-  will keep the token for at least another minute, and otherwise tells the chat as above. This is the narrower path
-  of [D-148](#d-148-for-the-pilot-a-send-of-the-full-activity-that-mdk-keeps-and-posts-after-someone-joins-is-an-accepted-limit),
-  left only there, and still accepted under it. Whether to keep it is the owner's choice.
+- **A send an older core handed to MDK**, whose state file noted no form for it, is asked after the same way
+  whoever is in the chat now, and is never handed to MDK again: the older core may have left its native message
+  out, and MDK would refuse it in another form, settling what it settled a second time (issue 181). Where MDK has
+  nothing under its token, it goes as the chat is sent now.
+- **Its engine has it, naming no event.** When the core lost MDK's answer to its first hand-over, which takes a
+  crash between MDK taking the send and the core saving its answer, MDK's status names no event while its engine
+  has the send. The core never tells the chat such a send may not have been delivered while MDK says its engine
+  has it, since MDK still posts it, and the notice would settle what it settled a second time. It asks again, a
+  little later each time up to ten seconds, until MDK names the event, or lets go of the token with the group's
+  messages, when the chat is told as above. The chat's later sends wait for it meanwhile; a stop does not.
+- **The one path left.** Such a send, in the form the core noted it was handed, is handed to MDK again under its
+  token, as it was handed, while MDK will keep the token for at least another minute: that gives its event at
+  once. This is the narrower path of
+  [D-148](#d-148-for-the-pilot-a-send-of-the-full-activity-that-mdk-keeps-and-posts-after-someone-joins-is-an-accepted-limit),
+  left only there, and still accepted under it. Whether to keep it is the owner's choice; without it, such a send
+  is asked after as above.
+- **A send MDK's engine keeps for good**, as one whose publish failed after its engine took it, keeps a status
+  that names no event until MDK lets go of its token. Asked after, it holds up its chat's later sends until then:
+  in a group whose messages never disappear, for good, unless the one path left hands it again. Other chats go
+  on.
 
 The model `ActivityHoldBack` lets MDK forget a token, and catches a second hand-over after someone joins
-([`hold-handed-again`](../formal/tla/counterexamples/hold-handed-again.json)) and a forgotten send held back
-([`hold-forgot-held`](../formal/tla/counterexamples/hold-forgot-held.json)) as defects.
+([`hold-handed-again`](../formal/tla/counterexamples/hold-handed-again.json)), a forgotten send held back
+([`hold-forgot-held`](../formal/tla/counterexamples/hold-forgot-held.json)), and a send MDK's engine has told as
+lost ([`hold-settled-owned`](../formal/tla/counterexamples/hold-settled-owned.json)) as defects.
 
 **Why.** MDK takes a token it has let go of as a new send. Handed again, a send of the owner's chat could reach
 someone who joined since, if the core stalled for longer than its minute's margin between asking and handing
 (issue 194). Asking alone cannot post anything. MDK's status gives no event while it holds a send, but MDK names
 the event when it first takes it, so keeping that answer is enough on every path but the one above, which MDK's
 status naming its event while its engine holds a send would close. A send MDK no longer knows may have gone, and
-D-109 already says how the chat is told of one.
+D-109 already says how the chat is told of one; one MDK's engine has has not been lost, and telling the chat it
+might be settled its requests twice once MDK posted it (found in review, 2026-11-25).
 
 Decided 2026-11-25 by the builder, under the project owner's instruction to decide minor points. What the chat is
 told, and that the one path left stays, follow D-109 and D-148; the owner has not yet seen them.

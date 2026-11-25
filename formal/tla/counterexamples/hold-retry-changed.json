@@ -14,7 +14,7 @@
     {"action": "Flip", "members": "more"},
     {"action": "ReadMembers", "owners": false, "held": 0},
     {"action": "Send", "tok": ["K", 2], "outcome": "refused"},
-    {"action": "Send", "tok": ["N", 1], "outcome": "sent"}
+    {"action": "Send", "tok": ["N", 1], "outcome": "posted-lost"}
   ],
   "end": {"kind": "violation"}
 }

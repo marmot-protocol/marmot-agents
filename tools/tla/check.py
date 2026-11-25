@@ -452,6 +452,15 @@ CASES += [
               "disappearing with it; someone joins; asked, MDK has no such token, and the core "
               "holds the tool back as a send MDK never took, where D-109 tells the chat it may "
               "not have been delivered (H5)."),
+    hold("bug-SettleOwned-H1", HPOSTED, invariant("H1"),
+         {"Bug": '"SettleOwned"', "INVARIANTS": "H1", **SAFETY},
+         counterexample="hold-settled-owned",
+         what="SettleOwned, run.rs flush before the review of 2026-11-25: the tool's closing "
+              "version, which settles r1, goes to MDK in the owner's chat, MDK posts it and the "
+              "answer is lost, and MDK's status names no event for it; someone joins; asked, MDK "
+              "says its engine has it, and, as MDK may let go of the token within the minute, the "
+              "core tells the chat it may not have been delivered, with a notice that settles r1, "
+              "which MDK's post of the tool settled already (H1)."),
     hold("bug-NoMove", HFAIR, TEMPORAL, {"Bug": '"NoMove"', "INVARIANTS": None}),
     hold("bug-HoldNothing", HPOSTED, invariant("H4"),
          {"Bug": '"HoldNothing"', "INVARIANTS": "H4", **SAFETY}),
@@ -463,6 +472,9 @@ CASES += [
     hold_probe("NeverKeptPosted"),
     hold_probe("NeverAskedOtherwise"),
     hold_probe("NeverToldLost"),
+    hold_probe("NeverKeptEvent"),
+    hold_probe("NeverHandedAgainOwned"),
+    hold_probe("NeverOwnedWaited"),
 ]
 
 # The larger bounds (formal/tla/README.md, "Larger bounds"): CoreLifecycle's fair configuration

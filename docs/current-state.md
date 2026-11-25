@@ -75,8 +75,9 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   withdraw such a send or to refuse it ([D-148](decisions.md#d-148-for-the-pilot-a-send-of-the-full-activity-that-mdk-keeps-and-posts-after-someone-joins-is-an-accepted-limit)).
 - Such a send, handed in a form the chat is no longer sent, is never handed to MDK again: the core asks MDK what
   became of it and takes the event MDK named. One MDK no longer knows is told to the chat as perhaps not
-  delivered. Only when the core lost MDK's first answer to a crash and MDK names no event yet does it hand the
-  send again, while MDK keeps the token at least another minute ([D-152](decisions.md#d-152-a-send-mdk-was-handed-in-a-form-its-chat-is-no-longer-sent-is-asked-after-never-handed-again)).
+  delivered; one MDK's engine has, naming no event, is asked after until MDK names it or lets go of the token,
+  and holds up its chat's later sends meanwhile. Only when the core lost MDK's first answer to a crash, and noted
+  the form it handed, does it hand the send again, while MDK keeps the token at least another minute ([D-152](decisions.md#d-152-a-send-mdk-was-handed-in-a-form-its-chat-is-no-longer-sent-is-asked-after-never-handed-again)).
 - Three exceptions to the native payload: a secret question no longer waiting carries none, for the pilot a chat
   without the full activity is sent none ([D-136](decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)), and the core leaves
   it out of an item over 64 KB, then cuts the output. A driver never cuts anything ([D-056](decisions.md#d-056-a-secret-question-carries-a-native-message-only-while-it-is-waiting), [D-026](decisions.md#d-026-an-agent-item-is-at-most-64-kb),

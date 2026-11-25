@@ -30,7 +30,9 @@ cut anywhere, pays most.
    [#182](https://github.com/marmot-protocol/marmot-agents/issues/182)); and review found that the core handed MDK
    again a send it was handed in the owner's chat, which MDK could take as new (issue
    [#194](https://github.com/marmot-protocol/marmot-agents/issues/194)). All three fixed on 2026-11-25; the model now
-   has MDK let go of a token, and the second hand-over and the forgotten send as defects it catches (D-152).
+   has MDK let go of a token, and the second hand-over and the forgotten send as defects it catches (D-152). A
+   further review found a send MDK's engine had, naming no event, told to the chat as lost; fixed, and modelled
+   since, with MDK's status naming no event as a defect it catches.
 3. **The agent's words and the settles they carry** (`conversation.rs` `emitted` for `Body::Message`,
    `settle_by_turn`, `shown_by`, `refused` for words): a second model of the core, which `CoreLifecycle` leaves
    out on purpose. The requests words name move between the words' next new message, the turn's next version and

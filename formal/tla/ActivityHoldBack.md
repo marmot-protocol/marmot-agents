@@ -30,9 +30,9 @@ and version (`{key}@{version}`). `N` names the core's notices of a send it gave 
 | `Flip` | Someone is added to the chat, or leaves it: MDK no longer marks it, or marks it again, a two-person chat of the agent and the owner (`Marmot::two_people`) |
 | `ReadMembers` | `members_now`, which `flush` calls before each send: the core reads who is in the chat (`owners_chat`); in a chat no longer sent everything, `hold_back` takes out of the outbox each send of the full activity (`full_activity_only`), but, since the fix, one MDK was handed (`tried_at`), and settles what it settled by the turn's next version |
 | `Send` | `flush`: the oldest send, its first event filled in (`next_send`), noted as handed to MDK and saved (`attempting`), and handed to MDK under its token (`Marmot::send`); MDK posts it and answers (`sent`), keeps it to post later (`Pending`), posts or keeps it and the answer is lost (`Unknown`), or does not take it (`Busy`); tried again under the same token, MDK answers from what it keeps if it is handed what it was handed first, and refuses anything else as another submission, which the core gives up with a notice settling what the send settled (`give_up`, `refused`). A send whose token MDK let go of is not handed again, and the chat is told it may not have been delivered, by a notice settling what it settled (`SendFailed::Forgotten`, `lost`, D-109) |
-| `Ask` | `flush`, since the fixes of 2026-11-25, for a send MDK was handed otherwise than the chat is sent now (`handed_otherwise`: the full activity, or an item with its native message or without): it is never handed to MDK again. MDK is asked what became of it (`Side::outcome`, MDK's `local_send_status`): the event it posted (`went`, `sent`), or that it keeps it queued; one MDK let go of is told as one that may not have been delivered (`lost`); one MDK never took is held back then if it is the full activity, and else goes as the chat is sent now (`not_kept`) |
+| `Ask` | `flush`, since the fixes of 2026-11-25, for a send MDK was handed otherwise than the chat is sent now (`handed_otherwise`: the full activity, or an item with its native message or without): it is never handed to MDK again. MDK is asked what became of it (`Side::outcome`, MDK's `local_send_status`): the event it posted (`went`, `sent`), or that it keeps it queued; one MDK let go of is told as one that may not have been delivered (`lost`); one MDK never took is held back then if it is the full activity, and else goes as the chat is sent now (`not_kept`). One MDK's engine posted but whose status names no event (`Outcome::Taken`, MDK's `EngineOwned`; `named` false) goes on with the event MDK named in a `Pending` answer, if the core kept it (`Queued::event`); else it is handed again as it was handed while MDK keeps the token (`Core::hand_again`, the one second hand-over left), or, when MDK may let go of the token within the minute, asked after until MDK does (`soon`) |
 | `MdkPosts(t)` | MDK posts a send it kept, as it was handed, to whoever is in the chat then |
-| `Forget(t)` | MDK lets go of the token of a send it posted, before the core learnt what became of it, as it does once the group's messages disappear: the post leaves the chat, and handed the send again, MDK takes it as new. The driver's items only |
+| `Forget(t)` | MDK lets go of the token of a send it posted, before the core learnt what became of it, as it does once the group's messages disappear: the post leaves the chat, and handed the send again, MDK takes it as new. The driver's items only. `Spec` makes MDK let go of a token the core read it may let go of within the minute (`LetsGo`) |
 
 The members are read just before each send, as `flush` does: the model's `Send` needs the last read to be fresh.
 Between that read and MDK taking the send, someone could still join; the model leaves that race out (the core
@@ -47,16 +47,20 @@ cannot close it).
   refuses, and its stand-in could settle its request a second time. Review found it, not the model (issue
   [#181](https://github.com/marmot-protocol/marmot-agents/issues/181)); **fixed** on 2026-11-25, first shown by
   `a_send_an_older_core_handed_over_goes_on_as_mdk_took_it_after_someone_joins` (`tests/crashes.rs`): such a send
-  is taken as handed in full and asked after, never handed again (`handed_otherwise`).
-- **MDK's engine holding a send without naming its event.** MDK names a send's event when it takes it, and the
-  core keeps it (`Queued::event`); MDK's status names it again once its engine has sent it
-  (`mdk_says_what_became_of_a_send_and_whether_its_token_lasts`, `tests/marmot.rs`). Only when the core lost
-  MDK's first answer, to a crash, and MDK's engine has the send but has not finished with it, does the core
-  learn the event by handing the send again, while MDK will keep the token for at least another minute
-  (`Side::lasts`), and otherwise tells the chat it may not have been delivered. The model leaves that path
-  out: its MDK names the event of every send it posted. It is the one path left to the limit D-148 accepts by
-  its narrower path, and its choice is the owner's
-  ([D-152](../../docs/decisions.md#d-152-a-send-mdk-was-handed-in-a-form-its-chat-is-no-longer-sent-is-asked-after-never-handed-again)).
+  is asked after, never handed again (`handed_otherwise`). A second review found that one MDK's engine had,
+  naming no event, was still handed again in full, which MDK refuses if the older core had left its native
+  message out, in a chat whose members never changed; **fixed** the same day, first shown by
+  `a_send_of_unknown_form_is_never_handed_again`: a send whose form was not noted is asked after only
+  (`Conversation::form_known`).
+- **The stall on the one path left.** A send MDK's engine has, naming no event, whose event the core did not
+  keep (it lost MDK's first answer to a crash), is handed again as it was handed while MDK will keep the token
+  for at least another minute (`Side::lasts`,
+  [D-152](../../docs/decisions.md#d-152-a-send-mdk-was-handed-in-a-form-its-chat-is-no-longer-sent-is-asked-after-never-handed-again)).
+  The model makes the ask and the hand-over one step; a stall of more than that minute between them is the
+  narrower path D-148 accepts, which `hold-handed-again` shows for the code before #194. Whether to keep that
+  hand-over is the owner's choice. Nor does the model's MDK say its engine has a send it has not posted yet:
+  the core treats that as a send MDK keeps queued, but for the one hand-over, which MDK answers from what it
+  keeps.
 - **A token MDK lets go of before it posts the send**, and the group's disappearing time changed after a send
   went: MDK forgets a token with the message it made, and the core reads the period as it is now (D-109's
   limit).
@@ -85,6 +89,9 @@ made, once the group's messages disappear, so a token it does not know before th
 | `FairMdk` | MDK eventually posts what it keeps | off: `r1` may never be settled in the chat (`hold-unfair`) |
 | `MdkForgets` | MDK may let go of the token of a send it posted, the post leaving the chat with it | on in both configurations; what the fixes of 2026-11-25 are checked against |
 
+Not a switch: MDK's status may name no event for any send it posted whose answer was not `sent` (`named`), in
+both configurations.
+
 ## Properties
 
 | Id | Property | Form | From |
@@ -103,29 +110,34 @@ are lost (or MDK is busy), and MDK may let go of the token of any send of `T` or
 
 | Case | Configuration | Expected | Distinct states | Counterexample |
 | --- | --- | --- | ---: | --- |
-| `hold-fair` | `ActivityHoldBack.fair.cfg` (MDK may keep a send; H1, H2, H5, L1) | every property holds | 269,437 | |
-| `hold-posted` | `ActivityHoldBack.posted.cfg` (MDK never keeps a send; H1, H2, H4, H5, L1) | every property holds | 17,950 | |
-| `hold-unfair` | fair, without `FairMdk` | L1 fails | 72,757 | |
-| `hold-kept-posted-later` | fair, H4 | H4 fails | 90 | [`hold-kept-posted-later`](counterexamples/hold-kept-posted-later.json) |
-| `hold-bug-HoldAttempted-H1` | posted, the code before the fix, H1 | H1 fails | 588 | [`hold-settled-twice`](counterexamples/hold-settled-twice.json) |
-| `hold-bug-HoldAttempted-H2` | fair, the code before the fix, H2 | H2 fails | 3,549 | [`hold-first-event-twice`](counterexamples/hold-first-event-twice.json) |
-| `hold-bug-RetryChanged-H1` | posted, the code before the second fix, H1 | H1 fails | 1,245 | [`hold-retry-changed`](counterexamples/hold-retry-changed.json) |
-| `hold-bug-HandAgain-H4` | posted, the code before #194, H4 | H4 fails | 802 | [`hold-handed-again`](counterexamples/hold-handed-again.json) |
-| `hold-bug-ForgotHeld-H5` | posted, the code before #182, H5 | H5 fails | 381 | [`hold-forgot-held`](counterexamples/hold-forgot-held.json) |
+| `hold-fair` | `ActivityHoldBack.fair.cfg` (MDK may keep a send; H1, H2, H5, L1) | every property holds | 1,818,041 | |
+| `hold-posted` | `ActivityHoldBack.posted.cfg` (MDK never keeps a send; H1, H2, H4, H5, L1) | every property holds | 30,002 | |
+| `hold-unfair` | fair, without `FairMdk` | L1 fails | 62,968 | |
+| `hold-kept-posted-later` | fair, H4 | H4 fails | 129 | [`hold-kept-posted-later`](counterexamples/hold-kept-posted-later.json) |
+| `hold-bug-HoldAttempted-H1` | posted, the code before the fix, H1 | H1 fails | 898 | [`hold-settled-twice`](counterexamples/hold-settled-twice.json) |
+| `hold-bug-HoldAttempted-H2` | fair, the code before the fix, H2 | H2 fails | 7,706 | [`hold-first-event-twice`](counterexamples/hold-first-event-twice.json) |
+| `hold-bug-RetryChanged-H1` | posted, the code before the second fix, H1 | H1 fails | 1,952 | [`hold-retry-changed`](counterexamples/hold-retry-changed.json) |
+| `hold-bug-HandAgain-H4` | posted, the code before #194, H4 | H4 fails | 1,097 | [`hold-handed-again`](counterexamples/hold-handed-again.json) |
+| `hold-bug-ForgotHeld-H5` | posted, the code before #182, H5 | H5 fails | 508 | [`hold-forgot-held`](counterexamples/hold-forgot-held.json) |
+| `hold-bug-SettleOwned-H1` | posted, the code before the review of 2026-11-25, H1 | H1 fails | 1,924 | [`hold-settled-owned`](counterexamples/hold-settled-owned.json) |
 
-Every case of this model together takes under a minute here.
+Every case of this model together takes about two and a half minutes here, most of it the fair
+configuration.
 
-**Each check catches its bug.** `HoldAttempted`, `RetryChanged`, `HandAgain` and `ForgotHeld`, the code before
-each fix (above); `NoMove`, a send held back whose settles are dropped, not moved to the turn, fails L1 (67,291
-distinct states); `HoldNothing`, no hold-back at all, fails H4 even where MDK never keeps a send (61).
+**Each check catches its bug.** `HoldAttempted`, `RetryChanged`, `HandAgain`, `ForgotHeld` and `SettleOwned`, the
+code before each fix (above); `NoMove`, a send held back whose settles are dropped, not moved to the turn, fails L1 (57,245
+distinct states); `HoldNothing`, no hold-back at all, fails H4 even where MDK never keeps a send (74).
 
 **No empty passes.** On the fair configuration: `NeverHeldBack` (a send of the tool still queued is held back,
 `held`, once an earlier version of the tool went out), `NeverSettledByTurn` and `NeverSettledByTool` (`r1` is
 settled by each), `NeverOwnersAgain` (the tool goes again once the chat is the owner's again), `NeverHeldAtSend` (a
 send MDK was handed and never took is held back when MDK is asked, the fix's path), `NeverKeptPosted` (MDK posts a
 tool it kept), `NeverAskedOtherwise` (the turn's event is learnt by asking MDK, in a chat sent otherwise than MDK
-was handed it, #194's path) and `NeverToldLost` (a send of the tool MDK let go of is told as one that may not have
-been delivered, after someone joined, #182's path). All are reached within 2,100 distinct states.
+was handed it, #194's path), `NeverToldLost` (a send of the tool MDK let go of is told as one that may not have
+been delivered, after someone joined, #182's path), and, for a send MDK's engine has whose status names no event,
+`NeverKeptEvent` (it goes on with the event the core kept), `NeverHandedAgainOwned` (it is handed again while its
+token lasts) and `NeverOwnedWaited` (it is asked after while MDK may let go of its token). All are reached within
+4,100 distinct states.
 
 ## What the model found
 
@@ -180,8 +192,9 @@ the minute the core allowed, as the group's messages disappeared, would post the
 branch), first shown through the real MDK by `a_send_mdk_keeps_is_not_handed_to_it_again_after_someone_joins`
 (`tests/crashes.rs`): such a send is never handed to MDK again; the core asks MDK what became of it
 (`Side::outcome`), and takes the event MDK names, in its status once its engine has sent the send, or as it named
-it when it first took it, which the core now keeps (`Queued::event`). One path is left, and the model leaves it out
-(above): the core lost MDK's first answer to a crash and MDK's engine has the send but names no event yet
+it when it first took it, which the core now keeps (`Queued::event`). One path is left, which the model makes one step
+(above): the core lost MDK's first answer to a crash, MDK's engine has the send but names no event, and MDK will
+keep the token another minute; then the core hands it again as it was handed
 ([D-152](../../docs/decisions.md#d-152-a-send-mdk-was-handed-in-a-form-its-chat-is-no-longer-sent-is-asked-after-never-handed-again)).
 
 **A send MDK let go of was held back as one it never took** (H5, found in review: issue
@@ -193,6 +206,15 @@ been delivered (`hold-forgot-held`, the defect `ForgotHeld`). **Fixed** (2026-11
 `a_send_mdk_no_longer_knows_is_told_as_not_known_after_someone_joins` (`tests/crashes.rs`): MDK's answer tells the
 two apart by the group's disappearing time and the send's first try (`Outcome::Forgotten`), and such a send is told
 as D-109 says (`lost`).
+
+**A send MDK's engine had was told as lost** (H1, found in review, and then modelled). A send whose first
+answer from MDK the core lost, and which MDK's engine has without naming its event, was told to the chat as
+one that may not have been delivered whenever MDK might let go of its token within the minute (`Side::lasts`
+false): in a group whose messages last a minute or less, always. MDK still posted it, and the notice settled its
+requests a second time (`hold-settled-owned`, the defect `SettleOwned`). **Fixed** (2026-11-25, this branch),
+first shown through the real MDK by `a_send_mdks_engine_has_is_not_told_as_lost_while_it_has_it`
+(`tests/crashes.rs`): such a send is asked after until MDK names its event or lets go of its token
+([D-152](../../docs/decisions.md#d-152-a-send-mdk-was-handed-in-a-form-its-chat-is-no-longer-sent-is-asked-after-never-handed-again)).
 
 ## Running
 

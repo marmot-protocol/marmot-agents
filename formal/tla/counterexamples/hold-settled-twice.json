@@ -13,7 +13,7 @@
     {"action": "Send", "tok": ["K", 2], "outcome": "posted-lost"},
     {"action": "Flip", "members": "more"},
     {"action": "ReadMembers", "owners": false, "held": 1},
-    {"action": "Send", "tok": ["T", 2], "outcome": "sent"}
+    {"action": "Send", "tok": ["T", 2], "outcome": "posted-lost"}
   ],
   "end": {"kind": "violation"}
 }
