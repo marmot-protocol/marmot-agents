@@ -113,6 +113,9 @@ cargo run --release -p marmot-agent-sim -- replay path/to/NAME.capsule.json
 It runs the capsule's schedule and says whether it fails the same property at the same step with the same trace, then
 prints the trace. A capsule that puts a bug back needs `--features bugs`.
 
+A failure the nightly run finds is kept in `tests/regressions.rs`, as a schedule written in Rust, cut down to the
+steps that matter and named after its run and issue, so every test run covers it. Show it fails before the fix.
+
 ## Bug switches
 
 With the `bugs` feature (which turns on `marmot-agent`'s `sim-bugs`), a schedule's `bugs` puts back a bug fixed before:
