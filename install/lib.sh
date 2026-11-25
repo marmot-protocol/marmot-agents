@@ -548,6 +548,7 @@ finish() {
     fi
     if [ -n "$MA_WORK" ]; then rm -rf "$MA_WORK"; fi
     if [ "$MA_STAGED" -eq 1 ]; then rm -rf "$MA_STAGE"; fi
+    if [ "$status" -ne 0 ]; then unlock_installs; fi
 }
 
 # ---------------------------------------------------------------------------------------------------
@@ -559,18 +560,35 @@ finish() {
 # finished or put back what it changed. The lock is on the file open as descriptor 9, and the system lets
 # it go when the run ends, however it ends. It is taken with flock, which Linux has (util-linux), or,
 # where there is none, as on macOS, with perl, which macOS ships, on the same descriptor. The commands a
-# run starts do not get the descriptor (act).
+# run starts do not get the descriptor (act). A run that made $MA_DATA for the lock and is refused
+# takes the folder away again, the lock file with it, while it holds the lock (unlock_installs).
 lock_installs() {
     [ "$DRY_RUN" -eq 0 ] || return 0
     # Taken once: opened again, the descriptor would let the lock go for a moment.
     [ "${MA_LOCKED:-0}" -eq 0 ] || return 0
-    mkdir -p "$MA_DATA"
-    exec 9>>"$MA_DATA/install.lock"
-    if ! lock_fd -n; then
-        say "another install of marmot-agent in this home is under way; waiting for it to end"
-        lock_fd || die "waiting for the other install of marmot-agent in this home failed"
-    fi
+    local said=0
+    while :; do
+        [ -d "$MA_DATA" ] || MA_MADE_DATA=1
+        mkdir -p "$MA_DATA"
+        exec 9>>"$MA_DATA/install.lock"
+        if ! lock_fd -n; then
+            [ "$said" -eq 1 ] || say "another install of marmot-agent in this home is under way; waiting for it to end"
+            said=1
+            lock_fd || die "waiting for the other install of marmot-agent in this home failed"
+        fi
+        # Held on the file in its place, or on one a refused run took away while this one waited: then
+        # it is opened again, where a run after this one finds it.
+        if [ /dev/fd/9 -ef "$MA_DATA/install.lock" ]; then break; fi
+    done
     MA_LOCKED=1
+}
+
+# As a refused run ends, still holding the lock: the data folder it made for the lock, should that be
+# all it holds, goes again with the lock file, so the run leaves nothing.
+unlock_installs() {
+    [ "${MA_LOCKED:-0}" -eq 1 ] && [ "${MA_MADE_DATA:-0}" -eq 1 ] || return 0
+    [ -z "$(find "$MA_DATA" -mindepth 1 -maxdepth 1 ! -name install.lock -print 2>/dev/null)" ] || return 0
+    rm -f "$MA_DATA/install.lock" && rmdir "$MA_DATA" 2>/dev/null
 }
 
 # Locks descriptor 9; given -n, fails at once if another run holds it.
@@ -813,10 +831,12 @@ upgrade_begin() {
 # the gateway: the lock taken, and an upgrade a run before this one left that this one cannot finish put
 # back, the plugin changes it holds with it, as upgrade_begin would. Read before, another agent's change
 # half made would be taken for the gateway's own: its home named in the settings stops this run, which
-# then never puts that change back (#180). One this run can finish is left to upgrade_begin. With no
-# $MA_DATA there is none, and a run that stops at a check leaves nothing.
+# then never puts that change back (#180). One this run can finish is left to upgrade_begin. The lock
+# is taken on a first install too, with no $MA_DATA yet, so that what this run reads of the gateway
+# stays as it is until it ends: another agent's install into it waits (D-154). A first install that
+# then stops at a check takes $MA_DATA away again (unlock_installs), and leaves nothing.
 upgrade_recover() {
-    [ "$DRY_RUN" -eq 0 ] && [ -d "$MA_DATA" ] || return 0
+    [ "$DRY_RUN" -eq 0 ] || return 0
     lock_installs
     [ -d "$MA_UPGRADE" ] || return 0
     change_restore || die "a plugin change left in $MA_UPGRADE could not be put back in its place"
@@ -1960,6 +1980,7 @@ main() {
     check_harness
     # MA_STAGED says whether this run made the folder in MA_STAGE: a dry run names the installed one.
     MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0 MA_UPGRADING=0 MA_PREPARED=0 MA_CHANGE_STATUS="" MA_LOCKED=0
+    MA_MADE_DATA=0
     trap 'finish $?' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT

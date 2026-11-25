@@ -66,7 +66,8 @@ call `image_commit` and `change_begin` alike).
 - **Two agents with one gateway, and one agent moved to another gateway.** Each Hermes agent here has a Hermes
   of its own, so the order in which the plugin changes an upgrade lists go back changes nothing, and the model
   takes them in any order. The installer allows a second agent into one Hermes only while its settings name
-  no other agent's home, read once an upgrade the run cannot finish is put back (`upgrade_recover`): so after
+  no other agent's home, read under the install lock, which a first install takes too, once an upgrade the
+  run cannot finish is put back (`upgrade_recover`): so after
   the first's run was killed, before or after it wrote its home there, and not once it finished. An agent may
   also be run again with another `HERMES_HOME`; with the fourth fix, neither can leave a change listed behind
   another's, as `changes_ours` also asks that a change name this run's gateway. `install/test_install.py` `TwoAgents` checks both: two agents into one

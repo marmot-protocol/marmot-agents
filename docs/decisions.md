@@ -3327,6 +3327,12 @@ another agent's change half made.
 So an install for a second Hermes or OpenClaw agent, or for the same agent pointed at another gateway, never ends
 another agent's change half made. An install that fails puts its own plugin change back in the same order as the
 others its upgrade holds, the last made first, and stops at the first that cannot go back.
+A gateway's install takes the install lock before it reads anything of the gateway, on every run, a first
+install too, so what it reads stays as it is until it ends; a run that is then refused takes away the data
+folder it made for the lock, the lock file with it, so it still leaves nothing. The project owner decided
+this rule on 2026-11-25, after review found that a first install, with no data folder yet, read whom the
+gateway serves outside the lock, so that a second agent's install could finish meanwhile and the first
+then put its own agent's home over the second's.
 
 **Why.** Two agents of one gateway harness replace the same support files, so a second agent's install took over
 the first's killed upgrade and ended it with only its own change. The first agent's gateway was left changed by a

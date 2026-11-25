@@ -255,7 +255,8 @@ Built in the core, the Codex driver and MDK ([D-141](decisions.md#d-141-subagent
   the ones it found if it fails or is stopped, with Pi's and Goose's image and our plugin in a gateway; a
   re-run after a kill finishes it or puts it back. One install runs in a home at a time ([D-134](decisions.md#d-134-an-upgrade-of-the-core-and-its-support-files-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)).
   Only a run for the same agent and the same gateway finishes a killed upgrade that holds a plugin change;
-  any other puts it back first ([D-154](decisions.md#d-154-an-install-takes-over-a-killed-upgrade-only-for-the-same-agent-and-the-same-gateway)).
+  any other puts it back first. A gateway's install takes the install lock before it reads the gateway, a
+  first install too, and one refused then leaves nothing ([D-154](decisions.md#d-154-an-install-takes-over-a-killed-upgrade-only-for-the-same-agent-and-the-same-gateway)).
 - A gateway install moves over with its installer's `--replace-plugin`. The OpenClaw installer finishes a
   half-done move by editing OpenClaw's settings file itself, after a copy; the gateway's conversation starts
   fresh in each chat. `--replace-plugin` lists the gateway's work folder in `files_from` beside the old

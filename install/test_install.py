@@ -283,7 +283,7 @@ else:
 '''
 FAKE_HERMES = r'''#!/usr/bin/env python3
 """A stand-in for `hermes`: the commands the installer runs. Its config.yaml is JSON, which is YAML."""
-import json, os, signal, sys
+import json, os, signal, sys, time
 from pathlib import Path
 
 args = sys.argv[1:]
@@ -344,6 +344,15 @@ elif args[:2] == ["config", "get"]:
         c, last = walk(load(), key)
         value = c.get(last, "") if c is not None else ""
         print(str(value).lower() if isinstance(value, bool) else value)
+    if os.environ.get("FAKE_HERMES_PAUSE_AFTER") == f"config get {key}":
+        # The installer held up once it has read this, as FAKE_PAUSE holds up the other stand-ins.
+        sys.stdout.flush()
+        at = Path(os.environ["FAKE_PAUSE_AT"])
+        Path(f"{at}.reached").touch()
+        for _ in range(1200):
+            if at.exists():
+                break
+            time.sleep(0.05)
 elif args[:2] == ["config", "set"]:
     note()
     key, value = args[2], args[3]
@@ -506,6 +515,14 @@ class Machine:
     @staticmethod
     def output(process: subprocess.Popen) -> str:
         return process.output_path.read_text()
+
+    @staticmethod
+    def until(*conditions) -> None:
+        """Waits, for up to a minute, until one of the conditions holds."""
+        for _ in range(1200):
+            if any(condition() for condition in conditions):
+                return
+            time.sleep(0.05)
 
     def args(self, harness: str, *more: str, container=False) -> list:
         args = ["--yes", "--owner", OWNER]
@@ -2277,6 +2294,64 @@ class TwoAgents(unittest.TestCase):
                 self.assertIn(str(m.data / "agents/b/home"), settings, said)
                 self.assertNotIn(str(m.data / "agents/a/home"), settings, said)
                 self.assertEqual(self.under_way(m), [], said)
+
+    def test_a_first_install_reads_the_gateway_only_under_the_lock(self):
+        """Agents a and b installed at once into one Hermes, in a home with no agent yet: b's run held
+        up just after it reads whom the Hermes serves, then a's run. a's waits for b's to end, then
+        finds b's home in the Hermes and stops; b's installs. Before, a first install took the lock
+        only once it put the core in, so a's ran to its end while b's was held up, and b's then put
+        its home over a's in the Hermes, which a's agent was left cut off from."""
+        m = Machine(self)
+        pause = m.dir / "pause"
+        b = m.start("hermes", *self.args(m, "b"), env={"FAKE_HERMES_PAUSE_AFTER": "config get platforms.marmot.home",
+                                                      "FAKE_PAUSE_AT": str(pause)})
+        self.addCleanup(b.kill)
+        reached = pause.with_name("pause.reached")
+        m.until(reached.exists, lambda: b.poll() is not None)
+        self.assertTrue(reached.exists(), m.output(b))
+        a = m.start("hermes", *self.args(m, "a"))
+        self.addCleanup(a.kill)
+        m.until(lambda: "waiting for it" in m.output(a), lambda: a.poll() is not None)
+        pause.touch()
+        self.assertEqual(b.wait(timeout=120), 0, m.output(b))
+        self.assertNotEqual(a.wait(timeout=120), 0, m.output(a))
+        self.assertIn("waiting for it", m.output(a))
+        self.assertIn(f"already connects to the agent whose home is {m.data / 'agents/b/home'}", m.output(a))
+        config = json.loads((m.home / ".hermes/config.yaml").read_text())
+        self.assertEqual(config["platforms"]["marmot"]["home"], str(m.data / "agents/b/home"))
+
+    def test_a_refused_first_install_hands_the_lock_on(self):
+        """A first install into a Hermes that serves another agent is refused, and takes away the data
+        folder it made for the lock, the lock file with it. A run that waited for that lock opens the
+        file again, so a run after it waits for it in turn, not taking a lock of its own on a new file
+        while it holds one on a file that is gone."""
+        m = Machine(self)
+        (m.home / ".hermes").mkdir()
+        (m.home / ".hermes/config.yaml").write_text(json.dumps({"platforms": {"marmot": {"home": "/elsewhere"}}}))
+        held, holds = m.dir / "held", m.dir / "holds"
+        refused = m.start("hermes", *self.args(m, "a"), env={"FAKE_HERMES_PAUSE_AFTER": "config get platforms.marmot.home",
+                                                            "FAKE_PAUSE_AT": str(held)})
+        self.addCleanup(refused.kill)
+        m.until(held.with_name("held.reached").exists, lambda: refused.poll() is not None)
+        self.assertTrue(m.data.exists(), m.output(refused))
+        codex = lambda name, env: m.start("codex", *m.args("codex", "--binary", str(m.core), "--name", name), env=env)
+        waited = codex("c", {"FAKE_PAUSE": "systemctl --user restart", "FAKE_PAUSE_AT": str(holds)})
+        self.addCleanup(waited.kill)
+        reached = holds.with_name("holds.reached")
+        m.until(lambda: "waiting for it" in m.output(waited), reached.exists, lambda: waited.poll() is not None)
+        self.assertIn("waiting for it", m.output(waited))
+        held.touch()
+        self.assertNotEqual(refused.wait(timeout=120), 0, m.output(refused))
+        self.assertIn("already connects to the agent whose home is /elsewhere", m.output(refused))
+        m.until(reached.exists, lambda: waited.poll() is not None)
+        self.assertTrue(reached.exists(), m.output(waited))
+        after = codex("d", {})
+        self.addCleanup(after.kill)
+        m.until(lambda: "waiting for it" in m.output(after), lambda: after.poll() is not None)
+        self.assertIn("waiting for it", m.output(after))
+        holds.touch()
+        self.assertEqual(waited.wait(timeout=120), 0, m.output(waited))
+        self.assertEqual(after.wait(timeout=120), 0, m.output(after))
 
 
 class FilesFrom(unittest.TestCase):
