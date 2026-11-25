@@ -711,7 +711,7 @@ interface (`BasePlatformAdapter`, `MessageEvent`, `SendResult`) and `ctx.registe
 | `COMMAND_REGISTRY` and `_is_gateway_available`, from `hermes_cli.commands` | The commands a session item lists ([D-044](../decisions.md#d-044-a-connector-supplies-what-its-harness-does-not-say)) | No; Hermes's plugin check warns about the import | The move-over test, `a_hermes_install_moves_over` in `crates/marmot-agent/tests/import_gateways.rs`, which runs real Hermes on the scripted model double and checks that the session item lists `/new` (added 2026-11-24). The plugin logs a warning and the session item lists no commands; `python/tests` fake it |
 | `resolve_gateway_approval_card`, from `tools.approval` | Answering an approval card, as the person who answered | Yes (read on 2026-11-24, below) | The approval step of the end-to-end scenario: the command is never run |
 | `resolve_gateway_clarify`, from `tools.clarify_gateway` | Answering a question | Yes (read on 2026-11-24, below) | The same move-over test: the scripted model asks a question with Hermes's `clarify` tool, the person answers with the second choice, and the model must be handed it as the tool's `user_response` (added 2026-11-24). `python/tests` fake the call |
-| `clear_if_stale`, `get_pending` (and the `created_at` of what it gives), `resolve` and `DEFAULT_TIMEOUT_SECONDS`, from `tools.slash_confirm` | Answering a request to confirm a command by its id, while Hermes would still run it ([D-146](../decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id)) | No (read on 2026-11-24, below) | The move-over test, `a_hermes_install_moves_over`, which runs real Hermes on the scripted model double, asks for a new session from the chat, answers Hermes's request to confirm it, and checks that Hermes's reply comes back outside any turn, which a typed `/approve` would not. `python/tests` stand in for the module as the pinned commit has it |
+| `clear_if_stale`, `get_pending` (and the `confirm_id` and `created_at` of what it gives), `resolve` and `DEFAULT_TIMEOUT_SECONDS`, from `tools.slash_confirm` | Answering a request to confirm a command by its id, while Hermes would still run it ([D-146](../decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id)); and reading, after a message reaches a session where one shows waiting, whether Hermes still holds it ([D-155](../decisions.md#d-155-the-hermes-plugin-keeps-each-request-to-confirm-a-command-as-hermes-keeps-it)) | No (read on 2026-11-24 and again on 2026-11-25, below) | The move-over test, `a_hermes_install_moves_over`, which runs real Hermes on the scripted model double, asks for a new session from the chat, answers Hermes's request to confirm it, and checks that Hermes's reply comes back outside any turn, which a typed `/approve` would not. `python/tests` stand in for the module as the pinned commit has it |
 | `slash_confirm_refusal`, `approval_refusal`, `clarify_refusal` and `refusal_text`, from `gateway.approval_actor` | Asking Hermes whether the person who answered a request to confirm a command, an approval card or a question may answer it, with the chat's settings, and Hermes's words when not ([D-146](../decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id), [D-151](../decisions.md#d-151-the-hermes-plugin-asks-hermess-own-check-of-who-may-answer-an-approval-card-or-a-question)) | Yes (read on 2026-11-24, below) | The confirmation and question steps of the move-over test, whose Hermes names no admins, so each check lets the answer through; a change that breaks one fails its step. The approval check has only the end-to-end scenario's approval step, which needs a model key. `python/tests` stand in for the checks |
 | `t`, from `agent.i18n` | Telling from a reply to `/model` or `/new` whether Hermes took it ([above](#how-the-plugin-tells-what-became-of-a-command)) | Not known | For `/model`: the move-over test, `a_hermes_install_moves_over` in `crates/marmot-agent/tests/import_gateways.rs`, which runs real Hermes on the scripted model double, switches the model and resets it, and fails when a reply is not known as taken (`gateway.model.switched`, `gateway.model.reset_done`); the end-to-end scenario's last step does the same on a real model. For `/new`: the scenario's new session, step 4. `python/tests` read the pinned English texts from `python/tests/hermes_phrases.json`. The plugin refuses both controls as `not_supported` when `t` knows none of the keys |
 | `_mark_connected` and `_mark_disconnected`, helpers of `BasePlatformAdapter` | Telling Hermes the platform is up or down | Not known; the leading underscore suggests not (inferred) | The scenario's first step, if a change makes the call fail: the platform then does not start (inferred, not tried) |
@@ -733,6 +733,28 @@ platform's settings (Telegram passes its `config.extra`), which reads the admins
 confirmed command answer when there are any; with none, everyone Hermes admits may. The text a person types is read by
 `_hm_slash_confirm_reply` in `gateway/run_inbound.py`, which leaves it to an approval when one waits in the
 session (`has_blocking_approval`) and otherwise answers whichever confirmation waits there, by no id.
+
+Read again on 2026-11-25 at the same commit, in the same image, for
+[D-155](../decisions.md#d-155-the-hermes-plugin-keeps-each-request-to-confirm-a-command-as-hermes-keeps-it)
+(`tools/slash_confirm.py`, `gateway/run_busy.py` `_request_slash_confirm`, `gateway/run_inbound.py`
+`_hm_slash_confirm_reply` and `_hm_pending_reply_intercepts`, `gateway/run_agent_cache.py`
+`_clear_session_boundary_security_state`, `locales/en.yaml`):
+
+- Hermes keeps one confirmation in each session, by its session key: `register` replaces whatever waited there,
+  with no word to the platform. Ids come from one counter in the gateway, which starts at a random point (`prompt_id_counter`). `get_pending` gives a copy of the one
+  that waits, and changes nothing; a confirmation older than `DEFAULT_TIMEOUT_SECONDS` still shows there until
+  something clears it.
+- It is cleared when it is answered (`resolve` takes it before it runs it), when a session boundary clears the
+  session's state (`/new`, `/resume`, an automatic reset, a handoff), when Hermes's own send is declined by a connector, and, when it is too old, by the
+  session's next message that answers nothing. Nothing about a turn clears it: a `/stop` does not.
+- A typed message in the session is read first as the answer to a question (`clarify`) when one waits there,
+  then as the answer to the confirmation: a command named `approve`, `yes`, `ok`, `confirm` (once), `always`,
+  `remember` (always), `cancel`, `no`, `deny` or `nevermind` (cancel), or the text alone, without a leading `!`
+  or `/`, in `approval.inputs.confirm_once`, `confirm_always` or `confirm_cancel`, in English (`approve`,
+  `approve once`, `once`, `yes`, `ok`, `confirm`; `always`, `always approve`, `remember`; `cancel`,
+  `nevermind`, `no`, `deny`), which always count, and in the language Hermes is set to. An approval waiting in
+  the session takes precedence. Hermes's reply to that message is what the confirmed command said, or its
+  refusal of the person, and the confirmation then still waits.
 
 The checks for an approval card and a question, read at the same commit and on the same list (with
 `refusal_text`):

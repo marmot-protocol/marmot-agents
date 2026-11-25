@@ -877,8 +877,15 @@ does, and feeds it to the chat's translator:
   confirmation's id, never by typing `/approve`, and only for someone Hermes's own check of who may answer
   lets: it answers that confirmation while it waits, and nothing else. The core is answered as soon as Hermes
   has taken it, and the command runs on by itself; Hermes's reply to it, which Hermes hands back once the
-  command finishes, is sent as the command's output and settles that command alone
+  command finishes, is sent as the command's output
   ([D-146](../decisions.md#d-146-the-hermes-plugin-answers-a-request-to-confirm-a-command-by-its-id)).
+  Each confirmation is kept by Hermes's session key and its id, one in each session as Hermes keeps it: a newer
+  one in the same session shows the older as cancelled, a turn's end closes none, and after a message reaches a
+  session where one waits, the plugin asks Hermes whether it still does, so a typed answer, in any of the words
+  Hermes reads as one, answers only the sender's own, and one Hermes dropped shows as cancelled. The command a
+  confirmation is for is settled by the answer or the close that says it will not run, or else by its own
+  effect, as below; Hermes's words settle it only when they say it was refused
+  ([D-155](../decisions.md#d-155-the-hermes-plugin-keeps-each-request-to-confirm-a-command-as-hermes-keeps-it)).
 - For Hermes a control is a typed command. Interrupt types `/stop` in the turn's chat as its sender, new
   session types `/new`, and setting the model types `/model <id>`, after which, once Hermes's reply says it
   took the change, the plugin asks Hermes for the session's model. No other setting can be changed from the chat yet. A
@@ -898,8 +905,10 @@ does, and feeds it to the chat's translator:
   ([details](../reference/hermes-messages.md#how-the-plugin-tells-what-became-of-a-command)). Any other reply
   is a refusal, and settles the request; the chat sees it as command output (provisional; before, the request
   was refused with Hermes's words). When Hermes first asks to confirm the command, its question is not the
-  outcome: its reply to the answer is. When Hermes knows none of those keys, the control is refused as
-  `not_supported`.
+  outcome: its reply to the answer is read the same way, and an empty reply settles nothing, so the command's
+  effect does, or, failing one, the core
+  ([D-155](../decisions.md#d-155-the-hermes-plugin-keeps-each-request-to-confirm-a-command-as-hermes-keeps-it)).
+  When Hermes knows none of those keys, the control is refused as `not_supported`.
 - One effect settles one request: one session's end one reset, one model read one switch. So a second new
   session, or a second `/model`, for a session whose first is not yet settled is refused as `busy`
   (provisional). The session is held from before the command is handed to Hermes, however long that takes,

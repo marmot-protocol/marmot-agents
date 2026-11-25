@@ -11,7 +11,10 @@ notice. Approvals, questions and requests to confirm a command arrive in a struc
 `approval` and `question` items (D-048). Hermes names no session to a platform, so a session is named
 after the chat and the sender, and counted when Hermes replaces it. In a group Hermes keeps a session
 for each sender, so turns can overlap: what names its session or its turn (an approval card, a
-question, the end of a turn, a reply to a message) goes to that turn, and the rest to the latest.
+question, the end of a turn, a reply to a message) goes to that turn, and the rest to the latest. A
+request to confirm a command is kept by Hermes's session key and its id, as Hermes keeps one in each
+session: it waits until it is answered, a newer one replaces it in its session, or Hermes drops it, and
+never closes with a turn. The plugin's look at what Hermes holds (`CONFIRM_LOOK`) says which (D-155).
 
 The native message of an event is the whole line's `msg` (D-059). An event the translator makes up,
 such as an item it closes because the turn ended, carries none.
@@ -34,13 +37,24 @@ WARNINGS = ("📬", "↪", "⚠️ Your message was interrupted", "⏸")
 # Plugin hooks that say nothing a platform call does not already say.
 HOOKS_NOT_SENT = {"pre_command", "on_session_end", "on_session_finalize", "on_session_open", "agent_loop_stopped",
                   "pre_approval_request", "post_approval_response"}
-# What a person types to answer Hermes's request to confirm one of their own commands, in the order of
-# the options the question offers.
-CONFIRM = ("/approve", "/always", "/cancel")
+# The options of Hermes's request to confirm one of a person's own commands, which they can also type as
+# `/approve`, `/always` and `/cancel`, among others (`CONFIRM_WORDS`).
 CONFIRM_LABELS = ("Approve once", "Always approve", "Cancel")
 # The same answers, as the plugin hands them to Hermes's own call for them (`tools.slash_confirm.resolve`),
 # which answers only the confirmation it names (D-146).
 CONFIRM_CHOICES = ("once", "always", "cancel")
+# Everything Hermes reads as a typed answer to a confirmation in the sender's own session, as the pinned
+# commit reads it (`_hm_slash_confirm_reply` in `gateway/run_inbound.py`): a command by these names, or
+# these words alone, in English, which Hermes always accepts beside the language it is set to
+# (`approval.inputs.confirm_*`). A word of another language that Hermes takes shows as a confirmation
+# dropped, not answered (D-155).
+CONFIRM_COMMANDS = {"approve": "once", "yes": "once", "ok": "once", "confirm": "once", "always": "always",
+                    "remember": "always", "cancel": "cancel", "no": "cancel", "deny": "cancel", "nevermind": "cancel"}
+CONFIRM_WORDS = {**{w: "once" for w in ("approve", "approve once", "once", "yes", "ok", "confirm")},
+                 **{w: "always" for w in ("always", "always approve", "remember")},
+                 **{w: "cancel" for w in ("cancel", "nevermind", "no", "deny")}}
+# The plugin's look at which confirmation Hermes holds in a session (`tools.slash_confirm.get_pending`).
+CONFIRM_LOOK = "tools.slash_confirm.get_pending"
 # What a person types to answer an approval Hermes sent as text, in the order of its choices.
 TEXT_CHOICES = [("Allow once", "allow", "/approve"), ("Allow for this session", "allow", "/approve session"),
                 ("Always allow", "allow", "/approve always"), ("Deny", "deny", "/deny")]
@@ -85,6 +99,17 @@ def reply_to_question(question, text):
     if chosen is not None:
         return {"question": question["id"], "options": [chosen["id"]]}
     return {"question": question["id"], "options": [], "text": text}
+
+
+def confirm_choice(text) -> str | None:
+    """The answer Hermes reads in `text` when a confirmation waits in the sender's session (`CONFIRM_WORDS`),
+    as `tools.slash_confirm.resolve` takes it, or None when Hermes reads none."""
+    text = str(text or "").strip()
+    if text.startswith("/"):
+        name = text.split(maxsplit=1)[0][1:].lower().split("@", 1)[0]
+        if name in CONFIRM_COMMANDS:
+            return CONFIRM_COMMANDS[name]
+    return CONFIRM_WORDS.get(text.lstrip("!/").lower())
 
 
 def usable_settings(result) -> bool:
@@ -139,9 +164,14 @@ class Translator:
         self.approval = None
         self.natives: dict[str, list] = {}  # approval item -> Hermes's value for each of its choices
         self.question = None
-        self.confirm = None
-        self.confirm_command = None
-        self.confirm_commands: dict[str, str] = {}  # request to confirm a command -> the command
+        # Hermes keeps one confirmation in a session, and a new one replaces it (`tools.slash_confirm`): its
+        # session key -> the one the chat shows waiting there, and each one -> its session key and command.
+        self.confirm_waiting: dict[str, str] = {}
+        self.confirm_key: dict[str, str] = {}
+        self.confirm_commands: dict[str, str] = {}
+        # A message typed in a session with a confirmation waiting -> that confirmation, and the answer
+        # Hermes reads in it, if any (`confirm_choice`)
+        self.typed_confirm: dict[str, tuple[str, str | None]] = {}
         self.final_next = False
         self.key = None
         self.turn_command = None
@@ -183,9 +213,11 @@ class Translator:
 
     def close_open_items(self, keep_turns=()):
         """A turn ended: anything still open will never report again (the turn closes itself), except
-        what belongs to another turn still running."""
+        what belongs to another turn still running, and a confirmation, which waits in Hermes's session,
+        not in a turn, until it is answered, replaced or dropped (D-155)."""
+        waiting = set(self.confirm_waiting.values())
         for item, ev in list(self.open.items()):
-            if ev["type"] in ("turn", "task", "session") or ev.get("turn") in keep_turns:
+            if ev["type"] in ("turn", "task", "session") or ev.get("turn") in keep_turns or item in waiting:
                 continue
             self.emit(item, ev["type"], "cancelled", ev["title"], ev["text"], ev["body"], native=None,
                       owner=(ev.get("session"), ev.get("turn")))
@@ -281,20 +313,82 @@ class Translator:
     def inbound(self, m):
         text = str(m.get("text") or "").strip()
         word, *args = text.split() or [""]
-        confirming = bool(self.confirm and self.confirm in self.open and word in CONFIRM)
-        if not confirming and word.startswith("/") and word not in ("/approve", "/deny"):
-            self.typed[m.get("message_id")] = self.typed_control(word, args)
+        key = None
         if m.get("chat_type"):
             # The plugin says what kind of chat a message is typed in, so a reply to it reaches the
             # sender's own session, whichever turn is the latest.
-            self.typed_key[m.get("message_id")] = key_of({"chat_type": m["chat_type"], "chat_id": m.get("chat"),
-                                                          "user_id": m.get("user")})
+            key = key_of({"chat_type": m["chat_type"], "chat_id": m.get("chat"), "user_id": m.get("user")})
+            self.typed_key[m.get("message_id")] = key
+        # Hermes reads a typed answer as the answer to the confirmation in the sender's own session.
+        asked = self.confirm_of(key, m.get("chat"), m.get("user"))
+        choice = confirm_choice(text) if asked else None
+        if asked:
+            self.typed_confirm[m.get("message_id")] = (asked, choice)
+        confirming = choice is not None and word.startswith("/")
+        if not confirming and word.startswith("/") and word not in ("/approve", "/deny"):
+            self.typed[m.get("message_id")] = self.typed_control(word, args)
         if confirming or (self.approval and word in ("/approve", "/deny")) or word.startswith("/"):
             # A slash command is never the answer to a question: Hermes leaves the question waiting.
             return
         item = self.question_for(m.get("chat"), m.get("user"))
         if item is not None:
             self.answered(item, text, m.get("user"))
+
+    def confirm_of(self, key, chat, user):
+        """The confirmation the chat shows waiting in the session of the sender of a message: by its chat and
+        sender (`key_of`) when the plugin says them, or else, as in a recording, by the chat and sender."""
+        for session_key, item in reversed(list(self.confirm_waiting.items())):
+            if item not in self.open:
+                continue
+            if key is not None and names_session(session_key, key):
+                return item
+            if key is None and (str(session_key).endswith(f":{chat}:{user}") or str(session_key).endswith(f":dm:{chat}")):
+                return item
+        return None
+
+    def confirm_done(self, item, choice, native=True, message=None):
+        """Hermes holds the confirmation `item` no longer: answered with `choice`, or, with none, replaced or
+        dropped, so it shows as cancelled. Either way it waits no more. Answered by a `message` typed, it
+        shows in that message's turn, as Hermes's reply to it does."""
+        prev = self.open.get(item)
+        key = self.confirm_key.get(item)
+        if self.confirm_waiting.get(key) == item:
+            del self.confirm_waiting[key]
+        for typed in [t for t, (asked, _) in self.typed_confirm.items() if asked == item]:
+            del self.typed_confirm[typed]
+        if prev is None:
+            return
+        owner = (prev.get("session"), prev.get("turn")) if message is None else self.owner_of(message)
+        if choice in CONFIRM_CHOICES:
+            q = prev["body"]["questions"][0]
+            chosen = q["options"][CONFIRM_CHOICES.index(choice)]
+            self.emit(item, "question", "done", prev["title"], f"Answered: {chosen['label']}",
+                      {**prev["body"], "answer": [{"question": q["id"], "options": [chosen["id"]]}]},
+                      native=native, owner=owner)
+        else:
+            self.emit(item, "question", "cancelled", prev["title"], prev["text"], prev["body"], native=native,
+                      owner=owner)
+
+    def looked(self, m):
+        """The plugin asked Hermes which confirmation waits in a session (`CONFIRM_LOOK`), after `message`
+        reached it, when one shows waiting there. When it is not the one shown, Hermes holds that one no
+        longer: the message answered it, when Hermes reads an answer in it, or else Hermes replaced or
+        dropped it. When it is, the message answered nothing."""
+        p = m.get("params") or {}
+        item = self.confirm_waiting.get(p.get("session_key"))
+        if item is None or item not in self.open:
+            return
+        result = m.get("result")
+        waiting = result.get("confirm_id") if isinstance(result, dict) else None
+        asked, choice = self.typed_confirm.get(str(p.get("message")), (None, None))
+        if waiting is not None and f"confirm:{waiting}" == item:
+            self.typed_confirm.pop(str(p.get("message")), None)
+            return
+        answered = asked == item and choice is not None
+        self.confirm_done(item, choice if answered else None, message=str(p.get("message")) if answered else None)
+        if answered:
+            # What Hermes says next to that message is the confirmed command's.
+            self.turn_command = self.confirm_commands.get(item)
 
     def question_for(self, chat, user):
         """The latest open question that a message from `user` in `chat` answers: Hermes takes a
@@ -400,6 +494,8 @@ class Translator:
             self.reads.pop(str(m["id"]), None)
         if "error" in m:
             return
+        if method == CONFIRM_LOOK:
+            return self.looked(m)
         if method == "hermes_cli.commands.COMMAND_REGISTRY":
             self.commands = [command(c.get("name"), c.get("description"), c.get("args_hint"))
                              for c in result or [] if c.get("gateway_available")]
@@ -512,16 +608,8 @@ class Translator:
         answer started none."""
         item = f"confirm:{m['confirm_id']}"
         if "said" not in m:
-            prev = self.open.get(item)
-            if prev is None or m.get("choice") not in CONFIRM_CHOICES:
-                return
-            q = prev["body"]["questions"][0]
-            chosen = q["options"][CONFIRM_CHOICES.index(m["choice"])]
-            self.emit(item, "question", "done", prev["title"], f"Answered: {chosen['label']}",
-                      {**prev["body"], "answer": [{"question": q["id"], "options": [chosen["id"]]}]},
-                      owner=(prev.get("session"), prev.get("turn")))
-            if self.confirm == item:
-                self.confirm = None
+            if item in self.open and m.get("choice") in CONFIRM_CHOICES:
+                self.confirm_done(item, m["choice"])
             return
         answered = self.last.get(item)
         if answered is None or answered["state"] != "done":
@@ -581,19 +669,22 @@ class Translator:
         if content.startswith("❓") and self.question in self.open:
             self.last_send = None
             return
-        if self.confirm in self.open:
-            prev = self.open[self.confirm]
-            if content == prev["text"]:
-                self.last_send = prev
-                return
-            if self.turn_command in CONFIRM:
-                q = prev["body"]["questions"][0]
-                chosen = q["options"][CONFIRM.index(self.turn_command)]
-                self.emit(self.confirm, "question", "done", prev["title"], f"Answered: {chosen['label']}",
-                          {**prev["body"], "answer": [{"question": q["id"], "options": [chosen["id"]]}]})
-                self.confirm, self.turn_command = None, self.confirm_command
         typed = self.typed.get(p.get("reply_to"))
         key = self.typed_key.get(p.get("reply_to")) or self.key
+        for asking in self.confirm_waiting.values():
+            prev = self.open.get(asking)
+            if (prev is not None and content == prev["text"]
+                    and (key is None or names_session(self.confirm_key.get(asking), key))):
+                # Hermes's request to confirm, as text, after it was handed over as one.
+                self.last_send = prev
+                return
+        # The reply to a typed answer to a confirmation, when the plugin did not look at Hermes first, as in
+        # a recording: the confirmation is answered, and what follows is the confirmed command's.
+        answer = p.get("reply_to") or self.turn or ""
+        asked, choice = self.typed_confirm.get(answer, (None, None))
+        if asked in self.open and choice is not None:
+            self.confirm_done(asked, choice, message=answer)
+            self.turn_command = self.confirm_commands.get(asked)
         if self.turn_command and (meta.get("notify") or final):
             return self.command_reply(item, content, typed, key)
         if typed:
@@ -636,13 +727,20 @@ class Translator:
                                    {"choices": choices}, owner=owner)
 
     def confirm_card(self, p):
+        """Hermes asks to confirm a command in a session: a confirmation it already held there is replaced,
+        and will never run (D-155)."""
         options = [{"id": f"o{n}", "label": label} for n, label in enumerate(CONFIRM_LABELS)]
-        self.confirm = f"confirm:{p.get('confirm_id')}"
-        self.confirm_command = p.get("title")
-        self.confirm_commands[self.confirm] = p.get("title")
+        item = f"confirm:{p.get('confirm_id')}"
+        session_key = str(p.get("session_key") or "")
+        replaced = self.confirm_waiting.get(session_key)
+        if replaced is not None and replaced != item:
+            self.confirm_done(replaced, None, native=None)
+        self.confirm_waiting[session_key] = item
+        self.confirm_key[item] = session_key
+        self.confirm_commands[item] = p.get("title")
         qs = [{"id": "q0", "text": p.get("message"), "multiple": False, "allow_text": False, "options": options}]
         # The session Hermes asks in, which in a group need not be the latest turn's.
         key = self.key_named(p.get("session_key"))
         owner = None if key is None else (self.name(key), self.turn_of_session(p.get("session_key")))
-        self.emit(self.confirm, "question", "waiting", "Confirm this command?", p.get("message"),
+        self.emit(item, "question", "waiting", "Confirm this command?", p.get("message"),
                   {"answer_via": "message", "questions": qs}, owner=owner)
