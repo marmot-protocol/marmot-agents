@@ -5,7 +5,7 @@
 (* what it holds back. It follows crates/marmot-agent/src/conversation.rs *)
 (* (`emitted`, `settle_for_hidden`, `members_now`, `hold_back`,            *)
 (* `next_send`, `attempting`, `sent`, `lost`) and run.rs `flush`, as of    *)
-(* master 4d7baac with the fixes of branch held-sends (2026-11-25),       *)
+(* master 60aab49 with MDK naming a held send's event (mdk#3712, #203),   *)
 (* against MDK's sends under tokens (marmot.rs `send`, `outcome`).        *)
 (*                                                                         *)
 (* One chat, one group. The turn T is sent to every chat; its first       *)
@@ -30,11 +30,10 @@
 (* a form the chat is no longer sent, the core never hands it again: it    *)
 (* asks MDK what became of it (`Side::outcome`), and tells the chat of one *)
 (* MDK no longer knows that it may not have been delivered (D-109).        *)
-(* MDK's status may name no event for a send its engine has (`named`), as  *)
-(* for one whose answer the core lost; the core then goes on with the     *)
-(* event MDK named in a Pending answer, if it kept one (`Queued::event`), *)
-(* else hands it again as it was handed while MDK keeps the token (D-152, *)
-(* `Core::hand_again`), else waits until MDK lets go of the token.        *)
+(* MDK's status names the event of a send it holds, queued or in its      *)
+(* engine (mdk#3712), so the core goes on with that event, a send whose   *)
+(* answer it lost too. Before, MDK's status could name no event for a     *)
+(* send its engine had (`named`, now only with the defect `SettleOwned`). *)
 (*                                                                         *)
 (* Each step names itself in the variable `step`, which tools/tla/        *)
 (* schedule.py reads to write a counterexample as a schedule.             *)
@@ -70,9 +69,10 @@ HandAgain == Bug = "HandAgain"
 \* never took, and held back, or sent as the chat is sent now.
 ForgotHeld == Bug = "ForgotHeld"
 
-\* The code before the review of 2026-11-25: a send MDK's engine has, whose status names no
-\* event and whose event the core did not keep, was told as one that may not have been delivered
-\* when MDK might let go of its token within the minute (`lasts` false), while MDK still had it.
+\* The code before the review of 2026-11-25, against MDK before mdk#3712, whose status could name
+\* no event for a send its engine had: such a send, whose event the core did not keep, was told as
+\* one that may not have been delivered when MDK might let go of its token within the minute
+\* (`lasts` false), while MDK still had it.
 SettleOwned == Bug = "SettleOwned"
 
 \* Whether a send handed otherwise than the chat is sent now is handed to MDK again: the code
@@ -99,9 +99,8 @@ VARIABLES
     version,    \* each item's last version queued (`Record::version`)
     first,      \* each item's first event as the core knows it (`Record::first`), or NoEvent
     outbox,     \* what is queued, oldest first (`saved.outbox`)
-    mdk,        \* each token MDK was handed: what it keeps, whether it posted it, whether its
-                \* status names its event once posted (`named`), and whether the core, asking,
-                \* read that MDK may let go of it within the minute (`soon`)
+    mdk,        \* each token MDK was handed: what it keeps, whether it posted it, and whether its
+                \* status names its event once posted (`named`; before mdk#3712)
     forgot,     \* the tokens MDK let go of
     chat,       \* what the chat was sent, in order, and whether each post disappeared since
     emitted,    \* how much of the script the driver emitted
@@ -262,26 +261,10 @@ HandedOtherwise(q) ==
     /\ \/ Full(q) /\ ~owners
        \/ Native(q.item) /\ q.bare = owners
 
-\* MDK's engine has the send `q` and its status names no event, and the core kept none
-\* (`Outcome::Taken`). While MDK will keep the token another minute (`Side::lasts`), the core hands
-\* it again as it was handed, which MDK answers from what it keeps: the one second hand-over left
-\* (D-152, `Core::hand_again`), here with no stall between the ask and the hand-over, which is
-\* D-148's accepted limit (`HandAgain` shows it). Else MDK may let go of the token within the minute,
-\* and the core asks again until it does (`soon`, which `Spec` makes MDK do); `SettleOwned` tells
-\* the chat at once instead.
-Owned(q, rest) ==
-    IF mdk[q.tok].soon
-    THEN /\ step' = [a |-> "Ask", tok |-> q.tok, outcome |-> "owned"]
-         /\ UNCHANGED <<outbox, version, first, mdk, chat, lost>>
-    ELSE \/ /\ Took(q, rest)
-            /\ step' = [a |-> "Ask", tok |-> q.tok, outcome |-> "handed again"]
-            /\ UNCHANGED <<version, mdk, chat, lost>>
-         \/ /\ MdkForgets
-            /\ IF SettleOwned
-               THEN Lost(q, rest, "Ask")
-               ELSE /\ mdk' = [mdk EXCEPT ![q.tok].soon = TRUE]
-                    /\ step' = [a |-> "Ask", tok |-> q.tok, outcome |-> "owned"]
-                    /\ UNCHANGED <<outbox, version, first, chat, lost>>
+\* `SettleOwned`, against MDK before mdk#3712: MDK's engine has the send `q` and its status names
+\* no event, and the core kept none; as MDK may let go of the token within the minute, the core
+\* tells the chat it may not have been delivered.
+Owned(q, rest) == /\ MdkForgets /\ Lost(q, rest, "Ask")
 
 \* Since #194, such a send is never handed to MDK again: the core asks MDK what became of it
 \* (`Side::outcome`, MDK's `local_send_status`), and MDK gives its event once it posted it, says
@@ -318,7 +301,7 @@ HandedAgain(q, rest) ==
     THEN Answered(q, rest)
     ELSE IF q.asked
     THEN /\ mdk' = q.tok :> [names |-> first[q.item], settles |-> q.settles, bare |-> q.bare,
-                             posted |-> TRUE, named |-> TRUE, soon |-> FALSE] @@ mdk
+                             posted |-> TRUE, named |-> TRUE] @@ mdk
          /\ chat' = Append(chat, Posted(q.tok, first[q.item], q.settles))
          /\ Took(q, rest)
          /\ step' = [a |-> "Send", tok |-> q.tok, outcome |-> "taken as new"]
@@ -346,15 +329,16 @@ Send ==
        THEN Answered(q, rest)
        ELSE \E outcome \in {"sent", "pending", "posted-lost", "kept-lost", "busy"},
                 named \in BOOLEAN :
-            \* MDK's status may name no event for a send whose answer was not "sent".
-            /\ ~named => outcome \in {"pending", "posted-lost", "kept-lost"}
+            \* Before mdk#3712, MDK's status could name no event for a send whose answer was
+            \* not "sent"; since, it names it.
+            /\ ~named => SettleOwned /\ outcome \in {"pending", "posted-lost", "kept-lost"}
             /\ outcome \in {"pending", "kept-lost"} => MdkKeeps
             /\ outcome \in {"posted-lost", "kept-lost", "busy"} => lost < MaxLost
             /\ lost' = IF outcome \in {"posted-lost", "kept-lost", "busy"} THEN lost + 1 ELSE lost
             /\ mdk' = IF outcome = "busy" THEN mdk
                       ELSE q.tok :> [names |-> names, settles |-> q.settles, bare |-> Bare(q),
                                      posted |-> outcome \in {"sent", "posted-lost"},
-                                     named |-> named, soon |-> FALSE] @@ mdk
+                                     named |-> named] @@ mdk
             /\ chat' = IF outcome \in {"sent", "posted-lost"}
                        THEN Append(chat, Posted(q.tok, names, q.settles)) ELSE chat
             /\ IF outcome = "sent"
@@ -396,11 +380,7 @@ Mdk == \E t \in DOMAIN mdk : MdkPosts(t)
 
 Next == Emit \/ Flip \/ Core \/ Mdk \/ (\E t \in DOMAIN mdk : Forget(t))
 
-\* MDK lets go of a token the core read it may let go of within the minute (`soon`).
-LetsGo == \E t \in DOMAIN mdk : mdk[t].soon /\ Forget(t)
-
 Spec == Init /\ [][Next]_vars /\ WF_vars(Emit) /\ WF_vars(Core) /\ (FairMdk => WF_vars(Mdk))
-        /\ WF_vars(LetsGo)
 
 (***************************************************************************)
 (* Properties                                                              *)
@@ -454,9 +434,4 @@ NeverKeptPosted == ~(step.a = "MdkPosts" /\ step.tok[1] = "K")
 NeverAskedOtherwise == ~(step.a = "Ask" /\ step.tok[1] = "T" /\ step.outcome = "went")
 \* A send of the tool MDK let go of is told as not known, after someone joined.
 NeverToldLost == ~(step.a = "Ask" /\ step.tok[1] = "K" /\ step.outcome = "lost")
-\* A send MDK's engine has, its status naming no event, goes on with the event the core kept; is
-\* handed again while its token lasts; is waited on while MDK may let go of the token.
-NeverKeptEvent == ~(step.a = "Ask" /\ step.outcome = "kept event")
-NeverHandedAgainOwned == ~(step.a = "Ask" /\ step.outcome = "handed again")
-NeverOwnedWaited == ~(step.a = "Ask" /\ step.outcome = "owned")
 =============================================================================

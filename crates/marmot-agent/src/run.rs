@@ -1335,26 +1335,12 @@ impl<D: Driver, M: Side> Core<D, M> {
                         self.went(group, &key, event)?;
                         continue;
                     }
-                    Ok(Outcome::Taken) => match self.conversation.event_of(&token.send) {
-                        Some(event) => {
-                            self.went(group, &key, event)?;
-                            continue;
+                    // MDK names the event while it keeps the send: kept, should MDK later let go
+                    // of the token, the send is known to have been taken (#203).
+                    Ok(Outcome::Queued(event)) => {
+                        if self.conversation.took(&token.send, event) {
+                            self.save()?;
                         }
-                        // MDK's answer when it took the send was lost, and MDK names no event
-                        // while its engine has it. MDK still posts it, so it is never told as
-                        // lost while MDK has it, which would settle its requests twice: it is
-                        // asked after again until MDK names its event or lets go of its token,
-                        // a little later each time. A stop does not wait for it: MDK's engine has
-                        // it, and it goes out as it was handed, whatever the core does.
-                        None => match self.hand_again(group, &token) {
-                            Ok(true) => {}
-                            Ok(false) | Err(NotNow) => {
-                                self.wait_longer(group);
-                                return Ok(());
-                            }
-                        },
-                    },
-                    Ok(Outcome::Queued) => {
                         self.wait_queued(group);
                         return Ok(());
                     }
@@ -1487,20 +1473,6 @@ impl<D: Driver, M: Side> Core<D, M> {
         eprintln!("marmot-agent: a send's outcome can no longer be known; the chat is told");
         self.conversation.lost(token);
         self.save()
-    }
-
-    /// Whether the send under `token`, which MDK's engine has without naming its event and whose
-    /// event the core did not keep, is handed to MDK again under its token to learn its event:
-    /// only in the form it was handed, which the core noted ([`Conversation::form_known`]), and
-    /// while MDK will still know the token then ([`Side::lasts`]), since MDK takes a token it has
-    /// let go of as a new send. This is the one second hand-over left (D-152), which the owner
-    /// may yet remove: answering `false` always leaves the send asked after until MDK names its
-    /// event or lets go of its token, and changes nothing else.
-    fn hand_again(&self, group: &GroupKey, token: &crate::Token) -> Result<bool, NotNow> {
-        if !self.conversation.form_known(&token.send) {
-            return Ok(false);
-        }
-        self.marmot.lasts(group, token)
     }
 
     /// The group's sends wait before they are tried again, longer each time.
@@ -1838,10 +1810,6 @@ mod tests {
         fn outcome(&self, _group: &GroupKey, _token: &crate::Token) -> Result<Outcome, NotNow> {
             unreachable!("only files are sent")
         }
-
-        fn lasts(&self, _group: &GroupKey, _token: &crate::Token) -> Result<bool, NotNow> {
-            unreachable!("only files are sent")
-        }
     }
 
     /// A stand-in for MDK with one group, whose `messages` were stored while the core was down,
@@ -1935,10 +1903,6 @@ mod tests {
         }
 
         fn outcome(&self, _group: &GroupKey, _token: &crate::Token) -> Result<Outcome, NotNow> {
-            unreachable!("nothing is sent")
-        }
-
-        fn lasts(&self, _group: &GroupKey, _token: &crate::Token) -> Result<bool, NotNow> {
             unreachable!("nothing is sent")
         }
     }
@@ -2369,13 +2333,9 @@ mod tests {
             Ok(Some(vec![self.agent.clone(), self.owner.clone()]))
         }
 
-        // Every send is taken, so this MDK keeps each token.
-        fn outcome(&self, _group: &GroupKey, _token: &crate::Token) -> Result<Outcome, NotNow> {
-            Ok(Outcome::Taken)
-        }
-
-        fn lasts(&self, _group: &GroupKey, _token: &crate::Token) -> Result<bool, NotNow> {
-            Ok(true)
+        // Every send went at once, as the event named after its token.
+        fn outcome(&self, _group: &GroupKey, token: &crate::Token) -> Result<Outcome, NotNow> {
+            Ok(Outcome::Went(EventKey::from(token.mdk.as_str())))
         }
 
         fn stored(&self, _group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {

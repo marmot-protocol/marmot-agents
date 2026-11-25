@@ -269,15 +269,10 @@ impl Side for SimSide {
         Ok(if kept.rejected {
             Asked::Dropped
         } else if (world.landings.iter()).any(|l| l.row.event == kept.event) {
-            Asked::Queued
+            Asked::Queued(kept.event.clone())
         } else {
             Asked::Went(kept.event.clone())
         })
-    }
-
-    /// The simulated MDK lets go of no token.
-    fn lasts(&self, _group: &GroupKey, _token: &Token) -> Result<bool, NotNow> {
-        Ok(true)
     }
 }
 

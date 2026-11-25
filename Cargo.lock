@@ -82,7 +82,7 @@ dependencies = [
 [[package]]
 name = "agent-connector"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "agent-control",
  "cgka-traits",
@@ -106,7 +106,7 @@ dependencies = [
 [[package]]
 name = "agent-control"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "serde",
  "serde_json",
@@ -393,12 +393,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-utility"
+version = "0.3.2"
+source = "git+https://github.com/yukibtc/async-utility?rev=b323ae0c1c1424b78bf8bb8832b95e86771f1dee#b323ae0c1c1424b78bf8bb8832b95e86771f1dee"
+dependencies = [
+ "futures-util",
+ "gloo-timers",
+ "tokio",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "async-wsocket"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c92385c7c8b3eb2de1b78aeca225212e4c9a69a78b802832759b108681a5069"
 dependencies = [
- "async-utility",
+ "async-utility 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures",
  "futures-util",
  "js-sys",
@@ -806,7 +817,7 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 [[package]]
 name = "cgka-engine"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "async-trait",
  "cgka-traits",
@@ -816,7 +827,7 @@ dependencies = [
  "hex",
  "k256",
  "marmot-forensics",
- "nostr 0.45.5",
+ "nostr 0.45.7",
  "openmls",
  "openmls_basic_credential",
  "openmls_rust_crypto",
@@ -835,7 +846,7 @@ dependencies = [
 [[package]]
 name = "cgka-traits"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "async-trait",
  "hex",
@@ -1666,7 +1677,7 @@ dependencies = [
 [[package]]
 name = "fs-private"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "libc",
 ]
@@ -3057,7 +3068,7 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 [[package]]
 name = "marmot-account"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "android-native-keyring-store",
  "apple-native-keyring-store",
@@ -3065,7 +3076,7 @@ dependencies = [
  "hex",
  "keyring-core",
  "libc",
- "nostr 0.45.5",
+ "nostr 0.45.7",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3238,7 +3249,7 @@ dependencies = [
 [[package]]
 name = "marmot-app"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3260,7 +3271,7 @@ dependencies = [
  "marmot-session",
  "media-store",
  "nostr 0.44.8",
- "nostr 0.45.5",
+ "nostr 0.45.7",
  "nostr-directory",
  "nostr-sdk",
  "openssl",
@@ -3290,7 +3301,7 @@ dependencies = [
 [[package]]
 name = "marmot-forensics"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "fs-private",
  "hex",
@@ -3304,7 +3315,7 @@ dependencies = [
 [[package]]
 name = "marmot-markdown"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "marmot-markdown-ast",
 ]
@@ -3312,7 +3323,7 @@ dependencies = [
 [[package]]
 name = "marmot-markdown-ast"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "serde",
 ]
@@ -3320,7 +3331,7 @@ dependencies = [
 [[package]]
 name = "marmot-observability"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "cgka-traits",
  "chrono",
@@ -3344,7 +3355,7 @@ dependencies = [
 [[package]]
 name = "marmot-pairing"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "cgka-traits",
  "hex",
@@ -3362,7 +3373,7 @@ dependencies = [
 [[package]]
 name = "marmot-session"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "async-trait",
  "cgka-engine",
@@ -3392,7 +3403,7 @@ dependencies = [
 [[package]]
 name = "media-store"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "fs-private",
  "fs4",
@@ -3522,8 +3533,8 @@ dependencies = [
 
 [[package]]
 name = "nostr"
-version = "0.45.5"
-source = "git+https://github.com/erskingardner/rust-nostr?rev=e93cc06b5624f06c21ecd8111a124176eb0c7589#e93cc06b5624f06c21ecd8111a124176eb0c7589"
+version = "0.45.7"
+source = "git+https://github.com/nostrdevkit/nostr?rev=4904ffb85f60178375a1dda659a61793f36f03b8#4904ffb85f60178375a1dda659a61793f36f03b8"
 dependencies = [
  "aes 0.8.4",
  "base64 0.22.1",
@@ -3560,16 +3571,16 @@ dependencies = [
 [[package]]
 name = "nostr-database"
 version = "0.45.2"
-source = "git+https://github.com/erskingardner/rust-nostr?rev=e93cc06b5624f06c21ecd8111a124176eb0c7589#e93cc06b5624f06c21ecd8111a124176eb0c7589"
+source = "git+https://github.com/nostrdevkit/nostr?rev=4904ffb85f60178375a1dda659a61793f36f03b8#4904ffb85f60178375a1dda659a61793f36f03b8"
 dependencies = [
- "nostr 0.45.5",
+ "nostr 0.45.7",
  "opaquerr",
 ]
 
 [[package]]
 name = "nostr-directory"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "base64 0.22.1",
  "cgka-engine",
@@ -3577,7 +3588,7 @@ dependencies = [
  "fs-private",
  "futures",
  "hex",
- "nostr 0.45.5",
+ "nostr 0.45.7",
  "nostr-sdk",
  "reqwest",
  "rusqlite",
@@ -3597,19 +3608,19 @@ dependencies = [
 [[package]]
 name = "nostr-gossip"
 version = "0.45.1"
-source = "git+https://github.com/erskingardner/rust-nostr?rev=e93cc06b5624f06c21ecd8111a124176eb0c7589#e93cc06b5624f06c21ecd8111a124176eb0c7589"
+source = "git+https://github.com/nostrdevkit/nostr?rev=4904ffb85f60178375a1dda659a61793f36f03b8#4904ffb85f60178375a1dda659a61793f36f03b8"
 dependencies = [
- "nostr 0.45.5",
+ "nostr 0.45.7",
  "opaquerr",
 ]
 
 [[package]]
 name = "nostr-memory"
 version = "0.45.2"
-source = "git+https://github.com/erskingardner/rust-nostr?rev=e93cc06b5624f06c21ecd8111a124176eb0c7589#e93cc06b5624f06c21ecd8111a124176eb0c7589"
+source = "git+https://github.com/nostrdevkit/nostr?rev=4904ffb85f60178375a1dda659a61793f36f03b8#4904ffb85f60178375a1dda659a61793f36f03b8"
 dependencies = [
  "btreecap",
- "nostr 0.45.5",
+ "nostr 0.45.7",
  "nostr-database 0.45.2",
  "tokio",
 ]
@@ -3620,7 +3631,7 @@ version = "0.44.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08ed09e8363503c6f464087b530a1f43cf68be6292bd4928b5ea1141b03dc11c"
 dependencies = [
- "async-utility",
+ "async-utility 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "async-wsocket 0.13.2",
  "atomic-destructor",
  "hex",
@@ -3633,16 +3644,16 @@ dependencies = [
 
 [[package]]
 name = "nostr-sdk"
-version = "0.45.4"
-source = "git+https://github.com/erskingardner/rust-nostr?rev=e93cc06b5624f06c21ecd8111a124176eb0c7589#e93cc06b5624f06c21ecd8111a124176eb0c7589"
+version = "0.45.6"
+source = "git+https://github.com/nostrdevkit/nostr?rev=4904ffb85f60178375a1dda659a61793f36f03b8#4904ffb85f60178375a1dda659a61793f36f03b8"
 dependencies = [
- "async-utility",
+ "async-utility 0.3.2 (git+https://github.com/yukibtc/async-utility?rev=b323ae0c1c1424b78bf8bb8832b95e86771f1dee)",
  "async-wsocket 0.17.0",
  "faster-hex",
  "futures",
  "lru 0.18.5",
  "negentropy",
- "nostr 0.45.5",
+ "nostr 0.45.7",
  "nostr-database 0.45.2",
  "nostr-gossip",
  "nostr-memory",
@@ -5225,7 +5236,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "storage-sqlite"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "cgka-traits",
  "fs-private",
@@ -5696,13 +5707,13 @@ dependencies = [
 [[package]]
 name = "transport-nostr"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "async-trait",
  "cgka-traits",
  "futures",
  "hex",
- "nostr 0.45.5",
+ "nostr 0.45.7",
  "nostr-sdk",
  "rand 0.8.8",
  "serde",
@@ -5717,7 +5728,7 @@ dependencies = [
 [[package]]
 name = "transport-nostr-adapter"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "async-trait",
  "async-wsocket 0.17.0",
@@ -5726,7 +5737,7 @@ dependencies = [
  "futures",
  "hex",
  "marmot-pairing",
- "nostr 0.45.5",
+ "nostr 0.45.7",
  "nostr-gossip",
  "nostr-sdk",
  "serde",
@@ -5744,7 +5755,7 @@ dependencies = [
 [[package]]
 name = "transport-nostr-peeler"
 version = "0.20.0-dev"
-source = "git+https://github.com/marmot-protocol/mdk.git?rev=029e0579fdb7f59e85b3a4a55dd7a9e42091988a#029e0579fdb7f59e85b3a4a55dd7a9e42091988a"
+source = "git+https://github.com/marmot-protocol/mdk.git?rev=bea7b400b78f3ec6d1abb3894d1d8162bdf409da#bea7b400b78f3ec6d1abb3894d1d8162bdf409da"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -5752,7 +5763,7 @@ dependencies = [
  "chacha20poly1305 0.10.1",
  "getrandom 0.2.17",
  "hex",
- "nostr 0.45.5",
+ "nostr 0.45.7",
  "rand 0.8.8",
  "serde",
  "serde_json",

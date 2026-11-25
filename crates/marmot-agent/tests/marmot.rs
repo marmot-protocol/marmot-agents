@@ -790,12 +790,11 @@ async fn a_send_older_than_its_groups_messages_is_not_sent_again() {
 
 // A send of the agent's full activity that MDK was handed while the chat was the owner's goes on,
 // after someone joins, only as MDK says when asked (`outcome`): once its engine took it, MDK names
-// the event the send became, which is the event MDK gave back when it took it. MDK lets go of a
-// token with the message it made, once the group's messages disappear, and takes a token it no
-// longer knows as a new send: a token MDK may let go of within a minute does not last to be handed
-// again, however MDK answers now (D-136, D-109).
+// the event the send became, which is the event MDK gave back when it took it, and names it too
+// while it keeps the send queued or its engine has it (mdk#3712). MDK lets go of a token with the
+// message it made, once the group's messages disappear (D-136, D-109).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn mdk_says_what_became_of_a_send_and_whether_its_token_lasts() {
+async fn mdk_says_what_became_of_a_send() {
     use marmot_agent::marmot::{Outcome, Side};
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     let group = a_quiet_chat(&world).await;
@@ -834,18 +833,28 @@ async fn mdk_says_what_became_of_a_send_and_whether_its_token_lasts() {
         Ok(Outcome::Forgotten),
         "the group's messages have disappeared since it was first tried"
     );
-    assert_eq!(world.marmot.lasts(&group, &tried(0)), Ok(true), "lasts");
+
+    // MDK keeps one queued for a while, then its engine has it: MDK names its event throughout.
+    world.marmot.faults.push(Fault::Owned {
+        queued: std::time::Duration::from_secs(5),
+        owned: std::time::Duration::from_secs(3600),
+    });
+    let (mut words, held) = words_named("held");
+    if let marmot_agent::Sending::Words { text, .. } = &mut words {
+        *text = "other words".into();
+    }
+    let pending = world.marmot.send(&group, &words, &held).await;
+    let Err(marmot_agent::marmot::SendFailed::Pending(event)) = pending else {
+        panic!("MDK keeps it queued: {pending:?}");
+    };
     assert_eq!(
-        world.marmot.lasts(&group, &tried(3600 - 600)),
-        Ok(true),
-        "lasts a good while yet"
+        world.marmot.outcome(&group, &held),
+        Ok(Outcome::Queued(event.clone()))
     );
-    assert_eq!(
-        world.marmot.lasts(&group, &tried(3600 - 10)),
-        Ok(false),
-        "MDK may let go of it before it is handed again"
-    );
-    assert_eq!(world.marmot.lasts(&group, &tried(7200)), Ok(false));
+    eventually(|| {
+        (world.marmot.outcome(&group, &held) == Ok(Outcome::Went(event.clone()))).then_some(())
+    })
+    .await;
     world.runtime.shutdown().await;
 }
 

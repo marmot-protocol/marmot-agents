@@ -154,12 +154,8 @@ impl Side for Mdk {
     }
 
     // Every send this MDK was handed waits in it, so it still holds each token.
-    fn outcome(&self, _group: &GroupKey, _token: &Token) -> Result<Outcome, NotNow> {
-        Ok(Outcome::Queued)
-    }
-
-    fn lasts(&self, _group: &GroupKey, _token: &Token) -> Result<bool, NotNow> {
-        Ok(true)
+    fn outcome(&self, _group: &GroupKey, token: &Token) -> Result<Outcome, NotNow> {
+        Ok(Outcome::Queued(EventKey::from(token.mdk.as_str())))
     }
 
     fn stored(&self, group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {

@@ -1836,17 +1836,6 @@ impl Conversation {
         new
     }
 
-    /// Whether the core knows the form the send named `token` was handed to MDK in under its
-    /// token now: with its item's native message or without. Not for one an older core handed
-    /// to MDK, which noted no form ([`Queued::bare`]), if it has a native message to leave out:
-    /// it is never handed to MDK again, since MDK would refuse a form other than the one it
-    /// was handed, settling what it settled a second time (#181).
-    pub fn form_known(&self, token: &str) -> bool {
-        (self.saved.outbox.iter())
-            .find(|q| q.token == token)
-            .is_some_and(|q| q.bare.is_some() || !Self::native(q))
-    }
-
     /// The event MDK said the send named `token` will be, when it took it under its token now.
     pub fn event_of(&self, token: &str) -> Option<EventKey> {
         let queued = self.saved.outbox.iter().find(|q| q.token == token)?;

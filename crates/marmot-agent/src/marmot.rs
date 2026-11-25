@@ -28,10 +28,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// The kind of a chat message.
 const CHAT: u64 = 9;
 
-/// How long, in seconds, the core may take from asking MDK whether it keeps a send to handing the
-/// send to it again ([`Side::lasts`]), saves and a busy MDK included, with room to spare.
-const HANDED_AGAIN_WITHIN: u64 = 60;
-
 /// Opens the account home the settings name: its accounts, and MDK's app and runtime on it.
 /// This is what first opens the store, which MDK upgrades forward only. MDK holds the home for as
 /// long as the app or a runtime made from it lives, so a second core on the same home is refused
@@ -192,10 +188,15 @@ pub struct Marmot {
 #[derive(Clone, Default)]
 pub struct Faults {
     next: Arc<Mutex<VecDeque<Fault>>>,
-    /// The tokens of sends MDK keeps queued ([`Fault::Held`], [`Fault::Owned`]), until when, and
-    /// until when its engine has them after that, naming no event ([`Fault::Owned`]).
-    held: Arc<Mutex<HashMap<String, (std::time::Instant, std::time::Instant)>>>,
+    /// The tokens of sends MDK keeps queued ([`Fault::Held`], [`Fault::Owned`]), until when, until
+    /// when its engine has them after that ([`Fault::Owned`]), and the event MDK named when it
+    /// took each, once it did.
+    held: Arc<Mutex<HashMap<String, Held>>>,
 }
+
+/// A send a fault keeps in MDK: until when MDK says it is queued, until when its engine has it
+/// after that, and the event MDK named when it took it, once it did.
+type Held = (std::time::Instant, std::time::Instant, Option<String>);
 
 /// What a send meets.
 pub enum Fault {
@@ -221,8 +222,8 @@ pub enum Fault {
     /// engine is held up: until then MDK says it is queued.
     Held(Duration),
     /// MDK takes the send and keeps it queued for `queued`, and then says for `owned` that its
-    /// engine has it without naming its event, as it says for good of a send whose publish
-    /// failed once its engine took it. After that, MDK says what it says.
+    /// engine has it, as it says for good of a send whose publish failed once its engine took
+    /// it. After that, MDK says what it says. MDK names the event it took it as throughout.
     Owned {
         /// How long MDK says it is queued, from its first try.
         queued: Duration,
@@ -235,6 +236,17 @@ impl Faults {
     /// The next send meets `fault`.
     pub fn push(&self, fault: Fault) {
         self.next.lock().expect("never poisoned").push_back(fault);
+    }
+
+    /// MDK's engine takes the send under `token` now, which a fault keeps queued: from now on MDK
+    /// says its engine has it, for as long as the fault said.
+    pub fn engine_takes(&self, token: &str) {
+        let mut held = self.held.lock().expect("never poisoned");
+        if let Some((queued, owned, _)) = held.get_mut(token) {
+            let now = std::time::Instant::now();
+            *owned = now + owned.saturating_duration_since(*queued);
+            *queued = now;
+        }
     }
 
     /// Whether every fault pushed has been met.
@@ -257,23 +269,33 @@ impl Faults {
     }
 
     /// Keeps the send under `token` queued for `queued`, from its first try, and then owned by
-    /// MDK's engine, naming no event, for `owned`.
+    /// MDK's engine for `owned`.
     fn hold(&self, token: &str, queued: Duration, owned: Duration) {
         let mut held = self.held.lock().expect("never poisoned");
         let until = std::time::Instant::now() + queued;
         held.entry(token.to_string())
-            .or_insert((until, until + owned));
+            .or_insert((until, until + owned, None));
     }
 
-    /// What MDK says of the send under `token` now, if a fault decides it.
+    /// MDK took the send under `token`, which a fault keeps, as `event`.
+    fn took(&self, token: &str, event: &EventKey) {
+        let mut held = self.held.lock().expect("never poisoned");
+        if let Some((_, _, named)) = held.get_mut(token) {
+            named.get_or_insert_with(|| event.0.clone());
+        }
+    }
+
+    /// What MDK says of the send under `token` now, if a fault decides it: nothing before MDK
+    /// took it.
     fn held(&self, token: &str) -> Option<LocalSendStatus> {
         let held = self.held.lock().expect("never poisoned");
-        let (queued, owned) = held.get(token)?;
+        let (queued, owned, named) = held.get(token)?;
+        let message_id_hex = named.clone()?;
         let now = std::time::Instant::now();
         if *queued > now {
-            Some(LocalSendStatus::Queued)
+            Some(LocalSendStatus::Queued { message_id_hex })
         } else if *owned > now {
-            Some(LocalSendStatus::EngineOwned)
+            Some(LocalSendStatus::EngineOwned { message_id_hex })
         } else {
             None
         }
@@ -443,7 +465,7 @@ impl Marmot {
             _ => {}
         }
         if let Some(tried) = token.tried_at
-            && self.may_have_let_go(group, tried, 0)?
+            && self.may_have_let_go(group, tried)?
         {
             match self.status(&id, &token.mdk) {
                 // MDK still keeps it: tried again, it is answered from what MDK keeps.
@@ -453,7 +475,10 @@ impl Marmot {
             }
         }
         let taken = match self.submit(&id, what, token).await {
-            Ok(Taken::Kept(event)) => event,
+            Ok(Taken::Kept(event)) => {
+                self.faults.took(&token.mdk, &event);
+                event
+            }
             // Words an older core sent, without a token: their edit goes as it went then. Sent
             // again, it shows the same text, and adds nothing anyone sees.
             Ok(Taken::Sent(event)) => return Ok(event),
@@ -461,7 +486,9 @@ impl Marmot {
                 return Err(match self.status(&id, &token.mdk) {
                     // A try MDK dropped is refused if tried again; that is the drop, not a
                     // refusal.
-                    Ok(Some(LocalSendStatus::Rejected)) => SendFailed::Rejected,
+                    Ok(Some(LocalSendStatus::Rejected | LocalSendStatus::RefusedNewMembers)) => {
+                        SendFailed::Rejected
+                    }
                     // MDK answers a token it took with what it made of it, before it looks at
                     // the group: so it never took this one, and the group is going or gone.
                     Ok(None) if group_ended(&error) => SendFailed::Refused { gone: false },
@@ -476,10 +503,12 @@ impl Marmot {
             }
         };
         match self.status(&id, &token.mdk) {
-            Ok(Some(LocalSendStatus::EngineOwned | LocalSendStatus::Completed(_))) => {}
-            Ok(Some(LocalSendStatus::Rejected)) => return Err(SendFailed::Rejected),
+            Ok(Some(LocalSendStatus::EngineOwned { .. } | LocalSendStatus::Completed(_))) => {}
+            Ok(Some(LocalSendStatus::Rejected | LocalSendStatus::RefusedNewMembers)) => {
+                return Err(SendFailed::Rejected);
+            }
             // Queued, or not to be read for a moment: MDK has it, and goes on with it.
-            Ok(Some(LocalSendStatus::Queued) | None) | Err(_) => {
+            Ok(Some(LocalSendStatus::Queued { .. }) | None) | Err(_) => {
                 return Err(SendFailed::Pending(taken));
             }
         }
@@ -572,22 +601,17 @@ impl Marmot {
         Ok(Taken::Kept(EventKey(accepted.message_id_hex)))
     }
 
-    /// Whether MDK may have let go of a token first tried at `tried` (seconds since 1970), or may
-    /// within `within` seconds from now. MDK forgets a token with the message it made, and a
-    /// group's messages disappear once they are as old as the group says; a message is never
-    /// older than its first try. An error when MDK cannot say for a moment.
-    fn may_have_let_go(
-        &self,
-        group: &GroupKey,
-        tried: u64,
-        within: u64,
-    ) -> Result<bool, SendFailed> {
+    /// Whether MDK may have let go of a token first tried at `tried` (seconds since 1970). MDK
+    /// forgets a token with the message it made, and a group's messages disappear once they are
+    /// as old as the group says; a message is never older than its first try. An error when MDK
+    /// cannot say for a moment.
+    fn may_have_let_go(&self, group: &GroupKey, tried: u64) -> Result<bool, SendFailed> {
         let record = (self.app)
             .group(&self.label, group.as_str())
             .map_err(|_| SendFailed::Unknown)?;
         let keep = record.map_or(0, |r| r.message_retention.disappearing_message_secs);
         let now = SystemTime::now().duration_since(UNIX_EPOCH);
-        let now = now.map_or(0, |d| d.as_secs()).saturating_add(within);
+        let now = now.map_or(0, |d| d.as_secs());
         Ok(keep > 0 && now.saturating_sub(tried) >= keep)
     }
 
@@ -858,11 +882,6 @@ pub trait Side: Clone + Send + Sync + 'static {
     /// What became of a send handed to MDK under `token`, as MDK says when asked: the send is
     /// not handed to it again. [`NotNow`] when MDK could not say.
     fn outcome(&self, group: &GroupKey, token: &Token) -> Result<Outcome, NotNow>;
-
-    /// Whether MDK will still know `token` when the send is handed to it again, a minute from
-    /// now at most: MDK takes a token it has let go of as a new send. [`NotNow`] when MDK could
-    /// not say.
-    fn lasts(&self, group: &GroupKey, token: &Token) -> Result<bool, NotNow>;
 }
 
 /// What became of a send handed to MDK under its token, as MDK says when asked
@@ -872,10 +891,8 @@ pub enum Outcome {
     /// It went out, or goes out, as MDK was handed it: MDK's engine took it, and this is the
     /// event it is.
     Went(EventKey),
-    /// MDK's engine took it, and it goes out as MDK was handed it; MDK does not say its event.
-    Taken,
-    /// MDK keeps it queued, to post as it was handed.
-    Queued,
+    /// MDK keeps it queued, to post as it was handed, as this event.
+    Queued(EventKey),
     /// MDK took it and dropped it before it went out: nothing of it went, and MDK refuses its
     /// token from now on.
     Dropped,
@@ -942,8 +959,7 @@ pub enum SendFailed {
     /// MDK keeps it under its token, queued, and its engine has not taken it yet: it is tried
     /// again soon under the same token, which MDK answers from what it keeps. MDK named the event
     /// it will be when it took it, which the core keeps: should someone join the chat meanwhile,
-    /// the send is not handed to MDK again, and MDK says no event while its engine has it
-    /// ([`Outcome::Taken`]).
+    /// the send is not handed to MDK again, and is asked after ([`Side::outcome`]).
     Pending(EventKey),
     /// It was an edit, and MDK no longer has the event it edits, nor the token that event went
     /// under: the group's messages disappeared since it went. MDK did not take this edit. A
@@ -1136,35 +1152,32 @@ impl Side for Marmot {
         };
         match self.status(&id, &token.mdk) {
             // What MDK posts is the event it named when it took the send (`retained_event`).
-            Ok(Some(LocalSendStatus::Completed(summary))) => {
-                Ok((summary.message_ids.into_iter().next())
-                    .map_or(Outcome::Taken, |event| Outcome::Went(EventKey(event))))
+            // MDK names the event in every token send it completes; one naming none is not an
+            // answer, and is asked again.
+            Ok(Some(LocalSendStatus::Completed(summary))) => (summary.message_ids.into_iter())
+                .next()
+                .map(|event| Outcome::Went(EventKey(event)))
+                .ok_or(NotNow),
+            // MDK names the event while it holds the send, its engine's or queued (mdk#3712).
+            Ok(Some(LocalSendStatus::EngineOwned { message_id_hex })) => {
+                Ok(Outcome::Went(EventKey(message_id_hex)))
             }
-            Ok(Some(LocalSendStatus::EngineOwned)) => Ok(Outcome::Taken),
-            Ok(Some(LocalSendStatus::Queued)) => Ok(Outcome::Queued),
-            Ok(Some(LocalSendStatus::Rejected)) => Ok(Outcome::Dropped),
+            Ok(Some(LocalSendStatus::Queued { message_id_hex })) => {
+                Ok(Outcome::Queued(EventKey(message_id_hex)))
+            }
+            Ok(Some(LocalSendStatus::Rejected | LocalSendStatus::RefusedNewMembers)) => {
+                Ok(Outcome::Dropped)
+            }
             // MDK lets go of a token with the message it made, once its group's messages
             // disappear; before then, it never had it.
             Ok(None) => match token.tried_at {
-                Some(tried) => match self.may_have_let_go(group, tried, 0) {
+                Some(tried) => match self.may_have_let_go(group, tried) {
                     Ok(true) => Ok(Outcome::Forgotten),
                     Ok(false) => Ok(Outcome::NotTaken),
                     Err(_) => Err(NotNow),
                 },
                 None => Ok(Outcome::NotTaken),
             },
-            Err(_) => Err(NotNow),
-        }
-    }
-
-    fn lasts(&self, group: &GroupKey, token: &Token) -> Result<bool, NotNow> {
-        // Let go of between this answer and the send, the send would go out again, as it was
-        // handed, to the chat as it is now.
-        let Some(tried) = token.tried_at else {
-            return Ok(true);
-        };
-        match self.may_have_let_go(group, tried, HANDED_AGAIN_WITHIN) {
-            Ok(gone) => Ok(!gone),
             Err(_) => Err(NotNow),
         }
     }

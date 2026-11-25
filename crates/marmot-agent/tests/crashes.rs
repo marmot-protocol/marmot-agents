@@ -684,9 +684,8 @@ async fn a_send_mdk_keeps_is_not_handed_to_it_again_after_someone_joins() {
     .await;
 
     // The tool, done, with its native message, settling the request: MDK takes it, and keeps it
-    // queued while someone is added to the chat. Then MDK's engine has it, and MDK names no event
-    // for it from then on, as for a send whose publish failed: the core goes on with the event
-    // MDK named when it took it, which it kept.
+    // queued while someone is added to the chat. Then MDK's engine has it, as for a send whose
+    // publish failed: the core goes on with the event MDK names, which it kept.
     world.marmot.faults.push(Fault::Owned {
         queued: Duration::from_secs(20),
         owned: Duration::from_secs(3600),
@@ -699,9 +698,10 @@ async fn a_send_mdk_keeps_is_not_handed_to_it_again_after_someone_joins() {
             settles: vec![marmot_agent_driver::RequestId(taken)],
         })
         .unwrap();
+    // The tool's event, as MDK named it when it took it, saved before someone joins.
     let tried = |state: serde_json::Value| {
         (state["conversation"]["outbox"].as_array()).is_some_and(|queue| {
-            (queue.iter()).any(|q| q["tried_at"].is_u64() && q["what"]["Item"].is_object())
+            (queue.iter()).any(|q| q["event"].is_string() && q["what"]["Item"].is_object())
         })
     };
     within(20, || tried(state()).then_some(())).await;
@@ -936,11 +936,11 @@ async fn a_send_an_older_core_handed_over_goes_on_as_mdk_took_it_after_someone_j
 }
 
 /// A tool MDK was handed while the chat was the owner's, whose answer the core lost to a stop, and
-/// which MDK's engine has for `owned`, naming no event, in a group whose messages last `keep`
-/// seconds (or for ever, for 0), which someone joined since: the core is started on that state, and
-/// the outbox empties within `within_secs`, the tool having gone out once, as MDK took it. What
-/// the chat was told.
-async fn engine_has_it(keep: u64, owned: u64, within_secs: u64) -> Vec<String> {
+/// which MDK's engine has for good, in a group whose messages last `keep` seconds (or for ever, for
+/// 0), which someone joined since: the core is started on that state, and the outbox empties, the
+/// tool having gone out once, as MDK took it, and nothing handed to MDK again. If `queued`, MDK
+/// keeps it queued first, until the core has saved the event MDK names. What the chat was told.
+async fn engine_has_it(keep: u64, queued: bool) -> Vec<String> {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
     world.runtime.start().await.unwrap();
     let (driver, _events, seen) = stub(false);
@@ -974,15 +974,35 @@ async fn engine_has_it(keep: u64, owned: u64, within_secs: u64) -> Vec<String> {
     let (token, what) = talk.next_send(&group).unwrap();
     talk.attempting(&token.send, unix_now());
     world.marmot.faults.push(Fault::Owned {
-        queued: Duration::ZERO,
-        owned: Duration::from_secs(owned),
+        queued: if queued {
+            Duration::from_secs(3600)
+        } else {
+            Duration::ZERO
+        },
+        owned: Duration::from_secs(3600),
     });
-    let went = world.send(&group, &what, &token).await.unwrap();
+    let went = match world.marmot.send(&group, &what, &token).await {
+        Ok(event) | Err(marmot_agent::marmot::SendFailed::Pending(event)) => event,
+        Err(failed) => panic!("MDK took it: {failed:?}"),
+    };
     save_conversation(&store, kept, &talk);
+    // Were the tool handed to MDK again, this would meet it, and it would be given up.
+    world.marmot.faults.push(Fault::Refuse(
+        marmot_app::AppError::InvalidAppMessagePayload("handed again".into()),
+    ));
 
     let (driver, _events, _) = stub(false);
     let core = world.start(driver);
-    within(within_secs, || {
+    if queued {
+        within(10, || {
+            let state = json(&store.load().unwrap());
+            let queue = state["conversation"]["outbox"].as_array().cloned()?;
+            (queue.len() == 1 && queue[0]["event"].as_str() == Some(went.as_str())).then_some(())
+        })
+        .await;
+        world.marmot.faults.engine_takes(&token.mdk);
+    }
+    within(20, || {
         let state = json(&store.load().unwrap());
         (state["conversation"]["outbox"].as_array())
             .is_some_and(|q| q.is_empty())
@@ -998,36 +1018,38 @@ async fn engine_has_it(keep: u64, owned: u64, within_secs: u64) -> Vec<String> {
         .collect();
     let firsts: Vec<EventKey> = (versions(&chat, "k").into_iter()).map(|v| v.0).collect();
     assert_eq!(firsts, vec![went], "the tool went out once, as MDK took it");
+    assert!(!world.marmot.faults.is_empty(), "not handed to MDK again");
     core.stop().await;
     world.runtime.shutdown().await;
     told
 }
 
 // A send of the agent's full activity that MDK was handed while the chat was the owner's, whose
-// answer the core lost, and which MDK's engine has without naming its event, is not told as one that
-// may not have been delivered while MDK has it, even in a group whose messages last a minute or less,
-// where MDK may let go of its token within the minute: MDK still posts it, and the notice would
-// settle again what it settled (S1, H1). The core asks again until MDK names its event.
+// answer the core lost, and which MDK's engine keeps for good, goes on with the event MDK names
+// (mdk#3712), handed to MDK no second time, and is not told as one that may not have been
+// delivered, which would settle again what it settled (S1, H1). Before MDK named it, this held up
+// the chat for good in a group whose messages disappear within a minute (D-152's known limit).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_send_mdks_engine_has_is_not_told_as_lost_while_it_has_it() {
-    let told = engine_has_it(60, 15, 40).await;
+async fn a_send_mdks_engine_keeps_goes_on_with_the_event_mdk_names() {
+    let told = engine_has_it(60, false).await;
     assert!(told.is_empty(), "nothing is told of it: {told:?}");
 }
 
-// The one second hand-over left (D-152), which the owner may yet remove: such a send, in the form
-// the core noted it was handed, is handed to MDK again under its token while MDK will still know
-// the token, and goes on with the event MDK names, before MDK's status names it.
+// The same in a group whose messages never disappear, where the core used to hand the send to MDK
+// again to learn its event (D-152's one path left, `hand_again`), here first kept queued: the core
+// saves the event MDK names meanwhile, so the send is known to have been taken should MDK later
+// let go of its token (#203).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_send_mdks_engine_has_is_handed_again_as_it_was_while_its_token_lasts() {
-    let told = engine_has_it(0, 3600, 20).await;
+async fn a_send_mdks_engine_keeps_is_never_handed_again() {
+    let told = engine_has_it(0, true).await;
     assert!(told.is_empty(), "nothing is told of it: {told:?}");
 }
 
 // A send an older core handed to MDK without its native message, in a chat that was not the
 // owner's, and which noted no form for it (`bare`), is not handed to MDK again in full while MDK's
-// engine has it without naming its event: MDK would refuse the token as bound to another
-// submission, the core would give the send up, and what stands in for it could settle again what
-// MDK still posts. It is asked after until MDK names its event, though no one joined or left.
+// engine has it: MDK would refuse the token as bound to another submission, the core would give the
+// send up, and what stands in for it could settle again what MDK still posts. It goes on with the
+// event MDK names, though no one joined or left.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_send_of_unknown_form_is_never_handed_again() {
     let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
@@ -1067,7 +1089,7 @@ async fn a_send_of_unknown_form_is_never_handed_again() {
     talk.attempting(&token.send, unix_now());
     world.marmot.faults.push(Fault::Owned {
         queued: Duration::ZERO,
-        owned: Duration::from_secs(15),
+        owned: Duration::from_secs(3600),
     });
     let went = world.send(&group, &what, &token).await.unwrap();
     let mut old = json(&Kept {
@@ -1092,7 +1114,7 @@ async fn a_send_of_unknown_form_is_never_handed_again() {
 
     let (driver, _events, _) = stub(false);
     let core = world.start(driver);
-    within(40, || {
+    within(20, || {
         let state = json(&store.load().unwrap());
         (state["conversation"]["outbox"].as_array())
             .is_some_and(|q| q.is_empty())
