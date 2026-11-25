@@ -238,6 +238,17 @@ impl Faults {
         self.next.lock().expect("never poisoned").push_back(fault);
     }
 
+    /// MDK's engine takes the send under `token` now, which a fault keeps queued: from now on MDK
+    /// says its engine has it, for as long as the fault said.
+    pub fn engine_takes(&self, token: &str) {
+        let mut held = self.held.lock().expect("never poisoned");
+        if let Some((queued, owned, _)) = held.get_mut(token) {
+            let now = std::time::Instant::now();
+            *owned = now + owned.saturating_duration_since(*queued);
+            *queued = now;
+        }
+    }
+
     /// Whether every fault pushed has been met.
     pub fn is_empty(&self) -> bool {
         self.next.lock().expect("never poisoned").is_empty()
