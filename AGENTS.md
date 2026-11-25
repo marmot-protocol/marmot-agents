@@ -409,8 +409,11 @@ from its seeds. `cargo fuzz list --fuzz-dir crates/marmot-agent-fuzz` lists the 
 ```sh
 cargo run -p marmot-agent-fuzz --example seeds -- target/fuzz-corpus
 cargo +nightly-2026-08-21 fuzz run --fuzz-dir crates/marmot-agent-fuzz --features libfuzzer \
-    <target> target/fuzz-corpus/<target> -- -max_total_time=300
+    --target x86_64-unknown-linux-gnu <target> target/fuzz-corpus/<target> -- -max_total_time=300
 ```
+
+The `--target` is for cargo-fuzz's own release builds, which are built for musl and otherwise build the
+targets for musl, where the sanitizer does not work. On another machine give its own triple.
 
 An input that makes a target fail is written under `crates/marmot-agent-fuzz/artifacts/`, which git ignores.
 Never commit one as it is: make it a test, as small as it can be, the way the property tests' cases are kept.
