@@ -757,6 +757,8 @@ Read again on 2026-11-25 at the same commit, in the same image, for
   refusal of the person, and the confirmation then still waits. When the confirmation is older than
   `DEFAULT_TIMEOUT_SECONDS`, `resolve` takes it and runs nothing, and the reply is empty (`_resolved or ""`), so
   nothing is sent.
+- When the platform does not render buttons, as the plugin does not, `_request_slash_confirm` returns the
+  question's text, which Hermes sends as its reply to the command's own message, wherever that command ran.
 
 The checks for an approval card and a question, read at the same commit and on the same list (with
 `refusal_text`):

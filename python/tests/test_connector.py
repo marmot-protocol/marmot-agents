@@ -1118,6 +1118,25 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         dropped = self.last_of("confirm:k-1")
         self.assertEqual((dropped["state"], dropped.get("settles")), ("cancelled", ["r-1"]))
 
+    async def test_a_confirmation_asked_while_another_turn_of_its_session_runs_waits_for_its_answer(self):
+        """Hermes asks to confirm a typed `/new` while the session's turn still runs, so the `/new` has no
+        turn of its own: the question Hermes sends in reply to the `/new` names it, and the answer, not
+        those words, decides what becomes of it."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"))
+        session = self.of("session")[0]["session"]
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "new_session", "chat": CHAT, "session": session}})
+        typed = self.hermes.typed[-1]
+        self.asks_to_confirm(typed[2], "/new", "⚠️ **Confirm /new**\n\nThis starts a fresh session.", "k-1")
+        self.feed(said("Hi.", "m-1", notify=True), complete("m-1"))
+        self.assertEqual([e for e in self.sent if "settles" in e], [])
+        self.hermes.confirmed = phrase("gateway.reset.header_default")
+        await self.connector.serve("answer", {"request": "r-2", "item": "confirm:k-1", "by": ALICE, "given": YES})
+        await asyncio.sleep(0)
+        self.assertEqual([(e["item"], e["settles"]) for e in self.sent if "settles" in e],
+                         [("confirm:k-1", ["r-2"]), (f"session:{session}", ["r-1"])])
+
     async def test_a_second_reset_while_one_is_on_its_way_is_refused(self):
         """One reset settles one request: a second `/new` for the same session waits for the first."""
         await self.connector.serve("prompt", prompt("m-1"))

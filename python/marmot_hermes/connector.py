@@ -217,8 +217,13 @@ class Connector:
                 # What Hermes says to a message can follow its taking a confirmation: Hermes is asked first.
                 settled_by_reply += self.look(chat, text_of(p.get("reply_to")), content)
                 awaiting = self.awaiting.pop(text_of(p.get("reply_to")), None)
-                if awaiting is not None and awaiting[0] == chat.id and awaiting[2](content):
-                    settled_by_reply.append(awaiting[1])
+                if awaiting is not None and awaiting[0] == chat.id:
+                    asking = self.asking(chat, awaiting[3], content)
+                    if asking is not None:
+                        # Hermes asks to confirm the command, in reply to it: the answer decides its outcome.
+                        chat.confirming[asking] = awaiting
+                    elif awaiting[2](content):
+                        settled_by_reply.append(awaiting[1])
                 if content.startswith(LOST_TURN):
                     self.discard(chat, text_of(p.get("reply_to")))
             if m.get("method") == "on_processing_complete":
@@ -265,18 +270,20 @@ class Connector:
             chat.by_item.setdefault(item, []).append(awaiting[1])
 
     def asked_to_confirm(self, chat: Chat, session_key: str, item: str) -> None:
-        """Hermes asks to confirm a command in the session `session_key`: the command typed there that Hermes
-        is answering, which now waits for the answer, and not for Hermes's words, which repeat the question.
-        One that Hermes held there before is replaced, and will not run its command."""
+        """Hermes asks to confirm a command in the session `session_key`: one that Hermes held there before is
+        replaced, and will not run its command."""
         replaced = chat.translator.confirm_waiting.get(session_key)
         if replaced is not None and replaced != item:
             self.dropped(chat, replaced)
-        # Hermes answers a session's messages in turn: the one whose turn runs, or else the oldest typed.
-        running = chat.translator.turn_of_session(session_key)
-        typed = [k for k, a in self.awaiting.items() if a[0] == chat.id and names_session(session_key, a[3])]
-        command = running if running in typed else None if running is not None else next(iter(typed), None)
-        if command is not None:
-            chat.confirming[item] = self.awaiting.pop(command)
+
+    def asking(self, chat: Chat, key: str, content: str) -> str | None:
+        """The confirmation that Hermes's reply `content`, to a command typed in the session of `key`, asks:
+        Hermes sends its question as its reply to the command (`_request_slash_confirm`), so the command now
+        waits for the answer, and not for those words. None when the reply is not one."""
+        translator = chat.translator
+        return next((item for session_key, item in translator.confirm_waiting.items()
+                     if names_session(session_key, key) and item not in chat.confirming
+                     and (translator.open.get(item) or {}).get("text") == content), None)
 
     def waiting(self, session_key: str) -> str | None:
         """The confirmation Hermes holds in a session, or `MARK` when that cannot be read. The look runs
