@@ -69,7 +69,13 @@ tries a send again is not modelled: a send may be tried again at once.
 - **Time.** No clock: `Tick` may fire for any taken control, and a send may be tried again at once. So
   disappearing messages are not modelled either: a send MDK has forgotten the token of (`lost`), and an edit
   whose first event has disappeared, which goes out as a new first event (`first_gone`), and a subagent's words
-  whose thread's `task` item has disappeared, which go in the main chat (`thread_gone`).
+  whose thread's `task` item has disappeared, which go in the main chat (`thread_gone`). Nor is there anything
+  between the driver and the core: `Emit` is the core taking the driver's event. So the model's S1 is "settled
+  at most once", and cannot show the net settling a control whose effect the driver handed over in time while
+  the core was busy, as waiting on the driver to take a slow request, and read only after the deadline. The
+  simulator's S1 checks that, against the harness's clock; it found the case on the nightly run
+  `driver/v2/45539714087/3755` ([#198](https://github.com/marmot-protocol/marmot-agents/issues/198)), and
+  `run.rs` now lets the net look only once the driver has nothing ready.
 - **Files the agent sends** (D-090).
 
 ## Trusted assumptions

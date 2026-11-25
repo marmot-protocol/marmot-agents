@@ -714,7 +714,12 @@ impl<D: Driver, M: Side> Core<D, M> {
             };
             match woke {
                 Woke::Tick => {
-                    loop {
+                    // The net waits while the driver has something the core has not read: the
+                    // core may have been busy past a deadline, as when it waited on the driver
+                    // to take a slow request, while the effect it waits for was handed over in
+                    // time. Settled now, that would be untrue (S1, D-087). What is ready is read
+                    // first, in the driver's turn, and the net looks again on the next tick.
+                    while !self.driver_ready().await {
                         let acts = self.conversation.overdue(self.clock());
                         if acts.is_empty() {
                             break;
