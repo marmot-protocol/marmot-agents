@@ -418,7 +418,8 @@ struct Queued {
     /// handed, and refuses it for anything else, so the send is tried again under it as it was
     /// first handed, whoever is in the chat now. `None` before its first try under the token, and
     /// in a state an older core wrote, which left the native message out by who was in the chat
-    /// at each try.
+    /// at each try: such a send, tried, is taken as handed in full ([`Conversation::bare`]), and
+    /// asked after, never handed again ([`Conversation::handed_otherwise`]).
     #[serde(default)]
     bare: Option<bool>,
     /// Whether it stands in for a send that was dropped: an item's close, or a notice that
@@ -1334,9 +1335,11 @@ impl Conversation {
             .find(|q| q.token == token)
             .is_some_and(|q| {
                 let everything = self.sent_everything(&q.group);
+                // An older core noted no form: it may have been handed either way (#181).
+                let unknown = q.bare.is_none();
                 q.tried_at.is_some()
                     && ((!everything && self.full_activity_only(q))
-                        || (Self::native(q) && self.bare(q) == everything))
+                        || (Self::native(q) && (unknown || self.bare(q) == everything)))
             })
     }
 
@@ -1900,9 +1903,12 @@ impl Conversation {
     }
 
     /// Whether the send `queued` goes without its item's native message: as it was first handed
-    /// to MDK under its token, or else as its chat is sent now.
+    /// to MDK under its token, or else as its chat is sent now. One an older core handed to MDK,
+    /// which noted no form, is taken as handed in full, as it was in the owner's chat, where the
+    /// full activity went (#181).
     fn bare(&self, queued: &Queued) -> bool {
-        (queued.bare).unwrap_or_else(|| !self.sent_everything(&queued.group))
+        (queued.bare)
+            .unwrap_or_else(|| queued.tried_at.is_none() && !self.sent_everything(&queued.group))
     }
 
     /// Whether `queued` carries a native message that only a chat sent the full activity is sent.

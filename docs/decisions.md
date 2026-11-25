@@ -3266,6 +3266,9 @@ to MDK again. The core learns what became of it by asking MDK (`local_send_statu
   [D-109](#d-109-how-the-cores-sends-survive-a-crash-as-built), "Something the agent sent may not have been
   delivered to the chat.", which settles what the send settled; it is no longer held back as a send MDK never took
   (issue 182).
+- **A send an older core handed to MDK**, whose state file noted no form for it, is taken as handed in full, as
+  it was in the owner's chat, and is asked after the same way whoever is in the chat now: it is never tried again
+  changed, which MDK would refuse, settling what it settled a second time (issue 181).
 - **The one path left.** When the core lost MDK's answer to its first hand-over, which takes a crash between MDK
   taking the send and the core saving its answer, and MDK's engine has the send but its status names no event yet,
   only a hand-over gives the event. Then the core hands the send again under its token, as it was handed, while MDK

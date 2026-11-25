@@ -791,6 +791,97 @@ async fn a_send_mdk_no_longer_knows_is_told_as_not_known_after_someone_joins() {
     world.runtime.shutdown().await;
 }
 
+// A send an older core queued and handed to MDK, which noted no form for it (`bare`), was handed
+// over in full: the older core sent the native message by who was in the chat at each try. After
+// someone joins the chat, before the newer core starts, it is not tried again changed, without
+// its native message, which MDK would refuse as bound to another submission, giving it up with a
+// notice: MDK is asked what became of it, and it goes on as MDK took it (#181).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_send_an_older_core_handed_over_goes_on_as_mdk_took_it_after_someone_joins() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let (driver, _events, seen) = stub(false);
+    let core = world.start(driver);
+    let (chat, id) = a_chat(&world, &seen).await;
+    core.stop().await;
+
+    // As an older core left it: the turn's first version, with its native message, handed to and
+    // taken by MDK in the owner's chat, and the core stopped before it learnt so.
+    let group = GroupKey(chat.hex.clone());
+    let store = Store::new(world.state.path());
+    let kept = store.load().unwrap();
+    let mut talk = conversation_of(&world, &kept, &group);
+    let native = marmot_agent_events::Native {
+        kind: "turn/started".into(),
+        payload: serde_json::value::RawValue::from_string(r#"{"id":"t1"}"#.into()).unwrap(),
+    };
+    let running = event("t", State::Running, turn());
+    let running = AgentEvent::new(running.header().clone(), turn(), Some(native)).unwrap();
+    talk.emitted(Emitted {
+        event: running,
+        chat: Some(id.clone()),
+        prompts: Vec::new(),
+        settles: Vec::new(),
+    });
+    let (token, what) = talk.next_send(&group).unwrap();
+    talk.attempting(&token.send, unix_now());
+    let went = world.send(&group, &what, &token).await.unwrap();
+    let mut old = json(&Kept {
+        conversation: talk.saved().clone(),
+        ..Kept::default()
+    });
+    for queued in old["conversation"]["outbox"].as_array_mut().unwrap() {
+        queued.as_object_mut().unwrap().remove("bare");
+    }
+    let old: Kept = serde_json::from_value(old).unwrap();
+    save_conversation(
+        &store,
+        kept,
+        &Conversation::new(
+            PubKey(world.agent.clone()),
+            "stub",
+            world.config.rights(),
+            Stub::caps(),
+            old.conversation,
+        ),
+    );
+    someone_joins(&world, &chat).await;
+
+    let (driver, events, _) = stub(false);
+    let core = world.start(driver);
+    nothing_queued(&world).await;
+    events
+        .send(Emitted {
+            event: event("t", State::Done, turn()),
+            chat: Some(id),
+            prompts: Vec::new(),
+            settles: Vec::new(),
+        })
+        .unwrap();
+    within(30, || {
+        versions(&chat, "t").iter().find(|v| v.1 == 2).cloned()
+    })
+    .await;
+    let versions = versions(&chat, "t");
+    let firsts: Vec<&EventKey> = (versions.iter())
+        .filter(|v| v.1 == 1)
+        .map(|v| &v.0)
+        .collect();
+    assert_eq!(
+        firsts,
+        vec![&went],
+        "the first version went out once, as MDK took it"
+    );
+    let second = versions.iter().find(|v| v.1 == 2).unwrap();
+    assert_eq!(second.2.as_ref(), Some(&went), "and the next names it");
+    assert!(
+        (chat.items().iter()).all(|(_, r)| refused(&r.item.event).is_none()),
+        "nothing was given up"
+    );
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
 // A send that went out just before a crash, before the core marked it sent, is tried again when
 // the core starts, under the token it went under: MDK gives back the event it made, sends nothing,
 // and the send is not made a second time (S3).

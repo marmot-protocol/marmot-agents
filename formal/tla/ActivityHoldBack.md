@@ -43,9 +43,11 @@ cannot close it).
 - **Crashes.** The outbox, the items and what is pending are saved; who is in a chat is not, and is read again
   before the first send after a restart, so a restart is a read like any other here. `CoreLifecycle` checks the
   saves and the tokens across crashes. Nor an outbox saved by an older core, whose sends tried before carry no
-  record of how they went (`Queued::bare`): after someone joins, such a send is tried again changed, which MDK
-  refuses, and its stand-in can settle its request a second time. Review found it, not the model; it is issue
-  [#181](https://github.com/marmot-protocol/marmot-agents/issues/181).
+  record of how they went (`Queued::bare`): after someone joins, such a send was tried again changed, which MDK
+  refuses, and its stand-in could settle its request a second time. Review found it, not the model (issue
+  [#181](https://github.com/marmot-protocol/marmot-agents/issues/181)); **fixed** on 2026-11-25, first shown by
+  `a_send_an_older_core_handed_over_goes_on_as_mdk_took_it_after_someone_joins` (`tests/crashes.rs`): such a send
+  is taken as handed in full and asked after, never handed again (`handed_otherwise`).
 - **MDK's engine holding a send without naming its event.** MDK names a send's event when it takes it, and the
   core keeps it (`Queued::event`); MDK's status names it again once its engine has sent it
   (`mdk_says_what_became_of_a_send_and_whether_its_token_lasts`, `tests/marmot.rs`). Only when the core lost
