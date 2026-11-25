@@ -10,8 +10,8 @@ For Hermes a control is a typed command (`docs/reference/hermes-messages.md`): a
 `/stop`, a new session `/new` and a new model `/model <id>`, each typed in the session's own chat by
 its own sender. An approval is answered through Hermes's approval card, and a question through the
 call Hermes gives a platform for it; each is settled once Hermes has taken the answer. A request to
-confirm a command is answered by its id (D-146), and is Hermes's: after a message of a session where one
-shows waiting, the plugin asks Hermes whether it still does, and the command it confirms is settled by
+confirm a command is answered by its id (D-146), and is Hermes's: before and after a message of a session
+where one shows waiting, the plugin asks Hermes whether it still does, and the command it confirms is settled by
 the answer that cancels it, the event that shows it replaced or dropped, or else by its own effect (D-155).
 
 Nothing here touches Hermes directly: `hermes` is the adapter, or a stand-in for it in the tests.
@@ -29,7 +29,7 @@ import tempfile
 from pathlib import Path
 
 from .core import Refusal
-from .translate import CONFIRM_CHOICES, CONFIRM_LOOK, OPEN, VERSION, Translator, names_session
+from .translate import CONFIRM_CHOICES, CONFIRM_LOOK, OPEN, VERSION, Translator, key_of, names_session
 
 log = logging.getLogger("marmot_hermes")
 
@@ -168,7 +168,7 @@ class Connector:
         chat = self.chats.get(id_)
         if chat is None:
             ids = f"{self.boot}-{len(self.chats) + 1}-"
-            chat = Chat(id_, Translator(self.version, ids, self.generations))
+            chat = Chat(id_, Translator(self.version, ids, self.generations, looks=True))
             self.chats[id_] = chat
             if self.commands is not None:
                 self.record(self.registry_line(), id_)
@@ -223,6 +223,11 @@ class Connector:
                     self.discard(chat, text_of(p.get("reply_to")))
             if m.get("method") == "on_processing_complete":
                 self.look(chat, text_of(p.get("message_id")), None)
+        if line.get("via") == "inbound" and m.get("chat_type"):
+            # Before Hermes has the message: a confirmation Hermes no longer holds, or holds too old to run,
+            # is not one this message answers, whatever it says (D-155).
+            key = key_of({"chat_type": m["chat_type"], "chat_id": m.get("chat"), "user_id": m.get("user")})
+            self.look(chat, text_of(m.get("message_id")), None, key)
         if line.get("via") == "press" and m.get("confirm_id") is not None and "said" in m:
             # Hermes's reply to the answer, which it handed the plugin, is the outcome of the command that
             # request confirmed, and of no other, when it says the command was refused. Otherwise the
@@ -282,14 +287,15 @@ class Connector:
             self.warn("Hermes's waiting confirmation could not be read")
             return MARK
 
-    def look(self, chat: Chat, message: str, reply: str | None) -> list[str]:
-        """Hermes reached `message`: asks Hermes which confirmation waits in that message's session when the
-        chat shows one waiting there, and records what it says, so the chat shows the one Hermes holds
-        (`Translator.looked`). When that one is gone, the message answered it, if Hermes reads an answer in
-        it, or Hermes dropped it. A command it would not run is settled by the event that closes it; one
-        it runs by its effect, or by Hermes's words `reply` when they say it was refused, which are returned."""
+    def look(self, chat: Chat, message: str, reply: str | None, key: str | None = None) -> list[str]:
+        """Hermes reached `message`, or is about to: asks Hermes which confirmation waits in that message's
+        session (`key`, or the one it was typed in) when the chat shows one waiting there, and records what it
+        says, so the chat shows the one Hermes holds (`Translator.looked`). When that one is gone, the message
+        answered it, if Hermes reads an answer in it, or Hermes dropped it. A command it would not run is
+        settled by the event that closes it; one it runs by its effect, or by Hermes's words `reply` when they
+        say it was refused, which are returned. When Hermes cannot be asked, the chat shows what it did."""
         translator = chat.translator
-        key = translator.typed_key.get(message)
+        key = key or translator.typed_key.get(message)
         if not message or key is None:
             return []
         replies = []

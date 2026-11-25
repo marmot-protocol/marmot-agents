@@ -145,8 +145,11 @@ class Translator:
     they never repeat after a restart. `generations` counts the sessions each chat and sender has had;
     the connector keeps it across restarts, so a replaced session's name is never taken again."""
 
-    def __init__(self, version=VERSION, ids="", generations=None):
+    def __init__(self, version=VERSION, ids="", generations=None, looks=False):
         self.version = version
+        # Whether the plugin looks at which confirmation Hermes holds (`CONFIRM_LOOK`) after each message of
+        # a session where one waits. A recording has no look: there the reply to a typed answer stands for it.
+        self.looks = looks
         self.ids = ids
         self.generation = {} if generations is None else generations
         self.seq = 0  # every event made, which names the items Hermes gives no id
@@ -678,11 +681,11 @@ class Translator:
                 # Hermes's request to confirm, as text, after it was handed over as one.
                 self.last_send = prev
                 return
-        # The reply to a typed answer to a confirmation, when the plugin did not look at Hermes first, as in
-        # a recording: the confirmation is answered, and what follows is the confirmed command's.
+        # The reply to a typed answer to a confirmation, when the plugin did not look at Hermes, as in a
+        # recording: the confirmation is answered, and what follows is the confirmed command's.
         answer = p.get("reply_to") or self.turn or ""
         asked, choice = self.typed_confirm.get(answer, (None, None))
-        if asked in self.open and choice is not None:
+        if not self.looks and asked in self.open and choice is not None:
             self.confirm_done(asked, choice, message=answer)
             self.turn_command = self.confirm_commands.get(asked)
         if self.turn_command and (meta.get("notify") or final):

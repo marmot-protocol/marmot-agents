@@ -754,7 +754,9 @@ Read again on 2026-11-25 at the same commit, in the same image, for
   `approve once`, `once`, `yes`, `ok`, `confirm`; `always`, `always approve`, `remember`; `cancel`,
   `nevermind`, `no`, `deny`), which always count, and in the language Hermes is set to. An approval waiting in
   the session takes precedence. Hermes's reply to that message is what the confirmed command said, or its
-  refusal of the person, and the confirmation then still waits.
+  refusal of the person, and the confirmation then still waits. When the confirmation is older than
+  `DEFAULT_TIMEOUT_SECONDS`, `resolve` takes it and runs nothing, and the reply is empty (`_resolved or ""`), so
+  nothing is sent.
 
 The checks for an approval card and a question, read at the same commit and on the same list (with
 `refusal_text`):

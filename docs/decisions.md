@@ -3354,10 +3354,11 @@ a new one replaces it (`tools.slash_confirm`). So the question:
 - shows as cancelled when Hermes asks a newer one in the same session (provisional);
 - is answered by a typed answer only in its sender's own session, as Hermes reads it, in any of the words Hermes
   reads as one in English (`/approve`, `/cancel`, `yes`, `no` and the rest), and is not answered when Hermes
-  did not take the answer: after a message reaches a session where one waits, the plugin asks Hermes
-  (`get_pending`) whether it still does;
-- shows as cancelled when Hermes dropped it, too old, without a word: when the plugin next looks, after a
-  message of that session or when someone answers it (provisional).
+  did not take the answer: before and after a message reaches a session where one waits, the plugin asks
+  Hermes (`get_pending`) whether it still does, and when Hermes cannot be asked, it still waits;
+- shows as cancelled when Hermes dropped it, too old, without a word, or holds it too old to run when a
+  message of that session comes, a typed answer too, which Hermes then takes and runs nothing: when the plugin
+  next looks, before or after a message of that session or when someone answers it (provisional).
 
 The command a confirmation is for settles as other effects do
 ([D-087](#d-087-the-core-settles-a-request-whose-effect-never-shows)), not from Hermes's reply to the answer.
@@ -3382,7 +3383,9 @@ commands or leave one unanswerable from the chat; D-146's remaining limit stands
 dropped after a stall now ends as having no effect rather than as settled. Issue #183.
 
 Not closed: Hermes reads a typed answer in the language it is set to as well as in English, and a word only
-that language has shows as the confirmation dropped, not answered. A typed `/approve` while an approval waits
+that language has shows as the confirmation dropped, not answered. A typed answer that comes in the last
+moment before Hermes's limit, fresh when the plugin looks and too old when Hermes reads it, shows as answered,
+and its command settles as having no effect after two minutes. A typed `/approve` while an approval waits
 in the same session goes to the approval, as D-146 says.
 
 

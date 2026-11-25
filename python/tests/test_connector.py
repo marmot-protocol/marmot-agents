@@ -53,6 +53,7 @@ class FakeHermes:
         self.confirmed = ""  # what Hermes says once a confirmation is answered: words, or words for a choice
         self.refuses = {}  # a person Hermes does not let answer a confirmation -> its words
         self.pause = None  # what a confirmed command waits on before it finishes, if anything
+        self.look_fails = None  # an error reading which confirmation waits raises
 
     async def inject(self, chat, sender, message_id, text, reply_to):
         if self.fails is not None:
@@ -99,6 +100,8 @@ class FakeHermes:
     def confirm_waiting(self, session_key):
         """As `tools.slash_confirm.get_pending`, by Hermes's own limit: the id of the confirmation that waits
         in that session, or None."""
+        if self.look_fails is not None:
+            raise self.look_fails
         return self.waiting_confirm.get(session_key)
 
     async def read_model_settings(self, chat, sender):
@@ -1053,6 +1056,58 @@ class Connected(unittest.IsolatedAsyncioTestCase):
         dropped = self.last_of("confirm:k-1")
         self.assertEqual((dropped["state"], dropped.get("settles")), ("cancelled", ["r-1"]))
         self.assertEqual(self.of("message")[-1]["text"], "Hi again.")
+
+    async def asked_to_confirm_a_new_session(self):
+        """Alice asks for a new session in a direct chat, and Hermes asks her to confirm it, as `k-1`."""
+        await self.connector.serve("prompt", prompt("m-1"))
+        self.feed(started("m-1"), said("Hi.", "m-1", notify=True), complete("m-1"))
+        session = self.of("session")[0]["session"]
+        await self.connector.serve("control", {"request": "r-1", "by": ALICE, "action": {
+            "type": "new_session", "chat": CHAT, "session": session}})
+        typed = self.hermes.typed[-1]
+        self.feed(started(typed[2], "/new"))
+        self.asks_to_confirm(typed[2], "/new", "⚠️ **Confirm /new**\n\nThis starts a fresh session.", "k-1")
+        self.feed(complete(typed[2]))
+        return session
+
+    async def test_a_typed_answer_hermes_did_not_take_leaves_the_confirmation_waiting(self):
+        """Hermes still holds the confirmation after a typed answer, here because its own check of who may
+        answer refused the sender (`_refused_slash_confirm`): the question still waits, and its command is
+        not settled, whatever the word."""
+        await self.asked_to_confirm_a_new_session()
+        for n, word in enumerate(("/approve", "yes")):
+            await self.connector.serve("prompt", prompt(f"m-{n + 2}", word))
+            self.feed(started(f"m-{n + 2}", word), said("⛔ /new is admin-only here.", f"m-{n + 2}", notify=True),
+                      complete(f"m-{n + 2}"))
+            self.assertEqual(self.last_of("confirm:k-1")["state"], "waiting", word)
+        self.assertEqual([e for e in self.sent if "settles" in e], [])
+
+    async def test_a_typed_answer_refused_while_hermes_could_not_be_asked_leaves_the_confirmation_waiting(self):
+        """When the plugin cannot read which confirmation Hermes holds, it does not guess: the question still
+        waits, so the card can still be answered."""
+        session = await self.asked_to_confirm_a_new_session()
+        self.hermes.look_fails = RuntimeError("unreadable")
+        await self.connector.serve("prompt", prompt("m-2", "/approve"))
+        self.feed(started("m-2", "/approve"), said("⛔ /new is admin-only here.", "m-2", notify=True), complete("m-2"))
+        self.assertEqual(self.last_of("confirm:k-1")["state"], "waiting")
+        self.hermes.look_fails = None
+        self.hermes.confirmed = phrase("gateway.reset.header_default")
+        await self.connector.serve("answer", {"request": "r-2", "item": "confirm:k-1", "by": ALICE, "given": YES})
+        await asyncio.sleep(0)
+        self.assertEqual(self.last_of("confirm:k-1")["text"], "Answered: Approve once")
+        self.assertEqual([(e["item"], e["settles"]) for e in self.sent if "settles" in e],
+                         [("confirm:k-1", ["r-2"]), (f"session:{session}", ["r-1"])])
+
+    async def test_a_typed_answer_to_a_confirmation_hermes_found_too_old_shows_it_cancelled(self):
+        """Hermes drops a confirmation older than it waits when the session's next message comes, a typed
+        `/approve` too, and runs nothing (`tools.slash_confirm.resolve`). The plugin looks before Hermes has
+        the message: the question shows as cancelled, not answered, and settles the `/new`, which will not run."""
+        await self.asked_to_confirm_a_new_session()
+        del self.hermes.waiting_confirm[KEY]  # older than Hermes's limit: `confirm_waiting` says none
+        await self.connector.serve("prompt", prompt("m-2", "/approve"))
+        self.feed(started("m-2", "/approve"), complete("m-2"))
+        dropped = self.last_of("confirm:k-1")
+        self.assertEqual((dropped["state"], dropped.get("settles")), ("cancelled", ["r-1"]))
 
     async def test_a_second_reset_while_one_is_on_its_way_is_refused(self):
         """One reset settles one request: a second `/new` for the same session waits for the first."""
