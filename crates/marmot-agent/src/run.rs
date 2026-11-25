@@ -616,9 +616,13 @@ impl<D: Driver, M: Side> Core<D, M> {
             return Err(unsaved);
         }
         // What the core took from the driver to look at is read before the stop, so a file it asks
-        // to send is answered with the others (D-145).
-        if let Some((output, _)) = self.early.take() {
-            self.take(output).await?;
+        // to send is answered with the others (D-145). A save that fails meanwhile ends the files
+        // as the loop's does.
+        if let Some((output, _)) = self.early.take()
+            && let Err(unsaved) = self.take(output).await
+        {
+            self.files.stop().await;
+            return Err(unsaved);
         }
         self.end_files().await?;
         // Everything the stop closes is queued and saved at once, before any of it is sent: a
@@ -3087,7 +3091,7 @@ mod tests {
 
     /// A driver that takes every control at once, and each prompt but `go` at once too, which it
     /// takes only after `slow`. It hands the core what the test gives it, and counts the files
-    /// among them it handed over.
+    /// among them it handed over. It says each output reached it at `at`, if given.
     struct Slowed {
         outputs: mpsc::UnboundedReceiver<Output>,
         slow: Duration,
@@ -3095,6 +3099,7 @@ mod tests {
         seen: mpsc::UnboundedSender<(&'static str, Option<marmot_agent_driver::ChatId>)>,
         handed: Arc<Mutex<usize>>,
         told: Told,
+        at: Option<std::time::Instant>,
     }
 
     impl Driver for Slowed {
@@ -3149,6 +3154,10 @@ mod tests {
         async fn file_sent(&mut self, id: String, result: Result<(), Refusal>) {
             self.told.lock().unwrap().push((id, result));
         }
+
+        fn arrived(&self) -> Option<std::time::Instant> {
+            self.at
+        }
     }
 
     // Review of #198: when a control was overdue, the `no_effect` net took what the driver had
@@ -3171,6 +3180,7 @@ mod tests {
                 seen: seen_out,
                 handed: handed.clone(),
                 told: told.clone(),
+                at: None,
             };
             let desk = OnDesk::start(driver);
             for n in 0..before {
@@ -3204,6 +3214,106 @@ mod tests {
                 desk.side.not_sent(),
                 handed - desk.side.offers(),
                 "{before} before: the chat hears of each file never offered"
+            );
+            drop(outputs);
+        }
+    }
+
+    /// The agent's words `n` in `chat`, as a driver hands them over.
+    fn words(chat: marmot_agent_driver::ChatId, n: u64) -> Output {
+        let header = marmot_agent_events::Header {
+            harness: "test".into(),
+            session: Some("s1".into()),
+            turn: None,
+            subagent: None,
+            item: format!("w{n}").into(),
+            seq: n,
+            state: marmot_agent_events::State::Done,
+            title: "words".into(),
+            text: format!("word {n}"),
+        };
+        let body = marmot_agent_events::Body::Message(Default::default());
+        Output::Event(marmot_agent_driver::Emitted {
+            event: marmot_agent_events::AgentEvent::new(header, body, None).unwrap(),
+            chat: Some(chat),
+            prompts: Vec::new(),
+            settles: Vec::new(),
+        })
+    }
+
+    // Review of #198: on a stop, the core reads the output the net held to look at, and a save that
+    // failed then returned at once, before the files were ended, so a file being read went on after
+    // the core (D-145). Here a file is being read, a control waits past its deadline while a prompt
+    // holds the core, the agent says something meanwhile, which reached the driver in time, the
+    // disk fills, and the core is asked to stop. The prompts before shift where in the loop's turn
+    // the core comes out of the slow prompt, as above. However it ends, no read goes on after it.
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_save_of_what_the_net_held_as_the_core_stops_still_ends_every_read() {
+        for before in 1..=2 * WAITS {
+            // The disk fills as the agent's words are kept: only taking them fails.
+            let words_kept = |kept: &Kept| serde_json::to_string(kept).unwrap().contains("\"w1\"");
+            let store = move |dir: &Path| Store::failing_when(dir, words_kept).0;
+            let (outputs, outputs_in) = mpsc::unbounded_channel();
+            let (seen_out, mut seen) = mpsc::unbounded_channel();
+            let driver = Slowed {
+                outputs: outputs_in,
+                slow: Duration::from_secs(150),
+                seen: seen_out,
+                handed: Arc::default(),
+                told: Told::default(),
+                at: Some(Instant::now().into_std()),
+            };
+            let desk = OnDesk::start_with(driver, store, None);
+            let reads = desk.side.reads_held();
+            desk.side.say("hi 0");
+            let (kind, chat) = seen.recv().await.unwrap();
+            assert_eq!(kind, "prompt");
+            let chat = chat.unwrap();
+            let file = SendFile {
+                id: "f0".into(),
+                chat: chat.clone(),
+                path: desk.notes(),
+            };
+            outputs.send(Output::SendFile(file)).unwrap();
+            // The read runs on a thread of its own, which the paused clock does not wait for.
+            for _ in 0..5_000 {
+                if desk.side.reading().0 == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(desk.side.reading().0, 1, "the file is being read");
+            for n in 1..before {
+                desk.side.say(&format!("hi {n}"));
+                assert_eq!(seen.recv().await.unwrap().0, "prompt");
+            }
+            desk.side.say("/new");
+            assert_eq!(seen.recv().await.unwrap().0, "control");
+            desk.side.say("go");
+            assert_eq!(seen.recv().await.unwrap().0, "slow");
+            // The net takes the second to look at once the core has read the first.
+            outputs.send(words(chat.clone(), 2)).unwrap();
+            outputs.send(words(chat, 1)).unwrap();
+            let _ = desk.stop.send(());
+            // A read under way keeps the paused clock from moving on by itself.
+            let mut running = desk.running;
+            for _ in 0..400 {
+                if running.is_finished() {
+                    break;
+                }
+                tokio::time::advance(Duration::from_secs(1)).await;
+            }
+            let (ended, reading) = (running.is_finished(), desk.side.reading().0);
+            drop(reads);
+            let ran = (&mut running).await.unwrap();
+            assert!(
+                !ended || reading == 0,
+                "{before} before: a read went on after the core"
+            );
+            assert!(
+                ran.is_ok() || ran == Err(UNSAVED.to_string()),
+                "{before} before: {ran:?}"
             );
             drop(outputs);
         }
@@ -3262,25 +3372,7 @@ mod tests {
                 return None;
             }
             self.said += 1;
-            let n = self.said;
-            let header = marmot_agent_events::Header {
-                harness: "chatty".into(),
-                session: Some("s1".into()),
-                turn: None,
-                subagent: None,
-                item: format!("w{n}").into(),
-                seq: n,
-                state: marmot_agent_events::State::Done,
-                title: "words".into(),
-                text: format!("word {n}"),
-            };
-            let body = marmot_agent_events::Body::Message(Default::default());
-            Some(Output::Event(marmot_agent_driver::Emitted {
-                event: marmot_agent_events::AgentEvent::new(header, body, None).unwrap(),
-                chat: Some(chat),
-                prompts: Vec::new(),
-                settles: Vec::new(),
-            }))
+            Some(words(chat, self.said))
         }
     }
 
