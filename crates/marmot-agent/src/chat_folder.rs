@@ -294,4 +294,53 @@ mod tests {
         let printed = format!("{rule:?}");
         assert!(!printed.contains("alice"), "{printed}");
     }
+
+    // Nothing outside a listed folder is read on disk: stepping through an unlisted folder and
+    // back into a listed one via `..` or a symlink is refused as not allowed, never resolved.
+    #[test]
+    fn a_path_through_an_unlisted_folder_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let work = root.join("work");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&work, outside.join("back")).unwrap();
+        let rule = FolderRule::new(&work, None, &root.join("keys"));
+
+        for asked in ["../outside/../work", "../outside/back"] {
+            assert_eq!(
+                rule.check(asked, &work).unwrap_err().reason,
+                Reason::NotAllowed,
+                "{asked}"
+            );
+        }
+    }
+
+    // Symlink resolution follows up to 40 links inside a listed folder and refuses longer chains
+    // or loops as invalid.
+    #[test]
+    fn symlink_resolution_stops_after_forty_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let work = std::fs::canonicalize(dir.path()).unwrap();
+        let target = work.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::os::unix::fs::symlink("target", work.join("l1")).unwrap();
+        for n in 2..=41 {
+            std::os::unix::fs::symlink(format!("l{}", n - 1), work.join(format!("l{n}"))).unwrap();
+        }
+        std::os::unix::fs::symlink("loop", work.join("loop")).unwrap();
+        let rule = FolderRule::new(&work, None, &work.join("keys"));
+
+        assert_eq!(rule.check("l40", &work).unwrap(), target);
+        // Check the finite 41-link chain before `loop` so a broken counter fails fast instead of hanging.
+        assert_eq!(
+            rule.check("l41", &work).unwrap_err().reason,
+            Reason::Invalid
+        );
+        assert_eq!(
+            rule.check("loop", &work).unwrap_err().reason,
+            Reason::Invalid
+        );
+    }
 }
