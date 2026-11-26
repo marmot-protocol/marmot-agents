@@ -209,6 +209,23 @@ class PrTrailerTests(unittest.TestCase):
         finally:
             tmp.cleanup()
 
+    def test_extract_landed_trailers_handles_github_squash_coauthor_footer(self) -> None:
+        msg = (
+            "Feature PR (#99)\n\n"
+            "* WIP commit\n\n"
+            "* Final commit\n\n"
+            "Local-Checks: cargo test\n"
+            "Local-Review: claude + codex merge @ 1234567\n"
+            "Release-Impact: minor\n"
+            "Changelog: Add feature X\n\n"
+            "---------\n\n"
+            "Co-authored-by: Alice <alice@example.com>\n"
+        )
+        parsed, errors = trailers.extract_landed_trailers(msg)
+        self.assertEqual(errors, [])
+        self.assertEqual(parsed.get("release-impact"), "minor")
+        self.assertEqual(parsed.get("changelog"), "Add feature X")
+
 
 if __name__ == "__main__":
     unittest.main()

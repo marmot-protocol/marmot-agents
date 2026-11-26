@@ -403,6 +403,7 @@ python3 -m unittest discover -s tools/ci -p 'test_*.py'   # the gate passes each
                                                           # and then passed, once, and reads no log
 python3 tools/ci/check_socket_compat.py --base origin/master   # per-track versions, protocol alignment, and
                                                                # direction-aware socket schema compatibility (D-165)
+python3 -m unittest discover -s tools/release -p 'test_*.py'   # path-aware SemVer release planner tests
 ```
 
 For a change to a function a Kani proof covers (a `proofs` module under `#[cfg(kani)]` in the core: the rights
