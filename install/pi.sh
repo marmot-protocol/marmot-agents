@@ -27,7 +27,7 @@ harness_check() {
     fi
     container_options_only
     HARNESS_SUPPORT=""
-    PI=$(program_path pi) || {
+    PI=$(harness_program pi) || {
         PI=pi
         missing "Pi" "$PI_HOW"
         return 0

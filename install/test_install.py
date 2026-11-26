@@ -419,8 +419,8 @@ MV_EXCHANGES = "--exchange" in subprocess.run(["mv", "--help"], capture_output=T
                                               env={"PATH": SYSTEM_PATH}).stdout
 
 # A systemctl that, as it starts or restarts an agent's unit, plays the core opening the agent's store, as
-# MDK does: the store, in home/accounts/agent, is made the core's own generation (session.sqlite and its -wal
-# file say which), forward only. An older core finds a newer store refused: noted in FAKE_LOG.refused, and
+# MDK does: the store, in accounts/agent in the home the agent's settings name, is made the core's own
+# generation (session.sqlite and its -wal file say which), forward only. An older core finds a newer store refused: noted in FAKE_LOG.refused, and
 # the store left as it is. Otherwise it is FAKE_LOGGER, paused before the core starts and failed after, as
 # when a connector's unit fails beside it.
 FAKE_SYSTEMCTL_STORE = """#!/bin/sh
@@ -436,7 +436,8 @@ case "$2" in restart | start)
     for unit; do
         case $unit in marmot-agent-*-connector.service | -*) continue ;; marmot-agent-*.service) ;; *) continue ;; esac
         name=${unit#marmot-agent-}
-        store="$HOME/.local/share/marmot-agent/agents/${name%.service}/home/accounts/agent"
+        home=$(sed -n 's/^home = "\\(.*\\)"$/\\1/p' "$HOME/.local/share/marmot-agent/agents/${name%.service}/settings.toml")
+        store="$home/accounts/agent"
         [ -d "$store" ] || continue
         if [ "$made" = older ] && [ "$(cat "$store/session.sqlite" 2>/dev/null)" = new ]; then
             echo "the older core cannot open the store of ${name%.service}" >>"$FAKE_LOG.refused"
@@ -1360,7 +1361,8 @@ class Boundaries(unittest.TestCase):
     def test_settings_imported_for_another_harness_are_refused(self):
         m = Machine(self)
         self.imported(m, "hermes", "OpenClaw")
-        self.refused(m, "hermes", *m.args("hermes", "--binary", str(m.core)), message="no record of its harness")
+        self.refused(m, "hermes", *m.args("hermes", "--binary", str(m.core)),
+                     message="were imported from a OpenClaw install, not from a Hermes install")
 
     @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
     def test_another_openclaw_plugin_called_marmot_is_not_replaced_unasked(self):
@@ -1494,6 +1496,261 @@ class Boundaries(unittest.TestCase):
         m.log.write_text("")
         subprocess.run([str(start)], check=True, env={"PATH": SYSTEM_PATH, "FAKE_LOG": str(m.log)})
         self.assertIn("with MODEL_BASE_URL=https://models.example/v1", m.calls())
+
+
+class Moved(unittest.TestCase):
+    """An install of today's coding connector moved over (D-160): `marmot-agent import <old home> --settings
+    <the agent's settings>`, then the harness's installer, with no flag of its own. It runs the core, and for
+    Claude Code its connector, as the agent's services, on the settings the import wrote, unchanged, and the
+    identity in the old home; it never runs `init`. The new core's first open of the old home is copied, and
+    put back should the install fail after it (D-159), even with that core installed for another agent."""
+
+    # Each coding harness, with the import's title for its connector and the section it writes for it.
+    SECTIONS = {
+        "codex": ("Codex", '[codex]\ncwd = "{cwd}"\n'),
+        "opencode": ("OpenCode", '[acp]\nname = "opencode"\ncommand = ["opencode", "acp"]\ncwd = "{cwd}"\n'),
+        "goose": ("Goose", '[acp]\nname = "goose"\ncommand = ["goose", "acp"]\ncwd = "{cwd}"\n'),
+        "pi": ("Pi", '[pi]\ncwd = "{cwd}"\n'),
+        "claude-code": ("Claude Code", "[connector]\n"),
+    }
+    # The import's name for each connector (Connector in crates/marmot-agent/src/import/mod.rs).
+    CONNECTORS = {"codex": "Codex", "opencode": "OpenCode", "goose": "Goose", "pi": "Pi", "claude-code": "Claude"}
+
+    @classmethod
+    def moved(cls, m: Machine, harness: str, cwd=None, title=None, section=None) -> tuple:
+        """The old home as today's connector left it, with a store wn-agent opened, and the settings the
+        import writes for the harness, in the agent's folder (docs/move.md)."""
+        own_title, own_section = cls.SECTIONS[harness]
+        cwd = cwd or str(m.home / "work")
+        old_home = m.home / f".marmot-agents/{harness}"
+        store = old_home / "accounts/agent"
+        store.mkdir(parents=True)
+        for name, text in (("session.sqlite", "wn-agent\n"), ("session.sqlite-wal", "wn-agent\n"),
+                           ("secret.json", "not a real secret\n")):
+            (store / name).write_text(text)
+            (store / name).chmod(0o600)
+        for folder in (old_home, old_home / "accounts", store):
+            folder.chmod(0o700)
+        settings = m.data / f"agents/{harness}/settings.toml"
+        settings.parent.mkdir(parents=True)
+        settings.write_text(
+            f"# Imported by `marmot-agent import` from a {title or own_title} install, at 20261126T090000Z.\n"
+            f"# The home before the import is backed up in {old_home}.backup-20261126T090000Z.\n"
+            f'home = "{old_home}"\nrelays = ["wss://relay.example"]\nowner = "{OWNER}"\n'
+            f'prompt = {{ people = ["{OWNER}", "{"ef" * 32}"] }}\napprove = "owner"\ninvite = ["{"ef" * 32}"]\n'
+            "# Only the folders the old connector let files be sent from; never the working folder.\n"
+            f'files_from = ["{m.home / "media"}"]\n\n' + (section or own_section).format(cwd=cwd))
+        settings.chmod(0o600)
+        return old_home, settings
+
+    @staticmethod
+    def store(old_home: Path) -> str:
+        """Which core's store the old home has, as its database and -wal file say, or what is wrong."""
+        store = old_home / "accounts/agent"
+        found = {(store / n).read_text().strip() for n in ("session.sqlite", "session.sqlite-wal")}
+        if (store / "secret.json").read_text() != "not a real secret\n":
+            return "its secret is gone or changed"
+        return found.pop() if len(found) == 1 else f"mixed: {sorted(found)}"
+
+    @staticmethod
+    def args(m: Machine, harness: str, *more: str) -> list:
+        """What a person moving over gives: no --owner, which the settings name; --cwd for Claude Code
+        only, whose connector takes it on its command line."""
+        cwd = ["--cwd", str(m.home / "work")] if harness in SOCKET else []
+        return ["--yes", "--binary", str(m.core), *cwd, *more]
+
+    @staticmethod
+    def another_agent(m: Machine) -> None:
+        """Another agent installed first, with the same core: the move's core is not new to the account."""
+        m.run("cursor", *m.args("cursor", "--binary", str(m.core), "--name", "other"))
+        m.log.write_text("")
+
+    def test_the_import_names_each_harness_as_its_installer_reads_it(self):
+        """The installers know imported settings by the first line the import writes, with the title of the
+        connector, which must be the installer's HARNESS_TITLE: read from both sides' sources, as the real
+        import needs today's connector to run."""
+        source = (ROOT / "crates/marmot-agent/src/import/mod.rs").read_text()
+        self.assertIn('"# Imported by `marmot-agent import` from a {} install, at {}.\\n\\\n', source)
+        for harness, (title, _) in self.SECTIONS.items():
+            with self.subTest(harness=harness):
+                self.assertIn(f'            Self::{self.CONNECTORS[harness]} => "{title}",\n', source)
+
+    def test_each_coding_harness_takes_an_install_moved_over(self):
+        for harness in self.SECTIONS:
+            with self.subTest(harness=harness):
+                m = Machine(self)
+                m.write(m.bin / "systemctl", FAKE_SYSTEMCTL_STORE)
+                self.another_agent(m)
+                old_home, settings = self.moved(m, harness)
+                before = settings.read_text()
+                agent = m.data / "agents" / harness
+                out = m.run(harness, *self.args(m, harness)).stdout
+                self.assertIn(f"using the settings marmot-agent import wrote in {settings}", out)
+                self.assertIn(f"the agent keeps the identity it was imported with, in {old_home}", out)
+                # The settings as the import wrote them, the identity in the old home, and no init.
+                self.assertEqual(settings.read_text(), before)
+                self.assertFalse([c for c in m.calls() if c.startswith("marmot-agent init")])
+                self.assertFalse((agent / "home").exists())
+                self.assertFalse((agent / "public-key").exists())
+                self.assertEqual((agent / "harness").read_text(), f"{harness}\n")
+                # The core, and Claude Code's connector, run as the agent's services, on that home.
+                self.assertIn(f"run '{settings}'", (agent / "start").read_text())
+                units = [f"marmot-agent-{harness}.service"]
+                if harness in SOCKET:
+                    units.append(f"marmot-agent-{harness}-connector.service")
+                    connector = (agent / "connector").read_text()
+                    self.assertIn(f"--home '{old_home}' --cwd '{m.home / 'work'}'", connector)
+                for unit in units:
+                    self.assertTrue((m.units / unit).is_file(), unit)
+                self.assertIn(f"systemctl --user enable {' '.join(units)}", m.calls())
+                self.assertIn(f"systemctl --user restart {' '.join(units)}", m.calls())
+                # Its first start was copied first, though the core was there already (D-159), and the copy
+                # is gone once the move is done.
+                self.assertIn("kept a copy of the agent's account home", out)
+                self.assertEqual(self.store(old_home), "new")
+                self.assertFalse((m.data / "upgrade").exists())
+                self.assertTrue((agent / "moved").is_file())
+                # Again: the same settings and home, no init, and no copy, the store being the core's now.
+                m.log.write_text("")
+                again = m.run(harness, *self.args(m, harness)).stdout
+                self.assertEqual(settings.read_text(), before)
+                self.assertNotIn("kept a copy", again)
+                self.assertFalse([c for c in m.calls() if c.startswith("marmot-agent init")])
+                self.assertFalse((agent / "home").exists())
+
+    def test_a_failure_after_the_first_start_puts_back_the_old_connectors_store(self):
+        """The new core opened the old home and a later step failed: the home is put back as the import
+        left it, the agent left stopped, and run again once fixed, the move is done."""
+        for harness in ("codex", "claude-code"):
+            with self.subTest(harness=harness):
+                m = Machine(self)
+                m.write(m.bin / "systemctl", FAKE_SYSTEMCTL_STORE)
+                self.another_agent(m)
+                old_home, settings = self.moved(m, harness)
+                before = settings.read_text()
+                agent = m.data / "agents" / harness
+                failed = m.run(harness, *self.args(m, harness), env={"FAKE_FAIL": "systemctl --user restart"},
+                               check=False)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn("failing, as asked", failed.stderr)
+                self.assertIn(f"put back the account home {old_home}", failed.stdout)
+                self.assertEqual(self.store(old_home), "wn-agent", failed.stderr)
+                self.assertEqual(mode(old_home / "accounts/agent/secret.json"), 0o600)
+                self.assertIn(f'the agent "{harness}" is left stopped, its account home as marmot-agent import left it',
+                              failed.stderr)
+                self.assertNotIn("systemctl --user start", failed.stderr)
+                # Its new services do not start at the next login, before the installer runs again.
+                for unit in [f"marmot-agent-{harness}.service"] + ([f"marmot-agent-{harness}-connector.service"]
+                                                                   if harness in SOCKET else []):
+                    self.assertIn(f"systemctl --user disable {unit}", m.calls())
+                self.assertFalse((m.data / "upgrade").exists())
+                self.assertFalse((agent / "moved").exists())
+                self.assertEqual(settings.read_text(), before)
+                m.run(harness, *self.args(m, harness))
+                self.assertEqual(self.store(old_home), "new")
+                self.assertTrue((agent / "moved").is_file())
+                self.assertEqual(settings.read_text(), before)
+
+    def test_settings_imported_for_another_harness_are_refused(self):
+        """Before anything is changed: Codex's settings in OpenCode's agent folder, or in Cursor's, whose
+        harness has no connector today."""
+        for harness in ("opencode", "cursor", "claude-code"):
+            with self.subTest(harness=harness):
+                m = Machine(self)
+                _, settings = self.moved(m, "codex")
+                if harness != "codex":
+                    settings.parent.rename(m.data / "agents" / harness)
+                settings = m.data / "agents" / harness / "settings.toml"
+                before = settings.read_text()
+                result = m.run(harness, *self.args(m, harness), check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("were imported from a Codex install, not from a", result.stderr)
+                self.assertEqual(m.calls(), [])
+                self.assertEqual(settings.read_text(), before)
+                self.assertEqual(sorted(p.name for p in settings.parent.iterdir()), ["settings.toml"])
+
+    def test_the_program_the_import_carried_over_is_the_one_checked(self):
+        """The old service's harness program, carried over as a whole path, need not be on PATH; one the
+        settings name that is not there stops the install, before anything changes."""
+        for harness, section in (("codex", '[codex]\nprogram = "{program}"\ncwd = "{cwd}"\n'),
+                                 ("goose", '[acp]\nname = "goose"\ncommand = ["{program}", "acp"]\ncwd = "{cwd}"\n')):
+            with self.subTest(harness=harness):
+                m = Machine(self, programs=())
+                program = m.dir / "elsewhere" / harness
+                program.parent.mkdir()
+                _, settings = self.moved(m, harness, section=section.replace("{program}", str(program)))
+                result = m.run(harness, *self.args(m, harness), check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("get what is missing above", result.stderr)
+                self.assertEqual(m.calls(), [])
+                m.write(program, FAKE_VERSIONED.format(version=" 1.59.2"))
+                out = m.run(harness, *self.args(m, harness)).stdout
+                if harness == "goose":
+                    self.assertIn(f"found Goose 1.59.2 at {program}", out)
+                self.assertIn(f"systemctl --user restart marmot-agent-{harness}.service", m.calls())
+
+    def test_a_work_folder_holding_or_inside_the_old_home_or_its_backup_is_refused(self):
+        """The old home and the import's backup of it stay out of the installer's data folder, and hold the
+        agent's keys: the harness, which reads anything in its work folder, never works in or above one."""
+        for harness in ("codex", "claude-code"):
+            for name in ("home", "inside", "parent", "backup"):
+                with self.subTest(harness=harness, folder=name):
+                    m = Machine(self)
+                    old_home = m.home / f".marmot-agents/{harness}"
+                    backup = Path(f"{old_home}.backup-20261126T090000Z")
+                    cwd = {"home": old_home, "inside": old_home / "work", "parent": old_home.parent,
+                           "backup": backup}[name]
+                    _, settings = self.moved(m, harness, cwd=str(cwd))
+                    backup.mkdir()
+                    before = settings.read_text()
+                    args = ["--cwd", str(cwd)] if harness in SOCKET else []
+                    result = m.run(harness, "--yes", "--binary", str(m.core), *args, check=False)
+                    self.assertNotEqual(result.returncode, 0)
+                    kept = backup if name == "backup" else old_home
+                    self.assertIn(f"must not hold or be inside {kept}, which holds the agent's keys", result.stderr)
+                    self.assertEqual((m.calls(), settings.read_text()), ([], before))
+                    self.assertEqual(sorted(p.name for p in settings.parent.iterdir()), ["settings.toml"])
+
+    def test_a_work_folder_written_with_an_escape_is_refused(self):
+        """The installer reads the settings' cwd as written, and the core decodes it as TOML: an escape could
+        name the old home to the core and something else to the installer's check, so one is refused."""
+        m = Machine(self)
+        _, settings = self.moved(m, "codex", cwd=str(m.home / "work"))
+        escaped = settings.read_text().replace(f'cwd = "{m.home / "work"}"', 'cwd = "\\u002emarmot-agents/codex"')
+        settings.write_text(escaped)
+        result = m.run("codex", *self.args(m, "codex"), check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("holds a backslash: write the folder without escapes", result.stderr)
+        self.assertEqual((m.calls(), settings.read_text()), ([], escaped))
+
+    def test_a_work_folder_the_import_left_is_kept_and_checked_as_cwd_is(self):
+        """The import's work folder is your home unless it was given --cwd, which holds the agents' folder:
+        refused before anything is changed. Until the move is done, --cwd does not rewrite the settings the
+        import wrote; the folder is changed there. Claude Code's connector needs --cwd, which the settings
+        do not say."""
+        m = Machine(self)
+        _, settings = self.moved(m, "codex", cwd=str(m.home))
+        before = settings.read_text()
+        result = m.run("codex", *self.args(m, "codex"), check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(f"the work folder the import wrote in {settings}, {m.home} (write another there as cwd), "
+                      "must not hold", result.stderr)
+        self.assertEqual((m.calls(), settings.read_text()), ([], before))
+        refused = m.run("codex", *self.args(m, "codex", "--cwd", str(m.home / "work")), check=False)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("names the work folder the import wrote; to change it, write it there as cwd", refused.stderr)
+        self.assertEqual((m.calls(), settings.read_text()), ([], before))
+        settings.write_text(before.replace(f'cwd = "{m.home}"', f'cwd = "{m.home / "work"}"'))
+        m.run("codex", *self.args(m, "codex"))
+        # Once the move is done, --cwd given again replaces the folder, as for any agent.
+        m.run("codex", *self.args(m, "codex", "--cwd", str(m.home / "other")))
+        self.assertIn(f'cwd = "{m.home / "other"}"', settings.read_text())
+        m = Machine(self)
+        self.moved(m, "claude-code")
+        result = m.run("claude-code", "--yes", "--binary", str(m.core), check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("give --cwd, the folder Claude Code works in", result.stderr)
+        self.assertEqual(m.calls(), [])
 
 
 class Interrupted(unittest.TestCase):

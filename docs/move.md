@@ -10,7 +10,9 @@ gateway with no plugin that works until it runs again, at the moments named belo
 ([D-116](decisions.md#d-116-a-gateways-plugin-swap-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)).
 Decided for a gateway's move ([D-119](decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)): the
 OpenClaw installer finishes a half-done move in OpenClaw's settings file, the gateway's conversation starts
-fresh, and `--replace-plugin` lists the gateway's work folder in `files_from`.
+fresh, and `--replace-plugin` lists the gateway's work folder in `files_from`. Decided too
+([D-160](decisions.md#d-160-the-coding-installers-take-an-install-moved-over-and-run-it-as-a-service)): a coding
+install moves over through its installer, which runs it as a service, as a gateway's does.
 
 One of today's connectors (installed by MDK's `install-*-marmot.sh`) moves to the core without anyone inviting
 the agent again. The core uses the old account home where it is, so the agent keeps its identity, its keys, its
@@ -35,13 +37,20 @@ There is no release of `marmot-agent` yet: build it from a checkout first, as th
    marmot-agent import ~/.marmot-agents/codex
    ```
 
-   For Hermes and OpenClaw, put the settings where the installer looks for them, in the agent's folder
-   (`hermes` here is the agent's name, the installer's `--name`, which is the harness's by default):
+   To run the agent as a service, which step 3 does, put the settings where the installer looks for them, in
+   the agent's folder. `codex` here is the agent's name, the installer's `--name`, which is the harness's by
+   default: `codex`, `claude-code`, `opencode`, `pi`, `goose`, `hermes` or `openclaw`. Give a coding harness the
+   folder it works in with `--cwd`, as without it the import names your home folder, which the installer
+   refuses:
 
    ```sh
-   mkdir -p ~/.local/share/marmot-agent/agents/hermes
-   marmot-agent import ~/.marmot-agents/hermes --settings ~/.local/share/marmot-agent/agents/hermes/settings.toml
+   mkdir -p ~/.local/share/marmot-agent/agents/codex
+   marmot-agent import ~/.marmot-agents/codex --cwd ~/work \
+       --settings ~/.local/share/marmot-agent/agents/codex/settings.toml
    ```
+
+   Settings written without `--settings`, to `marmot-agent.toml` in the home, can be moved there before step 3;
+   they name the home by its whole path.
 
    In this order, it:
 
@@ -66,14 +75,42 @@ There is no release of `marmot-agent` yet: build it from a checkout first, as th
    Before it copies anything, with the old services stopped and the home held, it reads the install again; if
    the old allow-lists changed as the services stopped, it stops there and says how to start them again.
 
-3. Start the core with those settings, as the import tells you: `marmot-agent run
-   ~/.marmot-agents/codex/marmot-agent.toml`. For Claude Code, start its driver too. For Hermes and OpenClaw,
-   run the installer instead, with `--replace-plugin`, such as `install/hermes.sh --replace-plugin`: it uses
-   the imported settings and the identity in the old home, never makes a new one, runs the core as a service,
-   and puts the new plugin in the gateway in place of the old one, pointed at that home. It keeps a copy of
-   the old plugin and of the gateway's settings in the agent's folder, under `backups`, and takes the old
-   plugin's own settings out of the gateway's (for OpenClaw, its socket, account and sender policy, which
-   OpenClaw would refuse once the new plugin is in). The gateway may keep running while it does. Then
+3. Run the harness's installer. It takes the settings the import wrote in the agent's folder, with no flag of its
+   own: it knows them by their first line, which names the connector they came from, and refuses settings from
+   another harness's
+   ([D-160](decisions.md#d-160-the-coding-installers-take-an-install-moved-over-and-run-it-as-a-service)). It uses
+   them as written, and the identity in the old home. It never makes a new identity or runs `marmot-agent init`,
+   and runs the core as the agent's service:
+
+   ```sh
+   install/codex.sh --from-source
+   ```
+
+   It adds nothing to the settings: the owner, the rights, the allow-lists, `files_from` and the work folder stay
+   as the import wrote them. To work elsewhere, change `cwd` in them before the installer runs: until the move
+   is done, it refuses a `--cwd` that differs. A work folder that holds `~/.local/share/marmot-agent`, as your
+   home does, or holds or lies inside the old home or its backup, is refused before anything changes. It checks the harness's program the settings name, as the
+   old service ran it, not the one on your `PATH`. For Claude Code, give `--cwd` always, as the import's settings for it do not name the folder:
+   `install/claude-code.sh --from-source --cwd ~/work`. It runs the Claude Code connector as a service beside the
+   core's. For Goose, add `--goose-mode approve` to have it ask in the chat before each tool.
+
+   Before the new core first opens the old home, it stops the agent and copies the home, as an upgrade does
+   ([D-159](decisions.md#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)),
+   even if the same `marmot-agent` is installed for another agent already. If the install fails after that, it
+   puts the home back as the import left it, leaves the agent stopped, disables its new services so that none
+   starts at your next login, and says so; run it again once what failed
+   is fixed, or go back as [below](#going-back). The move is done once the core runs as a service; the installer
+   notes it in the agent's folder (`moved`).
+
+   To run the agent by hand instead, in a terminal, with the settings anywhere: `marmot-agent run
+   ~/.marmot-agents/codex/marmot-agent.toml`, and for Claude Code its driver too, as the import tells you. It then
+   stops when you log out.
+
+   For Hermes and OpenClaw, give the installer `--replace-plugin`, such as `install/hermes.sh --replace-plugin`: it
+   does the same, with no `--cwd`, and puts the new plugin in the gateway in place of the old one, pointed at that
+   home. It keeps a copy of the old plugin and of the gateway's settings in the agent's folder, under `backups`,
+   and takes the old plugin's own settings out of the gateway's (for OpenClaw, its socket, account and sender
+   policy, which OpenClaw would refuse once the new plugin is in). The gateway may keep running while it does. Then
    restart the gateway. Without settings in the agent's folder, `--replace-plugin` stops before changing
    anything. The move is done once the core runs as a service. If the installer fails before that, or is
    stopped (Ctrl-C, or a `TERM`), it puts the gateway's settings and the old plugin back from those copies
@@ -220,6 +257,14 @@ harness's program: an agent over ACP, or the Pi driver's own fake Pi. For Claude
 socket, and a stand-in for the Claude Code driver connects to it as the driver does. For Codex, the core runs
 in the test with a stand-in driver.
 
+The installers' own tests (`install/test_install.py`, the class `Moved`) run each coding harness's installer on
+an old home and the settings the import writes for that harness, after another agent's install has put the same
+core in place. They check that the settings are taken and left as they are, no `init` runs, the identity stays
+in the old home, the core's service, and for Claude Code the connector's, is installed and started on it, and the
+first start is copied. A failure after that start puts the home back as the import left it. They also check that
+settings imported for another harness, and a work folder that holds the installer's data folder, are refused
+before anything changes.
+
 A second test moves an install of each gateway plugin over: Hermes and OpenClaw
 (`crates/marmot-agent/tests/import_gateways.rs`). It needs Docker, so it runs only when asked, one scenario at a
 time (`cargo test -p marmot-agent --test import_gateways -- --ignored --test-threads=1`). The real gateway runs
@@ -247,17 +292,17 @@ Not proven yet: a move on a real machine, with systemd and the real harnesses.
 
 ## Going back
 
-First stop the core for good. The Hermes and OpenClaw installers run it as a service that is started again
-whenever it stops (`Restart=always` on Linux, `KeepAlive` on a Mac), so stopping it is not enough: remove the
-service with the installer, `install/hermes.sh --uninstall --name <name>` or the same with `openclaw.sh`
-(`<name>` is the agent's name, `hermes` or `openclaw` by default). That also takes our plugin and its
-settings out of the gateway, and gives up a move the installer left unfinished: it removes `plugin-change`
-from the agent's folder, so that no later run puts the copies back over what the gateway has by then. If you
-put the gateway back by hand without `--uninstall`, delete `plugin-change` yourself. If you started the core
-yourself, with `marmot-agent run`, stop it.
+First stop the core for good. The installers run it as a service that is started again whenever it stops
+(`Restart=always` on Linux, `KeepAlive` on a Mac), so stopping it is not enough: remove the service with the
+installer, such as `install/codex.sh --uninstall --name <name>` (`<name>` is the agent's name, the harness's by
+default). For Claude Code that removes the connector's service too. For Hermes and OpenClaw it also takes our
+plugin and its settings out of the gateway, and gives up a move the installer left unfinished: it removes
+`plugin-change` from the agent's folder, so that no later run puts the copies back over what the gateway has by
+then. If you put the gateway back by hand without `--uninstall`, delete `plugin-change` yourself. If you started
+the core yourself, with `marmot-agent run`, stop it.
 
-Then put the gateway back as it was from the copies the installer kept before the move, in the agent's folder
-(`~/.local/share/marmot-agent/agents/<name>/backups`). `backups/before-move` lists them, a line for each file
+For Hermes and OpenClaw, then put the gateway back as it was from the copies the installer kept before the move,
+in the agent's folder (`~/.local/share/marmot-agent/agents/<name>/backups`). `backups/before-move` lists them, a line for each file
 or folder the move changed: `file` or `folder`, where it is, and its copy, separated by tabs. Put each copy in
 place of what its line names, a folder as a whole: for Hermes, `config.yaml`, `.env` and `plugins/marmot`; for
 OpenClaw, its settings file and the old plugin's folder. A line with no copy names what the move added: remove
@@ -267,4 +312,4 @@ Before the core has run, delete the settings file and start the old services aga
 it finished (`systemctl --user enable --now` each one it stopped, or on a Mac `launchctl enable` and
 `launchctl bootstrap`). Once it has run, MDK has upgraded the store, which only goes forward: put the backup in place of the home, and start
 the old services. Do that only if the agent has done nothing since, because an older store can reuse keys or
-run a prompt twice. Then restart the gateway.
+run a prompt twice. For Hermes and OpenClaw, then restart the gateway.

@@ -12,7 +12,7 @@ HARNESS_OPTIONS=""
 HARNESS_SUPPORT=""
 
 harness_check() {
-    OPENCODE=$(program_path opencode) || {
+    OPENCODE=$(harness_program opencode) || {
         OPENCODE=opencode
         missing "OpenCode" "Install it (https://opencode.ai), set up a model provider with: opencode auth login," \
             "then run this again."

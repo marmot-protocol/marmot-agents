@@ -119,7 +119,10 @@ Built so far, provisional until the owner accepts what others can see:
   prompt. It runs on MDK's test relay, not yet on a test machine, and on stand-ins for the harnesses: for
   OpenCode, Goose and Pi the core is `marmot-agent run` on the imported settings with its own driver; for
   Claude Code, a stand-in for its driver connects to the socket; for Codex, a stand-in driver runs in the
-  test. See [what is proven](move.md#what-is-proven).
+  test. See [what is proven](move.md#what-is-proven). After the import, the harness's installer takes the
+  imported settings and runs the agent as a service, as the gateways' do
+  ([D-160](decisions.md#d-160-the-coding-installers-take-an-install-moved-over-and-run-it-as-a-service)); its
+  own tests run it on stand-ins, not after a real import.
 - **Moving the gateway plugins over.** A second test (`crates/marmot-agent/tests/import_gateways.rs`) does the
   same for Hermes and OpenClaw against the real gateways in containers, with today's plugin in them, through
   `install/hermes.sh` and `install/openclaw.sh` with `--replace-plugin`. It needs Docker and runs when asked; the

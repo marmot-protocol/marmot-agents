@@ -3597,3 +3597,62 @@ The project owner decided on 2026-11-26 that the store is put back with the core
 the same day, that a put back leaves the agent's services stopped and prints how to start them. How it is copied,
 where it is kept, when the services stop, and the `init` guard were decided 2026-11-26 by the builder, under the
 project owner's instruction to decide minor points.
+
+## D-160 The coding installers take an install moved over, and run it as a service
+
+**Decision.** An install of today's connector for Codex, Claude Code, OpenCode, Pi or Goose moves over the way a
+Hermes or OpenClaw install does ([`docs/move.md`](move.md#steps)): first `marmot-agent import <old home> --settings
+<the agent's settings>`, which writes the settings where the installer looks for them,
+`~/.local/share/marmot-agent/agents/<name>/settings.toml`, and then the harness's installer, such as
+`install/codex.sh`. After that, `marmot-agent` runs as the agent's service, as it does after a fresh install, and
+for Claude Code so does its connector, beside it.
+
+- **No flag.** The installer knows settings the import wrote by their first line, which names the connector they
+  came from (`# Imported by marmot-agent import from a Codex install, …`). It takes those of its own harness, and
+  refuses, before it changes anything, settings imported from another harness's connector. Every installer does,
+  Hermes's and OpenClaw's too. The gateways keep `--replace-plugin`, which changes the gateway's plugin; a coding
+  harness has no plugin to change.
+- **The import's defaults stay.** Without `--settings` the import still writes `marmot-agent.toml` in the old home,
+  for every harness. The installer's folder depends on the `--name` it is given, which the import does not know,
+  and the gateways already work this way. Settings written there can be moved into the agent's folder before the
+  installer runs.
+- **What it uses, and adds.** It uses the settings as the import wrote them and the identity in the old home. It
+  never makes an identity or runs `marmot-agent init` there. It adds nothing to the settings: the owner, the
+  rights, the allow-lists, the relays, `files_from` and the work folder stay as written. Until the move is done, a
+  `--cwd` that differs from the settings' `cwd` stops it, before anything changes, and says to change the folder
+  in the settings; after that, `--cwd` replaces it, as on any run again. It checks the harness's program the
+  settings name as a whole path, as the import carried it over from the old service, not the one on `PATH`. In the agent's folder it writes what it writes for
+  every agent: the record of its harness, its choices, the service's environment and launchers. It also writes the
+  service's units. The Claude Code connector takes its work folder on its command line, and the import's settings
+  for Claude Code do not name one, so `claude-code.sh` needs `--cwd`.
+- **The work folder is checked.** Unless the import was given `--cwd`, its work folder is the person's home
+  folder. The installer checks the folder the settings name as it checks `--cwd`. It refuses, before it changes
+  anything, a folder that holds or lies inside its data folder, which holds the agents' keys. For an agent moved
+  over it also refuses one that holds or lies inside the old home, or the import's backup of it, which hold that
+  agent's keys outside the data folder: the harness reads anything in its work folder.
+- **The first start is copied.** [D-159](#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)
+  copies an agent's home only when the install puts in a core other than the one there before. The first core
+  of ours to open a home moved over moves its store forward from the old connector's, whichever core it is. So an
+  agent moved over, whose home no install has started yet, is copied whatever core was installed before. A move
+  made after another agent's install has put the same core in place is copied too, and so is a move of Hermes or
+  OpenClaw. An install whose upgrade ended after it started such an agent notes that in the agent's folder
+  (`moved`), and from then on D-159's rule holds. Put back, the agent is left stopped, with its home as the import
+  left it, and its new services are taken out of what starts at login (disabled on Linux; on macOS its
+  LaunchAgents are removed, which a run again writes back). The installer then says to run it again once what
+  failed is fixed, or to go back to today's connector. It does not print the command that starts the service,
+  which would open the home uncopied.
+- **Accepted limit.** The move counts as done once the service manager has started the core (`Type=exec` on
+  Linux), not once the core says it is ready. A core that then fails, as when the harness cannot start, has
+  moved the store forward; the new core stays installed and opens it, so the agent runs once the harness is
+  fixed, and going back to today's connector takes the import's backup, as after any move.
+
+**Why.** Run by hand, an agent stops when the person logs out or the machine restarts. Each piece takes the smallest
+step that is safe. The settings already say which connector they came from, so a flag would add nothing. A
+`--replace-plugin` for the coding installers would be a flag that replaces nothing. Without D-159's copy on the first
+start, a failure just after it would leave the old home moved forward and the old core unable to open it. Recovery
+would then need the import's backup, which is for going back, not for an install that failed.
+
+The project owner decided the outcome on 2026-11-26: the five coding harnesses end a move with `marmot-agent` running
+as a service, as Hermes and OpenClaw do. The details above were decided 2026-11-26 by the builder, under the project
+owner's instruction to decide minor points: no flag, the import's defaults kept, the work-folder check, the copy of
+the first start and its note, and what a put back says.

@@ -12,7 +12,7 @@ HARNESS_OPTIONS=""
 HARNESS_SUPPORT=""
 
 harness_check() {
-    CODEX=$(program_path codex) || {
+    CODEX=$(harness_program codex) || {
         CODEX=codex
         missing "Codex" "Install it (https://github.com/openai/codex, for example npm install -g @openai/codex)," \
             "sign in with: codex login, then run this again."
