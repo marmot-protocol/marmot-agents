@@ -52,8 +52,8 @@ The owner answered these on 2026-11-26; the plan below follows the answers.
    any history. Since [D-158](decisions.md#d-158-the-core-does-not-limit-a-send-to-the-chats-members-a-send-in-flight-when-the-owner-adds-someone-may-reach-them),
    F4 only observes what the person added sees; a send in flight reaching them is not a failure.
 6. **What a failed upgrade leaves** ([D-159](decisions.md#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)). The installer puts back the old core and the account store, and leaves
-   the agent's services stopped, printing the command to start them (decided 2026-11-26). How F3b makes an upgrade
-   fail after the new core opened the store is settled with the D-159 change.
+   the agent's services stopped, printing the command to start them (decided 2026-11-26). F3b makes a move fail
+   after the new core opened the store with a `systemctl` that fails its restart.
 
 ## Setup
 
