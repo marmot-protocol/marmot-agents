@@ -15,6 +15,8 @@ HARNESS_TITLE=Hermes
 HARNESS_KIND=plugin
 HARNESS_OPTIONS="replace-plugin"
 HARNESS_SUPPORT="python/marmot_hermes"
+# shellcheck disable=SC2034 # read by lib.sh
+CONNECTOR_TRACK=hermes
 # The release the plugin was built and recorded against (python/hermes/Dockerfile).
 HERMES_TESTED=0.23.2
 HERMES_HOW="Install or update it (https://github.com/NousResearch/hermes-agent), set up its model with: hermes setup, then run this again."

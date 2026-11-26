@@ -17,6 +17,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import stat
@@ -3620,13 +3621,13 @@ class PutBack(unittest.TestCase):
 class Download(unittest.TestCase):
     """The default: a release download, checked against its SHA256SUMS."""
 
-    def release(self, m: Machine, tamper=False) -> str:
+    def release(self, m: Machine, tamper=False, protocol=None) -> str:
         target = subprocess.run(
             ["bash", "-c", f'. "{HERE}/lib.sh"; OS=$(uname -s); MA_MACHINE=$(uname -m); release_target'],
             capture_output=True, text=True, check=True,
         ).stdout
         folder = m.dir / "releases/download/v1.2.3"
-        folder.mkdir(parents=True)
+        folder.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             [str(ROOT / "tools/release/package.sh"), str(m.core), target, str(folder)],
             check=True, capture_output=True,
@@ -3636,7 +3637,79 @@ class Download(unittest.TestCase):
         if tamper:
             digest = ("0" if digest[0] != "0" else "1") + digest[1:]
         (folder / "SHA256SUMS").write_text(f"{digest}  {asset.name}\n")
+        if protocol is not None:
+            (folder / "latest.json").write_text(json.dumps({
+                "track": "marmot-agent",
+                "tag": "v1.2.3",
+                "version": "1.2.3",
+                "socket_protocol": protocol,
+            }) + "\n")
         return f"file://{m.dir}/releases"
+
+    def connector_release(
+        self,
+        m: Machine,
+        track: str,
+        tag: str,
+        version: str,
+        protocol="marmot.agent-control.v3",
+        prerelease=False,
+        tamper=False,
+        omit_latest=False,
+        omit_tarball=False,
+    ) -> Path:
+        folder = m.dir / "releases/download" / tag
+        folder.mkdir(parents=True, exist_ok=True)
+        if not omit_tarball:
+            subprocess.run(
+                [str(ROOT / "tools/release/package_connector.sh"), track, str(folder)],
+                check=True, capture_output=True,
+            )
+            asset = folder / f"marmot-agent-{track}.tar.gz"
+            # Stamp the requested version into the packaged connector manifest so tests prove the
+            # standalone archive overlaid the connector bundled in the core archive.
+            repack = m.dir / f"repack-{tag}"
+            shutil.rmtree(repack, ignore_errors=True)
+            repack.mkdir(parents=True)
+            subprocess.run(["tar", "-xzf", str(asset), "-C", str(repack)], check=True)
+            root = repack / f"marmot-agent-{track}"
+            if track == "claude-code":
+                pkg = root / "packages/claude-code/package.json"
+                data = json.loads(pkg.read_text())
+                data["version"] = version
+                pkg.write_text(json.dumps(data, indent=2) + "\n")
+            elif track == "openclaw":
+                pkg = root / "packages/openclaw/package.json"
+                data = json.loads(pkg.read_text())
+                data["version"] = version
+                pkg.write_text(json.dumps(data, indent=2) + "\n")
+            elif track == "hermes":
+                init = root / "python/marmot_hermes/__init__.py"
+                before = init.read_text()
+                after, count = re.subn(
+                    r'^__version__\s*=\s*"[^"]*"',
+                    f'__version__ = "{version}"',
+                    before,
+                    count=1,
+                    flags=re.M,
+                )
+                self.assertEqual(count, 1, "expected __version__ assignment in marmot_hermes/__init__.py")
+                init.write_text(after)
+            subprocess.run(["tar", "-czf", str(asset), "-C", str(repack), f"marmot-agent-{track}"], check=True)
+            shutil.rmtree(repack)
+            digest = hashlib.sha256(asset.read_bytes()).hexdigest()
+            if tamper:
+                digest = ("0" if digest[0] != "0" else "1") + digest[1:]
+            (folder / "SHA256SUMS").write_text(f"{digest}  {asset.name}\n")
+        if not omit_latest:
+            (folder / "latest.json").write_text(json.dumps({
+                "track": track,
+                "tag": tag,
+                "version": version,
+                "prerelease": prerelease,
+                "socket_protocol": protocol,
+            }) + "\n")
+        return folder
 
     def test_download(self):
         m = Machine(self)
@@ -3655,6 +3728,277 @@ class Download(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("does not match its checksum", result.stderr)
         self.assertFalse((m.home / ".local/bin/marmot-agent").exists())
+
+    def test_explicit_connector_version_overlays_standalone_archive(self):
+        for track, check_file, expected in (
+            ("claude-code", "packages/claude-code/package.json", '"version": "0.1.1"'),
+            ("openclaw", "packages/openclaw/package.json", '"version": "0.1.1"'),
+            ("hermes", "python/marmot_hermes/__init__.py", '__version__ = "0.1.1"'),
+        ):
+            with self.subTest(track=track):
+                m = Machine(self)
+                url = self.release(m, protocol="marmot.agent-control.v3")
+                tag = f"{track}-v0.1.1"
+                self.connector_release(m, track, tag, "0.1.1", protocol="marmot.agent-control.v3")
+                m.run(
+                    track,
+                    *m.args(track, "--version", "v1.2.3", "--connector-version", tag, "--no-service"),
+                    env={"MARMOT_AGENT_RELEASES": url},
+                )
+                self.assertEqual((m.home / ".local/bin/marmot-agent").read_text(), FAKE_CORE)
+                self.assertIn(expected, (m.data / "lib" / check_file).read_text())
+
+    def test_connector_version_checksum_mismatch_leaves_install_untouched(self):
+        m = Machine(self)
+        url = self.release(m, protocol="marmot.agent-control.v3")
+        self.connector_release(m, "claude-code", "claude-code-v0.1.1", "0.1.1", tamper=True)
+        result = m.run(
+            "claude-code",
+            *m.args("claude-code", "--version", "v1.2.3", "--connector-version", "claude-code-v0.1.1", "--no-service"),
+            env={"MARMOT_AGENT_RELEASES": url},
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("does not match its checksum", result.stderr)
+        self.assertFalse((m.home / ".local/bin/marmot-agent").exists())
+        self.assertFalse((m.data / "lib").exists())
+
+    def test_connector_version_protocol_mismatch_and_missing_manifest_refused(self):
+        for case, kwargs, message in (
+            ("mismatch", {"protocol": "marmot.agent-control.v4"}, "speaks marmot.agent-control.v4, but marmot-agent speaks marmot.agent-control.v3"),
+            ("missing_latest", {"omit_latest": True}, "declares no socket_protocol in latest.json"),
+        ):
+            with self.subTest(case=case):
+                m = Machine(self)
+                url = self.release(m, protocol="marmot.agent-control.v3")
+                self.connector_release(m, "claude-code", "claude-code-v0.1.1", "0.1.1", **kwargs)
+                result = m.run(
+                    "claude-code",
+                    *m.args("claude-code", "--version", "v1.2.3", "--connector-version", "claude-code-v0.1.1", "--no-service"),
+                    env={"MARMOT_AGENT_RELEASES": url},
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertFalse((m.home / ".local/bin/marmot-agent").exists())
+                self.assertFalse((m.data / "lib").exists())
+
+    def test_connector_autodiscovery_picks_newest_compatible_newer_than_bundled(self):
+        m = Machine(self)
+        url = self.release(m, protocol="marmot.agent-control.v3")
+        self.connector_release(m, "claude-code", "claude-code-v0.2.0", "0.2.0", protocol="marmot.agent-control.v4")
+        self.connector_release(m, "claude-code", "claude-code-v0.1.3", "0.1.3", protocol="marmot.agent-control.v3", prerelease=True)
+        self.connector_release(m, "claude-code", "claude-code-v0.1.1", "0.1.1", protocol="marmot.agent-control.v3")
+        self.connector_release(m, "claude-code", "claude-code-v0.1.2", "0.1.2", protocol="marmot.agent-control.v3")
+        api = m.dir / "releases.json"
+        api.write_text(json.dumps([
+            {"tag_name": "claude-code-v0.2.5-rc.1"},
+            {"tag_name": "claude-code-v0.2.0"},
+            {"tag_name": "claude-code-v0.1.3"},
+            {"tag_name": "claude-code-v0.1.1"},
+            {"tag_name": "claude-code-v0.1.2"},
+            {"tag_name": "claude-code-v0.0.9"},
+            {"tag_name": "v1.2.3"},
+        ]))
+        result = m.run(
+            "claude-code",
+            *m.args("claude-code", "--version", "v1.2.3", "--no-service"),
+            env={"MARMOT_AGENT_RELEASES": url, "MARMOT_AGENT_RELEASES_API": f"file://{api}"},
+        )
+        installed_pkg = json.loads((m.data / "lib/packages/claude-code/package.json").read_text())
+        self.assertEqual(installed_pkg["version"], "0.1.2")
+        self.assertIn("skipping claude-code-v0.2.0", result.stderr)
+        self.assertIn("skipping prerelease claude-code-v0.1.3", result.stderr)
+        self.assertIn("using standalone claude-code connector release claude-code-v0.1.2", result.stderr)
+
+    def test_connector_autodiscovery_keeps_bundled_when_no_newer_standalone(self):
+        m = Machine(self)
+        url = self.release(m, protocol="marmot.agent-control.v3")
+        api = m.dir / "releases.json"
+        # Neither tag has a tarball on disk: proving auto-discovery skips equal/older standalone releases
+        # instead of downloading or downgrading the bundled 0.1.0 connector.
+        api.write_text(json.dumps([
+            {"tag_name": "claude-code-v0.1.0"},
+            {"tag_name": "claude-code-v0.0.9"},
+        ]))
+        m.run(
+            "claude-code",
+            *m.args("claude-code", "--version", "v1.2.3", "--no-service"),
+            env={"MARMOT_AGENT_RELEASES": url, "MARMOT_AGENT_RELEASES_API": f"file://{api}"},
+        )
+        installed_pkg = json.loads((m.data / "lib/packages/claude-code/package.json").read_text())
+        self.assertEqual(installed_pkg["version"], "0.1.0")
+
+    def test_missing_core_manifest_fails_closed(self):
+        # Auto-discovery keeps bundled connector when the core release has no latest.json.
+        m = Machine(self)
+        url = self.release(m, protocol=None)
+        self.connector_release(m, "claude-code", "claude-code-v0.2.0", "0.2.0", protocol="marmot.agent-control.v4")
+        api = m.dir / "releases.json"
+        api.write_text(json.dumps([{"tag_name": "claude-code-v0.2.0"}]))
+        m.run(
+            "claude-code",
+            *m.args("claude-code", "--version", "v1.2.3", "--no-service"),
+            env={"MARMOT_AGENT_RELEASES": url, "MARMOT_AGENT_RELEASES_API": f"file://{api}"},
+        )
+        installed_pkg = json.loads((m.data / "lib/packages/claude-code/package.json").read_text())
+        self.assertEqual(installed_pkg["version"], "0.1.0")
+
+        # Explicit --connector-version is refused when the core release declares no socket_protocol.
+        m2 = Machine(self)
+        url2 = self.release(m2, protocol=None)
+        self.connector_release(m2, "claude-code", "claude-code-v0.2.0", "0.2.0", protocol="marmot.agent-control.v4")
+        res = m2.run(
+            "claude-code",
+            *m2.args("claude-code", "--version", "v1.2.3", "--connector-version", "claude-code-v0.2.0", "--no-service"),
+            env={"MARMOT_AGENT_RELEASES": url2},
+            check=False,
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("marmot-agent declares no socket_protocol", res.stderr)
+        self.assertFalse((m2.home / ".local/bin/marmot-agent").exists())
+        self.assertFalse((m2.data / "lib").exists())
+
+    def test_binary_connector_version_uses_binary_manifest_not_checkout(self):
+        # A v4 binary run from this v3 checkout must reject a v3 connector and accept a v4 connector.
+        m = Machine(self)
+        url = self.release(m, protocol="marmot.agent-control.v3")
+        self.connector_release(m, "claude-code", "claude-code-v0.1.1", "0.1.1", protocol="marmot.agent-control.v3")
+        self.connector_release(m, "claude-code", "claude-code-v0.2.0", "0.2.0", protocol="marmot.agent-control.v4")
+        v4_dir = m.dir / "v4-release"
+        (v4_dir / "bin").mkdir(parents=True)
+        v4_bin = v4_dir / "bin/marmot-agent"
+        shutil.copy2(m.core, v4_bin)
+        (v4_dir / "latest.json").write_text(json.dumps({"socket_protocol": "marmot.agent-control.v4"}) + "\n")
+
+        bad = m.run(
+            "claude-code",
+            *m.args("claude-code", "--binary", str(v4_bin), "--connector-version", "claude-code-v0.1.1", "--no-service"),
+            env={"MARMOT_AGENT_RELEASES": url},
+            check=False,
+        )
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn("speaks marmot.agent-control.v3, but marmot-agent speaks marmot.agent-control.v4", bad.stderr)
+        self.assertFalse((m.data / "lib").exists())
+
+        m.run(
+            "claude-code",
+            *m.args("claude-code", "--binary", str(v4_bin), "--connector-version", "claude-code-v0.2.0", "--no-service"),
+            env={"MARMOT_AGENT_RELEASES": url},
+        )
+        installed_pkg = json.loads((m.data / "lib/packages/claude-code/package.json").read_text())
+        self.assertEqual(installed_pkg["version"], "0.2.0")
+
+        # A bare --binary with no adjacent latest.json refuses --connector-version instead of reading the checkout.
+        m2 = Machine(self)
+        url2 = self.release(m2, protocol="marmot.agent-control.v3")
+        self.connector_release(m2, "claude-code", "claude-code-v0.1.1", "0.1.1", protocol="marmot.agent-control.v3")
+        bare = m2.run(
+            "claude-code",
+            *m2.args("claude-code", "--binary", str(m2.core), "--connector-version", "claude-code-v0.1.1", "--no-service"),
+            env={"MARMOT_AGENT_RELEASES": url2},
+            check=False,
+        )
+        self.assertNotEqual(bare.returncode, 0)
+        self.assertIn("marmot-agent declares no socket_protocol", bare.stderr)
+        self.assertFalse((m2.data / "lib").exists())
+
+    def test_connector_autodiscovery_follows_pagination(self):
+        m = Machine(self)
+        url = self.release(m, protocol="marmot.agent-control.v3")
+        self.connector_release(m, "claude-code", "claude-code-v0.1.1", "0.1.1", protocol="marmot.agent-control.v3")
+        self.connector_release(m, "claude-code", "claude-code-v0.1.2", "0.1.2", protocol="marmot.agent-control.v3")
+        page1 = m.dir / "page1.json"
+        page2 = m.dir / "page2.json"
+        page1.write_text(json.dumps([{"tag_name": "v1.2.3"}, {"tag_name": "claude-code-v0.1.1"}]))
+        page2.write_text(json.dumps([{"tag_name": "claude-code-v0.1.2"}]))
+        real_curl = shutil.which("curl")
+        self.assertIsNotNone(real_curl)
+        m.write(m.bin / "curl", f"""#!/usr/bin/env bash
+set -euo pipefail
+out="" hdr="" target=""
+args=("$@")
+i=0
+while [ $i -lt ${{#args[@]}} ]; do
+    case "${{args[$i]}}" in
+        --output) i=$((i + 1)); out="${{args[$i]}}" ;;
+        --dump-header) i=$((i + 1)); hdr="${{args[$i]}}" ;;
+    esac
+    i=$((i + 1))
+done
+target="${{args[${{#args[@]}}-1]}}"
+case "$target" in
+    "https://api.example/repos/o/r/releases?per_page=100")
+        printf 'HTTP/2 200\\r\\nLink: <https://api.example/repos/o/r/releases?per_page=100&page=2>; rel="next"\\r\\n\\r\\n' > "$hdr"
+        cp "{page1}" "$out"
+        exit 0
+        ;;
+    "https://api.example/repos/o/r/releases?per_page=100&page=2")
+        printf 'HTTP/2 200\\r\\n\\r\\n' > "$hdr"
+        cp "{page2}" "$out"
+        exit 0
+        ;;
+esac
+exec "{real_curl}" "$@"
+""")
+        result = m.run(
+            "claude-code",
+            *m.args("claude-code", "--version", "v1.2.3", "--no-service"),
+            env={"MARMOT_AGENT_RELEASES": url, "MARMOT_AGENT_RELEASES_API": "https://api.example/repos/o/r/releases"},
+        )
+        installed_pkg = json.loads((m.data / "lib/packages/claude-code/package.json").read_text())
+        self.assertEqual(installed_pkg["version"], "0.1.2")
+        self.assertIn("using standalone claude-code connector release claude-code-v0.1.2", result.stderr)
+
+    def test_connector_autodiscovery_falls_back_on_download_error_but_fails_on_bad_checksum(self):
+        # Missing tarball in discovery warns and falls back to bundled 0.1.0.
+        m = Machine(self)
+        url = self.release(m, protocol="marmot.agent-control.v3")
+        self.connector_release(m, "claude-code", "claude-code-v0.1.2", "0.1.2", omit_tarball=True)
+        api = m.dir / "releases.json"
+        api.write_text(json.dumps([{"tag_name": "claude-code-v0.1.2"}]))
+        result = m.run(
+            "claude-code",
+            *m.args("claude-code", "--version", "v1.2.3", "--no-service"),
+            env={"MARMOT_AGENT_RELEASES": url, "MARMOT_AGENT_RELEASES_API": f"file://{api}"},
+        )
+        installed_pkg = json.loads((m.data / "lib/packages/claude-code/package.json").read_text())
+        self.assertEqual(installed_pkg["version"], "0.1.0")
+        self.assertIn("could not download", result.stderr)
+
+        # Tampered checksum in discovery still aborts hard.
+        m2 = Machine(self)
+        url2 = self.release(m2, protocol="marmot.agent-control.v3")
+        self.connector_release(m2, "claude-code", "claude-code-v0.1.2", "0.1.2", tamper=True)
+        api2 = m2.dir / "releases.json"
+        api2.write_text(json.dumps([{"tag_name": "claude-code-v0.1.2"}]))
+        bad = m2.run(
+            "claude-code",
+            *m2.args("claude-code", "--version", "v1.2.3", "--no-service"),
+            env={"MARMOT_AGENT_RELEASES": url2, "MARMOT_AGENT_RELEASES_API": f"file://{api2}"},
+            check=False,
+        )
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn("does not match its checksum", bad.stderr)
+        self.assertFalse((m2.data / "lib").exists())
+
+    def test_connector_version_validation_and_dry_run(self):
+        m = Machine(self)
+        r1 = m.run("codex", *m.args("codex", "--connector-version", "claude-code-v0.1.1"), check=False)
+        self.assertNotEqual(r1.returncode, 0)
+        self.assertIn("takes no --connector-version", r1.stderr)
+
+        r2 = m.run("openclaw", *m.args("openclaw", "--connector-version", "hermes-v0.1.1"), check=False)
+        self.assertNotEqual(r2.returncode, 0)
+        self.assertIn("must be a openclaw-v<version> release tag", r2.stderr)
+
+        r3 = m.run("claude-code", *m.args("claude-code", "--connector-version", "claude-code-v0.1.1..bad"), check=False)
+        self.assertNotEqual(r3.returncode, 0)
+        self.assertIn("unsafe character", r3.stderr)
+
+        dry = m.run("claude-code", *m.args("claude-code", "--dry-run", "--connector-version", "claude-code-v0.1.1"))
+        self.assertIn("would download marmot-agent-claude-code.tar.gz (claude-code-v0.1.1)", dry.stdout)
+        self.assertEqual(m.files(), [])
 
 
 def verify_units(test: unittest.TestCase, units: list) -> None:
