@@ -14,10 +14,12 @@ the TLA+ models run; any other job is expected in every tier.
 
 Usage, with the list in the environment variable EXPECTED:
 
-    passed.py --jobs JOBS --full true|false --models true|false
+    passed.py --jobs JOBS --full true|false --models true|false [--prefix PREFIX]
 
 JOBS holds one JSON object per line, each with the job's `name`, `status` and `conclusion`, as
 `gh api .../actions/runs/RUN/jobs --jq '.jobs[] | {name, status, conclusion}'` writes them.
+When called from another workflow via `workflow_call`, pass `--prefix` (for example `"CI / "`)
+to filter to the called workflow's jobs and strip the caller prefix before checking EXPECTED.
 """
 
 import argparse
@@ -48,13 +50,23 @@ def parse_expected(text):
     return expected
 
 
-def check(expected_text, jobs, full, models):
+def check(expected_text, jobs, full, models, prefix=""):
     """What is wrong with the run's `jobs`, as messages: none when the gate passes."""
     expected = parse_expected(expected_text)
     applies = {None: True, "full": full, "models": models}
     listed = {name for name, _ in expected}
     errors = []
-    others = [j for j in jobs if j["name"] != GATE]
+    if prefix:
+        scoped = [
+            dict(j, name=j["name"][len(prefix):])
+            for j in jobs
+            if j["name"].startswith(prefix)
+        ]
+        if not scoped:
+            return [f"no jobs in this run matched prefix {prefix!r}"]
+    else:
+        scoped = jobs
+    others = [j for j in scoped if j["name"] != GATE]
     for j in others:
         name, status, conclusion = j["name"], j["status"], j["conclusion"]
         if status != "completed":
@@ -86,12 +98,13 @@ def main():
     parser.add_argument("--jobs", required=True, help="the run's jobs, one JSON object per line")
     parser.add_argument("--full", required=True, type=flag, help="whether this is the full gate")
     parser.add_argument("--models", required=True, type=flag, help="whether the models run")
+    parser.add_argument("--prefix", default="", help="caller job prefix to filter and strip (workflow_call)")
     args = parser.parse_args()
     with open(args.jobs, encoding="utf-8") as f:
         jobs = [json.loads(line) for line in f if line.strip()]
     for j in jobs:
         print(f"{j['name']}: {j['status']}, {j['conclusion']}")
-    errors = check(os.environ.get("EXPECTED", ""), jobs, args.full, args.models)
+    errors = check(os.environ.get("EXPECTED", ""), jobs, args.full, args.models, prefix=args.prefix)
     for error in errors:
         print(f"::error::{error}")
     if errors:

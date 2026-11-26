@@ -63,6 +63,11 @@ class Passes(unittest.TestCase):
         jobs += [job("TLA+ models (fair)"), job("TLA+ models (give-up)")]
         self.assertEqual(check(EXPECTED, jobs, full=False, models=True), [])
 
+    def test_a_workflow_call_with_caller_prefix_and_sibling_jobs(self):
+        prefixed = [dict(j, name=f"CI / {j['name']}") for j in full_run()]
+        prefixed = [job("Check whether master moved")] + prefixed + [job("Fast-forward canary", None, "queued")]
+        self.assertEqual(check(EXPECTED, prefixed, full=True, models=True, prefix="CI / "), [])
+
 
 class Fails(unittest.TestCase):
     def assertFails(self, errors, *words):
@@ -107,6 +112,13 @@ class Fails(unittest.TestCase):
     def test_when_a_name_appears_twice_and_one_failed(self):
         jobs = full_run() + [job("Rust tests (core)", "failure")]
         self.assertFails(check(EXPECTED, jobs, full=True, models=True), "Rust tests (core)", "failure")
+
+    def test_when_no_job_matches_the_workflow_call_prefix(self):
+        self.assertFails(
+            check(EXPECTED, full_run(), full=True, models=True, prefix="Wrong / "),
+            "Wrong / ",
+            "matched prefix",
+        )
 
 
 class TheList(unittest.TestCase):

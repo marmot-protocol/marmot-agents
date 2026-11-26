@@ -224,5 +224,5 @@ tools/tla/run.sh formal/tla InstallUpgrade.tla InstallUpgrade.pi.cfg
 ```
 
 CI runs this model's cases with `ActivityHoldBack`'s in the `TLA+ models (InstallUpgrade and ActivityHoldBack)`
-job, in the merge queue and on `master` always, and on a pull request when it changes `install/`, or any other
+job, in hourly `canary` (and manual full-tier runs) always, and on a pull request when it changes `install/`, or any other
 code a model follows, `formal/`, `tools/tla/` or `.github/workflows/ci.yml`.
