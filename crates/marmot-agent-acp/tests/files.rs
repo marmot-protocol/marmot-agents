@@ -81,6 +81,12 @@ const GOOSE: Agent = Agent {
     serve: true,
 };
 
+const ANTIGRAVITY: Agent = Agent {
+    http: false,
+    name: "Antigravity ACP Server",
+    serve: false,
+};
+
 async fn connected(agent: Agent) -> (Acp, Stand) {
     let (driver_side, stand_side) = tokio::io::duplex(1 << 16);
     let (read, write) = tokio::io::split(stand_side);
@@ -535,4 +541,76 @@ async fn a_call_cut_off_halfway_does_not_hold_the_server_open() {
     )
     .await;
     assert!(closed.is_ok(), "the connection is still open");
+}
+
+// Antigravity 1.5.18 omits `mcpCapabilities` in `initialize`, yet connects to streamable HTTP MCP
+// servers per session and names the caller in `_meta["antigravity.google/conversation_id"]`.
+#[tokio::test]
+async fn antigravity_is_served_files_and_routed_by_conversation_id() {
+    let (mut acp, stand) = connected(ANTIGRAVITY).await;
+    assert!(
+        acp.serve_files().await.unwrap(),
+        "Antigravity gets the file tool even when mcpCapabilities is omitted"
+    );
+    let (_stand, [first, second]) = two_chats(&mut acp, stand, None).await;
+    let (server1, _) = server_of(&first);
+    let (server2, _) = server_of(&second);
+
+    // Matching token + conversation_id reaches chat 1.
+    let s1 = server1.clone();
+    let call = tokio::spawn(async move {
+        call_tool(
+            &s1,
+            "notes.txt",
+            json!({"antigravity.google/conversation_id": "s1"}),
+        )
+        .await
+    });
+    let file = next_file(&mut acp).await;
+    assert_eq!(file.chat.as_str(), "c-1");
+    assert_eq!(file.path, PathBuf::from("/work/demo/notes.txt"));
+    acp.file_sent(file.id, Ok(())).await;
+    let result = call.await.unwrap();
+    assert_eq!(said(&result), ("Sent.".to_string(), false));
+
+    // A call without conversation_id or naming another chat's session is refused.
+    refused(&mut acp, server1, Value::Null).await;
+    refused(
+        &mut acp,
+        server2,
+        json!({"antigravity.google/conversation_id": "s1"}),
+    )
+    .await;
+}
+
+// Explicit `mcpCapabilities.http: false` still disables file serving, even for Antigravity.
+#[tokio::test]
+async fn explicit_http_false_disables_antigravity_file_tool() {
+    let (driver_side, stand_side) = tokio::io::duplex(1 << 16);
+    let (read, write) = tokio::io::split(stand_side);
+    let mut stand = Stand {
+        lines: BufReader::new(read).lines(),
+        out: write,
+        prompts: Vec::new(),
+    };
+    let (driver_read, driver_write) = tokio::io::split(driver_side);
+    let greeting = tokio::spawn(async move {
+        let hello = stand.next().await;
+        stand
+            .reply(
+                &hello,
+                json!({
+                    "protocolVersion": 1,
+                    "agentCapabilities": {"loadSession": true, "mcpCapabilities": {"http": false}},
+                    "agentInfo": {"name": "Antigravity ACP Server", "version": "1.5.18"},
+                }),
+            )
+            .await;
+        stand
+    });
+    let mut acp = Acp::connect(driver_read, driver_write, "/work/demo", "antigravity")
+        .await
+        .unwrap();
+    let _stand = greeting.await.unwrap();
+    assert!(!acp.serve_files().await.unwrap());
 }

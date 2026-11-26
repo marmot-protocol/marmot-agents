@@ -34,7 +34,7 @@
 //! ```toml
 //! [acp]
 //! name = "opencode"                    # what events call the agent until it names itself
-//! command = ["opencode", "acp"]        # or ["cursor-agent", "acp"], or Goose's container wrapper
+//! command = ["opencode", "acp"]        # or ["cursor-agent", "acp"], ["agy", "acp"], or Goose's container wrapper
 //! cwd = "/home/me/work"
 //! ```
 //!
@@ -113,7 +113,7 @@ pub struct Config {
     /// A connector on the socket, such as the Claude Code driver, when the agent is not Codex.
     #[serde(default)]
     pub connector: Option<ConnectorConfig>,
-    /// An agent over ACP, built in: OpenCode, Goose or Cursor.
+    /// An agent over ACP, built in: OpenCode, Goose, Cursor or Antigravity.
     #[serde(default)]
     pub acp: Option<AcpConfig>,
 }

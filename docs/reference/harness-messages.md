@@ -642,6 +642,49 @@ OpenCode is written here.
 - **No usage.** The reply to `session/prompt` has only `stopReason`.
 - **`session_info_update`** once per session, with a title.
 
+## ACP: Antigravity
+
+Read on 2026-11-26 from the eleven recordings in
+[`fixtures/recordings/acp/antigravity`](../../fixtures/recordings/acp/antigravity), made that day with
+[`tools/record/record_acp.py`](../../tools/record/record_acp.py) against Google Antigravity CLI 1.5.18
+(`agy acp`, ACP protocol version 1) on the machine's own Google sign-in, with the account's default model.
+The scrubber trims `available_commands_update` to Antigravity's built-in slash commands and skills, neutralises
+`_meta.antigravity.tier`, and scrubs mapped paths split across streamed chunks. Only what differs from OpenCode
+is written here.
+
+- **Identity and capabilities.** `initialize` sets `agentInfo` to `{"name": "Antigravity ACP Server", "version": "1.5.18"}`,
+  which becomes harness `"antigravity-acp-server"` in translated events. It declares `loadSession`,
+  `promptCapabilities` (`image`, `embeddedContext`), and `sessionCapabilities` (`resume`, `close`, `load`,
+  `list`, `additionalDirectories`), plus `auth.logout` and `authMethods` (`oauth-personal`, `oauth-business`,
+  `gemini-api-key`, `agent-platform`). It omits `mcpCapabilities`, yet connects to streamable HTTP MCP servers
+  handed in `mcpServers` on `session/new` and `session/resume`, keeping them per session and naming the caller
+  in `_meta["antigravity.google/conversation_id"]`.
+- **Settings.** The reply to `session/new` includes legacy `models` and `modes`, plus `configOptions` `model`
+  (category `model`), `thought_level` (category `thought_level`: `low`, `medium`, `high`, `xhigh`), and `mode`
+  (category `mode`: `default`, `accept-edits`, `auto`, `plan`). `session/set_config_option` updates them and
+  replies with the new `configOptions`.
+- **Chunks have no `messageId`.** `agent_thought_chunk` and `agent_message_chunk` carry no `messageId`;
+  consecutive chunks of one kind become one item.
+- **Commands.** Shell commands run through `run_command` (`kind: "execute"`) with the command line in
+  `rawInput.CommandLine` (instead of `rawInput.command`), output in `content` and `rawOutput.output`, and
+  `rawOutput.exit_code`. The translators read `rawInput.CommandLine` as a fallback so `tool.command` and the
+  approval text carry the command line.
+- **Approvals.** In `default` mode, shell commands and MCP tools ask via `session/request_permission` with
+  `allow` (`allow_once`, "Allow") and `deny` (`reject_once`, "Deny"). A denial fails the tool call and the turn
+  still completes with `stopReason: "end_turn"`. With `--dangerously-skip-permissions` (used for non-approval
+  recordings), nothing asks.
+- **Questions.** Antigravity's `ask_question` tool asks via `elicitation/create` (`mode: "form"`) with a
+  string JSON-RPC `id` (e.g. `"1"`), naming each question's free-text twin `<name>_other` (e.g. `q1_other`)
+  instead of OpenCode's `<name>_custom`. The translators suppress the `ask_question` tool item and merge
+  `<name>_other` into its question as `allow_text: true` (rule 4).
+- **Edits.** `edit_file` (`kind: "edit"`) sends `locations` and a standard ACP `diff` content entry (`path`,
+  `oldText`, `newText`).
+- **Sessions and usage.** Both `session/resume` (no replay) and `session/load` (replays `user_message_chunk`
+  and `agent_message_chunk`) recover sessions across restarts, and two sessions in one process stay isolated.
+  The reply to `session/prompt` carries `stopReason` and `usage` (`inputTokens`, `outputTokens`,
+  `cachedReadTokens`, `cachedWriteTokens`, `thoughtTokens`, `totalTokens`). `session_info_update` sends a title
+  and `usage_update` reports context-window size; neither is sent to the chat.
+
 ## Pi
 
 Read from the 17 Pi recordings of 2026-11-21 ([`fixtures/recordings/pi`](../../fixtures/recordings/README.md#pi)),

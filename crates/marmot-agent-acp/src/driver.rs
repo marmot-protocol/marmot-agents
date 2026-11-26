@@ -307,16 +307,21 @@ impl Acp {
         acp.version = result["agentInfo"]["version"].as_str().map(String::from);
         acp.load = result["agentCapabilities"]["loadSession"].as_bool() == Some(true);
         acp.resume = result["agentCapabilities"]["sessionCapabilities"]["resume"].is_object();
-        // OpenCode, Goose and Cursor take MCP servers over HTTP; an agent that does not is given
-        // none, and has no tool to send a file.
-        acp.takes_http = result["agentCapabilities"]["mcpCapabilities"]["http"] == true;
         let name = result["agentInfo"]["name"].as_str().unwrap_or_default();
+        let is_antigravity = name.eq_ignore_ascii_case("Antigravity ACP Server");
+        // OpenCode, Goose and Cursor declare `mcpCapabilities.http: true`; Antigravity 1.5.18
+        // omits `mcpCapabilities` while still connecting to streamable HTTP MCP servers per
+        // session. An explicit `false` is still respected.
+        acp.takes_http = result["agentCapabilities"]["mcpCapabilities"]["http"]
+            .as_bool()
+            .unwrap_or(is_antigravity);
         if name.eq_ignore_ascii_case("opencode") {
             acp.scope = Scope::Folder;
         }
-        acp.names_caller = ["opencode", "goose"]
-            .iter()
-            .any(|n| name.eq_ignore_ascii_case(n));
+        acp.names_caller = is_antigravity
+            || ["opencode", "goose"]
+                .iter()
+                .any(|n| name.eq_ignore_ascii_case(n));
         acp.greeting = vec![(Direction::Out, hello), (Direction::In, line)];
         Ok(acp)
     }

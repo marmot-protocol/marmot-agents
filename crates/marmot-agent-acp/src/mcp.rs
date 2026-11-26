@@ -35,9 +35,13 @@ pub const SEND_FILE: &str = "send_file";
 /// `marmot__send_file`, Cursor `marmot-send_file`.
 pub const SERVER: &str = "marmot";
 
-/// The keys under which an agent names, in a call's `_meta`, the ACP session that made it: OpenCode
-/// 2.3.2 and Goose 1.59.2, read in their sources and seen on the wire 2026-11-22.
-const SESSION_KEYS: [&str; 2] = ["ai.opencode/sessionID", "agent-session-id"];
+/// The keys under which an agent names, in a call's `_meta`, the ACP session that made it:
+/// OpenCode 2.3.2, Goose 1.59.2, and Antigravity 1.5.18, seen on the wire.
+const SESSION_KEYS: [&str; 3] = [
+    "ai.opencode/sessionID",
+    "agent-session-id",
+    "antigravity.google/conversation_id",
+];
 
 /// How long a connection may take, once the server stops, to finish what it was given. A call
 /// whose whole request has arrived is answered in that time; one still waiting for the rest of its

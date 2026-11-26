@@ -28,6 +28,7 @@ pub enum Flavor {
     OpenCode,
     Goose,
     Cursor,
+    Antigravity,
 }
 
 /// What outlives one agent process: each session's past, and the sessions whose turn a crash cut.
@@ -70,7 +71,7 @@ pub struct Acp {
     sessions: HashMap<String, Option<Turn>>,
     /// Sessions running something by themselves (Goose).
     own_runs: HashSet<String>,
-    asked: HashMap<i64, Asked>,
+    asked: HashMap<String, Asked>,
     next_request: i64,
     /// The MCP servers each session was handed, and each session's folder: OpenCode keeps them by
     /// folder instead, the last handed over for a folder serving every session there.
@@ -152,6 +153,7 @@ impl Acp {
             Flavor::OpenCode => Some(json!({"ai.opencode/sessionID": session, "progressToken": 2})),
             Flavor::Goose => Some(json!({"agent-session-id": session})),
             Flavor::Cursor => None,
+            Flavor::Antigravity => Some(json!({"antigravity.google/conversation_id": session})),
         };
         self.filing.insert(session.to_string(), false);
         let (called, waker, session) =
@@ -195,8 +197,14 @@ impl Acp {
     fn ask(&mut self, method: &str, params: Value, asked: Asked, out: &mut Outbox) {
         let id = self.next_request;
         self.next_request += 1;
-        self.asked.insert(id, asked);
-        out.say(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        // Antigravity sends string JSON-RPC ids for `elicitation/create` requests.
+        let wire_id = if self.flavor == Flavor::Antigravity && method == "elicitation/create" {
+            Value::String(id.to_string())
+        } else {
+            json!(id)
+        };
+        self.asked.insert(wire_id.to_string(), asked);
+        out.say(json!({"jsonrpc": "2.0", "id": wire_id, "method": method, "params": params}));
     }
 
     /// Ends the session's turn with `stop`, after the agent's words when it completed.
@@ -244,6 +252,7 @@ impl Acp {
             Flavor::OpenCode => fresh("ses"),
             Flavor::Goose => format!("20261122_{}", store.counter),
             Flavor::Cursor => fresh("cursor"),
+            Flavor::Antigravity => fresh("agy"),
         };
         store.sessions.insert(session.clone(), Vec::new());
         session
@@ -270,6 +279,11 @@ impl Acp {
             }
             return;
         }
+        let command_input = if self.flavor == Flavor::Antigravity {
+            json!({"CommandLine": format!("echo {text}")})
+        } else {
+            json!({"command": format!("echo {text}")})
+        };
         if matches!(script, Script::Ask | Script::Sleep | Script::Die) {
             let call = fresh("call");
             let status = if script == Script::Ask {
@@ -280,7 +294,7 @@ impl Acp {
             out.say(update(
                 session,
                 json!({"sessionUpdate": "tool_call", "toolCallId": call, "title": format!("echo {text}"),
-                "kind": "execute", "status": status, "rawInput": {"command": format!("echo {text}")}}),
+                "kind": "execute", "status": status, "rawInput": command_input}),
             ));
             turn.call = Some(call);
         }
@@ -300,7 +314,7 @@ impl Acp {
                 for n in 1..=(1 + u8::from(twice)) {
                     let mut params = json!({"sessionId": session,
                         "toolCall": {"toolCallId": call, "title": format!("echo {text}"), "kind": "execute",
-                            "rawInput": {"command": format!("echo {text}")}},
+                            "rawInput": command_input},
                         "options": [{"optionId": "once", "name": "Allow once", "kind": "allow_once"},
                                     {"optionId": "reject", "name": "Reject", "kind": "reject_once"}]});
                     if text.contains("#garbled") {
@@ -324,10 +338,31 @@ impl Acp {
                 self.ask("elicitation/create", params, asked, out);
             }
             Script::Quiz => {
-                let params = json!({"mode": "form", "sessionId": session, "message": "Questions",
-                    "requestedSchema": {"type": "object", "required": [], "properties": {"q0": {
-                        "type": "string", "title": "Pick", "description": format!("Which? {text}"),
-                        "oneOf": [{"const": "Yes", "title": "Yes"}, {"const": "No", "title": "No"}]}}}});
+                let params = if self.flavor == Flavor::Antigravity {
+                    let call = fresh("call");
+                    out.say(update(
+                        session,
+                        json!({"sessionUpdate": "tool_call", "toolCallId": call, "name": "ask_question",
+                            "title": "Run ask_question", "kind": "other", "status": "in_progress"}),
+                    ));
+                    json!({"mode": "form", "sessionId": session, "toolCallId": call,
+                    "message": "The agent has a question.",
+                    "requestedSchema": {"type": "object", "required": [], "properties": {
+                        "q0": {
+                            "type": "string", "title": "Pick", "description": format!("Which? {text}"),
+                            "oneOf": [{"const": "Yes", "title": "Yes"}, {"const": "No", "title": "No"}]
+                        },
+                        "q0_other": {
+                            "type": "string", "title": "Other",
+                            "description": format!("Optional free-form answer to: Which? {text}")
+                        }
+                    }}})
+                } else {
+                    json!({"mode": "form", "sessionId": session, "message": "Questions",
+                        "requestedSchema": {"type": "object", "required": [], "properties": {"q0": {
+                            "type": "string", "title": "Pick", "description": format!("Which? {text}"),
+                            "oneOf": [{"const": "Yes", "title": "Yes"}, {"const": "No", "title": "No"}]}}}})
+                };
                 let asked = Asked::Form {
                     session: session.to_string(),
                 };
@@ -348,7 +383,7 @@ impl Protocol for Acp {
         let params = &frame["params"];
         let session = params["sessionId"].as_str().unwrap_or_default().to_string();
         let Some(method) = frame["method"].as_str() else {
-            let Some(asked) = id.as_i64().and_then(|id| self.asked.remove(&id)) else {
+            let Some(asked) = self.asked.remove(&id.to_string()) else {
                 return;
             };
             let result = &frame["result"];
@@ -413,6 +448,10 @@ impl Protocol for Acp {
                     Flavor::Cursor => json!({"protocolVersion": 1,
                         "agentCapabilities": {"loadSession": true, "sessionCapabilities": {"list": {}},
                             "mcpCapabilities": {"http": true, "sse": true}}}),
+                    Flavor::Antigravity => json!({"protocolVersion": 1,
+                        "agentCapabilities": {"loadSession": true,
+                            "sessionCapabilities": {"resume": {}, "load": {}, "list": {}, "close": {}}},
+                        "agentInfo": {"name": "Antigravity ACP Server", "version": "1.5.18-fake"}}),
                 };
                 Self::reply(id, result, out);
             }
@@ -433,7 +472,7 @@ impl Protocol for Acp {
             }
             "session/resume" | "session/load" => {
                 let offered = match self.flavor {
-                    Flavor::OpenCode => method == "session/resume",
+                    Flavor::OpenCode | Flavor::Antigravity => method == "session/resume",
                     _ => method == "session/load",
                 };
                 let past = self.store.lock().unwrap().sessions.get(&session).cloned();

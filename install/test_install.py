@@ -31,7 +31,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-HARNESSES = ["codex", "claude-code", "opencode", "goose", "cursor", "pi", "openclaw", "hermes"]
+HARNESSES = ["codex", "claude-code", "opencode", "goose", "cursor", "antigravity", "pi", "openclaw", "hermes"]
 # A connector of ours, as a service beside the core's.
 SOCKET = {"claude-code"}
 # Our plugin, in the person's own gateway.
@@ -39,7 +39,7 @@ PLUGIN = {"openclaw", "hermes"}
 # What may run in a container instead, with --container.
 CONTAINER = {"goose", "pi"}
 # Each harness's program, as the stand-ins on PATH provide it.
-PROGRAMS = ("codex", "opencode", "cursor-agent", "goose", "pi", "openclaw", "hermes")
+PROGRAMS = ("codex", "opencode", "cursor-agent", "agy", "goose", "pi", "openclaw", "hermes")
 REAL_NODE = shutil.which("node")
 OWNER = "ab" * 32
 AGENT_KEY = "cd" * 32
@@ -493,6 +493,7 @@ class Machine:
         for name in ("systemctl", "launchctl", "docker", *programs):
             self.write(self.bin / name, FAKE_LOGGER)
         stand_ins = {"goose": FAKE_VERSIONED.format(version=" 1.59.2"), "pi": FAKE_VERSIONED.format(version="1.6.0"),
+                     "agy": FAKE_VERSIONED.format(version="1.5.18"),
                      "openclaw": FAKE_OPENCLAW, "hermes": FAKE_HERMES}
         for name in programs:
             if name in stand_ins:
@@ -704,6 +705,7 @@ class DryRun(unittest.TestCase):
             "codex": ["[codex]", f'program = "{m.bin}/codex"'],
             "opencode": ["[acp]", 'name = "opencode"', f'command = ["{m.bin}/opencode", "acp"]'],
             "cursor": ["[acp]", 'name = "cursor"', f'command = ["{m.bin}/cursor-agent", "acp"]'],
+            "antigravity": ["[acp]", 'name = "antigravity"', f'command = ["{m.bin}/agy", "acp"]'],
             "goose": ["[acp]", 'name = "goose"', f'command = ["{m.bin}/goose", "acp"]'],
             "pi": ["[pi]", f'program = "{m.bin}/pi"'],
         }
@@ -1038,6 +1040,7 @@ class Install(unittest.TestCase):
 
     def test_each_missing_harness_says_how_to_get_it(self):
         hints = {"goose": ("missing: Goose", "goose configure"),
+                 "antigravity": ("missing: the Antigravity CLI (agy)", "agy acp --login"),
                  "pi": ("missing: Pi", "npm install -g @earendil-works/pi-coding-agent"),
                  "openclaw": ("missing: OpenClaw", "openclaw onboard"),
                  "hermes": ("missing: Hermes", "hermes setup")}
@@ -1059,6 +1062,9 @@ class Install(unittest.TestCase):
         self.assertIn("Pi 1.5.9 is older than 1.6.0", result.stderr)
         result = m.run("goose", *m.args("goose", "--binary", str(m.core), "--dry-run"), env={"FAKE_VERSION": "1.60.0"})
         self.assertNotIn("older", result.stderr)
+        result = m.run("antigravity", *m.args("antigravity", "--binary", str(m.core), "--dry-run"),
+                       env={"FAKE_VERSION": "1.5.10"})
+        self.assertIn("Antigravity 1.5.10 is older than 1.5.18", result.stderr)
         # OpenClaw refuses a plugin for a newer release than itself, so an older one is missing.
         result = m.run("openclaw", *m.args("openclaw", "--binary", str(m.core)),
                        env={"FAKE_OPENCLAW_VERSION": "2026.10.10"}, check=False)

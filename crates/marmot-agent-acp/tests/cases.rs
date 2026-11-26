@@ -340,3 +340,124 @@ fn a_to_do_list_with_no_params_is_unreadable_and_leaves_the_plan_alone() {
     assert_eq!(native.payload.get(), "{}");
     assert_eq!(acp.unreadable(), 1);
 }
+
+// Antigravity puts a shell command in `rawInput.CommandLine` instead of `rawInput.command`.
+#[test]
+fn a_command_in_command_line_is_kept_on_the_tool_and_approval() {
+    let (mut acp, _) = started();
+    let call = acp.feed(
+        Direction::In,
+        r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"c1","name":"run_command","title":"Run","kind":"execute","status":"in_progress","rawInput":{"CommandLine":"python3 greet.py"}}}}"#,
+    );
+    let Body::Tool(tool) = call[0].body() else {
+        panic!("expected a tool item: {call:?}");
+    };
+    assert_eq!(tool.command.as_deref(), Some("python3 greet.py"));
+    assert_eq!(call[0].header().text, "python3 greet.py");
+
+    let ask = acp.feed(
+        Direction::In,
+        r#"{"jsonrpc":"2.0","id":1,"method":"session/request_permission","params":{"sessionId":"s1","toolCall":{"toolCallId":"c1","title":"Run","kind":"execute","rawInput":{"CommandLine":"python3 greet.py"}},"options":[{"optionId":"allow","name":"Allow","kind":"allow_once"}]}}"#,
+    );
+    assert!(matches!(ask[0].body(), Body::Approval(_)));
+    assert_eq!(ask[0].header().text, "python3 greet.py");
+}
+
+// Antigravity's `ask_question` tool and its `elicitation/create` form (whose free-text twin is
+// `<name>_other`) become one question item with free text allowed, and no tool item (rule 4).
+#[test]
+fn antigravitys_ask_question_and_other_field_are_one_question_item() {
+    use marmot_agent_driver::{Answer, Given, Person, Reply};
+    let mut acp = Translator::named("antigravity");
+    for (dir, msg) in [
+        (
+            Direction::Out,
+            r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":1}}"#,
+        ),
+        (
+            Direction::In,
+            r#"{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":1,"agentInfo":{"name":"Antigravity ACP Server","version":"1.5.18"}}}"#,
+        ),
+        (
+            Direction::Out,
+            r#"{"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"/work/demo","mcpServers":[]}}"#,
+        ),
+        (
+            Direction::In,
+            r#"{"jsonrpc":"2.0","id":1,"result":{"sessionId":"s1"}}"#,
+        ),
+        (
+            Direction::Out,
+            r#"{"jsonrpc":"2.0","id":2,"method":"session/prompt","params":{"sessionId":"s1","prompt":[]}}"#,
+        ),
+    ] {
+        acp.feed(dir, msg);
+    }
+    let tool = acp.feed(
+        Direction::In,
+        r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"tool_call","toolCallId":"c1","name":"ask_question","title":"Run ask_question","kind":"other","status":"in_progress"}}}"#,
+    );
+    assert!(
+        tool.is_empty(),
+        "ask_question must not emit a tool item: {tool:?}"
+    );
+
+    let asked = acp.feed(
+        Direction::In,
+        r#"{"jsonrpc":"2.0","id":"1","method":"elicitation/create","params":{"sessionId":"s1","toolCallId":"c1","mode":"form","message":"The agent has a question.","requestedSchema":{"type":"object","properties":{"q1":{"type":"string","title":"Which greeting?","oneOf":[{"const":"1","title":"Hello"},{"const":"2","title":"Hi"}]},"q1_other":{"type":"string","title":"Other","description":"Optional free-form answer"}}}}}"#,
+    );
+    assert_eq!(asked.len(), 1);
+    let Body::Question(q) = asked[0].body() else {
+        panic!("expected a question item: {asked:?}");
+    };
+    assert_eq!(q.questions().len(), 1, "q1_other is merged into q1");
+    assert!(q.questions()[0].allow_text, "free-text answer allowed");
+
+    let answer = Answer {
+        request: "r".into(),
+        item: asked[0].header().item.clone(),
+        by: Person {
+            id: "u-1".into(),
+            name: "Alice".into(),
+        },
+        given: Given::Questions(vec![Reply {
+            question: "q1".into(),
+            options: Vec::new(),
+            text: Some("Howdy".into()),
+        }]),
+    };
+    let reply = acp.reply(&answer).expect("free text goes into q1_other");
+    let parsed: serde_json::Value = serde_json::from_str(&reply).unwrap();
+    assert_eq!(parsed["id"], "1");
+    assert_eq!(parsed["result"]["content"]["q1_other"], "Howdy");
+
+    let answered = acp.feed(Direction::Out, &reply);
+    let Body::Question(done) = answered[0].body() else {
+        panic!("expected answered question: {answered:?}");
+    };
+    let given = done.answer().expect("answer recorded");
+    assert_eq!(given.len(), 1);
+    assert_eq!(given[0].text.as_deref(), Some("Howdy"));
+}
+
+// `<name>_other` merging is Antigravity-only: an unrelated ACP harness with independent `q1` and
+// `q1_other` fields keeps both as separate questions.
+#[test]
+fn other_field_stays_a_separate_question_for_other_harnesses() {
+    let (mut acp, _) = started();
+    let asked = acp.feed(
+        Direction::In,
+        r#"{"jsonrpc":"2.0","id":1,"method":"elicitation/create","params":{"sessionId":"s1","mode":"form","message":"Questions","requestedSchema":{"type":"object","properties":{"q1":{"type":"string","title":"Pick","oneOf":[{"const":"1","title":"Yes"}]},"q1_other":{"type":"string","title":"Other notes"}}}}}"#,
+    );
+    assert_eq!(asked.len(), 1);
+    let Body::Question(q) = asked[0].body() else {
+        panic!("expected a question item: {asked:?}");
+    };
+    assert_eq!(
+        q.questions().len(),
+        2,
+        "both fields remain separate questions"
+    );
+    assert!(!q.questions()[0].allow_text);
+    assert_eq!(q.questions()[1].id, "q1_other");
+}

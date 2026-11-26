@@ -102,7 +102,9 @@ class Scrubber:
         # account's own skills and synced entries among its commands; only its built-in ones are kept
         # (D-085).
         if agent == "cursor":
-            msg = cursor_commands(msg)
+            msg = builtin_commands(msg, CURSOR_BUILTIN)
+        elif agent == "antigravity":
+            msg = antigravity_scrub(msg)
         def homes(v):
             if isinstance(v, dict):
                 return {k: homes(x) for k, x in v.items()}
@@ -159,13 +161,39 @@ CURSOR_BUILTIN = {
 }
 
 
-def cursor_commands(msg: dict) -> dict:
-    """Cursor's command list with only its built-in commands left in."""
+def builtin_commands(msg: dict, names: set[str]) -> dict:
+    """An ACP `available_commands_update` with only the harness's built-in commands left in."""
     update = (msg.get("params") or {}).get("update") or {}
     if msg.get("method") != "session/update" or update.get("sessionUpdate") != "available_commands_update":
         return msg
-    kept = [c for c in update.get("availableCommands") or [] if c.get("name") in CURSOR_BUILTIN]
+    kept = [c for c in update.get("availableCommands") or [] if c.get("name") in names]
     return {**msg, "params": {**msg["params"], "update": {**update, "availableCommands": kept}}}
+
+
+# Antigravity's built-in slash commands and built-in skills, as `agy` 1.5.18 lists them. Everything else
+# in `available_commands_update` comes from the machine's or repository's own skills.
+ANTIGRAVITY_BUILTIN = {
+    "agy-customizations", "antigravity-guide", "boost", "browser", "compact", "goal", "grill-me",
+    "learn", "plan", "run-workflow", "schedule", "swarm", "teamwork",
+}
+
+
+def antigravity_scrub(msg: dict) -> dict:
+    """Antigravity's command list with only built-ins left in, and account tier neutralised."""
+    msg = builtin_commands(msg, ANTIGRAVITY_BUILTIN)
+    result = msg.get("result")
+    if isinstance(result, dict):
+        meta = result.get("_meta")
+        ag = meta.get("antigravity") if isinstance(meta, dict) else None
+        if isinstance(ag, dict) and "tier" in ag:
+            return {
+                **msg,
+                "result": {
+                    **result,
+                    "_meta": {**meta, "antigravity": {**ag, "tier": neutralise(ag["tier"])}},
+                },
+            }
+    return msg
 
 
 MACHINE_UPTIME = re.compile(r"system \d+[dhms](?: \d+[dhms])*")
@@ -198,6 +226,51 @@ def strings(v):
         yield v
 
 
+def _acp_chunk_text(rec: dict) -> tuple[str | None, str | None]:
+    msg = rec.get("msg") or {}
+    if msg.get("method") != "session/update":
+        return None, None
+    u = (msg.get("params") or {}).get("update") or {}
+    kind = u.get("sessionUpdate")
+    content = u.get("content") or {}
+    if kind in ("agent_message_chunk", "agent_thought_chunk") and content.get("type") == "text":
+        return kind, content.get("text")
+    return None, None
+
+
+def scrub_split_chunks(records: list[dict], scrubber: Scrubber) -> None:
+    """Scrub mapped paths that an ACP agent split across consecutive message or thought chunks."""
+    i = 0
+    while i < len(records):
+        kind, first = _acp_chunk_text(records[i])
+        if kind is None or not isinstance(first, str):
+            i += 1
+            continue
+        run = [i]
+        j = i + 1
+        while j < len(records):
+            k2, t2 = _acp_chunk_text(records[j])
+            if k2 != kind or not isinstance(t2, str):
+                break
+            run.append(j)
+            j += 1
+        if len(run) > 1:
+            joined = "".join(records[idx]["msg"]["params"]["update"]["content"]["text"] for idx in run)
+            scrubbed = scrubber.text(joined)
+            if scrubbed != joined:
+                # Re-split at the original chunk lengths; the last chunk takes the rest.
+                pos = 0
+                for n, idx in enumerate(run):
+                    c = records[idx]["msg"]["params"]["update"]["content"]
+                    if n == len(run) - 1:
+                        c["text"] = scrubbed[pos:]
+                    else:
+                        take = len(c["text"])
+                        c["text"] = scrubbed[pos : pos + take]
+                        pos += take
+        i = j
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("raw", type=Path)
@@ -216,9 +289,11 @@ def main() -> int:
             rel = src.relative_to(args.raw / harness)
             (args.out / harness / rel.parent).mkdir(parents=True, exist_ok=True)
             lines = []
+            parsed = [json.loads(line) for line in filter(str.strip, src.read_text(encoding="utf-8").split("\n"))]
+            if harness == "acp":
+                scrub_split_chunks(parsed, s)
             # Split on newlines alone: a message may hold U+2028 and the like, which `splitlines` splits on.
-            for line in filter(str.strip, src.read_text(encoding="utf-8").split("\n")):
-                rec = json.loads(line)
+            for rec in parsed:
                 kept_as_is = {}
                 if harness == "cassettes":
                     # A cassette's line is not a message: the whole line is scrubbed and checked, except the

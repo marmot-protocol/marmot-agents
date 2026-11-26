@@ -3894,3 +3894,32 @@ Decided 2026-11-26 by the project owner (as Phase 2 of #222).
 **Why.** Team changes are already verified locally and cross-model reviewed before opening a PR ([D-068](#d-068-work-follows-the-plan-and-the-builder-decides-what-is-internal), [D-162](#d-162-pull-requests-record-verification-review-and-release-impact-trailers-on-the-tip-commit)). Removing redundant per-PR Rust compilation cuts team PR turnaround to ~60 seconds and eliminates ~85–90% of Actions compute while keeping external/fork PRs fully tested and maintainer-merged, and keeping `master` protected by hourly full-gate `canary` + revert-only bisection + Meltdown Mode (Phase 3 of #222).
 
 Decided 2026-11-26 by the project owner (as Phase 3 of #222).
+
+## D-170 Google Antigravity CLI is driven through ACP
+
+**Decision.** Google Antigravity CLI (`agy acp`, tested on 1.5.18) is supported through the shared ACP driver built
+into the core, with `install/antigravity.sh` connecting to the person's own signed-in `agy` on `PATH` (extending
+[D-005](#d-005-which-driver-each-harness-gets) and
+[D-102](#d-102-the-installers-connect-to-the-harness-the-person-already-has)). Antigravity-specific handling in the
+ACP driver is limited to three wire differences confirmed in real sessions:
+
+- Commands read `rawInput.CommandLine` when `rawInput.command` is absent.
+- `ask_question` tool items are suppressed and `<name>_other` free-text fields in `elicitation/create` are merged
+  into `<name>` for `antigravity-acp-server` only (rule 4 of the event model).
+- Because `agy acp` 1.5.18 omits `mcpCapabilities` in `initialize` while still connecting to client-given streamable
+  HTTP MCP servers per session, the driver offers the loopback `send_file` server to `Antigravity ACP Server` when
+  `mcpCapabilities.http` is omitted (still honoring an explicit `false`) and requires callers to name their session
+  in `_meta["antigravity.google/conversation_id"]` (extending
+  [D-110](#d-110-an-acp-agent-gets-the-file-tool-from-a-loopback-mcp-server-on-by-default)).
+
+For privacy in committed fixtures, `tools/record/scrub.py` trims Antigravity's `available_commands_update` to its
+built-in slash commands and skills, neutralises `_meta.antigravity.tier`, and scrubs mapped paths split across
+streamed ACP chunks (extending
+[D-085](#d-085-cursor-recordings-keep-only-cursors-built-in-commands)).
+
+**Why.** `agy acp` already speaks standard ACP v1 over stdio with `session/resume`, `session/load`,
+`session/request_permission`, `elicitation/create`, `configOptions`, and per-session HTTP MCP servers. Reusing the
+ACP driver keeps maintenance small while fixing the three real-session differences and keeping personal skills,
+account tier, and local paths out of committed recordings (#235).
+
+Decided 2026-11-26 (requested in #235).

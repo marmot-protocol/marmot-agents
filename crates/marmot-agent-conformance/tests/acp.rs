@@ -1,5 +1,5 @@
 //! The ACP driver against the conformance suite, on a fake agent shaped like each recorded one:
-//! OpenCode, Goose and Cursor.
+//! OpenCode, Goose, Cursor and Antigravity.
 
 use marmot_agent_acp::Acp;
 use marmot_agent_conformance::fake::acp::{self, Flavor};
@@ -162,6 +162,26 @@ conformance!(Cursor:
     ]
 );
 
+// Antigravity omits `mcpCapabilities` in `initialize` while still taking streamable HTTP MCP
+// servers per session (naming the caller in `_meta["antigravity.google/conversation_id"]`),
+// puts commands in `rawInput.CommandLine`, and asks questions with `ask_question` + `<name>_other`
+// and string JSON-RPC ids.
+conformance!(Antigravity:
+    run: [two_chats, answered_once, answer_after_death, answer_after_interrupt, restart, new_session, new_session_unnamed, folder, send_file];
+    left_out: [
+        one_turn,
+        dies_mid_turn,
+        dies_with_requests_pending,
+        dropped_waits,
+        slow_and_out_of_order,
+        partial_frames,
+        never_answers,
+        stops_reading,
+        late_replies,
+        settings,
+    ]
+);
+
 fn recording(folder: &str, name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/recordings/acp")
@@ -176,6 +196,7 @@ async fn replays_recordings() {
         (Flavor::OpenCode, "opencode"),
         (Flavor::Goose, "goose"),
         (Flavor::Cursor, "cursor"),
+        (Flavor::Antigravity, "antigravity"),
     ] {
         for name in ["simple.jsonl", "approval_allowed.jsonl"] {
             let progress = std::sync::Arc::new(Progress::default());
@@ -217,6 +238,7 @@ async fn a_replay_stops_on_another_answer() {
         (Flavor::OpenCode, "opencode"),
         (Flavor::Goose, "goose"),
         (Flavor::Cursor, "cursor"),
+        (Flavor::Antigravity, "antigravity"),
     ] {
         let progress = std::sync::Arc::new(Progress::default());
         let subject = OnFake {
@@ -235,7 +257,12 @@ async fn a_replay_stops_on_another_answer() {
 #[tokio::test]
 async fn the_file_faults_are_caught() {
     use marmot_agent_conformance::faults::{self, Fault};
-    for flavor in [Flavor::OpenCode, Flavor::Goose, Flavor::Cursor] {
+    for flavor in [
+        Flavor::OpenCode,
+        Flavor::Goose,
+        Flavor::Cursor,
+        Flavor::Antigravity,
+    ] {
         for fault in [
             Fault::FileWrongChat,
             Fault::FileToWrongChat,
@@ -262,7 +289,12 @@ async fn two_requests_for_one_tool_call_take_one_answer_each() {
     use marmot_agent_conformance::fake::Heard;
     use marmot_agent_conformance::run::{turn_ended, waiting};
 
-    for flavor in [Flavor::OpenCode, Flavor::Goose, Flavor::Cursor] {
+    for flavor in [
+        Flavor::OpenCode,
+        Flavor::Goose,
+        Flavor::Cursor,
+        Flavor::Antigravity,
+    ] {
         let mut run = Run::start(subject(flavor)).await;
         let m = (run.prompt("c-1", "#ask #twice").await.unwrap()).expect("the prompt is taken");
         let first = (run.wait("L2", "the first approval", waiting).await)
@@ -320,7 +352,12 @@ async fn a_request_the_driver_cannot_show_is_answered() {
     use marmot_agent_conformance::run::turn_ended;
     use marmot_agent_events::Body;
 
-    for flavor in [Flavor::OpenCode, Flavor::Goose, Flavor::Cursor] {
+    for flavor in [
+        Flavor::OpenCode,
+        Flavor::Goose,
+        Flavor::Cursor,
+        Flavor::Antigravity,
+    ] {
         for (chat, words) in [("c-1", "#ask #garbled"), ("c-2", "#quiz #garbled")] {
             let mut run = Run::start(subject(flavor)).await;
             let m = (run.prompt(chat, words).await.unwrap()).expect("the prompt is taken");

@@ -1319,9 +1319,12 @@ class Acp(Translator):
         tid = u.get("toolCallId")
         t = self.tools.setdefault(tid, {})
         t.update({k: v for k, v in u.items() if k not in ("sessionUpdate", "toolCallId") and v is not None})
-        if self.harness == "opencode" and t.get("name") == "question":
-            # OpenCode's question tool asks through a form, which becomes the one question item (rule 4).
-            return self.skip("tool call that is really a question (question)")
+        if (self.harness == "opencode" and t.get("name") == "question") or (
+            self.harness == "antigravity-acp-server" and t.get("name") == "ask_question"
+        ):
+            # OpenCode's `question` and Antigravity's `ask_question` ask through a form, which
+            # becomes the one question item (rule 4).
+            return self.skip(f"tool call that is really a question ({t.get('name')})")
         if self.harness == "cursor" and (t.get("rawInput") or {}).get("_toolName") == "updateTodos":
             # Cursor's to-do tool: its list comes in `cursor/update_todos`, which becomes the plan (rule 4).
             return self.skip("tool call that is really a plan (updateTodos)")
@@ -1339,9 +1342,9 @@ class Acp(Translator):
         path = next((x.get("path") for x in t.get("locations") or [] if x.get("path")), None)
         body = {"kind": kind, "name": t.get("name") or acp_kind}
         if kind == "command":
-            # ACP gives a command no field of its own. OpenCode puts it in the raw input, which ACP
-            # leaves to the agent; until it does, the tool call's title stands in as its text.
-            body.update(command=raw.get("command"), cwd=raw.get("cwd"), output=output)
+            # ACP gives a command no field of its own. OpenCode puts it in `rawInput.command`,
+            # Antigravity in `rawInput.CommandLine`; until one is there, the tool call's title stands in.
+            body.update(command=raw.get("command") or raw.get("CommandLine"), cwd=raw.get("cwd"), output=output)
             text = body["command"] or t.get("title")
             # Nor an exit code. OpenCode puts one in `rawOutput.metadata.exit`, Cursor in `rawOutput.exitCode`,
             # Goose in `rawOutput.exit_code`.
@@ -1392,15 +1395,21 @@ class Acp(Translator):
             self.pending[("s", rid)] = {"item": item, "native_choices": native_choices}
             what = {"execute": "command", "edit": "edit", "delete": "edit", "move": "edit"}.get(call.get("kind"), "action")
             return self.emit(item, "approval", "waiting", f"Allow this {what}?",
-                             raw.get("command") or call.get("title") or "",
+                             raw.get("command") or raw.get("CommandLine") or call.get("title") or "",
                              {"subject": subject, "choices": choices}, f"{method} (request)", p)
         if method == "elicitation/create" and p.get("mode") == "form":
             schema = p.get("requestedSchema") or {}
             props = schema.get("properties") or {}
             qs, values = [], {}
-            # OpenCode adds a free-text field `<name>_custom` beside each question with choices: an answer
-            # of one's own to that question, not a second question.
-            custom = {n[: -len("_custom")]: n for n in props if n.endswith("_custom") and n[: -len("_custom")] in props}
+            # OpenCode adds `<name>_custom`, and Antigravity adds `<name>_other`, beside a question
+            # with choices: a free-text answer to that question, not a second question.
+            suffixes = ("_custom", "_other") if self.harness == "antigravity-acp-server" else ("_custom",)
+            custom = {}
+            for n in props:
+                for suffix in suffixes:
+                    if n.endswith(suffix) and n[: -len(suffix)] in props:
+                        custom[n[: -len(suffix)]] = n
+                        break
             # In the order of their names: ACP's official Rust types keep a form's fields in a sorted map.
             for name, f in sorted(props.items()):
                 if name in custom.values():
@@ -3339,7 +3348,7 @@ def crate_shape(value, key=None):
 # The harnesses whose drivers are tested against the prototype's events (D-074).
 DRIVEN = {
     "codex": "Codex", "claude": "Claude Code", "opencode": "OpenCode", "goose": "Goose", "cursor": "Cursor",
-    "pi": "Pi", "openclaw": "OpenClaw", "hermes": "Hermes",
+    "antigravity-acp-server": "Antigravity", "pi": "Pi", "openclaw": "OpenClaw", "hermes": "Hermes",
 }
 
 

@@ -170,6 +170,25 @@ documentation in its npm package and the source of `pi-codes` 1.6.0. The recordi
   [`harness-messages.md`](harness-messages.md#acp-cursor). It does not name itself in `initialize`, declares
   only `loadSession` and session `list`, and keeps its to-do list with its own `cursor/update_todos`.
 
+### Antigravity
+
+- **ACP.** Google Antigravity CLI ships `agy acp` over stdio (ACP v1), driven by the shared ACP driver.
+- **Checked on 2026-11-26**: `agy` 1.5.18 (`Antigravity ACP Server`) on the machine's own Google sign-in
+  (`agy acp --login`, or signing in interactively with `agy`). What it sent is in
+  [`harness-messages.md`](harness-messages.md#acp-antigravity).
+- **Minimum / tested CLI version:** tested on `agy` 1.5.18 (`install/antigravity.sh` warns when `agy --version`
+  is below `1.5.18`).
+- **Controls that work in chat:** prompt and reply, Allow and Deny on `session/request_permission`, multiple-choice
+  and free-text questions via `elicitation/create` (`ask_question` + `<name>_other`), Stop (`session/cancel`),
+  New session (`session/new`), setting changes via `session/set_config_option` (`model`, `thought_level`, `mode`),
+  folder moves (`cwd`), session recovery across restarts (`session/resume`, and `session/load` is also offered),
+  two-chat session isolation in one process, slash commands (`available_commands_update`), and `send_file` over
+  the driver's loopback HTTP MCP server.
+- **Differences from OpenCode/Goose/Cursor confirmed on the wire:** `initialize` omits `mcpCapabilities`, yet
+  `agy acp` connects to client-given HTTP MCP servers per session and names the caller in
+  `_meta["antigravity.google/conversation_id"]`; shell commands arrive in `rawInput.CommandLine`; its question
+  tool is `ask_question` with `<name>_other` free-text fields and string JSON-RPC request ids.
+
 ## About ACP itself
 
 - **Version.** v1 is current (schema v1.32.0, 2026-11-14). v2 has been a draft since 2026-07-20 (alpha 16 on
@@ -200,18 +219,18 @@ Checked on 2026-11-22, for the ACP driver's `send_file` tool. **How:** OpenCode'
 field names and the order of arrival were looked at. Not checked: SSE servers, stdio servers, and what each does
 with more than one server.
 
-| | OpenCode 2.3.2 | Goose 1.59.2 | Cursor 2026.11.22 |
-| --- | --- | --- | --- |
-| `mcpCapabilities` in `initialize` | `http: true, sse: false` | `http: true, sse: false` | `http: true, sse: true` |
-| Takes from `mcpServers` | stdio and HTTP; SSE refused | stdio and streamable HTTP; SSE refused | HTTP (stdio and SSE not tried) |
-| On `session/load`, `session/resume` | taken again (both) | taken again (`load`; no `resume`), replacing a server of the same name | taken again (`load`) |
-| Kept for | every session in the folder: `mcp.add` with `location.directory`, so the server handed over last for a name serves all of them (seen: a call from the first of two sessions arrived at the second's address) | the session: stored with the session's extensions, on disk | the session (seen: two sessions in one folder each called their own address) |
-| Connects | at `session/new`, before replying | lazily, at the first tool list | at `session/new`, before replying |
-| Client-given headers | sent on every request | sent (`headers` of the extension; read in source, not seen) | sent on every request |
-| The calling session, in `tools/call` | `_meta["ai.opencode/sessionID"]`, the ACP session id | `_meta["agent-session-id"]`, the ACP session id, with `agent-working-dir` and `agent-tool-call-request-id` | not named |
-| Before the call | nothing asked (with its default permissions); the model may call it from OpenCode's `execute` code tool, which ACP shows as `execute` with the code as `rawInput` | asks in `approve` mode, as for every tool: title `marmot: send file · <path>` | always asks (`session/request_permission`, title `marmot-send_file: send_file`, `allow-once`, `allow-always`, `reject-once`) |
-| First MCP request | `initialize` (`2025-11-25`) | `server/discover` (draft `2026-07-28`), then `initialize` when refused | `initialize` (`2025-11-25`) |
-| A server it cannot reach | not tried; a request to a server that has gone is logged as a warning with its address (seen: host and port) | the session still opens and the turn runs without the tool (seen in its container, which cannot reach the host's loopback address) | not tried |
+| | OpenCode 2.3.2 | Goose 1.59.2 | Cursor 2026.11.22 | Antigravity 1.5.18 (checked 2026-11-26) |
+| --- | --- | --- | --- | --- |
+| `mcpCapabilities` in `initialize` | `http: true, sse: false` | `http: true, sse: false` | `http: true, sse: true` | omitted |
+| Takes from `mcpServers` | stdio and HTTP; SSE refused | stdio and streamable HTTP; SSE refused | HTTP (stdio and SSE not tried) | streamable HTTP (stdio and SSE not tried) |
+| On `session/load`, `session/resume` | taken again (both) | taken again (`load`; no `resume`), replacing a server of the same name | taken again (`load`) | taken again (`resume`; `load` not tried) |
+| Kept for | every session in the folder: `mcp.add` with `location.directory`, so the server handed over last for a name serves all of them (seen: a call from the first of two sessions arrived at the second's address) | the session: stored with the session's extensions, on disk | the session (seen: two sessions in one folder each called their own address) | the session (seen: two sessions in one folder each called with their own token) |
+| Connects | at `session/new`, before replying | lazily, at the first tool list | at `session/new`, before replying | at `session/new` and `session/resume`, before replying |
+| Client-given headers | sent on every request | sent (`headers` of the extension; read in source, not seen) | sent on every request | sent on every request |
+| The calling session, in `tools/call` | `_meta["ai.opencode/sessionID"]`, the ACP session id | `_meta["agent-session-id"]`, the ACP session id, with `agent-working-dir` and `agent-tool-call-request-id` | not named | `_meta["antigravity.google/conversation_id"]`, the ACP session id (with `root_conversation_id` and `artifacts_dir`) |
+| Before the call | nothing asked (with its default permissions); the model may call it from OpenCode's `execute` code tool, which ACP shows as `execute` with the code as `rawInput` | asks in `approve` mode, as for every tool: title `marmot: send file · <path>` | always asks (`session/request_permission`, title `marmot-send_file: send_file`, `allow-once`, `allow-always`, `reject-once`) | asks in `default` mode (`session/request_permission`, name `mcp_marmot_send_file`, title `Run mcp_marmot_send_file`, `allow`, `deny`) |
+| First MCP request | `initialize` (`2025-11-25`) | `server/discover` (draft `2026-07-28`), then `initialize` when refused | `initialize` (`2025-11-25`) | `server/discover` (draft `2026-07-28`), then `initialize` (`2025-11-25`) when refused |
+| A server it cannot reach | not tried; a request to a server that has gone is logged as a warning with its address (seen: host and port) | the session still opens and the turn runs without the tool (seen in its container, which cannot reach the host's loopback address) | not tried | not tried |
 
 OpenCode's log records a server's address when a request to it fails, which is why the driver puts its token in a
 header and not in the address (the log line seen held the host and port only; a path was not tried). Goose stores a session's servers, headers included, in its session store

@@ -415,6 +415,32 @@ is in [`docs/reference/harness-messages.md`](../../docs/reference/harness-messag
 
 `acp/cursor/expected/` holds the expected events.
 
+## ACP: Antigravity
+
+Eleven of the same scenarios with `agy acp`, on the machine's own Google sign-in. What they show is in
+[`docs/reference/harness-messages.md`](../../docs/reference/harness-messages.md#acp-antigravity).
+
+| | |
+| --- | --- |
+| Interface | `agy acp`, ACP protocol version 1, JSON-RPC 2.0 over stdio |
+| Version | Antigravity CLI 1.5.18 (`Antigravity ACP Server`) |
+| Model | The account's default (`gemini-4-neon`, high thinking) |
+| Recorded on | 2026-11-26 |
+
+- **Built-in commands and account tier are scrubbed**: `tools/record/scrub.py` trims `available_commands_update`
+  to Antigravity's built-in slash commands and skills, neutralises `_meta.antigravity.tier`, and scrubs mapped
+  paths split across streamed chunks.
+- **Scenarios with no approval run `agy acp --dangerously-skip-permissions`**: otherwise `agy acp` asks before
+  shell commands.
+- **`question`**: Antigravity's `ask_question` tool sends `elicitation/create` with a string JSON-RPC id and
+  a `<name>_other` free-text twin; the translators suppress the tool item and merge `<name>_other` into the
+  question.
+- **`approval_denied`**: denying the command fails the tool call and the turn finishes with `stopReason: "end_turn"`.
+- **`resume` and `load`**: both recover the session after a restart (`session/resume` without replay; `session/load`
+  with replay).
+
+`acp/antigravity/expected/` holds the expected events.
+
 ## Pi
 
 Pi is recorded through its RPC mode, `pi --mode rpc`, in a container. The recorder starts Pi the way the Pi

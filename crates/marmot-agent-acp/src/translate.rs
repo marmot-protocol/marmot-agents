@@ -783,9 +783,12 @@ impl Translator {
         };
         // A tool call's id is the agent's own for one session; the item is named after both.
         let item = format!("{session}:{id}");
-        if self.harness == "opencode" && t.name.as_deref() == Some("question") {
-            // OpenCode's question tool asks through a form, which becomes the one question item
-            // (rule 4 of the event model).
+        if (self.harness == "opencode" && t.name.as_deref() == Some("question"))
+            || (self.harness == "antigravity-acp-server"
+                && t.name.as_deref() == Some("ask_question"))
+        {
+            // OpenCode's `question` and Antigravity's `ask_question` ask through a form, which
+            // becomes the one question item (rule 4 of the event model).
             return;
         }
         if self.harness == "cursor"
@@ -864,9 +867,9 @@ impl Translator {
         };
         let text = match kind {
             ToolKind::Command => {
-                // ACP gives a command no field of its own. OpenCode puts it in the raw input,
-                // which ACP leaves to the agent; until it does, the title stands in as its text.
-                body.command = raw_str("command");
+                // ACP gives a command no field of its own. OpenCode puts it in `rawInput.command`,
+                // Antigravity in `rawInput.CommandLine`; until one is there, the title stands in.
+                body.command = raw_str("command").or_else(|| raw_str("CommandLine"));
                 body.cwd = raw
                     .and_then(|r| r.get("cwd"))
                     .and_then(Value::as_str)
@@ -1012,7 +1015,7 @@ impl Translator {
                 let command = f
                     .raw_input
                     .as_ref()
-                    .and_then(|r| r.get("command"))
+                    .and_then(|r| r.get("command").or_else(|| r.get("CommandLine")))
                     .and_then(Value::as_str)
                     .filter(|s| !s.is_empty())
                     .map(str::to_string);
@@ -1067,13 +1070,16 @@ impl Translator {
                 // sorted map.
                 let schema = serde_json::to_value(&form.requested_schema).unwrap_or(Value::Null);
                 let props = schema.get("properties").and_then(Value::as_object);
-                // OpenCode adds a free-text field `<name>_custom` beside each question with
-                // choices: an answer of one's own to that question, not a second question.
+                // OpenCode adds `<name>_custom`, and Antigravity adds `<name>_other`, beside a
+                // question with choices: a free-text answer to that question, not a second one.
+                let is_antigravity = self.harness == "antigravity-acp-server";
                 let custom: HashMap<String, String> = props
                     .into_iter()
                     .flat_map(|p| p.keys())
                     .filter_map(|n| {
-                        let base = n.strip_suffix("_custom")?;
+                        let base = n.strip_suffix("_custom").or_else(|| {
+                            is_antigravity.then(|| n.strip_suffix("_other")).flatten()
+                        })?;
                         props?
                             .contains_key(base)
                             .then(|| (base.to_string(), n.clone()))

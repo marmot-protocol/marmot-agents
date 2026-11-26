@@ -59,6 +59,7 @@ fn recordings() -> &'static [Recording] {
             (Harness::Acp("opencode"), root.join("acp/opencode")),
             (Harness::Acp("goose"), root.join("acp/goose")),
             (Harness::Acp("cursor"), root.join("acp/cursor")),
+            (Harness::Acp("antigravity"), root.join("acp/antigravity")),
             (Harness::Pi, root.join("pi")),
         ] {
             for path in files(&folder) {

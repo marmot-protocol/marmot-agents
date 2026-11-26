@@ -27,7 +27,12 @@ struct Marker {
 }
 
 /// Each agent recorded over ACP, and how many recordings it has.
-const AGENTS: &[(&str, usize)] = &[("opencode", 12), ("goose", 13), ("cursor", 11)];
+const AGENTS: &[(&str, usize)] = &[
+    ("opencode", 12),
+    ("goose", 13),
+    ("cursor", 11),
+    ("antigravity", 11),
+];
 
 fn folder(agent: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -163,49 +168,56 @@ fn the_expected_events_are_what_the_types_write() {
     }
 }
 
-/// OpenCode's question tool and the form it asks with are one question item, and no tool item
-/// (rule 4 of the event model). Its free-text field is the question's own answer, not a second
-/// question.
+/// OpenCode's `question` and Antigravity's `ask_question` and the form each asks with are one
+/// question item, and no tool item (rule 4 of the event model). Each free-text field is the
+/// question's own answer, not a second question.
 #[test]
 fn a_question_is_one_item() {
-    let events = replay(&folder("opencode").join("question.jsonl"));
-    let questions: Vec<&AgentEvent> = events
-        .iter()
-        .filter(|e| matches!(e.body(), Body::Question(_)))
-        .collect();
-    let items: HashSet<&str> = questions.iter().map(|e| e.header().item.as_str()).collect();
-    assert_eq!(items.len(), 1, "one question item");
-    let Body::Question(q) = questions[0].body() else {
-        unreachable!()
-    };
-    assert_eq!(q.questions().len(), 1, "one question");
-    assert!(q.questions()[0].allow_text, "with a free-text answer");
-    assert!(
-        !events.iter().any(|e| matches!(e.body(), Body::Tool(_))),
-        "the question tool is not a tool item"
-    );
+    for agent in ["opencode", "antigravity"] {
+        let events = replay(&folder(agent).join("question.jsonl"));
+        let questions: Vec<&AgentEvent> = events
+            .iter()
+            .filter(|e| matches!(e.body(), Body::Question(_)))
+            .collect();
+        let items: HashSet<&str> = questions.iter().map(|e| e.header().item.as_str()).collect();
+        assert_eq!(items.len(), 1, "{agent}: one question item");
+        let Body::Question(q) = questions[0].body() else {
+            unreachable!()
+        };
+        assert_eq!(q.questions().len(), 1, "{agent}: one question");
+        assert!(
+            q.questions()[0].allow_text,
+            "{agent}: with a free-text answer"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e.body(), Body::Tool(_))),
+            "{agent}: the question tool is not a tool item"
+        );
+    }
 }
 
 /// A command that exits with an error is failed, with its exit code, though ACP calls it completed.
 #[test]
 fn a_failing_command_is_failed_with_its_exit_code() {
-    let events = replay(&folder("opencode").join("failing_command.jsonl"));
-    let last = events
-        .iter()
-        .rev()
-        .find_map(|e| match e.body() {
-            Body::Tool(t) => Some((e.header().state, t.exit_code)),
-            _ => None,
-        })
-        .expect("a tool item");
-    assert_eq!(last, (State::Failed, Some(1)));
+    for agent in ["opencode", "antigravity"] {
+        let events = replay(&folder(agent).join("failing_command.jsonl"));
+        let last = events
+            .iter()
+            .rev()
+            .find_map(|e| match e.body() {
+                Body::Tool(t) => Some((e.header().state, t.exit_code)),
+                _ => None,
+            })
+            .expect("a tool item");
+        assert_eq!(last, (State::Failed, Some(1)), "{agent}");
+    }
 }
 
-/// A failed command shows what it wrote to its error stream: Goose sends it as text, Cursor only in
-/// `rawOutput.stderr`.
+/// A failed command shows what it wrote to its error stream: Goose and Antigravity send it as text,
+/// Cursor only in `rawOutput.stderr`.
 #[test]
 fn a_failed_commands_error_output_is_kept() {
-    for agent in ["goose", "cursor"] {
+    for agent in ["goose", "cursor", "antigravity"] {
         let events = replay(&folder(agent).join("failing_command.jsonl"));
         let output = events
             .iter()

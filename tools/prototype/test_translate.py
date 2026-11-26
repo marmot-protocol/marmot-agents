@@ -422,6 +422,43 @@ class AcpTurns(unittest.TestCase):
             self.assertEqual((len(asked), len(tools)), (2, 1), (kind, asked, tools))
             self.assertFalse(asked & tools, (kind, asked, tools))
 
+    def test_antigravity_other_field_holds_typed_answer(self):
+        """Antigravity names a question's free-text twin `<name>_other`; answering in it records
+        the typed text on that question, not a second question. Other harnesses keep both fields."""
+        form = {
+            "jsonrpc": "2.0", "id": "1", "method": "elicitation/create",
+            "params": {
+                "mode": "form", "sessionId": "s1", "toolCallId": "c1", "message": "The agent has a question.",
+                "requestedSchema": {"type": "object", "properties": {
+                    "q1": {"type": "string", "title": "Which greeting?",
+                           "oneOf": [{"const": "1", "title": "Hello"}, {"const": "2", "title": "Hi"}]},
+                    "q1_other": {"type": "string", "title": "Other"},
+                }},
+            },
+        }
+        acp = self.started()
+        acp.feed({"dir": "out", "msg": {"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {}}})
+        acp.feed({"dir": "in", "msg": {
+            "jsonrpc": "2.0", "id": 0,
+            "result": {"agentInfo": {"name": "Antigravity ACP Server", "version": "1.5.18"}},
+        }})
+        acp.feed({"dir": "in", "msg": form})
+        acp.feed({"dir": "out", "msg": {
+            "jsonrpc": "2.0", "id": "1", "result": {"action": "accept", "content": {"q1_other": "Howdy"}},
+        }})
+        questions = [e for e in acp.events if e["type"] == "question"]
+        self.assertEqual(len(questions), 2)
+        self.assertEqual(len(questions[0]["body"]["questions"]), 1)
+        self.assertTrue(questions[0]["body"]["questions"][0]["allow_text"])
+        self.assertEqual(questions[1]["body"]["answer"], [{"question": "q1", "options": [], "text": "Howdy"}])
+
+        other = self.started()
+        other.feed({"dir": "in", "msg": form})
+        other_q = [e for e in other.events if e["type"] == "question"]
+        self.assertEqual(len(other_q), 1)
+        self.assertEqual([q["id"] for q in other_q[0]["body"]["questions"]], ["q1", "q1_other"])
+        self.assertFalse(other_q[0]["body"]["questions"][0]["allow_text"])
+
 if __name__ == "__main__":
     unittest.main()
 

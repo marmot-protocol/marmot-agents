@@ -13,7 +13,7 @@ ten crates, and CI checks them: `marmot-agent-events`, the agent event and its e
 its subagents shown in the chat that started them, each in a thread of its own,
 [D-117](docs/decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them),
 [D-142](docs/decisions.md#d-142-how-subagent-threads-are-built)),
-`marmot-agent-acp` (OpenCode, Goose and Cursor over ACP) and `marmot-agent-pi` (Pi, in a container from
+`marmot-agent-acp` (OpenCode, Goose, Cursor and Antigravity over ACP) and `marmot-agent-pi` (Pi, in a container from
 `tools/pi`); `marmot-agent`, the core, which runs one agent's account through MDK and
 drives a built-in driver or serves a local socket; `marmot-agent-chat`, a terminal client for trying it;
 `marmot-agent-sim`, a deterministic simulator that runs the real core against a simulated MDK and a scripted
@@ -473,23 +473,26 @@ python3 tools/record/inventory.py fixtures/recordings/claude --kinds   # nor thi
 python3 tools/record/inventory.py fixtures/recordings/acp/opencode --kinds   # nor this
 python3 tools/record/inventory.py fixtures/recordings/acp/goose --kinds      # nor this
 python3 tools/record/inventory.py fixtures/recordings/acp/cursor --kinds     # nor this
+python3 tools/record/inventory.py fixtures/recordings/acp/antigravity --kinds  # nor this
 python3 tools/record/inventory.py fixtures/recordings/pi --kinds             # nor this
 python3 -m unittest discover -s tools/prototype -p 'test_*.py'         # cases no recording holds
 python3 -m unittest discover -s tools/model_double -p 'test_*.py'      # the model double's wire formats
 python3 tools/prototype/translate.py --check fixtures/recordings/codex fixtures/recordings/claude \
     fixtures/recordings/hermes fixtures/recordings/openclaw fixtures/recordings/acp/opencode \
-    fixtures/recordings/acp/goose fixtures/recordings/acp/cursor fixtures/recordings/pi
+    fixtures/recordings/acp/goose fixtures/recordings/acp/cursor fixtures/recordings/acp/antigravity \
+    fixtures/recordings/pi
 python3 tools/prototype/translate.py --expected fixtures/recordings/codex --check   # the Codex driver's expected events
 python3 tools/prototype/translate.py --expected fixtures/recordings/claude --check  # the Claude Code driver's
 python3 tools/prototype/translate.py --expected fixtures/recordings/acp/opencode --check  # the ACP driver's
 python3 tools/prototype/translate.py --expected fixtures/recordings/acp/goose --check     # and again
 python3 tools/prototype/translate.py --expected fixtures/recordings/acp/cursor --check    # and again
+python3 tools/prototype/translate.py --expected fixtures/recordings/acp/antigravity --check  # and again
 python3 tools/prototype/translate.py --expected fixtures/recordings/pi --check      # the Pi driver's
 python3 tools/prototype/translate.py --expected fixtures/recordings/openclaw --check  # the OpenClaw plugin's
 python3 tools/prototype/translate.py --expected fixtures/recordings/hermes --check  # the Hermes plugin's
 ```
 
-The `--check` over the eight folders must end with "native messages with no translation: none". If you change
+The `--check` over the nine folders must end with "native messages with no translation: none". If you change
 the event model, change `tools/prototype/translate.py` to match and run it again.
 
 The Codex driver is tested against `fixtures/recordings/codex/expected`, the Claude Code driver against
