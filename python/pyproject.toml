@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "marmot-hermes"
+version = "0.1.0"
+description = "Hermes platform plugin for marmot-agent over its local socket"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/marmot-protocol/marmot-agents"
+
+[tool.setuptools]
+packages = ["marmot_hermes"]
+
+[tool.setuptools.package-data]
+marmot_hermes = ["plugin.yaml"]
+
+[tool.marmot]
+socket_protocol = "marmot.agent-control.v3"

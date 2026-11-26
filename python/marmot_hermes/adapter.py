@@ -46,12 +46,13 @@ from urllib.parse import unquote, urlsplit
 from gateway.config import Platform
 from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageType, SendResult
 
+from . import __version__
 from .connector import Connector
 from .core import CoreConnection, HelloRefused, Refusal, Refused, line_of
 from .translate import VERSION, usable_settings
 
 PLATFORM = "marmot"
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = __version__
 RECONNECT_SECONDS = 2.0
 # How much sooner than Hermes's limit the plugin stops answering a request to confirm a command, so that
 # one it answers is one Hermes runs, even after a stall of a few seconds between the plugin's look and

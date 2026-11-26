@@ -97,6 +97,8 @@ test("media OpenClaw sends through the channel goes as its caption, then its fil
     const running = startAccount({ cfg: { channels: { marmot: { home: dir } } }, accountId: "default", channelRuntime: {}, abortSignal: abort.signal });
     await until(() => core.state.welcomed);
     await until(() => core.lines.length > 0 && core.lines.at(-1)!["method"] === "hello");
+    const hello = core.lines.find((m) => m["method"] === "hello");
+    assert.deepEqual(object(hello!["params"])["connector"], { name: "marmot-agent-openclaw", version: "0.1.0" });
     await new Promise((r) => setTimeout(r, 20));
 
     // The core refuses the file: the caption went first, as the agent's words, and the send fails.

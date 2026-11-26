@@ -1,10 +1,13 @@
 {
   "name": "marmot-agent-openclaw",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "The OpenClaw plugin for marmot-agent: a channel inside OpenClaw that connects it to the core over the local socket",
   "license": "MIT",
   "type": "module",
+  "marmot": {
+    "socketProtocol": "marmot.agent-control.v3"
+  },
   "engines": {
     "node": ">=24"
   },
