@@ -1711,6 +1711,18 @@ class Moved(unittest.TestCase):
                     self.assertEqual((m.calls(), settings.read_text()), ([], before))
                     self.assertEqual(sorted(p.name for p in settings.parent.iterdir()), ["settings.toml"])
 
+    def test_a_work_folder_written_with_an_escape_is_refused(self):
+        """The installer reads the settings' cwd as written, and the core decodes it as TOML: an escape could
+        name the old home to the core and something else to the installer's check, so one is refused."""
+        m = Machine(self)
+        _, settings = self.moved(m, "codex", cwd=str(m.home / "work"))
+        escaped = settings.read_text().replace(f'cwd = "{m.home / "work"}"', 'cwd = "\\u002emarmot-agents/codex"')
+        settings.write_text(escaped)
+        result = m.run("codex", *self.args(m, "codex"), check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("holds a backslash: write the folder without escapes", result.stderr)
+        self.assertEqual((m.calls(), settings.read_text()), ([], escaped))
+
     def test_a_work_folder_the_import_left_is_kept_and_checked_as_cwd_is(self):
         """The import's work folder is your home unless it was given --cwd, which holds the agents' folder:
         refused before anything is changed. Until the move is done, --cwd does not rewrite the settings the

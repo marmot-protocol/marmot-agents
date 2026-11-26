@@ -2058,6 +2058,8 @@ settle_values() {
         [ "$HARNESS_KIND" != plugin ] || return 0
         local settings_cwd
         settings_cwd=$(sed -n 's/^cwd = "\(.*\)"$/\1/p' "$MA_SETTINGS" | head -n 1)
+        # Read as written, so a TOML escape would name another folder to the core than the one checked here.
+        case $settings_cwd in *\\*) die "the cwd in $MA_SETTINGS holds a backslash: write the folder without escapes" ;; esac
         # A harness the core drives works where its settings say, which may have been edited since.
         if [ "$HARNESS_KIND" = builtin ] && [ -z "$CWD_GIVEN" ] && [ -n "$settings_cwd" ]; then
             CWD=$settings_cwd
