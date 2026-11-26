@@ -1,7 +1,7 @@
 # The swap test
 
-Status: a plan written 2026-11-26, not yet run. Steps marked **[D-158]** or **[D-159]** depend on changes still
-being built and describe how those changes will behave; steps marked *(inferred)* were worked out, not read in
+Status: a plan written 2026-11-26, not yet run. Steps marked **[D-159]** depend on a change still being built
+and describe how it will behave; steps marked *(inferred)* were worked out, not read in
 a source or seen to run.
 
 The project owner runs this by hand, on a fresh Linux virtual machine. It installs today's MDK connector for every
@@ -36,29 +36,25 @@ Read these before anything else. The first three are also questions in [Before y
 
 ## Before you start
 
-The owner answers these. Each has a recommendation; the plan below follows it.
+The owner answered these on 2026-11-26; the plan below follows the answers.
 
-1. **The coding harnesses after the move: by hand, or an installer first?** Recommended: build a
-   `--replace`-style path for the coding installers before the test, so all seven move as a person would move
-   them and run as services. Until then, this plan runs them by hand in `tmux`, which tests the import and the
-   core but not the service.
-2. **Which `wn-agent` release?** Recommended: `wn-agent-v0.19.0`, the release MDK's integration guide names
-   at the pinned commit, and what real installs run. A nightly (`wn-agent-v0.20.0-nightly.*`) is closer to what
-   the import was tested on, and so proves less.
-3. **Which White Noise build, and does it show agent items and threads?** Recommended: one built on MDK at or
-   after 2026-11-22. Without it, the checks marked *(needs items)* can only be partly seen, and are reported
-   as not seen.
-4. **Who are the second and third people?** Two more White Noise accounts, on other devices. Called *B* and *C*
-   below. Use test accounts, not real people.
-5. **Can White Noise add a member to a direct chat?** If not, make the owner's two-person chat as a group of two,
-   so [F4](#f4-a-third-person-joins-the-owners-chat) can add *C* to it. Decide before making any history.
-6. **[D-159] How to make an upgrade fail after the new core opened the store.** Recommended: ask the D-159 change
-   for a way. Until then, [F3](#f3-an-upgrade-that-fails-part-way) gives one *(inferred)*.
-7. **Is the D-159 backup taken on a gateway's first move**, as well as on an upgrade of `marmot-agent`? The plan
-   assumes yes.
-8. **[D-159] Does a failed service start stop the core before the store is put back?** Such a failure leaves the
-   core's service in place, and it may be running ([`move.md`](move.md#steps)); a store put back under a running
-   core is not safe *(inferred)*. Recommended: the D-159 change stops and removes that service first.
+1. **The coding harnesses after the move.** The coding installers will take an imported install, as
+   `--replace-plugin` does for the gateways, so all seven move as a person would and run as services. That is being
+   built after D-159. Until it lands, the steps for Codex, OpenCode, Goose, Pi and Claude Code run them by hand in
+   `tmux`, which tests the import and the core but not the service; they will be rewritten when it lands.
+2. **Which `wn-agent` release.** `wn-agent-v0.19.0`, the release MDK's integration guide names and real installs
+   run. This test is the first time the import runs on a home it made.
+3. **Which White Noise build.** The owner builds one that shows agent items, answers and controls, and subagent
+   threads, on MDK at `bea7b40` or later. Note its version in the report.
+4. **The second and third people.** The owner makes two White Noise test accounts on other devices, *B* and *C*.
+5. **Adding someone to the owner's two-person chat.** If White Noise cannot add a member to a direct chat, start
+   the owner's chat with the agent as a group of the two of them, **with no name**: MDK, and so the core, treat a
+   chat with no name and exactly two people as a two-person chat, and a named one as a group. Decide before making
+   any history. Since [D-158](decisions.md#d-158-the-core-does-not-limit-a-send-to-the-chats-members-a-send-in-flight-when-the-owner-adds-someone-may-reach-them),
+   F4 only observes what the person added sees; a send in flight reaching them is not a failure.
+6. **[D-159] What a failed upgrade leaves.** The installer puts back the old core and the account store, and leaves
+   the agent's services stopped, printing the command to start them (decided 2026-11-26). How F3b makes an upgrade
+   fail after the new core opened the store is settled with the D-159 change.
 
 ## Setup
 
@@ -124,7 +120,7 @@ anywhere. Check that the owner's, *B*'s and *C*'s White Noise list both.
 
 There is no release yet: nothing has been tagged, and `.github/workflows/release.yml` runs only on a tag that is
 the workspace's version (`v0.1.0` today). So build it on the machine from a checkout, at the `master` commit
-that has both D-158 and D-159:
+that has D-159:
 
 ```sh
 git clone https://github.com/marmot-protocol/marmot-agents.git ~/marmot-agents
@@ -437,11 +433,9 @@ Passing:
 - From the moment *C* joins, the chat is no longer the owner's: *C* sees the agent's words, the turn, approvals,
   questions and errors, and no reasoning, tools, plans or notices
   ([D-136](decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)).
-- **[D-158]** Nothing of the full activity reaches *C*, even what the core handed to MDK just before *C* joined:
-  MDK refuses such a send because someone joined, and the core holds it back. Without D-158, such a send may
-  reach *C* ([D-148](decisions.md#d-148-for-the-pilot-a-send-of-the-full-activity-that-mdk-keeps-and-posts-after-someone-joins-is-an-accepted-limit)).
-- **Known gap, not a failure:** on Codex, a subagent's words in its thread may reach *C*. MDK has no way yet to
-  limit a thread message to two people. Note whether they did.
+- **Not a failure:** a tool update or a subagent's words that the core handed to MDK in the seconds before *C*
+  joined may reach *C*; only the owner can add someone, so that is accepted
+  ([D-158](decisions.md#d-158-the-core-does-not-limit-a-send-to-the-chats-members-a-send-in-flight-when-the-owner-adds-someone-may-reach-them)). Note whether anything did.
 - The turn goes on and finishes; the owner's approvals still work.
 
 Then remove *C*. The chat is the owner's again from the next send: full activity comes back *(inferred: D-136
