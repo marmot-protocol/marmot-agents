@@ -9,6 +9,38 @@ that nobody has to repeat the inventory.
   "checked" were then confirmed directly in the code. The rest were not re-checked.
 - **Paths** are relative to the MDK repository root. Line numbers will drift.
 
+## Re-checked on 2026-11-26
+
+At MDK commit `bea7b40`, the revision the core uses, in the read-only cargo checkout, for
+[the swap test](../swap-test.md). Read in the code and in `integrations/README.md`; nothing was run. What changed
+since the sections below were written:
+
+- **The QUIC preview stack is gone.** `crates/agent-stream-compose`, `crates/transport-quic-stream` and
+  `crates/transport-quic-broker` no longer exist, and `AgentControlRequest` has no `Stream*` requests: 47 types
+  by a count of its variants, not about fifty. The rows for them in "Layout in MDK", the preview row of "The socket
+  protocol today", Hermes's "Streamed partial text" row and "The QUIC preview stack" are out of date. What Hermes's
+  plugin does with streamed text now was not checked.
+- **Sizes** are smaller. Counting every `.rs`, `.py` or `.ts` file under each folder, tests included:
+  `agent-connector` about 24,900 lines, `terminal-harness` about 14,400, the Hermes plugin about 9,000 and the
+  OpenClaw plugin about 20,500. How the earlier count was made is not known, so the two may not compare.
+- **Files from the terminal harnesses.** `integrations/terminal-harness/README.md` says generated files are not
+  sent back by Claude Code, OpenCode, Pi or Goose. Codex sends them only when `WN_CODEX_ARTIFACT_EXPORTS_ENABLED`
+  is set with a grant naming one group and an export folder, from a staging folder in the home
+  (`media-uploads`) that must also be a `--media-allowed-root`. The installers still set none.
+- **The terminal harnesses' own commands.** A chat picks its folder with `/<path>`, under the home, and
+  `/help`, `/pwd`, `/new` and `/goal` are the connector's, not the harness's (`commands.rs`).
+- **Releases.** The integration guide pins `wn-agent-v0.19.0` (a pre-release of 2026-11-22), and checks each
+  installer against a `.sha256` beside it before running it. Nightly `wn-agent-v0.20.0-nightly.*` releases have
+  followed. The guide's minimum releases: Hermes 0.19.0, OpenClaw 2026.10.10 with Node 24.22.1, Claude Code 2.1.0,
+  OpenCode 1.18.18 and Goose 1.53.0.
+- **OpenClaw's sender policy** is not set by its installer: `--allow-welcomer` admits invites only, and the
+  person adds `channels.marmot.senderPolicy` by hand (`integrations/openclaw/marmot/README.md`). The Hermes and
+  OpenClaw installers still set `dev/outbound-media` as the media folder.
+
+Still as written: one process per turn, with the prompt written to standard input and input closed
+(`process.rs`); `ParsedEvent`'s variants; the socket being `marmot.agent-control.v2`; OpenClaw's final-only
+dispatch; Hermes's approval with no request id from the host.
+
 ## Layout in MDK
 
 | Path | What it is |
