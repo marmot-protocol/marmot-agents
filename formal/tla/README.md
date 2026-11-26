@@ -280,6 +280,6 @@ python3 tools/tla/check.py --bounds larger-liveness   # their liveness, which ta
 Temurin 21 image with Docker. `TLC_WORKERS` sets TLC's workers (default 1); `TLC_HEAP` its heap (default 2g).
 
 CI runs `check.py` in the `TLA+ models` jobs, three for this model, one for `SocketProtocol`, one for
-`DriverTransport`, and one for `InstallUpgrade` and `ActivityHoldBack` together: in the merge queue and on
-`master` always, and on a pull request when it changes `formal/`, `tools/tla/`, the code a model follows or
+`DriverTransport`, and one for `InstallUpgrade` and `ActivityHoldBack` together: in hourly `canary` always,
+and on a pull request when it changes `formal/`, `tools/tla/`, the code a model follows or
 `.github/workflows/ci.yml`.

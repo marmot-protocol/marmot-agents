@@ -268,10 +268,33 @@ class Inventory(unittest.TestCase):
 
     def test_nightly_yml_gives_its_jobs_names(self):
         self.assertEqual(TRUSTED["nightly.yml"], {
-            "Simulator on new seeds", "TLA+ models on larger bounds", "Coverage report",
-            "Mutation testing, one shard", "The model double's cassettes",
+            "Resolve canary commit", "Simulator on new seeds", "TLA+ models on larger bounds",
+            "Coverage report", "Mutation testing, one shard", "The model double's cassettes",
             "Property tests at high counts", "Fuzzing",
             "Open an issue for each job that failed"})
+
+    def test_canary_yml_gives_its_own_and_called_ci_job_names(self):
+        expected_called = {f"CI / {name}" for name in TRUSTED["ci.yml"]}
+        self.assertEqual(TRUSTED["canary.yml"], {
+            "Check whether master moved", "Fast-forward canary", "Report canary failure",
+        } | expected_called)
+
+    def test_canary_gate_counts_only_when_no_other_job_of_its_attempt_failed(self):
+        github = FakeGitHub(
+            {"canary.yml": [run(1, 2, event="schedule"), run(2, 2, event="schedule")]},
+            {1: [job(10, "CI / CI passed", 1, "failure"),
+                 job(11, "CI / Rust tests (core)", 1, "failure"),
+                 job(12, "CI / Rust tests (core)", 2, "success"),
+                 job(13, "CI / CI passed", 2, "success")],
+             2: [job(20, "CI / CI passed", 1, "failure"),
+                 job(21, "CI / Rust tests (core)", 1, "success"),
+                 job(22, "CI / CI passed", 2, "success")]})
+        state = empty()
+        collect(github, state, "2026-11-10", workflows=("canary.yml",))
+        self.assertEqual(counted(state), [
+            ("canary.yml", "CI / CI passed", 1),
+            ("canary.yml", "CI / Rust tests (core)", 1),
+        ])
 
     def test_the_forms_a_workflow_names_its_jobs_in(self):
         text = """name: X

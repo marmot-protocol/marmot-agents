@@ -3723,3 +3723,27 @@ cache warming into an hourly `canary` run keeps `master`'s caches fresh and guar
 move-over, Kani, simulator-200) runs against `master` while cutting runner usage dramatically (Phase 1 of #222).
 
 Decided 2026-11-26 by the project owner (as Phase 1 of #222).
+
+## D-164 Nightly verification runs against the verified `canary` branch
+
+**Decision.** Amending [D-130](#d-130-ci-runs-in-three-tiers-with-one-required-check) and
+[D-143](#d-143-one-issue-tracks-the-ci-jobs-that-flake), building on
+[D-163](#d-163-hourly-canary-runs-the-full-gate-on-master-and-refreshes-build-caches):
+
+- `.github/workflows/nightly.yml` resolves `refs/heads/canary` once in a first `resolve` job on scheduled runs,
+  persists that resolved SHA in a run-scoped cache (`nightly-sha-<run_id>`) so "Re-run all jobs" always tests the
+  exact same commit even if `canary` advances between attempts (preserving D-143's same-commit flake guarantee),
+  checks out that pinned commit across all nightly jobs (`simulator`, `properties`, `fuzzing`, `models`,
+  `coverage`, `mutants`, `cassettes`), and reports that SHA in failure issues. Scheduled runs execute `master`'s
+  `nightly.yml` against `canary`'s checkout (so changes to `nightly.yml` that depend on new repository code take
+  effect once `canary` advances). Manual `workflow_dispatch` runs always test their dispatched ref (`github.sha`).
+- `.github/workflows/flake-report.yml` and `tools/ci/flake_report.py` also watch `canary.yml` (expanding its local
+  `workflow_call` to `ci.yml` with the `CI / ` job prefix and treating `CI / CI passed` as a gate), so flakes in
+  the hourly full-gate tier continue to surface in the `Flaky job tracker`.
+
+**Why.** The nightly soak burns ~173 runner-minutes per night (5,000 simulator seeds, 10,000-case property tests,
+fuzzing, larger TLA+ bounds, coverage, mutation testing). Pinning scheduled runs to `canary` ensures nightly never
+wastes a full soak on an unverified or broken `master` commit and never drifts mid-run if `canary` advances, while
+tracking `canary.yml` in the flaky job tracker keeps flake visibility across all three tiers (Phase 1.3 of #222).
+
+Decided 2026-11-26 by the project owner (as Phase 1.3 of #222).

@@ -79,22 +79,19 @@ jobs:
             echo "should_advance=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-          # Cap retries on the same broken SHA to 2 failed/cancelled runs unless forced, so a
-          # deterministic overnight regression does not burn 24 full gates while still giving one
-          # automatic retry for transient infra/flake failures (and two red runs for Meltdown
-          # detection). Query by status=failure and status=cancelled separately so subsequent
-          # successful skip runs can never displace earlier failures from a recent-runs window.
+          # Cap retries on the same broken SHA to 2 failed runs unless forced, so a deterministic
+          # overnight regression does not burn 24 full gates while still giving one automatic retry
+          # for transient infra/flake failures (and two red runs for Meltdown detection). Query
+          # status=failure directly so subsequent successful skip runs can never displace earlier
+          # failures from a recent-runs window, and do not count cancelled runs (which can happen
+          # when a queued hourly trigger is preempted by the next hour under concurrency: canary).
           if [ "${FORCE}" != "true" ]; then
             prior_failures="$(gh api \
               "repos/${GH_REPO}/actions/workflows/canary.yml/runs?head_sha=${TARGET_SHA}&status=failure&per_page=1" \
               --jq .total_count)"
-            prior_cancelled="$(gh api \
-              "repos/${GH_REPO}/actions/workflows/canary.yml/runs?head_sha=${TARGET_SHA}&status=cancelled&per_page=1" \
-              --jq .total_count)"
-            prior_unsuccessful="$((prior_failures + prior_cancelled))"
-            echo "Prior unsuccessful canary runs on ${TARGET_SHA}: ${prior_unsuccessful} (failure=${prior_failures}, cancelled=${prior_cancelled})"
-            if [ "${prior_unsuccessful}" -ge 2 ]; then
-              echo "SHA ${TARGET_SHA} already had ${prior_unsuccessful} unsuccessful canary runs; skipping until a new commit lands or force=true."
+            echo "Prior failed canary runs on ${TARGET_SHA}: ${prior_failures}"
+            if [ "${prior_failures}" -ge 2 ]; then
+              echo "SHA ${TARGET_SHA} already failed canary ${prior_failures} times; skipping until a new commit lands or force=true."
               echo "should_run=false" >> "${GITHUB_OUTPUT}"
               echo "should_advance=false" >> "${GITHUB_OUTPUT}"
               exit 0
@@ -184,8 +181,9 @@ jobs:
             gh issue comment "${number}" --body "${body}"
             echo "Commented on #${number}: ${title}"
           else
-            gh issue create --title "${title}" --body "${body}
-
-This issue is opened by .github/workflows/canary.yml whenever the full gate fails on master. Close it once canary advances past the failing commit."
+            issue_body="$(printf '%s\n\n%s\n' \
+              "${body}" \
+              'This issue is opened by .github/workflows/canary.yml whenever the full gate fails on master. Close it once canary advances past the failing commit.')"
+            gh issue create --title "${title}" --body "${issue_body}"
             echo "Opened: ${title}"
           fi
