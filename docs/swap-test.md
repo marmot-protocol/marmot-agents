@@ -15,10 +15,10 @@ like.
 
 Read these before anything else. The first three are also questions in [Before you start](#before-you-start).
 
-- **Only Hermes and OpenClaw move over through an installer.** For Codex, Claude Code, OpenCode, Pi and Goose
-  the move is `marmot-agent import`, then `marmot-agent run` by hand ([`move.md`](move.md#steps), step 3). The
-  coding installers (`install/codex.sh` and the others) refuse an agent whose settings they did not write
-  (`check_harness` in `install/lib.sh`). So after the move those five run in a terminal, not as a service.
+- **Every harness moves over through its installer.** The import writes the settings into the agent's folder
+  (`--settings`), and the harness's installer takes them and runs the agent as a service
+  ([`move.md`](move.md#steps), step 3). Hermes and OpenClaw take `--replace-plugin` as well; the coding harnesses
+  take no flag ([D-160](decisions.md#d-160-the-coding-installers-take-an-install-moved-over-and-run-it-as-a-service)).
 - **The import has only been tested on homes made by `wn-agent` at the MDK revision the core uses** (`bea7b40`,
   of 2026-11-25). MDK's published connectors are `wn-agent-v0.19.0`, of 2026-11-22. A home made by 0.19.0 has
   never been moved over. This test is the first time.
@@ -37,10 +37,10 @@ Read these before anything else. The first three are also questions in [Before y
 
 The owner answered these on 2026-11-26; the plan below follows the answers.
 
-1. **The coding harnesses after the move.** The coding installers will take an imported install, as
-   `--replace-plugin` does for the gateways, so all seven move as a person would and run as services. That is being
-   built after D-159. Until it lands, the steps for Codex, OpenCode, Goose, Pi and Claude Code run them by hand in
-   `tmux`, which tests the import and the core but not the service; they will be rewritten when it lands.
+1. **The coding harnesses after the move.** The coding installers take an imported install, as `--replace-plugin`
+   does for the gateways
+   ([D-160](decisions.md#d-160-the-coding-installers-take-an-install-moved-over-and-run-it-as-a-service)), so all
+   seven move as a person would and run as services.
 2. **Which `wn-agent` release.** `wn-agent-v0.19.0`, the release MDK's integration guide names and real installs
    run. This test is the first time the import runs on a home it made.
 3. **Which White Noise build.** The owner builds one that shows agent items, answers and controls, and subagent
@@ -77,7 +77,7 @@ Install:
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y build-essential git curl tmux python3 python3-venv jq qrencode
+sudo apt-get install -y build-essential git curl python3 python3-venv jq qrencode
 # Node 24.22.1, the release this repository's containers use, from nodejs.org or nvm
 # Rust, from https://rustup.rs (the pinned compiler installs itself on the first build)
 ```
@@ -249,54 +249,60 @@ in C4.
 
 ```sh
 cd ~/marmot-agents
-"$CORE" import ~/.marmot-agents/codex --owner "$OWNER_NPUB" --cwd ~/swap-test/work/codex --dry-run
+mkdir -p ~/.local/share/marmot-agent/agents/codex
+"$CORE" import ~/.marmot-agents/codex --owner "$OWNER_NPUB" --cwd ~/swap-test/work/codex \
+    --settings ~/.local/share/marmot-agent/agents/codex/settings.toml --dry-run
 ```
 
 Read the plan it prints. Passing: it says a Codex install; the owner is the one you gave; *B* may invite and
 prompt, and only the owner may approve; two relays; the folder each chat chose with `/<path>` is not carried over;
 `files_from` is empty. Then run it without `--dry-run`.
 
-The import writes `~/.marmot-agents/codex/marmot-agent.toml`. Edit two lines in it for the test:
+The import writes `~/.local/share/marmot-agent/agents/codex/settings.toml`. Edit two lines in it for the test:
 
 - `files_from = []` becomes `files_from = ["/home/<you>/swap-test/work/codex/out"]`, so C8 can send a file;
 - under `[codex]`, add `approval_policy = "untrusted"`, so Codex asks before most commands, as
   [`try.md`](try.md) does.
 
-Check the groups, with the agent stopped. This prints ids to the terminal only; do not copy them anywhere:
+Then install it as a service. Do not run `marmot-agent groups` or `run` on these settings first: either would open
+the old home with the new core before the installer copies it
+([D-159](decisions.md#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)).
 
 ```sh
-"$CORE" groups ~/.marmot-agents/codex/marmot-agent.toml
+install/codex.sh --binary "$CORE"
+loginctl enable-linger "$USER"
 ```
 
-Passing: the two-person chat, marked as the owner's, and the group, and nothing else. Then start it in its own
-`tmux` window:
-
-```sh
-tmux new-session -d -s codex "$CORE run ~/.marmot-agents/codex/marmot-agent.toml"
-```
+Passing: the installer says it uses the settings `marmot-agent import` wrote, and keeps the identity it was
+imported with, in `~/.marmot-agents/codex`. It says it kept a copy of the agent's account home, until it is
+started on the new core. It makes no new identity and prints no public key, and `marmot-agent-codex` is active
+(`systemctl --user status marmot-agent-codex`). The settings file is as you left it.
 
 ### M2 to M4: OpenCode, Goose and Pi
 
-The same as Codex, without `--owner` and without *B*, each with its home and folder:
+The same as Codex, without `--owner` and without *B*, each with its home, folder and settings in its agent's
+folder (`--settings ~/.local/share/marmot-agent/agents/<name>/settings.toml`, after `mkdir -p` of that folder):
 
-| Harness | Home | Before starting, in `marmot-agent.toml` | Start |
+| Harness | Home | Before installing, in `settings.toml` | Install |
 | --- | --- | --- | --- |
-| OpenCode | `~/.marmot-agents/harnesses` | `files_from` as for Codex | `tmux new-session -d -s opencode "$CORE run ~/.marmot-agents/harnesses/marmot-agent.toml"` |
-| Goose | `~/.marmot-agents/goose` | `files_from` as for Codex | `tmux new-session -d -s goose "GOOSE_MODE=approve $CORE run ~/.marmot-agents/goose/marmot-agent.toml"`, so Goose asks before each tool *(inferred: the core passes its environment to Goose, as the installer's `GOOSE_MODE` does)* |
-| Pi | `~/.marmot-agents/pi` | `files_from` as for Codex | `tmux new-session -d -s pi "$CORE run ~/.marmot-agents/pi/marmot-agent.toml"` |
+| OpenCode | `~/.marmot-agents/harnesses` | `files_from` as for Codex | `install/opencode.sh --binary "$CORE"` |
+| Goose | `~/.marmot-agents/goose` | `files_from` as for Codex | `install/goose.sh --binary "$CORE" --goose-mode approve`, so Goose asks in the chat before each tool |
+| Pi | `~/.marmot-agents/pi` | `files_from` as for Codex | `install/pi.sh --binary "$CORE"` |
 
-Pi asks nobody before a tool runs, so it has no approval to check.
+The agents' names, and so their folders and services, are `opencode`, `goose` and `pi`. Pi asks nobody before a
+tool runs, so it has no approval to check.
 
 ### M5: Claude Code
 
-Import as for OpenCode, with `~/.marmot-agents/claude` and `--cwd ~/swap-test/work/claude`. Then start the core
-and, beside it, its driver, as the import says:
+Import as for OpenCode, with `~/.marmot-agents/claude`, `--cwd ~/swap-test/work/claude` and `--settings
+~/.local/share/marmot-agent/agents/claude-code/settings.toml`. The agent's name is `claude-code`. Then install
+it, giving the work folder again, as the import's settings for Claude Code do not name it:
 
 ```sh
-tmux new-session -d -s claude "$CORE run ~/.marmot-agents/claude/marmot-agent.toml"
-tmux new-window -t claude "node ~/marmot-agents/packages/claude-code/src/main.ts --home ~/.marmot-agents/claude --cwd ~/swap-test/work/claude"
+install/claude-code.sh --binary "$CORE" --cwd ~/swap-test/work/claude
 ```
 
+Passing, as for Codex, and both `marmot-agent-claude-code` and `marmot-agent-claude-code-connector` are active.
 The driver's permission mode is `default`, which asks in the chat.
 
 ### M6: Hermes
@@ -341,10 +347,10 @@ Run them in order, after each move. Where a step needs an item to be seen, White
 | Check | What to do | Passing looks like |
 | --- | --- | --- |
 | C1 Same identity | Look at the agent's replies in White Noise | They come from the same contact, in the same two chats. No invite arrives |
-| C2 Same groups | `marmot-agent groups` before the first start (above). For Hermes and OpenClaw, whose installer starts the core: `systemctl --user stop marmot-agent-<name>`, then `"$CORE" groups ~/.local/share/marmot-agent/agents/<name>/settings.toml`, then start it again | The two chats, the two-person one marked as the owner's, and no other |
+| C2 Same groups | `systemctl --user stop marmot-agent-<name>`, then `"$CORE" groups ~/.local/share/marmot-agent/agents/<name>/settings.toml`, then start it again (for Claude Code, `systemctl --user start marmot-agent-claude-code marmot-agent-claude-code-connector`) | The two chats, the two-person one marked as the owner's, and no other |
 | C3 Nothing old read again | Wait five minutes after the start | No reply holds `<W1>` to `<W4>`. No turn starts that nobody asked for. The harness's own history shows no prompt from before the move |
 | C4 The gap message | The `<W5>` sent during the move | Answered once, or not at all, never twice. It is answered only if it reached the agent after the core first subscribed ([D-111](decisions.md#d-111-a-group-the-core-has-never-read-starts-after-what-arrived-before-the-core-did)); note which |
-| C5 Catching up | Stop the core (`tmux kill-session -t <name>`, which for Claude Code stops its driver too, or `systemctl --user stop marmot-agent-<name>` for Hermes and OpenClaw), send "Reply with the word `<W6>`." in the two-person chat, wait two minutes, start it again | One reply with `<W6>`, once |
+| C5 Catching up | Stop the core (`systemctl --user stop marmot-agent-<name>`, which for Claude Code stops its connector too), send "Reply with the word `<W6>`." in the two-person chat, wait two minutes, start it again | One reply with `<W6>`, once |
 | C6 Who may prompt | *B*, in the group, mentioning the agent: "Reply with the word `<W7>`." | Codex answers; no other agent does, and no turn starts. A `refused` notice may show *(needs items)* |
 | C7 Who may approve | Ask for something that needs approval (below); *B* answers it first, then the owner | *B*'s answer is refused (`not_allowed`) and the request keeps waiting; the owner's is taken and the work goes on |
 | C8 Files | "Send me `out/report.txt`." Then "Send me `~/swap-test/outside.txt`." Then "Send me the file `bootstrap.json` in your account home." | The first arrives as a file. The second and third are refused, and the agent says so. For Hermes and OpenClaw use a file in the gateway's work folder for the first |
@@ -367,7 +373,7 @@ settings ask about. Pi never asks.
 On Codex and on Hermes. Start a long task in the two-person chat, and once a command is running:
 
 ```sh
-pkill -KILL -f 'marmot-agent run .*/codex/'      # Codex, run by hand; then start it again as in M1
+systemctl --user kill -s KILL marmot-agent-codex   # Codex; systemd starts it again
 systemctl --user kill -s KILL marmot-agent-hermes  # Hermes; systemd starts it again
 ```
 
@@ -488,8 +494,7 @@ When something fails, collect:
 
 - the step, what you expected, and what you saw, in your own words;
 - the time, in UTC, to the minute;
-- the core's log around that time: `journalctl --user -u marmot-agent-<name> --since "<time>"` for a service, or
-  the `tmux` window's output. The core's logs hold no message text, keys, ids, relay addresses or paths
+- the core's log around that time: `journalctl --user -u marmot-agent-<name> --since "<time>"`. The core's logs hold no message text, keys, ids, relay addresses or paths
   ([D-071](decisions.md#d-071-what-may-be-logged)), but read them before sharing;
 - the state of the services: `systemctl --user list-units 'wn-*' 'marmot-agent-*'`;
 - for an installer or the import, the lines it printed that say what failed.
