@@ -1,8 +1,8 @@
+# The swap test
+
 Status: a plan written 2026-11-26, not yet run. Steps marked **[D-158]** or **[D-159]** depend on changes still
 being built and describe how those changes will behave; steps marked *(inferred)* were worked out, not read in
 a source or seen to run.
-
-# The swap test
 
 The project owner runs this by hand, on a fresh Linux virtual machine. It installs today's MDK connector for every
 harness, makes history with each through real White Noise chats, moves each over to `marmot-agent`, and checks
