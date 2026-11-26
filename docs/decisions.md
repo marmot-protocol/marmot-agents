@@ -2516,6 +2516,8 @@ Decided 2026-11-23 by the builder, under the project owner's instruction to deci
 
 ## D-130 CI runs in three tiers, with one required check
 
+*(Replaced by [D-169](#d-169-team-pull-requests-use-a-fast-static-gate-backed-by-hourly-canary-and-the-bisect-agent).)*
+
 **Decision.** CI runs in three tiers, and adds to
 [D-094](#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly):
 
@@ -3876,3 +3878,19 @@ that isolates deterministic regressions by revert-only bisection, avoids reverti
 and freezes `master` loudly rather than silently piling commits onto a broken tree (Phase 2 of #222).
 
 Decided 2026-11-26 by the project owner (as Phase 2 of #222).
+
+## D-169 Team pull requests use a fast static gate backed by hourly canary and the bisect agent
+
+**Decision.** Replaces [D-130](#d-130-ci-runs-in-three-tiers-with-one-required-check). `.github/workflows/ci.yml` keeps `CI passed` as the single required check on `master` (checked by `tools/ci/passed.py`), and routes each run into one of three tiers:
+
+- **Fast Team PR gate (~45–60 seconds, zero Rust compilation):** applies **only** to same-repo pull requests (`head.repo.full_name == github.repository` and `head.repo.fork != true`) authored by a collaborator whose live repository permission is `write`, `maintain`, or `admin`, unless the PR carries the `ci:full` label. Runs:
+  - Verified commit-signature check on every commit in the PR before any PR code is checked out;
+  - `tree-state` check reading `origin/tree-state:state.json` (fails closed on every PR run started or re-run while `state != "green"`, i.e. Meltdown Mode under [D-168](#d-168-always-on-revert-only-bisect-agent-watches-hourly-canary-and-activates-meltdown-mode), unless labeled `tree-fix` or `revert`; a PR whose `CI passed` check had already turned green before Meltdown is not retroactively invalidated by this workflow alone);
+  - Hard-enforced tip commit trailers (`tools/ci/check_pr_trailers.py`, [D-162](#d-162-pull-requests-record-verification-review-and-release-impact-trailers-on-the-tip-commit));
+  - `Rust format` (`cargo fmt --all --check`, installing only `rustfmt` with zero compilation), `ShellCheck` (lint only), `Recordings`, `TypeScript (claude-code)`, `TypeScript (openclaw)`, `Python` (including socket compatibility and release planner tests), `Documents` (`lychee`), and `CI passed` (which also runs `tools/ci` unit tests).
+- **External / fork PR gate (and `ci:full` Team PRs):** any pull request from a fork, a non-collaborator, a read-only member, or when the live permission lookup fails fails closed into the full PR suite (`Rust format and Clippy`, `Rust tests (core)`, `Rust tests (drivers and the rest)`, `Simulator`, `Conformance (socket)`, `Install scripts`, path-scoped `TLA+ models`, plus all fast static checks), with commit trailers kept advisory so outside contributors are not blocked by internal agent conventions. Merging an external/fork PR requires a repository collaborator with write access to review the head commit and merge it (GitHub already prevents non-write contributors from merging or arming auto-merge, and clears auto-merge if a non-write user pushes). Adding the `ci:full` label to any PR and re-running CI runs the complete `full` tier (including `Move-over tests (Docker)`, `Kani proofs`, `Simulator` at 200 runs, and all `TLA+ models`).
+- **Hourly `canary` and Nightly:** unchanged from [D-163](#d-163-hourly-canary-runs-the-full-gate-on-master-and-refreshes-build-caches) and [D-164](#d-164-nightly-verification-runs-against-the-verified-canary-branch). Hourly `canary` runs the full gate on `master` via `workflow_call` (with `pull-requests: read` granted to the called workflow), refreshes Rust build caches once per batch, and fast-forwards `canary` on green; the always-on bisect agent ([D-168](#d-168-always-on-revert-only-bisect-agent-watches-hourly-canary-and-activates-meltdown-mode)) isolates deterministic regressions or activates Meltdown Mode.
+
+**Why.** Team changes are already verified locally and cross-model reviewed before opening a PR ([D-068](#d-068-work-follows-the-plan-and-the-builder-decides-what-is-internal), [D-162](#d-162-pull-requests-record-verification-review-and-release-impact-trailers-on-the-tip-commit)). Removing redundant per-PR Rust compilation cuts team PR turnaround to ~60 seconds and eliminates ~85–90% of Actions compute while keeping external/fork PRs fully tested and maintainer-merged, and keeping `master` protected by hourly full-gate `canary` + revert-only bisection + Meltdown Mode (Phase 3 of #222).
+
+Decided 2026-11-26 by the project owner (as Phase 3 of #222).

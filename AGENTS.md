@@ -248,22 +248,24 @@ Recorded sessions have their own rules:
 ## Verification
 
 CI runs these commands (`.github/workflows/ci.yml`), with two exceptions that are marked below: the diagrams
-and `tools/record/inventory.py`. Those two are checked only by you. Run everything that applies before you push.
-If you change a command here, change it there. CI runs in three tiers
-([D-130](docs/decisions.md#d-130-ci-runs-in-three-tiers-with-one-required-check)):
+and `tools/record/inventory.py`. Those two are checked only by you. Run everything that applies before you push:
+team PRs run a fast static gate in CI and rely on local verification + hourly `canary`
+([D-169](docs/decisions.md#d-169-team-pull-requests-use-a-fast-static-gate-backed-by-hourly-canary-and-the-bisect-agent)):
 
 | Tier | When | What |
 | --- | --- | --- |
-| Pull request | Each push to a pull request; aim under 10 minutes | Every command below that CI runs, with the simulator at its normal count. The TLA+ models run only when `formal/`, `tools/tla/`, `ci.yml` or the code a model follows changed (the paths are in `ci.yml`'s first job) |
-| Hourly `canary` | Hourly on `master` (`.github/workflows/canary.yml`), skipping when `master == canary`; aim under 30 minutes ([D-161](docs/decisions.md#d-161-ci-no-longer-runs-on-pushes-to-master), [D-163](docs/decisions.md#d-163-hourly-canary-runs-the-full-gate-on-master-and-refreshes-build-caches)) | All of the pull-request tier whatever changed, the simulator at `MARMOT_AGENT_SIM_RUNS=200`, the move-over tests that need Docker, the Kani proofs, and `master` cache refresh, then fast-forwards `canary` on green |
+| Fast Team PR | Same-repo PR by a `write`/`maintain`/`admin` collaborator without `ci:full`; ~45–60 seconds, zero Rust compile | Verified PR commit signatures, `tree-state` check (fails closed when `red` unless labeled `tree-fix` or `revert`), hard-enforced D-162 commit trailers, `Rust format` (`cargo fmt --all --check`), `ShellCheck`, `Recordings`, `TypeScript`, `Python`, `Documents`, and `CI passed` |
+| External / fork PR (or `ci:full` label) | Fork PRs, non-collaborators, read-only members, or any PR labeled `ci:full`; under 10 minutes (`ci:full` runs the full gate) | All Rust Clippy, workspace tests, conformance, simulator, install scripts, and TLA+ models when watched paths changed; external PRs are merged only by a collaborator with write access after reviewing the head commit |
+| Hourly `canary` | Hourly on `master` (`.github/workflows/canary.yml`), skipping when `master == canary`; aim under 30 minutes ([D-161](docs/decisions.md#d-161-ci-no-longer-runs-on-pushes-to-master), [D-163](docs/decisions.md#d-163-hourly-canary-runs-the-full-gate-on-master-and-refreshes-build-caches), [D-168](docs/decisions.md#d-168-always-on-revert-only-bisect-agent-watches-hourly-canary-and-activates-meltdown-mode)) | Full gate whatever changed, simulator at `MARMOT_AGENT_SIM_RUNS=200`, Docker move-over tests, Kani proofs, and `master` cache refresh; fast-forwards `canary` on green, or watched by the revert-only bisect agent |
 | Nightly | Once a night on the verified `canary` branch (`.github/workflows/nightly.yml`, [D-164](docs/decisions.md#d-164-nightly-verification-runs-against-the-verified-canary-branch)), and by hand | The simulator on a new seed with many runs, the property tests at `PROPTEST_CASES=10000`, five minutes of each fuzz target, TLC on larger bounds, a coverage report, a 64th of the core's mutants, and `check_cassettes.py --strict` on the model double's cassettes; a failed job opens an issue |
 
-The job `CI passed` needs every other job of the first two tiers and is the one check `master` requires. It
-checks the run's jobs against a list of the names each tier expects (`EXPECTED` in `ci.yml`), so a new job, or a
-new leg of a matrix, goes in that list and in its `needs`. Either
-tier can be run on a branch by hand: `gh workflow run ci.yml --ref <branch> -f tier=pull-request` (or
-`tier=full`). CI's Rust jobs also set `CARGO_INCREMENTAL=0` and `CARGO_PROFILE_DEV_DEBUG=line-tables-only`,
-which change how fast they build and what a cache holds, not what is tested.
+The job `CI passed` needs every other job of `ci.yml` and is the one check `master` requires. It checks the run's
+jobs against the list of names each tier expects (`EXPECTED` in `ci.yml`), so a new job, or a new leg of a matrix,
+goes in that list and in its `needs`. Label a team PR `ci:full` to run the full gate before merging, or dispatch
+either tier on a branch by hand: `gh workflow run ci.yml --ref <branch> -f tier=pull-request` (or `tier=full`).
+While `tree-state` is `red` (Meltdown Mode), only PRs labeled `tree-fix` or `revert` pass the `tree-state` gate.
+CI's Rust jobs also set `CARGO_INCREMENTAL=0` and `CARGO_PROFILE_DEV_DEBUG=line-tables-only`, which change how fast
+they build and what a cache holds, not what is tested.
 
 For any change to Rust code, `Cargo.toml`, `Cargo.lock` or `rust-toolchain.toml`:
 

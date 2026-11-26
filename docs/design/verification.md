@@ -3,8 +3,8 @@
 Status: the approach is decided
 ([D-093](../decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top)), and
 so is the CI budget ([D-094](../decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)),
-on 2026-11-21, and CI's three tiers ([D-130](../decisions.md#d-130-ci-runs-in-three-tiers-with-one-required-check)),
-on 2026-11-23, built with the nightly workflow the same day, and the flaky job tracker
+on 2026-11-21, and CI's tiers ([D-169](../decisions.md#d-169-team-pull-requests-use-a-fast-static-gate-backed-by-hourly-canary-and-the-bisect-agent), replacing [D-130](../decisions.md#d-130-ci-runs-in-three-tiers-with-one-required-check)),
+updated on 2026-11-26, and the flaky job tracker
 ([D-143](../decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake)), on 2026-11-24. The property list, the models and the layers below are the plan; their details are internal and
 change as the work goes. It comes from reading all the code after M3 and the M4 work in progress, and from how MDK
 tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules). Under
@@ -655,15 +655,18 @@ waits; and one write for everything a stop closes, not one for each.
 
 ## In CI
 
-Pull requests keep CI under 15 minutes, by caching builds and running independent checks as parallel jobs
+Pull requests keep CI fast, by running independent checks as parallel jobs
 ([D-094](../decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)), and CI
-runs in three tiers ([D-130](../decisions.md#d-130-ci-runs-in-three-tiers-with-one-required-check)). Rows marked
-"planned" are not built yet.
+runs in three tiers backed by hourly `canary` and the always-on bisect agent
+([D-169](../decisions.md#d-169-team-pull-requests-use-a-fast-static-gate-backed-by-hourly-canary-and-the-bisect-agent),
+[D-168](../decisions.md#d-168-always-on-revert-only-bisect-agent-watches-hourly-canary-and-activates-meltdown-mode)).
+Rows marked "planned" are not built yet.
 
 | When | What |
 | --- | --- |
-| Every pull request, aimed at under 10 minutes | Formatting and Clippy; the workspace's tests in two jobs side by side, the core's and every other, with the conformance suite (about 30 s) and real Claude Code and Codex on the [model double](#11-a-model-double) in the core's; the socket connectors through the conformance suite, in a job of their own (about a minute once built); the simulator on a fixed set of seeds at its normal count (20 runs of each gate family from seed 0, in release, in its own job); TLC on small bounds, every model's cases in five jobs, only when the models or the code they follow changed; the TypeScript, Python, install-script, recording and document checks, and the cassettes' age as a warning. The property tests at 256 cases each, and every fuzz target's check over its seeds. Planned: the privacy scan |
-| Hourly `canary` (`.github/workflows/canary.yml`, skipping when `master == canary`; [D-161](../decisions.md#d-161-ci-no-longer-runs-on-pushes-to-master), [D-163](../decisions.md#d-163-hourly-canary-runs-the-full-gate-on-master-and-refreshes-build-caches)), aimed at under 30 minutes | All of the above whatever changed; the simulator at 200 runs of each family; the move-over tests that need Docker and no key (Hermes and OpenClaw installs moved over, on the model double, scripted); the Kani proofs; refreshes `master` caches and fast-forwards `canary` on green |
+| Fast Team pull request (~45–60 seconds, zero Rust compile; same-repo PR by a `write`/`maintain`/`admin` collaborator without `ci:full`) | Verified PR commit signatures; `tree-state` gate (fails closed when `"red"` unless labeled `tree-fix` or `revert`); hard-enforced D-162 commit trailers; `Rust format` (`cargo fmt --all --check`); `ShellCheck`; `Recordings` (with cassettes' age as a warning); `TypeScript (claude-code)` and `TypeScript (openclaw)`; `Python` (Hermes tests, socket compatibility guard, and release planner tests); `Documents` (`lychee`); and `CI passed` (`tools/ci` tests + expected-job check) |
+| External / fork pull request (aimed at under 10 minutes), or any PR labeled `ci:full` (full gate) | All of the fast checks above (with trailers advisory for outside contributors), plus Clippy, the workspace's tests in two jobs side by side (with the conformance suite and real Claude Code and Codex on the [model double](#11-a-model-double)), `Conformance (socket)`, `Simulator` (20 runs of each family from seed 0 in release; 200 on `ci:full`), `Install scripts`, property tests at 256 cases each, fuzz targets' seed checks, and TLC on small bounds when the models or the code they follow changed (all models + Docker move-over tests + Kani proofs on `ci:full`). External PRs are merged only by a write collaborator reviewing the head commit. Planned: the privacy scan |
+| Hourly `canary` (`.github/workflows/canary.yml`, skipping when `master == canary`; [D-161](../decisions.md#d-161-ci-no-longer-runs-on-pushes-to-master), [D-163](../decisions.md#d-163-hourly-canary-runs-the-full-gate-on-master-and-refreshes-build-caches), [D-168](../decisions.md#d-168-always-on-revert-only-bisect-agent-watches-hourly-canary-and-activates-meltdown-mode)), aimed at under 30 minutes | All of the above whatever changed; the simulator at 200 runs of each family; the move-over tests that need Docker and no key (Hermes and OpenClaw installs moved over, on the model double, scripted); the Kani proofs; refreshes `master` caches and fast-forwards `canary` on green. Watched by the revert-only bisect agent |
 | Nightly (`.github/workflows/nightly.yml`, on the verified `canary` branch; [D-164](../decisions.md#d-164-nightly-verification-runs-against-the-verified-canary-branch)) | The simulator on a new seed each night, 5,000 runs of each family, its capsules kept; TLC on `CoreLifecycle`'s larger bounds, safety only (liveness there takes hours and is run by hand); a coverage report (`cargo llvm-cov`, a report only); mutation testing on a 64th of the core's mutants (2,049 on 2026-11-25; the simulator's hooks left out, since only it exercises them, and the Kani proofs, which the tests never build and the Kani job checks), by the day of the year the run was created (so a rerun tests the same shard), so each shard runs about every two months; the cassettes' age, failing, with newer harness releases reported (`check_cassettes.py --strict`, [the model double](#11-a-model-double)). The property tests at 10,000 cases each; every fuzz target for five minutes. A failed job opens an issue, with the mutants missed, the cassettes due or the fuzz targets that failed |
 | Weekly (planned) | Long simulator campaigns |
 | After each run of CI, Canary or Nightly that was run again, and daily (`.github/workflows/flake-report.yml`) | The flaky job tracker: one issue that ranks the jobs that failed and then passed when they were run again, below |
