@@ -1,7 +1,6 @@
 # The swap test
 
-Status: a plan written 2026-11-26, not yet run. Steps marked **[D-159]** depend on a change still being built
-and describe how it will behave; steps marked *(inferred)* were worked out, not read in
+Status: a plan written 2026-11-26, not yet run. Steps marked *(inferred)* were worked out, not read in
 a source or seen to run.
 
 The project owner runs this by hand, on a fresh Linux virtual machine. It installs today's MDK connector for every
@@ -52,7 +51,7 @@ The owner answered these on 2026-11-26; the plan below follows the answers.
    chat with no name and exactly two people as a two-person chat, and a named one as a group. Decide before making
    any history. Since [D-158](decisions.md#d-158-the-core-does-not-limit-a-send-to-the-chats-members-a-send-in-flight-when-the-owner-adds-someone-may-reach-them),
    F4 only observes what the person added sees; a send in flight reaching them is not a failure.
-6. **[D-159] What a failed upgrade leaves.** The installer puts back the old core and the account store, and leaves
+6. **What a failed upgrade leaves** ([D-159](decisions.md#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)). The installer puts back the old core and the account store, and leaves
    the agent's services stopped, printing the command to start them (decided 2026-11-26). How F3b makes an upgrade
    fail after the new core opened the store is settled with the D-159 change.
 
@@ -120,7 +119,7 @@ anywhere. Check that the owner's, *B*'s and *C*'s White Noise list both.
 
 There is no release yet: nothing has been tagged, and `.github/workflows/release.yml` runs only on a tag that is
 the workspace's version (`v0.1.0` today). So build it on the machine from a checkout, at the `master` commit
-that has D-159:
+that has D-159 (#216, merged 2026-11-26):
 
 ```sh
 git clone https://github.com/marmot-protocol/marmot-agents.git ~/marmot-agents
@@ -314,8 +313,8 @@ hermes gateway restart
 
 Passing: the import finds the owner by itself; the installer says it keeps the identity it was imported with,
 keeps a copy of the old plugin and of Hermes's settings under `backups`, lists Hermes's work folder in
-`files_from`, and starts `marmot-agent-hermes`. **[D-159]** It also says it backed up the account store before the
-new core first opened it.
+`files_from`, and starts `marmot-agent-hermes`. It also says it kept a copy of the agent's account home, until it
+is started on the new core (D-159).
 
 ### M7: OpenClaw
 
@@ -397,9 +396,9 @@ Passing: the installer says it put back Hermes's settings and the old plugin. Th
 settings the import wrote, `~/.local/share/marmot-agent/agents/hermes/settings.toml`, start the old service (`systemctl --user enable --now wn-agent-hermes`), and restart Hermes. The old connector answers
 "Reply with the word `<W8>`." in the two-person chat, from the same contact.
 
-**F3b: a failure after the new core opened the store. [D-159]** Make the installer's service start fail after the
-service really started *(inferred: this fakes `systemctl restart` failing; use the D-159 change's own way if it
-has one)*:
+**F3b: a failure after the new core opened the store.** Make the installer's service start fail after the
+service really started *(inferred: this fakes `systemctl restart` failing; the installer has no switch of its
+own for it)*:
 
 ```sh
 mkdir -p ~/swap-test/failing-bin
@@ -414,12 +413,11 @@ chmod +x ~/swap-test/failing-bin/systemctl
 PATH="$HOME/swap-test/failing-bin:$PATH" install/hermes.sh --binary "$CORE" --replace-plugin
 ```
 
-Passing, with D-159: the installer says the start failed, and that it put back the plugin, Hermes's settings and
-the account store as it was before the new core opened it. A failed start leaves the core's service in place, and
-it may be running ([`move.md`](move.md#steps)): remove it at once (`install/hermes.sh --uninstall`), then go back
-as in F3a. The old connector opens the home and answers `<W8>`.
-Without D-159, the old connector cannot open the home, and only the import's backup brings it back
-([Going back](#going-back)).
+Passing: the installer says the start failed, puts back the plugin and Hermes's settings, says it put back the
+account home as it was before the upgrade, and that the agent is left stopped, with the command that would start it
+(D-159). Do not start it: this is a move to go back from. Remove the core's service (`install/hermes.sh
+--uninstall`), then go back as in F3a. The old connector opens the home and answers `<W8>`. Before D-159, the old
+connector could not open the home, and only the import's backup brought it back ([Going back](#going-back)).
 
 Then move Hermes for real, as M6, from the snapshot or from where F3 left it.
 
@@ -445,8 +443,9 @@ reads the members before each send)*.
 
 - **Before a core has opened the home**, going back is easy: delete the settings the import wrote and start the
   old services again, as the import said when it finished ([`move.md`](move.md#going-back)).
-- **[D-159] If an installer fails after the new core opened the home**, it puts the account store back with the
-  old core or plugin, and the old connector can start again (F3b).
+- **If an installer fails after the new core opened the home**, it puts the account store back with the old core
+  or plugin, leaves the agent stopped, and the old connector can start again (F3b,
+  [D-159](decisions.md#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)).
 - **After a move that worked, there is no going back.** The first time the core opens the home, MDK upgrades the
   store, and MDK's migration 0226 at the current pin keeps older builds from opening it. The import's backup
   (`~/.marmot-agents/<name>.backup-<time>`) can be put in place of the home, but only safely if the agent has
