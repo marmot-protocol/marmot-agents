@@ -3533,9 +3533,13 @@ so an upgrade put back after that left the old core beside a store it could not 
   all of it, MDK's databases with their `-wal` and `-shm` files, its keys, its records and the core's own state, as
   they were at one moment. It leaves out MDK's lock and the folder of the socket, which the core makes again as it
   starts. A core that still has the home open after that minute stops the install. The services stay stopped until
-  the install starts them on the new core, as before, so no core of the agent's opens the store in between, not
-  even `marmot-agent init`. A new agent, a run with the same core as before, and one with `--no-start` or
-  `--no-service` copy nothing.
+  the install starts them on the new core, as before, so no core of the agent's opens the store in between. A new
+  agent, a run with the same core as before, and one with `--no-start` or `--no-service` copy nothing.
+- **No `init` on a home in use.** The installer runs `marmot-agent init` only on an account home that is missing
+  or empty. A home that holds anything but MDK's lock and the folder of the socket, with the agent's
+  `public-key` file lost, stops the install before any core opens it: the error says to write the agent's public
+  key into that file, or to move the home away to give the agent a new identity. So no new core opens the store
+  uncopied, as `init` would in a run that copies nothing.
 - **Where it lives.** In the upgrade's record only,
   `~/.local/share/marmot-agent/upgrade/stores/<name>/home`, beside a file that names the home and the agent's
   services. It is made under another name and renamed once whole. Each file keeps its owner and mode, and every
@@ -3547,13 +3551,13 @@ so an upgrade put back after that left the old core beside a store it could not 
   the agent's services and, under MDK's lock, replaces what the home holds with the copy, in place, so that the home
   and its lock never move. A put back under way is marked in the record, and whatever reads the record next
   finishes it before anything else: a run that takes the upgrade over, `--no-start` too, or one that puts it back.
-  Once the whole upgrade is put back and its record gone, the services start again, on the old core. A copy that
-  could not go back keeps the record, for a later run, and the agent is not started.
+  The agent's services are left stopped, on the old core: the installer prints the command that starts them,
+  `systemctl --user start` with the agent's units, or `launchctl bootstrap` with its agents on macOS, and starts
+  nothing itself. A copy that could not go back keeps the record, for a later run.
 - **Ended.** The copy goes with the record, in the one step that ends the upgrade. A run that takes over a killed
-  upgrade keeps the copy that run took, which is of the store before any new core opened it. Services an
-  upgrade's end or put back is to start are written to `~/.local/share/marmot-agent/start-after` before its record
-  goes, so a run killed before it started them leaves them for the next install, which starts them as it takes
-  the lock; another agent's services that a killed run stopped are started this way as the upgrade ends.
+  upgrade keeps the copy that run took, which is of the store before any new core opened it. Another agent's
+  services that the killed run stopped are left stopped, and the run that ends the upgrade prints how to start
+  them. No install starts an agent because of an earlier one that failed or was killed.
 
 Two limits are accepted. Only the agent being installed has its home copied: another agent on the account whose
 core restarts while the new core is in place, before the upgrade ends, opens its store with the new core, and an
@@ -3572,6 +3576,12 @@ leaves no moment in which the agent's core can run the new release on an uncopie
 version found that moment, and that swapping the home for a copy moved MDK's lock out from under a core waiting
 for it.
 
-The project owner decided on 2026-11-26 that the store is put back with the core, the first of the three. How it is
-copied, where it is kept and when the services stop and start were decided 2026-11-26 by the builder, under the
+Leaving the services stopped after a put back, as the put back of the core alone always did, keeps the installer
+from starting an agent the owner had stopped, or one a later install had no part in. Starting them again took a
+list of services to start that outlived the run, and review found it starting agents despite `--no-start` and
+dropping a start that failed.
+
+The project owner decided on 2026-11-26 that the store is put back with the core, the first of the three, and,
+the same day, that a put back leaves the agent's services stopped and prints how to start them. How it is copied,
+where it is kept, when the services stop, and the `init` guard were decided 2026-11-26 by the builder, under the
 project owner's instruction to decide minor points.

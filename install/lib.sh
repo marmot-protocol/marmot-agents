@@ -581,8 +581,6 @@ lock_installs() {
         if [ /dev/fd/9 -ef "$MA_DATA/install.lock" ]; then break; fi
     done
     MA_LOCKED=1
-    # The services an upgrade's end or put back stopped and a kill left stopped (D-159).
-    services_pending
 }
 
 # As a refused run ends, still holding the lock: the data folder it made for the lock, should that be
@@ -923,22 +921,19 @@ empty_above() {
 # two would put back the old plugin over the new core, or the old core under the new plugin. The copies
 # of our own plugin it names are removed after (change_end). The copies of the account stores it kept go
 # with the record (D-159); another agent's, kept by a run killed before it started that agent again, is
-# started now, on the new core, as its upgrade is done too.
+# left stopped, and how to start it is said.
 upgrade_end() {
-    local others=""
     if [ "$DRY_RUN" -eq 0 ] && [ "${MA_CHANGING:-0}" -eq 1 ] && [ -f "$MA_CHANGE" ]; then
         MA_OWN_COPIES=$(own_copies)
         printf '%s\n' "$MA_CHANGE" | put "$MA_UPGRADE/plugin-change.path" 600
         mv -f "$MA_CHANGE" "$MA_UPGRADE/plugin-change"
     fi
     if [ "$DRY_RUN" -eq 0 ]; then
-        others=$(store_services "$(store_records others)")
-        services_after "$others"
+        store_hints "$(store_records others)"
         upgrade_retire
     fi
     MA_UPGRADING=0
     [ "$DRY_RUN" -eq 1 ] || rm -rf "$MA_DATA/.upgrade.done.$$"
-    [ "$DRY_RUN" -eq 1 ] || services_pending
 }
 
 # A change to a gateway's plugin moved into an upgrade's record as the upgrade ended, by a run stopped
@@ -986,19 +981,18 @@ upgrade_put_back_changes() {
 
 # After an upgrade that did not end: the account stores it kept, the plugin changes it lists, the core
 # and the parts of $MA_LIB there before it put back, a part that was not there removed, and what happened
-# said. The agents whose stores it kept are started again once it is gone, on the core put back: started
-# before, they would run on what a run after this one might put back again. Given "other", the upgrade is
-# one a run before this one left, which this one puts back before it starts, and the status says whether
-# it could.
+# said. The agents whose stores it put back are left stopped, and how to start them is said once it is
+# gone (D-159). Given "other", the upgrade is one a run before this one left, which this one puts back
+# before it starts, and the status says whether it could.
 upgrade_put_back() {
-    local why=${1:-} kind part found ok=0 plugins record records services=""
+    local why=${1:-} kind part found ok=0 plugins record records put="" hints
     # Gone already: upgrade_end took it away, and the upgrade is done.
     [ -f "$MA_UPGRADE/list" ] || return 0
     records=$(store_records)
     while IFS= read -r record; do
         [ -n "$record" ] || continue
         if store_put_back "$record"; then
-            services="$services$(sed 1d "$record/where")
+            put="$put$record
 "
         else
             ok=1
@@ -1033,12 +1027,13 @@ EOF
         esac
     done <"$MA_UPGRADE/list"
     image_put_back_from "$MA_UPGRADE/image" || ok=1
-    [ "$ok" -eq 1 ] || services_after "$services"
+    # Read before the record goes.
+    hints=$(store_hints "$put")
     if [ "$why" = other ]; then
         if [ "$ok" -eq 0 ] && upgrade_retire; then
             rm -rf "$MA_DATA/.upgrade.done.$$"
             say "a run of another installer, or for another agent, before this one stopped part way through installing marmot-agent; this put back the core and support files that run found"
-            services_pending
+            [ -z "$hints" ] || say "$hints"
             return 0
         fi
         printf 'error: %s\n' "a run of another installer, or for another agent, before this one stopped part way \
@@ -1050,7 +1045,7 @@ are in $MA_UPGRADE" >&2
         rm -rf "$MA_DATA/.upgrade.done.$$"
         printf 'error: %s\n' "the install did not finish, so this put back the marmot-agent core and support files \
 that were installed before it, which every agent on this account starts with" >&2
-        services_pending >&2
+        [ -z "$hints" ] || say "$hints" >&2
     else
         printf 'error: %s\n' "the install did not finish, and putting back the marmot-agent core and support files \
 that were installed before it failed too (above); they are in $MA_UPGRADE. Run this again: it finishes the \
@@ -1066,7 +1061,8 @@ install, or puts them back should it fail" >&2
 # cannot open it after. So an upgrade that puts in a core other than the one there before, for an agent
 # with a home, keeps a copy of the home before the new core is in place, and puts it back with the core
 # should the upgrade be put back. The agent's services are stopped first, and stay stopped until
-# start_services starts them on the new core, so no core of this agent's runs in between; the copy is
+# start_services starts them on the new core, so no core of this agent's runs in between; put back, they
+# stay stopped until the owner starts them, as the installer says how to (services_hint). The copy is
 # taken while this run holds MDK's own lock on the home, so none has it open: the whole home as it was at
 # one moment, MDK's databases with their -wal and -shm files, its keys and records, and the core's own
 # state, but for the folder of the socket, which holds only the socket the core makes again as it starts.
@@ -1099,7 +1095,7 @@ store_wanted() {
 
 # Before the new core is put in place: the agent's services stopped, and the copy of its home made,
 # once, under MDK's lock. The record names the home and the services before they are stopped, so that
-# whatever puts the upgrade back starts them again.
+# whatever puts the upgrade back stops them again and says how to start them.
 store_keep() {
     local record="$MA_UPGRADE/stores/$NAME" services
     services=$(agent_services)
@@ -1133,33 +1129,32 @@ services_stop() {
     fi
 }
 
-# Starts the agent's services named; one running already is left as it is.
-services_start() {
-    local service ok=0
-    [ $# -gt 0 ] || return 0
-    if [ "$OS" = Linux ]; then
-        systemctl --user start "$@" 9>&- || ok=1
-    else
-        for service in "$@"; do
-            launchctl print "gui/$(id -u)/$service" >/dev/null 2>&1 9>&- && continue
-            launchctl bootstrap "gui/$(id -u)" "$MA_LAUNCHD_DIR/$service.plist" 9>&- || ok=1
-        done
-    fi
-    [ "$ok" -eq 0 ] || warn "starting $* again failed (above): start them yourself"
+# Says how to start the services of the agent a store record names, which are left stopped: an install
+# starts no agent because of an upgrade that was put back or that it did not make (D-159).
+services_hint() {
+    local service command=""
+    while IFS= read -r service; do
+        [ -n "$service" ] || continue
+        if [ "$OS" = Linux ]; then
+            command="${command:-systemctl --user start} $service"
+        else
+            command="${command:+$command && }launchctl bootstrap gui/$(id -u) $MA_LAUNCHD_DIR/$service.plist"
+        fi
+    done <<EOF
+$(sed 1d "$1/where")
+EOF
+    [ -z "$command" ] ||
+        say "the agent \"${1##*/}\" is left stopped; start it again with: $command"
 }
 
-# Starts the services an upgrade stopped, given one a line, once its record is gone: they are written to
-# $MA_DATA/start-after before it goes, and started after (services_pending). A run killed before then
-# leaves them there, and the next run starts them as it takes the lock, once no upgrade's record is left:
-# whatever finishes or puts back one that is writes them again.
-services_after() {
-    if [ -n "$1" ]; then printf '%s\n' "$1" | put "$MA_DATA/start-after" 600; fi
-}
-services_pending() {
-    [ -f "$MA_DATA/start-after" ] && [ ! -d "$MA_UPGRADE" ] || return 0
-    # shellcheck disable=SC2046 # one service a line, without spaces
-    services_start $(cat "$MA_DATA/start-after")
-    rm -f "$MA_DATA/start-after"
+# services_hint for each store record given, one a line.
+store_hints() {
+    local record
+    while IFS= read -r record; do
+        [ -z "$record" ] || services_hint "$record"
+    done <<EOF
+$1
+EOF
 }
 
 # Waits, for up to a minute, for MDK's own lock on an account home, which a core holds for as long as it
@@ -1256,16 +1251,6 @@ store_records() {
         if [ "${1:-}" = others ] && [ "$record" = "$MA_UPGRADE/stores/$NAME" ]; then continue; fi
         printf '%s\n' "$record"
     done
-}
-
-# The services the records given, one a line, name, one a line.
-store_services() {
-    local record
-    while IFS= read -r record; do
-        [ -z "$record" ] || sed 1d "$record/where"
-    done <<EOF
-$1
-EOF
 }
 
 release_target() {
@@ -1485,6 +1470,14 @@ init_agent() {
     fi
     if imported; then
         say "the agent keeps the identity it was imported with, in $MA_HOME"
+        return 0
+    fi
+    # A home a core has opened holds an identity already, and init would open its store with the new core,
+    # in an upgrade that keeps no copy of it, as with --no-start, or before the copy is kept (D-159).
+    if [ -d "$MA_HOME" ] && [ -n "$(home_entries "$MA_HOME")" ]; then
+        local why="the agent's account home $MA_HOME already holds an identity, but $MA_AGENT_DIR/public-key, which names it, is missing. Write the agent's public key into that file and run this again; or, to give the agent a new identity, move $MA_HOME away first"
+        [ "$DRY_RUN" -eq 1 ] || die "$why"
+        warn "a real run would stop here: $why"
         return 0
     fi
     if [ "$DRY_RUN" -eq 1 ]; then

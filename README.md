@@ -95,7 +95,8 @@ identity in the old home, and makes no new one.
   Every agent on your account uses the same `marmot-agent` and support files, so an update that fails or is
   stopped puts back the ones it found, with Pi's or Goose's container image, the plugin in your Hermes or
   OpenClaw, and the agent's account store as it was before the new `marmot-agent` opened it, and running it
-  again after a kill finishes it. One install runs on your account at a time; a second waits for the first to
+  again after a kill finishes it. An agent whose store was put back is left stopped, and the script prints the
+  command that starts it again. One install runs on your account at a time; a second waits for the first to
   end
   ([D-134](docs/decisions.md#d-134-an-upgrade-of-the-core-and-its-support-files-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill),
   [D-159](docs/decisions.md#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)).
