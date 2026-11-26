@@ -738,7 +738,7 @@ gateway does not publish, its reference page lists it, with the version it was r
 that internal changes. The tests of the plugin's own package run against a fake gateway, which stands in for
 these internals, so they cannot see such a change; the test that can is the end-to-end scenario against the
 real gateway, which runs on demand and must pass before a milestone closes, or the move-over test, which runs the
-real gateway on a scripted model in CI's merge queue. The lists are in
+real gateway on a scripted model in hourly `canary`. The lists are in
 [OpenClaw's reference page](../reference/openclaw-messages.md#what-the-plugin-relies-on-outside-the-plugin-sdk) and
 [Hermes's](../reference/hermes-messages.md#what-the-plugin-relies-on-outside-the-published-plugin-interface). Since
 2026-11-24 each has such a test.

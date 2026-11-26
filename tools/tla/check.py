@@ -9,7 +9,7 @@ The models, each with its README: CoreLifecycle (formal/tla/README.md), SocketPr
 (formal/tla/DriverTransport.md), whose cases are named `driver-...`, InstallUpgrade
 (formal/tla/InstallUpgrade.md), whose cases are named `install-...`, and ActivityHoldBack
 (formal/tla/ActivityHoldBack.md), whose cases are named `hold-...`. The cases on the small
-bounds, the default, which CI runs on pull requests and in the merge queue:
+bounds, the default, which CI runs on pull requests and in hourly `canary`:
 
 - the fair configurations (CoreLifecycle's, SocketProtocol's for each kind of connector, and
   DriverTransport's for each harness's shape), and those that let a send be refused or given up,

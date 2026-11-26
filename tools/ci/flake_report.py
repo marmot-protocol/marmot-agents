@@ -2,12 +2,13 @@
 when they were run again.
 
 A job that fails in one attempt of a run and passes in a later attempt of the same run failed on
-the same commit and then passed: it is flaky. This script lists the recent runs of `ci.yml` and
-`nightly.yml` that were run again (pull requests, the merge queue, master and the nightly runs
-alike), and the jobs of each attempt, and counts each job that failed or timed out in one attempt
-and passed in a later one, by its workflow and its name (a matrix leg's name holds its leg). The
-gate, `CI passed`, fails whenever another job does: it counts only when every other job's latest
-result up to its attempt passed (a job not run again keeps its earlier result).
+the same commit and then passed: it is flaky. This script lists the recent runs of `ci.yml`,
+`canary.yml` and `nightly.yml` that were run again (pull requests, hourly canary and the nightly
+runs alike), and the jobs of each attempt, and counts each job that failed or timed out in one
+attempt and passed in a later one, by its workflow and its name (a matrix leg's name holds its leg,
+and a reusable-workflow call keeps its `<caller> / ` prefix). The gate, `CI passed` (or `CI / CI
+passed` inside canary), fails whenever another job does: it counts only when every other job's
+latest result up to its attempt passed (a job not run again keeps its earlier result).
 
 It reads no log. A log mixes what the runner printed with what the tests printed, so a test could
 put its own text into the public issue; which test flaked is for machine-readable results to say
@@ -34,21 +35,23 @@ Usage:
 
 BODY is the issue's body as Markdown; `--previous` names a file that is missing when there is no
 issue yet, and only then is the count started afresh: an issue's body that is empty fails. DIR
-holds the default branch's ci.yml and nightly.yml. GitHub is called through `gh api`, with the
-token in GH_TOKEN.
+holds the default branch's ci.yml, canary.yml and nightly.yml. GitHub is called through `gh api`,
+with the token in GH_TOKEN.
 """
 
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import subprocess
 import sys
 
 TITLE = "Flaky job tracker"
-WORKFLOWS = ("ci.yml", "nightly.yml")
-# This fails whenever another job does, so only a failure of its own counts.
-GATES = {"CI passed"}
+WORKFLOWS = ("ci.yml", "canary.yml", "nightly.yml")
+LOCAL_WORKFLOW = "./.github/workflows/"
+# These fail whenever another job does, so only a failure of their own counts.
+GATES = {"CI passed", "CI / CI passed"}
 # A job that hit its `timeout-minutes` ends `timed_out`; one that a step failed ends `failure`.
 FAILED = {"failure", "timed_out"}
 # A gate's failure is its own only when no other job's latest result up to it is one of these.
@@ -69,7 +72,7 @@ EVENTS = {
     "pull_request": "pull request",
     "merge_group": "merge queue",
     "push": "master",
-    "schedule": "nightly",
+    "schedule": "scheduled",
     "workflow_dispatch": "by hand",
 }
 MATRIX = re.compile(r"\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}")
@@ -203,43 +206,76 @@ def _legs(matrix):
     return combos + include + [dict(c, **i) for c in combos for i in include]
 
 
-def job_names(text):
-    """The names a workflow's jobs run under, as GitHub shows them, read from its file.
+def _expand_job_name(name, job):
+    """Expand a job's name across its matrix legs, or return it directly when unparameterised."""
+    if "${{" not in name:
+        return [name]
+    strategy = job.get("strategy")
+    out = []
+    for leg in _legs(strategy.get("matrix") if isinstance(strategy, dict) else None):
+        filled = MATRIX.sub(lambda m: leg.get(m.group(1), "${{"), name)
+        if "${{" not in filled and all(isinstance(leg.get(k), str) for k in
+                                       MATRIX.findall(name)):
+            out.append(filled)
+    return out
 
-    Each job's `name`, or its key when it has none, with `${{ matrix.KEY }}` filled from each leg
-    of its `strategy.matrix`. A name with any other expression, or a matrix this reader cannot
-    read, gives no name: the tracker then shows that job only as NOT_ON_DEFAULT_BRANCH.
+
+def job_names(text):
+    """The direct job names a workflow runs under, as GitHub shows them, read from its file.
+
+    Each non-reusable job's `name`, or its key when it has none, with `${{ matrix.KEY }}` filled
+    from each leg of its `strategy.matrix`. A name with any other expression, or a matrix this
+    reader cannot read, gives no name: the tracker then shows that job only as
+    NOT_ON_DEFAULT_BRANCH.
     """
     workflow, _ = _block(_lines(text), 0, 0)
     names = set()
     jobs = workflow.get("jobs")
     for key, job in (jobs.items() if isinstance(jobs, dict) else []):
-        if not isinstance(job, dict):
+        if not isinstance(job, dict) or isinstance(job.get("uses"), str):
             continue
         name = job.get("name", key)
-        if not isinstance(name, str):
-            continue
-        if "${{" not in name:
-            names.add(name)
-            continue
-        strategy = job.get("strategy")
-        for leg in _legs(strategy.get("matrix") if isinstance(strategy, dict) else None):
-            filled = MATRIX.sub(lambda m: leg.get(m.group(1), "${{"), name)
-            if "${{" not in filled and all(isinstance(leg.get(k), str) for k in
-                                           MATRIX.findall(name)):
-                names.add(filled)
+        if isinstance(name, str):
+            names.update(_expand_job_name(name, job))
     return names
+
+
+def _local_workflow_calls(text):
+    """Return `(caller_name, callee_filename)` pairs for jobs calling `./.github/workflows/<file>`."""
+    workflow, _ = _block(_lines(text), 0, 0)
+    calls = []
+    jobs = workflow.get("jobs")
+    for key, job in (jobs.items() if isinstance(jobs, dict) else []):
+        if not isinstance(job, dict):
+            continue
+        uses = job.get("uses")
+        if not (isinstance(uses, str) and uses.startswith(LOCAL_WORKFLOW)):
+            continue
+        callee = uses[len(LOCAL_WORKFLOW):]
+        name = job.get("name", key)
+        if isinstance(name, str) and os.path.basename(callee) == callee and callee not in ("", ".", ".."):
+            for caller_name in _expand_job_name(name, job):
+                calls.append((caller_name, callee))
+    return calls
 
 
 def trusted_names(folder, workflows=WORKFLOWS):
     """The job names of each workflow, read from its file in `folder`, the default branch's.
 
-    Raises InventoryError when a workflow gives none, rather than show every job as unknown.
+    Expands one level of local reusable-workflow calls (`uses: ./.github/workflows/<file>`) with
+    GitHub's `<caller> / <callee>` job-name prefix. Raises InventoryError when a workflow gives
+    none, rather than show every job as unknown.
     """
     trusted = {}
     for workflow in workflows:
-        with open(f"{folder}/{workflow}", encoding="utf-8") as f:
-            trusted[workflow] = job_names(f.read())
+        with open(os.path.join(folder, workflow), encoding="utf-8") as f:
+            text = f.read()
+        names = job_names(text)
+        for caller_name, callee in _local_workflow_calls(text):
+            with open(os.path.join(folder, callee), encoding="utf-8") as f:
+                for callee_name in job_names(f.read()):
+                    names.add(f"{caller_name} / {callee_name}")
+        trusted[workflow] = names
         if not trusted[workflow]:
             raise InventoryError(f"{folder}/{workflow} names no job")
     return trusted
@@ -449,7 +485,7 @@ def render(state, today, top, repo):
         f"# {TITLE}",
         "",
         "The CI jobs that failed and passed when they were run again, on the same commit: on pull "
-        "requests, in the merge queue, on master and in the nightly runs. Written by "
+        "requests, in hourly canary, and in the nightly runs. Written by "
         "`.github/workflows/flake-report.yml` from `tools/ci/flake_report.py` (D-143); edits by "
         "hand are lost the next time it runs, or stop it. It reads no log: follow the link to the "
         "job to see what failed. Naming the tests is #184.",

@@ -1,10 +1,12 @@
 name: Nightly
 
-# The long checks (D-094, D-130), on master once a night and by hand: the simulator on many new
-# seeds, the property tests at high counts and every fuzz target (D-144), TLC on larger bounds, a
-# coverage report, one shard of the core's mutants, and the model double's cassettes against their
-# age and the harnesses' releases (D-127). Nothing here gates a
-# pull request; a job that fails opens an issue, or adds to the one it opened before.
+# The long checks (D-094, D-130, D-164), on the verified `canary` branch once a night (and on the
+# dispatched ref by hand): the simulator on many new seeds, the property tests at high counts and
+# every fuzz target (D-144), TLC on larger bounds, a coverage report, one shard of the core's
+# mutants, and the model double's cassettes against their age and the harnesses' releases (D-127).
+# Scheduled runs execute master's nightly.yml against canary's checkout (so a change to nightly.yml
+# that depends on new repo code takes effect once canary advances). Nothing here gates a pull
+# request; a job that fails opens an issue, or adds to the one it opened before.
 #
 # Rules for this file, as for ci.yml: every action is pinned to a commit and every downloaded
 # tool to a version and a checksum, the token can only read except in the job that writes issues,
@@ -28,8 +30,77 @@ env:
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
+  resolve:
+    name: Resolve canary commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # To verify whether an earlier attempt already pinned a commit if the run cache was evicted.
+      actions: read
+    outputs:
+      sha: ${{ steps.ref.outputs.sha }}
+    steps:
+      - name: Restore pinned commit from earlier attempt
+        id: sha_cache
+        if: github.event_name == 'schedule'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nightly-sha
+          key: nightly-sha-${{ github.run_id }}
+
+      - name: Pin the commit to test
+        id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          FALLBACK_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          CACHE_HIT: ${{ steps.sha_cache.outputs.cache-hit }}
+          SHA_FILE: ${{ runner.temp }}/nightly-sha/sha
+        run: |
+          set -euo pipefail
+          # Scheduled runs test the protected `canary` branch (D-164) so the nightly soak never
+          # burns runner minutes on an unverified master commit. Preserve the first resolved SHA
+          # across all attempts of the same run via run-scoped cache so "Re-run all jobs" never
+          # tests a newer commit and misattributes a fix as a same-commit flake (D-143). Manual
+          # `workflow_dispatch` runs always test their dispatched ref (`github.sha`).
+          if [ "${EVENT_NAME}" != "schedule" ]; then
+            sha="${FALLBACK_SHA}"
+            echo "Manual dispatch on ${REF}; testing ${sha}"
+          elif [ "${CACHE_HIT}" = "true" ] && [ -s "${SHA_FILE}" ]; then
+            sha="$(tr -d '[:space:]' < "${SHA_FILE}")"
+            echo "Reusing pinned canary SHA from attempt 1: ${sha}"
+          else
+            if [ "${RUN_ATTEMPT}" -gt 1 ]; then
+              prior_ok="$(gh api --paginate "repos/${GH_REPO}/actions/runs/${RUN_ID}/jobs?filter=all&per_page=100" \
+                | jq -s --argjson attempt "${RUN_ATTEMPT}" \
+                  '[.[].jobs[] | select(.name == "Resolve canary commit" and .run_attempt < $attempt and .conclusion == "success")] | length')"
+              if [ "${prior_ok}" -gt 0 ]; then
+                echo "::error::Pinned canary SHA cache for run ${RUN_ID} is missing on attempt ${RUN_ATTEMPT}; refusing to resolve a newer commit (start a new run instead)."
+                exit 1
+              fi
+            fi
+            sha="$(gh api "repos/${GH_REPO}/git/ref/heads/canary" --jq .object.sha)"
+            mkdir -p "$(dirname "${SHA_FILE}")"
+            printf '%s\n' "${sha}" > "${SHA_FILE}"
+            echo "Resolved refs/heads/canary -> ${sha}"
+          fi
+          echo "sha=${sha}" >> "${GITHUB_OUTPUT}"
+
+      - name: Save pinned commit for reruns of this run
+        if: github.event_name == 'schedule' && steps.sha_cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nightly-sha
+          key: nightly-sha-${{ github.run_id }}
+
   simulator:
     name: Simulator on new seeds
+    needs: resolve
     runs-on: ubuntu-24.04
     # 200 runs of each gate family take about 10 s once built.
     timeout-minutes: 90
@@ -38,6 +109,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
 
       - uses: ./.github/actions/rust
@@ -70,6 +142,7 @@ jobs:
 
   properties:
     name: Property tests at high counts
+    needs: resolve
     # The property tests a pull request runs at proptest's normal 256 cases, at 10,000 (D-144):
     # the core's (crates/marmot-agent/tests/properties) and the translators' over changed
     # recordings (crates/marmot-agent-conformance/tests/translators.rs). A failure prints the
@@ -81,6 +154,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
 
       - uses: ./.github/actions/rust
@@ -101,6 +175,7 @@ jobs:
 
   fuzzing:
     name: Fuzzing
+    needs: resolve
     # Every target in crates/marmot-agent-fuzz for five minutes, from its seeds and what the night
     # before found (D-144). cargo-fuzz needs a nightly compiler for the sanitizer and the coverage
     # it builds with; it is the one Kani pins, which builds MDK. cargo-fuzz sets RUSTFLAGS for its
@@ -124,6 +199,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
 
       - uses: ./.github/actions/rust
@@ -214,6 +290,7 @@ jobs:
 
   models:
     name: TLA+ models on larger bounds
+    needs: resolve
     runs-on: ubuntu-24.04
     # formal/tla/README.md, "Larger bounds": CoreLifecycle's fair configuration with two items
     # and two downs, and with two chats, safety only; liveness there had not finished on a runner
@@ -224,6 +301,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
 
       - name: Install Java
@@ -259,6 +337,7 @@ jobs:
 
   coverage:
     name: Coverage report
+    needs: resolve
     runs-on: ubuntu-24.04
     # A report only: no threshold, nothing fails on a number. The workspace's tests, the
     # simulator's at their normal count, built with LLVM's instrumentation.
@@ -266,6 +345,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
 
       - uses: ./.github/actions/rust
@@ -316,6 +396,7 @@ jobs:
 
   mutants:
     name: Mutation testing, one shard
+    needs: resolve
     # The core's mutants, a 64th of them a night: on 2026-11-23 cargo-mutants 27.1.0 listed 1,649
     # (`cargo mutants --list -p marmot-agent`), about 26 a shard, and each needs the core's tests
     # built again and run, about three minutes. The shard is the day of the year modulo 64, so
@@ -335,6 +416,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
 
       - uses: ./.github/actions/rust
@@ -410,6 +492,7 @@ jobs:
 
   cassettes:
     name: The model double's cassettes
+    needs: resolve
     # D-127: a cassette older than 14 days fails the nightly run, which means it is time to record
     # it again; that needs a key and is done by hand (tools/model_double/README.md). A harness with
     # a release newer than the one a cassette was recorded with, which the script looks up in npm's
@@ -422,6 +505,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
 
       - name: Each cassette is younger than 14 days; newer harness releases are reported
@@ -445,6 +529,7 @@ jobs:
     # Only the night's own run reports: a run started by hand is watched by whoever started it.
     if: always() && github.event_name == 'schedule'
     needs:
+      - resolve
       - simulator
       - properties
       - fuzzing
@@ -467,11 +552,12 @@ jobs:
           GH_REPO: ${{ github.repository }}
           NEEDS: ${{ toJSON(needs) }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          SHA: ${{ github.sha }}
+          SHA: ${{ needs.resolve.outputs.sha || github.sha }}
         run: |
           set -euo pipefail
           title_of() {
             case "$1" in
+              resolve) echo "Resolve canary commit" ;;
               simulator) echo "Simulator on new seeds" ;;
               properties) echo "Property tests at high counts" ;;
               fuzzing) echo "Fuzzing" ;;

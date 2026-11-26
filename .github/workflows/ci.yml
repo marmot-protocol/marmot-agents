@@ -608,7 +608,8 @@ jobs:
           lychee .
 
   passed:
-    # The one check the master ruleset requires, on pull requests and in the merge queue. It runs
+    # The one check the master ruleset requires on pull requests, and the gate hourly canary checks
+    # before fast-forwarding `canary`. It runs
     # whatever happened above (`always()`: a required check that is skipped would count as
     # passed). It fails if any job failed or was cancelled, and, since GitHub can report a matrix
     # job as passed when a leg was cancelled before a runner took it, it also lists the run's jobs
