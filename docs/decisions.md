@@ -3519,3 +3519,50 @@ another. The gap is a few seconds wide, and opens only when the owner adds someo
 Decided 2026-11-26 by the project owner. The change that limited sends (branch `member-limited-sends`) was built,
 reviewed and not merged.
 
+## D-159 An upgrade keeps a copy of the agent's account store, and puts it back with the old core
+
+**Decision.** MDK upgrades an account home's store forward only, the first time a newer core opens it, and an
+older core cannot open it after (MDK's migration 0226 at `bea7b40`, as 0220 and 0221 before it). The new core
+first opens the store as an upgrade starts the agent, before the upgrade is done
+([D-134](#d-134-an-upgrade-of-the-core-and-its-support-files-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill)),
+so an upgrade put back after that left the old core beside a store it could not open (issue #210). Now:
+
+- **The copy.** Before an install starts its agent on a core other than the one there before, it stops the
+  agent's services, waits up to a minute for MDK's own lock on the home (`.marmot-runtime.lock`, which a core
+  holds for as long as it has the home open), and, holding it, copies the agent's account home: all of it, MDK's
+  databases with their `-wal` and `-shm` files, its keys, its records and the core's own state, as they were at
+  one moment, but for the folder of the socket, which the core makes again as it starts. A core that still has the
+  home open after that minute stops the install. Then it starts the services, on the new core, as before. An agent
+  this run made, a run with the same core as before, and one with `--no-start` or `--no-service` copy nothing: no
+  new core opens an older store in them.
+- **Where it lives.** In the upgrade's record only,
+  `~/.local/share/marmot-agent/upgrade/stores/<name>/home`, beside a file that names the home and the agent's
+  services. It is made under another name and renamed once whole. Each file keeps its owner and mode, and every
+  folder made for it is the owner's alone (mode 700). Nothing of it is printed or logged: the installer names
+  only its path.
+- **Put back.** Whatever puts the upgrade back puts the copy back with the core: the run's own exit trap, the next
+  run after a kill, or another harness's or another agent's install that cannot finish it
+  ([D-154](#d-154-an-install-takes-over-a-killed-upgrade-only-for-the-same-agent-and-the-same-gateway)). It stops
+  the agent's services, takes MDK's lock on the home, copies the copy beside the home under a hidden name and
+  renames it into place, as a gateway's plugin goes back. Once the whole upgrade is put back and its record gone,
+  it starts the services again, on the old core. A copy that could not go back keeps the record, for a later run,
+  and the agent is not started.
+- **Ended.** The copy goes with the record, in the one step that ends the upgrade. A run that takes over a killed
+  upgrade keeps the copy that run took, which is of the store before any new core opened it, and puts back first
+  a home that run was killed putting back. Another agent's services a killed run stopped are started again as the
+  upgrade ends.
+
+What the new core did between its start and the put back is lost with it: the agent is back where it was as the
+copy was taken. That is mostly the seconds until a later step fails, but an older store can reuse keys or run a
+prompt twice, as going back from a move can ([`docs/move.md`](move.md#going-back)). It is the price of an agent that
+starts again at all. An upgrade that ended has no way back: the old core cannot open the store, so going back to
+an older release needs the store as it was before, which the installer does not keep.
+
+**Why.** Of the three ways forward issue #210 named, putting the store back with the core keeps D-134's promise
+that a failed upgrade leaves every agent as it found it, and costs a copy of one agent's home on each upgrade. The
+lock is MDK's own, taken as MDK takes it, so the copy is never of a store a core is writing, and no core opens the
+home while it is copied or put back.
+
+The project owner decided on 2026-11-26 that the store is put back with the core, the first of the three. How it is
+copied, where it is kept and when the services stop and start were decided 2026-11-26 by the builder, under the
+project owner's instruction to decide minor points.

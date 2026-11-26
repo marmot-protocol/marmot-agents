@@ -411,6 +411,36 @@ exec {shutil.which("mv", path=SYSTEM_PATH)} "$@"
 MV_EXCHANGES = "--exchange" in subprocess.run(["mv", "--help"], capture_output=True, text=True,
                                               env={"PATH": SYSTEM_PATH}).stdout
 
+# A systemctl that, as it starts or restarts an agent's unit, plays the core opening the agent's store, as
+# MDK does: the store, in home/accounts/agent, is made the core's own generation (session.sqlite and its -wal
+# file say which), forward only. An older core finds a newer store refused: noted in FAKE_LOG.refused, and
+# the store left as it is. Otherwise it is FAKE_LOGGER, paused before the core starts and failed after, as
+# when a connector's unit fails beside it.
+FAKE_SYSTEMCTL_STORE = """#!/bin/sh
+echo "$(basename "$0") $*" >> "$FAKE_LOG"
+if [ -n "${FAKE_PAUSE:-}" ]; then case "$(basename "$0") $*" in "$FAKE_PAUSE"*)
+    : >"$FAKE_PAUSE_AT.reached"
+    n=0; while [ ! -e "$FAKE_PAUSE_AT" ] && [ "$n" -lt 1200 ]; do sleep 0.05; n=$((n + 1)); done ;;
+esac; fi
+case "$2" in restart | start)
+    core="$HOME/.local/bin/marmot-agent"
+    if grep -q '^# an older core' "$core"; then made=older; else made=new; fi
+    for unit; do
+        case $unit in marmot-agent-*-connector.service | -*) continue ;; marmot-agent-*.service) ;; *) continue ;; esac
+        name=${unit#marmot-agent-}
+        store="$HOME/.local/share/marmot-agent/agents/${name%.service}/home/accounts/agent"
+        [ -d "$store" ] || continue
+        if [ "$made" = older ] && [ "$(cat "$store/session.sqlite" 2>/dev/null)" = new ]; then
+            echo "the older core cannot open the store of ${name%.service}" >>"$FAKE_LOG.refused"
+            continue
+        fi
+        echo "$made" >"$store/session.sqlite"
+        echo "$made" >"$store/session.sqlite-wal"
+    done ;;
+esac
+if [ -n "${FAKE_FAIL:-}" ]; then case "$(basename "$0") $*" in "$FAKE_FAIL"*) echo "failing, as asked" >&2; exit 1 ;; esac; fi
+"""
+
 # Runs the install script named after it, as `bash script` does, and sends STOP_SIGNAL to the script's
 # process group as it comes to step STOP_AT. A step is a call of act or put, through which the scripts
 # change things, or an rm, cp or mv they run outside one: counted as each is entered, so once, in the
@@ -2136,6 +2166,133 @@ exec {rm} "$@"
                     self.assertFalse(any(name.startswith((".upgrade", "upgrade")) for name in left), left)
         self.assertGreater(taken_over, 0, "some step leaves an upgrade under way for the next run")
 
+
+    # The account store (D-159): an older agent, "first", upgraded in place, whose core opens its store as it
+    # starts (FAKE_SYSTEMCTL_STORE).
+    STORE = "agents/first/home"
+
+    def older_store(self, m: Machine, harness=None) -> None:
+        """Agent "first" of the harness, installed with an older core that has opened its store: a database
+        with its -wal file, a secret and the folder of the socket, each the owner's alone."""
+        harness = harness or self.HARNESS
+        m.write(m.bin / "systemctl", FAKE_SYSTEMCTL_STORE)
+        older = m.dir / "older-core"
+        m.write(older, OLDER_CORE)
+        m.run(harness, *m.args(harness, "--binary", str(older), "--name", "first"))
+        self.mark_older(m)
+        home = m.data / self.STORE
+        store = home / "accounts/agent"
+        store.mkdir(parents=True)
+        for name, text in (("session.sqlite", "older\n"), ("session.sqlite-wal", "older\n"),
+                           ("secret.json", "not a real secret\n")):
+            (store / name).write_text(text)
+            (store / name).chmod(0o600)
+        for folder in (home, home / "accounts", store):
+            folder.chmod(0o700)
+        (home / "socket").mkdir(mode=0o700)
+        (home / "socket/marmot-agent.sock").write_text("")
+
+    def store_args(self, m: Machine, harness=None) -> list:
+        harness = harness or self.HARNESS
+        return m.args(harness, "--binary", str(m.core), "--name", "first")
+
+    def store_of(self, m: Machine) -> str:
+        """Which core's store agent "first" has, as its database and its -wal file say, or what is wrong."""
+        store = m.data / self.STORE / "accounts/agent"
+        refused = m.dir / "calls.log.refused"
+        if refused.exists():
+            return refused.read_text().strip()
+        found = {(store / name).read_text().strip() if (store / name).exists() else "none"
+                 for name in ("session.sqlite", "session.sqlite-wal")}
+        if (store / "secret.json").read_text() != "not a real secret\n":
+            return "its secret changed"
+        return found.pop() if len(found) == 1 else f"mixed: {sorted(found)}"
+
+    def no_copy(self, m: Machine) -> None:
+        """No copy of the home is left anywhere: in the upgrade's record, or beside the home."""
+        self.assertFalse((m.data / "upgrade").exists())
+        self.assertEqual([p.name for p in (m.data / "agents/first").iterdir() if "marmot-agent-" in p.name], [])
+        self.assertEqual(self.leftovers(m), [])
+
+    def test_a_failure_once_the_new_core_started_puts_back_the_store(self):
+        """An upgrade that fails after the new core opened the agent's store puts the store back as it was
+        with the older core, the agent's services stopped first and started again after, so the older core
+        opens it; the next upgrade puts the new core in, and its store goes forward. With mv that can
+        exchange two folders and with one that cannot."""
+        for exchanges in (True, False):
+            if exchanges and not MV_EXCHANGES:
+                continue
+            with self.subTest(exchanges=exchanges):
+                m = Machine(self)
+                if not exchanges:
+                    m.write(m.bin / "mv", MV_WITHOUT_EXCHANGE)
+                self.older_store(m)
+                m.log.write_text("")
+                failed = m.run(self.HARNESS, *self.store_args(m), env={"FAKE_FAIL": "systemctl --user restart"},
+                               check=False)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn("failing, as asked", failed.stderr)
+                units = "marmot-agent-first.service marmot-agent-first-connector.service"
+                calls = [c for c in m.calls() if c.split(" ")[:3] in (["systemctl", "--user", verb] for verb in
+                                                                       ("stop", "restart", "start"))]
+                self.assertEqual(calls, [f"systemctl --user stop {units}", f"systemctl --user restart {units}",
+                                         f"systemctl --user stop {units}", f"systemctl --user start {units}"],
+                                 failed.stderr)
+                self.assertEqual(self.shared_generations(m), {"core": "older", "install files": "older"})
+                self.assertEqual(self.store_of(m), "older", failed.stderr)
+                self.assertIn("put back the account home", failed.stdout)
+                home = m.data / self.STORE
+                self.assertEqual(mode(home / "accounts/agent/secret.json"), 0o600)
+                self.assertEqual(mode(home), 0o700)
+                self.no_copy(m)
+                m.run(self.HARNESS, *self.store_args(m))
+                self.assertEqual(self.shared_generations(m), {"core": "new", "install files": "new"})
+                self.assertEqual(self.store_of(m), "new")
+                self.no_copy(m)
+
+    def test_a_successful_upgrade_removes_the_copy(self):
+        """While the upgrade is under way, the copy of the store is in the upgrade's record alone, the
+        owner's alone, each file with its mode, and nothing of it is printed; once the upgrade is done it is
+        gone. Installed again with the same core, nothing is copied."""
+        m = Machine(self)
+        self.older_store(m)
+        home = m.data / self.STORE
+        pause = m.dir / "pause"
+        run = m.start(self.HARNESS, *self.store_args(m),
+                      env={"FAKE_PAUSE": "systemctl --user restart", "FAKE_PAUSE_AT": str(pause)})
+        self.addCleanup(run.kill)
+        m.until(lambda: pause.with_name("pause.reached").exists(), lambda: run.poll() is not None)
+        self.assertTrue(pause.with_name("pause.reached").exists(), m.output(run))
+        record = m.data / "upgrade/stores/first"
+        copy = record / "home"
+        self.assertEqual(mode(record), 0o700)
+        self.assertEqual(mode(record.parent), 0o700)
+        self.assertEqual((record / "where").read_text().splitlines()[0], str(home))
+        expected = {str(p.relative_to(home)): (mode(p), p.read_text() if p.is_file() else None)
+                    for p in home.rglob("*") if not p.is_relative_to(home / "socket")}
+        found = {str(p.relative_to(copy)): (mode(p), p.read_text() if p.is_file() else None) for p in copy.rglob("*")}
+        self.assertEqual(found, expected, "the whole home but the socket's folder, each file with its mode")
+        self.assertEqual(mode(copy), mode(home))
+        self.assertEqual(found["accounts/agent/session.sqlite"][1], "older\n", "taken before the new core started")
+        pause.touch()
+        self.assertEqual(run.wait(timeout=120), 0, m.output(run))
+        self.assertNotIn("not a real secret", m.output(run))
+        self.assertEqual(self.store_of(m), "new")
+        self.no_copy(m)
+        m.log.write_text("")
+        m.run(self.HARNESS, *self.store_args(m))
+        self.assertNotIn("systemctl --user stop marmot-agent-first.service marmot-agent-first-connector.service",
+                         m.calls(), "the same core again opens no store anew, so none is copied")
+
+    def test_every_step_keeps_the_store_with_its_core(self):
+        """The store goes with the core, whatever step an upgrade of the agent is stopped at: never the older
+        core with the store the new one made (U1, as every_step_together checks it). A killed upgrade that the
+        same agent's install finishes leaves the new store and removes the copy; one that fails puts it back,
+        and so does Codex's install, which cannot finish it (D-154)."""
+        def together(m: Machine) -> dict:
+            return {**self.shared_generations(m), "store": self.store_of(m)}
+
+        self.every_step_together(self.HARNESS, self.store_args, self.older_store, together)
 
 class TwoAgents(unittest.TestCase):
     """Two agents of one gateway harness in one home share the core and the support files, and each
