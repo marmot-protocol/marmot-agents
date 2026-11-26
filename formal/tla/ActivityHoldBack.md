@@ -173,7 +173,9 @@ in the chat when it does, someone who joined since too. D-136 says a person adde
 before they came. The core cannot take back what MDK keeps; it holds back everything it has not handed over. Only
 MDK could do more, by withdrawing a queued send or refusing one queued before a member joined; the owner will ask
 MDK for one of these, and the core will use whichever MDK offers. The same is true, more briefly, of the moment
-between the core's read of the members and MDK taking a send. The fixes change neither.
+between the core's read of the members and MDK taking a send. The fixes change neither. On 2026-11-26 the project owner accepted the limit for good: only the owner
+can add someone to their two-person chat, and the person they add is meant to read it
+([D-158](../../docs/decisions.md#d-158-the-core-does-not-limit-a-send-to-the-chats-members-a-send-in-flight-when-the-owner-adds-someone-may-reach-them)).
 
 **A second hand-over could post to someone who joined** (H4, found in review: issue
 [#194](https://github.com/marmot-protocol/marmot-agents/issues/194), and then modelled). To learn what became of a
