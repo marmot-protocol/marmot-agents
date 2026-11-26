@@ -2,11 +2,10 @@
 #
 # Used twice in a job: first with `save: false`, which installs Odin and the pinned toolchain and
 # restores the cache named `cache`; then, as the job's last step, with `save: true` and the key the
-# first gave back, which saves the cache. Only a run on a branch's own ref saves one, a push to
-# master or a run started by hand (ci.yml asks for that), and GitHub lets only that branch and the
-# branches made from it read it: a pull request or a merge group reads master's caches and writes
-# none, so what a pull request built never reaches another run, and the caches stay within the
-# repository's limit.
+# first gave back, which saves the cache. Only a run started by hand (`workflow_dispatch`) saves
+# one (D-161), and GitHub lets only that branch and the branches made from it read it: a pull
+# request or a merge group reads master's caches and writes none, so what a pull request built
+# never reaches another run, and the caches stay within the repository's limit.
 #
 # The key is the job's cache name and what makes every dependency build differently: the compiler,
 # Cargo.lock, the Cargo settings and the Odin release. A key is written once, so a cache holds the
@@ -75,7 +74,7 @@ runs:
           ~/.cargo/git/checkouts/
           target/
         key: ${{ inputs.cache }}-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', '.cargo/config.toml', 'tools/odin/install.sh') }}
-        restore-keys: ${{ github.event_name != 'push' && github.event_name != 'workflow_dispatch' && format('{0}-{1}-', inputs.cache, runner.os) || '' }}
+        restore-keys: ${{ github.event_name != 'workflow_dispatch' && format('{0}-{1}-', inputs.cache, runner.os) || '' }}
 
     - name: Leave the workspace's own crates out of the cache
       if: inputs.save == 'true'

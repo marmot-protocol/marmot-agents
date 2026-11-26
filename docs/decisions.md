@@ -2526,7 +2526,7 @@ Decided 2026-11-23 by the builder, under the project owner's instruction to deci
   follows changed, which a step of CI's own finds with `git diff`.
 - **Merge queue** (GitHub's, on `master`), aimed at under 30 minutes: all of the pull-request tier whatever
   changed, the simulator at 200 runs, and the tests that need Docker and no key or sign-in. A push to `master`
-  runs the same, so `master` stays checked.
+  runs the same, so `master` stays checked. *(Amended by [D-161](#d-161-ci-no-longer-runs-on-pushes-to-master): pushes to `master` no longer trigger CI.)*
 - **Nightly**: the simulator on new seeds, TLC on `CoreLifecycle`'s larger bounds, a coverage report, a 64th of the core's mutants
   (by the day of the year), and the model double's cassettes against their age and the harnesses' releases, which
   fails the night as D-127 says. A failed job opens an issue, or adds to the one it opened, with what the job
@@ -2989,7 +2989,7 @@ machine-readable results. The details are the builder's, under the instruction t
   (`crates/marmot-agent-fuzz/tests/seeds.rs`). A failing case found anywhere is committed in the test's
   `proptest-regressions` file.
 - **Merge queue and `master`**: the Kani proofs, `cargo kani -p marmot-agent`, in a job of their own. Kani builds
-  the core with MDK under its own compiler before it proves anything, which is more than a pull request's time.
+  the core with MDK under its own compiler before it proves anything, which is more than a pull request's time. *(Amended by [D-161](#d-161-ci-no-longer-runs-on-pushes-to-master): pushes to `master` no longer trigger CI.)*
 - **Nightly**: the property tests at 10,000 cases each, and every fuzz target for five minutes, from its seeds and
   from what the nights before found, which a cache carries from night to night. An input that makes a target fail
   is kept as the run's artifact for 30 days; the issue the night opens names the target and the input's file name,
@@ -3656,3 +3656,20 @@ The project owner decided the outcome on 2026-11-26: the five coding harnesses e
 as a service, as Hermes and OpenClaw do. The details above were decided 2026-11-26 by the builder, under the project
 owner's instruction to decide minor points: no flag, the import's defaults kept, the work-folder check, the copy of
 the first start and its note, and what a put back says.
+
+## D-161 CI no longer runs on pushes to `master`
+
+**Decision.** The `push` to `master` trigger is removed from `.github/workflows/ci.yml`, amending
+[D-130](#d-130-ci-runs-in-three-tiers-with-one-required-check) and
+[D-144](#d-144-property-tests-run-on-every-pull-request-kani-in-the-full-gate-and-fuzzing-nightly-on-a-pinned-nightly-compiler).
+The full gate (including the simulator at 200 runs, the Docker move-over tests, and the Kani proofs) continues to run
+on manual `workflow_dispatch` runs with `tier=full` (and in `merge_group` whenever a merge queue is active). Rust
+build caches are saved only by `workflow_dispatch` runs (until hourly `canary` takes over cache saving in Phase 1
+of #222); if `master`'s caches are stale or evicted, run `ci.yml` by hand on `master` with `tier=full`.
+
+**Why.** Every merge to `master` was running the full 21-job CI workflow a third time (`pull_request` ~47 min,
+`merge_group` ~53 min, `push: master` ~51 min) on the exact tree just verified, burning ~51 runner-minutes per merge
+even when every cache already hit. Dropping the `push: master` trigger saves ~51 runner-minutes per merge immediately
+as Phase 0 of #222.
+
+Decided 2026-11-26 by the project owner (as Phase 0 of #222).

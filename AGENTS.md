@@ -245,7 +245,7 @@ If you change a command here, change it there. CI runs in three tiers
 | Tier | When | What |
 | --- | --- | --- |
 | Pull request | Each push to a pull request; aim under 10 minutes | Every command below that CI runs, with the simulator at its normal count. The TLA+ models run only when `formal/`, `tools/tla/`, `ci.yml` or the code a model follows changed (the paths are in `ci.yml`'s first job) |
-| Merge queue | Each pull request queued to merge, and each push to `master`; aim under 30 minutes | All of the pull-request tier whatever changed, the simulator at `MARMOT_AGENT_SIM_RUNS=200`, the move-over tests that need Docker, and the Kani proofs, below |
+| Merge queue | Each pull request queued to merge; aim under 30 minutes (pushes to `master` no longer run CI, [D-161](docs/decisions.md#d-161-ci-no-longer-runs-on-pushes-to-master)) | All of the pull-request tier whatever changed, the simulator at `MARMOT_AGENT_SIM_RUNS=200`, the move-over tests that need Docker, and the Kani proofs, below |
 | Nightly | Once a night on `master` (`.github/workflows/nightly.yml`), and by hand | The simulator on a new seed with many runs, the property tests at `PROPTEST_CASES=10000`, five minutes of each fuzz target, TLC on larger bounds, a coverage report, a 64th of the core's mutants, and `check_cassettes.py --strict` on the model double's cassettes; a failed job opens an issue |
 
 The job `CI passed` needs every other job of the first two tiers and is the one check `master` requires. It
