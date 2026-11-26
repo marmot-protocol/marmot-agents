@@ -1051,34 +1051,32 @@ class BisectAgent:
         )
 
     def _bisect_culprit(self, good_sha: str, bad_sha: str, command: str, max_steps: int = 24) -> Optional[str]:
-        """Drive `git bisect` step-by-step, running each candidate SHA in a clean sandboxed export."""
-        count_proc = self._git(["rev-list", "--count", f"{good_sha}..{bad_sha}"], check=False)
-        if count_proc.returncode == 0 and count_proc.stdout.strip() == "1":
-            return validate_sha(bad_sha)
-        wt = self.worktrees_dir / "bisect"
-        self._remove_worktree(wt)
-        try:
-            self._git(["worktree", "add", "--detach", str(wt), bad_sha])
-            step = self._git(["bisect", "start", bad_sha, good_sha], cwd=wt)
-            output = (step.stdout or "") + "\n" + (step.stderr or "")
-            for _ in range(max_steps):
-                m = re.search(r"^([0-9a-f]{40}) is the first bad commit$", output, re.M)
-                if m:
-                    return validate_sha(m.group(1))
-                cur_sha = validate_sha(self._git(["rev-parse", "HEAD"], cwd=wt).stdout)
-                ok, tail = self._run_check_in_export(self.repo_dir, cur_sha, command)
-                if not ok and "command timed out" in tail:
-                    verdict = "skip"
-                else:
-                    verdict = "good" if ok else "bad"
-                step = self._git(["bisect", verdict], cwd=wt, check=False)
-                output = (step.stdout or "") + "\n" + (step.stderr or "")
-                if step.returncode != 0 and "is the first bad commit" not in output:
-                    return None
-            return None
-        finally:
-            self._git(["bisect", "reset"], cwd=wt, check=False)
-            self._remove_worktree(wt)
+        """Bisect `good_sha..bad_sha` using `git rev-list --bisect-all` plumbing, testing each
+        candidate SHA in a clean sandboxed export (no worktree checkout or porcelain text parsing)."""
+        cur_bad = validate_sha(bad_sha)
+        goods: list[str] = [validate_sha(good_sha)]
+        skipped: set[str] = set()
+        for _ in range(max_steps + 1):
+            proc = self._git(["rev-list", "--bisect-all", cur_bad, "--not", *goods], check=False)
+            if proc.returncode != 0:
+                return None
+            candidates = [line.split()[0] for line in proc.stdout.splitlines() if line.strip()]
+            if not candidates:
+                return None
+            if len(candidates) == 1:
+                return validate_sha(candidates[0]) if candidates[0] == cur_bad else None
+            next_sha = next((c for c in candidates if c != cur_bad and c not in skipped), None)
+            if next_sha is None:
+                # Only skipped commits plus `cur_bad` remain; cannot isolate a single culprit.
+                return None
+            ok, tail = self._run_check_in_export(self.repo_dir, next_sha, command)
+            if not ok and "command timed out" in tail:
+                skipped.add(next_sha)
+            elif ok:
+                goods.append(validate_sha(next_sha))
+            else:
+                cur_bad = validate_sha(next_sha)
+        return None
 
     def _attempt_clean_revert(
         self,

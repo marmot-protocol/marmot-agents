@@ -767,6 +767,34 @@ class BisectAgentBucketTests(TempRepoMixin, unittest.TestCase):
         self.assertIn("revert_conflict", alerts[0][0])
         self.assertEqual(json.loads(_git(origin, "show", "tree-state:state.json"))["state"], "red")
 
+    def test_bisect_plumbing_handles_skipped_commits_and_ambiguity(self):
+        _, _, work, repo, worktrees, state_dir, base_sha = self.make_repo()
+        shas: list[str] = [base_sha]
+        for idx in range(1, 5):
+            (work / f"step-{idx}.txt").write_text(f"{idx}\n", encoding="utf-8")
+            if idx == 3:
+                (work / "check.sh").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+            _git(work, "add", ".")
+            _git(work, "commit", "-m", f"Step {idx}")
+            shas.append(_git(work, "rev-parse", "HEAD"))
+        _git(work, "push", "origin", "master")
+        _git(repo, "fetch", "origin", "master", "canary")
+
+        agent = self._agent(repo, worktrees, state_dir, FakeGitHub(), dry_run=True)
+
+        # Skipping an unrelated commit (step 1) still isolates culprit (step 3).
+        orig_run = agent._run_check_in_export
+        agent._run_check_in_export = lambda sr, ref, cmd: (  # type: ignore[method-assign]
+            (False, "command timed out after 30s") if ref == shas[1] else orig_run(sr, ref, cmd)
+        )
+        self.assertEqual(agent._bisect_culprit(shas[0], shas[4], "bash check.sh"), shas[3])
+
+        # Skipping the culprit's direct parent (step 2) makes step 2 vs step 3 ambiguous -> None.
+        agent._run_check_in_export = lambda sr, ref, cmd: (  # type: ignore[method-assign]
+            (False, "command timed out after 30s") if ref == shas[2] else orig_run(sr, ref, cmd)
+        )
+        self.assertIsNone(agent._bisect_culprit(shas[0], shas[4], "bash check.sh"))
+
     def test_skipped_canary_success_does_not_clear_meltdown(self):
         _, origin, work, repo, worktrees, state_dir, _ = self.make_repo(tree_state="red")
         (work / "broken.txt").write_text("x\n", encoding="utf-8")
