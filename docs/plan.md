@@ -106,6 +106,9 @@ to D-126, moved into M4 by [D-141](decisions.md#d-141-subagent-threads-are-built
 **Done when** an install of each of today's connectors has moved over, on a test machine, without being
 invited again, and every harness that allows it can send a file.
 
+The test on a test machine is planned in [`swap-test.md`](swap-test.md): today's connector for each harness installed
+on a fresh Linux machine, used through White Noise, moved over, and checked. Written 2026-11-26, not yet run.
+
 Built so far, provisional until the owner accepts what others can see:
 
 - **Moving the coding connectors over.** A test (`crates/marmot-agent/tests/import.rs` and `import_coding.rs`)

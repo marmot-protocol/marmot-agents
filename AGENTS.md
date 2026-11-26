@@ -79,6 +79,7 @@ being replaced by what is designed here, not extended.
 | Work on the install scripts | `install/lib.sh`, then the harness's script beside it, after `README.md` ("Installing an agent") |
 | Work on the release | `.github/workflows/release.yml` and `tools/release/package.sh` |
 | Work on moving an install over | `crates/marmot-agent/src/import`, after `docs/move.md` and `docs/reference/current-connectors.md` |
+| Run or change the end-to-end swap test on a test machine | `docs/swap-test.md`, after `docs/move.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml`, `nightly.yml` and `.github/actions/rust` |
 | Plan or add tests, models or proofs | `docs/design/verification.md` |
 | See which jobs are flaky, or fix one | The open "Flaky job tracker" issue, then `docs/design/verification.md` ("Flaky tests") and `tools/ci/flake_report.py` |
