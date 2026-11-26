@@ -2204,8 +2204,9 @@ exec {rm} "$@"
             return refused.read_text().strip()
         found = {(store / name).read_text().strip() if (store / name).exists() else "none"
                  for name in ("session.sqlite", "session.sqlite-wal")}
-        if (store / "secret.json").read_text() != "not a real secret\n":
-            return "its secret changed"
+        secret = store / "secret.json"
+        if not secret.is_file() or secret.read_text() != "not a real secret\n":
+            return "its secret is gone or changed"
         return found.pop() if len(found) == 1 else f"mixed: {sorted(found)}"
 
     def no_copy(self, m: Machine) -> None:
@@ -2269,9 +2270,10 @@ exec {rm} "$@"
         self.assertEqual(mode(record.parent), 0o700)
         self.assertEqual((record / "where").read_text().splitlines()[0], str(home))
         expected = {str(p.relative_to(home)): (mode(p), p.read_text() if p.is_file() else None)
-                    for p in home.rglob("*") if not p.is_relative_to(home / "socket")}
+                    for p in home.rglob("*")
+                    if not p.is_relative_to(home / "socket") and p.name != ".marmot-runtime.lock"}
         found = {str(p.relative_to(copy)): (mode(p), p.read_text() if p.is_file() else None) for p in copy.rglob("*")}
-        self.assertEqual(found, expected, "the whole home but the socket's folder, each file with its mode")
+        self.assertEqual(found, expected, "the whole home but MDK's lock and the socket's folder, each file with its mode")
         self.assertEqual(mode(copy), mode(home))
         self.assertEqual(found["accounts/agent/session.sqlite"][1], "older\n", "taken before the new core started")
         pause.touch()
@@ -2283,6 +2285,81 @@ exec {rm} "$@"
         m.run(self.HARNESS, *self.store_args(m))
         self.assertNotIn("systemctl --user stop marmot-agent-first.service marmot-agent-first-connector.service",
                          m.calls(), "the same core again opens no store anew, so none is copied")
+
+    def test_a_core_run_before_the_agent_starts_finds_the_store_kept(self):
+        """The copy is taken before the new core is in place, so a new core run before the agent's services
+        start, here `marmot-agent init` on a home whose public key was lost, which opens the store and then
+        refuses, moves forward a store that is put back with the older core."""
+        m = Machine(self)
+        self.older_store(m)
+        (m.data / "agents/first/public-key").unlink()
+        store = m.data / self.STORE / "accounts/agent"
+        m.write(m.core, FAKE_CORE.replace(
+            "    init) home=",
+            f'    init) echo new >"{store}/session.sqlite"; echo new >"{store}/session.sqlite-wal"\n'
+            '        echo "the home already has an identity" >&2; exit 1 ;;\n    unused) home='))
+        failed = m.run(self.HARNESS, *self.store_args(m), check=False)
+        self.assertIn("the home already has an identity", failed.stderr)
+        self.assertEqual(self.shared_generations(m), {"core": "older", "install files": "older"})
+        self.assertEqual(self.store_of(m), "older", failed.stderr)
+        self.no_copy(m)
+
+    def test_a_kill_while_the_store_goes_back_is_finished_by_the_next_run(self):
+        """An upgrade that fails once the new core has opened the store, killed at any step as it puts the
+        store back: the next run of the same agent, with --no-start, finishes putting the store back before
+        it ends the upgrade, so the agent's home is never left half put back or missing, and an install for
+        another agent starts this one's services again, which the killed run had stopped."""
+        fail = {"FAKE_FAIL": "systemctl --user restart"}
+        m = Machine(self)
+        self.older_store(m)
+        m.run(self.HARNESS, *self.store_args(m), env=fail, stop=("KILL", 0), check=False)
+        steps = int(m.steps.read_text())
+        units = "marmot-agent-first.service marmot-agent-first-connector.service"
+
+        def one(case):
+            step, then = case
+            m = Machine(self)
+            self.older_store(m)
+            m.run(self.HARNESS, *self.store_args(m), env=fail, stop=("KILL", step), check=False)
+            if then == "no-start":
+                ran = m.run(self.HARNESS, *self.store_args(m), "--no-start", check=False)
+            else:
+                ran = m.run("codex", *m.args("codex", "--binary", str(m.core), "--name", "other"), check=False)
+            calls = m.calls()
+            stops = [i for i, c in enumerate(calls) if c == f"systemctl --user stop {units}"]
+            starts = [i for i, c in enumerate(calls) if c.startswith(("systemctl --user start", "systemctl --user restart"))
+                      and units in c]
+            wrong = None
+            if ran.returncode != 0:
+                wrong = "the run failed"
+            elif (m.data / "upgrade").exists() or (m.data / "start-after").exists():
+                wrong = "something is left under way"
+            elif self.store_of(m) not in ("older", "new"):
+                wrong = f"the store is {self.store_of(m)}"
+            elif then == "codex" and self.store_of(m) != "older":
+                wrong = f"the store is {self.store_of(m)}"
+            elif then == "codex" and stops and not any(start > stops[-1] for start in starts):
+                wrong = f"the agent's services are left stopped: {calls}"
+            return f"killed at step {step}, then {then}", wrong, ran.stderr
+
+        cases = [(step, then) for step in range(1, steps + 1) for then in ("no-start", "codex")]
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+            for said, wrong, stderr in pool.map(one, cases):
+                with self.subTest(said):
+                    self.assertIsNone(wrong, f"{said}:\n{stderr}")
+
+    def test_services_left_stopped_by_a_kill_are_started_by_the_next_run(self):
+        """A run killed once an upgrade's record is gone, before it started the services it had stopped,
+        leaves them named in start-after: the next install, of any agent, starts them as it takes the lock."""
+        m = Machine(self)
+        self.older_store(m)
+        units = "marmot-agent-first.service\nmarmot-agent-first-connector.service\n"
+        (m.data / "start-after").write_text(units)
+        m.log.write_text("")
+        m.run("codex", *m.args("codex", "--binary", str(m.core), "--name", "other"))
+        self.assertIn("systemctl --user start marmot-agent-first.service marmot-agent-first-connector.service",
+                      m.calls())
+        self.assertFalse((m.data / "start-after").exists())
 
     def test_every_step_keeps_the_store_with_its_core(self):
         """The store goes with the core, whatever step an upgrade of the agent is stopped at: never the older

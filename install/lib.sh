@@ -581,6 +581,8 @@ lock_installs() {
         if [ /dev/fd/9 -ef "$MA_DATA/install.lock" ]; then break; fi
     done
     MA_LOCKED=1
+    # The services an upgrade's end or put back stopped and a kill left stopped (D-159).
+    services_pending
 }
 
 # As a refused run ends, still holding the lock: the data folder it made for the lock, should that be
@@ -763,6 +765,7 @@ publish_support() {
         return 0
     fi
     upgrade_begin
+    if store_wanted; then store_keep; fi
     mkdir -p "$MA_BIN_DIR"
     install -m 0755 "$MA_STAGE/.core/marmot-agent" "$MA_CORE.new"
     mv -f "$MA_CORE.new" "$MA_CORE"
@@ -805,6 +808,7 @@ upgrade_begin() {
     if [ -d "$MA_UPGRADE" ]; then
         change_restore || die "a plugin change left in $MA_UPGRADE could not be put back in its place"
         if upgrade_ours; then
+            store_restores || die "an account home a run before this one was putting back could not be put back (above); run this again"
             MA_UPGRADING=1
             say "a run before this one stopped part way through installing marmot-agent; this one finishes that, and puts back the core and support files that run found if it fails"
             upgrade_list "$MA_UPGRADE"
@@ -921,7 +925,7 @@ empty_above() {
 # with the record (D-159); another agent's, kept by a run killed before it started that agent again, is
 # started now, on the new core, as its upgrade is done too.
 upgrade_end() {
-    local others="" record
+    local others=""
     if [ "$DRY_RUN" -eq 0 ] && [ "${MA_CHANGING:-0}" -eq 1 ] && [ -f "$MA_CHANGE" ]; then
         MA_OWN_COPIES=$(own_copies)
         printf '%s\n' "$MA_CHANGE" | put "$MA_UPGRADE/plugin-change.path" 600
@@ -929,17 +933,12 @@ upgrade_end() {
     fi
     if [ "$DRY_RUN" -eq 0 ]; then
         others=$(store_services "$(store_records others)")
-        # What a run killed putting a home back left beside it, which holds what the home held.
-        for record in "$MA_UPGRADE"/stores/*; do
-            [ -f "$record/where" ] || continue
-            rm -rf "$(home_aside "$(sed -n 1p "$record/where")" new)" "$(home_aside "$(sed -n 1p "$record/where")" old)"
-        done
+        services_after "$others"
         upgrade_retire
     fi
     MA_UPGRADING=0
     [ "$DRY_RUN" -eq 1 ] || rm -rf "$MA_DATA/.upgrade.done.$$"
-    # shellcheck disable=SC2086 # one service a line, without spaces
-    services_start $others
+    [ "$DRY_RUN" -eq 1 ] || services_pending
 }
 
 # A change to a gateway's plugin moved into an upgrade's record as the upgrade ended, by a run stopped
@@ -1034,12 +1033,12 @@ EOF
         esac
     done <"$MA_UPGRADE/list"
     image_put_back_from "$MA_UPGRADE/image" || ok=1
+    [ "$ok" -eq 1 ] || services_after "$services"
     if [ "$why" = other ]; then
         if [ "$ok" -eq 0 ] && upgrade_retire; then
             rm -rf "$MA_DATA/.upgrade.done.$$"
             say "a run of another installer, or for another agent, before this one stopped part way through installing marmot-agent; this put back the core and support files that run found"
-            # shellcheck disable=SC2086 # one service a line, without spaces
-            services_start $services
+            services_pending
             return 0
         fi
         printf 'error: %s\n' "a run of another installer, or for another agent, before this one stopped part way \
@@ -1051,8 +1050,7 @@ are in $MA_UPGRADE" >&2
         rm -rf "$MA_DATA/.upgrade.done.$$"
         printf 'error: %s\n' "the install did not finish, so this put back the marmot-agent core and support files \
 that were installed before it, which every agent on this account starts with" >&2
-        # shellcheck disable=SC2086 # one service a line, without spaces
-        services_start $services >&2
+        services_pending >&2
     else
         printf 'error: %s\n' "the install did not finish, and putting back the marmot-agent core and support files \
 that were installed before it failed too (above); they are in $MA_UPGRADE. Run this again: it finishes the \
@@ -1065,63 +1063,71 @@ install, or puts them back should it fail" >&2
 # The account store, put back with the core (D-159)
 #
 # MDK upgrades an account home's store forward only, as a newer core first opens it, and an older core
-# cannot open it after. So an upgrade that starts an agent on a core other than the one there before keeps
-# a copy of the agent's home first, and puts it back with the core should the upgrade be put back. The copy
-# is taken between stopping the agent's services and starting them, while this run holds MDK's own lock on
-# the home, so no core has it open: the whole home as it was at one moment, MDK's databases with their -wal
-# and -shm files, its keys and records, and the core's own state, but for the folder of the socket, which
-# holds only the socket the core makes again as it starts. It is kept in the upgrade's record, in
-# $MA_UPGRADE/stores/NAME: `where` names the home and the agent's services, and home/ is the copy, made
-# under home.new and renamed once whole. Each file keeps its mode, and every folder made for it is the
-# owner's alone. It goes with the record, as the upgrade ends or is put back, and nothing of it is printed.
+# cannot open it after. So an upgrade that puts in a core other than the one there before, for an agent
+# with a home, keeps a copy of the home before the new core is in place, and puts it back with the core
+# should the upgrade be put back. The agent's services are stopped first, and stay stopped until
+# start_services starts them on the new core, so no core of this agent's runs in between; the copy is
+# taken while this run holds MDK's own lock on the home, so none has it open: the whole home as it was at
+# one moment, MDK's databases with their -wal and -shm files, its keys and records, and the core's own
+# state, but for the folder of the socket, which holds only the socket the core makes again as it starts.
+# It is kept in the upgrade's record, in $MA_UPGRADE/stores/NAME: `where` names the home and the agent's
+# services, and home/ is the copy, made under home.new and renamed once whole. Each file keeps its mode,
+# and every folder made for it is the owner's alone. It goes with the record, as the upgrade ends or is put
+# back, and nothing of it is printed. Only this agent's home is copied: another agent whose core restarts
+# while the new one is in place, before the upgrade ends, moves its store forward uncopied (D-159).
 
-# Whether this run, about to start the agent, keeps its store first: in an upgrade whose core is not the
-# one there before, for an agent with a home this run did not make. One a run before this one began is
-# taken over with the upgrade.
-store_wanted() {
-    [ "${MA_UPGRADING:-0}" -eq 1 ] || return 1
-    [ ! -d "$MA_UPGRADE/stores/$NAME" ] || return 0
-    [ "${MA_MADE_IDENTITY:-0}" -eq 0 ] && [ -d "$MA_HOME" ] || return 1
-    ! { [ -f "$MA_UPGRADE/marmot-agent" ] && cmp -s "$MA_UPGRADE/marmot-agent" "$MA_CORE"; }
+# The agent's services: its systemd units, or its launchd labels.
+agent_services() {
+    if [ "$OS" = Linux ]; then
+        say "$MA_UNIT.service"
+        [ "$HARNESS_KIND" != socket ] || say "$MA_UNIT-connector.service"
+    else
+        say "$MA_LABEL"
+        [ "$HARNESS_KIND" != socket ] || say "$MA_LABEL.connector"
+    fi
 }
 
-# Before the agent's services, named, start on the new core: they are stopped, and the copy of the home
-# made, once, under MDK's lock. The record names the home and the services before they are stopped, so
-# that whatever puts the upgrade back starts them again. A home a run before this one was killed putting
-# back is put back first.
+# Whether this run, about to put the new core in place, keeps the agent's store first: an upgrade that
+# starts the agent, for an agent with a home, and a core that is not the one there before. One a run
+# before this one began is taken over with the upgrade.
+store_wanted() {
+    [ "${MA_UPGRADING:-0}" -eq 1 ] && [ "$NO_SERVICE" -eq 0 ] && [ "$NO_START" -eq 0 ] || return 1
+    [ ! -d "$MA_UPGRADE/stores/$NAME" ] || return 0
+    [ -d "$MA_HOME" ] || return 1
+    ! { [ -f "$MA_UPGRADE/marmot-agent" ] && cmp -s "$MA_UPGRADE/marmot-agent" "$MA_STAGE/.core/marmot-agent"; }
+}
+
+# Before the new core is put in place: the agent's services stopped, and the copy of its home made,
+# once, under MDK's lock. The record names the home and the services before they are stopped, so that
+# whatever puts the upgrade back starts them again.
 store_keep() {
-    local record="$MA_UPGRADE/stores/$NAME"
+    local record="$MA_UPGRADE/stores/$NAME" services
+    services=$(agent_services)
     if [ ! -d "$record" ]; then
         rm -rf "$record.new"
-        { (umask 077 && mkdir -p "$record.new" && printf '%s\n' "$MA_HOME" "$@" >"$record.new/where") &&
+        { (umask 077 && mkdir -p "$record.new" && printf '%s\n' "$MA_HOME" "$services" >"$record.new/where") &&
             mv "$record.new" "$record"; } || die "the record of the agent's account home could not be written in $MA_UPGRADE"
     fi
-    services_stop "$@"
-    if [ -d "$record/home" ] && [ ! -d "$MA_HOME" ]; then
-        restore_home "$record/home" "$MA_HOME" ||
-            die "putting back the agent's account home from $record/home failed (above); run this again"
-    fi
-    [ -d "$MA_HOME" ] || return 0
-    rm -rf "$(home_aside "$MA_HOME" new)" "$(home_aside "$MA_HOME" old)"
+    # shellcheck disable=SC2086 # one service a line, without spaces
+    services_stop $services
+    [ ! -d "$record/home" ] || return 0
     lease_home "$MA_HOME" ||
         die "the agent's core still has its account home $MA_HOME open after its service was stopped: stop it, then run this again"
-    if [ ! -d "$record/home" ]; then
-        rm -rf "$record/home.new"
-        if ! { copy_home "$MA_HOME" "$record/home.new" && mv "$record/home.new" "$record/home"; }; then
-            exec 8>&-
-            die "copying the agent's account home into $record failed (above)"
-        fi
-        say "kept a copy of the agent's account home, until it is started on the new core"
+    rm -rf "$record/home.new"
+    if ! { copy_home "$MA_HOME" "$record/home.new" && mv "$record/home.new" "$record/home"; }; then
+        exec 8>&-
+        die "copying the agent's account home into $record failed (above)"
     fi
     exec 8>&-
+    say "kept a copy of the agent's account home, until it is started on the new core"
 }
 
-# Stops the agent's services named; one that is not running is left as it is.
+# Stops the agent's services named; one that is not running, or not there, is left as it is.
 services_stop() {
     local service
     [ $# -gt 0 ] || return 0
     if [ "$OS" = Linux ]; then
-        systemctl --user stop "$@" 9>&- || warn "stopping $* failed (above)"
+        systemctl --user stop "$@" >/dev/null 2>&1 9>&- || true
     else
         for service in "$@"; do launchctl bootout "gui/$(id -u)/$service" >/dev/null 2>&1 9>&- || true; done
     fi
@@ -1142,6 +1148,20 @@ services_start() {
     [ "$ok" -eq 0 ] || warn "starting $* again failed (above): start them yourself"
 }
 
+# Starts the services an upgrade stopped, given one a line, once its record is gone: they are written to
+# $MA_DATA/start-after before it goes, and started after (services_pending). A run killed before then
+# leaves them there, and the next run starts them as it takes the lock, once no upgrade's record is left:
+# whatever finishes or puts back one that is writes them again.
+services_after() {
+    if [ -n "$1" ]; then printf '%s\n' "$1" | put "$MA_DATA/start-after" 600; fi
+}
+services_pending() {
+    [ -f "$MA_DATA/start-after" ] && [ ! -d "$MA_UPGRADE" ] || return 0
+    # shellcheck disable=SC2046 # one service a line, without spaces
+    services_start $(cat "$MA_DATA/start-after")
+    rm -f "$MA_DATA/start-after"
+}
+
 # Waits, for up to a minute, for MDK's own lock on an account home, which a core holds for as long as it
 # has the home open, and holds it on descriptor 8 until this run closes that: then no core has the home
 # open, and none can open it meanwhile. Taken as MDK takes it, with flock on the file (fs-private), which
@@ -1154,66 +1174,77 @@ lease_home() {
     if program_path flock >/dev/null; then
         flock -w 60 8 9>&- && return 0
     elif program_path perl >/dev/null; then
-        perl -MFcntl=:flock -e 'open(my $f, ">&=", 8) or exit 2; $SIG{ALRM} = sub { exit 1 }; alarm 60;
-            flock($f, LOCK_EX) or exit 1' 9>&- && return 0
+        perl -MFcntl=:flock -e 'open(my $f, ">&=", 8) or exit 2;
+            for (1 .. 600) { exit 0 if flock($f, LOCK_EX | LOCK_NB); select(undef, undef, undef, 0.1) } exit 1' \
+            9>&- && return 0
     fi
     exec 8>&-
     return 1
 }
 
-# Copies an account home into a new folder, the owner's alone, each file with its mode and times, but
-# for the folder of the socket.
+# The entries of a folder, one a line, but for MDK's lock and the folder of the socket.
+home_entries() {
+    local entry
+    for entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+        [ -e "$entry" ] || [ -L "$entry" ] || continue
+        case ${entry##*/} in .marmot-runtime.lock | socket) continue ;; esac
+        printf '%s\n' "$entry"
+    done
+}
+
+# Copies an account home into a folder, the owner's alone, each file with its mode and times, but for
+# MDK's lock and the folder of the socket; the folder is made unless it is there.
 copy_home() {
-    local from=$1 to=$2
+    local from=$1 to=$2 entry
     (
         umask 077
-        mkdir "$to" || exit 1
-        for entry in "$from"/* "$from"/.[!.]* "$from"/..?*; do
-            [ -e "$entry" ] || [ -L "$entry" ] || continue
-            [ "$entry" = "$from/socket" ] || cp -pR "$entry" "$to/" || exit 1
-        done
+        [ -d "$to" ] || mkdir "$to" || exit 1
+        while IFS= read -r entry; do
+            [ -z "$entry" ] || cp -pR "$entry" "$to/" || exit 1
+        done <<EOF
+$(home_entries "$from")
+EOF
         chmod "$(file_mode "$from")" "$to"
     )
 }
 
-# Where a home is copied to, beside it, as it is put back (new), and where the one it replaces is moved
-# to (old), under hidden names.
-home_aside() {
-    printf '%s/.%s.marmot-agent-%s' "$(dirname "$1")" "$(basename "$1")" "$2"
-}
-
-# Puts a copy of an account home in place of the home, which need not be there: copied beside it and
-# renamed into place, as replace_dir does. Where mv cannot exchange the two, a kill between its two
-# renames leaves no home; the copy, still in the record, goes back the next run (store_keep,
-# store_put_back).
-restore_home() {
-    local from=$1 to=$2 new old
-    new=$(home_aside "$to" new)
-    old=$(home_aside "$to" old)
-    rm -rf "$new" || return 1
-    copy_home "$from" "$new" || return 1
-    if [ -e "$to" ] && mv -T --exchange "$new" "$to" 2>/dev/null; then
-        rm -rf "$new"
-        return 0
-    fi
-    if [ -e "$to" ]; then { rm -rf "$old" && mv "$to" "$old"; } || return 1; fi
-    mv "$new" "$to" || return 1
-    rm -rf "$old"
-}
-
-# Puts back the store a record of the upgrade names: the agent's services stopped, and, if a copy was
-# made, its home put back from it under MDK's lock. Fails if it could not be.
+# Puts a copy of an account home back into the home, in place, under MDK's lock: what the home holds is
+# removed, but for that lock, and the copy put in. The home and its lock stay where they are, so a core
+# that waits for the lock finds the home whole. A restore under way is marked in the record, and finished
+# by whatever reads the record next (upgrade_begin, upgrade_put_back), before anything else.
 store_put_back() {
-    local record=$1 home ok=0
+    local record=$1 home entry ok=0
     home=$(sed -n 1p "$record/where") && [ -n "$home" ] || return 1
     # shellcheck disable=SC2046 # one service a line, without spaces
     services_stop $(sed 1d "$record/where")
     [ -d "$record/home" ] || return 0
-    if [ -d "$home" ]; then lease_home "$home" || return 1; fi
-    restore_home "$record/home" "$home" || ok=1
+    (umask 077 && mkdir -p "$home") || return 1
+    lease_home "$home" || return 1
+    if : >"$record/restoring"; then
+        while IFS= read -r entry; do
+            [ -z "$entry" ] || rm -rf "$entry" || ok=1
+        done <<EOF
+$(home_entries "$home")
+EOF
+        [ "$ok" -eq 1 ] || copy_home "$record/home" "$home" || ok=1
+        [ "$ok" -eq 1 ] || rm -f "$record/restoring" || ok=1
+    else
+        ok=1
+    fi
     exec 8>&-
     [ "$ok" -eq 1 ] || say "put back the account home $home as it was before the upgrade"
     return "$ok"
+}
+
+# Finishes each restore of a home a run before this one was killed making, before this run uses the
+# home; fails if one could not be finished.
+store_restores() {
+    local record
+    while IFS= read -r record; do
+        [ -z "$record" ] || [ ! -f "$record/restoring" ] || store_put_back "$record" || return 1
+    done <<EOF
+$(store_records)
+EOF
 }
 
 # The records of the stores the upgrade kept, one a line; given "others", only other agents'.
@@ -1462,7 +1493,6 @@ init_agent() {
     fi
     say "making the agent's identity and publishing it to its relays"
     local key
-    MA_MADE_IDENTITY=1
     key=$("$MA_CORE" init "$MA_SETTINGS") || die "marmot-agent init failed (see above). If it says the home already has an identity, write its public key into $MA_AGENT_DIR/public-key, or move $MA_HOME away to make a new one"
     printf '%s\n' "$key" | put "$MA_AGENT_DIR/public-key" 600
 }
@@ -1601,16 +1631,12 @@ start_services() {
             return 0
         fi
         # shellcheck disable=SC2086
-        if store_wanted; then store_keep $units; fi
-        # shellcheck disable=SC2086
         act systemctl --user restart $units
     else
         if [ "$NO_START" -eq 1 ]; then
             say "the service is set up, not loaded: launchctl bootstrap gui/$(id -u) $MA_LAUNCHD_DIR/$MA_LABEL.plist"
             return 0
         fi
-        # shellcheck disable=SC2086
-        if store_wanted; then store_keep $labels; fi
         for label in $labels; do
             if [ "$DRY_RUN" -eq 0 ]; then launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true; fi
             act launchctl bootstrap "gui/$(id -u)" "$MA_LAUNCHD_DIR/$label.plist"
@@ -2192,7 +2218,7 @@ main() {
     check_harness
     # MA_STAGED says whether this run made the folder in MA_STAGE: a dry run names the installed one.
     MA_WORK="" MA_STAGE="" MA_STAGED=0 MA_CHANGING=0 MA_UPGRADING=0 MA_PREPARED=0 MA_CHANGE_STATUS="" MA_LOCKED=0
-    MA_MADE_DATA=0 MA_MADE_IDENTITY=0
+    MA_MADE_DATA=0
     trap 'finish $?' EXIT
     trap 'exit 129' HUP
     trap 'exit 130' INT

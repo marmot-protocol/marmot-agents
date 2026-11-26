@@ -263,9 +263,10 @@ Built in the core, the Codex driver and MDK ([D-141](decisions.md#d-141-subagent
   Only a run for the same agent and the same gateway finishes a killed upgrade that holds a plugin change;
   any other puts it back first. A gateway's install takes the install lock before it reads the gateway, a
   first install too, and one refused then leaves nothing ([D-154](decisions.md#d-154-an-install-takes-over-a-killed-upgrade-only-for-the-same-agent-and-the-same-gateway)).
-  Before it starts the agent on another core, an upgrade copies the agent's account home into its own record,
-  under MDK's lock, and puts it back with the old core; the copy goes when the upgrade ends. An upgrade that
-  ended cannot be undone: the old core cannot open the store the new one moved forward ([D-159](decisions.md#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)).
+  Before it puts another core in place, an upgrade stops the agent and copies its account home into its own
+  record, under MDK's lock, and puts it back with the old core; the copy goes when the upgrade ends. An upgrade
+  that started the agent and ended cannot be undone: the old core cannot open the store the new one moved
+  forward. Other agents' homes are not copied ([D-159](decisions.md#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)).
 - A gateway install moves over with its installer's `--replace-plugin`. The OpenClaw installer finishes a
   half-done move by editing OpenClaw's settings file itself, after a copy; the gateway's conversation starts
   fresh in each chat. `--replace-plugin` lists the gateway's work folder in `files_from` beside the old

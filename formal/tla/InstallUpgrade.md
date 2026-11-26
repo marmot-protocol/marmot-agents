@@ -82,8 +82,8 @@ call `image_commit` and `change_begin` alike).
 - **Dry runs**, `--uninstall` (which gives a left plugin change up), and the stale folders a later run removes
   (`lib.new.*`, `.upgrade.done.*`).
 - **A run's own files staged in `lib.new.$$`**, which no other run reads.
-- **The agent's account store**, which an upgrade copies into its record before it starts the agent on a new core,
-  and puts back with the core
+- **The agent's account store**, which an upgrade copies into its record before it puts a new core in place, and
+  puts back with the core
   ([D-159](../../docs/decisions.md#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)).
   It is one more thing that goes with the record, as Pi's image tag does; `install/test_install.py` stops such an
   upgrade at every step and checks that the store is always the core's (`Upgrade`,
