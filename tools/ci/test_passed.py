@@ -1,4 +1,4 @@
-"""Tests for passed.py, the check behind CI's one required job, `CI passed` (D-130)."""
+"""Tests for passed.py, the check behind CI's one required job, `CI passed` (D-169)."""
 
 import unittest
 
@@ -6,8 +6,10 @@ from passed import check, parse_expected
 
 EXPECTED = """
 Tier and changed paths
-Rust tests (core)
-Rust tests (drivers and the rest)
+Rust format [fast]
+ShellCheck
+Rust tests (core) [slow]
+Rust tests (drivers and the rest) [slow]
 Move-over tests (Docker) [full]
 TLA+ models (fair) [models]
 TLA+ models (give-up) [models]
@@ -18,10 +20,25 @@ def job(name, conclusion="success", status="completed"):
     return {"name": name, "status": status, "conclusion": conclusion}
 
 
-def pull_request_run():
-    """A pull request's run in which the path rule left the models out."""
+def fast_team_pr_run():
+    """A fast Team PR run: static checks only, no Rust compilation or models."""
     return [
         job("Tier and changed paths"),
+        job("Rust format"),
+        job("ShellCheck"),
+        job("Rust tests (${{ matrix.part }})", "skipped"),
+        job("Move-over tests (Docker)", "skipped"),
+        job("TLA+ models (${{ matrix.part }})", "skipped"),
+        job("CI passed", None, "in_progress"),
+    ]
+
+
+def external_pr_run():
+    """An external/fork pull request run in which the path rule left the models out."""
+    return [
+        job("Tier and changed paths"),
+        job("Rust format", "skipped"),
+        job("ShellCheck"),
         job("Rust tests (core)"),
         job("Rust tests (drivers and the rest)"),
         job("Move-over tests (Docker)", "skipped"),
@@ -34,6 +51,8 @@ def pull_request_run():
 def full_run():
     return [
         job("Tier and changed paths"),
+        job("Rust format", "skipped"),
+        job("ShellCheck"),
         job("Rust tests (core)"),
         job("Rust tests (drivers and the rest)"),
         job("Move-over tests (Docker)"),
@@ -52,14 +71,17 @@ def replaced(jobs, name, **changes):
 
 
 class Passes(unittest.TestCase):
-    def test_a_pull_request_whose_tier_and_path_rule_left_jobs_out(self):
-        self.assertEqual(check(EXPECTED, pull_request_run(), full=False, models=False), [])
+    def test_a_fast_team_pr_passes_without_slow_jobs(self):
+        self.assertEqual(check(EXPECTED, fast_team_pr_run(), full=False, models=False, fast=True), [])
+
+    def test_an_external_pr_whose_tier_and_path_rule_left_jobs_out(self):
+        self.assertEqual(check(EXPECTED, external_pr_run(), full=False, models=False, fast=False), [])
 
     def test_the_full_gate(self):
         self.assertEqual(check(EXPECTED, full_run(), full=True, models=True), [])
 
-    def test_a_pull_request_that_runs_the_models(self):
-        jobs = without(pull_request_run(), "TLA+ models (${{ matrix.part }})")
+    def test_an_external_pr_that_runs_the_models(self):
+        jobs = without(external_pr_run(), "TLA+ models (${{ matrix.part }})")
         jobs += [job("TLA+ models (fair)"), job("TLA+ models (give-up)")]
         self.assertEqual(check(EXPECTED, jobs, full=False, models=True), [])
 
@@ -76,6 +98,14 @@ class Fails(unittest.TestCase):
         for word in words:
             self.assertIn(word, joined)
 
+    def test_fast_team_pr_fails_if_rust_format_was_skipped(self):
+        jobs = replaced(fast_team_pr_run(), "Rust format", conclusion="skipped")
+        self.assertFails(check(EXPECTED, jobs, full=False, models=False, fast=True), "Rust format", "skipped")
+
+    def test_fast_cannot_combine_with_full_or_models(self):
+        self.assertFails(check(EXPECTED, fast_team_pr_run(), full=True, models=False, fast=True), "invalid tier")
+        self.assertFails(check(EXPECTED, fast_team_pr_run(), full=False, models=True, fast=True), "invalid tier")
+
     def test_when_a_matrix_leg_never_ran(self):
         # GitHub can report a matrix job as passed to `needs` when a leg was cancelled before a
         # runner took it, and the leg may then be missing from the run's jobs.
@@ -83,7 +113,7 @@ class Fails(unittest.TestCase):
         self.assertFails(check(EXPECTED, jobs, full=True, models=True), "TLA+ models (give-up)", "never ran")
 
     def test_when_a_job_never_ran(self):
-        jobs = without(pull_request_run(), "Rust tests (core)")
+        jobs = without(external_pr_run(), "Rust tests (core)")
         self.assertFails(check(EXPECTED, jobs, full=False, models=False), "Rust tests (core)", "never ran")
 
     def test_when_a_job_the_tier_needs_was_skipped(self):
@@ -91,14 +121,14 @@ class Fails(unittest.TestCase):
         self.assertFails(check(EXPECTED, jobs, full=True, models=True), "Move-over tests (Docker)", "skipped")
 
     def test_when_the_models_were_skipped_though_the_path_rule_wanted_them(self):
-        self.assertFails(check(EXPECTED, pull_request_run(), full=False, models=True), "TLA+ models (fair)")
+        self.assertFails(check(EXPECTED, external_pr_run(), full=False, models=True), "TLA+ models (fair)")
 
     def test_when_a_job_was_cancelled(self):
         jobs = replaced(full_run(), "TLA+ models (fair)", conclusion="cancelled")
         self.assertFails(check(EXPECTED, jobs, full=True, models=True), "TLA+ models (fair)", "cancelled")
 
     def test_when_a_job_the_tier_leaves_out_failed_anyway(self):
-        jobs = replaced(pull_request_run(), "Move-over tests (Docker)", conclusion="failure")
+        jobs = replaced(external_pr_run(), "Move-over tests (Docker)", conclusion="failure")
         self.assertFails(check(EXPECTED, jobs, full=False, models=False), "Move-over tests (Docker)", "failure")
 
     def test_when_a_job_has_not_finished(self):

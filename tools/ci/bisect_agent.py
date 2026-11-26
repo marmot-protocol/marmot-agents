@@ -106,6 +106,10 @@ class JobSpec:
 # Note: test_bisect_agent verifies that every job name in .github/workflows/ci.yml is present
 # here; keep the commands aligned with ci.yml when workflow steps change.
 JOB_SPECS: dict[str, JobSpec] = {
+    "Rust format": JobSpec(
+        command="cargo fmt --all --check",
+        required_bins=("cargo",),
+    ),
     "Rust format and Clippy": JobSpec(
         command="cargo fmt --all --check && cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
         required_bins=("cargo",),
@@ -178,13 +182,16 @@ JOB_SPECS: dict[str, JobSpec] = {
         ),
         required_bins=("python3",),
     ),
-    "Install scripts": JobSpec(
+    "ShellCheck": JobSpec(
         command=(
             "shellcheck -x install/*.sh tools/release/archive.sh tools/release/package.sh "
-            "tools/release/package_connector.sh tools/tla/run.sh && "
-            "TMPDIR=/tmp python3 -m unittest discover -v -s install -p 'test_*.py'"
+            "tools/release/package_connector.sh tools/tla/run.sh"
         ),
-        required_bins=("shellcheck", "python3"),
+        required_bins=("shellcheck",),
+    ),
+    "Install scripts": JobSpec(
+        command="TMPDIR=/tmp python3 -m unittest discover -v -s install -p 'test_*.py'",
+        required_bins=("python3",),
     ),
     "TLA+ models (fair)": JobSpec(
         command="TLC_WORKERS=4 python3 tools/tla/check.py --model CoreLifecycle --only fair",

@@ -161,6 +161,14 @@ description (Problem, Fix, Verification; follow the global `gh-create-pr`
 skill when available). Put `Fixes #<n>` (or `Part of #<n>`) below Problem and
 Fix when there is an issue.
 
+Team PRs (same-repo branches by `write`/`maintain`/`admin` collaborators) run
+the fast ~60s static gate (`D-169`): verified signatures, `tree-state` check,
+hard-enforced `D-162` commit trailers, `cargo fmt`, ShellCheck, Recordings,
+TypeScript, Python, Documents, and `CI passed`. Add the `ci:full` label when
+you explicitly want full Rust/Docker/Kani/TLA+ CI before merging. If `master`
+is frozen in Meltdown Mode (`tree-state=red`, `D-168`), only recovery PRs
+labeled `tree-fix` or `revert` pass CI.
+
 ## 5. Make it ready
 
 The PR is ready when its head is the reviewed head (step 3), its required

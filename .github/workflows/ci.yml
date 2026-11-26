@@ -1,17 +1,22 @@
 name: CI
 
-# Three tiers (D-130). The same commands are in AGENTS.md under "Verification"; keep the two in
-# step.
+# Four lanes across three tiers (D-169, replacing D-130). The same commands are in AGENTS.md under
+# "Verification"; keep the two in step.
 #
-# - A pull request runs the fast tier, under 10 minutes: formatting, Clippy, the workspace's tests
-#   with the conformance suite, the property tests at their normal count and every fuzz target's
-#   check over its seeds, the simulator at its normal count, the TypeScript, Python,
-#   install-script, recording and document checks, and the TLA+ models on small bounds when the
-#   code a model follows or the models changed.
+# - Fast Team PR gate (same-repo branch by a write/maintain/admin collaborator without `ci:full`,
+#   ~45-60s, zero Rust compile): verified PR commit signatures, `tree-state` check (fails closed
+#   when `red` unless labeled `tree-fix` or `revert`), hard-enforced D-162 commit trailers,
+#   `cargo fmt --all --check`, ShellCheck, Recordings, TypeScript, Python, and Documents.
+# - External / fork PR gate (or a Team PR labeled `ci:full`): full Rust Clippy, workspace tests
+#   with conformance + property + fuzz-seed checks, Simulator, socket conformance, Install scripts,
+#   and TLA+ models (trailers remain advisory on external PRs; GitHub already ensures only
+#   collaborators with write access can merge external PRs).
 # - Hourly canary (`canary.yml`, D-163, #222) calls this workflow via `workflow_call` with
 #   `tier: full` and `save_caches: true` whenever `master` moves past `canary`: it runs the full
 #   gate (simulator at 200 runs, Docker move-over tests, Kani proofs, and all TLA+ models),
 #   refreshes `master`'s Rust build caches once per batch, and fast-forwards `canary` on green.
+#   The revert-only bisect agent (D-168) watches canary and isolates regressions or activates
+#   Meltdown Mode (`tree-state=red`).
 # - Pushes to master do not trigger CI (D-161). `workflow_dispatch` runs either tier on any branch
 #   and refreshes that branch's caches (pick `tier: full` on `master` to also refresh `rust-kani`).
 #
@@ -73,10 +78,98 @@ jobs:
     name: Tier and changed paths
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
+      fast: ${{ steps.tier.outputs.fast }}
       full: ${{ steps.tier.outputs.full }}
       models: ${{ steps.tier.outputs.models }}
+      is_team_pr: ${{ steps.trust.outputs.is_team_pr }}
     steps:
+      - name: Verify PR commit signatures
+        # Runs before any PR code is checked out. Fails closed if any commit in the PR lacks a
+        # GitHub-verified signature (complementing the master ruleset's required_signatures rule).
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          COMMIT_COUNT: ${{ github.event.pull_request.commits }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100" |
+            jq -s --exit-status --arg head "${HEAD_SHA}" --argjson expected "${COMMIT_COUNT}" '
+              [.[][]] as $commits |
+              $expected > 0 and ($commits | length) == $expected and
+              ([$commits[].sha] | unique | length) == $expected and
+              any($commits[]; .sha == $head) and
+              all($commits[]; .commit.verification.verified == true)'
+
+      - name: Classify PR trust and live labels
+        # Only same-repo PRs authored by a collaborator with write, maintain, or admin permission
+        # qualify for the fast static Team PR gate. External/fork PRs, read-only members, and
+        # failed permission lookups all fail closed into the full PR suite. Labels are read live
+        # so applying `ci:full`, `tree-fix`, or `revert` and re-running takes effect immediately.
+        id: trust
+        env:
+          EVENT: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+          is_team_pr=false
+          has_ci_full=false
+          has_tree_override=false
+          if [ "${EVENT}" = pull_request ]; then
+            labels_json="$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/labels?per_page=100" | jq -s '[.[][].name]')"
+            if jq -e 'index("ci:full") != null' <<< "${labels_json}" > /dev/null; then
+              has_ci_full=true
+            fi
+            if jq -e 'any(. == "tree-fix" or . == "revert")' <<< "${labels_json}" > /dev/null; then
+              has_tree_override=true
+            fi
+            if [ -n "${HEAD_REPO}" ] && [ "${HEAD_REPO}" = "${REPO}" ] && [ "${HEAD_FORK}" != "true" ] && [ -n "${PR_AUTHOR}" ]; then
+              permission="$(gh api "repos/${REPO}/collaborators/${PR_AUTHOR}/permission" --jq '.permission // ""' 2>/dev/null || true)"
+              case "${permission}" in
+                write|maintain|admin) is_team_pr=true ;;
+              esac
+            fi
+          fi
+          echo "is_team_pr=${is_team_pr}" >> "${GITHUB_OUTPUT}"
+          echo "has_ci_full=${has_ci_full}" >> "${GITHUB_OUTPUT}"
+          echo "has_tree_override=${has_tree_override}" >> "${GITHUB_OUTPUT}"
+          echo "Team PR: ${is_team_pr}. ci:full: ${has_ci_full}. tree-override: ${has_tree_override}."
+
+      - name: Check tree-state gate
+        # Fails closed when origin/tree-state:state.json is not "green" (Meltdown Mode, D-168)
+        # unless the recovery PR carries the `tree-fix` or `revert` label (merging still requires
+        # write access). Applies to every PR run started or re-run while tree-state is red.
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HAS_TREE_OVERRIDE: ${{ steps.trust.outputs.has_tree_override }}
+        run: |
+          set -euo pipefail
+          raw="$(gh api "repos/${REPO}/contents/state.json?ref=tree-state" --jq '.content' | tr -d '\n' | base64 -d)"
+          tree_state="$(jq -r '.state // "unknown"' <<< "${raw}")"
+          reason="$(jq -r '.reason // ""' <<< "${raw}")"
+          echo "tree-state: ${tree_state} (${reason})"
+          if [ "${tree_state}" != "green" ]; then
+            if [ "${HAS_TREE_OVERRIDE}" = "true" ]; then
+              echo "::notice::tree-state is '${tree_state}', allowed via tree-fix/revert label."
+            else
+              echo "::error::master is frozen in Meltdown Mode (tree-state=${tree_state}: ${reason}). Label recovery PRs 'tree-fix' or 'revert' to pass CI while red."
+              exit 1
+            fi
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -94,17 +187,26 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           TIER: ${{ inputs.tier }}
+          IS_TEAM_PR: ${{ steps.trust.outputs.is_team_pr }}
+          HAS_CI_FULL: ${{ steps.trust.outputs.has_ci_full }}
         run: |
           set -euo pipefail
+          fast=false
+          full=false
+          models=true
           if [ -n "${TIER}" ]; then
-            if [ "${TIER}" = full ]; then full=true; else full=false; fi
+            [ "${TIER}" = full ] && full=true
           elif [ "${EVENT}" = pull_request ]; then
-            full=false
+            if [ "${HAS_CI_FULL}" = true ]; then
+              full=true
+            elif [ "${IS_TEAM_PR}" = true ]; then
+              fast=true
+              models=false
+            fi
           else
             full=true
           fi
-          models=true
-          if [ "${full}" = false ] && [ "${EVENT}" = pull_request ]; then
+          if [ "${fast}" = false ] && [ "${full}" = false ] && [ "${EVENT}" = pull_request ]; then
             # --no-renames: a file moved out of a watched path counts there as deleted. git exits
             # 0 when nothing there changed and 1 when something did; anything else is an error,
             # and the models run.
@@ -123,18 +225,52 @@ jobs:
               *) echo "::warning::git could not compare the paths the models follow, so the models run." ;;
             esac
           fi
+          echo "fast=${fast}" >> "${GITHUB_OUTPUT}"
           echo "full=${full}" >> "${GITHUB_OUTPUT}"
           echo "models=${models}" >> "${GITHUB_OUTPUT}"
-          echo "Full gate: ${full}. Models: ${models}."
+          echo "Fast Team PR: ${fast}. Full gate: ${full}. Models: ${models}."
 
-      - name: PR commit trailers (advisory)
+      - name: PR commit trailers
+        # Hard-enforced on Team PRs (D-162, D-169); advisory on external/fork PRs so outside
+        # contributors are not blocked by internal agent trailer conventions.
         if: github.event_name == 'pull_request'
+        env:
+          IS_TEAM_PR: ${{ steps.trust.outputs.is_team_pr }}
         run: |
-          python3 tools/ci/check_pr_trailers.py --base HEAD^1 --head HEAD^2 --advisory \
-            || echo "::warning title=PR trailers::advisory check failed unexpectedly"
+          set -euo pipefail
+          if [ "${IS_TEAM_PR}" = true ]; then
+            python3 tools/ci/check_pr_trailers.py --base HEAD^1 --head HEAD^2
+          else
+            python3 tools/ci/check_pr_trailers.py --base HEAD^1 --head HEAD^2 --advisory \
+              || echo "::warning title=PR trailers::advisory check failed unexpectedly"
+          fi
+
+  rust-fmt:
+    name: Rust format
+    needs: changes
+    if: needs.changes.outputs.fast == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Format
+        # Install only the pinned channel + rustfmt (skipping clippy and llvm-tools-preview) so
+        # formatting finishes in seconds without compiling anything.
+        run: |
+          set -euo pipefail
+          channel="$(sed -n 's/^channel *= *"\([^"]*\)".*/\1/p' rust-toolchain.toml)"
+          test -n "${channel}"
+          rustup toolchain install "${channel}" --profile minimal --component rustfmt --no-self-update
+          cargo +"${channel}" fmt --version
+          cargo +"${channel}" fmt --all --check
 
   lint:
     name: Rust format and Clippy
+    needs: changes
+    if: needs.changes.outputs.fast != 'true'
     runs-on: ubuntu-24.04
     # Without a cache (after Cargo.lock or the compiler changes) Clippy takes about 4 minutes.
     timeout-minutes: 30
@@ -165,6 +301,8 @@ jobs:
 
   tests:
     name: Rust tests (${{ matrix.part }})
+    needs: changes
+    if: needs.changes.outputs.fast != 'true'
     runs-on: ubuntu-24.04
     # Cargo runs one test program at a time, and the core's take about three minutes, so the
     # workspace's tests run in two jobs side by side: the core's package, and every other but the
@@ -217,6 +355,7 @@ jobs:
   simulator:
     name: Simulator
     needs: changes
+    if: needs.changes.outputs.fast != 'true'
     runs-on: ubuntu-24.04
     # In release, with the build cached: with the dependencies cached, the build takes about
     # 30 s and 200 runs of each gate family about 10 s; without a cache the build takes about 7
@@ -305,6 +444,8 @@ jobs:
 
   conformance-socket:
     name: Conformance (socket)
+    needs: changes
+    if: needs.changes.outputs.fast != 'true'
     runs-on: ubuntu-24.04
     # The shipped socket connectors, Claude Code, Hermes and OpenClaw, through the driver conformance
     # suite on the core's real socket, each with a scripted harness inside it: no key and no network
@@ -505,12 +646,10 @@ jobs:
         working-directory: .
         run: python3 -m unittest discover -s tools/release -p 'test_*.py'
 
-  install:
-    name: Install scripts
+  shellcheck:
+    name: ShellCheck
     runs-on: ubuntu-24.04
-    # The suite takes about 7 minutes here, and went past 10 in the merge queue (#218); the tier's other jobs
-    # take longer, so this does not lengthen it.
-    timeout-minutes: 20
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -532,10 +671,22 @@ jobs:
           tar -xJf "${RUNNER_TEMP}/${name}" -C "${RUNNER_TEMP}"
           echo "${RUNNER_TEMP}/shellcheck-v${SHELLCHECK_VERSION}" >> "${GITHUB_PATH}"
 
-      - name: The install scripts pass ShellCheck
+      - name: The shell scripts pass ShellCheck
         run: |
           shellcheck --version
           shellcheck -x install/*.sh tools/release/archive.sh tools/release/package.sh tools/release/package_connector.sh tools/tla/run.sh
+
+  install:
+    name: Install scripts
+    needs: changes
+    if: needs.changes.outputs.fast != 'true'
+    runs-on: ubuntu-24.04
+    # Runs in the full / external / canary gates (fast Team PRs run `ShellCheck` above).
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Each install script runs against a throwaway home, with stand-ins for what it calls
         # Each test named as it runs, so a run cut short says where, and the ten slowest at the end.
@@ -637,6 +788,7 @@ jobs:
     if: always()
     needs:
       - changes
+      - rust-fmt
       - lint
       - tests
       - simulator
@@ -646,6 +798,7 @@ jobs:
       - recordings
       - typescript
       - python
+      - shellcheck
       - install
       - models
       - documents
@@ -659,11 +812,18 @@ jobs:
       - name: Every job passed, or was left out by the tier or the path rule
         env:
           NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
+          FAST: ${{ needs.changes.outputs.fast }}
+          IS_TEAM_PR: ${{ needs.changes.outputs.is_team_pr }}
         run: |
           set -euo pipefail
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "${NEEDS}"
           if jq -e 'any(.[]; .result == "failure" or .result == "cancelled")' <<< "${NEEDS}" > /dev/null; then
             echo "::error::A job failed or was cancelled."
+            exit 1
+          fi
+          if [ "${EVENT}" = pull_request ] && [ "${IS_TEAM_PR}" != true ] && [ "${FAST}" = true ]; then
+            echo "::error::Non-team PR must not take the fast gate."
             exit 1
           fi
 
@@ -685,26 +845,30 @@ jobs:
         run: python3 -m unittest discover -s tools/ci -p 'test_*.py'
 
       - name: Every job the tier expects ran and passed
-        # `[full]`: only in the full gate. `[models]`: only when the models run.
+        # `[fast]`: fast Team PR gate only. `[slow]`: non-fast runs (external PR, ci:full, dispatch,
+        # canary). `[full]`: full gate only. `[models]`: when TLA+ models run.
         env:
           GH_TOKEN: ${{ github.token }}
+          FAST: ${{ needs.changes.outputs.fast }}
           FULL: ${{ needs.changes.outputs.full }}
           MODELS: ${{ needs.changes.outputs.models }}
           JOB_PREFIX: ${{ inputs.job_prefix }}
           EXPECTED: |
             Tier and changed paths
-            Rust format and Clippy
-            Rust tests (core)
-            Rust tests (drivers and the rest)
-            Simulator
+            Rust format [fast]
+            Rust format and Clippy [slow]
+            Rust tests (core) [slow]
+            Rust tests (drivers and the rest) [slow]
+            Simulator [slow]
             Move-over tests (Docker) [full]
-            Conformance (socket)
+            Conformance (socket) [slow]
             Kani proofs [full]
             Recordings
             TypeScript (claude-code)
             TypeScript (openclaw)
             Python
-            Install scripts
+            ShellCheck
+            Install scripts [slow]
             TLA+ models (fair) [models]
             TLA+ models (give-up) [models]
             TLA+ models (the other cases) [models]
@@ -717,4 +881,9 @@ jobs:
           gh api --paginate --jq '.jobs[] | {name, status, conclusion}' \
             "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?filter=latest&per_page=100" \
             > "${RUNNER_TEMP}/jobs.jsonl"
-          python3 tools/ci/passed.py --jobs "${RUNNER_TEMP}/jobs.jsonl" --full "${FULL}" --models "${MODELS}" --prefix "${JOB_PREFIX}"
+          python3 tools/ci/passed.py \
+            --jobs "${RUNNER_TEMP}/jobs.jsonl" \
+            --fast "${FAST}" \
+            --full "${FULL}" \
+            --models "${MODELS}" \
+            --prefix "${JOB_PREFIX}"
