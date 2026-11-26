@@ -192,9 +192,15 @@ fn a_message_whose_read_fails_is_read_again_not_skipped() {
     };
     let report = run(&schedule);
     assert_eq!(property(&report), None, "{:#?}", report.trace);
-    let read_failed = (report.trace.iter()).any(|t| t.what == "Place: Error");
-    assert!(read_failed, "{:#?}", report.trace);
-    let caught_up = (report.trace.iter()).any(|t| t.what.starts_with("CatchUp(c0, "));
-    assert!(caught_up, "{:#?}", report.trace);
+    let failed_at = (report.trace.iter())
+        .position(|t| t.what == "Place: Error")
+        .unwrap_or_else(|| panic!("expected Place: Error in trace\n{:#?}", report.trace));
+    let retried =
+        (report.trace[failed_at + 1..].iter()).any(|t| t.what.starts_with("CatchUp(c0, "));
+    assert!(
+        retried,
+        "expected CatchUp after Place: Error\n{:#?}",
+        report.trace
+    );
     assert_eq!(report.stats.delivered, 2, "{:#?}", report.trace);
 }

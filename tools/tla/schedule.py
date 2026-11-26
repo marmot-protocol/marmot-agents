@@ -323,6 +323,8 @@ def step(action, s, t, constants):
             (msg,) = [m for m in s["order"]
                       if chat_of(m) == chat and s["order"][m] == t["cv"]["mark"][chat]]
         else:
+            # A repeat failure leaves `unread` unchanged; only single-chat traces are supported
+            # here, since TLC does not record which waiting chat failed.
             added = t["unread"] - s["unread"]
             (chat,) = added if added else s["unread"]
             after = [m for m in s["order"]

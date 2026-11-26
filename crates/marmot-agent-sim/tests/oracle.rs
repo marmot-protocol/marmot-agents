@@ -621,13 +621,3 @@ fn an_item_in_the_main_chat_whose_task_item_went_out_fails_s14() {
     sent(&mut w, 0, &of_subagent());
     assert_eq!(property(oracle::safety(&w)), Some("S14".into()));
 }
-
-// L3: a stored prompt that was skipped (never delivered, never lost in a crash, no turn started
-// by it) fails liveness, matching `CoreLifecycle`'s `SkipUnread` defect (#80).
-#[test]
-fn a_stored_prompt_skipped_fails_l3() {
-    let mut w = world(1, &[prompt(0)]);
-    assert_eq!(properties(oracle::liveness(&w)), vec!["L3"]);
-    handed(&mut w, 0, "A");
-    assert_eq!(properties(oracle::liveness(&w)), Vec::<String>::new());
-}

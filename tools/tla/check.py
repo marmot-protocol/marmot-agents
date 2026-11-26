@@ -75,7 +75,8 @@ SAFETY = {"PROPERTIES": None}  # drops the liveness properties: safety only
 class Case:
     """A configuration, the changes to it, what TLC must say, and the counterexample it is."""
 
-    def __init__(self, name, cfg, expected, changes=None, counterexample=None, what=None):
+    def __init__(self, name, cfg, expected, changes=None, counterexample=None, what=None,
+                 fixed=False):
         self.name = name
         self.model = cfg.split(".")[0]
         self.cfg = cfg
@@ -85,6 +86,7 @@ class Case:
         self.changes = changes or {}
         self.counterexample = counterexample
         self.what = what
+        self.fixed = fixed
 
 
 def mutant(bug, prop, cfg=FAIR, name=None, **more):
@@ -141,7 +143,8 @@ CASES = [
          counterexample="skip-unread",
          what="SkipUnread, the core before #88 (#83): MDK cannot read a message for a moment "
               "(NotNow), and the core moves the read mark past it without handling it. The "
-              "message is never read again (L3; S10 too)."),
+              "message is never read again (L3; S10 too).",
+         fixed=True),
     # A dropped send has something in its place (conversation.rs refused): the item is closed,
     # the requests settled, and the chat told of the gap.
     Case("give-up-closes-item", GIVEUP, PASS),
@@ -663,7 +666,7 @@ def main():
         # checked once, at the end, with both fixed, so their traces repeat; the others repeat
         # as they are.
         options = []
-        if (case.model == DT or case.name == "skip-unread") and case.expected == TEMPORAL and case.counterexample:
+        if (case.model == DT or case.fixed) and case.expected == TEMPORAL and case.counterexample:
             options = ["-lncheck", "final", "-fp", "1", "-seed", "1"]
         ran = subprocess.run([str(RUN), str(folder), f"{case.model}.tla", f"{case.model}.cfg",
                               *options], capture_output=True, text=True, env=env)
