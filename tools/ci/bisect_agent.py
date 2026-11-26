@@ -419,24 +419,30 @@ class GitHubClient:
                 return
 
     def latest_failed_canary_run(self) -> Optional[RunInfo]:
-        """Query `status=failure` directly so an unresolved failure is never hidden by >300 skip runs."""
-        out = self._gh(
-            [
-                "api",
-                f"repos/{self.repo}/actions/workflows/{CANARY_WORKFLOW}/runs"
-                "?branch=master&status=failure&per_page=10",
-            ]
-        ).stdout
-        for r in json.loads(out).get("workflow_runs", []):
-            conclusion = r.get("conclusion") or ""
-            if conclusion in {"failure", "timed_out"}:
-                return RunInfo(
-                    run_id=int(r["id"]),
-                    head_sha=validate_sha(r["head_sha"]),
-                    conclusion=conclusion,
-                    html_url=str(r.get("html_url") or ""),
-                )
-        return None
+        """Query `status=failure` and `status=timed_out` directly so an unresolved failure is never
+        hidden behind >300 retry-cap skip runs."""
+        best: Optional[RunInfo] = None
+        for status in ("failure", "timed_out"):
+            out = self._gh(
+                [
+                    "api",
+                    f"repos/{self.repo}/actions/workflows/{CANARY_WORKFLOW}/runs"
+                    f"?branch=master&status={status}&per_page=10",
+                ]
+            ).stdout
+            for r in json.loads(out).get("workflow_runs", []):
+                conclusion = r.get("conclusion") or ""
+                if conclusion in {"failure", "timed_out"}:
+                    cand = RunInfo(
+                        run_id=int(r["id"]),
+                        head_sha=validate_sha(r["head_sha"]),
+                        conclusion=conclusion,
+                        html_url=str(r.get("html_url") or ""),
+                    )
+                    if best is None or cand.run_id > best.run_id:
+                        best = cand
+                    break
+        return best
 
     def failed_jobs_for_run(self, run_id: int) -> list[FailedJob]:
         out = self._gh(["api", "--paginate", f"repos/{self.repo}/actions/runs/{run_id}/jobs?per_page=100"]).stdout
@@ -698,10 +704,24 @@ class BisectAgent:
                         "place --worktrees-dir and cache directories outside repo/state/credential paths"
                     )
 
+    @staticmethod
+    def _clean_git_env() -> dict[str, str]:
+        """Remove repository-location Git env vars so inherited hooks/wrappers cannot redirect git."""
+        strip = {
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        }
+        return {k: v for k, v in os.environ.items() if k not in strip}
+
     def _git(self, args: list[str], cwd: Optional[Path] = None, check: bool = True) -> subprocess.CompletedProcess:
         return subprocess.run(
             ["git", *args],
             cwd=str(cwd or self.repo_dir),
+            env=self._clean_git_env(),
             text=True,
             capture_output=True,
             timeout=120,
@@ -861,6 +881,7 @@ class BisectAgent:
         archive = subprocess.Popen(
             ["git", "archive", "--format=tar", ref],
             cwd=str(source_repo),
+            env=self._clean_git_env(),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -971,19 +992,28 @@ class BisectAgent:
             shutil.rmtree(export_dir, ignore_errors=True)
             shutil.rmtree(sandbox_home, ignore_errors=True)
 
-    def _reproduce_on_sha(self, sha: str, command: str, attempts: int) -> tuple[int, int, str]:
-        """Run command `attempts` times on clean sandboxed exports of `sha`."""
+    def _reproduce_on_sha(
+        self, sha: str, command: str, attempts: int, stop_on_pass: bool = False
+    ) -> tuple[int, int, int, str]:
+        """Run command up to `attempts` times on clean sandboxed exports of `sha`.
+        Returns `(passes, fails, timeouts, last_tail)` where supervisor timeouts are tracked
+        separately from deterministic check failures."""
         passes = 0
         fails = 0
+        timeouts = 0
         last_tail = ""
         for _ in range(attempts):
             ok, tail = self._run_check_in_export(self.repo_dir, sha, command)
             last_tail = tail
             if ok:
                 passes += 1
+                if stop_on_pass:
+                    break
+            elif "command timed out" in tail:
+                timeouts += 1
             else:
                 fails += 1
-        return passes, fails, last_tail
+        return passes, fails, timeouts, last_tail
 
     def _classify_job(self, job: FailedJob, run_info: RunInfo, canary_sha: str, flaky_names: set[str]) -> JobClassification:
         norm_name = normalize_job_name(job.name)
@@ -1005,8 +1035,20 @@ class BisectAgent:
             )
             return JobClassification(job=job, bucket="unmapped", reason=reason)
 
-        attempts = 1 if is_known_flake else self.repro_attempts
-        passes_tip, fails_tip, tip_tail = self._reproduce_on_sha(run_info.head_sha, spec.command, attempts)
+        if self.require_sandbox and self._sandbox_backend != "bwrap":
+            return JobClassification(
+                job=job,
+                bucket="baseline_broken",
+                reason="required bwrap sandbox is unavailable on bisect host; refusing unsandboxed execution",
+                spec=spec,
+            )
+
+        # Require full `repro_attempts` failures before promoting even a tracked flake to
+        # deterministic, while stopping early on the first pass so flaky jobs finish in 1 try.
+        attempts = self.repro_attempts
+        passes_tip, fails_tip, timeouts_tip, tip_tail = self._reproduce_on_sha(
+            run_info.head_sha, spec.command, attempts, stop_on_pass=is_known_flake
+        )
         if passes_tip > 0:
             if is_known_flake:
                 return JobClassification(
@@ -1028,8 +1070,19 @@ class BisectAgent:
                 tip_tail=tip_tail,
             )
 
-        passes_base, fails_base, _ = self._reproduce_on_sha(canary_sha, spec.command, 1)
-        if fails_base > 0 or passes_base == 0:
+        if timeouts_tip > 0 or fails_tip < attempts:
+            return JobClassification(
+                job=job,
+                bucket="known_flake" if is_known_flake else "infra",
+                reason=f"local reproduction timed out ({timeouts_tip}/{attempts}) on {run_info.head_sha[:9]}",
+                spec=spec,
+                passes_tip=passes_tip,
+                fails_tip=fails_tip,
+                tip_tail=tip_tail,
+            )
+
+        passes_base, fails_base, timeouts_base, _ = self._reproduce_on_sha(canary_sha, spec.command, 1)
+        if timeouts_base > 0 or fails_base > 0 or passes_base == 0:
             return JobClassification(
                 job=job,
                 bucket="baseline_broken",
@@ -1133,7 +1186,10 @@ class BisectAgent:
             # Fetch existing remote revert branch (if any) so --force-with-lease knows its ref.
             self._git(["fetch", "origin", branch], cwd=wt, check=False)
             self._git(["push", "--force-with-lease", "-u", "origin", branch], cwd=wt)
-            pr_url, auto_merge_ok = self.gh.open_revert_pr(branch, pr_title, pr_body)
+            try:
+                pr_url, auto_merge_ok = self.gh.open_revert_pr(branch, pr_title, pr_body)
+            except RuntimeError as exc:
+                return False, f"revert_pr_create_failed: {exc}", branch, None
             if not auto_merge_ok:
                 return False, f"revert_auto_merge_failed ({pr_url})", branch, pr_url
             return True, "revert_pr_opened", branch, pr_url
@@ -1313,7 +1369,10 @@ class BisectAgent:
             extra={"revert_pr_url": pr_url, "revert_status": status},
         )
         if activated:
-            self._record_handled(state, run_info.run_id, consecutive, run_info.head_sha, pending_revert_pr=None)
+            # Record the pending PR's own run_id so a newer failed canary run remains eligible.
+            handled_run_id = pending.get("run_id") or state.get("last_handled_run_id") or run_info.run_id
+            handled_sha = state.get("last_failed_sha") or run_info.head_sha
+            self._record_handled(state, handled_run_id, consecutive, handled_sha, pending_revert_pr=None)
         return res
 
     def _run_once_locked(self) -> AgentResult:
@@ -1393,9 +1452,9 @@ class BisectAgent:
                 tree_state=tree_state,
             )
 
-        # Reset per-SHA failure count when a new SHA fails (unless tree is already red).
+        # Reset per-SHA failure count whenever the failed SHA changes (D-168: 1 retry per SHA).
         prev_count = int(state.get("consecutive_failures", 0))
-        if state.get("last_failed_sha") != run_info.head_sha and tree_state != "red":
+        if state.get("last_failed_sha") != run_info.head_sha:
             prev_count = 0
         consecutive = prev_count + 1
 
@@ -1453,12 +1512,16 @@ class BisectAgent:
             if consecutive < 2:
                 if not self.dry_run:
                     self.gh.dispatch_canary(force=True)
-                    if chosen.bucket == "suspected_race":
+                # Persist handled state right after dispatch so a failed comment cannot trigger retries.
+                self._record_handled(state, run_info.run_id, consecutive, run_info.head_sha)
+                if not self.dry_run and chosen.bucket == "suspected_race":
+                    try:
                         self.gh.comment_canary_issue(
                             f"Bisect agent classified `{chosen.job.name}` on `{run_info.head_sha[:9]}` "
                             f"as **suspected new race** ({chosen.reason}). Dispatched one canary retry."
                         )
-                self._record_handled(state, run_info.run_id, consecutive, run_info.head_sha)
+                    except RuntimeError as exc:
+                        print(f"bisect_agent: warning: canary issue comment failed: {exc}", file=sys.stderr)
                 return AgentResult(
                     action="retry_canary",
                     bucket=chosen.bucket,
@@ -1496,8 +1559,8 @@ class BisectAgent:
         # Bucket 4: Deterministic regression over canary..run_info.head_sha.
         assert chosen.spec is not None
         if master_sha != run_info.head_sha:
-            passes_master, fails_master, _ = self._reproduce_on_sha(master_sha, chosen.spec.command, 1)
-            if passes_master > 0 and fails_master == 0:
+            passes_master, fails_master, timeouts_master, _ = self._reproduce_on_sha(master_sha, chosen.spec.command, 1)
+            if passes_master > 0 and fails_master == 0 and timeouts_master == 0:
                 self._record_handled(state, run_info.run_id, 0, None)
                 return AgentResult(
                     action="noop_already_fixed_on_master",

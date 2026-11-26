@@ -989,6 +989,90 @@ class BisectAgentBucketTests(TempRepoMixin, unittest.TestCase):
             self.assertNotIn(secret_key, env)
         self.assertEqual(env["HOME"], str(worktrees / ".check-home"))
 
+    def test_hardening_edge_cases_timeout_sandbox_flake_pr_create_and_run_id(self):
+        _, _, work, repo, worktrees, state_dir, _ = self.make_repo()
+        (work / "check.sh").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+        _git(work, "add", "check.sh")
+        _git(work, "commit", "-m", "Break check")
+        culprit = _git(work, "rev-parse", "HEAD")
+        _git(work, "push", "origin", "master")
+
+        # 1. Missing required bwrap escalates cleanly to Meltdown instead of raising RuntimeError.
+        gh1 = FakeGitHub(
+            run_info=ba.RunInfo(801, culprit, "failure", "https://example/runs/801"),
+            failed_jobs=[ba.FailedJob(81, "CI / Python", "failure", "https://example/jobs/81", "FAILED")],
+        )
+        ag_no_bwrap = self._agent(repo, worktrees, state_dir / "s1", gh1, dry_run=True, require_sandbox=True)
+        ag_no_bwrap._sandbox_backend = None
+        r1 = ag_no_bwrap.run_once()
+        self.assertEqual(r1.action, "meltdown")
+        self.assertEqual(r1.bucket, "baseline_broken")
+
+        # 2. Supervisor timeouts on tip are NOT counted as deterministic regressions.
+        gh2 = FakeGitHub(
+            run_info=ba.RunInfo(802, culprit, "failure", "https://example/runs/802"),
+            failed_jobs=[ba.FailedJob(82, "CI / Python", "failure", "https://example/jobs/82", "FAILED")],
+        )
+        ag_to = self._agent(repo, worktrees, state_dir / "s2", gh2, dry_run=True)
+        ag_to._run_check_in_export = lambda *a, **kw: (False, "command timed out after 30s")  # type: ignore[method-assign]
+        r2 = ag_to.run_once()
+        self.assertEqual(r2.bucket, "infra")
+        self.assertEqual(r2.action, "retry_canary")
+
+        # 3. Tracked flake failing 1st attempt and passing 2nd stays known_flake (not promoted).
+        gh3 = FakeGitHub(
+            run_info=ba.RunInfo(803, culprit, "failure", "https://example/runs/803"),
+            failed_jobs=[ba.FailedJob(83, "CI / Python", "failure", "https://example/jobs/83", "FAILED")],
+            flaky_jobs={"Python"},
+        )
+        ag_fl = self._agent(repo, worktrees, state_dir / "s3", gh3, dry_run=True)
+        seq = iter([(False, "flake once"), (True, "ok second")])
+        ag_fl._run_check_in_export = lambda *a, **kw: next(seq)  # type: ignore[method-assign]
+        r3 = ag_fl.run_once()
+        self.assertEqual(r3.bucket, "known_flake")
+
+        # 4. PR creation RuntimeError after branch push escalates cleanly to Meltdown.
+        gh4 = FakeGitHub(
+            run_info=ba.RunInfo(804, culprit, "failure", "https://example/runs/804"),
+            failed_jobs=[ba.FailedJob(84, "CI / Python", "failure", "https://example/jobs/84", "FAILED")],
+        )
+        def _boom(*a, **kw):
+            raise RuntimeError("gh pr create failed")
+        gh4.open_revert_pr = _boom  # type: ignore[method-assign]
+        r4 = self._agent(repo, worktrees, state_dir / "s4", gh4, dry_run=False).run_once()
+        self.assertEqual(r4.action, "meltdown")
+        self.assertIn("revert_pr_create_failed", str(r4.details.get("revert_status")))
+
+        # 5. Failed older pending revert PR does NOT mark a newer canary run_id as handled.
+        _, _, work2, repo2, worktrees2, state_dir2, _ = self.make_repo()
+        (work2 / "check.sh").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+        _git(work2, "add", "check.sh")
+        _git(work2, "commit", "-m", "Break 1")
+        c1 = _git(work2, "rev-parse", "HEAD")
+        _git(work2, "push", "origin", "master")
+        gh_a = FakeGitHub(
+            run_info=ba.RunInfo(901, c1, "failure", "https://example/runs/901"),
+            failed_jobs=[ba.FailedJob(91, "CI / Python", "failure", "https://example/jobs/91", "FAILED")],
+        )
+        r_open = self._agent(repo2, worktrees2, state_dir2, gh_a, dry_run=False).run_once()
+        self.assertEqual(r_open.action, "revert_pr_opened")
+
+        gh_b = FakeGitHub(
+            run_info=ba.RunInfo(902, c1, "failure", "https://example/runs/902"),
+            failed_jobs=[ba.FailedJob(92, "CI / Python", "failure", "https://example/jobs/92", "FAILED")],
+        )
+        gh_b._inspected_pr = {
+            "url": r_open.revert_pr_url,
+            "state": "OPEN",
+            "auto_merge": True,
+            "mergeable": "MERGEABLE",
+            "checks": "failed",
+        }
+        ag_b = self._agent(repo2, worktrees2, state_dir2, gh_b, dry_run=False)
+        r_melt = ag_b.run_once()
+        self.assertEqual(r_melt.action, "meltdown")
+        self.assertEqual(ag_b._load_state().get("last_handled_run_id"), 901)
+
 
 if __name__ == "__main__":
     unittest.main()
