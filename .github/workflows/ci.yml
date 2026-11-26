@@ -501,6 +501,10 @@ jobs:
             python3 tools/ci/check_socket_compat.py
           fi
 
+      - name: Release planner tests
+        working-directory: .
+        run: python3 -m unittest discover -s tools/release -p 'test_*.py'
+
   install:
     name: Install scripts
     runs-on: ubuntu-24.04

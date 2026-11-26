@@ -128,6 +128,16 @@ class TrackChecks(unittest.TestCase):
             _, _, errors = compat.check_tracks(root)
             self.assertTrue(any("0.0.0" in e for e in errors), errors)
 
+    def test_semver_grammar_accepts_build_metadata_and_rejects_leading_zero_prerelease(self) -> None:
+        valid = ("0.1.0", "1.2.3", "1.2.3-rc.1", "1.2.3-0", "1.2.3-alpha.01a", "1.2.3+build.7", "1.2.3-rc.1+sha.abc")
+        invalid = ("0.0.0", "0.0.0-rc.1", "01.2.3", "1.2.3-01", "1.2.3-rc.01", "1.2.3+", "1.2", "v1.2.3")
+        for ver in valid:
+            with self.subTest(valid=ver):
+                self.assertTrue(compat.is_valid_semver(ver))
+        for ver in invalid:
+            with self.subTest(invalid=ver):
+                self.assertFalse(compat.is_valid_semver(ver))
+
     def test_lockfile_version_drift_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

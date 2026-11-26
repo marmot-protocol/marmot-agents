@@ -33,6 +33,11 @@ CROSS_MODEL_REVIEW = re.compile(
 )
 HUMAN_REVIEW = re.compile(r"^human(?:\s+\S.*)?$", re.IGNORECASE)
 EXEMPT_REVIEW = re.compile(r"^exempt\s*\((?P<reason>[^()]+)\)$", re.IGNORECASE)
+GITHUB_SQUASH_SEPARATOR = "---------"
+GITHUB_SQUASH_FOOTER_LINE = re.compile(
+    r"^(?:Co-authored-by|Signed-off-by|On-behalf-of):[ \t]+(?:\S[^\r\n]*[ \t]+)?<[^<>\s]+>$",
+    re.IGNORECASE,
+)
 
 
 def git(root: Path, *args: str) -> str:
@@ -88,6 +93,44 @@ def parse_trailers(message: str) -> tuple[dict[str, str], list[str]]:
                 trailers[key] = value
         else:
             trailers.setdefault(key, value)
+    return trailers, errors
+
+
+def strip_github_squash_footer(message: str) -> str | None:
+    """Return `message` before GitHub's trailing `---------` trailer footer, if present."""
+    lines = message.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+
+    sep_idx = None
+    for idx in range(len(lines) - 1, -1, -1):
+        if lines[idx] == GITHUB_SQUASH_SEPARATOR:
+            sep_idx = idx
+            break
+    if sep_idx is None:
+        return None
+
+    footer_slice = lines[sep_idx + 1 :]
+    while footer_slice and not footer_slice[0].strip():
+        footer_slice.pop(0)
+    if not footer_slice or any(not GITHUB_SQUASH_FOOTER_LINE.match(line) for line in footer_slice):
+        return None
+    return "\n".join(lines[:sep_idx]).rstrip() + "\n"
+
+
+def extract_landed_trailers(message: str) -> tuple[dict[str, str], list[str]]:
+    """Extract workflow trailers from a landed commit message on `master`.
+
+    Handles single-commit squash messages, multi-commit `COMMIT_MESSAGES` squashes where the tip
+    commit sits at the end, and multi-commit squashes where GitHub appends a `---------` co-author
+    footer after the tip commit.
+    """
+    trailers, errors = parse_trailers(message)
+    if any(key in trailers for key in UNIQUE_TRAILER_KEYS):
+        return trailers, errors
+    prefix = strip_github_squash_footer(message)
+    if prefix is not None:
+        return parse_trailers(prefix)
     return trailers, errors
 
 
