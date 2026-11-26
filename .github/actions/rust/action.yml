@@ -2,10 +2,11 @@
 #
 # Used twice in a job: first with `save: false`, which installs Odin and the pinned toolchain and
 # restores the cache named `cache`; then, as the job's last step, with `save: true` and the key the
-# first gave back, which saves the cache. Only a run started by hand (`workflow_dispatch`) saves
-# one (D-161), and GitHub lets only that branch and the branches made from it read it: a pull
-# request or a merge group reads master's caches and writes none, so what a pull request built
-# never reaches another run, and the caches stay within the repository's limit.
+# first gave back, which saves the cache. Only a run started by hand (`workflow_dispatch`) or
+# hourly canary (`workflow_call` with `save_caches: true`) saves one (D-161, D-163), and GitHub
+# lets only that branch and the branches made from it read it: a pull request reads master's caches
+# and writes none, so what a pull request built never reaches another run, and the caches stay
+# within the repository's limit.
 #
 # The key is the job's cache name and what makes every dependency build differently: the compiler,
 # Cargo.lock, the Cargo settings and the Odin release. A key is written once, so a cache holds the
@@ -30,6 +31,10 @@ inputs:
     description: With `save`, the key the setup step gave back.
     required: false
     default: ""
+  skip_fallback:
+    description: "`true` to skip prefix fallback restore-keys when this run will save a fresh cache."
+    required: false
+    default: "false"
 outputs:
   key:
     description: The cache's key, for the step that saves it.
@@ -74,7 +79,7 @@ runs:
           ~/.cargo/git/checkouts/
           target/
         key: ${{ inputs.cache }}-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', '.cargo/config.toml', 'tools/odin/install.sh') }}
-        restore-keys: ${{ github.event_name != 'workflow_dispatch' && format('{0}-{1}-', inputs.cache, runner.os) || '' }}
+        restore-keys: ${{ inputs.skip_fallback != 'true' && github.event_name != 'workflow_dispatch' && format('{0}-{1}-', inputs.cache, runner.os) || '' }}
 
     - name: Leave the workspace's own crates out of the cache
       if: inputs.save == 'true'

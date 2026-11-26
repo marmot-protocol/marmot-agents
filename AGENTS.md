@@ -255,7 +255,7 @@ If you change a command here, change it there. CI runs in three tiers
 | Tier | When | What |
 | --- | --- | --- |
 | Pull request | Each push to a pull request; aim under 10 minutes | Every command below that CI runs, with the simulator at its normal count. The TLA+ models run only when `formal/`, `tools/tla/`, `ci.yml` or the code a model follows changed (the paths are in `ci.yml`'s first job) |
-| Merge queue | Each pull request queued to merge; aim under 30 minutes (pushes to `master` no longer run CI, [D-161](docs/decisions.md#d-161-ci-no-longer-runs-on-pushes-to-master)) | All of the pull-request tier whatever changed, the simulator at `MARMOT_AGENT_SIM_RUNS=200`, the move-over tests that need Docker, and the Kani proofs, below |
+| Hourly `canary` | Hourly on `master` (`.github/workflows/canary.yml`), skipping when `master == canary`; aim under 30 minutes ([D-161](docs/decisions.md#d-161-ci-no-longer-runs-on-pushes-to-master), [D-163](docs/decisions.md#d-163-hourly-canary-runs-the-full-gate-on-master-and-refreshes-build-caches)) | All of the pull-request tier whatever changed, the simulator at `MARMOT_AGENT_SIM_RUNS=200`, the move-over tests that need Docker, the Kani proofs, and `master` cache refresh, then fast-forwards `canary` on green |
 | Nightly | Once a night on `master` (`.github/workflows/nightly.yml`), and by hand | The simulator on a new seed with many runs, the property tests at `PROPTEST_CASES=10000`, five minutes of each fuzz target, TLC on larger bounds, a coverage report, a 64th of the core's mutants, and `check_cassettes.py --strict` on the model double's cassettes; a failed job opens an issue |
 
 The job `CI passed` needs every other job of the first two tiers and is the one check `master` requires. It
@@ -296,14 +296,14 @@ CI runs the workspace's tests in two jobs side by side, the core's package (`-p 
 (`--workspace --exclude marmot-agent --exclude marmot-agent-sim`), which together are the command above.
 
 The workspace's tests include the simulator's at a small count of runs. CI's Rust jobs leave them out and run
-them in a job of its own, in release: at the normal count on a pull request, and at 200 in the merge queue. For a
+them in a job of its own, in release: at the normal count on a pull request, and at 200 in hourly `canary`. For a
 change to the core's run loop, conversation or Marmot side, run that too:
 
 ```sh
 MARMOT_AGENT_SIM_RUNS=200 cargo test --locked --release -p marmot-agent-sim --all-features
 ```
 
-The merge queue also runs the move-over tests that need Docker and nothing else, no key and no sign-in: today's
+Hourly `canary` also runs the move-over tests that need Docker and nothing else, no key and no sign-in: today's
 Hermes and OpenClaw installs moved over, with a scripted model. Run them for a change to the import or the
 install scripts:
 

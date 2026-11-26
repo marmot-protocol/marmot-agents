@@ -8,12 +8,12 @@ name: CI
 #   check over its seeds, the simulator at its normal count, the TypeScript, Python,
 #   install-script, recording and document checks, and the TLA+ models on small bounds when the
 #   code a model follows or the models changed.
-# - The merge queue (`merge_group`) runs the full gate: all of that whatever changed, the
-#   simulator at 200 runs, the move-over tests in Docker, which need no key and no sign-in, and
-#   the Kani proofs (D-144).
-# - Pushes to master no longer trigger CI (D-161, #222): merge_group already verified the merged
-#   tree. Run this workflow by hand (`workflow_dispatch`) on master to refresh master's build
-#   caches (or on any branch for that branch's caches) until hourly canary takes over cache saving.
+# - Hourly canary (`canary.yml`, D-163, #222) calls this workflow via `workflow_call` with
+#   `tier: full` and `save_caches: true` whenever `master` moves past `canary`: it runs the full
+#   gate (simulator at 200 runs, Docker move-over tests, Kani proofs, and all TLA+ models),
+#   refreshes `master`'s Rust build caches once per batch, and fast-forwards `canary` on green.
+# - Pushes to master do not trigger CI (D-161). `workflow_dispatch` runs either tier on any branch
+#   and refreshes that branch's caches (pick `tier: full` on `master` to also refresh `rust-kani`).
 #
 # The job `CI passed` needs every other job and is the one check a ruleset requires: a job that
 # failed or was cancelled fails it, and so does a job its tier expects that did not run and pass,
@@ -27,11 +27,24 @@ name: CI
 # would replace the ban on unsafe code in .cargo/config.toml.
 on:
   pull_request:
-  merge_group:
+  workflow_call:
+    inputs:
+      tier:
+        description: The pull-request tier, or the full gate
+        type: string
+        default: full
+      save_caches:
+        description: Whether Rust jobs should save build caches on miss
+        type: boolean
+        default: false
+      job_prefix:
+        description: Caller job prefix GitHub prepends to called job names (for passed.py)
+        type: string
+        default: ""
   workflow_dispatch:
     inputs:
       tier:
-        description: The pull-request tier, or the full gate of the merge queue
+        description: The pull-request tier, or the full gate
         type: choice
         options:
           - pull-request
@@ -42,7 +55,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Inside workflow_call, github.event_name is the caller's event (schedule or workflow_dispatch),
+  # so key on inputs.job_prefix rather than github.event_name.
+  group: ci-${{ inputs.job_prefix != '' && format('call-{0}', github.run_id) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -81,11 +96,13 @@ jobs:
           TIER: ${{ inputs.tier }}
         run: |
           set -euo pipefail
-          case "${EVENT}" in
-            pull_request) full=false ;;
-            workflow_dispatch) if [ "${TIER}" = full ]; then full=true; else full=false; fi ;;
-            *) full=true ;;
-          esac
+          if [ -n "${TIER}" ]; then
+            if [ "${TIER}" = full ]; then full=true; else full=false; fi
+          elif [ "${EVENT}" = pull_request ]; then
+            full=false
+          else
+            full=true
+          fi
           models=true
           if [ "${full}" = false ] && [ "${EVENT}" = pull_request ]; then
             # --no-renames: a file moved out of a watched path counts there as deleted. git exits
@@ -130,6 +147,7 @@ jobs:
         id: rust
         with:
           cache: rust-lint
+          skip_fallback: ${{ inputs.save_caches == true && 'true' || 'false' }}
 
       - name: Format
         # `cargo fmt` builds nothing and has no --locked.
@@ -138,7 +156,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 
-      - if: github.event_name == 'workflow_dispatch' && steps.rust.outputs.hit != 'true'
+      - if: (github.event_name == 'workflow_dispatch' || inputs.save_caches == true) && steps.rust.outputs.hit != 'true'
         uses: ./.github/actions/rust
         with:
           cache: rust-lint
@@ -178,6 +196,7 @@ jobs:
         id: rust
         with:
           cache: ${{ matrix.cache }}
+          skip_fallback: ${{ inputs.save_caches == true && 'true' || 'false' }}
 
       - if: matrix.part == 'core'
         uses: ./.github/actions/harnesses
@@ -188,7 +207,7 @@ jobs:
       - name: Tests
         run: cargo test --locked --all-features ${{ matrix.packages }}
 
-      - if: github.event_name == 'workflow_dispatch' && steps.rust.outputs.hit != 'true'
+      - if: (github.event_name == 'workflow_dispatch' || inputs.save_caches == true) && steps.rust.outputs.hit != 'true'
         uses: ./.github/actions/rust
         with:
           cache: ${{ matrix.cache }}
@@ -213,6 +232,7 @@ jobs:
         id: rust
         with:
           cache: rust-simulator
+          skip_fallback: ${{ inputs.save_caches == true && 'true' || 'false' }}
 
       - name: Build the simulator's tests
         run: cargo test --locked --release -p marmot-agent-sim --all-features --no-run
@@ -237,7 +257,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - if: github.event_name == 'workflow_dispatch' && steps.rust.outputs.hit != 'true'
+      - if: (github.event_name == 'workflow_dispatch' || inputs.save_caches == true) && steps.rust.outputs.hit != 'true'
         uses: ./.github/actions/rust
         with:
           cache: rust-simulator
@@ -342,6 +362,7 @@ jobs:
         id: rust
         with:
           cache: rust-kani
+          skip_fallback: ${{ inputs.save_caches == true && 'true' || 'false' }}
 
       - name: Install Kani
         # The driver from crates.io at this version, with its own lock file; the bundle it runs,
@@ -361,7 +382,7 @@ jobs:
       - name: Every proof holds
         run: cargo kani -p marmot-agent --output-format terse
 
-      - if: github.event_name == 'workflow_dispatch' && steps.rust.outputs.hit != 'true'
+      - if: (github.event_name == 'workflow_dispatch' || inputs.save_caches == true) && steps.rust.outputs.hit != 'true'
         uses: ./.github/actions/rust
         with:
           cache: rust-kani
@@ -645,6 +666,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FULL: ${{ needs.changes.outputs.full }}
           MODELS: ${{ needs.changes.outputs.models }}
+          JOB_PREFIX: ${{ inputs.job_prefix }}
           EXPECTED: |
             Tier and changed paths
             Rust format and Clippy
@@ -671,4 +693,4 @@ jobs:
           gh api --paginate --jq '.jobs[] | {name, status, conclusion}' \
             "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?filter=latest&per_page=100" \
             > "${RUNNER_TEMP}/jobs.jsonl"
-          python3 tools/ci/passed.py --jobs "${RUNNER_TEMP}/jobs.jsonl" --full "${FULL}" --models "${MODELS}"
+          python3 tools/ci/passed.py --jobs "${RUNNER_TEMP}/jobs.jsonl" --full "${FULL}" --models "${MODELS}" --prefix "${JOB_PREFIX}"

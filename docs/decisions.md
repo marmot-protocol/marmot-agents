@@ -2537,7 +2537,7 @@ it fails when a job failed or was cancelled, and it lists the run's jobs and fai
 expects ran and passed, since GitHub can report a matrix job as passed when one of its legs never ran. A job left
 out by its tier or the path rule counts as passed. CI uses no third-party action and no secret; the gate's token
 may read the run's jobs, and nothing more. Build caches are written by a push to `master` and by a run started by
-hand on its own branch; a pull request and the merge queue read `master`'s and write none.
+hand on its own branch; a pull request and the merge queue read `master`'s and write none. *(Amended by [D-161](#d-161-ci-no-longer-runs-on-pushes-to-master) and [D-163](#d-163-hourly-canary-runs-the-full-gate-on-master-and-refreshes-build-caches): hourly `canary` refreshes `master`'s build caches and runs the full gate instead of `merge_group` and `push: master`.)*
 
 **Why.** A pull request gets its answer fast, and the slower checks still run before anything reaches `master`,
 on the code as it will be merged. One required check means the ruleset need not change when a job is added.
@@ -3695,3 +3695,31 @@ verification, cross-model review, and release-impact metadata in `master`'s git 
 comments, while keeping the trailer schema identical across `marmot-protocol/mdk` and `marmot-protocol/marmot-agents`.
 
 Decided 2026-11-26 by the project owner (as Phase 0.3 of #222).
+
+## D-163 Hourly canary runs the full gate on `master` and refreshes build caches
+
+**Decision.** Amending [D-130](#d-130-ci-runs-in-three-tiers-with-one-required-check),
+[D-144](#d-144-property-tests-run-on-every-pull-request-kani-in-the-full-gate-and-fuzzing-nightly-on-a-pinned-nightly-compiler),
+and [D-161](#d-161-ci-no-longer-runs-on-pushes-to-master):
+
+- The GitHub merge queue is removed from `master`'s ruleset (`#27632519`) and `allow_auto_merge` is enabled; pull
+  requests squash-merge directly once `CI passed` is green.
+- A protected fast-forward branch `canary` (ruleset `#28171730`: no deletion, no force-push, required signatures)
+  tracks the latest commit on `master` verified by the full CI gate.
+- `.github/workflows/canary.yml` runs hourly (`schedule`) and on `workflow_dispatch` from `refs/heads/master`,
+  serialized by `concurrency: { group: canary, cancel-in-progress: false }`. It skips immediately when `github.sha`
+  is already at or behind `canary`, or when the same SHA has already failed canary twice (unless `force=true`,
+  preventing unbounded hourly retries on a deterministic regression while keeping one automatic retry for transient
+  flakes). Otherwise it invokes `.github/workflows/ci.yml` via `workflow_call` with `tier: full` and
+  `save_caches: true` (running all TLA+ models, simulator at 200 runs, Docker move-over tests, and Kani proofs, and
+  saving `master`'s Rust build caches once per batch), fast-forwards `canary` to the exact verified SHA via the Git
+  Refs API (`force: false`) on green, or opens/updates a `Canary: full gate failed` issue on failure.
+- `tools/ci/passed.py` accepts `--prefix` so `CI passed` verifies every expected job of `ci.yml` when invoked through
+  `workflow_call` (where GitHub prefixes called job names with the caller job name).
+
+**Why.** Running the full 21-job gate on every PR in a merge queue and again on every `push: master` burned ~150+
+runner-minutes per merged PR and serialized merges behind slow queue runs. Batching full-gate verification and
+cache warming into an hourly `canary` run keeps `master`'s caches fresh and guarantees every heavy check (Docker
+move-over, Kani, simulator-200) runs against `master` while cutting runner usage dramatically (Phase 1 of #222).
+
+Decided 2026-11-26 by the project owner (as Phase 1 of #222).
