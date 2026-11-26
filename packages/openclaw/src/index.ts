@@ -38,7 +38,17 @@ import { redactor, secretsFrom } from "./redact.ts";
 import { CoreConnection, MAX_MESSAGE, notificationSize, type Hello } from "./socket.ts";
 
 const ID = "marmot";
-const PLUGIN_VERSION = "0.0.0";
+
+function packageVersion(): string {
+  try {
+    const value = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as Json)["version"];
+    return typeof value === "string" && value.length > 0 ? value : "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
+}
+
+const PLUGIN_VERSION = packageVersion();
 
 type Json = Record<string, unknown>;
 

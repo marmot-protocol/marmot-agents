@@ -480,6 +480,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 2
 
       - uses: ./.github/actions/python
 
@@ -487,6 +488,18 @@ jobs:
         run: |
           python3 --version
           python3 -m unittest discover -s tests
+
+      - name: Track versions and socket protocol compatibility
+        working-directory: .
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT}" = pull_request ]; then
+            python3 tools/ci/check_socket_compat.py --base HEAD^1
+          else
+            python3 tools/ci/check_socket_compat.py
+          fi
 
   install:
     name: Install scripts
@@ -653,10 +666,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          # The flake report's tests read the workflows' job names (D-143).
+          # The flake report's tests read the workflows' job names (D-143), and
+          # test_check_socket_compat.py reads the socket schema and per-track manifests (D-165).
           sparse-checkout: |
             tools/ci
             .github/workflows
+            fixtures/socket
+            crates/marmot-agent/src
+            packages/claude-code
+            packages/openclaw
+            python
 
       - name: The gate's own check passes its tests
         run: python3 -m unittest discover -s tools/ci -p 'test_*.py'

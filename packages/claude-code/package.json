@@ -1,10 +1,13 @@
 {
   "name": "marmot-agent-claude-code",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "The Claude Code driver for marmot-agent: runs Claude Code and connects it to the core over the local socket",
   "license": "MIT",
   "type": "module",
+  "marmot": {
+    "socketProtocol": "marmot.agent-control.v3"
+  },
   "engines": {
     "node": ">=24"
   },

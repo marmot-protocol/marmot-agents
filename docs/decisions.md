@@ -3747,3 +3747,38 @@ wastes a full soak on an unverified or broken `master` commit and never drifts m
 tracking `canary.yml` in the flaky job tracker keeps flake visibility across all three tiers (Phase 1.3 of #222).
 
 Decided 2026-11-26 by the project owner (as Phase 1.3 of #222).
+
+## D-165 Four independent release tracks decoupled by the socket protocol version
+
+**Decision.** Amending [D-091](#d-091-one-install-script-per-harness-and-release-binaries-from-ci) and building on
+[D-020](#d-020-the-socket-speaks-agent-control-v3-with-a-clean-cutover) and
+[D-115](#d-115-the-sockets-schema-is-made-from-the-cores-own-types-and-checks-this-repositorys-connectors), the
+repository versions four independent release tracks decoupled by the socket protocol version
+(`marmot.agent-control.v3`), laying the versioning and compatibility contract for per-track releases in Phase 4 of
+#222:
+
+- **`marmot-agent`** (planned tag `vX.Y.Z`, source of truth `Cargo.toml` `[workspace.package].version`): the Rust
+  core, built-in drivers (`codex`, `pi`, `acp`), container files (`tools/pi`, `tools/goose`), and installers
+  (`install/`).
+- **`claude-code`** (planned tag `claude-code-vX.Y.Z`, source of truth `packages/claude-code/package.json`): the
+  TypeScript Claude Code driver, declaring `marmot.socketProtocol`.
+- **`openclaw`** (planned tag `openclaw-vX.Y.Z`, source of truth `packages/openclaw/package.json`): the TypeScript
+  OpenClaw channel plugin, declaring `marmot.socketProtocol` and reading its runtime version from `package.json`.
+- **`hermes`** (planned tag `hermes-vX.Y.Z`, source of truth `python/pyproject.toml` `[project].version`, kept in
+  sync with `python/marmot_hermes/plugin.yaml` and `python/marmot_hermes/__init__.py::__version__`): the Python
+  Hermes channel plugin, declaring `[tool.marmot].socket_protocol`.
+
+Every track starts at a real SemVer version (`0.1.0`, never `0.0.0`). `tools/ci/check_socket_compat.py` runs in
+CI's `Python` job: on every run it verifies that all four tracks have valid non-zero SemVer versions, matching
+lockfiles/manifests, and matching socket protocol metadata; on pull requests (`--base HEAD^1`) it also runs a
+direction-aware structural check on `fixtures/socket/schema.json` so changes on the same protocol version cannot
+break either older connectors sending `FromConnector` messages or older connectors reading `FromCore` messages
+(breaking changes require bumping `marmot.agent-control.vN+1` across the core and every connector). Per-track
+packaging and release tags follow in later Phase 4 PRs.
+
+**Why.** Bundling TypeScript and Python connector fixes behind a 3-platform Rust release build couples unrelated
+ship cadences and turns a 30-second plugin fix into an hour-long cross-platform binary release. Real per-track
+SemVer manifests and a mechanical schema compatibility guard let each track version and ship independently on top
+of a stable socket protocol boundary (Phase 4.1 of #222).
+
+Decided 2026-11-26 by the project owner (as Phase 4.1 of #222).

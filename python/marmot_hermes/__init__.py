@@ -4,6 +4,8 @@ Hermes loads this folder as a plugin and calls `register`. Everything that needs
 `adapter.py`, imported only here, so the translator and the connector can be tested without Hermes.
 """
 
+__version__ = "0.1.0"
+
 
 def register(ctx):
     """Hermes's plugin entry point."""
