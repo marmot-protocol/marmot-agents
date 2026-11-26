@@ -13,6 +13,8 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
 # shellcheck source=../../install/lib.sh
 . "$root/install/lib.sh"
+# shellcheck source=archive.sh
+. "$root/tools/release/archive.sh"
 binary=$1 target=$2 out=$3
 case $target in *[!a-z0-9_-]*) echo "error: the target is a name such as x86_64-unknown-linux-gnu" >&2; exit 2 ;; esac
 [ -x "$binary" ] || { echo "error: $binary is not a program" >&2; exit 2; }
@@ -22,11 +24,5 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/$name/bin" "$out"
 install -m 0755 "$binary" "$work/$name/bin/marmot-agent"
 copy_support "$root" "$work/$name"
-# The same archive from the same files: sorted, no owners, the commit's time.
-mtime=$(git -C "$root" log -1 --format=%ct 2>/dev/null || date +%s)
-if tar --version 2>/dev/null | grep -q GNU; then
-    tar -C "$work" --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$mtime" -cf - "$name" | gzip -n >"$out/$name.tar.gz"
-else
-    tar -C "$work" -cf - "$name" | gzip -n >"$out/$name.tar.gz"
-fi
+write_release_tarball "$root" "$work" "$name" "$out"
 echo "$out/$name.tar.gz"
