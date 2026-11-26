@@ -3836,3 +3836,43 @@ through the existing installers without losing single-tarball offline fallback, 
 safety, or atomic upgrade/rollback semantics (Phase 4.4 of #222).
 
 Decided 2026-11-26 by the project owner (as Phase 4.4 of #222).
+
+## D-168 Always-on revert-only bisect agent watches hourly canary and activates Meltdown Mode
+
+**Decision.** Building on [D-143](#d-143-one-issue-tracks-the-ci-jobs-that-flake),
+[D-162](#d-162-pull-requests-record-verification-review-and-release-impact-trailers-on-the-tip-commit), and
+[D-163](#d-163-hourly-canary-runs-the-full-gate-on-master-and-refreshes-build-caches), an isolated systemd
+timer on the CI host (`marmot-agents-bot`, separate from MDK's `mdk-bot`) runs `tools/ci/bisect_agent.py`
+to watch completed `.github/workflows/canary.yml` runs on `master`:
+
+- Failures are classified into four buckets (stopping early on the first confirmed deterministic regression):
+  1. `infra` (runner/network/registry/cache outages, checked only after real test/compiler failure markers) —
+     retries `canary.yml` once; escalates to Meltdown on a second consecutive failure on the same SHA.
+  2. `known_flake` (jobs recorded in the open `Flaky job tracker` issue, read via `flake_report.read_state`) —
+     verified locally on `tip` when a local command exists (promoting to `deterministic_regression` if it
+     reproduces deterministically on `tip` and passes on `canary`), otherwise retries `canary.yml` once without
+     reverting and escalates to Meltdown on a second consecutive failure on the same SHA.
+  3. `suspected_race` (non-infra, unlisted job that passes or flakes locally on `tip`) — retries `canary.yml`
+     once and escalates to Meltdown on a second consecutive failure on the same SHA.
+  4. `deterministic_regression` (fails locally on `tip` and passes on `canary`) — confirms current `master`
+     still fails, bisects `canary..tip` by exporting each candidate SHA via `git archive` and running checks
+     inside a `bwrap` (bubblewrap) read-only-root + PID/IPC/mount-namespace sandbox (masking bot credentials,
+     host container sockets such as `/run/docker.sock`, `/run/user/$UID`, and the control checkout, using
+     dedicated credential-free writable `CARGO_HOME`/`RUSTUP_HOME` caches and a fresh per-check `HOME`, and
+     failing closed if unavailable), verifies a clean `git revert` on `master` passes that command, and opens
+     a signed `revert` PR (`Local-Review: exempt (automated bisect revert)`) with squash auto-merge enabled.
+     Docker-dependent jobs (`Move-over tests (Docker)`) are treated as locally unbisectable so the bot never
+     exposes a host Docker socket.
+- Whenever automated revert cannot safely recover `master` (revert conflict, reverted tree still fails,
+  broken `canary` baseline, unbisectable repeated failure, or persistent flake/race/infra), the agent enters
+  **Meltdown Mode**: pushes a signed commit to the protected `tree-state` branch setting `state.json` to
+  `"red"` (retrying on subsequent ticks if the remote update fails), posts recovery instructions on the
+  canary failure issue, and dispatches a structured White Noise / Marmot alert. Once a subsequent completed
+  `canary.yml` run genuinely advances `canary` to cover `master` (ignoring skipped runs), the agent
+  automatically resets `tree-state` back to `"green"`.
+
+**Why.** Moving team pull requests onto a fast gate (Phase 3) requires an always-on automated safety net
+that isolates deterministic regressions by revert-only bisection, avoids reverting on flakes or infra blips,
+and freezes `master` loudly rather than silently piling commits onto a broken tree (Phase 2 of #222).
+
+Decided 2026-11-26 by the project owner (as Phase 2 of #222).
