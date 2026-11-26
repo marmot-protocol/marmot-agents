@@ -154,6 +154,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           HAS_TREE_OVERRIDE: ${{ steps.trust.outputs.has_tree_override }}
         run: |
           set -euo pipefail
@@ -162,7 +163,21 @@ jobs:
           reason="$(jq -r '.reason // ""' <<< "${raw}")"
           echo "tree-state: ${tree_state} (${reason})"
           if [ "${tree_state}" != "green" ]; then
-            if [ "${HAS_TREE_OVERRIDE}" = "true" ]; then
+            has_tree_override="${HAS_TREE_OVERRIDE}"
+            if [ "${has_tree_override}" != "true" ]; then
+              # `gh pr create --label` (and two-step PR creation) attaches labels in a follow-up
+              # API call after opening the PR; briefly re-check live labels before failing closed.
+              for delay in 2 4 6; do
+                sleep "${delay}"
+                if labels_json="$(gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/labels?per_page=100" | jq -s '[.[][].name]')"; then
+                  if jq -e 'any(. == "tree-fix" or . == "revert")' <<< "${labels_json}" > /dev/null; then
+                    has_tree_override=true
+                    break
+                  fi
+                fi
+              done
+            fi
+            if [ "${has_tree_override}" = "true" ]; then
               echo "::notice::tree-state is '${tree_state}', allowed via tree-fix/revert label."
             else
               echo "::error::master is frozen in Meltdown Mode (tree-state=${tree_state}: ${reason}). Label recovery PRs 'tree-fix' or 'revert' to pass CI while red."
