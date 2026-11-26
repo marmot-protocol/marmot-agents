@@ -55,6 +55,9 @@ PURE_WRAPPER_JOBS = {
 # Gate jobs that fail whenever an inner job fails, but also run `tools/ci` tests themselves.
 GATE_JOBS = {"CI passed", "CI / CI passed"}
 
+# Labels that exempt a recovery PR from Meltdown Mode (`tree-state=red`, D-168 / D-169).
+RECOVERY_LABELS = frozenset({"tree-fix", "revert"})
+
 # Test/compiler failure markers that indicate a real failure rather than an infra outage.
 REAL_FAILURE_MARKERS = [
     re.compile(r"test result: FAILED", re.I),
@@ -569,6 +572,43 @@ class GitHubClient:
         proc = self._gh(["pr", "merge", pr_url, "--repo", self.repo, "--auto", "--squash"], check=False)
         return proc.returncode == 0
 
+    def list_open_prs(self, base: str = "master") -> list[dict]:
+        """List open PRs targeting `base`, paginated across all pages."""
+        out = self._gh(
+            ["api", "--paginate", f"repos/{self.repo}/pulls?state=open&base={base}&per_page=100"]
+        ).stdout
+        prs: list[dict] = []
+        dec = json.JSONDecoder()
+        idx = 0
+        s = out.strip()
+        while idx < len(s):
+            chunk, end = dec.raw_decode(s, idx)
+            if isinstance(chunk, list):
+                for pr in chunk:
+                    if not isinstance(pr, dict):
+                        continue
+                    labels = [
+                        str(lbl.get("name"))
+                        for lbl in (pr.get("labels") or [])
+                        if isinstance(lbl, dict) and lbl.get("name")
+                    ]
+                    prs.append(
+                        {
+                            "number": pr.get("number"),
+                            "url": str(pr.get("html_url") or ""),
+                            "labels": labels,
+                            "auto_merge": pr.get("auto_merge") is not None,
+                        }
+                    )
+            idx = end
+            while idx < len(s) and s[idx].isspace():
+                idx += 1
+        return prs
+
+    def disable_auto_merge(self, pr_url: str) -> bool:
+        proc = self._gh(["pr", "merge", pr_url, "--repo", self.repo, "--disable-auto"], check=False)
+        return proc.returncode == 0
+
     def dispatch_canary(self, force: bool = True) -> None:
         args = ["workflow", "run", CANARY_WORKFLOW, "--repo", self.repo, "--ref", "master"]
         if force:
@@ -624,6 +664,8 @@ class GitHubClient:
             "impact:patch",
         ]
         proc = self._gh(args, check=False)
+        if proc.returncode != 0:
+            proc = self._gh(args[:-2], check=False)
         if proc.returncode != 0:
             proc = self._gh(args[:-4], check=True)
         pr_url = proc.stdout.strip().splitlines()[-1].strip()
@@ -1203,6 +1245,46 @@ class BisectAgent:
         finally:
             self._remove_worktree(wt)
 
+    def _disarm_non_recovery_prs(self) -> dict:
+        """Best-effort disarm of auto-merge on open non-recovery PRs targeting master.
+
+        Never raises so Meltdown activation, alerting, and issue reporting always complete.
+        In dry-run mode, runs only the read-only listing and records candidates without mutating.
+        """
+        summary: dict = {"disarmed": [], "would_disarm": [], "failed": [], "skipped_recovery": []}
+        try:
+            open_prs = self.gh.list_open_prs(base="master")
+        except Exception as exc:
+            print(f"bisect_agent: warning: could not list open PRs during Meltdown: {exc}", file=sys.stderr)
+            summary["list_error"] = str(exc)
+            return summary
+
+        for pr in open_prs:
+            if not pr.get("auto_merge"):
+                continue
+            url = str(pr.get("url") or "")
+            if not url:
+                continue
+            labels = set(pr.get("labels") or ())
+            if labels & RECOVERY_LABELS:
+                summary["skipped_recovery"].append(url)
+                continue
+            if self.dry_run:
+                summary["would_disarm"].append(url)
+                continue
+            try:
+                ok = self.gh.disable_auto_merge(url)
+            except Exception as exc:
+                print(f"bisect_agent: warning: failed to disarm auto-merge on {url}: {exc}", file=sys.stderr)
+                summary["failed"].append(url)
+                continue
+            if ok:
+                summary["disarmed"].append(url)
+            else:
+                print(f"bisect_agent: warning: could not disarm auto-merge on {url}", file=sys.stderr)
+                summary["failed"].append(url)
+        return summary
+
     def _enter_meltdown(
         self,
         reason: str,
@@ -1235,6 +1317,17 @@ class BisectAgent:
                 False,
             )
 
+        disarm = self._disarm_non_recovery_prs()
+        disarm_alert_lines = ""
+        if disarm["disarmed"]:
+            disarm_alert_lines += f"Disarmed auto-merge ({len(disarm['disarmed'])}): {', '.join(disarm['disarmed'])}\n"
+        if disarm["would_disarm"]:
+            disarm_alert_lines += f"Would disarm auto-merge ({len(disarm['would_disarm'])}): {', '.join(disarm['would_disarm'])}\n"
+        if disarm["failed"]:
+            disarm_alert_lines += f"Failed to disarm auto-merge ({len(disarm['failed'])}): {', '.join(disarm['failed'])}\n"
+        if disarm.get("list_error"):
+            disarm_alert_lines += f"Auto-merge disarm warning: {disarm['list_error']}\n"
+
         alert_text = (
             f"[MELTDOWN] {self.gh.repo} tree-state set to RED\n"
             f"Reason: {reason}\n"
@@ -1243,12 +1336,20 @@ class BisectAgent:
             f"Range: {canary_sha[:9]}..{run_info.head_sha[:9]}\n"
             f"Job: {failed_job or 'unknown'}\n"
             + (f"Culprit: {culprit_sha}\n" if culprit_sha else "")
+            + disarm_alert_lines
             + "Recovery: land a PR labeled `tree-fix` or `revert` and verify canary."
         )
         alert_record = self._alert(alert_text, self.dry_run)
         if not self.dry_run and alert_record.get("channel") != "none" and not alert_record.get("sent"):
             print(f"bisect_agent: warning: Meltdown alert command failed: {alert_record}", file=sys.stderr)
         if not self.dry_run:
+            disarm_comment_lines = ""
+            if disarm["disarmed"]:
+                disarm_comment_lines += f"- **Disarmed auto-merge:** {', '.join(disarm['disarmed'])}\n"
+            if disarm["failed"]:
+                disarm_comment_lines += f"- **Failed to disarm auto-merge:** {', '.join(disarm['failed'])}\n"
+            if disarm.get("list_error"):
+                disarm_comment_lines += f"- **Auto-merge disarm warning:** {disarm['list_error']}\n"
             self.gh.comment_canary_issue(
                 f"### Meltdown Mode Activated (`tree-state` = `red`)\n\n"
                 f"- **Reason:** {reason}\n"
@@ -1257,10 +1358,16 @@ class BisectAgent:
                 f"- **Range:** `{canary_sha[:9]}..{run_info.head_sha[:9]}`\n"
                 f"- **Job:** `{failed_job or 'unknown'}`\n"
                 + (f"- **Culprit:** `{culprit_sha}`\n" if culprit_sha else "")
+                + disarm_comment_lines
                 + "\n`tree-state` is now `red` (enforced on team PRs once the Phase 3 gate is active). "
                 "Label recovery PRs `tree-fix` or `revert`."
             )
-        details = {"reason": reason, "tree_state_status": ts_status, "alert": alert_record}
+        details = {
+            "reason": reason,
+            "tree_state_status": ts_status,
+            "auto_merge_disarm": disarm,
+            "alert": alert_record,
+        }
         if extra:
             details.update(extra)
         return (

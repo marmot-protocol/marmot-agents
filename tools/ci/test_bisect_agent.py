@@ -49,6 +49,9 @@ class FakeGitHub:
         flaky_jobs: set[str] | None = None,
         existing_revert_pr: dict | str | None = None,
         auto_merge_ok: bool = True,
+        open_prs: list[dict] | None = None,
+        disable_auto_merge_results: dict[str, bool | Exception] | None = None,
+        list_open_prs_error: Exception | None = None,
     ):
         self.repo = "marmot-protocol/marmot-agents"
         self._runs = list(runs) if runs is not None else ([run_info] if run_info is not None else [])
@@ -67,10 +70,15 @@ class FakeGitHub:
             self._existing_revert_pr = existing_revert_pr
         self._inspected_pr: dict | None = None
         self._auto_merge_ok = auto_merge_ok
+        self._open_prs = list(open_prs) if open_prs is not None else []
+        self._disable_auto_merge_results = dict(disable_auto_merge_results or {})
+        self._list_open_prs_error = list_open_prs_error
         self.dispatched: list[bool] = []
         self.comments: list[str] = []
         self.opened_prs: list[dict] = []
         self.auto_merge_calls: list[str] = []
+        self.list_open_prs_calls: list[str] = []
+        self.disable_auto_merge_calls: list[str] = []
 
     def iter_completed_canary_runs(self, per_page: int = 30, max_pages: int = 10):
         yield from self._runs
@@ -95,6 +103,19 @@ class FakeGitHub:
     def enable_auto_merge(self, pr_url: str) -> bool:
         self.auto_merge_calls.append(pr_url)
         return self._auto_merge_ok
+
+    def list_open_prs(self, base: str = "master") -> list[dict]:
+        self.list_open_prs_calls.append(base)
+        if self._list_open_prs_error is not None:
+            raise self._list_open_prs_error
+        return list(self._open_prs)
+
+    def disable_auto_merge(self, pr_url: str) -> bool:
+        self.disable_auto_merge_calls.append(pr_url)
+        outcome = self._disable_auto_merge_results.get(pr_url, True)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return bool(outcome)
 
     def dispatch_canary(self, force: bool = True):
         self.dispatched.append(force)
@@ -1072,6 +1093,382 @@ class BisectAgentBucketTests(TempRepoMixin, unittest.TestCase):
         r_melt = ag_b.run_once()
         self.assertEqual(r_melt.action, "meltdown")
         self.assertEqual(ag_b._load_state().get("last_handled_run_id"), 901)
+
+    def test_github_client_list_open_prs_paginates_and_disables_auto_merge(self):
+        # Contract: GitHubClient.list_open_prs paginates concatenated JSON arrays for base=master
+        # and normalizes labels/auto_merge; disable_auto_merge invokes gh pr merge --disable-auto.
+        page1 = [
+            {
+                "number": 101,
+                "html_url": "https://github.com/marmot-protocol/marmot-agents/pull/101",
+                "labels": [{"name": "enhancement"}],
+                "auto_merge": {"merge_method": "squash"},
+            },
+        ]
+        page2 = [
+            {
+                "number": 102,
+                "html_url": "https://github.com/marmot-protocol/marmot-agents/pull/102",
+                "labels": [{"name": "tree-fix"}],
+                "auto_merge": {"merge_method": "squash"},
+            },
+            {
+                "number": 103,
+                "html_url": "https://github.com/marmot-protocol/marmot-agents/pull/103",
+                "labels": [],
+                "auto_merge": None,
+            },
+        ]
+        seen_cmds: list[list[str]] = []
+
+        def fake_gh_run(cmd, **kwargs):
+            seen_cmds.append(list(cmd))
+            if "pulls?state=open&base=master&per_page=100" in " ".join(cmd):
+                return subprocess.CompletedProcess(cmd, 0, json.dumps(page1) + "\n" + json.dumps(page2), "")
+            if "--disable-auto" in cmd:
+                rc = 0 if cmd[3].endswith("/101") else 1
+                return subprocess.CompletedProcess(cmd, rc, "", "failed" if rc else "")
+            raise AssertionError(f"unexpected gh call: {cmd}")
+
+        gh = ba.GitHubClient("marmot-protocol/marmot-agents", run_fn=fake_gh_run)
+        prs = gh.list_open_prs(base="master")
+        self.assertEqual(
+            prs,
+            [
+                {
+                    "number": 101,
+                    "url": "https://github.com/marmot-protocol/marmot-agents/pull/101",
+                    "labels": ["enhancement"],
+                    "auto_merge": True,
+                },
+                {
+                    "number": 102,
+                    "url": "https://github.com/marmot-protocol/marmot-agents/pull/102",
+                    "labels": ["tree-fix"],
+                    "auto_merge": True,
+                },
+                {
+                    "number": 103,
+                    "url": "https://github.com/marmot-protocol/marmot-agents/pull/103",
+                    "labels": [],
+                    "auto_merge": False,
+                },
+            ],
+        )
+        self.assertTrue(gh.disable_auto_merge("https://github.com/marmot-protocol/marmot-agents/pull/101"))
+        self.assertFalse(gh.disable_auto_merge("https://github.com/marmot-protocol/marmot-agents/pull/999"))
+        self.assertIn("--paginate", seen_cmds[0])
+        self.assertEqual(
+            seen_cmds[1],
+            [
+                "gh",
+                "pr",
+                "merge",
+                "https://github.com/marmot-protocol/marmot-agents/pull/101",
+                "--repo",
+                "marmot-protocol/marmot-agents",
+                "--disable-auto",
+            ],
+        )
+
+    def test_open_revert_pr_preserves_revert_label_when_impact_label_fails(self):
+        # Contract: open_revert_pr falls back to `--label revert` before dropping all labels so
+        # automated revert PRs keep their Meltdown override label if `impact:patch` is unavailable.
+        seen_cmds: list[list[str]] = []
+
+        def fake_gh_run(cmd, **kwargs):
+            seen_cmds.append(list(cmd))
+            if cmd[:3] == ["gh", "pr", "create"]:
+                if "impact:patch" in cmd:
+                    return subprocess.CompletedProcess(cmd, 1, "", "label impact:patch not found")
+                return subprocess.CompletedProcess(cmd, 0, "https://github.com/marmot-protocol/marmot-agents/pull/555\n", "")
+            if cmd[:3] == ["gh", "pr", "merge"]:
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            raise AssertionError(f"unexpected gh call: {cmd}")
+
+        gh = ba.GitHubClient("marmot-protocol/marmot-agents", run_fn=fake_gh_run)
+        url, am_ok = gh.open_revert_pr("bisect/revert-abcdef123", "Revert bad", "body")
+        self.assertEqual(url, "https://github.com/marmot-protocol/marmot-agents/pull/555")
+        self.assertTrue(am_ok)
+        self.assertIn("revert", seen_cmds[1])
+        self.assertNotIn("impact:patch", seen_cmds[1])
+
+    def test_meltdown_disarms_non_recovery_auto_merge_prs_and_respects_dry_run_and_best_effort(self):
+        # Contract: activating Meltdown disarms auto-merge on open non-recovery PRs targeting master,
+        # skips `tree-fix` / `revert` and non-auto-merge PRs, performs zero mutations in dry-run,
+        # and preserves tree-state=red + alert + issue comment even when disarming or listing fails.
+        _, origin, work, repo, worktrees, state_dir, _ = self.make_repo()
+        (work / "note.txt").write_text("innocent\n", encoding="utf-8")
+        _git(work, "add", "note.txt")
+        _git(work, "commit", "-m", "Innocent commit")
+        tip = _git(work, "rev-parse", "HEAD")
+        _git(work, "push", "origin", "master")
+
+        pr_normal = "https://github.com/marmot-protocol/marmot-agents/pull/301"
+        pr_fail = "https://github.com/marmot-protocol/marmot-agents/pull/302"
+        pr_boom = "https://github.com/marmot-protocol/marmot-agents/pull/303"
+        pr_tree_fix = "https://github.com/marmot-protocol/marmot-agents/pull/304"
+        pr_revert = "https://github.com/marmot-protocol/marmot-agents/pull/305"
+        pr_no_am = "https://github.com/marmot-protocol/marmot-agents/pull/306"
+        open_prs = [
+            {"number": 301, "url": pr_normal, "labels": ["enhancement"], "auto_merge": True},
+            {"number": 302, "url": pr_fail, "labels": [], "auto_merge": True},
+            {"number": 303, "url": pr_boom, "labels": ["bug"], "auto_merge": True},
+            {"number": 304, "url": pr_tree_fix, "labels": ["tree-fix"], "auto_merge": True},
+            {"number": 305, "url": pr_revert, "labels": ["revert", "impact:patch"], "auto_merge": True},
+            {"number": 306, "url": pr_no_am, "labels": [], "auto_merge": False},
+        ]
+
+        # 1. Dry-run Meltdown: zero remote mutations, records candidates in would_disarm.
+        gh_dry = FakeGitHub(
+            run_info=ba.RunInfo(710, tip, "failure", "https://example/runs/710"),
+            failed_jobs=[ba.FailedJob(710, "CI / Python", "failure", "https://example/jobs/710", "FAILED")],
+            open_prs=open_prs,
+        )
+        alerts_dry: list[tuple[str, bool]] = []
+        r_dry = self._agent(
+            repo,
+            worktrees,
+            state_dir / "dry",
+            gh_dry,
+            dry_run=True,
+            job_specs={"Python": ba.JobSpec(command="exit 1", required_bins=("bash",))},
+            alerts=alerts_dry,
+        ).run_once()
+        self.assertEqual(r_dry.action, "meltdown")
+        self.assertEqual(gh_dry.list_open_prs_calls, ["master"])
+        self.assertEqual(gh_dry.disable_auto_merge_calls, [])
+        self.assertEqual(r_dry.details["auto_merge_disarm"]["would_disarm"], [pr_normal, pr_fail, pr_boom])
+        self.assertEqual(r_dry.details["auto_merge_disarm"]["disarmed"], [])
+        self.assertEqual(r_dry.details["auto_merge_disarm"]["skipped_recovery"], [pr_tree_fix, pr_revert])
+        self.assertEqual(json.loads(_git(origin, "show", "tree-state:state.json"))["state"], "green")
+
+        # 2. Live Meltdown: disarms non-recovery PRs best-effort; partial failure still disarms others,
+        #    sets tree-state=red, sends alert, and comments on canary issue.
+        gh_live = FakeGitHub(
+            run_info=ba.RunInfo(711, tip, "failure", "https://example/runs/711"),
+            failed_jobs=[ba.FailedJob(711, "CI / Python", "failure", "https://example/jobs/711", "FAILED")],
+            open_prs=open_prs,
+            disable_auto_merge_results={pr_fail: False, pr_boom: RuntimeError("transient API error")},
+        )
+        alerts_live: list[tuple[str, bool]] = []
+        r_live = self._agent(
+            repo,
+            worktrees,
+            state_dir / "live",
+            gh_live,
+            dry_run=False,
+            job_specs={"Python": ba.JobSpec(command="exit 1", required_bins=("bash",))},
+            alerts=alerts_live,
+        ).run_once()
+        self.assertEqual(r_live.action, "meltdown")
+        self.assertEqual(r_live.tree_state, "red")
+        self.assertEqual(gh_live.disable_auto_merge_calls, [pr_normal, pr_fail, pr_boom])
+        self.assertEqual(r_live.details["auto_merge_disarm"]["disarmed"], [pr_normal])
+        self.assertEqual(r_live.details["auto_merge_disarm"]["failed"], [pr_fail, pr_boom])
+        self.assertEqual(r_live.details["auto_merge_disarm"]["skipped_recovery"], [pr_tree_fix, pr_revert])
+        self.assertEqual(len(alerts_live), 1)
+        self.assertIn(pr_normal, alerts_live[0][0])
+        self.assertIn(pr_fail, alerts_live[0][0])
+        self.assertEqual(len(gh_live.comments), 1)
+        self.assertIn(pr_normal, gh_live.comments[0])
+        self.assertIn(pr_fail, gh_live.comments[0])
+        self.assertEqual(json.loads(_git(origin, "show", "tree-state:state.json"))["state"], "red")
+
+        # 3. Listing failure still activates Meltdown, sends alert, and comments on canary issue.
+        _, origin2, work2, repo2, worktrees2, state_dir2, _ = self.make_repo()
+        (work2 / "note.txt").write_text("innocent\n", encoding="utf-8")
+        _git(work2, "add", "note.txt")
+        _git(work2, "commit", "-m", "Innocent commit 2")
+        tip2 = _git(work2, "rev-parse", "HEAD")
+        _git(work2, "push", "origin", "master")
+        gh_err = FakeGitHub(
+            run_info=ba.RunInfo(712, tip2, "failure", "https://example/runs/712"),
+            failed_jobs=[ba.FailedJob(712, "CI / Python", "failure", "https://example/jobs/712", "FAILED")],
+            list_open_prs_error=RuntimeError("GitHub 502"),
+        )
+        alerts_err: list[tuple[str, bool]] = []
+        r_err = self._agent(
+            repo2,
+            worktrees2,
+            state_dir2,
+            gh_err,
+            dry_run=False,
+            job_specs={"Python": ba.JobSpec(command="exit 1", required_bins=("bash",))},
+            alerts=alerts_err,
+        ).run_once()
+        self.assertEqual(r_err.action, "meltdown")
+        self.assertEqual(len(alerts_err), 1)
+        self.assertEqual(len(gh_err.comments), 1)
+        self.assertIn("GitHub 502", r_err.details["auto_merge_disarm"].get("list_error", ""))
+        self.assertEqual(json.loads(_git(origin2, "show", "tree-state:state.json"))["state"], "red")
+
+
+def _extract_ci_step_run_script(step_name: str) -> str:
+    """Extract the `run: |` shell script for a named step in `.github/workflows/ci.yml`."""
+    ci_yml = Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
+    lines = ci_yml.read_text(encoding="utf-8").splitlines()
+    target = f"- name: {step_name}"
+    start = None
+    for idx, line in enumerate(lines):
+        if line.strip() == target:
+            start = idx + 1
+            break
+    if start is None:
+        raise AssertionError(f"step {step_name!r} not found in ci.yml")
+    run_idx = None
+    run_indent = 0
+    for idx in range(start, len(lines)):
+        stripped = lines[idx].strip()
+        if stripped.startswith("- name:") or stripped.startswith("- uses:"):
+            break
+        if stripped == "run: |":
+            run_idx = idx + 1
+            run_indent = len(lines[idx]) - len(lines[idx].lstrip(" "))
+            break
+    if run_idx is None:
+        raise AssertionError(f"`run: |` block not found for step {step_name!r}")
+    body: list[str] = []
+    for line in lines[run_idx:]:
+        if line.strip() and (len(line) - len(line.lstrip(" "))) <= run_indent:
+            break
+        body.append(line)
+    import textwrap
+
+    return textwrap.dedent("\n".join(body)) + "\n"
+
+
+class TreeStateGateScriptTests(unittest.TestCase):
+    """Run the real `Check tree-state gate` bash step from `.github/workflows/ci.yml` against fake `gh`/`sleep`."""
+
+    def _run_gate(self, tree_state: str, has_tree_override: str, label_responses: list[tuple[int, str]]):
+        import base64
+
+        script = _extract_ci_step_run_script("Check tree-state gate")
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        state_b64 = base64.b64encode(
+            json.dumps({"state": tree_state, "reason": "test reason"}).encode("utf-8")
+        ).decode("ascii")
+        calls_file = root / "calls.jsonl"
+        resp_file = root / "label_responses.json"
+        resp_file.write_text(json.dumps(label_responses), encoding="utf-8")
+        idx_file = root / "label_idx.txt"
+        idx_file.write_text("0", encoding="utf-8")
+
+        fake_gh = bin_dir / "gh"
+        fake_gh.write_text(
+            f"""#!{sys.executable}
+import json, sys
+from pathlib import Path
+args = sys.argv[1:]
+with open({str(calls_file)!r}, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps({{"cmd": "gh", "args": args}}) + "\\n")
+joined = " ".join(args)
+if "contents/state.json?ref=tree-state" in joined:
+    print({state_b64!r})
+    raise SystemExit(0)
+if "/labels?per_page=100" in joined:
+    idx_p = Path({str(idx_file)!r})
+    idx = int(idx_p.read_text(encoding="utf-8"))
+    resps = json.loads(Path({str(resp_file)!r}).read_text(encoding="utf-8"))
+    idx_p.write_text(str(idx + 1), encoding="utf-8")
+    rc, body = resps[idx] if idx < len(resps) else (0, "[]")
+    if body:
+        sys.stdout.write(body)
+    raise SystemExit(rc)
+sys.stderr.write(f"unexpected gh call: {{args}}\\n")
+raise SystemExit(2)
+""",
+            encoding="utf-8",
+        )
+        fake_gh.chmod(0o755)
+
+        fake_sleep = bin_dir / "sleep"
+        fake_sleep.write_text(
+            f"""#!{sys.executable}
+import json, sys
+with open({str(calls_file)!r}, "a", encoding="utf-8") as fh:
+    fh.write(json.dumps({{"cmd": "sleep", "args": sys.argv[1:]}}) + "\\n")
+""",
+            encoding="utf-8",
+        )
+        fake_sleep.chmod(0o755)
+
+        env = os.environ.copy()
+        env["PATH"] = f"{bin_dir}:{env.get('PATH', '')}"
+        env["GH_TOKEN"] = "test-token"
+        env["REPO"] = "marmot-protocol/marmot-agents"
+        env["PR_NUMBER"] = "234"
+        env["HAS_TREE_OVERRIDE"] = has_tree_override
+        proc = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True, check=False)
+        calls = (
+            [json.loads(line) for line in calls_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+            if calls_file.exists()
+            else []
+        )
+        return proc, calls
+
+    def test_green_tree_state_adds_zero_label_retries_or_sleeps(self):
+        proc, calls = self._run_gate("green", "false", [])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual([c["cmd"] for c in calls], ["gh"])
+
+    def test_red_tree_state_allows_delayed_revert_label_after_transient_api_error(self):
+        # Catches the `gh pr create --label revert` race where labels attach after the opened event.
+        proc, calls = self._run_gate(
+            "red",
+            "false",
+            [
+                (1, ""),
+                (0, json.dumps([{"name": "revert"}])),
+            ],
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("allowed via tree-fix/revert label", proc.stdout)
+        sleeps = [c["args"][0] for c in calls if c["cmd"] == "sleep"]
+        self.assertEqual(len(sleeps), 2)
+
+    def test_red_tree_state_allows_delayed_tree_fix_label(self):
+        proc, calls = self._run_gate(
+            "red",
+            "false",
+            [
+                (0, "[]"),
+                (0, json.dumps([{"name": "tree-fix"}])),
+            ],
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("allowed via tree-fix/revert label", proc.stdout)
+
+    def test_red_tree_state_fails_closed_when_no_recovery_label_arrives(self):
+        proc, calls = self._run_gate("red", "false", [(0, "[]"), (0, "[]"), (0, "[]")])
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("Meltdown Mode", proc.stdout)
+        sleeps = [c["args"][0] for c in calls if c["cmd"] == "sleep"]
+        self.assertGreaterEqual(len(sleeps), 2)
+
+    def test_red_tree_state_fails_closed_when_all_label_rechecks_fail(self):
+        proc, calls = self._run_gate("red", "false", [(1, ""), (1, ""), (1, "")])
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("Meltdown Mode", proc.stdout)
+        sleeps = [c["args"][0] for c in calls if c["cmd"] == "sleep"]
+        self.assertEqual(len(sleeps), 3)
+
+    def test_check_tree_state_gate_step_binds_pr_number_env(self):
+        ci_yml = Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml"
+        text = ci_yml.read_text(encoding="utf-8")
+        idx = text.index("- name: Check tree-state gate")
+        step_block = text[idx : text.index("run: |", idx)]
+        self.assertIn("PR_NUMBER: ${{ github.event.pull_request.number }}", step_block)
+
+    def test_red_tree_state_with_existing_override_does_not_sleep(self):
+        proc, calls = self._run_gate("red", "true", [])
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual([c["cmd"] for c in calls], ["gh"])
 
 
 if __name__ == "__main__":
