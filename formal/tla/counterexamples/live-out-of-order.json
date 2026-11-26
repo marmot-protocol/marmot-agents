@@ -5,7 +5,7 @@
   "breaks": "S10",
   "what": "MarkFromLive, the core before MDK #3606: MDK hands a later message over first, the core handles it and moves the read mark to its place, past the earlier one, which is then never read (S10). The core now reads from the mark instead.",
   "generated_by": "python3 tools/tla/check.py --counterexamples",
-  "constants": {"Prompts": ["p1"], "Requests": ["r1"], "NewSession": ["r1"], "Items": ["s1"], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 1, "MaxRefusals": 0, "MaxRejected": 1, "RejectedTries": 2, "GoneChats": [], "TokenDedupe": true, "TickCatchUp": true, "LiveAfterStore": true, "LastResortTaken": true, "FairMdk": true, "FairDriver": true, "FairTime": true, "Bug": "MarkFromLive"},
+  "constants": {"Prompts": ["p1"], "Requests": ["r1"], "NewSession": ["r1"], "Items": ["s1"], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 1, "MaxRefusals": 0, "MaxRejected": 1, "MaxReadFails": 0, "RejectedTries": 2, "GoneChats": [], "TokenDedupe": true, "TickCatchUp": true, "LiveAfterStore": true, "LastResortTaken": true, "FairMdk": true, "FairDriver": true, "FairTime": true, "Bug": "MarkFromLive"},
   "messages": [{"id": "p1", "chat": "c1", "kind": "prompt"}, {"id": "r1", "chat": "c1", "kind": "control", "new_session": true}],
   "steps": [
     {"action": "CatchUpDone"},

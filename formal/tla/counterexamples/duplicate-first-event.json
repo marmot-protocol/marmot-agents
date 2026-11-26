@@ -5,7 +5,7 @@
   "breaks": "S3",
   "what": "Without TokenDedupe, as before MDK 0.19.0's token-based sends: a send MDK posted, a failed save, a restart, and the send tried again, which MDK does not know for the one it posted; the chat has two first events for one item (S3).",
   "generated_by": "python3 tools/tla/check.py --counterexamples",
-  "constants": {"Prompts": ["p1"], "Requests": ["r1"], "NewSession": ["r1"], "Items": ["s1"], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 0, "MaxRefusals": 0, "MaxRejected": 0, "RejectedTries": 2, "GoneChats": [], "TokenDedupe": false, "TickCatchUp": false, "LiveAfterStore": true, "LastResortTaken": true, "FairMdk": true, "FairDriver": true, "FairTime": true, "Bug": "none"},
+  "constants": {"Prompts": ["p1"], "Requests": ["r1"], "NewSession": ["r1"], "Items": ["s1"], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 0, "MaxRefusals": 0, "MaxRejected": 0, "MaxReadFails": 0, "RejectedTries": 2, "GoneChats": [], "TokenDedupe": false, "TickCatchUp": false, "LiveAfterStore": true, "LastResortTaken": true, "FairMdk": true, "FairDriver": true, "FairTime": true, "Bug": "none"},
   "messages": [{"id": "p1", "chat": "c1", "kind": "prompt"}, {"id": "r1", "chat": "c1", "kind": "control", "new_session": true}],
   "steps": [
     {"action": "CatchUpDone"},

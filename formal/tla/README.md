@@ -31,7 +31,8 @@ drive it.
 | --- | --- |
 | `Store(m)` | MDK stores a message for the agent (`insert_order`), and hands it to the event stream if the core runs and it was not handed over already |
 | `Hear(p)`, `Ask(r)` | `run.rs` `live` for a live chat message or request, taken off the stream in any order (MDK #3606): it only wakes its chat's reader (`catch_up_group`), which handles the oldest message stored after the mark, if any (`handle`: `conversation.rs` `heard` or `asked`, and the read mark). Without `LiveAfterStore`, MDK may hand a message over before storing it, and the reader finds nothing new |
-| `CatchUp(c)`, `CatchUpDone` | `run.rs` `catch_up`: what was stored after the mark, oldest first, at start; with `TickCatchUp` also at any idle moment while the core runs, as on its tick and when the event stream lags (`RecvError::Lagged`) |
+| `CatchUp(c)`, `CatchUpDone` | `run.rs` `catch_up`: what was stored after the mark, oldest first, at start (skipping chats waiting to be read again); with `TickCatchUp` also at any idle moment while the core runs, as on its tick and when the event stream lags (`RecvError::Lagged`) |
+| `ReadFails(m)`, `ReadAgain(c)` | `run.rs` `handle`, `catch_up_group`, `read_later`, `read_again` (#88): when MDK cannot read a message for a moment (`NotNow`), the core leaves the mark and the message alone and puts the chat in `unread` (up to `MaxReadFails` times). While a chat waits, `Handle` and `CatchUp` do nothing for it; fair `ReadAgain(c)` reads it again from its mark until nothing after the mark remains |
 | `Save`, `SaveFails` | `Store::save`, before each act and after a step; a failed save stops the core |
 | `Deliver` | `carry_out_one`: a prompt or request to the driver, only once what led to it is saved |
 | `Take`, `Refuse` | the driver's answer to the request it was handed (`prompted`, `requested`). A new-session control the driver takes marks the chat taken, as a prompt does, so a prompt after it names no session (D-065) |
@@ -152,6 +153,8 @@ bounds below.
 | live out of order | `CoreLifecycle.fair.cfg` with `MarkFromLive`, safety only | S10 fails | 58 | [`live-out-of-order`](counterexamples/live-out-of-order.json) |
 | live before store | `CoreLifecycle.livestore.cfg` (no `LiveAfterStore`, no `TickCatchUp`; only `p1`) | L3 fails | 102 | [`live-before-store`](counterexamples/live-before-store.json) |
 | live before store, tick | the same, with `TickCatchUp` | every property holds | 141 | |
+| read fails | `CoreLifecycle.readfail.cfg` (`MaxReadFails = 1`, no `TickCatchUp`, `p1` and `r1`) | every property holds | 3,088 | |
+| skip unread | `CoreLifecycle.readfail.cfg` with `SkipUnread` (`p1` only, L3 only) | L3 fails | 108 | [`skip-unread`](counterexamples/skip-unread.json) |
 | give up, item | `CoreLifecycle.giveup.cfg` (1 dropped try gives a send up) | every property holds | 325,927 | |
 | give up, notice | `CoreLifecycle.giveup-notice.cfg` (the same, no item) | every property holds | 6,211 | |
 | refused, item | `CoreLifecycle.refuse.cfg` (1 refusal in the live group) | every property holds | 126,865 | |
@@ -183,6 +186,7 @@ property named, on the fair configuration with only that property, unless the ta
 | `DeliverBeforeSave` | a prompt reaches the driver before its read mark is saved | S4 | 607 |
 | `MarkNotLoaded` | a restart reads every group from its start | S10 | 506 |
 | `CatchUpAnyOrder` | catch-up takes any stored message after the mark | S10 | 19 |
+| `SkipUnread` | a read failure moves the mark past the unread message (on the read-fail configuration; also fails L3 as [`skip-unread`](counterexamples/skip-unread.json)) | S10 | 8 |
 | `ResumeAlways` | every prompt names the saved session (with a second prompt, `p2`) | S12 | 28,545 |
 | `KeepEndedSession` | a session that ended stays the chat's | S12 | 2,292 |
 | `NewSessionUntaken` | a new-session control the driver took leaves the chat untaken, so a prompt before the new session names the old one | S12 | 9,723 |
@@ -197,9 +201,11 @@ after MDK dropped a try of it), `NeverDeliveredInCatchUp` (a request reaches the
 yet named it). On the gone configuration, `NeverDropped` (a version is refused). On the refused and give-up
 configurations, with no prompt, `NeverTold` (a failed notice for a dropped version is posted) and
 `NeverClosedUndelivered` (the core's close of an item whose closing version was dropped is posted). On the
-refused-notice and give-up-notice configurations, `NeverResettled` (a failed notice in place of a dropped notice
-that settled requests is posted). On the live-before-store configuration, `NeverDroppedEarly` (a message handed
-over before it was stored is dropped, then stored). All seventeen are reached within 3,200 distinct states.
+refused-notice and give-up-notice configurations, `NeverResettled` (a last-resort failed notice in place of a dropped notice
+that actually settles a request is posted; `no-false-resettle` checks it stays true on two refusals with no requests,
+so a retold version-gap notice cannot trip it by token shape alone). On the read-fail configuration, `NeverReadFailed`
+(a read failure marks its chat waiting to be read again). On the live-before-store configuration, `NeverDroppedEarly` (a message handed
+over before it was stored is dropped, then stored). All eighteen are reached within 3,200 distinct states.
 
 **Larger bounds**, safety only, on the same day with 8 workers and a 6 GB heap, the other constants as in the fair
 configuration, before the sends took MDK's tokens. Liveness at these sizes did not finish in 15 minutes with a 2 GB

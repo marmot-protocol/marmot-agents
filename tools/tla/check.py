@@ -68,6 +68,7 @@ def invariant(name):
 FAIR = "CoreLifecycle.fair.cfg"
 GIVEUP = "CoreLifecycle.giveup.cfg"
 REFUSE = "CoreLifecycle.refuse.cfg"
+READFAIL = "CoreLifecycle.readfail.cfg"
 SAFETY = {"PROPERTIES": None}  # drops the liveness properties: safety only
 
 
@@ -132,6 +133,15 @@ CASES = [
               "again once stored. Nothing reads it until the core starts again (L3)."),
     # With the core's tick, which reads every chat from its mark, such a message is read (L3).
     Case("live-before-store-tick", "CoreLifecycle.livestore.cfg", PASS, {"TickCatchUp": "TRUE"}),
+    # A read that fails for a moment (NotNow) leaves the mark alone and waits for ReadAgain.
+    Case("read-fails", READFAIL, PASS),
+    Case("skip-unread", READFAIL, TEMPORAL,
+         {"Bug": '"SkipUnread"', "Requests": "{}", "NewSession": "{}",
+          "INVARIANTS": None, "PROPERTIES": "L3"},
+         counterexample="skip-unread",
+         what="SkipUnread, the core before #88 (#83): MDK cannot read a message for a moment "
+              "(NotNow), and the core moves the read mark past it without handling it. The "
+              "message is never read again (L3; S10 too)."),
     # A dropped send has something in its place (conversation.rs refused): the item is closed,
     # the requests settled, and the chat told of the gap.
     Case("give-up-closes-item", GIVEUP, PASS),
@@ -170,6 +180,7 @@ CASES = [
     mutant("DeliverBeforeSave", "S4"),
     mutant("MarkNotLoaded", "S10"),
     mutant("CatchUpAnyOrder", "S10"),
+    mutant("SkipUnread", "S10", READFAIL),
     # A second prompt in the chat, in the same run of the driver, is what it names a session for.
     mutant("ResumeAlways", "S12", Prompts='{"p1", "p2"}'),
     mutant("KeepEndedSession", "S12"),
@@ -190,6 +201,12 @@ CASES = [
     probe("NeverClosedUndelivered", GIVEUP, "NeverClosedUndelivered-given-up", **NO_PROMPT),
     probe("NeverResettled", "CoreLifecycle.refuse-notice.cfg", "NeverResettled-refused"),
     probe("NeverResettled", "CoreLifecycle.giveup-notice.cfg", "NeverResettled-given-up"),
+    # NeverResettled depends on a posted notice that settles a request, not on the token's shape:
+    # a retold failed notice for a dropped version that settled nothing must not trip it.
+    Case("no-false-resettle", REFUSE, PASS,
+         {"INVARIANTS": "NeverResettled", "Requests": "{}", "NewSession": "{}",
+          **SAFETY, **TWICE}),
+    probe("NeverReadFailed", READFAIL),
     probe("NeverDroppedEarly", "CoreLifecycle.livestore.cfg"),
 ]
 # SocketProtocol: the socket between the core and one connector of each kind, across connections.
@@ -642,10 +659,11 @@ def main():
         # TLC checks liveness on a timer while it searches, so where it finds a temporal
         # counterexample moves from run to run, and so does the order its search takes, which
         # TLC's fingerprint function and seed, picked at random, decide. DriverTransport's
-        # committed ones are checked once, at the end, with both fixed, so their traces repeat;
-        # CoreLifecycle's and SocketProtocol's repeat as they are.
+        # committed ones and CoreLifecycle's `skip-unread` (which has two 5-step traces) are
+        # checked once, at the end, with both fixed, so their traces repeat; the others repeat
+        # as they are.
         options = []
-        if case.model == DT and case.expected == TEMPORAL and case.counterexample:
+        if (case.model == DT or case.name == "skip-unread") and case.expected == TEMPORAL and case.counterexample:
             options = ["-lncheck", "final", "-fp", "1", "-seed", "1"]
         ran = subprocess.run([str(RUN), str(folder), f"{case.model}.tla", f"{case.model}.cfg",
                               *options], capture_output=True, text=True, env=env)

@@ -1,0 +1,18 @@
+{
+  "case": "skip-unread",
+  "model": "CoreLifecycle",
+  "config": "CoreLifecycle.readfail.cfg",
+  "breaks": "L3",
+  "what": "SkipUnread, the core before #88 (#83): MDK cannot read a message for a moment (NotNow), and the core moves the read mark past it without handling it. The message is never read again (L3; S10 too).",
+  "generated_by": "python3 tools/tla/check.py --counterexamples",
+  "constants": {"Prompts": ["p1"], "Requests": [], "NewSession": [], "Items": [], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 0, "MaxRefusals": 0, "MaxRejected": 0, "MaxReadFails": 1, "RejectedTries": 2, "GoneChats": [], "TokenDedupe": true, "TickCatchUp": false, "LiveAfterStore": true, "LastResortTaken": true, "FairMdk": true, "FairDriver": true, "FairTime": true, "Bug": "SkipUnread"},
+  "messages": [{"id": "p1", "chat": "c1", "kind": "prompt"}],
+  "steps": [
+    {"action": "CatchUpDone"},
+    {"action": "Store", "msg": "p1"},
+    {"action": "ReadFails", "chat": "c1", "msg": "p1"},
+    {"action": "Save"},
+    {"action": "Hear", "msg": "p1", "stored": true, "reads": null}
+  ],
+  "end": {"kind": "stutter"}
+}

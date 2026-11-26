@@ -5,7 +5,7 @@
   "breaks": "L3",
   "what": "Without LiveAfterStore and without TickCatchUp: MDK hands a message over before storing it; the chat's reader finds nothing new, and MDK does not hand it over again once stored. Nothing reads it until the core starts again (L3).",
   "generated_by": "python3 tools/tla/check.py --counterexamples",
-  "constants": {"Prompts": ["p1"], "Requests": [], "NewSession": [], "Items": [], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 0, "MaxRefusals": 0, "MaxRejected": 0, "RejectedTries": 2, "GoneChats": [], "TokenDedupe": true, "TickCatchUp": false, "LiveAfterStore": false, "LastResortTaken": true, "FairMdk": true, "FairDriver": true, "FairTime": true, "Bug": "none"},
+  "constants": {"Prompts": ["p1"], "Requests": [], "NewSession": [], "Items": [], "MaxDowns": 1, "MaxEmits": 2, "MaxAmbiguous": 0, "MaxRefusals": 0, "MaxRejected": 0, "MaxReadFails": 0, "RejectedTries": 2, "GoneChats": [], "TokenDedupe": true, "TickCatchUp": false, "LiveAfterStore": false, "LastResortTaken": true, "FairMdk": true, "FairDriver": true, "FairTime": true, "Bug": "none"},
   "messages": [{"id": "p1", "chat": "c1", "kind": "prompt"}],
   "steps": [
     {"action": "CatchUpDone"},

@@ -17,7 +17,7 @@ docs/design/verification.md names the actions. A step names what the model's act
 
 - Store(msg), Hear(msg) and Ask(msg) (`reads` names the message the chat's reader then handled,
   the oldest stored after the mark, or is null when there was none), CatchUp(chat, msg),
-  CatchUpDone;
+  ReadFails(chat, msg), ReadAgain(chat, msg), CatchUpDone;
 - Deliver(msg, kind, session), Take(msg), Refuse(msg), Emit(item, settles, fin), Tick(req);
 - Send(chat, send, outcome), where `send` names the item and version, or the notice and what it
   is about, `last_resort` when it stands in for a dropped send, and `try` the number of its tries
@@ -316,6 +316,26 @@ def step(action, s, t, constants):
     if action == "CatchUp":
         (msg,) = [m for m in t["cv"]["h"] if t["cv"]["h"][m] != s["cv"]["h"][m]]
         return [{"action": "CatchUp", "chat": chat_of(msg), "msg": msg}]
+    if action == "ReadFails":
+        moved = [c for c in t["cv"]["mark"] if t["cv"]["mark"][c] != s["cv"]["mark"][c]]
+        if moved:
+            (chat,) = moved
+            (msg,) = [m for m in s["order"]
+                      if chat_of(m) == chat and s["order"][m] == t["cv"]["mark"][chat]]
+        else:
+            added = t["unread"] - s["unread"]
+            (chat,) = added if added else s["unread"]
+            after = [m for m in s["order"]
+                     if chat_of(m) == chat and s["order"][m] > s["cv"]["mark"][chat]]
+            msg = min(after, key=lambda m: s["order"][m])
+        return [{"action": "ReadFails", "chat": chat, "msg": msg}]
+    if action == "ReadAgain":
+        read = [m for m in t["cv"]["h"] if t["cv"]["h"][m] != s["cv"]["h"][m]]
+        if read:
+            (msg,) = read
+            return [{"action": "ReadAgain", "chat": chat_of(msg), "msg": msg}]
+        (chat,) = s["unread"] - t["unread"]
+        return [{"action": "ReadAgain", "chat": chat, "msg": None}]
     if action == "Deliver":
         act = t["inflight"]
         session = None if act["sess"] == "none" else act["sess"]
