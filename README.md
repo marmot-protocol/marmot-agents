@@ -88,6 +88,12 @@ connectors, the script stops: move that install over first, with its settings in
 ([`docs/move.md`](docs/move.md)), then run it with `--replace-plugin`. It then uses those settings and the
 identity in the old home, and makes no new one.
 
+An install of today's connector for Codex, Claude Code, OpenCode, Pi or Goose moves over the same way, with no
+flag: run `marmot-agent import` with its settings in the agent's folder, then the harness's script
+([`docs/move.md`](docs/move.md#steps)). The script uses those settings as written and the identity in the old
+home, makes no new one, and runs the agent as a service
+([D-160](docs/decisions.md#d-160-the-coding-installers-take-an-install-moved-over-and-run-it-as-a-service)).
+
 - `--dry-run` shows every file and command the script would write and run, and does nothing.
 - Running the script again updates `marmot-agent` and the service, and keeps the agent's settings and
   identity. Until there is a release, give it `--from-source` each time. A `--cwd` or `--model-key` given

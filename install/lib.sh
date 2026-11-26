@@ -1111,13 +1111,30 @@ agent_services() {
 }
 
 # Whether this run, about to put the new core in place, keeps the agent's store first: an upgrade that
-# starts the agent, for an agent with a home, and a core that is not the one there before. One a run
-# before this one began is taken over with the upgrade.
+# starts the agent, for an agent with a home, and a core that is not the one there before, or an agent
+# moved over that no install has started yet (first_start), whatever core was there. One a run before
+# this one began is taken over with the upgrade.
 store_wanted() {
     [ "${MA_UPGRADING:-0}" -eq 1 ] && [ "$NO_SERVICE" -eq 0 ] && [ "$NO_START" -eq 0 ] || return 1
     [ ! -d "$MA_UPGRADE/stores/$NAME" ] || return 0
     [ -d "$MA_HOME" ] || return 1
+    ! first_start || return 0
     ! { [ -f "$MA_UPGRADE/marmot-agent" ] && cmp -s "$MA_UPGRADE/marmot-agent" "$MA_STAGE/.core/marmot-agent"; }
+}
+
+# Whether the agent was moved over from today's connector and no install has started it since: its home
+# is as the old connector left it, and the core this run starts is the first of ours to open its store,
+# even if it is the one already installed for another agent (D-160). The run that starts it notes, once
+# its upgrade has ended, that it did (moved_done).
+first_start() {
+    imported && [ ! -f "$MA_AGENT_DIR/moved" ]
+}
+
+# Notes that an agent moved over has been started by an install whose upgrade ended: its store is the
+# installed core's from now on.
+moved_done() {
+    [ "$DRY_RUN" -eq 0 ] && [ "$NO_SERVICE" -eq 0 ] && [ "$NO_START" -eq 0 ] && first_start || return 0
+    printf '%s\n' "the agent was moved over and first started by install/$HARNESS.sh" | put "$MA_AGENT_DIR/moved" 600
 }
 
 # Before the new core is put in place: the agent's services stopped, and the copy of its home made,
@@ -1129,6 +1146,7 @@ store_keep() {
     if [ ! -d "$record" ]; then
         rm -rf "$record.new"
         { (umask 077 && mkdir -p "$record.new" && printf '%s\n' "$MA_HOME" "$services" >"$record.new/where") &&
+            { ! first_start || : >"$record.new/moved"; } &&
             mv "$record.new" "$record"; } || die "the record of the agent's account home could not be written in $MA_UPGRADE"
     fi
     # shellcheck disable=SC2086 # one service a line, without spaces
@@ -1172,6 +1190,12 @@ services_stop() {
 # starts no agent because of an upgrade that was put back or that it did not make (D-159).
 services_hint() {
     local service command=""
+    # Its home is as the import left it, and its new service was never started on it: starting that would
+    # open the store, uncopied, with whatever core is in place by then.
+    if [ -f "$1/moved" ]; then
+        say "the agent \"${1##*/}\" is left stopped, its account home as marmot-agent import left it; run its installer again once what failed is fixed, or go back to today's connector as docs/move.md says (\"Going back\")"
+        return 0
+    fi
     while IFS= read -r service; do
         [ -n "$service" ] || continue
         if [ "$OS" = Linux ]; then
@@ -1517,6 +1541,14 @@ imported() {
     return 1
 }
 
+# The install the import names in the first line of the settings it wrote, such as "a Codex install".
+imported_from() {
+    local line
+    line=$(head -n 1 "$MA_SETTINGS")
+    line=${line#"# Imported by \`marmot-agent import\` from "}
+    printf '%s' "${line%%,*}"
+}
+
 # The account home the agent's settings name: the one in the agent's folder, unless they were imported
 # or edited since. Only a plain path in quotes is read.
 settings_home() {
@@ -1748,7 +1780,9 @@ Usage: install/$HARNESS.sh [options]
 
 Installs marmot-agent with $HARNESS_TITLE, makes the agent's identity, and runs it as a service of your
 account (systemd --user on Linux, launchd on macOS). Running it again updates marmot-agent and the
-service and keeps the agent's settings and identity.
+service and keeps the agent's settings and identity. An install of today's connector moved over with
+marmot-agent import, its settings written to the agent's folder, keeps those settings and the identity
+in its old home, and is given none (docs/move.md).
 
 Options:
   --owner KEY          your public key, in hex or as an npub: only you may prompt and approve (asked
@@ -1824,7 +1858,7 @@ parse_args() {
     DRY_RUN=0 ASSUME_YES=0 NO_SERVICE=0 NO_START=0 UNINSTALL=0 FROM_SOURCE=0
     BINARY_FROM="" VERSION="" NAME=$HARNESS DISPLAY=$HARNESS_TITLE OWNER="" RELAYS="" LOCAL_RELAY="" CWD=""
     MODEL_KEY="" MODEL="" MODEL_URL="" PERMISSION_MODE="" GOOSE_MODE="" SET_CWD=0 SET_KEY=""
-    CONTAINER="" REPLACE_PLUGIN=0
+    CONTAINER="" REPLACE_PLUGIN=0 CWD_WHAT=""
     while [ $# -gt 0 ]; do
         case $1 in
             --owner | --cwd | --name | --display-name | --relay | --local-relay | --version | --binary | \
@@ -1953,9 +1987,11 @@ check_harness() {
     local owner=""
     if [ -f "$MA_AGENT_DIR/harness" ]; then
         owner=$(cat "$MA_AGENT_DIR/harness")
-    elif [ "$HARNESS_KIND" = plugin ] && imported "$HARNESS_TITLE install,"; then
-        # Moved over from today's connector (docs/move.md): the settings name its home and identity.
+    elif imported "$HARNESS_TITLE install,"; then
+        # Moved over from today's connector (docs/move.md): the settings name its home and identity (D-160).
         say "using the settings marmot-agent import wrote in $MA_SETTINGS"
+    elif imported; then
+        die "the settings in $MA_SETTINGS were imported from $(imported_from), not from a $HARNESS_TITLE install: run that harness's installer, or give another --name"
     elif [ -f "$MA_SETTINGS" ]; then
         die "the agent \"$NAME\" has settings but no record of its harness in $MA_AGENT_DIR/harness: give another --name, or write the harness's name, such as $HARNESS, there"
     fi
@@ -1989,8 +2025,14 @@ settle_values() {
             CWD=$settings_cwd
         fi
         [ -n "$CWD" ] || CWD=$settings_cwd
-        [ -n "$CWD" ] || die "the agent has settings but no work folder is known: give --cwd"
+        if [ -z "$CWD" ]; then
+            # The Claude Code connector's work folder is on its command line, not in the settings the import wrote.
+            ! imported || die "give --cwd, the folder $HARNESS_TITLE works in (the import's --cwd): the settings marmot-agent import wrote do not say it"
+            die "the agent has settings but no work folder is known: give --cwd"
+        fi
         CWD=$(absolute "$CWD")
+        # One kept from before, as one the import wrote (by default your home folder), is checked as --cwd is.
+        [ -n "$CWD_GIVEN" ] || CWD_WHAT="the agent's work folder, $CWD (give --cwd for another),"
         check_cwd
         plan_settings_update
         return 0
@@ -2038,11 +2080,11 @@ plan_settings_update() {
 # it: so it must not hold the agents' keys or the model key, nor be inside the folder that holds the
 # agents. Paths are compared with links, `.` and `..` resolved, and the work folder is kept that way.
 check_cwd() {
-    no_control "--cwd" "$CWD"
-    local key
-    CWD=$(canonical "$CWD") || die "--cwd names a loop of links"
-    if inside "$CWD" "$MA_DATA"; then die "--cwd must not be inside $MA_DATA, which holds the agents' keys"; fi
-    if inside "$MA_DATA" "$CWD"; then die "--cwd must not hold $MA_DATA, which holds the agents' keys"; fi
+    local key what=${CWD_WHAT:---cwd}
+    no_control "$what" "$CWD"
+    CWD=$(canonical "$CWD") || die "$what names a loop of links"
+    if inside "$CWD" "$MA_DATA"; then die "$what must not be inside $MA_DATA, which holds the agents' keys"; fi
+    if inside "$MA_DATA" "$CWD"; then die "$what must not hold $MA_DATA, which holds the agents' keys"; fi
     [ -n "$MODEL_KEY" ] || return 0
     key=$(canonical "$MODEL_KEY") || die "--model-key names a loop of links"
     if inside "$key" "$CWD"; then
@@ -2345,6 +2387,7 @@ main() {
     if declare -F harness_commit >/dev/null; then harness_commit; fi
     if [ "$MA_UPGRADING" -eq 1 ]; then upgrade_end; fi
     if [ "$MA_CHANGING" -eq 1 ]; then change_end; fi
+    moved_done
     summary
 }
 
