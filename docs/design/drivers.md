@@ -51,6 +51,7 @@ It does not decide who is allowed to do anything, and it does not touch Marmot. 
 | Other ACP agents | ACP | Rust | Each agent's ACP command | `agent-client-protocol` |
 | Claude Code | Native | TypeScript | The Claude Agent SDK | `@anthropic-ai/claude-agent-sdk` |
 | Cursor | ACP | Rust | `cursor-agent acp` | `agent-client-protocol` ([D-080](../decisions.md#d-080-cursor-is-driven-through-acp)) |
+| Antigravity | ACP, with a small Antigravity flavour | Rust | `agy acp` | `agent-client-protocol` ([D-170](../decisions.md#d-170-google-antigravity-cli-is-driven-through-acp)) |
 | Hermes | Channel plugin | Python | Hermes's platform plugin interface | Hermes itself |
 | OpenClaw | Channel plugin | TypeScript | OpenClaw's channel plugin interface | OpenClaw itself |
 
@@ -148,7 +149,7 @@ sequenceDiagram
   session the driver starts, and Codex keeps it when a session is resumed. Claude Code gets an in-process MCP
   server from the Agent SDK with the same tool, which Claude Code calls `mcp__marmot__send_file`. Pi gets it
   from a small extension of the driver's own, loaded into each chat's Pi ([the Pi driver](#the-pi-driver)). An
-  ACP agent (OpenCode, Goose, Cursor) gets an MCP server the ACP driver serves itself, over HTTP on the loopback
+  ACP agent (OpenCode, Goose, Cursor, Antigravity) gets an MCP server the ACP driver serves itself, over HTTP on the loopback
   address, on every session it opens or takes up, unless its settings say `send_files = false`
   ([D-110](../decisions.md#d-110-an-acp-agent-gets-the-file-tool-from-a-loopback-mcp-server-on-by-default), [the ACP driver](#the-acp-driver)). All take one
   argument, `path`. The model is never asked to write a path into its answer, and nothing in its words is read
@@ -203,7 +204,7 @@ sequenceDiagram
 - **Who may.** Calling the tool needs nobody's approval in the chat: the Claude Code connector allows it in
   its permission callback, Codex does not ask for a dynamic tool, and Pi asks nobody before any tool. The
   folders are the limit, as the owner set them. An ACP agent that asks its client before an MCP tool (Cursor
-  always; Goose in `approve` mode) asks in the chat, like any approval: the ACP driver answers no approval
+  always; Antigravity in `default` mode; Goose in `approve` mode) asks in the chat, like any approval: the ACP driver answers no approval
   itself ([D-110](../decisions.md#d-110-an-acp-agent-gets-the-file-tool-from-a-loopback-mcp-server-on-by-default)).
 
 ### A gateway's files
@@ -255,7 +256,7 @@ each file, as today's connectors turn it into `send_media`.
 
 ## A chat's folder
 
-Each chat of a coding harness (Codex, Claude Code, OpenCode, Goose, Cursor and Pi) works in a folder of its
+Each chat of a coding harness (Codex, Claude Code, OpenCode, Goose, Cursor, Antigravity and Pi) works in a folder of its
 own choosing ([D-101](../decisions.md#d-101-a-chat-can-move-a-coding-harness-to-another-folder)). Hermes and
 OpenClaw keep the workspace they manage. Built 2026-11-22; what other programs and people see is provisional.
 
@@ -428,7 +429,7 @@ passing them on is a later step.
 
 Built into the core, in [`crates/marmot-agent-acp`](../../crates/marmot-agent-acp), with the same two halves as
 the Codex driver. It reads ACP with the official types (`agent-client-protocol-schema`). The translator turns one
-chat's ACP session into agent events and is tested against the OpenCode, Goose and Cursor recordings; the
+chat's ACP session into agent events and is tested against the OpenCode, Goose, Cursor and Antigravity recordings; the
 transport runs one agent process for every chat of an agent, routes each message to the chat whose session it
 names, and is tested against a stand-in agent. What each agent sends is in
 [`reference/harness-messages.md`](../reference/harness-messages.md#acp-opencode).
@@ -438,16 +439,16 @@ The core is started with an `[acp]` section in place of `[codex]`:
 ```toml
 [acp]
 name = "opencode"                 # what events call the agent until it names itself; Cursor never does
-command = ["opencode", "acp"]     # or ["cursor-agent", "acp"], ["goose", "acp"], or Goose's container, below
+command = ["opencode", "acp"]     # or ["cursor-agent", "acp"], ["agy", "acp"], ["goose", "acp"], or Goose's container
 cwd = "/home/me/work"
 # send_files = false              # the send_file tool is on unless this says false (D-110)
 ```
 
-- **Goose, OpenCode and Cursor run on the host**, as the person's own programs, with their own settings and
+- **Goose, OpenCode, Cursor and Antigravity run on the host**, as the person's own programs, with their own settings and
   sign-in: the installers expect them on `PATH` and install none
   ([D-102](../decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)). Goose runs as
   `goose acp`, on the model its own settings name (`goose configure`), and reads `GOOSE_MODE` from its
-  environment.
+  environment. Antigravity runs as `agy acp` (tested on `agy` 1.5.18, signed in with `agy acp --login` or `agy`).
 - **Goose can also run in a throwaway container**, as this project's tests and recordings run it, and as
   `install/goose.sh --container` sets it up. `tools/goose/goose-acp.sh <model-key-file> [goose-home]` builds
   the image from [`tools/goose`](../../tools/goose/Dockerfile) (Goose pinned, with its checksum) and runs it
@@ -497,19 +498,20 @@ cwd = "/home/me/work"
   ([D-110](../decisions.md#d-110-an-acp-agent-gets-the-file-tool-from-a-loopback-mcp-server-on-by-default)). On unless the `[acp]` settings say
   `send_files = false`, which leaves the driver listening on nothing and handing the agent no server. When on,
   an agent that takes MCP servers
-  over HTTP (`mcpCapabilities.http`, which OpenCode, Goose and Cursor all state) is given the driver's own on
+  over HTTP (`mcpCapabilities.http`, which OpenCode, Goose and Cursor all state; Antigravity 1.5.18 omits
+  `mcpCapabilities` while still taking HTTP MCP servers, so it gets the server unless it sets `http: false`) is given the driver's own on
   `session/new`, `session/load` and `session/resume`, named `marmot`, with one tool, `send_file`. The driver
   serves it with the official MCP library (`rmcp`), on `127.0.0.1` and a port the system picks, stateless,
   answering in plain JSON; it refuses a `Host` that is not the loopback. Each chat has a token of its own for
   each folder it opens a session in, 128 random bits, which the agent sends in an `Authorization` header and
   never in the address, since OpenCode writes the address into its log. A request without a token the driver
   gave is refused before MCP reads it. A tool call goes to the chat whose session the call names in its
-  `_meta` (OpenCode: `ai.opencode/sessionID`; Goose: `agent-session-id`), and that session must be the token's
-  own chat's (Goose), or, for OpenCode, a session of a chat working in the token's folder: OpenCode keeps one
+  `_meta` (OpenCode: `ai.opencode/sessionID`; Goose: `agent-session-id`; Antigravity: `antigravity.google/conversation_id`), and that session must be the token's
+  own chat's (Goose, Antigravity), or, for OpenCode, a session of a chat working in the token's folder: OpenCode keeps one
   server of a name for every session in a folder, the one handed over last, so its calls carry whichever
   chat's token came last there, and the token alone would send one chat's file to another. A call that names
   no session goes to the chat whose token it carries (Cursor, which keeps a server for each session); from
-  OpenCode or Goose, which always name it, it is refused. A call naming a session no chat has (such as one of OpenCode's subagents), another
+  OpenCode, Goose or Antigravity, which always name it, it is refused. A call naming a session no chat has (such as one of OpenCode's subagents), another
   chat's session, or a session in a shape the driver cannot read, is refused, never guessed. A relative path
   is made whole from the chat's folder, which changes only once the agent has opened a session in the new
   one. While a file waits for the core's word, a prompt to that chat that would restart its turn is refused
@@ -523,6 +525,46 @@ cwd = "/home/me/work"
 Its capabilities: it can interrupt; a message during a turn restarts it; the core names the sessions, which
 can be resumed when the agent can load or resume them; approvals come to the chat; no approval commands; no
 files passed to the agent ([D-083](../decisions.md#d-083-the-core-passes-no-files-to-a-harness-yet)).
+
+### Using another ACP harness
+
+Any CLI that speaks ACP v1 over stdio can be tried without writing a new driver or installer: write a
+`settings.toml` with an `[acp]` section naming the command and working folder, then initialize and run it
+with `marmot-agent` (see [`docs/try.md`](../try.md)):
+
+```toml
+home = "/home/me/.local/share/marmot-agent/agents/my-acp/home"
+name = "My ACP Agent"
+relays = ["wss://relay.eu.whitenoise.chat", "wss://relay.us.whitenoise.chat"]
+owner = "<your public key, hex or npub>"
+
+[acp]
+name = "my-acp"
+command = ["/abs/path/to/harness", "acp"]
+cwd = "/home/me/work"
+# send_files = false  # uncomment if the harness does not handle HTTP MCP servers cleanly
+```
+
+Then run `marmot-agent init settings.toml` and `marmot-agent run settings.toml`. Standard ACP features work
+automatically when the harness implements them: prompts and replies, Allow/Deny on `session/request_permission`,
+questions via `elicitation/create`, Stop (`session/cancel`), New session (`session/new`), settings via
+`configOptions` / `session/set_config_option`, slash commands via `available_commands_update`, folder moves
+(`cwd`), session recovery (`session/resume` or `session/load`), and `send_file` when `mcpCapabilities.http`
+is `true`.
+
+Before listing another ACP harness as supported or adding an installer under `install/`, verify it in a real
+session with `tools/record/record_acp.py` and `marmot-agent`:
+
+1. Prompt and reply, tool calls, and failing commands.
+2. Allow and Deny on `session/request_permission`, and Stop (`session/cancel`) during a running turn.
+3. Session recovery after a restart (`session/resume` or `session/load`) and two chats keeping separate sessions.
+4. Whether the harness keeps client-given HTTP MCP servers per session or per folder and whether it names the
+   calling session in `tools/call` `_meta` (if it shares servers across sessions without naming the caller, set
+   `send_files = false` until handled safely).
+5. Capture scrubbed fixtures for any differences from existing ACP harnesses and add conformance coverage.
+
+Next candidates to verify this way (not yet tested or listed as supported): Kiro CLI (`kiro-cli acp`) and
+Qwen Code (`qwen --acp`).
 
 ## The Pi driver
 

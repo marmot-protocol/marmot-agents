@@ -75,7 +75,7 @@ broad coverage cheaply; a harness gets its own driver only when it matters enoug
 | --- | --- | --- |
 | Codex | Native, Rust | Inside the core |
 | Pi | Native, Rust | Inside the core |
-| Goose, OpenCode, Cursor, other ACP agents | ACP, Rust | Inside the core |
+| Goose, OpenCode, Cursor, Antigravity, other ACP agents | ACP, Rust | Inside the core |
 | Claude Code | Native, TypeScript | Separate program, over the socket |
 | Hermes | Channel plugin, Python | Inside Hermes, over the socket |
 | OpenClaw | Channel plugin, TypeScript | Inside OpenClaw, over the socket |

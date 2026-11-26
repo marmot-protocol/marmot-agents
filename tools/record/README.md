@@ -201,6 +201,10 @@ say so there: what a harness does instead is the useful part.
   synced from the account; the scrubber keeps only Cursor's built-in commands
   ([D-085](../../docs/decisions.md#d-085-cursor-recordings-keep-only-cursors-built-in-commands)). Read the
   scrubbed output by hand all the same: a model that goes looking can read files outside the project.
+- Antigravity runs on the machine's own Google sign-in (`--own-home`), with `--agent "agy acp"` and
+  `--agent-auto "agy acp --dangerously-skip-permissions"`. The scrubber trims `available_commands_update` to
+  Antigravity's built-in slash commands and skills, neutralises `_meta.antigravity.tier`, and scrubs mapped
+  paths split across streamed chunks.
 
 - The Codex recorder starts the app server with `--disable hooks`, so your own Codex hooks do not run. Threads
   are started as ephemeral, so nothing is added to your Codex history. Nine scenarios are the exception,

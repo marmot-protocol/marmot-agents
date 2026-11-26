@@ -17,6 +17,8 @@
 //! cargo test -p marmot-agent --test acp goose -- --ignored --nocapture
 //! # Cursor, on the host's own sign-in: needs `cursor-agent`, signed in.
 //! cargo test -p marmot-agent --test acp cursor -- --ignored --nocapture
+//! # Antigravity, on the host's own sign-in: needs `agy`, signed in.
+//! cargo test -p marmot-agent --test acp antigravity -- --ignored --nocapture
 //! ```
 
 mod common;
@@ -92,6 +94,13 @@ const CURSOR: Agent = Agent {
     // The host's own sign-in. Cursor asks before every command that is not on its allow-list.
     command: |_work, _home| vec!["cursor-agent".into(), "acp".into()],
     files: Some("marmot-send_file"),
+};
+
+const ANTIGRAVITY: Agent = Agent {
+    name: "antigravity",
+    // The host's own sign-in. Antigravity asks before commands and MCP tools in its default mode.
+    command: |_work, _home| vec!["agy".into(), "acp".into()],
+    files: Some("Run mcp_marmot_send_file"),
 };
 
 async fn start(agent: &Agent, work: &Path, home: &Path) -> Acp {
@@ -259,4 +268,10 @@ async fn goose_end_to_end() {
 #[ignore = "needs cursor-agent installed and signed in"]
 async fn cursor_end_to_end() {
     scenario(CURSOR).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs agy installed and signed in"]
+async fn antigravity_end_to_end() {
+    scenario(ANTIGRAVITY).await;
 }

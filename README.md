@@ -29,13 +29,14 @@ what it is doing, approve what it asks, and control it as fully as you could at 
 ## Installing an agent
 
 Each harness has an install script in [`install/`](install): `codex.sh`, `claude-code.sh`, `opencode.sh`,
-`cursor.sh`, `goose.sh`, `pi.sh`, `openclaw.sh` and `hermes.sh`. They work the same on Linux, on x86_64 or
+`cursor.sh`, `antigravity.sh`, `goose.sh`, `pi.sh`, `openclaw.sh` and `hermes.sh`. They work the same on Linux, on x86_64 or
 arm64, and on macOS with Apple silicon. Intel Macs are not supported: the Odin compiler the core needs to build
 has no pinned release for them, and there is no release of the core for them. A script never installs the
 harness: it uses the one you already have, set up with your own model and sign-in
 ([D-102](docs/decisions.md#d-102-the-installers-connect-to-the-harness-the-person-already-has)). Codex, Claude
-Code, OpenCode, Cursor, Goose and Pi must be on your `PATH`; Hermes and OpenClaw installed, as `hermes` and
-`openclaw`. If one is missing, the script says how to get it and stops.
+Code, OpenCode, Cursor, Antigravity (`agy` 1.5.18 or newer, signed in with `agy acp --login` or `agy`), Goose and Pi must be on your `PATH`; Hermes and OpenClaw installed, as `hermes` and
+`openclaw`. If one is missing, the script says how to get it and stops. To connect another harness that speaks
+ACP using `[acp]` settings directly, see [Using another ACP harness](docs/design/drivers.md#using-another-acp-harness).
 
 **There is no release yet**, so for now build `marmot-agent` from a checkout of this repository. You need Rust,
 from [rustup](https://rustup.rs) (the pinned compiler installs itself on the first build), a C toolchain (on
