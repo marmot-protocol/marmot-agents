@@ -466,7 +466,9 @@ jobs:
   install:
     name: Install scripts
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # The suite takes about 7 minutes here, and went past 10 in the merge queue (#218); the tier's other jobs
+    # take longer, so this does not lengthen it.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -494,7 +496,8 @@ jobs:
           shellcheck -x install/*.sh tools/release/package.sh tools/tla/run.sh
 
       - name: Each install script runs against a throwaway home, with stand-ins for what it calls
-        run: python3 -m unittest discover -s install -p 'test_*.py'
+        # Each test named as it runs, so a run cut short says where, and the ten slowest at the end.
+        run: python3 -m unittest discover -v --durations 10 -s install -p 'test_*.py'
 
   models:
     name: TLA+ models (${{ matrix.part }})
