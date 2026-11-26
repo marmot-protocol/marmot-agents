@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""Validate commit trailers for pull requests targeting master (D-162, #222).
+
+Every change targeting master records three trailers in the final Git trailer
+block of its tip commit:
+
+    Local-Checks: cargo fmt, cargo clippy, cargo test ...
+    Local-Review: claude + codex merge @ <short-sha>
+    Release-Impact: none | patch | minor
+
+An optional `Changelog:` trailer may also be included; when present it must not
+be duplicated or a placeholder.
+"""
+
+from __future__ import annotations
+
+import argparse
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+VALID_IMPACTS = ("none", "patch", "minor")
+REQUIRED_TRAILER_KEYS = frozenset({"local-checks", "local-review", "release-impact"})
+UNIQUE_TRAILER_KEYS = REQUIRED_TRAILER_KEYS | frozenset({"changelog"})
+PLACEHOLDER_VALUES = frozenset({"", "-", "...", "?", "n/a", "na", "none", "tbd", "todo"})
+CROSS_MODEL_REVIEW = re.compile(
+    r"^(?P<seat_a>[a-z][a-z0-9_-]*)\s*\+\s*(?P<seat_b>[a-z][a-z0-9_-]*)"
+    r"\s+merge\s+@\s*(?P<sha>[0-9a-f]{7,40})(?:\s+.*)?$",
+    re.IGNORECASE,
+)
+HUMAN_REVIEW = re.compile(r"^human(?:\s+\S.*)?$", re.IGNORECASE)
+EXEMPT_REVIEW = re.compile(r"^exempt\s*\((?P<reason>[^()]+)\)$", re.IGNORECASE)
+
+
+def git(root: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(root), *args],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    ).stdout
+
+
+def parse_trailers(message: str) -> tuple[dict[str, str], list[str]]:
+    """Parse Git trailers from a commit message using `git interpret-trailers`.
+
+    Uses `--no-divider` so standalone `---` lines in commit bodies are never
+    treated as format-patch dividers, unfolds multi-line values via Git's
+    parser, permits repeated standard trailers (such as multiple
+    `Co-authored-by:` lines), and rejects duplicate workflow trailers
+    (`Local-Checks`, `Local-Review`, `Release-Impact`, `Changelog`).
+    """
+    out = subprocess.run(
+        [
+            "git",
+            "-c",
+            "trailer.separators=:",
+            "interpret-trailers",
+            "--parse",
+            "--unfold",
+            "--no-divider",
+        ],
+        input=message,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    ).stdout
+
+    trailers: dict[str, str] = {}
+    errors: list[str] = []
+    for line in out.splitlines():
+        raw_key, sep, raw_value = line.partition(":")
+        if not sep:
+            continue
+        key = raw_key.strip().lower()
+        value = raw_value.strip()
+        if key in UNIQUE_TRAILER_KEYS:
+            if key in trailers:
+                errors.append(f"duplicate trailer '{raw_key.strip()}'")
+            else:
+                trailers[key] = value
+        else:
+            trailers.setdefault(key, value)
+    return trailers, errors
+
+
+def validate_local_checks(value: str | None) -> list[str]:
+    if value is None:
+        return ["missing required trailer 'Local-Checks:' on tip commit"]
+    if value.strip().lower() in PLACEHOLDER_VALUES:
+        return [f"invalid 'Local-Checks:' value {value!r}; list the commands run locally"]
+    return []
+
+
+def validate_local_review(value: str | None) -> list[str]:
+    if value is None:
+        return ["missing required trailer 'Local-Review:' on tip commit"]
+    stripped = value.strip()
+    if stripped.lower() in PLACEHOLDER_VALUES:
+        return [
+            f"invalid 'Local-Review:' value {value!r}; expected "
+            "'<seat-a> + <seat-b> merge @ <sha>', 'human', or 'exempt (<reason>)'"
+        ]
+    if HUMAN_REVIEW.match(stripped):
+        return []
+    if match := EXEMPT_REVIEW.match(stripped):
+        if match.group("reason").strip().lower() in PLACEHOLDER_VALUES:
+            return [f"invalid 'Local-Review:' exemption reason in {value!r}"]
+        return []
+    if match := CROSS_MODEL_REVIEW.match(stripped):
+        seat_a = match.group("seat_a").lower()
+        seat_b = match.group("seat_b").lower()
+        if seat_a in PLACEHOLDER_VALUES or seat_b in PLACEHOLDER_VALUES:
+            return [f"placeholder seat name in 'Local-Review: {stripped}'"]
+        if seat_a == seat_b:
+            return [f"'Local-Review:' requires two distinct seats, got '{seat_a} + {seat_b}'"]
+        return []
+    return [
+        f"invalid 'Local-Review:' format {value!r}; expected "
+        "'<seat-a> + <seat-b> merge @ <sha>', 'human', or 'exempt (<reason>)'"
+    ]
+
+
+def validate_release_impact(value: str | None) -> tuple[str | None, list[str]]:
+    if value is None:
+        return None, [
+            "missing required trailer 'Release-Impact:' on tip commit "
+            f"(expected one of: {', '.join(VALID_IMPACTS)})"
+        ]
+    normalized = value.strip().lower()
+    if normalized not in VALID_IMPACTS:
+        return None, [
+            f"invalid 'Release-Impact:' value {value!r} "
+            f"(expected one of: {', '.join(VALID_IMPACTS)})"
+        ]
+    return normalized, []
+
+
+def validate_changelog(value: str | None) -> list[str]:
+    if value is None:
+        return []
+    if value.strip().lower() in PLACEHOLDER_VALUES:
+        return [f"invalid 'Changelog:' value {value!r}; provide a summary or omit the trailer"]
+    return []
+
+
+def validate_range(root: Path, base: str, head: str) -> tuple[str | None, list[str]]:
+    """Validate tip-commit trailers for `base..head`."""
+    tip_sha = git(root, "rev-list", "-n", "1", f"{base}..{head}").strip()
+    if not tip_sha:
+        return None, [f"no commits found in range {base}..{head}"]
+
+    tip_msg = git(root, "show", "-s", "--format=%B", tip_sha)
+    trailers, errors = parse_trailers(tip_msg)
+
+    errors.extend(validate_local_checks(trailers.get("local-checks")))
+    errors.extend(validate_local_review(trailers.get("local-review")))
+    impact, impact_errors = validate_release_impact(trailers.get("release-impact"))
+    errors.extend(impact_errors)
+    errors.extend(validate_changelog(trailers.get("changelog")))
+
+    return impact, errors
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--root", type=Path, default=ROOT, help="repository root")
+    parser.add_argument("--base", default="origin/master", help="base commit or ref")
+    parser.add_argument("--head", default="HEAD", help="head commit or ref")
+    parser.add_argument(
+        "--advisory",
+        action="store_true",
+        help="emit GitHub Actions warnings instead of failing (Phase 0-2 rollout mode)",
+    )
+    args = parser.parse_args(argv)
+
+    try:
+        impact, errors = validate_range(args.root, args.base, args.head)
+    except subprocess.CalledProcessError as exc:
+        msg = f"pr-trailers: failed to inspect {args.base}..{args.head}: {exc}"
+        if args.advisory:
+            print(f"::warning title=PR trailers::{msg}")
+            return 0
+        print(msg, file=sys.stderr)
+        return 1
+
+    if errors:
+        if args.advisory:
+            for err in errors:
+                print(f"::warning title=PR trailers::{err}")
+            print(
+                f"pr-trailers: {len(errors)} advisory warning(s) "
+                "(enforcement starts in Phase 3; see AGENTS.md)"
+            )
+            return 0
+        for err in errors:
+            print(f"pr-trailers: {err}", file=sys.stderr)
+        return 1
+
+    print(f"pr-trailers: OK (Release-Impact: {impact})")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
