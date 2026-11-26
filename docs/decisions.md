@@ -3532,7 +3532,10 @@ so an upgrade put back after that left the old core beside a store it could not 
   (`.marmot-runtime.lock`, which a core holds for as long as it has the home open) and, holding it, copies the home:
   all of it, MDK's databases with their `-wal` and `-shm` files, its keys, its records and the core's own state, as
   they were at one moment. It leaves out MDK's lock and the folder of the socket, which the core makes again as it
-  starts. A core that still has the home open after that minute stops the install. The services stay stopped until
+  starts. A core that still has the home open after that minute stops the install, and so does a service that is not
+  stopped once it was asked to stop, as one waiting to start again on its own: the installer reads each unit's
+  state, not whether the stop command failed. Putting a copy back checks the same, and keeps everything as it is if
+  a service did not stop. The core put in place is checked against the checksum the copy is kept for. The services stay stopped until
   the install starts them on the new core, as before, so no core of the agent's opens the store in between. A new
   agent, a run with the same core as before, and one with `--no-start` or `--no-service` copy nothing.
 - **No `init` on a home in use.** The installer runs `marmot-agent init` only on an account home that is missing

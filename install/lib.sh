@@ -1132,7 +1132,8 @@ store_keep() {
             mv "$record.new" "$record"; } || die "the record of the agent's account home could not be written in $MA_UPGRADE"
     fi
     # shellcheck disable=SC2086 # one service a line, without spaces
-    services_stop $services
+    services_stop $services ||
+        die "the agent's services did not stop, so its account home was not copied: stop them, then run this again"
     [ ! -d "$record/home" ] || return 0
     lease_home "$MA_HOME" ||
         die "the agent's core still has its account home $MA_HOME open after its service was stopped: stop it, then run this again"
@@ -1148,12 +1149,22 @@ store_keep() {
 
 # Stops the agent's services named; one that is not running, or not there, is left as it is.
 services_stop() {
-    local service
+    local service state
     [ $# -gt 0 ] || return 0
+    # Each must be stopped, or not there, afterwards: a stop can fail, and a unit set to start again on
+    # its own could start a core on the store as it is copied or put back (D-159). Whether the stop
+    # command failed says nothing of a unit that is not there, so the state is read instead.
     if [ "$OS" = Linux ]; then
         systemctl --user stop "$@" >/dev/null 2>&1 9>&- || true
+        for service in "$@"; do
+            state=$(systemctl --user show -p ActiveState --value "$service" 2>/dev/null 9>&-) || return 1
+            case $state in "" | inactive | failed) ;; *) return 1 ;; esac
+        done
     else
-        for service in "$@"; do launchctl bootout "gui/$(id -u)/$service" >/dev/null 2>&1 9>&- || true; done
+        for service in "$@"; do
+            launchctl bootout "gui/$(id -u)/$service" >/dev/null 2>&1 9>&- || true
+            ! launchctl print "gui/$(id -u)/$service" >/dev/null 2>&1 9>&- || return 1
+        done
     fi
 }
 
@@ -1239,7 +1250,10 @@ store_put_back() {
     local record=$1 home entry ok=0
     home=$(sed -n 1p "$record/where") && [ -n "$home" ] || return 1
     # shellcheck disable=SC2046 # one service a line, without spaces
-    services_stop $(sed 1d "$record/where")
+    if ! services_stop $(sed 1d "$record/where"); then
+        printf 'error: %s\n' "the services of the agent whose account home is $home did not stop, so the home could not be put back as it was before the upgrade" >&2
+        return 1
+    fi
     [ -d "$record/home" ] || return 0
     (umask 077 && mkdir -p "$home") || return 1
     if ! lease_home "$home"; then
@@ -1412,6 +1426,9 @@ install_core() {
     MA_STAGED=1
     mkdir -p "$MA_STAGE/.core"
     install -m 0755 "$binary" "$MA_STAGE/.core/marmot-agent"
+    # The core staged is the one the checksum names, which a copy of a store is kept for.
+    [ "$(sha256_of "$MA_STAGE/.core/marmot-agent")" = "$MA_CORE_SUM" ] ||
+        die "$binary changed while it was being installed: run this again"
     # shellcheck disable=SC2046 # one part per word
     copy_support "$tree" "$MA_STAGE" $(lib_parts)
 }

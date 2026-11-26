@@ -71,6 +71,11 @@ OLDER_CORE = FAKE_CORE + "# an older core\n"
 # starts as FAKE_PAUSE says makes the file FAKE_PAUSE_AT.reached, then waits until FAKE_PAUSE_AT is there.
 FAKE_LOGGER = """#!/bin/sh
 echo "$(basename "$0") $*" >> "$FAKE_LOG"
+# A unit's state is FAKE_ACTIVE's, inactive unless it says; a LaunchAgent is never loaded once booted out.
+case "$(basename "$0") $*" in
+    "systemctl --user show"*) echo "${FAKE_ACTIVE:-inactive}"; exit 0 ;;
+    "launchctl print"*) exit 113 ;;
+esac
 if [ -n "${FAKE_FAIL:-}" ]; then case "$(basename "$0") $*" in "$FAKE_FAIL"*) echo "failing, as asked" >&2; exit 1 ;; esac; fi
 if [ -n "${FAKE_PAUSE:-}" ]; then case "$(basename "$0") $*" in "$FAKE_PAUSE"*)
     : >"$FAKE_PAUSE_AT.reached"
@@ -420,6 +425,7 @@ MV_EXCHANGES = "--exchange" in subprocess.run(["mv", "--help"], capture_output=T
 # when a connector's unit fails beside it.
 FAKE_SYSTEMCTL_STORE = """#!/bin/sh
 echo "$(basename "$0") $*" >> "$FAKE_LOG"
+case "$*" in "--user show"*) echo "${FAKE_ACTIVE:-inactive}"; exit 0 ;; esac
 if [ -n "${FAKE_PAUSE:-}" ]; then case "$(basename "$0") $*" in "$FAKE_PAUSE"*)
     : >"$FAKE_PAUSE_AT.reached"
     n=0; while [ ! -e "$FAKE_PAUSE_AT" ] && [ "$n" -lt 1200 ]; do sleep 0.05; n=$((n + 1)); done ;;
@@ -2255,6 +2261,23 @@ exec {rm} "$@"
                 self.assertEqual(self.shared_generations(m), {"core": "new", "install files": "new"})
                 self.assertEqual(self.store_of(m), "new")
                 self.no_copy(m)
+
+    def test_a_service_that_does_not_stop_stops_the_upgrade_before_the_copy(self):
+        """An upgrade whose agent's services are still running, or waiting to start again, once they were
+        stopped copies nothing and puts nothing new in: the older core and its store stay as they were."""
+        m = Machine(self)
+        self.older_store(m)
+        failed = m.run(self.HARNESS, *self.store_args(m), env={"FAKE_ACTIVE": "activating"}, check=False)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("the agent's services did not stop", failed.stderr)
+        self.assertEqual(self.shared_generations(m), {"core": "older", "install files": "older"})
+        self.assertEqual(self.store_of(m), "older")
+        self.assertFalse((m.data / "upgrade/stores/first/home").exists(), "nothing was copied")
+        # Once the services stop, the next run finishes the upgrade, and the store goes forward.
+        m.run(self.HARNESS, *self.store_args(m))
+        self.assertEqual(self.shared_generations(m), {"core": "new", "install files": "new"})
+        self.assertEqual(self.store_of(m), "new")
+        self.no_copy(m)
 
     def test_a_successful_upgrade_removes_the_copy(self):
         """While the upgrade is under way, the copy of the store is in the upgrade's record alone, the
