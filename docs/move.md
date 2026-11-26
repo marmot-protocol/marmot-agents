@@ -87,16 +87,18 @@ There is no release of `marmot-agent` yet: build it from a checkout first, as th
    ```
 
    It adds nothing to the settings: the owner, the rights, the allow-lists, `files_from` and the work folder stay
-   as the import wrote them. A `--cwd` given to it replaces the work folder in them, and nothing else. A work
-   folder that holds `~/.local/share/marmot-agent`, as your home does, is refused before anything changes: give
-   `--cwd`. For Claude Code, give `--cwd` always, as the import's settings for it do not name the folder:
+   as the import wrote them. To work elsewhere, change `cwd` in them before the installer runs: until the move
+   is done, it refuses a `--cwd` that differs. A work folder that holds `~/.local/share/marmot-agent`, as your
+   home does, or holds or lies inside the old home or its backup, is refused before anything changes. It checks the harness's program the settings name, as the
+   old service ran it, not the one on your `PATH`. For Claude Code, give `--cwd` always, as the import's settings for it do not name the folder:
    `install/claude-code.sh --from-source --cwd ~/work`. It runs the Claude Code connector as a service beside the
    core's. For Goose, add `--goose-mode approve` to have it ask in the chat before each tool.
 
    Before the new core first opens the old home, it stops the agent and copies the home, as an upgrade does
    ([D-159](decisions.md#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)),
    even if the same `marmot-agent` is installed for another agent already. If the install fails after that, it
-   puts the home back as the import left it, leaves the agent stopped and says so; run it again once what failed
+   puts the home back as the import left it, leaves the agent stopped, disables its new services so that none
+   starts at your next login, and says so; run it again once what failed
    is fixed, or go back as [below](#going-back). The move is done once the core runs as a service; the installer
    notes it in the agent's folder (`moved`).
 

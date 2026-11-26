@@ -193,6 +193,25 @@ program_path() {
     esac
 }
 
+# A coding harness's program: for an agent moved over, the one its settings name as a whole path, as the
+# import carried it over from the old service (`program`, or the first word of `command`), which need not
+# be on PATH; otherwise NAME on PATH. Fails when neither is there.
+harness_program() {
+    local kept
+    if imported; then
+        kept=$(sed -n -e 's/^program = "\([^"\\]*\)"[[:space:]]*$/\1/p' \
+            -e 's/^command = \["\([^"\\]*\)".*$/\1/p' "$MA_SETTINGS" | head -n 1)
+        case $kept in
+            /*)
+                [ -x "$kept" ] || return 1
+                printf '%s' "$kept"
+                return 0
+                ;;
+        esac
+    fi
+    program_path "$1"
+}
+
 need_docker() {
     if ! program_path docker >/dev/null; then
         missing "Docker" "$HARNESS_TITLE runs in a container. Install Docker (https://docs.docker.com/engine/install/)."
@@ -1186,6 +1205,23 @@ services_stop() {
     fi
 }
 
+# Takes the services of an agent moved over out of what starts at login, as they were before its first
+# start, which is being put back (D-160): enabled, they would start a core on the home as the import left
+# it, uncopied, at the next login, before its installer runs again and enables them. On macOS, its
+# LaunchAgents go, which that run writes again. One that cannot be taken out is said.
+services_disable() {
+    local service
+    for service in "$@"; do
+        if [ "$OS" = Linux ]; then
+            systemctl --user disable "$service" >/dev/null 2>&1 9>&- || true
+            [ "$(systemctl --user is-enabled "$service" 2>/dev/null 9>&-)" != enabled ] && continue
+        else
+            rm -f "$MA_LAUNCHD_DIR/$service.plist" && continue
+        fi
+        printf 'error: %s\n' "$service could not be taken out of what starts at login: disable it yourself before you log in again" >&2
+    done
+}
+
 # Says how to start the services of the agent a store record names, which are left stopped: an install
 # starts no agent because of an upgrade that was put back or that it did not make (D-159).
 services_hint() {
@@ -1278,6 +1314,8 @@ store_put_back() {
         printf 'error: %s\n' "the services of the agent whose account home is $home did not stop, so the home could not be put back as it was before the upgrade" >&2
         return 1
     fi
+    # shellcheck disable=SC2046 # one service a line, without spaces
+    [ ! -f "$record/moved" ] || services_disable $(sed 1d "$record/where")
     [ -d "$record/home" ] || return 0
     (umask 077 && mkdir -p "$home") || return 1
     if ! lease_home "$home"; then
@@ -2032,7 +2070,11 @@ settle_values() {
         fi
         CWD=$(absolute "$CWD")
         # One kept from before, as one the import wrote (by default your home folder), is checked as --cwd is.
-        [ -n "$CWD_GIVEN" ] || CWD_WHAT="the agent's work folder, $CWD (give --cwd for another),"
+        if [ -z "$CWD_GIVEN" ] && [ "$HARNESS_KIND" = builtin ] && first_start; then
+            CWD_WHAT="the work folder the import wrote in $MA_SETTINGS, $CWD (write another there as cwd),"
+        elif [ -z "$CWD_GIVEN" ]; then
+            CWD_WHAT="the agent's work folder, $CWD (give --cwd for another),"
+        fi
         check_cwd
         plan_settings_update
         return 0
@@ -2061,6 +2103,9 @@ plan_settings_update() {
     [ "$HARNESS_KIND" = builtin ] || return 0
     local old
     if [ -n "$CWD_GIVEN" ] && ! grep -qxF -- "cwd = $(toml_str "$CWD")" "$MA_SETTINGS"; then
+        # The settings of a move not yet done stay as the import wrote them (D-160).
+        ! first_start ||
+            die "$MA_SETTINGS names the work folder the import wrote; to change it, write it there as cwd, then run this again without --cwd"
         [ "$(grep -c '^cwd = ' "$MA_SETTINGS" || true)" = 1 ] ||
             die "$MA_SETTINGS has no single cwd line to change: write the work folder there yourself"
         SET_CWD=1
@@ -2080,11 +2125,22 @@ plan_settings_update() {
 # it: so it must not hold the agents' keys or the model key, nor be inside the folder that holds the
 # agents. Paths are compared with links, `.` and `..` resolved, and the work folder is kept that way.
 check_cwd() {
-    local key what=${CWD_WHAT:---cwd}
+    local key kept what=${CWD_WHAT:---cwd}
     no_control "$what" "$CWD"
     CWD=$(canonical "$CWD") || die "$what names a loop of links"
     if inside "$CWD" "$MA_DATA"; then die "$what must not be inside $MA_DATA, which holds the agents' keys"; fi
     if inside "$MA_DATA" "$CWD"; then die "$what must not hold $MA_DATA, which holds the agents' keys"; fi
+    # An agent moved over keeps its home, and the import's backup of it, where they were, out of MA_DATA
+    # (D-160): the harness reads anything in its work folder, so that holds neither, nor lies in one.
+    if imported; then
+        for kept in "$MA_HOME" "$(settings_backup || true)"; do
+            [ -n "$kept" ] || continue
+            kept=$(canonical "$kept") || die "$kept names a loop of links"
+            if inside "$CWD" "$kept" || inside "$kept" "$CWD"; then
+                die "$what must not hold or be inside $kept, which holds the agent's keys"
+            fi
+        done
+    fi
     [ -n "$MODEL_KEY" ] || return 0
     key=$(canonical "$MODEL_KEY") || die "--model-key names a loop of links"
     if inside "$key" "$CWD"; then

@@ -275,9 +275,10 @@ Built in the core, the Codex driver and MDK ([D-141](decisions.md#d-141-subagent
   connector's folders, in the line the import wrote ([D-119](decisions.md#d-119-how-a-gateway-install-moves-over-its-work-folder-a-half-done-openclaw-move-a-fresh-conversation)).
 - A coding install (Codex, Claude Code, OpenCode, Pi, Goose) moves over with the import, its settings written to the
   agent's folder, then its installer, with no flag: the installer takes settings imported from its own harness's
-  connector and refuses another's. It uses those settings as written and the identity in the old home, never runs
-  `init`, and runs the core, and Claude Code's connector, as services. Claude Code needs `--cwd`. A work folder
-  that holds the installer's data folder, as the import's default (your home) does, is refused. The first start
+  connector and refuses another's. It uses those settings as written, `cwd` too until the move is done, and the
+  identity in the old home, never runs `init`, and runs the core, and Claude Code's connector, as services. Claude Code needs `--cwd`. A work folder
+  that holds the installer's data folder, as the import's default (your home) does, or holds or lies in the old
+  home or its backup, is refused. The first start
   of any agent moved over is copied, and put back on a failure, whatever core was installed before ([D-160](decisions.md#d-160-the-coding-installers-take-an-install-moved-over-and-run-it-as-a-service)).
 
 ## Verification and how the work runs

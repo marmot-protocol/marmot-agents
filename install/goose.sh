@@ -31,7 +31,7 @@ harness_check() {
     fi
     container_options_only
     HARNESS_SUPPORT=""
-    GOOSE=$(program_path goose) || {
+    GOOSE=$(harness_program goose) || {
         GOOSE=goose
         missing "Goose" "$GOOSE_HOW"
         return 0

@@ -12,7 +12,7 @@ HARNESS_OPTIONS=""
 HARNESS_SUPPORT=""
 
 harness_check() {
-    CURSOR=$(program_path cursor-agent) || {
+    CURSOR=$(harness_program cursor-agent) || {
         CURSOR=cursor-agent
         missing "the Cursor CLI (cursor-agent)" "Install it (https://cursor.com/cli), sign in with: cursor-agent login," \
             "then run this again."

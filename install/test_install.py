@@ -1513,12 +1513,14 @@ class Moved(unittest.TestCase):
         "pi": ("Pi", '[pi]\ncwd = "{cwd}"\n'),
         "claude-code": ("Claude Code", "[connector]\n"),
     }
+    # The import's name for each connector (Connector in crates/marmot-agent/src/import/mod.rs).
+    CONNECTORS = {"codex": "Codex", "opencode": "OpenCode", "goose": "Goose", "pi": "Pi", "claude-code": "Claude"}
 
     @classmethod
-    def moved(cls, m: Machine, harness: str, cwd=None, title=None) -> tuple:
+    def moved(cls, m: Machine, harness: str, cwd=None, title=None, section=None) -> tuple:
         """The old home as today's connector left it, with a store wn-agent opened, and the settings the
         import writes for the harness, in the agent's folder (docs/move.md)."""
-        own_title, section = cls.SECTIONS[harness]
+        own_title, own_section = cls.SECTIONS[harness]
         cwd = cwd or str(m.home / "work")
         old_home = m.home / f".marmot-agents/{harness}"
         store = old_home / "accounts/agent"
@@ -1537,7 +1539,7 @@ class Moved(unittest.TestCase):
             f'home = "{old_home}"\nrelays = ["wss://relay.example"]\nowner = "{OWNER}"\n'
             f'prompt = {{ people = ["{OWNER}", "{"ef" * 32}"] }}\napprove = "owner"\ninvite = ["{"ef" * 32}"]\n'
             "# Only the folders the old connector let files be sent from; never the working folder.\n"
-            f'files_from = ["{m.home / "media"}"]\n\n' + section.format(cwd=cwd))
+            f'files_from = ["{m.home / "media"}"]\n\n' + (section or own_section).format(cwd=cwd))
         settings.chmod(0o600)
         return old_home, settings
 
@@ -1571,9 +1573,7 @@ class Moved(unittest.TestCase):
         self.assertIn('"# Imported by `marmot-agent import` from a {} install, at {}.\\n\\\n', source)
         for harness, (title, _) in self.SECTIONS.items():
             with self.subTest(harness=harness):
-                self.assertIn(f'HARNESS_TITLE={shlex.quote(title)}\n'.replace("'", '"'),
-                              (HERE / f"{harness}.sh").read_text())
-                self.assertRegex(source, rf'Self::\w+ => "{title}",')
+                self.assertIn(f'            Self::{self.CONNECTORS[harness]} => "{title}",\n', source)
 
     def test_each_coding_harness_takes_an_install_moved_over(self):
         for harness in self.SECTIONS:
@@ -1639,6 +1639,10 @@ class Moved(unittest.TestCase):
                 self.assertIn(f'the agent "{harness}" is left stopped, its account home as marmot-agent import left it',
                               failed.stderr)
                 self.assertNotIn("systemctl --user start", failed.stderr)
+                # Its new services do not start at the next login, before the installer runs again.
+                for unit in [f"marmot-agent-{harness}.service"] + ([f"marmot-agent-{harness}-connector.service"]
+                                                                   if harness in SOCKET else []):
+                    self.assertIn(f"systemctl --user disable {unit}", m.calls())
                 self.assertFalse((m.data / "upgrade").exists())
                 self.assertFalse((agent / "moved").exists())
                 self.assertEqual(settings.read_text(), before)
@@ -1665,20 +1669,70 @@ class Moved(unittest.TestCase):
                 self.assertEqual(settings.read_text(), before)
                 self.assertEqual(sorted(p.name for p in settings.parent.iterdir()), ["settings.toml"])
 
-    def test_a_work_folder_the_import_left_is_checked_as_cwd_is(self):
+    def test_the_program_the_import_carried_over_is_the_one_checked(self):
+        """The old service's harness program, carried over as a whole path, need not be on PATH; one the
+        settings name that is not there stops the install, before anything changes."""
+        for harness, section in (("codex", '[codex]\nprogram = "{program}"\ncwd = "{cwd}"\n'),
+                                 ("goose", '[acp]\nname = "goose"\ncommand = ["{program}", "acp"]\ncwd = "{cwd}"\n')):
+            with self.subTest(harness=harness):
+                m = Machine(self, programs=())
+                program = m.dir / "elsewhere" / harness
+                program.parent.mkdir()
+                _, settings = self.moved(m, harness, section=section.replace("{program}", str(program)))
+                result = m.run(harness, *self.args(m, harness), check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("get what is missing above", result.stderr)
+                self.assertEqual(m.calls(), [])
+                m.write(program, FAKE_VERSIONED.format(version=" 1.59.2"))
+                out = m.run(harness, *self.args(m, harness)).stdout
+                if harness == "goose":
+                    self.assertIn(f"found Goose 1.59.2 at {program}", out)
+                self.assertIn(f"systemctl --user restart marmot-agent-{harness}.service", m.calls())
+
+    def test_a_work_folder_holding_or_inside_the_old_home_or_its_backup_is_refused(self):
+        """The old home and the import's backup of it stay out of the installer's data folder, and hold the
+        agent's keys: the harness, which reads anything in its work folder, never works in or above one."""
+        for harness in ("codex", "claude-code"):
+            for name in ("home", "inside", "parent", "backup"):
+                with self.subTest(harness=harness, folder=name):
+                    m = Machine(self)
+                    old_home = m.home / f".marmot-agents/{harness}"
+                    backup = Path(f"{old_home}.backup-20261126T090000Z")
+                    cwd = {"home": old_home, "inside": old_home / "work", "parent": old_home.parent,
+                           "backup": backup}[name]
+                    _, settings = self.moved(m, harness, cwd=str(cwd))
+                    backup.mkdir()
+                    before = settings.read_text()
+                    args = ["--cwd", str(cwd)] if harness in SOCKET else []
+                    result = m.run(harness, "--yes", "--binary", str(m.core), *args, check=False)
+                    self.assertNotEqual(result.returncode, 0)
+                    kept = backup if name == "backup" else old_home
+                    self.assertIn(f"must not hold or be inside {kept}, which holds the agent's keys", result.stderr)
+                    self.assertEqual((m.calls(), settings.read_text()), ([], before))
+                    self.assertEqual(sorted(p.name for p in settings.parent.iterdir()), ["settings.toml"])
+
+    def test_a_work_folder_the_import_left_is_kept_and_checked_as_cwd_is(self):
         """The import's work folder is your home unless it was given --cwd, which holds the agents' folder:
-        refused before anything is changed, and --cwd given to the installer writes another into the
-        settings, which change nowhere else. Claude Code's connector needs --cwd, which the settings do not
-        say."""
+        refused before anything is changed. Until the move is done, --cwd does not rewrite the settings the
+        import wrote; the folder is changed there. Claude Code's connector needs --cwd, which the settings
+        do not say."""
         m = Machine(self)
         _, settings = self.moved(m, "codex", cwd=str(m.home))
         before = settings.read_text()
         result = m.run("codex", *self.args(m, "codex"), check=False)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn(f"the agent's work folder, {m.home} (give --cwd for another), must not hold", result.stderr)
+        self.assertIn(f"the work folder the import wrote in {settings}, {m.home} (write another there as cwd), "
+                      "must not hold", result.stderr)
         self.assertEqual((m.calls(), settings.read_text()), ([], before))
-        m.run("codex", *self.args(m, "codex", "--cwd", str(m.home / "work")))
-        self.assertEqual(settings.read_text(), before.replace(f'cwd = "{m.home}"', f'cwd = "{m.home / "work"}"'))
+        refused = m.run("codex", *self.args(m, "codex", "--cwd", str(m.home / "work")), check=False)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("names the work folder the import wrote; to change it, write it there as cwd", refused.stderr)
+        self.assertEqual((m.calls(), settings.read_text()), ([], before))
+        settings.write_text(before.replace(f'cwd = "{m.home}"', f'cwd = "{m.home / "work"}"'))
+        m.run("codex", *self.args(m, "codex"))
+        # Once the move is done, --cwd given again replaces the folder, as for any agent.
+        m.run("codex", *self.args(m, "codex", "--cwd", str(m.home / "other")))
+        self.assertIn(f'cwd = "{m.home / "other"}"', settings.read_text())
         m = Machine(self)
         self.moved(m, "claude-code")
         result = m.run("claude-code", "--yes", "--binary", str(m.core), check=False)

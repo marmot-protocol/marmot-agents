@@ -3618,15 +3618,18 @@ for Claude Code so does its connector, beside it.
   installer runs.
 - **What it uses, and adds.** It uses the settings as the import wrote them and the identity in the old home. It
   never makes an identity or runs `marmot-agent init` there. It adds nothing to the settings: the owner, the
-  rights, the allow-lists, the relays, `files_from` and the work folder stay as written. A `--cwd` given to it is
-  written in place of the settings' `cwd`, as on any run again. In the agent's folder it writes what it writes for
+  rights, the allow-lists, the relays, `files_from` and the work folder stay as written. Until the move is done, a
+  `--cwd` that differs from the settings' `cwd` stops it, before anything changes, and says to change the folder
+  in the settings; after that, `--cwd` replaces it, as on any run again. It checks the harness's program the
+  settings name as a whole path, as the import carried it over from the old service, not the one on `PATH`. In the agent's folder it writes what it writes for
   every agent: the record of its harness, its choices, the service's environment and launchers. It also writes the
   service's units. The Claude Code connector takes its work folder on its command line, and the import's settings
   for Claude Code do not name one, so `claude-code.sh` needs `--cwd`.
 - **The work folder is checked.** Unless the import was given `--cwd`, its work folder is the person's home
   folder. The installer checks the folder the settings name as it checks `--cwd`. It refuses, before it changes
-  anything, a folder that holds or lies inside its data folder, which holds the agents' keys, and says to give
-  `--cwd`.
+  anything, a folder that holds or lies inside its data folder, which holds the agents' keys. For an agent moved
+  over it also refuses one that holds or lies inside the old home, or the import's backup of it, which hold that
+  agent's keys outside the data folder: the harness reads anything in its work folder.
 - **The first start is copied.** [D-159](#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)
   copies an agent's home only when the install puts in a core other than the one there before. The first core
   of ours to open a home moved over moves its store forward from the old connector's, whichever core it is. So an
@@ -3634,8 +3637,14 @@ for Claude Code so does its connector, beside it.
   made after another agent's install has put the same core in place is copied too, and so is a move of Hermes or
   OpenClaw. An install whose upgrade ended after it started such an agent notes that in the agent's folder
   (`moved`), and from then on D-159's rule holds. Put back, the agent is left stopped, with its home as the import
-  left it. The installer then says to run it again once what failed is fixed, or to go back to today's connector.
-  It does not print the command that starts the service, which would open the home uncopied.
+  left it, and its new services are taken out of what starts at login (disabled on Linux; on macOS its
+  LaunchAgents are removed, which a run again writes back). The installer then says to run it again once what
+  failed is fixed, or to go back to today's connector. It does not print the command that starts the service,
+  which would open the home uncopied.
+- **Accepted limit.** The move counts as done once the service manager has started the core (`Type=exec` on
+  Linux), not once the core says it is ready. A core that then fails, as when the harness cannot start, has
+  moved the store forward; the new core stays installed and opens it, so the agent runs once the harness is
+  fixed, and going back to today's connector takes the import's backup, as after any move.
 
 **Why.** Run by hand, an agent stops when the person logs out or the machine restarts. Each piece takes the smallest
 step that is safe. The settings already say which connector they came from, so a flag would add nothing. A
