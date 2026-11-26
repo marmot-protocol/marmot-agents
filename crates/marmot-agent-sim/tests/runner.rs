@@ -7,7 +7,7 @@
 mod regressions;
 
 use marmot_agent_sim::{
-    Action, BugSet, Family, Faults, Outcome, Posted, Report, RunName, Schedule, What, run,
+    Action, BugSet, Family, Faults, Outcome, Posted, ReadStep, Report, RunName, Schedule, What, run,
 };
 
 /// One chat, one prompt that reaches the harness, and then `then`.
@@ -159,4 +159,48 @@ fn a_send_given_up_after_its_tries_is_a_gap_the_oracles_allow() {
     assert_eq!(property(&report), None, "{:?}", report.failure);
     let given_up = (report.trace.iter()).any(|t| t.what.contains("given up"));
     assert!(given_up, "{:#?}", report.trace);
+}
+
+// From CoreLifecycle's `SkipUnread` L3 counterexample (`formal/tla/counterexamples/skip-unread.json`,
+// issue #80 / #88): when MDK cannot read a stored message for a moment (`NotNow`), the core leaves
+// the read mark alone, marks the chat waiting, ignores live messages for that chat while it waits,
+// and reads the chat again from its mark in storage order (`L3`, `S10`).
+#[test]
+fn a_message_whose_read_fails_is_read_again_not_skipped() {
+    let prompt = Posted {
+        chat: 0,
+        what: What::Prompt { approval: false },
+    };
+    let schedule = Schedule {
+        name: RunName::new(Family::Live, 0, 0),
+        chats: 1,
+        bugs: BugSet::default(),
+        faults: Faults::default(),
+        messages: vec![prompt, prompt],
+        steps: vec![
+            Action::Invite { chat: 0 },
+            Action::ReadFails {
+                at: ReadStep::Place,
+            },
+            Action::Store { msg: 0 },
+            Action::Hear { msg: 0 },
+            // A second prompt arrives while the chat waits to be read again: it must not jump
+            // ahead of m0 (S10), and both must be delivered once MDK can read again (L3).
+            Action::Store { msg: 1 },
+            Action::Hear { msg: 1 },
+        ],
+    };
+    let report = run(&schedule);
+    assert_eq!(property(&report), None, "{:#?}", report.trace);
+    let failed_at = (report.trace.iter())
+        .position(|t| t.what == "Place: Error")
+        .unwrap_or_else(|| panic!("expected Place: Error in trace\n{:#?}", report.trace));
+    let retried =
+        (report.trace[failed_at + 1..].iter()).any(|t| t.what.starts_with("CatchUp(c0, "));
+    assert!(
+        retried,
+        "expected CatchUp after Place: Error\n{:#?}",
+        report.trace
+    );
+    assert_eq!(report.stats.delivered, 2, "{:#?}", report.trace);
 }

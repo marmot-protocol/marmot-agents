@@ -49,9 +49,9 @@ harness finishes its turns, a send that lands late lands, and the clock runs. By
   its versions. These two were let off whenever the first send was refused, until the TLA+ model showed the core left
   them for good; with that limit removed, 80 of 1,200 gate runs failed (seed 0, 200 runs per family) until the core
   was fixed.
-- The world sees a give-up from outside: a send whose last try came back unknown and stored nothing, when the core
-  tries another send to the same chat instead (sends to a chat go one at a time, oldest first). It is recorded with
-  the sends MDK refused.
+- The world records a give-up right when the core gives a send up: after MDK drops `REJECTED_TRIES` tries of it
+  (`side.rs` `dropped_try`), it is recorded with the sends MDK refused, even if nothing is tried in that chat after
+  it. Sends whose outcome is unknown are retried under their token and never given up.
 
 A run also fails, with its schedule and trace, when the core's task panics, ends when no stop, driver end or failed
 save explains it, or does not end cleanly after the last stop.
