@@ -3782,3 +3782,29 @@ SemVer manifests and a mechanical schema compatibility guard let each track vers
 of a stable socket protocol boundary (Phase 4.1 of #222).
 
 Decided 2026-11-26 by the project owner (as Phase 4.1 of #222).
+
+## D-166 Per-track releases, compatibility manifests, and protected release tags
+
+**Decision.** Building on [D-091](#d-091-one-install-script-per-harness-and-release-binaries-from-ci) and
+[D-165](#d-165-four-independent-release-tracks-decoupled-by-the-socket-protocol-version):
+
+- `.github/workflows/release.yml` ships all four tracks independently:
+  - `vX.Y.Z*` (`marmot-agent`) runs the 3-platform cold Rust core build (`tools/release/package.sh`).
+  - `claude-code-vX.Y.Z*`, `openclaw-vX.Y.Z*`, and `hermes-vX.Y.Z*` run only that connector's verification suite
+    and `tools/release/package_connector.sh`, publishing in ~30–60 seconds with no Rust build.
+  - Manual `workflow_dispatch` on `master` plans from the verified `canary` branch via
+    `tools/release/plan_release.py` (`dry_run: true` by default) and can cut `-rc.N` prereleases directly from
+    `canary` once the track's manifest version matches the planned base version (`tools/release/resolve_release.py`).
+- Every release publishes `SHA256SUMS` and a `latest.json` compatibility manifest (`tools/release/write_manifest.py`)
+  recording `schema_version`, `track`, `version`, `tag`, `prerelease`, `commit`, `socket_protocol`, and each asset's
+  SHA-256 digest and byte size. GitHub's repository-wide "Latest" release always tracks the latest stable
+  `marmot-agent` core release (`--latest=false` on connector tracks) so installers fetching `/releases/latest` keep
+  working. Only the final `publish` job holds `contents: write`, and it runs no repository code.
+- Repository tag ruleset `#28179915` (`Release tags`) protects `v*`, `claude-code-v*`, `openclaw-v*`, and
+  `hermes-v*` (excluding `*-rc.*`) against deletion, updates, and unsigned tags.
+
+**Why.** Connector fixes ship in under a minute without rebuilding Rust across three platforms, every release
+advertises its exact socket protocol and checksums for split-artifact installers (Phase 4.4), and stable release
+tags stay immutable and cryptographically signed (Phase 4.3 of #222).
+
+Decided 2026-11-26 by the project owner (as Phase 4.3 of #222).

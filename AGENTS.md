@@ -77,7 +77,7 @@ being replaced by what is designed here, not extended.
 | Work on the Hermes plugin's transport | `python/marmot_hermes/connector.py` and `adapter.py`, after `docs/design/drivers.md` and `docs/reference/hermes-messages.md` |
 | Work on the core | `crates/marmot-agent`, after `docs/plan.md` and `docs/design/architecture.md` |
 | Work on the install scripts | `install/lib.sh`, then the harness's script beside it, after `README.md` ("Installing an agent") |
-| Work on the release | `.github/workflows/release.yml` and `tools/release/package.sh` |
+| Work on the release | `.github/workflows/release.yml`, `tools/release/package.sh`, `package_connector.sh`, `plan_release.py`, `resolve_release.py`, and `write_manifest.py` |
 | Work on moving an install over | `crates/marmot-agent/src/import`, after `docs/move.md` and `docs/reference/current-connectors.md` |
 | Run or change the end-to-end swap test on a test machine | `docs/swap-test.md`, after `docs/move.md` |
 | Change the compiler, the workspace settings or CI | `rust-toolchain.toml`, `Cargo.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml`, `nightly.yml` and `.github/actions/rust` |
@@ -385,13 +385,14 @@ For any change under `install/` or `tools/release/`, or to `tools/tla/run.sh`, w
 [ShellCheck](https://github.com/koalaman/shellcheck) at the release CI names (it is a tool, like lychee):
 
 ```sh
-shellcheck -x install/*.sh tools/release/package.sh tools/tla/run.sh
+shellcheck -x install/*.sh tools/release/archive.sh tools/release/package.sh tools/release/package_connector.sh tools/tla/run.sh
 python3 -m unittest discover -s install -p 'test_*.py'   # runs each install script against a throwaway
                                                          # home, with stand-ins for what it calls
 ```
 
-`.github/workflows/release.yml` runs only on a version tag, so a change to it is checked by reading it, and by
-[actionlint](https://github.com/rhysd/actionlint) if you have it. Check a change to `ci.yml`, `nightly.yml` or
+`.github/workflows/release.yml` runs on per-track version tags and on manual `workflow_dispatch` (dry-run planning or
+`-rc.N` cuts from `canary`), so check changes to it by reading it, by [actionlint](https://github.com/rhysd/actionlint)
+if you have it, and with the `tools/release` tests below. Check a change to `ci.yml`, `nightly.yml` or
 `.github/actions/` with actionlint too, and by running the tier it changes on its branch by hand (above);
 `nightly.yml` can be run by hand only once it is on `master`. For a change to `ci.yml`'s jobs or to `tools/ci`,
 which the `CI passed` job runs:
@@ -403,7 +404,7 @@ python3 -m unittest discover -s tools/ci -p 'test_*.py'   # the gate passes each
                                                           # and then passed, once, and reads no log
 python3 tools/ci/check_socket_compat.py --base origin/master   # per-track versions, protocol alignment, and
                                                                # direction-aware socket schema compatibility (D-165)
-python3 -m unittest discover -s tools/release -p 'test_*.py'   # path-aware SemVer release planner tests
+python3 -m unittest discover -s tools/release -p 'test_*.py'   # release planner, resolver, connector packaging, and manifests
 ```
 
 For a change to a function a Kani proof covers (a `proofs` module under `#[cfg(kani)]` in the core: the rights

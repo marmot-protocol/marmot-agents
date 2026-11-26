@@ -535,7 +535,7 @@ jobs:
       - name: The install scripts pass ShellCheck
         run: |
           shellcheck --version
-          shellcheck -x install/*.sh tools/release/package.sh tools/tla/run.sh
+          shellcheck -x install/*.sh tools/release/archive.sh tools/release/package.sh tools/release/package_connector.sh tools/tla/run.sh
 
       - name: Each install script runs against a throwaway home, with stand-ins for what it calls
         # Each test named as it runs, so a run cut short says where, and the ten slowest at the end.
