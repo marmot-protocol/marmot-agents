@@ -3171,6 +3171,9 @@ The narrower path is narrowed further by
 no longer hands such a send to MDK again, but for one case, a send whose first answer from MDK the core lost.
 It is closed by [D-157](#d-157-the-core-goes-on-with-the-event-mdk-names-for-a-send-it-holds-and-never-hands-such-a-send-to-mdk-again): the core hands no such send to MDK again on any path. The limit itself stands.
 
+[D-158](#d-158-the-core-does-not-limit-a-send-to-the-chats-members-a-send-in-flight-when-the-owner-adds-someone-may-reach-them) accepts the limit for good: the core does not limit sends to the chat's members, and asks MDK
+for nothing more.
+
 ## D-149 Stop in a subagent's thread stops that subagent alone
 
 **Decision.** This builds the Stop in a thread of
@@ -3497,3 +3500,22 @@ a send handed again after MDK let go of its token, is closed too.
 That the one path left and the stall go was decided 2026-11-25 by the project owner, in D-152. Taking a refusal for
 a member as a drop was decided 2026-11-25 by the builder, under the project owner's instruction to decide minor
 points.
+
+## D-158 The core does not limit a send to the chat's members: a send in flight when the owner adds someone may reach them
+
+**Decision.** The core keeps the rule of
+[D-136](#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group):
+it reads who is in a chat before each send, and holds back the agent's full activity from a chat that is not the
+owner's two-person chat. It does not use MDK's sends limited to named members (`submit_custom_event_to_members`,
+MDK pull request 3712). A send the core handed to MDK while the chat was the owner's, which MDK posts after someone
+was added, can reach the person added. That is fine, not a limit: only the owner can add someone to their
+two-person chat with the agent, and the person they add is meant to read the chat. D-148's limit is accepted for
+good, not for the pilot only, and nothing more is asked of MDK for it.
+
+**Why.** Limiting those sends took more bookkeeping than the gap is worth: MDK can refuse such a send after its status
+already says its engine has it, so the core could not tell when a send was done, and review found one edge after
+another. The gap is a few seconds wide, and opens only when the owner adds someone on purpose.
+
+Decided 2026-11-26 by the project owner. The change that limited sends (branch `member-limited-sends`) was built,
+reviewed and not merged.
+
