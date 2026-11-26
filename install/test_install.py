@@ -576,10 +576,68 @@ class Machine:
     def calls(self) -> list:
         return self.log.read_text().splitlines()
 
+    _STATE_FILES = ("calls.log", "calls.log.refused", "docker-tags", "docker-images")
+
+    def save_state(self, name: str) -> None:
+        """Saves this machine's mutable home and stand-in state beside it, to restore at the same paths."""
+        snap = self.dir / f".snap-{name}"
+        if snap.exists():
+            shutil.rmtree(snap)
+        snap.mkdir()
+        shutil.copytree(self.home, snap / "home", symlinks=True)
+        for filename in self._STATE_FILES:
+            src = self.dir / filename
+            if src.exists():
+                shutil.copy2(src, snap / filename)
+
+    def restore_state(self, name: str) -> None:
+        """Restores mutable state saved by save_state(name) into the exact same HOME paths."""
+        snap = self.dir / f".snap-{name}"
+        shutil.rmtree(self.home)
+        shutil.copytree(snap / "home", self.home, symlinks=True)
+        for filename in self._STATE_FILES:
+            dst = self.dir / filename
+            src = snap / filename
+            if src.exists():
+                shutil.copy2(src, dst)
+            elif dst.exists():
+                dst.unlink()
+
     def files(self) -> list:
         """What is in HOME, but for Claude Code's sign-in."""
         return sorted(str(p.relative_to(self.home)) for p in self.home.rglob("*")
                       if not p.is_relative_to(self.claude))
+
+
+def map_with_machines(test: unittest.TestCase, cases, setup, fn):
+    """Runs fn(machine, state, case) in parallel across cases, reusing one snapshotted Machine per worker.
+
+    Each worker prepares one Machine via setup(m) -> state, saves it with save_state("base"), and
+    restores that snapshot into the exact same HOME path before each case assigned to it.
+    """
+    cases = list(cases)
+    if not cases:
+        return []
+    workers = min(len(cases), os.cpu_count() or 4)
+    machines = [Machine(test) for _ in range(workers)]
+    buckets = [cases[i::workers] for i in range(workers)]
+
+    def run_bucket(machine: Machine, bucket: list):
+        state = setup(machine)
+        machine.save_state("base")
+        out = []
+        for case in bucket:
+            machine.restore_state("base")
+            out.append(fn(machine, state, case))
+        return out
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        grouped = list(pool.map(run_bucket, machines, buckets))
+    results = [None] * len(cases)
+    for offset, bucket_results in enumerate(grouped):
+        for idx, value in enumerate(bucket_results):
+            results[offset + idx * workers] = value
+    return results
 
 
 class DryRun(unittest.TestCase):
@@ -1828,58 +1886,58 @@ class Interrupted(unittest.TestCase):
                 wrong.append(f"before-move lists {[path for _, path, _ in lines]}, not {sorted(before)}")
             return wrong
 
-        def one(case):
-            signal, step = case
-            m = machine()
+        def setup(m: Machine):
+            if mv:
+                m.write(m.bin / "mv", mv)
             made = make(m)
-            before = found(m)
-            stopped = m.run(harness, *args, stop=(signal, step), check=False)
+            return made, found(m), m.args(harness, "--binary", str(m.core), "--replace-plugin")
+
+        def one(m: Machine, prepared, case):
+            made, before, m_args = prepared
+            signal, step = case
+            stopped = m.run(harness, *m_args, stop=(signal, step), check=False)
             after = full(m, made)
             under_way = (m.data / agent / "plugin-change").exists()
             plain = failed = after_failure = None
             if signal == "KILL" and (under_way or after not in ("old", "ours")):
                 # Killed the same way and run again as it was, it finishes, from the copies the killed run
                 # took: it takes no more of the old plugin.
-                other = machine()
-                other_made = make(other)
-                other_before = found(other)
-                other.run(harness, *args, stop=(signal, step), check=False)
-                noted = (other.data / agent / "plugin-change").exists()
-                kept = sorted(p.name for p in (other.data / agent / "backups").glob("marmot.*"))
-                result = other.run(harness, *args, check=False)
-                plain = (result, finished(other, other_made, other_before),
-                         not noted or kept == sorted(p.name for p in (other.data / agent / "backups").glob("marmot.*")))
-                failed = m.run(harness, *args, env=fail, check=False)
+                m.save_state("killed")
+                kept = sorted(p.name for p in (m.data / agent / "backups").glob("marmot.*"))
+                result = m.run(harness, *m_args, check=False)
+                plain = (result, finished(m, made, before),
+                         not under_way or kept == sorted(p.name for p in (m.data / agent / "backups").glob("marmot.*")))
+                m.restore_state("killed")
+                failed = m.run(harness, *m_args, env=fail, check=False)
                 after_failure = full(m, made)
-            again = m.run(harness, *args, check=False)
+            again = m.run(harness, *m_args, check=False)
             wrong = finished(m, made, before) if again.returncode == 0 else ["the run again failed"]
             return case, stopped, after, under_way, plain, failed, after_failure, again, wrong
 
         in_windows = []
-        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
-            for (signal, step), stopped, after, under_way, plain, failed, after_failure, again, wrong in pool.map(one, cases):
-                with self.subTest(signal=signal, step=step):
-                    said = f"after SIG{signal} at step {step}:\n{stopped.stdout}\n{stopped.stderr}"
-                    self.assertNotEqual(stopped.returncode, 0, "the run was stopped")
-                    if signal == "KILL" and after in windows:
-                        in_windows.append(after)
-                    elif signal == "KILL" and after == self.STARTING:
-                        self.assertTrue(under_way, f"the change is noted as under way until the core is started {said}")
-                    else:
-                        self.assertIn(after, ("old", "ours"), said)
-                    if signal == "TERM":
-                        self.assertFalse(under_way, f"a change put back or finished {said}")
-                    if plain is not None:
-                        result, plain_wrong, same_copies = plain
-                        self.assertEqual(result.returncode, 0, f"{said}\nthen again:\n{result.stdout}\n{result.stderr}")
-                        self.assertEqual(plain_wrong, [], f"{said}\nthen again:\n{result.stdout}")
-                        self.assertTrue(same_copies, f"the next run took more copies of the plugin, {said}")
-                    if failed is not None:
-                        # What the killed run found is put back, not what it left.
-                        self.assertNotEqual(failed.returncode, 0)
-                        self.assertEqual(after_failure, "old", f"{said}\nthen failing:\n{failed.stdout}\n{failed.stderr}")
-                    self.assertEqual(again.returncode, 0, again.stderr)
-                    self.assertEqual(wrong, [], again.stdout)
+        for (signal, step), stopped, after, under_way, plain, failed, after_failure, again, wrong in map_with_machines(self, cases, setup, one):
+            with self.subTest(signal=signal, step=step):
+                said = f"after SIG{signal} at step {step}:\n{stopped.stdout}\n{stopped.stderr}"
+                self.assertNotEqual(stopped.returncode, 0, "the run was stopped")
+                if signal == "KILL" and after in windows:
+                    in_windows.append(after)
+                elif signal == "KILL" and after == self.STARTING:
+                    self.assertTrue(under_way, f"the change is noted as under way until the core is started {said}")
+                else:
+                    self.assertIn(after, ("old", "ours"), said)
+                if signal == "TERM":
+                    self.assertFalse(under_way, f"a change put back or finished {said}")
+                if plain is not None:
+                    result, plain_wrong, same_copies = plain
+                    self.assertEqual(result.returncode, 0, f"{said}\nthen again:\n{result.stdout}\n{result.stderr}")
+                    self.assertEqual(plain_wrong, [], f"{said}\nthen again:\n{result.stdout}")
+                    self.assertTrue(same_copies, f"the next run took more copies of the plugin, {said}")
+                if failed is not None:
+                    # What the killed run found is put back, not what it left.
+                    self.assertNotEqual(failed.returncode, 0)
+                    self.assertEqual(after_failure, "old", f"{said}\nthen failing:\n{failed.stdout}\n{failed.stderr}")
+                self.assertEqual(again.returncode, 0, again.stderr)
+                self.assertEqual(wrong, [], again.stdout)
         self.assertEqual(sorted(in_windows), sorted(windows), "each window is left by one step")
 
     def hermes(self, mv=None, windows=()):
@@ -2068,19 +2126,24 @@ class Upgrade(unittest.TestCase):
         steps = Machine(self)
         self.older(steps)
         steps.run(self.HARNESS, *self.args(steps), stop=("KILL", 0))
-        tried = untouched = 0
-        for step in range(1, int(steps.steps.read_text()) + 1):
-            m = Machine(self)
-            self.older(m)
+        def one(m: Machine, _, step: int):
             m.run(self.HARNESS, *self.args(m), stop=("KILL", step), check=False)
             if not (m.data / "upgrade").exists():
+                return step, False, False, None, None, None
+            untouched_here = not (m.data / "upgrade/lib/packages").exists()
+            out = m.run("codex", *m.args("codex", "--binary", str(m.core))).stdout
+            return step, True, untouched_here, out, self.snapshot(m), self.leftovers(m)
+
+        tried = untouched = 0
+        for step, was_under_way, untouched_here, out, snap, left in map_with_machines(
+                self, range(1, int(steps.steps.read_text()) + 1), self.older, one):
+            if not was_under_way:
                 continue
             tried += 1
-            untouched += not (m.data / "upgrade/lib/packages").exists()
-            out = m.run("codex", *m.args("codex", "--binary", str(m.core))).stdout
+            untouched += untouched_here
             self.assertIn("a run of another installer, or for another agent, before this one stopped part way", out, f"killed at step {step}")
-            self.assertEqual(self.snapshot(m), expected, f"killed at step {step}")
-            self.assertEqual(self.leftovers(m), [])
+            self.assertEqual(snap, expected, f"killed at step {step}")
+            self.assertEqual(left, [])
         self.assertGreater(untouched, 0, "some step leaves the upgrade under way before Claude Code's own files")
         self.assertGreater(tried, untouched)
 
@@ -2235,23 +2298,25 @@ exec {rm} "$@"
         def under_way(m: Machine) -> bool:
             return (m.data / "upgrade").exists() or (m.data / f"agents/{harness}/plugin-change").exists()
 
-        def one(case):
+        def setup(m: Machine):
+            m.write(m.bin / "docker", FAKE_DOCKER)
+            older(m)
+
+        def one(m: Machine, _, case):
             signal, step = case
             found = []
-            for then in (None, "again", "failing", "codex"):
-                m = Machine(self)
-                m.write(m.bin / "docker", FAKE_DOCKER)
-                older(m)
-                stopped = m.run(harness, *args(m), stop=(signal, step), env=stopped_env, check=False)
-                said = f"after SIG{signal} at step {step}"
-                if then is None:
-                    if not under_way(m):
-                        found.append((said, self.judged(together(m), ("older", "new")), stopped.stderr))
-                    elif signal == "TERM":
-                        found.append((said, "something is left under way", stopped.stderr))
-                    continue
-                if signal == "TERM" or not under_way(m):
-                    break
+            stopped = m.run(harness, *args(m), stop=(signal, step), env=stopped_env, check=False)
+            said = f"after SIG{signal} at step {step}"
+            is_under_way = under_way(m)
+            if not is_under_way:
+                found.append((said, self.judged(together(m), ("older", "new")), stopped.stderr))
+            elif signal == "TERM":
+                found.append((said, "something is left under way", stopped.stderr))
+            if signal == "TERM" or not is_under_way:
+                return found
+            m.save_state("killed")
+            for then in ("again", "failing", "codex"):
+                m.restore_state("killed")
                 if then == "codex":
                     ran = m.run("codex", *m.args("codex", "--binary", str(m.core), "--name", "other"), check=False)
                 else:
@@ -2268,11 +2333,10 @@ exec {rm} "$@"
                     found.append((f"{said}, then {then}", self.judged(together(m), expected), ran.stderr))
             return found
 
-        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
-            for found in pool.map(one, cases):
-                for said, wrong, stderr in found:
-                    with self.subTest(said):
-                        self.assertIsNone(wrong, f"{said}:\n{stderr}")
+        for found in map_with_machines(self, cases, setup, one):
+            for said, wrong, stderr in found:
+                with self.subTest(said):
+                    self.assertIsNone(wrong, f"{said}:\n{stderr}")
 
     @staticmethod
     def shared_generations(m: Machine) -> dict:
@@ -2393,42 +2457,38 @@ exec {rm} "$@"
         self.assertGreater(steps, 10)
         cases = [(signal, step) for signal in ("TERM", "KILL") for step in range(1, steps + 1)]
 
-        def one(case):
+        def one(m: Machine, _, case):
             signal, step = case
-            m = Machine(self)
-            self.older(m)
             stopped = m.run(self.HARNESS, *self.args(m), stop=(signal, step), check=False)
             after = self.state(m)
             under_way = (m.data / "upgrade").exists()
             failed = after_failure = None
             if signal == "KILL" and under_way:
-                # On a copy killed the same way, a run that fails puts back what the killed run found.
-                other = Machine(self)
-                self.older(other)
-                other.run(self.HARNESS, *self.args(other), stop=(signal, step), check=False)
-                failed = other.run(self.HARNESS, *self.args(other), env={"FAKE_FAIL": "systemctl --user restart"},
-                                   check=False)
-                after_failure = (self.state(other), self.leftovers(other))
+                # On the same killed state, a run that fails puts back what the killed run found.
+                m.save_state("killed")
+                failed = m.run(self.HARNESS, *self.args(m), env={"FAKE_FAIL": "systemctl --user restart"},
+                               check=False)
+                after_failure = (self.state(m), self.leftovers(m))
+                m.restore_state("killed")
             again = m.run(self.HARNESS, *self.args(m), check=False)
             return case, stopped, after, under_way, failed, after_failure, again, self.state(m), self.leftovers(m)
 
         taken_over = 0
-        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
-            for (signal, step), stopped, after, under_way, failed, after_failure, again, finished, left in pool.map(one, cases):
-                taken_over += failed is not None
-                with self.subTest(signal=signal, step=step):
-                    said = f"after SIG{signal} at step {step}:\n{stopped.stdout}\n{stopped.stderr}"
-                    self.assertNotEqual(stopped.returncode, 0, "the run was stopped")
-                    if signal == "TERM" or not under_way:
-                        self.assertIn(after, ("older", "new"), said)
-                    if signal == "TERM":
-                        self.assertFalse(under_way, f"an upgrade put back or finished {said}")
-                    if failed is not None:
-                        self.assertNotEqual(failed.returncode, 0)
-                        self.assertEqual(after_failure, ("older", []), f"{said}\nthen failing:\n{failed.stderr}")
-                    self.assertEqual(again.returncode, 0, f"{said}\nthen again:\n{again.stderr}")
-                    self.assertEqual(finished, "new", again.stdout)
-                    self.assertFalse(any(name.startswith((".upgrade", "upgrade")) for name in left), left)
+        for (signal, step), stopped, after, under_way, failed, after_failure, again, finished, left in map_with_machines(self, cases, self.older, one):
+            taken_over += failed is not None
+            with self.subTest(signal=signal, step=step):
+                said = f"after SIG{signal} at step {step}:\n{stopped.stdout}\n{stopped.stderr}"
+                self.assertNotEqual(stopped.returncode, 0, "the run was stopped")
+                if signal == "TERM" or not under_way:
+                    self.assertIn(after, ("older", "new"), said)
+                if signal == "TERM":
+                    self.assertFalse(under_way, f"an upgrade put back or finished {said}")
+                if failed is not None:
+                    self.assertNotEqual(failed.returncode, 0)
+                    self.assertEqual(after_failure, ("older", []), f"{said}\nthen failing:\n{failed.stderr}")
+                self.assertEqual(again.returncode, 0, f"{said}\nthen again:\n{again.stderr}")
+                self.assertEqual(finished, "new", again.stdout)
+                self.assertFalse(any(name.startswith((".upgrade", "upgrade")) for name in left), left)
         self.assertGreater(taken_over, 0, "some step leaves an upgrade under way for the next run")
 
 
@@ -2607,37 +2667,38 @@ exec {rm} "$@"
         m.run(self.HARNESS, *self.store_args(m), env=fail, stop=("KILL", 0), check=False)
         steps = int(m.steps.read_text())
 
-        def one(case):
-            step, then = case
-            m = Machine(self)
-            self.older_store(m)
+        def one(m: Machine, _, step: int):
             m.run(self.HARNESS, *self.store_args(m), env=fail, stop=("KILL", step), check=False)
-            m.log.write_text("")
-            if then == "no-start":
-                ran = m.run(self.HARNESS, *self.store_args(m), "--no-start", check=False)
-            else:
-                ran = m.run("codex", *m.args("codex", "--binary", str(m.core), "--name", "other"), check=False)
-            calls = m.calls()
-            starts = [c for c in calls if c.startswith(("systemctl --user start", "systemctl --user restart"))
-                      and "marmot-agent-first" in c]
-            wrong = None
-            if ran.returncode != 0:
-                wrong = "the run failed"
-            elif (m.data / "upgrade").exists():
-                wrong = "something is left under way"
-            elif starts:
-                wrong = f"the agent's services are started: {starts}"
-            elif self.store_of(m) not in ("older", "new"):
-                wrong = f"the store is {self.store_of(m)}"
-            elif then == "codex" and self.store_of(m) != "older":
-                wrong = f"the store is {self.store_of(m)}"
-            elif then == "codex" and "put back the account home" in ran.stdout and self.START not in ran.stdout:
-                wrong = "how to start the agent is not said"
-            return f"killed at step {step}, then {then}", wrong, ran.stderr
+            m.save_state("killed")
+            found = []
+            for then in ("no-start", "codex"):
+                m.restore_state("killed")
+                m.log.write_text("")
+                if then == "no-start":
+                    ran = m.run(self.HARNESS, *self.store_args(m), "--no-start", check=False)
+                else:
+                    ran = m.run("codex", *m.args("codex", "--binary", str(m.core), "--name", "other"), check=False)
+                calls = m.calls()
+                starts = [c for c in calls if c.startswith(("systemctl --user start", "systemctl --user restart"))
+                          and "marmot-agent-first" in c]
+                wrong = None
+                if ran.returncode != 0:
+                    wrong = "the run failed"
+                elif (m.data / "upgrade").exists():
+                    wrong = "something is left under way"
+                elif starts:
+                    wrong = f"the agent's services are started: {starts}"
+                elif self.store_of(m) not in ("older", "new"):
+                    wrong = f"the store is {self.store_of(m)}"
+                elif then == "codex" and self.store_of(m) != "older":
+                    wrong = f"the store is {self.store_of(m)}"
+                elif then == "codex" and "put back the account home" in ran.stdout and self.START not in ran.stdout:
+                    wrong = "how to start the agent is not said"
+                found.append((f"killed at step {step}, then {then}", wrong, ran.stderr))
+            return found
 
-        cases = [(step, then) for step in range(1, steps + 1) for then in ("no-start", "codex")]
-        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
-            for said, wrong, stderr in pool.map(one, cases):
+        for found in map_with_machines(self, range(1, steps + 1), self.older_store, one):
+            for said, wrong, stderr in found:
                 with self.subTest(said):
                     self.assertIsNone(wrong, f"{said}:\n{stderr}")
 
@@ -2782,10 +2843,11 @@ class TwoAgents(unittest.TestCase):
         counting.run("hermes", *self.args(counting, "a"), stop=("KILL", 0))
         steps = int(counting.steps.read_text())
 
-        def one(step):
-            m = Machine(self)
+        def setup(m: Machine):
             self.older(m)
-            before = self.gateway(m)
+            return self.gateway(m)
+
+        def one(m: Machine, before, step: int):
             m.run("hermes", *self.args(m, "a"), stop=("KILL", step), check=False)
             left = (m.data / "upgrade").exists()
             killed = self.gateway(m)
@@ -2795,18 +2857,17 @@ class TwoAgents(unittest.TestCase):
                     (m.data / "lib/install/OLDER").exists(), self.under_way(m))
 
         put_back = 0
-        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
-            for step, left, before, killed, ran, a, b, core, files_older, under_way in pool.map(one, range(1, steps + 1)):
-                put_back += left and killed != before
-                with self.subTest(step=step):
-                    said = f"a killed at step {step}, then b:\n{ran.stdout}\n{ran.stderr}"
-                    self.assertEqual(ran.returncode, 0, said)
-                    self.assertEqual(under_way, [], said)
-                    # A run of a stopped part way through its upgrade is put back with it; one stopped
-                    # after, its upgrade done, is left as it is.
-                    self.assertEqual(a, before if left else killed, said)
-                    self.assertNotIn("plugins/marmot/OLDER", b, said)
-                    self.assertEqual((core, files_older), (FAKE_CORE, False), said)
+        for step, left, before, killed, ran, a, b, core, files_older, under_way in map_with_machines(self, range(1, steps + 1), setup, one):
+            put_back += left and killed != before
+            with self.subTest(step=step):
+                said = f"a killed at step {step}, then b:\n{ran.stdout}\n{ran.stderr}"
+                self.assertEqual(ran.returncode, 0, said)
+                self.assertEqual(under_way, [], said)
+                # A run of a stopped part way through its upgrade is put back with it; one stopped
+                # after, its upgrade done, is left as it is.
+                self.assertEqual(a, before if left else killed, said)
+                self.assertNotIn("plugins/marmot/OLDER", b, said)
+                self.assertEqual((core, files_older), (FAKE_CORE, False), said)
         self.assertGreater(put_back, 0, "some step leaves a's Hermes changed and its upgrade under way")
 
     def test_the_same_agent_and_gateway_finish_the_upgrade(self):
@@ -2817,12 +2878,12 @@ class TwoAgents(unittest.TestCase):
             if harness == "openclaw" and not REAL_NODE:
                 continue
             with self.subTest(harness=harness):
-                counting = Machine(self)
-                args = counting.args(harness, "--binary", str(counting.core))
-                counting.run(harness, *args, stop=("KILL", 0))
-                for step in range(1, int(counting.steps.read_text()) + 1):
-                    m = Machine(self)
-                    args = m.args(harness, "--binary", str(m.core))
+                m = Machine(self)
+                m.save_state("clean")
+                args = m.args(harness, "--binary", str(m.core))
+                m.run(harness, *args, stop=("KILL", 0))
+                for step in range(int(m.steps.read_text()), 0, -1):
+                    m.restore_state("clean")
                     m.run(harness, *args, stop=("KILL", step), check=False)
                     if (m.data / f"agents/{harness}/plugin-change").exists() and (m.data / "upgrade").exists():
                         break
