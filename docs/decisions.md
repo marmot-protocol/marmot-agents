@@ -3808,3 +3808,31 @@ advertises its exact socket protocol and checksums for split-artifact installers
 tags stay immutable and cryptographically signed (Phase 4.3 of #222).
 
 Decided 2026-11-26 by the project owner (as Phase 4.3 of #222).
+
+## D-167 Socket and plugin installers fetch compatible standalone connector releases atomically
+
+**Decision.** Building on [D-134](#d-134-an-upgrade-of-the-core-and-its-support-files-is-put-back-on-failure-and-finished-by-a-re-run-after-a-kill),
+[D-165](#d-165-four-independent-release-tracks-decoupled-by-the-socket-protocol-version), and
+[D-166](#d-166-per-track-releases-compatibility-manifests-and-protected-release-tags):
+
+- `install/claude-code.sh`, `install/openclaw.sh`, and `install/hermes.sh` declare `CONNECTOR_TRACK` and accept
+  `--connector-version <track>-v<version>` (refused on built-in harnesses).
+- When downloading a core release, socket/plugin installers either fetch the explicit `--connector-version` tag or
+  query `MARMOT_AGENT_RELEASES_API` (following same-origin `Link: rel="next"` pagination, 100 releases per page) for
+  stable `<track>-vX.Y.Z` releases strictly newer than the connector bundled in the core archive (sorted highest
+  SemVer first) and select the newest one whose `latest.json` `socket_protocol` matches the core's `latest.json`.
+  They verify its `SHA256SUMS` and archive paths, and overlay its files into `$MA_STAGE` before `harness_prepare`
+  and `publish_support` (falling back to the connector bundled in the core tarball if no newer compatible standalone
+  release is available or reachable).
+- Protocol verification fails closed: when the selected core's `socket_protocol` cannot be determined (for example,
+  a core release missing `latest.json` or `--binary` with no adjacent `latest.json`), auto-discovery preserves the
+  bundled connector and explicit `--connector-version` is refused before modifying `$MA_LIB` or `$MA_CORE`. When
+  the core declares a `socket_protocol`, an explicit `--connector-version` whose `latest.json` disagrees or declares
+  no `socket_protocol` fails before modifying `$MA_LIB` or `$MA_CORE`; auto-discovery skips incompatible, prerelease,
+  or undeclared releases and picks the newest compatible release.
+
+**Why.** Independent connector releases (`claude-code-v*`, `openclaw-v*`, `hermes-v*`) reach users directly
+through the existing installers without losing single-tarball offline fallback, checksum verification, protocol
+safety, or atomic upgrade/rollback semantics (Phase 4.4 of #222).
+
+Decided 2026-11-26 by the project owner (as Phase 4.4 of #222).

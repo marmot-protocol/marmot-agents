@@ -15,6 +15,8 @@ HARNESS_TITLE=OpenClaw
 HARNESS_KIND=plugin
 HARNESS_OPTIONS="replace-plugin"
 HARNESS_SUPPORT="packages/openclaw"
+# shellcheck disable=SC2034 # read by lib.sh
+CONNECTOR_TRACK=openclaw
 # The plugin needs this release or later (packages/openclaw/package.json, openclaw.install.minHostVersion).
 OPENCLAW_LEAST=2026.11.5
 OPENCLAW_HOW="Install or update it (https://docs.openclaw.ai), set it up with: openclaw onboard, then run this again."

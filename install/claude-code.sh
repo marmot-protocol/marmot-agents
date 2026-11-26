@@ -12,6 +12,8 @@ HARNESS_TITLE="Claude Code"
 HARNESS_KIND=socket
 HARNESS_OPTIONS="permission-mode"
 HARNESS_SUPPORT="packages/claude-code"
+# shellcheck disable=SC2034 # read by lib.sh
+CONNECTOR_TRACK=claude-code
 
 harness_check() {
     need_node

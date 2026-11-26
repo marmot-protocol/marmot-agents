@@ -25,6 +25,14 @@
 
 MA_REPO=${MARMOT_AGENT_REPO:-marmot-protocol/marmot-agents}
 MA_RELEASES=${MARMOT_AGENT_RELEASES:-https://github.com/$MA_REPO/releases}
+if [ -n "${MARMOT_AGENT_RELEASES_API+x}" ]; then
+    MA_RELEASES_API=$MARMOT_AGENT_RELEASES_API
+else
+    case $MA_RELEASES in
+        file://*) MA_RELEASES_API="" ;;
+        *) MA_RELEASES_API="https://api.github.com/repos/$MA_REPO/releases" ;;
+    esac
+fi
 # White Noise's own relays, as MDK names them, and as today's installers use.
 MA_DEFAULT_RELAYS="wss://relay.eu.whitenoise.chat
 wss://relay.us.whitenoise.chat"
@@ -1396,15 +1404,129 @@ download() {
         --connect-timeout 15 --max-time 600 --retry 3 --output "$2" "$1"
 }
 
-# Downloads the release for this machine, checks it against the release's SHA256SUMS, and unpacks it into
-# a folder; prints the unpacked tree. The checksum catches a broken download, not a replaced one (Q-28).
-fetch_release() {
-    local work=$1 target asset base expected actual member
-    target=$(release_target)
-    asset="marmot-agent-$target.tar.gz"
-    if [ -n "$VERSION" ]; then base="$MA_RELEASES/download/$VERSION"; else base="$MA_RELEASES/latest/download"; fi
-    download "$base/$asset" "$work/$asset" || die "could not download $base/$asset"
-    download "$base/SHA256SUMS" "$work/SHA256SUMS" || die "could not download $base/SHA256SUMS"
+# Reads the first matching string field from a JSON file (such as latest.json, package.json, or schema.json).
+json_file_field() {
+    [ -f "$1" ] || return 0
+    awk -v k="$2" '
+        {
+            pat = "\"" k "\"[ \t\r\n]*:[ \t\r\n]*\"[^\"]*\""
+            if (match($0, pat)) {
+                s = substr($0, RSTART, RLENGTH)
+                sub(/^"[^"]*"[ \t\r\n]*:[ \t\r\n]*"/, "", s)
+                sub(/"$/, "", s)
+                print s
+                exit
+            }
+        }
+    ' "$1"
+}
+
+# Reads the connector version bundled inside a core tree, if present.
+bundled_connector_version() {
+    local tree=$1
+    case ${CONNECTOR_TRACK:-} in
+        claude-code) json_file_field "$tree/packages/claude-code/package.json" version ;;
+        openclaw) json_file_field "$tree/packages/openclaw/package.json" version ;;
+        hermes)
+            [ -f "$tree/python/marmot_hermes/__init__.py" ] || return 0
+            sed -n 's/^__version__[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+                "$tree/python/marmot_hermes/__init__.py" | head -n 1
+            ;;
+    esac
+}
+
+# Fetches up to 10 pages of GitHub Releases API JSON (100 releases/page) into $work/releases-*.json,
+# following same-origin https Link: rel="next" headers, or one local file:// fixture.
+fetch_release_pages() {
+    local work=$1 api_url=$2 page=1 hdr next url origin
+    case $api_url in
+        https://*)
+            case $api_url in *\?*) url="$api_url&per_page=100" ;; *) url="$api_url?per_page=100" ;; esac
+            origin=${api_url#https://}
+            origin="https://${origin%%/*}/"
+            while [ -n "$url" ] && [ "$page" -le 10 ]; do
+                hdr="$work/releases-$page.hdr"
+                curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+                    --connect-timeout 15 --max-time 60 --retry 3 \
+                    --dump-header "$hdr" --output "$work/releases-$page.json" "$url" 2>/dev/null || return 1
+                next=$(awk '
+                    /^[Ll][Ii][Nn][Kk]:/ {
+                        s = $0
+                        while (match(s, /<[^>]*>[ \t]*;[ \t]*rel="next"/)) {
+                            u = substr(s, RSTART + 1, RLENGTH - 1)
+                            sub(/>.*/, "", u)
+                            print u
+                            exit
+                        }
+                    }
+                ' "$hdr" | tr -d '\r')
+                case $next in
+                    "$origin"*) url=$next ;;
+                    *) url="" ;;
+                esac
+                page=$((page + 1))
+            done
+            ;;
+        *)
+            download "$api_url" "$work/releases-1.json" 2>/dev/null || return 1
+            ;;
+    esac
+}
+
+# Lists stable SemVer release tags for one connector track from one or more Releases API JSON files,
+# sorted highest SemVer first. When min_version is a valid X.Y.Z, returns only strictly newer tags.
+list_connector_tags() {
+    local track=$1 min_version=$2
+    shift 2
+    [ $# -gt 0 ] || return 0
+    awk -v prefix="${track}-v" -v min="$min_version" '
+        function parse_semver(s, a) {
+            if (split(s, a, ".") != 3) return 0
+            return a[1] ~ /^(0|[1-9][0-9]*)$/ &&
+                   a[2] ~ /^(0|[1-9][0-9]*)$/ &&
+                   a[3] ~ /^(0|[1-9][0-9]*)$/
+        }
+        BEGIN {
+            plen = length(prefix)
+            has_min = parse_semver(min, m)
+        }
+        {
+            line = $0
+            while (match(line, /"tag_name"[ \t\r\n]*:[ \t\r\n]*"[^"]*"/)) {
+                tok = substr(line, RSTART, RLENGTH)
+                line = substr(line, RSTART + RLENGTH)
+                sub(/^"tag_name"[ \t\r\n]*:[ \t\r\n]*"/, "", tok)
+                sub(/"$/, "", tok)
+                if (substr(tok, 1, plen) != prefix) continue
+                ver = substr(tok, plen + 1)
+                if (!parse_semver(ver, v)) continue
+                if (has_min) {
+                    if (v[1] + 0 < m[1] + 0) continue
+                    if (v[1] + 0 == m[1] + 0 && v[2] + 0 < m[2] + 0) continue
+                    if (v[1] + 0 == m[1] + 0 && v[2] + 0 == m[2] + 0 && v[3] + 0 <= m[3] + 0) continue
+                }
+                print ver
+            }
+        }
+    ' "$@" 2>/dev/null |
+        sort -u -t. -k1,1nr -k2,2nr -k3,3nr |
+        sed "s/^/${track}-v/"
+}
+
+# Downloads one tarball and its SHA256SUMS, checks the checksum and member paths, and unpacks it.
+# When soft_download=1 (discovery mode), a failed download warns and returns 2 instead of aborting;
+# checksum mismatches and unsafe paths always fail hard.
+fetch_tarball() {
+    local base=$1 asset=$2 prefix=$3 work=$4 soft_download=${5:-0} expected actual member
+    mkdir -p "$work"
+    if ! download "$base/$asset" "$work/$asset"; then
+        [ "$soft_download" -eq 1 ] && { warn "could not download $base/$asset"; return 2; }
+        die "could not download $base/$asset"
+    fi
+    if ! download "$base/SHA256SUMS" "$work/SHA256SUMS"; then
+        [ "$soft_download" -eq 1 ] && { warn "could not download $base/SHA256SUMS"; return 2; }
+        die "could not download $base/SHA256SUMS"
+    fi
     expected=$(awk -v a="$asset" '$2 == a || $2 == "*" a { print tolower($1); exit }' "$work/SHA256SUMS")
     [ ${#expected} -eq 64 ] || die "SHA256SUMS has no line for $asset"
     actual=$(sha256_of "$work/$asset")
@@ -1412,19 +1534,107 @@ fetch_release() {
     while IFS= read -r member; do
         case $member in
             /* | .. | ../* | */../* | */..) die "the archive holds an unsafe path" ;;
-            "marmot-agent-$target" | "marmot-agent-$target/"*) ;;
-            *) die "the archive holds a path outside marmot-agent-$target/" ;;
+            "$prefix" | "$prefix/"*) ;;
+            *) die "the archive holds a path outside $prefix/" ;;
         esac
     done < <(tar -tzf "$work/$asset")
     mkdir -p "$work/unpacked"
     tar -xzf "$work/$asset" -C "$work/unpacked"
-    [ -x "$work/unpacked/marmot-agent-$target/bin/marmot-agent" ] || die "the archive holds no bin/marmot-agent"
-    printf '%s' "$work/unpacked/marmot-agent-$target"
+}
+
+# Downloads the core release for this machine, checks it against SHA256SUMS, and unpacks it into
+# a folder; prints the unpacked tree. Also saves latest.json when present for socket protocol checks.
+# The checksum catches a broken download, not a replaced one (Q-28).
+fetch_release() {
+    local work=$1 target asset base
+    target=$(release_target)
+    asset="marmot-agent-$target.tar.gz"
+    if [ -n "$VERSION" ]; then base="$MA_RELEASES/download/$VERSION"; else base="$MA_RELEASES/latest/download"; fi
+    fetch_tarball "$base" "$asset" "marmot-agent-$target" "$work/core" 0
+    download "$base/latest.json" "$work/core-latest.json" 2>/dev/null || rm -f "$work/core-latest.json"
+    [ -x "$work/core/unpacked/marmot-agent-$target/bin/marmot-agent" ] || die "the archive holds no bin/marmot-agent"
+    printf '%s' "$work/core/unpacked/marmot-agent-$target"
+}
+
+# Downloads one standalone connector release (D-166, D-167), checks its socket protocol against the
+# core's declared protocol, verifies SHA256SUMS and archive paths, and prints its unpacked tree.
+fetch_connector() {
+    local work=$1 tag=$2 core_protocol=$3 strict=$4
+    local base="$MA_RELEASES/download/$tag" asset="marmot-agent-$CONNECTOR_TRACK.tar.gz"
+    local cwork="$work/connector" connector_protocol="" rc=0
+    [ -n "$core_protocol" ] || die "cannot verify $tag compatibility: marmot-agent declares no socket_protocol"
+    rm -rf "$cwork"
+    mkdir -p "$cwork"
+    if download "$base/latest.json" "$cwork/latest.json" 2>/dev/null; then
+        connector_protocol=$(json_file_field "$cwork/latest.json" socket_protocol)
+    else
+        rm -f "$cwork/latest.json"
+    fi
+    if [ -z "$connector_protocol" ]; then
+        if [ "$strict" -eq 1 ]; then
+            die "$tag declares no socket_protocol in latest.json (expected $core_protocol)"
+        fi
+        warn "skipping $tag (no socket_protocol in latest.json; marmot-agent speaks $core_protocol)"
+        return 2
+    fi
+    if [ "$strict" -eq 0 ] && grep -Eq '"prerelease"[[:space:]]*:[[:space:]]*true([^A-Za-z0-9_]|$)' "$cwork/latest.json"; then
+        warn "skipping prerelease $tag"
+        return 2
+    fi
+    if [ "$core_protocol" != "$connector_protocol" ]; then
+        if [ "$strict" -eq 1 ]; then
+            die "$tag speaks $connector_protocol, but marmot-agent speaks $core_protocol"
+        fi
+        warn "skipping $tag ($connector_protocol; marmot-agent speaks $core_protocol)"
+        return 2
+    fi
+    fetch_tarball "$base" "$asset" "marmot-agent-$CONNECTOR_TRACK" "$cwork" $((1 - strict)) || rc=$?
+    [ "$rc" -eq 0 ] || return "$rc"
+    [ -d "$cwork/unpacked/marmot-agent-$CONNECTOR_TRACK/$HARNESS_SUPPORT" ] ||
+        die "the archive holds no $HARNESS_SUPPORT"
+    printf '%s' "$cwork/unpacked/marmot-agent-$CONNECTOR_TRACK"
+}
+
+# Resolves an explicit --connector-version or discovers the newest compatible standalone connector
+# release strictly newer than the bundled connector. Prints the unpacked connector tree, or nothing
+# to keep the connector bundled in the core tree.
+resolve_connector_tree() {
+    local work=$1 core_protocol=$2 downloaded_core=$3 bundled_version=${4:-}
+    [ -n "${CONNECTOR_TRACK:-}" ] || return 0
+    if [ -n "$CONNECTOR_VERSION" ]; then
+        program_path curl >/dev/null || die "downloading the connector release needs curl"
+        [ -n "$core_protocol" ] || die "cannot verify $CONNECTOR_VERSION compatibility: marmot-agent declares no socket_protocol"
+        say "downloading $CONNECTOR_TRACK connector $CONNECTOR_VERSION" >&2
+        fetch_connector "$work" "$CONNECTOR_VERSION" "$core_protocol" 1
+        return $?
+    fi
+    [ "$downloaded_core" -eq 1 ] && [ -n "$MA_RELEASES_API" ] && [ -n "$core_protocol" ] || return 0
+    local tag rc=0 tree=""
+    fetch_release_pages "$work" "$MA_RELEASES_API" || {
+        warn "could not list $CONNECTOR_TRACK connector releases; keeping the bundled connector"
+        return 0
+    }
+    while IFS= read -r tag; do
+        [ -n "$tag" ] || continue
+        case $tag in *[!A-Za-z0-9._+-]* | *..*) continue ;; esac
+        rc=0
+        tree=$(fetch_connector "$work" "$tag" "$core_protocol" 0) || rc=$?
+        if [ "$rc" -eq 0 ] && [ -n "$tree" ]; then
+            say "using standalone $CONNECTOR_TRACK connector release $tag" >&2
+            printf '%s' "$tree"
+            return 0
+        fi
+        if [ "$rc" -ne 2 ]; then
+            return 1
+        fi
+    done <<EOF
+$(list_connector_tags "$CONNECTOR_TRACK" "$bundled_version" "$work"/releases-*.json)
+EOF
 }
 
 # Installs the core and the support files, from wherever they come from.
 install_core() {
-    local tree binary work="" stage
+    local tree binary stage downloaded_core=0 core_protocol="" connector_tree=""
     if [ -n "$BINARY_FROM" ]; then
         [ -x "$BINARY_FROM" ] || die "--binary names no program"
         binary=$BINARY_FROM
@@ -1447,6 +1657,9 @@ install_core() {
         say "installing the marmot-agent beside this script"
     elif [ "$DRY_RUN" -eq 1 ]; then
         say "would download marmot-agent-$(release_target).tar.gz ${VERSION:-(latest)} from $MA_RELEASES and check it against SHA256SUMS"
+        if [ -z "$CONNECTOR_VERSION" ] && [ -n "${CONNECTOR_TRACK:-}" ] && [ -n "$MA_RELEASES_API" ]; then
+            say "would check $MA_RELEASES_API for a newer compatible $CONNECTOR_TRACK connector release"
+        fi
         binary="(downloaded)"
         tree=$MA_ROOT
     else
@@ -1455,12 +1668,35 @@ install_core() {
         say "downloading marmot-agent ${VERSION:-(latest release)}"
         tree=$(fetch_release "$MA_WORK")
         binary="$tree/bin/marmot-agent"
+        downloaded_core=1
+    fi
+    if [ "$DRY_RUN" -eq 1 ] && [ -n "$CONNECTOR_VERSION" ]; then
+        say "would download marmot-agent-$CONNECTOR_TRACK.tar.gz ($CONNECTOR_VERSION) from $MA_RELEASES and check it against SHA256SUMS"
     fi
     owner_hex "$binary"
     if [ "$DRY_RUN" -eq 1 ]; then
         say "would copy the support files of $HARNESS_TITLE to $MA_LIB"
         MA_STAGE=$MA_LIB
         return 0
+    fi
+    if [ -n "$CONNECTOR_VERSION" ] || { [ "$downloaded_core" -eq 1 ] && [ -n "${CONNECTOR_TRACK:-}" ]; }; then
+        [ -n "${MA_WORK:-}" ] || MA_WORK=$(mktemp -d)
+        if [ "$downloaded_core" -eq 1 ]; then
+            [ ! -f "$MA_WORK/core-latest.json" ] || core_protocol=$(json_file_field "$MA_WORK/core-latest.json" socket_protocol)
+        elif [ -n "$BINARY_FROM" ]; then
+            local bin_dir
+            bin_dir=$(dirname "$BINARY_FROM")
+            if [ -f "$bin_dir/latest.json" ]; then
+                core_protocol=$(json_file_field "$bin_dir/latest.json" socket_protocol)
+            elif [ -f "$bin_dir/../latest.json" ]; then
+                core_protocol=$(json_file_field "$bin_dir/../latest.json" socket_protocol)
+            fi
+        elif [ "$FROM_SOURCE" -eq 1 ]; then
+            [ ! -f "$MA_ROOT/fixtures/socket/schema.json" ] || core_protocol=$(json_file_field "$MA_ROOT/fixtures/socket/schema.json" title)
+        elif [ -f "$MA_ROOT/latest.json" ]; then
+            core_protocol=$(json_file_field "$MA_ROOT/latest.json" socket_protocol)
+        fi
+        connector_tree=$(resolve_connector_tree "$MA_WORK" "$core_protocol" "$downloaded_core" "$(bundled_connector_version "$tree")")
     fi
     # Nothing is written before the checks above, and nothing is read that another install changes
     # before the lock is held: a gateway's script takes it sooner, before it reads the gateway
@@ -1493,6 +1729,10 @@ install_core() {
         die "$binary changed while it was being installed: run this again"
     # shellcheck disable=SC2046 # one part per word
     copy_support "$tree" "$MA_STAGE" $(lib_parts)
+    if [ -n "$connector_tree" ]; then
+        rm -rf "${MA_STAGE:?}/$HARNESS_SUPPORT"
+        (cd "$connector_tree" && tar -cf - "$HARNESS_SUPPORT") | (cd "$MA_STAGE" && tar -xf -)
+    fi
 }
 
 # A new agent's owner, in hex: an npub is read by the core about to be installed, which checks it.
@@ -1869,8 +2109,13 @@ EOF
                        auto, which asks nothing
 EOF
     esac
+    if [ -n "${CONNECTOR_TRACK:-}" ]; then cat <<EOF
+  --connector-version TAG
+                       install this $CONNECTOR_TRACK connector release (default: latest compatible)
+EOF
+    fi
     cat <<EOF
-  --version TAG        install this release (default: the latest)
+  --version TAG        install this core release (default: the latest)
   --from-source        build marmot-agent from this checkout instead (needs cargo and ODIN)
   --binary PATH        install this marmot-agent program instead
   --no-service         set up no service
@@ -1882,6 +2127,7 @@ EOF
   -h, --help           show this
 
 Environment: MARMOT_AGENT_RELEASES (where releases are, default $MA_RELEASES),
+MARMOT_AGENT_RELEASES_API (releases index for standalone connectors),
 XDG_DATA_HOME and XDG_CONFIG_HOME (where files go).
 EOF
 }
@@ -1894,13 +2140,14 @@ takes() {
 # shellcheck disable=SC2034 # MODEL and MODEL_URL are read by the harness scripts
 parse_args() {
     DRY_RUN=0 ASSUME_YES=0 NO_SERVICE=0 NO_START=0 UNINSTALL=0 FROM_SOURCE=0
-    BINARY_FROM="" VERSION="" NAME=$HARNESS DISPLAY=$HARNESS_TITLE OWNER="" RELAYS="" LOCAL_RELAY="" CWD=""
+    BINARY_FROM="" VERSION="" CONNECTOR_VERSION="" NAME=$HARNESS DISPLAY=$HARNESS_TITLE OWNER="" RELAYS="" LOCAL_RELAY="" CWD=""
     MODEL_KEY="" MODEL="" MODEL_URL="" PERMISSION_MODE="" GOOSE_MODE="" SET_CWD=0 SET_KEY=""
     CONTAINER="" REPLACE_PLUGIN=0 CWD_WHAT=""
     while [ $# -gt 0 ]; do
         case $1 in
-            --owner | --cwd | --name | --display-name | --relay | --local-relay | --version | --binary | \
-                --model-key | --model | --model-url | --permission-mode | --goose-mode)
+            --owner | --cwd | --name | --display-name | --relay | --local-relay | --version | \
+                --connector-version | --binary | --model-key | --model | --model-url | \
+                --permission-mode | --goose-mode)
                 [ $# -ge 2 ] || die "$1 needs a value"
                 no_control "$1" "$2"
                 case $1 in
@@ -1912,6 +2159,10 @@ parse_args() {
 " ;;
                     --local-relay) LOCAL_RELAY=$2 ;;
                     --version) VERSION=$2 ;;
+                    --connector-version)
+                        [ -n "${CONNECTOR_TRACK:-}" ] || die "install/$HARNESS.sh takes no --connector-version"
+                        CONNECTOR_VERSION=$2
+                        ;;
                     --binary) BINARY_FROM=$2 ;;
                     --model-key) takes model-key; MODEL_KEY=$2 ;;
                     --model) takes model; MODEL=$2 ;;
@@ -1948,6 +2199,15 @@ parse_args() {
     [ "$FROM_SOURCE" -eq 0 ] || count=$((count + 1))
     [ -z "$VERSION" ] || count=$((count + 1))
     [ $count -le 1 ] || die "give one of --version, --from-source and --binary"
+    if [ -n "$CONNECTOR_VERSION" ]; then
+        case $CONNECTOR_VERSION in
+            "${CONNECTOR_TRACK}-v"[0-9]*.*) ;;
+            *) die "--connector-version must be a ${CONNECTOR_TRACK}-v<version> release tag" ;;
+        esac
+        case $CONNECTOR_VERSION in
+            *[!A-Za-z0-9._+-]* | *..*) die "--connector-version holds an unsafe character" ;;
+        esac
+    fi
     if [ -n "$BINARY_FROM" ]; then BINARY_FROM=$(absolute "$BINARY_FROM"); fi
     if [ -n "$MODEL_KEY" ]; then MODEL_KEY=$(absolute "$MODEL_KEY"); fi
     if [ "$HARNESS_KIND" = plugin ] && [ -n "$CWD" ]; then
