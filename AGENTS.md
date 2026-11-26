@@ -112,8 +112,18 @@ being replaced by what is designed here, not extended.
   milestone, each with your recommendation and the reason. Carry on meanwhile with the recommendation, marked
   as provisional, except on privacy or security, which wait.
 - **One pull request per piece of work that makes sense alone**, on its own branch from `master`.
-- **One round of review per code change**, by the two other models. Fix blockers, and check again only if the
+- **One round of review per code change**, by the two other models (using
+  [`.agents/skills/review-local`](.agents/skills/review-local/SKILL.md) and
+  [`.agents/skills/land-change`](.agents/skills/land-change/SKILL.md)). Fix blockers, and check again only if the
   fix is large. Fix lesser findings when cheap; otherwise open an issue. Decisions and documents need none.
+- **Record commit trailers on the final signed commit**
+  ([D-162](docs/decisions.md#d-162-pull-requests-record-verification-review-and-release-impact-trailers-on-the-tip-commit),
+  preserved on `master` under GitHub's `COMMIT_MESSAGES` squash setting), and verify them locally with
+  `python3 tools/ci/check_pr_trailers.py`:
+  - `Local-Checks: <commands run locally>`
+  - `Local-Review: <seat-a> + <seat-b> merge @ <short-sha>` (or `human` / `exempt (<reason>)`)
+  - `Release-Impact: none | patch | minor` (audited by both review seats)
+  - Optional `Changelog: <one-line summary>` for user-facing changes.
 - **Merge** once CI passes and the review left no blocker unfixed. The owner reads each milestone's work at its
   end.
 - **Sign every commit.** If signing or `gh` is not set up on the machine, stop and say so.

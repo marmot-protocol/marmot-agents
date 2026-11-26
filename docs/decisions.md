@@ -3673,3 +3673,25 @@ even when every cache already hit. Dropping the `push: master` trigger saves ~51
 as Phase 0 of #222.
 
 Decided 2026-11-26 by the project owner (as Phase 0 of #222).
+
+## D-162 Pull requests record verification, review, and release-impact trailers on the tip commit
+
+**Decision.** Every pull request targeting `master` records three Git trailers in the final trailer block of its tip
+commit (preserved on `master` under GitHub's `COMMIT_MESSAGES` squash setting), matching `marmot-protocol/mdk`:
+
+- `Local-Checks: <commands run locally>`
+- `Local-Review: <seat-a> + <seat-b> merge @ <short-sha>` (or `human`, or `exempt (<reason>)`)
+- `Release-Impact: none | patch | minor` (audited by both local review seats)
+- Optional `Changelog: <one-line summary>` for user-facing changes.
+
+`tools/ci/check_pr_trailers.py` validates the tip commit's trailers and runs in advisory mode in
+`.github/workflows/ci.yml` during Phases 0–2 of #222 (emitting warnings without failing CI), with hard enforcement
+starting in Phase 3 when the fast Team PR gate replaces full per-PR CI. Repo-local `.agents/skills/land-change` and
+`.agents/skills/review-local` (adapted from `agent-tools` to this repository's `D-068` rules) carry the workflow for
+coding agents.
+
+**Why.** Moving to a fast Team PR gate and automated per-track SemVer releases (#222) requires durable, machine-readable
+verification, cross-model review, and release-impact metadata in `master`'s git history rather than only in ephemeral PR
+comments, while keeping the trailer schema identical across `marmot-protocol/mdk` and `marmot-protocol/marmot-agents`.
+
+Decided 2026-11-26 by the project owner (as Phase 0.3 of #222).

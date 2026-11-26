@@ -110,6 +110,12 @@ jobs:
           echo "models=${models}" >> "${GITHUB_OUTPUT}"
           echo "Full gate: ${full}. Models: ${models}."
 
+      - name: PR commit trailers (advisory)
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 tools/ci/check_pr_trailers.py --base HEAD^1 --head HEAD^2 --advisory \
+            || echo "::warning title=PR trailers::advisory check failed unexpectedly"
+
   lint:
     name: Rust format and Clippy
     runs-on: ubuntu-24.04
