@@ -265,7 +265,8 @@ Built in the core, the Codex driver and MDK ([D-141](decisions.md#d-141-subagent
   first install too, and one refused then leaves nothing ([D-154](decisions.md#d-154-an-install-takes-over-a-killed-upgrade-only-for-the-same-agent-and-the-same-gateway)).
   Before it puts another core in place, an upgrade stops the agent and copies its account home into its own
   record, under MDK's lock, and puts it back with the old core, leaving the agent stopped and printing how to
-  start it; the copy goes when the upgrade ends. The installer runs `marmot-agent init` only on an empty home.
+  start it; the copy goes when the upgrade ends, and a run with another core puts a killed upgrade that holds
+  one back first. A copy that cannot go back leaves the new core in place. The installer runs `marmot-agent init` only on an empty home.
   An upgrade that started the agent and ended cannot be undone: the old core cannot open the store the new one
   moved forward. Other agents' homes are not copied ([D-159](decisions.md#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)).
 - A gateway install moves over with its installer's `--replace-plugin`. The OpenClaw installer finishes a

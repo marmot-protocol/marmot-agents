@@ -13,9 +13,11 @@ tools/release/package.sh. The OpenClaw installer reads JSON with node, so its te
 the PATH the tests run with, and are skipped without one.
 """
 
+import fcntl
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -2368,6 +2370,91 @@ exec {rm} "$@"
             return {**self.shared_generations(m), "store": self.store_of(m)}
 
         self.every_step_together(self.HARNESS, self.store_args, self.older_store, together)
+
+    def test_another_core_puts_back_an_upgrade_whose_store_moved(self):
+        """An upgrade killed after the new core opened the agent's store, then the same agent installed with
+        the older core, with --no-start or without: that run does not take the upgrade over, which would end it
+        with the copy gone and the older core on the new store. It puts it back first, the store with it, then
+        installs the older core on the older store."""
+        def killed(step: int) -> Machine:
+            m = Machine(self)
+            self.older_store(m)
+            m.run(self.HARNESS, *self.store_args(m), stop=("KILL", step), check=False)
+            return m
+
+        def moved(step: int) -> bool:
+            m = killed(step)
+            return (m.data / "upgrade/stores/first/home").is_dir() and self.store_of(m) == "new"
+
+        counted = Machine(self)
+        self.older_store(counted)
+        counted.run(self.HARNESS, *self.store_args(counted), stop=("KILL", 0))
+        steps = int(counted.steps.read_text())
+        step = next((s for s in range(steps, 0, -1) if moved(s)), None)
+        self.assertIsNotNone(step, "some step leaves the upgrade under way once the new core opened the store")
+        for no_start in (True, False):
+            with self.subTest(no_start=no_start):
+                m = killed(step)
+                older = m.dir / "older-core"
+                ran = m.run(self.HARNESS, *m.args(self.HARNESS, "--binary", str(older), "--name", "first"),
+                            *(["--no-start"] if no_start else []), check=False)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+                self.assertEqual(self.shared_generations(m)["core"], "older")
+                self.assertEqual(self.store_of(m), "older", ran.stderr)
+                self.no_copy(m)
+                self.assertIn("with another marmot-agent core", ran.stdout)
+
+    @unittest.skipUnless(shutil.which("flock", path=SYSTEM_PATH), "holds MDK's lock with flock")
+    def test_a_store_that_cannot_go_back_keeps_the_new_core(self):
+        """An upgrade that fails after the new core opened the store, while something else holds MDK's lock on
+        the agent's home: the store cannot go back, so neither do the core and the support files, which are
+        left new beside the new store, never the older core beside it. The record is kept, and the error says
+        to run the installer again once nothing holds the home; that run, the lock let go, finishes the
+        upgrade. The wait for the lock is cut from a minute to a second."""
+        m = Machine(self)
+        self.older_store(m)
+        m.write(m.bin / "flock", '#!/bin/sh\nif [ "$1" = -w ] && [ "$2" = 60 ]; then shift 2; set -- -w 1 "$@"; fi\n'
+                f'exec {shutil.which("flock", path=SYSTEM_PATH)} "$@"\n')
+        pause = m.dir / "pause"
+        run = m.start(self.HARNESS, *self.store_args(m),
+                      env={"FAKE_PAUSE": "systemctl --user restart", "FAKE_PAUSE_AT": str(pause),
+                           "FAKE_FAIL": "systemctl --user restart"})
+        self.addCleanup(run.kill)
+        m.until(lambda: pause.with_name("pause.reached").exists(), lambda: run.poll() is not None)
+        self.assertTrue(pause.with_name("pause.reached").exists(), m.output(run))
+        held = os.open(m.data / self.STORE / ".marmot-runtime.lock", os.O_WRONLY | os.O_APPEND)
+        try:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            pause.touch()
+            self.assertNotEqual(run.wait(timeout=120), 0)
+            out = m.output(run)
+            self.assertIn("failing, as asked", out)
+            self.assertEqual(self.shared_generations(m), {"core": "new", "install files": "new"}, out)
+            self.assertEqual(self.store_of(m), "new", out)
+            self.assertTrue((m.data / "upgrade/stores/first/home").is_dir(), "the record and its copy are kept")
+            self.assertIn("Run this again once nothing holds the agent's account home", out)
+            self.assertNotIn("put back the account home", out)
+        finally:
+            os.close(held)
+        m.run(self.HARNESS, *self.store_args(m))
+        self.assertEqual(self.shared_generations(m), {"core": "new", "install files": "new"})
+        self.assertEqual(self.store_of(m), "new")
+        self.no_copy(m)
+
+    def test_the_start_command_on_macos_is_quoted(self):
+        """How to start an agent left stopped, on macOS: each plist's path one word, a home with spaces too."""
+        record = Path(tempfile.mkdtemp(prefix="marmot-install-")) / "first"
+        self.addCleanup(shutil.rmtree, record.parent, True)
+        record.mkdir()
+        (record / "where").write_text("/the home\norg.marmot.marmot-agent.first\norg.marmot.marmot-agent.first.connector\n")
+        launchd = "/Users/some one/Library/LaunchAgents"
+        said = subprocess.run(["bash", "-c", f'. "{HERE}/lib.sh"; OS=Darwin; MA_LAUNCHD_DIR="$1"; services_hint "$2"',
+                               "bash", launchd, str(record)], capture_output=True, text=True, check=True).stdout
+        command = said.split("start it again with: ", 1)[1].strip()
+        uid = os.getuid()
+        self.assertEqual(shlex.split(command), [
+            "launchctl", "bootstrap", f"gui/{uid}", f"{launchd}/org.marmot.marmot-agent.first.plist", "&&",
+            "launchctl", "bootstrap", f"gui/{uid}", f"{launchd}/org.marmot.marmot-agent.first.connector.plist"])
 
 class TwoAgents(unittest.TestCase):
     """Two agents of one gateway harness in one home share the core and the support files, and each

@@ -3542,7 +3542,7 @@ so an upgrade put back after that left the old core beside a store it could not 
   uncopied, as `init` would in a run that copies nothing.
 - **Where it lives.** In the upgrade's record only,
   `~/.local/share/marmot-agent/upgrade/stores/<name>/home`, beside a file that names the home and the agent's
-  services. It is made under another name and renamed once whole. Each file keeps its owner and mode, and every
+  services and one that holds the checksum of the core it was kept for. It is made under another name and renamed once whole. Each file keeps its owner and mode, and every
   folder made for it is the owner's alone (mode 700). Nothing of it is printed or logged: the installer names
   only its path.
 - **Put back.** Whatever puts the upgrade back puts the copy back with the core: the run's own exit trap, the next
@@ -3553,15 +3553,24 @@ so an upgrade put back after that left the old core beside a store it could not 
   finishes it before anything else: a run that takes the upgrade over, `--no-start` too, or one that puts it back.
   The agent's services are left stopped, on the old core: the installer prints the command that starts them,
   `systemctl --user start` with the agent's units, or `launchctl bootstrap` with its agents on macOS, and starts
-  nothing itself. A copy that could not go back keeps the record, for a later run.
+  nothing itself. A copy that could not go back, as when something still holds MDK's lock on the home, leaves
+  the rest as it is too: the new core and support files stay in place, so the new core is never left beside an
+  old store or the old core beside a new one, and the record is kept. The installer says to run it again once
+  nothing holds the agent's home.
 - **Ended.** The copy goes with the record, in the one step that ends the upgrade. A run that takes over a killed
-  upgrade keeps the copy that run took, which is of the store before any new core opened it. Another agent's
+  upgrade keeps the copy that run took, which is of the store before any new core opened it, but only when it
+  installs the same core the copy was kept for. A run with any other core, an older release too, puts that
+  upgrade back first, the store with it: the killed run's core may have moved the store forward already, and
+  taking it over would end the upgrade with the copy gone and another core on that store. Another agent's
   services that the killed run stopped are left stopped, and the run that ends the upgrade prints how to start
   them. No install starts an agent because of an earlier one that failed or was killed.
 
-Two limits are accepted. Only the agent being installed has its home copied: another agent on the account whose
+Three limits are accepted. Only the agent being installed has its home copied: another agent on the account whose
 core restarts while the new core is in place, before the upgrade ends, opens its store with the new core, and an
-upgrade then put back leaves it as #210 did, until the new release is installed again. What the new core did
+upgrade then put back leaves it as #210 did, until the new release is installed again. An upgrade with
+`--no-start` copies no home either, so should the agent's service manager start its core again while the new one
+is in place (its units restart it whenever its harness exits), the store moves forward uncopied in the same way;
+the builder accepted this on 2026-11-26, under the project owner's instruction to decide minor points. What the new core did
 between its start and the put back is lost with it: the agent is back where it was as the copy was taken. That
 is mostly the seconds until a later step fails, but an older store can reuse keys or run a prompt twice, as going
 back from a move can ([`docs/move.md`](move.md#going-back)). It is the price of an agent that starts again at all.

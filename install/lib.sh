@@ -799,20 +799,25 @@ publish_support() {
 
 # Starts an upgrade, or takes over one a run before this one left under way. One that replaces a part
 # this run does not, as another harness's install does, or that holds a plugin change of another agent,
-# or to another gateway, this run cannot finish: it puts it back first.
+# or to another gateway, this run cannot finish: it puts it back first. So too one that holds a copy of an
+# account store kept for another core than this run's (stores_ours), whose store that core may have moved
+# forward already, out of reach of this run's.
 upgrade_begin() {
     local making
     [ "${MA_UPGRADING:-0}" -eq 0 ] || return 0
     if [ -d "$MA_UPGRADE" ]; then
         change_restore || die "a plugin change left in $MA_UPGRADE could not be put back in its place"
-        if upgrade_ours; then
+        if ! upgrade_ours; then
+            upgrade_put_back other || die "fix what stops it, then run this again"
+        elif ! stores_ours; then
+            upgrade_put_back core || die "fix what stops it, then run this again"
+        else
             store_restores || die "an account home a run before this one was putting back could not be put back (above); run this again"
             MA_UPGRADING=1
             say "a run before this one stopped part way through installing marmot-agent; this one finishes that, and puts back the core and support files that run found if it fails"
             upgrade_list "$MA_UPGRADE"
             return 0
         fi
-        upgrade_put_back other || die "fix what stops it, then run this again"
     fi
     MA_UPGRADING=1
     # Made under another name and renamed once whole, so a run killed before then has changed nothing.
@@ -982,12 +987,15 @@ upgrade_put_back_changes() {
 # After an upgrade that did not end: the account stores it kept, the plugin changes it lists, the core
 # and the parts of $MA_LIB there before it put back, a part that was not there removed, and what happened
 # said. The agents whose stores it put back are left stopped, and how to start them is said once it is
-# gone (D-159). Given "other", the upgrade is one a run before this one left, which this one puts back
+# gone (D-159). A store that cannot go back leaves the rest as it is, and the record kept. Given "other",
+# or "core" (upgrade_begin), the upgrade is one a run before this one left, which this one puts back
 # before it starts, and the status says whether it could.
 upgrade_put_back() {
-    local why=${1:-} kind part found ok=0 plugins record records put="" hints
+    local why=${1:-} kind part found ok=0 plugins record records put="" hints who
     # Gone already: upgrade_end took it away, and the upgrade is done.
     [ -f "$MA_UPGRADE/list" ] || return 0
+    who="a run of another installer, or for another agent, before this one"
+    [ "$why" != core ] || who="a run before this one, with another marmot-agent core, which kept a copy of an account home for that core,"
     records=$(store_records)
     while IFS= read -r record; do
         [ -n "$record" ] || continue
@@ -996,10 +1004,27 @@ upgrade_put_back() {
 "
         else
             ok=1
+            break
         fi
     done <<EOF
 $records
 EOF
+    # A store that could not go back is left as the new core made it, and so is the rest: the core and
+    # support files, the plugin changes and the image, with the record, for a run once nothing holds the
+    # home. Put back, the older core would be left with a store it cannot open.
+    if [ "$ok" -eq 1 ]; then
+        if [ -n "$why" ]; then
+            printf 'error: %s\n' "$who stopped part way through installing marmot-agent, and an account home it \
+kept a copy of could not be put back (above), so the core and support files are left as they are, the new ones, \
+and what that run found is in $MA_UPGRADE. Run this again once nothing holds the agent's account home" >&2
+            return 1
+        fi
+        printf 'error: %s\n' "the install did not finish, and an account home could not be put back as it was before \
+it (above), so the marmot-agent core and support files are left as they are, the new ones, and those installed \
+before it are in $MA_UPGRADE. Run this again once nothing holds the agent's account home: it finishes the \
+install, or puts them back should it fail" >&2
+        return 0
+    fi
     plugins=$(upgrade_put_back_changes) || ok=1
     # A change change_restore could not put back in its place is in the record still, which is kept.
     [ ! -f "$MA_UPGRADE/plugin-change" ] || ok=1
@@ -1029,14 +1054,14 @@ EOF
     image_put_back_from "$MA_UPGRADE/image" || ok=1
     # Read before the record goes.
     hints=$(store_hints "$put")
-    if [ "$why" = other ]; then
+    if [ -n "$why" ]; then
         if [ "$ok" -eq 0 ] && upgrade_retire; then
             rm -rf "$MA_DATA/.upgrade.done.$$"
-            say "a run of another installer, or for another agent, before this one stopped part way through installing marmot-agent; this put back the core and support files that run found"
+            say "$who stopped part way through installing marmot-agent; this put back the core and support files that run found"
             [ -z "$hints" ] || say "$hints"
             return 0
         fi
-        printf 'error: %s\n' "a run of another installer, or for another agent, before this one stopped part way \
+        printf 'error: %s\n' "$who stopped part way \
 through installing marmot-agent, and putting back the core and support files that run found failed (above); they \
 are in $MA_UPGRADE" >&2
         return 1
@@ -1067,10 +1092,12 @@ install, or puts them back should it fail" >&2
 # one moment, MDK's databases with their -wal and -shm files, its keys and records, and the core's own
 # state, but for the folder of the socket, which holds only the socket the core makes again as it starts.
 # It is kept in the upgrade's record, in $MA_UPGRADE/stores/NAME: `where` names the home and the agent's
-# services, and home/ is the copy, made under home.new and renamed once whole. Each file keeps its mode,
-# and every folder made for it is the owner's alone. It goes with the record, as the upgrade ends or is put
-# back, and nothing of it is printed. Only this agent's home is copied: another agent whose core restarts
-# while the new one is in place, before the upgrade ends, moves its store forward uncopied (D-159).
+# services, `core` the checksum of the core it is kept for, and home/ is the copy, made under home.new and
+# renamed once whole. Each file keeps its mode, and every folder made for it is the owner's alone. It goes
+# with the record, as the upgrade ends or is put back, and nothing of it is printed. Only this agent's home
+# is copied: another agent whose core restarts while the new one is in place, before the upgrade ends,
+# moves its store forward uncopied; and with --no-start none is, so a core of this agent's that its service
+# manager starts again meanwhile moves it forward uncopied too (D-159).
 
 # The agent's services: its systemd units, or its launchd labels.
 agent_services() {
@@ -1110,7 +1137,8 @@ store_keep() {
     lease_home "$MA_HOME" ||
         die "the agent's core still has its account home $MA_HOME open after its service was stopped: stop it, then run this again"
     rm -rf "$record/home.new"
-    if ! { copy_home "$MA_HOME" "$record/home.new" && mv "$record/home.new" "$record/home"; }; then
+    if ! { printf '%s\n' "$MA_CORE_SUM" >"$record/core" && copy_home "$MA_HOME" "$record/home.new" &&
+        mv "$record/home.new" "$record/home"; }; then
         exec 8>&-
         die "copying the agent's account home into $record failed (above)"
     fi
@@ -1138,7 +1166,7 @@ services_hint() {
         if [ "$OS" = Linux ]; then
             command="${command:-systemctl --user start} $service"
         else
-            command="${command:+$command && }launchctl bootstrap gui/$(id -u) $MA_LAUNCHD_DIR/$service.plist"
+            command="${command:+$command && }launchctl bootstrap gui/$(id -u) $(sh_quote "$MA_LAUNCHD_DIR/$service.plist")"
         fi
     done <<EOF
 $(sed 1d "$1/where")
@@ -1214,7 +1242,10 @@ store_put_back() {
     services_stop $(sed 1d "$record/where")
     [ -d "$record/home" ] || return 0
     (umask 077 && mkdir -p "$home") || return 1
-    lease_home "$home" || return 1
+    if ! lease_home "$home"; then
+        printf 'error: %s\n' "something still holds the account home $home open, so it could not be put back as it was before the upgrade" >&2
+        return 1
+    fi
     if : >"$record/restoring"; then
         while IFS= read -r entry; do
             [ -z "$entry" ] || rm -rf "$entry" || ok=1
@@ -1237,6 +1268,20 @@ store_restores() {
     local record
     while IFS= read -r record; do
         [ -z "$record" ] || [ ! -f "$record/restoring" ] || store_put_back "$record" || return 1
+    done <<EOF
+$(store_records)
+EOF
+}
+
+# Whether each copy of a store the upgrade's record holds was kept for the core this run installs
+# (MA_CORE_SUM, which install_core reads), which may have moved that store forward since: taken over by
+# another core, the upgrade would end with the copy gone, and that core on a store it cannot open.
+stores_ours() {
+    local record
+    [ -n "${MA_CORE_SUM:-}" ] || return 1
+    while IFS= read -r record; do
+        if [ -z "$record" ] || [ ! -d "$record/home" ]; then continue; fi
+        [ -f "$record/core" ] && [ "$(cat "$record/core")" = "$MA_CORE_SUM" ] || return 1
     done <<EOF
 $(store_records)
 EOF
@@ -1345,6 +1390,10 @@ install_core() {
     # before the lock is held: a gateway's script takes it sooner, before it reads the gateway
     # (upgrade_recover).
     lock_installs
+    # The checksum of the core this run installs, which a copy of a store it keeps is kept for, and which
+    # a copy an upgrade left under way holds must be kept for, for this run to take that upgrade over.
+    MA_CORE_SUM=$(sha256_of "$binary")
+    [ -n "$MA_CORE_SUM" ] || die "the checksum of $binary could not be read"
     # An upgrade a run before this one left under way is finished by this one, or put back should this
     # one fail before it is.
     if [ -d "$MA_UPGRADE" ]; then upgrade_begin; fi
