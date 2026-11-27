@@ -472,11 +472,8 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     /// Whether the chats' members are to be read again, as MDK could not list them last time
     /// ([`Core::show_rights`]).
     members_again: bool,
-    /// Whether the message being handed on was read while the driver had output ready, so the
-    /// look could not see whether it had ended ([`Core::catch_up_group`]).
-    unseen: bool,
-    /// Whether the driver refused a prompt handed on so as one that has ended: nothing more is
-    /// read for it, and what it still has is taken until it ends (D-139).
+    /// Whether the driver refused a prompt as one that has ended: nothing more is read for it,
+    /// and what it still has is taken until it ends (D-139, D-180).
     gone: bool,
     /// Faults put back for the simulator, to show its checks find them: none in use.
     #[cfg(feature = "sim-bugs")]
@@ -568,7 +565,6 @@ impl<D: Driver, M: Side> Core<D, M> {
             early: None,
             ended: false,
             members_again: false,
-            unseen: false,
             gone: false,
             #[cfg(feature = "sim-bugs")]
             bugs: Bugs::default(),
@@ -1057,8 +1053,8 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// group is read on from its mark after the loop has taken it in its turn, but each read
     /// reads one message at least, so neither waits behind the other for long; once the driver
     /// has ended, nothing more is read, and the next driver reads on from the mark (D-139). A
-    /// driver whose output hid its end refuses that message's prompt as one that has ended: it
-    /// was never given, and the mark stays before it.
+    /// driver that ended after the look refuses that message's prompt as one that has ended: it
+    /// was never given, and the mark stays before it (D-180).
     async fn catch_up_group(&mut self, group: GroupKey) -> Result<(), Unsaved> {
         self.behind.remove(&group);
         // The next driver reads on from the mark (D-139).
@@ -1085,18 +1081,13 @@ impl<D: Driver, M: Side> Core<D, M> {
             // never given: the core ends, and the next driver is given it, once (D-139). What it
             // gave meanwhile is taken in its turn of the loop, and this group's turn comes after,
             // once one message is read: a driver that always has more does not hold it up (#167).
-            let ready = handed < READS && self.driver_ready().await;
-            if handed == READS || (ready && (handed > 0 || self.ended)) {
+            if handed == READS || (self.driver_ready().await && (handed > 0 || self.ended)) {
                 // The rest of the page is read again from the mark next turn.
                 self.read_through(&group);
                 self.behind.insert(group);
                 return Ok(());
             }
-            // With output ready, the look could not see whether the driver had ended: a refusal
-            // that says it had shows it was never given the message (#257).
-            self.unseen = ready;
             self.handle(message).await?;
-            self.unseen = false;
             if self.waits(&group) || self.gone {
                 return Ok(());
             }
@@ -1331,8 +1322,8 @@ impl<D: Driver, M: Side> Core<D, M> {
         Ok(match act {
             Act::Prompt(prompt) => {
                 let result = self.driver.prompt(prompt.clone()).await;
-                // A driver the core did not see had ended was never given it, and nobody is told.
-                if self.unseen && result.as_ref().is_err_and(|r| r.ended) {
+                // A driver that had ended was never given it, and nobody is told (D-180).
+                if result.as_ref().is_err_and(|r| r.ended) {
                     self.gone = true;
                     return Ok(Vec::new());
                 }
