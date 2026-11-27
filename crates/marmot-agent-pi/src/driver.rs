@@ -68,6 +68,10 @@ const EXTENSION: &str = include_str!("../extension/send-file.ts");
 /// The title of the dialog the extension's `send_file` tool asks the driver in.
 pub const SEND_FILE_REQUEST: &str = "marmot-agent send_file";
 
+/// What the chat is told when Pi cannot open a session that held messages: its file has gone, or
+/// Pi stopped as it started.
+const HISTORY_GONE: &str = "Pi could not open this session's history, which may have been deleted. Start a new session to go on.";
+
 /// How long a Pi that was asked to stop has before it is killed.
 const STOP_GRACE: Duration = Duration::from_secs(10);
 
@@ -88,10 +92,14 @@ pub struct Setup {
     pub args: Vec<String>,
     /// The working folder.
     pub cwd: PathBuf,
+    /// The file the driver keeps, one id a line, the sessions it has seen hold a message, so that
+    /// after a restart it still tells a session whose file was deleted from one that never had
+    /// one. Created if missing.
+    pub held: PathBuf,
 }
 
-/// Leaves out the program, its arguments and the working folder, which hold paths, such as the
-/// model key file's: a path is not logged (D-071).
+/// Leaves out the program, its arguments, the working folder and the file of sessions, which
+/// hold paths, such as the model key file's: a path is not logged (D-071).
 impl fmt::Debug for Setup {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Setup")
@@ -303,8 +311,12 @@ pub struct Pi {
     chats: HashMap<ChatId, Chat>,
     /// Every session a chat has had, and the chat: a session belongs to its chat for good.
     owners: HashMap<String, ChatId>,
-    /// Sessions known to have held a message, so Pi has written their file.
+    /// Sessions known to have held a message, so Pi has written their file: those in the setup's
+    /// file, and those seen since.
     held: HashSet<String>,
+    /// The setup's file lacks some of `held`, since a write to it failed: it is written whole at
+    /// the next session seen to hold a message.
+    unsaved: bool,
     lines: mpsc::UnboundedReceiver<Line>,
     sender: mpsc::UnboundedSender<Line>,
     /// Held while a reader stamps a line and sends it, and while [`Pi::arrival`] looks, so that no
@@ -348,13 +360,19 @@ impl Pi {
             .prefix("marmot-agent-pi-")
             .tempdir()?;
         std::fs::write(extension.path().join("send-file.ts"), EXTENSION)?;
+        let held = match std::fs::read_to_string(&setup.held) {
+            Ok(text) => text.lines().map(String::from).collect(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => HashSet::new(),
+            Err(e) => return Err(e),
+        };
         let (sender, lines) = mpsc::unbounded_channel();
         Ok(Self {
             setup,
             version: (!version.is_empty()).then_some(version),
             chats: HashMap::new(),
             owners: HashMap::new(),
-            held: HashSet::new(),
+            held,
+            unsaved: false,
             lines,
             sender,
             stamping: std::sync::Arc::default(),
@@ -372,6 +390,33 @@ impl Pi {
     /// stopped: [`PATIENCE`] unless set.
     pub fn set_patience(&mut self, patience: Duration) {
         self.patience = patience;
+    }
+
+    /// Notes that a session has held a message, here and in the setup's file, so that the driver
+    /// knows it after a restart. A note that cannot be written is tried again, with every other,
+    /// the next time a session is seen to hold a message.
+    fn hold(&mut self, session: &str) {
+        if !self.held.insert(session.to_string()) && !self.unsaved {
+            return;
+        }
+        // After a failed write, a new line first ends any part of one it left.
+        let text: String = if self.unsaved {
+            std::iter::once("\n".to_string())
+                .chain(self.held.iter().map(|s| format!("{s}\n")))
+                .collect()
+        } else {
+            format!("{session}\n")
+        };
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600); // like the core's own state
+        let file = options.open(&self.setup.held);
+        let written = file.and_then(|mut file| {
+            std::io::Write::write_all(&mut file, text.as_bytes())?;
+            file.sync_data()
+        });
+        self.unsaved = written.is_err();
     }
 
     fn id(&mut self) -> String {
@@ -459,7 +504,7 @@ impl Pi {
         opened?;
         let now = c.translator.session().map(String::from).expect("checked");
         if resume == Resume::Open && session.is_some() {
-            self.held.insert(now.clone()); // Pi found its file
+            self.hold(&now); // Pi found its file
         }
         self.owners.insert(now, chat.clone());
         Ok(())
@@ -761,7 +806,7 @@ impl Pi {
     fn ready_event(&mut self, chat: &ChatId, event: AgentEvent, mut settles: Vec<RequestId>) {
         let header = event.header();
         if let (Body::Turn(_), Some(session)) = (event.body(), &header.session) {
-            self.held.insert(session.as_str().to_string()); // a run starts with a message
+            self.hold(session.as_str()); // a run starts with a message
         }
         let c = self.chats.get_mut(chat).expect("a chat that was fed");
         let turn = header.turn.as_ref().map(|t| t.as_str().to_string());
@@ -919,9 +964,17 @@ impl Pi {
         };
         // Pi writes a session's file only once it holds a message. A session that never did, such
         // as a new one the core restarted after, is made again, empty, with its id. One known to
-        // have held a message is not: its history is gone.
+        // have held a message, even before a restart, is not: its history is gone, and the chat
+        // is told.
         let mut started = self.spawn(chat, Some(&resume), Resume::Open, folder).await;
-        if started == Err(Unstarted::Exited) && !self.held.contains(&resume) {
+        if started == Err(Unstarted::Exited) {
+            if self.held.contains(&resume) {
+                return Err(Refusal {
+                    reason: Reason::Failed,
+                    detail: Some(HISTORY_GONE.into()),
+                    unanswered: false,
+                });
+            }
             started = (self.spawn(chat, Some(&resume), Resume::Create, folder)).await;
         }
         started.map_err(|_| Refusal::new(Reason::Failed))

@@ -28,9 +28,15 @@ impl Subject for OnFake {
 
     async fn start(&mut self) -> Pi {
         let (program, args, cwd) = self.server.program();
-        let mut pi = Pi::start(Setup { program, args, cwd })
-            .await
-            .expect("the relay answers --version");
+        let held = cwd.join("held");
+        let mut pi = Pi::start(Setup {
+            program,
+            args,
+            cwd,
+            held,
+        })
+        .await
+        .expect("the relay answers --version");
         // The suite waits five seconds for a request; the driver gives up on a Pi sooner.
         pi.set_patience(std::time::Duration::from_secs(2));
         pi

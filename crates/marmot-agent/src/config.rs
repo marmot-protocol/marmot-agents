@@ -327,6 +327,7 @@ impl Config {
             program: pi.program.clone(),
             args: pi.args.clone(),
             cwd: pi.cwd.clone().into(),
+            held: self.home.join("pi-held-sessions"),
         })
     }
 
