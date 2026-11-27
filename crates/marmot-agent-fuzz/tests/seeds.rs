@@ -32,6 +32,26 @@ fn every_check_passes_over_nothing_and_noise() {
     }
 }
 
+/// Regression for #242: a command or method name ending in `_chunk]` produces a single-message
+/// `response to ...` / `error response to ...` native payload, not an ACP streamed chunk list.
+#[test]
+fn translator_fuzz_checks_handle_chunk_suffix_in_command_or_method() {
+    marmot_agent_fuzz::pi(
+        br#"1{"id":"4","type":"response","command":"get__chunk]","message":"/mcp"}
+"#,
+    );
+    marmot_agent_fuzz::codex(
+        br#"0{"id":1,"method":"foo_chunk]","params":{}}
+1{"id":1,"error":{"code":-32601,"message":"not found"}}
+"#,
+    );
+    marmot_agent_fuzz::acp(
+        br#"0{"jsonrpc":"2.0","id":1,"method":"foo_chunk]","params":{}}
+1{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"not found"}}
+"#,
+    );
+}
+
 /// cargo-fuzz takes every program of the package for a fuzz target, and the nightly job fuzzes
 /// each one it lists, so the package's programs are the targets and nothing else: one that is
 /// not, such as what writes the seeds, would be run as a fuzzer and pass without fuzzing.
