@@ -205,11 +205,10 @@ Still to work out:
   in the same process memory, so a break-in to the program exposes all of them. With today's default store, each
   key is also a plain file beside the data it protects. So the choice is between easier running and stronger
   isolation, and where keys are kept matters more if one program holds them all.
-- **How an agent knows another member is an agent**, so that it does not answer it, when no owner link is
-  required. The proposal is a flag in the agent's own profile: a Nostr profile (kind 0) keeps its fields in its
-  content, so a true-or-false "this is an agent" field can simply be added. Nostr already has a profile field
-  named `bot` for automated accounts, which may be the one to use. A limit on back-and-forth replies would be a
-  backstop either way.
+- **How an agent knows another member is an agent.** Decided: a member that has sent a `session` item in the
+  chat is one, and its messages are not prompts unless the owner lists it; nothing goes in the public profile
+  ([D-175](decisions.md#d-175-an-agent-sends-its-session-item-when-it-joins-a-chat-and-an-agents-messages-are-not-prompts)).
+  A limit on back-and-forth replies, for agents on today's connectors, which send no session item, is still open.
 - **Every agent in a group reads everything.** A member receives every message, mentioned or not. Five agents
   in a group means five harness installs holding that chat.
 - **Names.** The identity is per install, so Claude Code on a laptop and on a server are two contacts.
@@ -217,8 +216,9 @@ Still to work out:
 
 ### Q-10 How are permissions changed from the chat?
 
-D-010 wants this later. The mechanism is open, and so is how a client learns who may prompt, so that it can show
-this before someone tries. Not before the swap: until then permissions are set in the configuration file
+D-010 wants this later. The mechanism is open. How a client learns who may prompt, so that it can show this
+before someone tries, is decided: the chat's session item says
+([D-176](decisions.md#d-176-the-session-item-says-who-in-the-chat-may-prompt-and-who-may-approve)). Not before the swap: until then permissions are set in the configuration file
 ([D-073](decisions.md#d-073-standing-settings-live-in-a-configuration-file)).
 
 ### Q-25 Can something outside the chat and the harness start a turn?
@@ -305,4 +305,17 @@ Not scheduled. Raised in [issue 12](https://github.com/marmot-protocol/marmot-ag
 
 ### Q-20 What do the apps need?
 
-Rich rendering needs work in the White Noise apps. Which item types come first, and who does that work, is open.
+Rich rendering needs work in the White Noise apps. White Noise Android builds its own side and has said what it
+wants first (issue #45), in this order:
+
+1. Each chat's turn state in the chat list: working, waiting for an answer, failed, or finished since last looked.
+2. Approval and question cards that send kind 1202 answers, with their alerts.
+3. The session item: settings, actions, slash commands and the shared controls, with the title, the rights and
+   the first item on joining ([D-175](decisions.md#d-175-an-agent-sends-its-session-item-when-it-joins-a-chat-and-an-agents-messages-are-not-prompts),
+   [D-176](decisions.md#d-176-the-session-item-says-who-in-the-chat-may-prompt-and-who-may-approve),
+   [D-177](decisions.md#d-177-the-session-item-carries-the-sessions-title-its-project-comes-later-to-full-activity-chats-only)).
+4. Tools, reasoning and plans, folded under the turn's line.
+5. Subagent threads.
+
+It moves to the new shape of kind 1202 when MDK does, with no period of both. What White Noise iOS needs first,
+and when each app ships it, is open.
