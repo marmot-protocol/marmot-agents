@@ -1177,6 +1177,9 @@ store_keep() {
             { ! first_start || : >"$record.new/moved"; } &&
             mv "$record.new" "$record"; } || die "the record of the agent's account home could not be written in $MA_UPGRADE"
     fi
+    # The launchers first: one an older release wrote would start the core on the home while its copy is
+    # put back, should the run fail before it writes them in its turn (D-172).
+    write_launchers
     # shellcheck disable=SC2086 # one service a line, without spaces
     services_stop $services ||
         die "the agent's services did not stop, so its account home was not copied: stop them, then run this again"

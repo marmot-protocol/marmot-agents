@@ -4000,9 +4000,10 @@ replaced, the second added:
 - **A home being put back.** While a put back of the agent's home is under way, marked in the upgrade's record
   (`stores/<name>/restoring`), the agent's `start` launcher, which its service runs, refuses to run the core. A
   service manager that starts the agent after a kill and a reboot, before the installer runs again, so finds the
-  home part removed or part copied and starts no core on it. A put back whose copy fails part way keeps the mark,
-  and the installer says that the home is incomplete, and to fix what failed and run the installer again before
-  starting the agent. The run that finishes the put back removes the mark, as D-159 has it.
+  home part removed or part copied and starts no core on it. An upgrade writes the launchers again before it copies
+  the home, so that one an older release wrote, without this refusal, is never beside a put back of that copy. A
+  put back whose copy fails part way keeps the mark, and the installer says that the home is incomplete, and to
+  fix what failed and run the installer again before starting the agent. The run that finishes the put back removes the mark, as D-159 has it.
 
 **Why.** Issue #215: a first install whose `init` was stopped before it made an identity left files in the home, and
 the next run refused it as a home that held one, asking for a public key that did not exist. Asking whether a home

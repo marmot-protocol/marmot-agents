@@ -2776,13 +2776,36 @@ exec {rm} "$@"
         subprocess.run(start, env=env, check=True)
         self.assertIn(f"marmot-agent run {m.data}/agents/first/settings.toml", m.calls())
 
+    def test_the_start_refuses_a_home_being_put_back_before_the_copy_is_kept(self):
+        """#217: an agent whose start an older release wrote, without that refusal: an upgrade writes the start
+        again before it stops the agent to copy its home, so that no put back of that copy, as after a step
+        that fails before the launchers are written in their turn, runs beside a start that would let a
+        service manager run the core on the home part put back."""
+        m = Machine(self)
+        self.older_store(m)
+        start = m.data / "agents/first/start"
+        start.write_text("".join(line for line in start.read_text().splitlines(keepends=True)
+                                 if "restoring" not in line and not line.startswith(("    ", "fi"))))
+        self.assertNotIn("restoring", start.read_text())
+        pause = m.dir / "pause"
+        run = m.start(self.HARNESS, *self.store_args(m),
+                      env={"FAKE_PAUSE": "systemctl --user stop", "FAKE_PAUSE_AT": str(pause)})
+        self.addCleanup(run.kill)
+        m.until(lambda: pause.with_name("pause.reached").exists(), lambda: run.poll() is not None)
+        self.assertTrue(pause.with_name("pause.reached").exists(), m.output(run))
+        self.assertFalse((m.data / "upgrade/stores/first/home").exists(), "the copy is not kept yet")
+        self.assertIn(f"{m.data}/upgrade/stores/first/restoring", start.read_text())
+        pause.touch()
+        self.assertEqual(run.wait(timeout=120), 0, m.output(run))
+
     def test_a_home_that_cannot_be_copied_back_whole_says_so(self):
         """#217: a put back whose copy fails part way leaves the home incomplete, and marked: the error says
         to fix what failed and run the installer again before starting the agent, and that run finishes it."""
         m = Machine(self)
         self.older_store(m)
         home = m.data / self.STORE
-        m.write(m.bin / "cp", f'#!/bin/sh\nfor last; do :; done\n[ "$last" != "{home}/" ] || exit 1\nexec /bin/cp "$@"\n')
+        cp = shutil.which("cp", path=SYSTEM_PATH)
+        m.write(m.bin / "cp", f'#!/bin/sh\nfor last; do :; done\n[ "$last" != "{home}/" ] || exit 1\nexec {cp} "$@"\n')
         failed = m.run(self.HARNESS, *self.store_args(m), env={"FAKE_FAIL": "systemctl --user restart"}, check=False)
         self.assertNotEqual(failed.returncode, 0)
         self.assertIn(f"the account home {home} could not be put back whole (above), and is left incomplete: fix "
