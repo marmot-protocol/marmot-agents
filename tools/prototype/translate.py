@@ -1813,6 +1813,21 @@ class Hermes(Translator):
     def key_of(src):
         return f"{src.get('chat_type')}:{src.get('chat_id')}:{src.get('user_id')}"
 
+    @staticmethod
+    def names_session(named, key):
+        """Whether Hermes's name for a session, `named`, is the session of `key` (`key_of`), by the
+        plugin's rule: a group's session is named after the chat and the sender,
+        `agent:main:<platform>:group:<chat>:<sender>`, and a direct chat's after the chat alone,
+        `agent:main:<platform>:dm:<chat>`."""
+        named = str(named or "")
+        if not named:
+            return False
+        if named.endswith(":" + key):
+            return True
+        kind, _, rest = key.partition(":")
+        chat = rest.rpartition(":")[0]
+        return kind == "dm" and bool(chat) and named.endswith(f":dm:{chat}")
+
     def name(self, key):
         """Hermes hands a platform no session id. The driver names a session after the chat and the
         sender, and counts when Hermes replaces it."""
@@ -1970,10 +1985,9 @@ class Hermes(Translator):
         return (ev["session"], turn) if ev is not None else None
 
     def turn_of_session(self, session_key):
-        """The running turn of the Hermes session `session_key`, which Hermes names after the chat and
-        the sender (`agent:main:<platform>:<chat type>:<chat>:<sender>`), if one is running."""
+        """The running turn of the Hermes session `session_key` (`names_session`), if one is running."""
         for turn, key in reversed(list(self.turn_key.items())):
-            if session_key and str(session_key).endswith(":" + key) and f"turn:{turn}" in self.open:
+            if self.names_session(session_key, key) and f"turn:{turn}" in self.open:
                 return turn
         return None
 
@@ -1981,7 +1995,7 @@ class Hermes(Translator):
         """The chat and sender of the Hermes session `session_key`, of those this chat has had a turn or a
         session of, or None. In a group each sender has a session: the latest is not theirs."""
         known = [*reversed(list(self.turn_key.values())), *self.generation]
-        return next((key for key in known if session_key and str(session_key).endswith(":" + key)), None)
+        return next((key for key in known if self.names_session(session_key, key)), None)
 
     # -- everything that arrives as text
 
