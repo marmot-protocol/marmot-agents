@@ -24,6 +24,7 @@ pub mod groups;
 pub mod import;
 pub mod keys;
 pub mod marmot;
+pub mod ready;
 pub mod rights;
 pub mod run;
 pub mod socket;

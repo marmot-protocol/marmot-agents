@@ -99,8 +99,11 @@ There is no release of `marmot-agent` yet: build it from a checkout first, as th
    even if the same `marmot-agent` is installed for another agent already. If the install fails after that, it
    puts the home back as the import left it, leaves the agent stopped, disables its new services so that none
    starts at your next login, and says so; run it again once what failed
-   is fixed, or go back as [below](#going-back). The move is done once the core runs as a service; the installer
-   notes it in the agent's folder (`moved`).
+   is fixed, or go back as [below](#going-back). The move is done once the core runs as a service and says it is
+   ready, its store open and its harness started, and for Claude Code once its connector has reached the core; the
+   installer waits up to two minutes for that, counts a core that stops or is not ready by then as a failure, and
+   notes a move done in the agent's folder (`moved`)
+   ([D-178](decisions.md#d-178-an-install-counts-a-start-as-done-once-the-core-and-claude-codes-connector-say-they-are-ready)).
 
    To run the agent by hand instead, in a terminal, with the settings anywhere: `marmot-agent run
    ~/.marmot-agents/codex/marmot-agent.toml`, and for Claude Code its driver too, as the import tells you. It then

@@ -92,6 +92,8 @@ class FakeQuery implements QueryLike {
  */
 class FakeCore {
   hello: Json | undefined;
+  /** Whether the core holds its answer to the hello until the test calls `welcome`. */
+  holdHello = false;
   readonly invalid: string[] = [];
   readonly events: Json[] = [];
   /** The size of every line the connector sent, in bytes, without its newline. */
@@ -132,7 +134,7 @@ class FakeCore {
   private read(m: Json): void {
     if (m["method"] === "hello") {
       this.hello = m;
-      this.write({ jsonrpc: "2.0", id: m["id"], result: { core: { version: "0" }, agent: { name: "a" } } });
+      if (!this.holdHello) this.welcome();
     } else if (m["method"] === "event") {
       this.events.push(m["params"] as Json);
     } else if (m["method"] === "send_file") {
@@ -142,6 +144,10 @@ class FakeCore {
     } else if (typeof m["id"] === "number") {
       this.responses.get(m["id"])?.(m);
     }
+  }
+  /** Takes the hello. */
+  welcome(): void {
+    this.write({ jsonrpc: "2.0", id: this.hello!["id"], result: { core: { version: "0" }, agent: { name: "a" } } });
   }
   request(method: string, params: Json): Promise<Json> {
     const id = (this.nextId += 1);
@@ -159,11 +165,12 @@ class FakeCore {
   }
 }
 
-async function start(cwd = "/nowhere"): Promise<{
+async function start(cwd = "/nowhere", holdHello = false): Promise<{
   core: FakeCore;
   queries: FakeQuery[];
   running: Promise<void>;
   warnings: string[];
+  readied: () => number;
   done: () => Promise<void>;
 }> {
   const home = mkdtempSync(join(tmpdir(), "marmot-agent-claude-test-"));
@@ -172,7 +179,9 @@ async function start(cwd = "/nowhere"): Promise<{
   const server = createServer();
   await new Promise<void>((r) => server.listen(join(home, "socket", "marmot-agent.sock"), r));
   const core = new FakeCore(server);
+  core.holdHello = holdHello;
   const queries: FakeQuery[] = [];
+  let readied = 0;
   const running = run({
     home,
     cwd,
@@ -188,6 +197,7 @@ async function start(cwd = "/nowhere"): Promise<{
     warn: (kind) => warnings.push(kind),
     // A stand-in for the SDK's MCP server: the test calls the tool's handler itself.
     fileServer: (send) => ({ send }),
+    ready: () => (readied += 1),
   });
   const warnings: string[] = [];
   const done = async () => {
@@ -200,7 +210,7 @@ async function start(cwd = "/nowhere"): Promise<{
   // A test that fails before it stops the connector must not keep the others waiting.
   stopping.add(done);
   await until(() => core.hello !== undefined, "the hello");
-  return { core, queries, running, warnings, done };
+  return { core, queries, running, warnings, readied: () => readied, done };
 }
 
 const stopping = new Set<() => Promise<void>>();
@@ -247,6 +257,15 @@ test("the hello names the protocol, the token, Claude Code and its seven capabil
   assert.deepEqual(params["capabilities"], CAPABILITIES);
   // The folder it works in when a chat chose none, so the core can let a chat move it (D-101).
   assert.equal(params["folder"], "/nowhere");
+  await done();
+});
+
+test("the connector says it is ready once the core has taken its hello, and not before (D-178)", async () => {
+  const { core, readied, done } = await start("/nowhere", true);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(readied(), 0, "not while the hello waits for its answer");
+  core.welcome();
+  await until(() => readied() === 1, "the connector to say it is ready");
   await done();
 });
 

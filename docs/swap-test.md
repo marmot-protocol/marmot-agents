@@ -419,6 +419,12 @@ chmod +x ~/swap-test/failing-bin/systemctl
 PATH="$HOME/swap-test/failing-bin:$PATH" install/hermes.sh --binary "$CORE" --replace-plugin
 ```
 
+The core's unit is `Type=notify`, so the real `systemctl restart` inside the stand-in returns only once the new
+core has opened the store and said it is ready; the stand-in then fails it. The installer counts a core that
+stops, or is not ready within two minutes, as a failed start in the same way
+([D-178](decisions.md#d-178-an-install-counts-a-start-as-done-once-the-core-and-claude-codes-connector-say-they-are-ready)),
+so its message, that the agent's core did not start or did not say it was ready, is the stand-in's doing here.
+
 Passing: the installer says the start failed, puts back the plugin and Hermes's settings, says it put back the
 account home as it was before the upgrade, and that the agent is left stopped, with the command that would start it
 (D-159). Do not start it: this is a move to go back from. Remove the core's service (`install/hermes.sh
