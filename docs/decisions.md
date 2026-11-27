@@ -4022,7 +4022,9 @@ it replaces was the builder's too.
 **Decision.** The Pi driver keeps the sessions it has seen hold a message in a file of its own, one id a line,
 `pi-held-sessions` in the agent's account home, and reads it when it starts. After a restart, a session whose file
 has gone and which that file names is not made again empty: the prompt is refused, and the chat's notice says
-"Pi no longer has this session's history. Start a new session to go on." A session the file does not name, such
+"Pi could not open this session's history, which may have been deleted. Start a new session to go on." The
+words say "may": Pi also exits this way when it fails as it starts, which the driver cannot tell apart, since Pi's
+diagnostics are not read ([D-071](#d-071-what-may-be-logged)). A session the file does not name, such
 as a new one the core restarted after before anyone wrote, is made again with its id as before. This replaces
 what [D-092](#d-092-the-choices-made-while-building-m3-are-accepted) says of a deleted session after a restart
 (issue #63).

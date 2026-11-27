@@ -349,6 +349,34 @@ async fn a_session_that_held_messages_and_is_gone_is_not_made_again_after_a_rest
     assert!(!prompts.contains("again"), "no Pi heard the prompt");
 }
 
+/// #63: a session the driver could not note, since its file could not be written, is noted when
+/// the next session is seen to hold a message, so a restart still knows it.
+#[tokio::test]
+async fn a_note_that_could_not_be_written_is_written_later() {
+    let work = tempfile::tempdir().unwrap();
+    let fake = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fake_pi.py");
+    let setup = Setup {
+        program: "python3".into(),
+        args: vec![fake.display().to_string()],
+        cwd: work.path().to_path_buf(),
+        held: work.path().join("later").join(".held"), // a folder not there yet
+    };
+    let mut pi = Pi::start(setup.clone()).await.unwrap();
+    pi.prompt(prompt("c-1", "m-1", "hello")).await.unwrap();
+    let first = session_of(&until(&mut pi, |e| is_turn(e, State::Done)).await);
+    std::fs::create_dir(work.path().join("later")).unwrap();
+    pi.prompt(prompt("c-2", "m-2", "hello")).await.unwrap();
+    until(&mut pi, |e| is_turn(e, State::Done)).await;
+    drop(pi);
+    std::fs::remove_file(work.path().join(".fake-sessions").join(first.as_str())).unwrap();
+
+    let mut pi = Pi::start(setup).await.unwrap();
+    let mut resume = prompt("c-1", "m-3", "again");
+    resume.session = Some(first);
+    let refused = pi.prompt(resume).await.unwrap_err();
+    assert_eq!(refused.reason, Reason::Failed);
+}
+
 #[tokio::test]
 async fn a_session_that_never_held_a_message_is_made_again_after_a_restart() {
     let work = tempfile::tempdir().unwrap();

@@ -68,8 +68,9 @@ const EXTENSION: &str = include_str!("../extension/send-file.ts");
 /// The title of the dialog the extension's `send_file` tool asks the driver in.
 pub const SEND_FILE_REQUEST: &str = "marmot-agent send_file";
 
-/// What the chat is told when a session that held messages has lost its file.
-const HISTORY_GONE: &str = "Pi no longer has this session's history. Start a new session to go on.";
+/// What the chat is told when Pi cannot open a session that held messages: its file has gone, or
+/// Pi stopped as it started.
+const HISTORY_GONE: &str = "Pi could not open this session's history, which may have been deleted. Start a new session to go on.";
 
 /// How long a Pi that was asked to stop has before it is killed.
 const STOP_GRACE: Duration = Duration::from_secs(10);
@@ -313,6 +314,9 @@ pub struct Pi {
     /// Sessions known to have held a message, so Pi has written their file: those in the setup's
     /// file, and those seen since.
     held: HashSet<String>,
+    /// The setup's file lacks some of `held`, since a write to it failed: it is written whole at
+    /// the next session seen to hold a message.
+    unsaved: bool,
     lines: mpsc::UnboundedReceiver<Line>,
     sender: mpsc::UnboundedSender<Line>,
     /// Held while a reader stamps a line and sends it, and while [`Pi::arrival`] looks, so that no
@@ -368,6 +372,7 @@ impl Pi {
             chats: HashMap::new(),
             owners: HashMap::new(),
             held,
+            unsaved: false,
             lines,
             sender,
             stamping: std::sync::Arc::default(),
@@ -388,19 +393,30 @@ impl Pi {
     }
 
     /// Notes that a session has held a message, here and in the setup's file, so that the driver
-    /// knows it after a restart. A note that cannot be written is kept only while the driver runs.
+    /// knows it after a restart. A note that cannot be written is tried again, with every other,
+    /// the next time a session is seen to hold a message.
     fn hold(&mut self, session: &str) {
-        if !self.held.insert(session.to_string()) {
+        if !self.held.insert(session.to_string()) && !self.unsaved {
             return;
         }
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.setup.held);
-        if let Ok(mut file) = file {
-            let _ = std::io::Write::write_all(&mut file, format!("{session}\n").as_bytes())
-                .and_then(|()| file.sync_data());
-        }
+        // After a failed write, a new line first ends any part of one it left.
+        let text: String = if self.unsaved {
+            std::iter::once("\n".to_string())
+                .chain(self.held.iter().map(|s| format!("{s}\n")))
+                .collect()
+        } else {
+            format!("{session}\n")
+        };
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600); // like the core's own state
+        let file = options.open(&self.setup.held);
+        let written = file.and_then(|mut file| {
+            std::io::Write::write_all(&mut file, text.as_bytes())?;
+            file.sync_data()
+        });
+        self.unsaved = written.is_err();
     }
 
     fn id(&mut self) -> String {
