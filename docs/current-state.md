@@ -150,11 +150,11 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
 - In a group the agent answers when mentioned or replied to; in a two-person chat, always ([D-075](decisions.md#d-075-in-a-group-the-agent-answers-when-mentioned-or-replied-to-in-a-direct-chat-always)).
 - A reply's quote is what the chat shows now: an edited message as edited, and a deleted one by its author
   alone, without its text ([D-185](decisions.md#d-185-a-replys-quote-is-what-the-chat-shows-now-and-a-message-no-longer-shown-is-quoted-without-its-text)).
-  It holds the message's first 2,000 characters (provisional, [D-187](decisions.md#d-187-a-quote-holds-the-first-2000-characters-of-a-message)).
+  It holds the message's first 2,000 characters ([D-187](decisions.md#d-187-a-quote-holds-the-first-2000-characters-of-a-message)).
 - A message sent during a turn goes straight to the harness, which folds it in, restarts or queues it
   ([D-040](decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness)). OpenCode folds it in,
-  through its steering extension to ACP; the other ACP agents restart (provisional,
-  [D-186](decisions.md#d-186-the-acp-driver-sends-a-message-during-a-turn-with-the-agents-steering-extension-when-it-announces-one)).
+  through its steering extension to ACP; the other ACP agents restart
+  ([D-186](decisions.md#d-186-the-acp-driver-sends-a-message-during-a-turn-with-the-agents-steering-extension-when-it-announces-one)).
 - A secret answer is accepted only in a two-person chat. The membership check is not bound to the MLS epoch the
   answer is sent under, an accepted risk ([D-041](decisions.md#d-041-a-secret-answer-is-accepted-only-in-a-two-person-chat), [D-137](decisions.md#d-137-a-secret-answers-membership-check-is-not-bound-to-the-epoch-it-is-sent-under)).
   An app should not offer to answer a secret question in a chat of more than two members ([D-181](decisions.md#d-181-an-app-should-not-offer-to-answer-a-secret-question-in-a-chat-of-more-than-two-members)).
