@@ -34,6 +34,10 @@ const QUOTE_DELETED: &str = "[this message was deleted]";
 const QUOTE_GONE: &str = "[this message is not available]";
 /// How much of a message a quote holds, in characters (D-187).
 const QUOTE_MAX_CHARS: usize = 2_000;
+/// How many of a message's files a quote names, and how much of each one's name and type, in
+/// characters (D-188).
+const QUOTE_MAX_FILES: usize = 16;
+const QUOTE_MAX_FILE_CHARS: usize = 200;
 
 /// Opens the account home the settings name: its accounts, and MDK's app and runtime on it.
 /// This is what first opens the store, which MDK upgrades forward only. MDK holds the home for as
@@ -470,7 +474,9 @@ impl Marmot {
             .map_err(|_| NotNow)?;
         let text = match shown {
             Some(shown) if shown.deleted => QUOTE_DELETED.to_owned(),
-            Some(shown) if !shown.invalidated => excerpt(shown.plaintext),
+            Some(shown) if !shown.invalidated => {
+                quote_of(shown.plaintext, files_of(&record.tags, record.source_epoch))
+            }
             _ => QUOTE_GONE.to_owned(),
         };
         let author = PubKey(record.sender);
@@ -831,13 +837,42 @@ fn too_large() -> AppError {
     AppError::InvalidAppMessagePayload("over the size limit".into())
 }
 
-/// The start of a message, for a quote: all of it when it fits, or else its first
-/// [`QUOTE_MAX_CHARS`] characters and a mark that it was cut.
-fn excerpt(text: String) -> String {
-    match text.char_indices().nth(QUOTE_MAX_CHARS) {
+/// The start of `text`: all of it when it fits in `max` characters, or else its first `max`
+/// characters and a mark that it was cut.
+fn excerpt(text: String, max: usize) -> String {
+    match text.char_indices().nth(max) {
         Some((end, _)) => format!("{}…", &text[..end]),
         None => text,
     }
+}
+
+/// What a quote says of a message the chat shows: the start of its text, then a line for each of
+/// its `files`, a name and a type, up to [`QUOTE_MAX_FILES`], and a line more when there are more.
+fn quote_of(text: String, files: impl IntoIterator<Item = (String, String)>) -> String {
+    let mut files = files.into_iter().map(|(name, kind)| {
+        let (name, kind) = (
+            excerpt(name, QUOTE_MAX_FILE_CHARS),
+            excerpt(kind, QUOTE_MAX_FILE_CHARS),
+        );
+        format!("[file: {name} ({kind})]")
+    });
+    let mut lines = vec![excerpt(text, QUOTE_MAX_CHARS)];
+    lines.extend(files.by_ref().take(QUOTE_MAX_FILES));
+    if files.next().is_some() {
+        lines.push("[and more files]".to_owned());
+    }
+    lines.retain(|line| !line.is_empty());
+    lines.join("\n")
+}
+
+/// The files a message carries, each by its name and type, read from the message's own tags.
+/// Nothing is fetched, so where a file is kept does not matter here.
+fn files_of(tags: &[Vec<String>], source_epoch: Option<u64>) -> Vec<(String, String)> {
+    (tags.iter())
+        .filter(|tag| tag.first().is_some_and(|name| name == "imeta"))
+        .filter_map(|tag| marmot_app::media_attachment_from_imeta_tag(tag, source_epoch, true).ok())
+        .map(|file| (file.file_name, file.media_type))
+        .collect()
 }
 
 /// Whether `message` is the first event, or an edit, of a session item (D-175). Who sent it is the
@@ -1302,9 +1337,34 @@ mod tests {
     #[test]
     fn a_long_quote_is_cut_between_characters_and_says_so() {
         let fits = "é".repeat(QUOTE_MAX_CHARS);
-        assert_eq!(excerpt(fits.clone()), fits);
-        let cut = excerpt(format!("{fits}and more"));
+        assert_eq!(quote_of(fits.clone(), []), fits);
+        let cut = quote_of(format!("{fits}and more"), []);
         assert_eq!(cut, format!("{fits}…"));
+    }
+
+    // #267. A quote's files follow its text, one to a line; sixteen are named and a line says
+    // when there were more; and a name too long to be a name is cut like the text, so a file
+    // cannot make a quote large again.
+    #[test]
+    fn a_quote_names_sixteen_files_and_cuts_a_long_name() {
+        let file = |n: usize| (format!("{n}.txt"), "text/plain".to_owned());
+        let two = quote_of("see these".into(), (1..=2).map(file));
+        assert_eq!(
+            two,
+            "see these\n[file: 1.txt (text/plain)]\n[file: 2.txt (text/plain)]"
+        );
+        let sixteen = quote_of(String::new(), (1..=16).map(file));
+        assert_eq!(sixteen.lines().count(), 16);
+        assert!(sixteen.ends_with("[file: 16.txt (text/plain)]"));
+        let more = quote_of(String::new(), (1..=17).map(file));
+        assert_eq!(more.lines().count(), 17);
+        assert!(more.ends_with("[file: 16.txt (text/plain)]\n[and more files]"));
+        let long = "n".repeat(QUOTE_MAX_FILE_CHARS);
+        let named = quote_of(
+            String::new(),
+            [(format!("{long}.txt"), "text/plain".into())],
+        );
+        assert_eq!(named, format!("[file: {long}… (text/plain)]"));
     }
 
     /// MDK's words, at the revision the core links (`marmot-app`'s `local_submissions.rs`), for a
