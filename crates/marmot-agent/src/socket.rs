@@ -386,6 +386,11 @@ impl SocketDriver {
         };
         match write_line(&mut self.writer, &message, deadline).await {
             Ok(()) => {}
+            // As before the request: no next driver could be given it either.
+            Err(Unwritten::Unwritable) => {
+                self.gone = true;
+                return Err(Refusal::new(Reason::Failed));
+            }
             Err(Unwritten::Nothing) => {
                 self.gone = true;
                 return Err(Refusal::ended());
@@ -675,6 +680,8 @@ impl Driver for SocketDriver {
 /// Why a message was not written whole.
 #[derive(Debug)]
 enum Unwritten {
+    /// None of it, since no connection could carry it: too long, or not a message.
+    Unwritable,
     /// None of it: the connector cannot have it.
     Nothing,
     /// Part of it, perhaps all but the line's end: the connector may read it as whole.
@@ -690,10 +697,10 @@ async fn write_line(
     deadline: tokio::time::Instant,
 ) -> Result<(), Unwritten> {
     let Ok(mut line) = serde_json::to_string(message) else {
-        return Err(Unwritten::Nothing);
+        return Err(Unwritten::Unwritable);
     };
     if line.len() > MAX_MESSAGE {
-        return Err(Unwritten::Nothing);
+        return Err(Unwritten::Unwritable);
     }
     line.push('\n');
     let bytes = line.as_bytes();
@@ -877,6 +884,25 @@ mod tests {
         assert!(!driver.request(a_prompt()).await.unwrap_err().unanswered);
         let mut seen = vec![0u8; 1024];
         let _ = connector.read(&mut seen).await;
+    }
+
+    // A request too long for any connection is refused as failed, not as by a connector that went:
+    // the next could not be given it either, so it does not wait for one (#257).
+    #[tokio::test]
+    async fn a_request_too_long_to_write_is_not_refused_as_ended() {
+        let (core, mut connector) = UnixStream::pair().unwrap();
+        connector
+            .write_all(hello(json!(TOKEN)).as_bytes())
+            .await
+            .unwrap();
+        let mut driver = greeted(core).await;
+        let mut long = a_prompt();
+        if let wire::CoreRequest::Prompt(params) = &mut long {
+            params.text = "x".repeat(MAX_MESSAGE);
+        }
+        let result = driver.request(long).await.unwrap_err();
+        assert_eq!(result, Refusal::new(Reason::Failed));
+        drop(connector);
     }
 
     // A connector that stops reading cannot hold the core: a request bigger than the socket can
