@@ -4015,7 +4015,7 @@ the home half put back, and a put back that failed part way said only to run the
 the home.
 
 Decided 2026-11-27 by the builder, under the project owner's instruction to decide minor points. The `init` guard
-it replaces was the builder's too.
+it replaces was the builder's too. The project owner accepted it on 2026-11-27.
 
 ## D-174 The Pi driver remembers, across a restart, which sessions held a message
 
@@ -4037,5 +4037,5 @@ the core already keeps. A refusal, as the driver already gave before a restart, 
 because a file that has gone can also be a moved or unmounted session folder, which a new empty session would
 hide.
 
-Decided 2026-11-27 by the builder. The notice's words and the refusal are visible to people, and provisional
-until the owner accepts them.
+Decided 2026-11-27 by the builder. The notice's words and the refusal are visible to people; the project owner
+accepted both on 2026-11-27.
