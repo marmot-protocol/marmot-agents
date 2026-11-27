@@ -1174,7 +1174,7 @@ store_keep() {
     if [ ! -d "$record" ]; then
         rm -rf "$record.new"
         { (umask 077 && mkdir -p "$record.new" && printf '%s\n' "$MA_HOME" "$services" >"$record.new/where") &&
-            { ! first_start || : >"$record.new/moved"; } &&
+            { ! first_start || : >"$record.new/moved"; } && units_keep "$record.new" &&
             mv "$record.new" "$record"; } || die "the record of the agent's account home could not be written in $MA_UPGRADE"
     fi
     # The launchers first: one an older release wrote would start the core on the home while its copy is
@@ -1194,6 +1194,30 @@ store_keep() {
     fi
     exec 8>&-
     say "kept a copy of the agent's account home, until it is started on the new core"
+}
+
+# On Linux, the agent's systemd units as they are before this run writes its own, kept in the record of
+# its store, so that a put back restores them with the older core: an older release's core never says it
+# is ready, which a unit of this release waits for (D-178). A plist waits for nothing, and is left as it is.
+units_keep() {
+    local service
+    [ "$OS" = Linux ] || return 0
+    (umask 077 && mkdir -p "$1/units") || return 1
+    for service in $(agent_services); do
+        [ ! -f "$MA_SYSTEMD_DIR/$service" ] || cp -p "$MA_SYSTEMD_DIR/$service" "$1/units/$service" || return 1
+    done
+}
+
+# Puts the units a record kept back in place, and has systemd read them again, before it says how to start
+# the agent.
+units_put_back() {
+    local unit
+    [ -d "$1/units" ] || return 0
+    for unit in "$1"/units/*; do
+        [ -f "$unit" ] || continue
+        cp -p "$unit" "$MA_SYSTEMD_DIR/$(basename "$unit")" || return 1
+    done
+    systemctl --user daemon-reload >/dev/null 2>&1 9>&- || true
 }
 
 # Stops the agent's services named; one that is not running, or not there, is left as it is.
@@ -1330,6 +1354,8 @@ store_put_back() {
         printf 'error: %s\n' "the services of the agent whose account home is $home did not stop, so the home could not be put back as it was before the upgrade" >&2
         return 1
     fi
+    units_put_back "$record" ||
+        printf 'error: %s\n' "the agent's systemd units could not be put back as they were before the upgrade: run the installer again before you start it" >&2
     # shellcheck disable=SC2046 # one service a line, without spaces
     [ ! -f "$record/moved" ] || services_disable $(sed 1d "$record/where")
     [ -d "$record/home" ] || return 0
@@ -1901,11 +1927,16 @@ EOF
         say "    echo 'marmot-agent: the account home is being put back as it was before an upgrade; run the installer again' >&2"
         say "    exit 1"
         say "fi"
+        # systemd hears that the core is ready from the core itself (Type=notify); launchd cannot, so on
+        # macOS the core makes a file once it is ready, which the installer waits for (D-178).
+        [ "$OS" = Linux ] || say "export MARMOT_AGENT_READY_FILE=$(sh_quote "$MA_AGENT_DIR/core.ready")"
         say "exec $(sh_quote "$MA_CORE") run $(sh_quote "$MA_SETTINGS")"
     } | put "$MA_AGENT_DIR/start" 700
     [ "$HARNESS_KIND" = socket ] || return 0
     {
         launcher_head "the $HARNESS_TITLE connector"
+        # Made once the core has taken the connector's hello, on either system (D-178).
+        say "export MARMOT_AGENT_READY_FILE=$(sh_quote "$MA_AGENT_DIR/connector.ready")"
         harness_connector
     } | put "$MA_AGENT_DIR/connector" 700
 }
@@ -1929,7 +1960,10 @@ systemd_units() {
         say "Documentation=https://github.com/$MA_REPO"
         say ""
         say "[Service]"
-        say "Type=exec"
+        say "# Started once the core says it is ready: its store open and its harness started (D-178)."
+        say "Type=notify"
+        say "NotifyAccess=main"
+        say "TimeoutStartSec=$MA_READY_WAIT"
         say "ExecStart=$(systemd_quote "$MA_AGENT_DIR/start")"
         say "WorkingDirectory=$(systemd_path "$MA_AGENT_DIR")"
         say "# Started again however it ends, as when its harness stops, unless systemd stopped it."
@@ -2009,8 +2043,14 @@ start_services() {
             say "the service is set up and enabled, not started: $(start_command $(agent_services))"
             return 0
         fi
+        ready_reset
+        local logs="journalctl --user -u $MA_UNIT"
+        [ "$HARNESS_KIND" != socket ] || logs="$logs, and its connector's: journalctl --user -u $MA_UNIT-connector"
+        # The core's unit is Type=notify: systemctl returns once the core has said it is ready, and fails
+        # if it stops first or does not say so in time.
         # shellcheck disable=SC2086
-        act systemctl --user restart $units
+        act systemctl --user restart $units ||
+            die "the agent's core did not start: it stopped, or did not say it was ready within $MA_READY_WAIT seconds (its logs: $logs)"
     else
         if [ "$NO_START" -eq 1 ]; then
             # shellcheck disable=SC2046 # one service a line, without spaces
@@ -2019,9 +2059,41 @@ start_services() {
         fi
         for label in $labels; do
             if [ "$DRY_RUN" -eq 0 ]; then launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true; fi
-            act launchctl bootstrap "gui/$(id -u)" "$MA_LAUNCHD_DIR/$label.plist"
         done
+        ready_reset
+        # launchd orders nothing: the connector is started once the core's socket listens, as After= does.
+        act launchctl bootstrap "gui/$(id -u)" "$MA_LAUNCHD_DIR/$MA_LABEL.plist"
+        wait_ready "$MA_AGENT_DIR/core.ready" ||
+            die "the agent's core did not say it was ready within $MA_READY_WAIT seconds (its logs: $MA_AGENT_DIR/logs/core.log)"
+        [ "$HARNESS_KIND" != socket ] || act launchctl bootstrap "gui/$(id -u)" "$MA_LAUNCHD_DIR/$MA_LABEL.connector.plist"
     fi
+    [ "$HARNESS_KIND" = socket ] || return 0
+    local logs="journalctl --user -u $MA_UNIT-connector"
+    [ "$OS" = Linux ] || logs="$MA_AGENT_DIR/logs/connector.log"
+    wait_ready "$MA_AGENT_DIR/connector.ready" ||
+        die "the $HARNESS_TITLE connector did not connect to the agent's core within $MA_READY_WAIT seconds (its logs: $logs)"
+}
+
+# The files the core, on macOS, and the connector make once they are ready, taken away before the
+# services start, so that only a start of this run's counts.
+ready_reset() {
+    [ "$DRY_RUN" -eq 0 ] || return 0
+    rm -f "$MA_AGENT_DIR/core.ready" "$MA_AGENT_DIR/connector.ready"
+}
+
+# Waits, up to MA_READY_WAIT seconds, for a file a launcher names in MARMOT_AGENT_READY_FILE (D-178).
+# Until then, an upgrade is not ended, its copy of the store is kept and a move is not noted done: one
+# that is not ready in time fails, and is put back as any failed start is (D-159).
+wait_ready() {
+    local file=$1 until=$((SECONDS + MA_READY_WAIT))
+    if [ "$DRY_RUN" -eq 1 ]; then
+        say "would wait up to $MA_READY_WAIT seconds for $file"
+        return 0
+    fi
+    while [ ! -e "$file" ]; do
+        [ "$SECONDS" -lt "$until" ] || return 1
+        sleep 0.2
+    done
 }
 
 uninstall() {
@@ -2257,6 +2329,9 @@ set_paths() {
     MA_LABEL=org.marmot.marmot-agent.$NAME
     MA_SYSTEMD_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
     MA_LAUNCHD_DIR=$HOME/Library/LaunchAgents
+    # How long a start waits for the core, and Claude Code's connector, to say they are ready (D-178).
+    MA_READY_WAIT=${MARMOT_AGENT_READY_WAIT:-120}
+    case $MA_READY_WAIT in '' | *[!0-9]*) die "MARMOT_AGENT_READY_WAIT is a number of seconds" ;; esac
     no_control "the data folder" "$MA_DATA"
 }
 

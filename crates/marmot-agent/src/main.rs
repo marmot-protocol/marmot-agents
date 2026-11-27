@@ -168,6 +168,7 @@ async fn run(config: &Config) -> Result<(), String> {
                 Some(driver) => {
                     let driver = driver.map_err(|_| "Codex could not be started")?;
                     let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
+                    ready();
                     core.run(live, stop).await
                 }
                 None => Ok(()),
@@ -186,6 +187,7 @@ async fn run(config: &Config) -> Result<(), String> {
                 Some(driver) => {
                     let driver = driver.map_err(|_| "the ACP agent could not be started")?;
                     let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
+                    ready();
                     core.run(live, stop).await
                 }
                 None => Ok(()),
@@ -195,6 +197,7 @@ async fn run(config: &Config) -> Result<(), String> {
             Some(driver) => {
                 let driver = driver.map_err(|_| "Pi could not be started")?;
                 let core = Core::new(marmot, driver, config, Store::new(&config.home))?;
+                ready();
                 core.run(live, stop).await
             }
             None => Ok(()),
@@ -206,11 +209,22 @@ async fn run(config: &Config) -> Result<(), String> {
             let (listener, token) = endpoint
                 .listen()
                 .map_err(|_| "the socket could not be opened")?;
+            // A connector can connect from now on: the core is ready, whether or not one has.
+            ready();
             serve(marmot, config, &config.home, listener, token, since, stop).await
         }
     };
     runtime.shutdown().await;
     ran
+}
+
+/// Tells the service manager, if there is one, that the store is open and the driver started
+/// (D-178). A core that cannot say so runs on: systemd then counts its start as failed once it has
+/// waited, and the installer puts back what it changed.
+fn ready() {
+    if let Err(why) = marmot_agent::ready::tell() {
+        eprintln!("marmot-agent: {why}");
+    }
 }
 
 /// What `work` gives, or nothing when the core is asked to stop first; `work` is then dropped.

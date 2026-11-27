@@ -102,7 +102,11 @@ home, makes no new one, and runs the agent as a service
   Every agent on your account uses the same `marmot-agent` and support files, so an update that fails or is
   stopped puts back the ones it found, with Pi's or Goose's container image, the plugin in your Hermes or
   OpenClaw, and the agent's account store as it was before the new `marmot-agent` opened it, and running it
-  again after a kill finishes it. An agent whose store was put back is left stopped, and the script prints the
+  again after a kill finishes it. An update counts as done only once the new `marmot-agent` says it is ready, its
+  store open and its harness started, and for Claude Code once its connector has reached it; one that stops, or
+  is not ready within two minutes, fails and is put back
+  ([D-178](docs/decisions.md#d-178-an-install-counts-a-start-as-done-once-the-core-and-claude-codes-connector-say-they-are-ready)).
+  An agent whose store was put back is left stopped, and the script prints the
   command that starts it again. An update keeps no copy of the store for a new agent, with the same
   `marmot-agent` as before, or with `--no-start` or `--no-service`, which do not start the agent: after one of
   those two, the store moves forward uncopied when the agent next starts. One install runs on your account at a

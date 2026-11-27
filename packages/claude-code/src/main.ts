@@ -6,10 +6,13 @@
  * The socket is `socket/marmot-agent.sock` in the agent's home and the token is `connector.token` there
  * (`Endpoint::in_home` in `crates/marmot-agent/src/socket.rs`). It exits when the socket closes.
  * It prints errors by kind only: never a message, a prompt, a key or a path (D-071).
+ *
+ * Once the core has taken its hello, it makes the file `MARMOT_AGENT_READY_FILE` names, if set: the
+ * installer waits for it before it counts the agent as started (D-178).
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { run, type QueryFn } from "./connector.ts";
 
@@ -59,6 +62,15 @@ try {
     version: field(new URL("../package.json", import.meta.url), "version") ?? "0.0.0",
     harnessVersion: field(sdk, "claudeCodeVersion"),
     warn: say,
+    ready: () => {
+      const file = process.env["MARMOT_AGENT_READY_FILE"];
+      if (!file) return;
+      try {
+        writeFileSync(file, "", { mode: 0o600 });
+      } catch {
+        say("the file that says the connector is ready could not be made");
+      }
+    },
   });
 } catch (e) {
   // What `run` throws names a kind and nothing else.

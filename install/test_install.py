@@ -68,6 +68,26 @@ esac
 """
 # An older core, which the upgrade tests install first.
 OLDER_CORE = FAKE_CORE + "# an older core\n"
+# A service that starts says it is ready as its launcher asks it to (MARMOT_AGENT_READY_FILE, D-178), unless
+# FAKE_NOT_READY names its launcher: "start", the core's, or "connector". A systemctl that succeeds is a core
+# that said it is ready, as its unit is Type=notify; on macOS the core makes the file too.
+FAKE_READY = r"""
+ready() {
+    [ -f "$1" ] || return 0
+    case " ${FAKE_NOT_READY:-} " in *" $(basename "$1") "*) return 0 ;; esac
+    line=$(grep '^export MARMOT_AGENT_READY_FILE=' "$1") || return 0
+    (eval "$line" && : >"$MARMOT_AGENT_READY_FILE")
+}
+case "$(basename "$0") $1 $2" in
+    "systemctl --user restart" | "systemctl --user start")
+        for unit; do
+            file="$HOME/.config/systemd/user/$unit"
+            [ -f "$file" ] && ready "$(sed -n 's/^ExecStart="\(.*\)"$/\1/p' "$file")"
+        done ;;
+    "launchctl bootstrap "*) ready "$(sed -n 's|^        <string>\(.*\)</string>$|\1|p' "$3" | head -n 1)" ;;
+esac
+exit 0
+"""
 # A stand-in fails a command that starts as FAKE_FAIL says, such as "systemctl --user restart". One that
 # starts as FAKE_PAUSE says makes the file FAKE_PAUSE_AT.reached, then waits until FAKE_PAUSE_AT is there.
 FAKE_LOGGER = """#!/bin/sh
@@ -82,7 +102,7 @@ if [ -n "${FAKE_PAUSE:-}" ]; then case "$(basename "$0") $*" in "$FAKE_PAUSE"*)
     : >"$FAKE_PAUSE_AT.reached"
     n=0; while [ ! -e "$FAKE_PAUSE_AT" ] && [ "$n" -lt 1200 ]; do sleep 0.05; n=$((n + 1)); done ;;
 esac; fi
-"""
+""" + FAKE_READY
 # A stand-in for docker that keeps its images' tags, in docker-tags beside FAKE_LOG, and its images, in
 # docker-images: each build makes a new image. An image a tag no longer names is kept, as docker keeps it
 # (dangling), and may be tagged again by its id; `rmi` of its last tag removes it. It says nothing of the
@@ -457,7 +477,7 @@ case "$2" in restart | start)
     done ;;
 esac
 if [ -n "${FAKE_FAIL:-}" ]; then case "$(basename "$0") $*" in "$FAKE_FAIL"*) echo "failing, as asked" >&2; exit 1 ;; esac; fi
-"""
+""" + FAKE_READY
 
 # Runs the install script named after it, as `bash script` does, and sends STOP_SIGNAL to the script's
 # process group as it comes to step STOP_AT. A step is a call of act or put, through which the scripts
@@ -1783,20 +1803,27 @@ class Moved(unittest.TestCase):
                 self.assertFalse((agent / "home").exists())
 
     def test_a_failure_after_the_first_start_puts_back_the_old_connectors_store(self):
-        """The new core opened the old home and a later step failed: the home is put back as the import
-        left it, the agent left stopped, and run again once fixed, the move is done."""
-        for harness in ("codex", "claude-code"):
-            with self.subTest(harness=harness):
+        """The new core opened the old home and then failed, or a later step did: the home is put back as
+        the import left it, the agent left stopped, and run again once fixed, the move is done. A core that
+        stops or is not ready in time fails its systemctl restart (Type=notify), and Claude Code's connector
+        that never connects is waited for, up to a bound (D-178): either is a failed start, not a move done."""
+        for harness, fail, said in (
+                ("codex", {"FAKE_FAIL": "systemctl --user restart"},
+                 "the agent's core did not start: it stopped, or did not say it was ready within 120 seconds"),
+                ("claude-code", {"FAKE_FAIL": "systemctl --user restart"}, "failing, as asked"),
+                ("claude-code", {"FAKE_NOT_READY": "connector", "MARMOT_AGENT_READY_WAIT": "1"},
+                 "the Claude Code connector did not connect to the agent's core within 1 seconds "
+                 "(its logs: journalctl --user -u marmot-agent-claude-code-connector)")):
+            with self.subTest(harness=harness, fail=fail):
                 m = Machine(self)
                 m.write(m.bin / "systemctl", FAKE_SYSTEMCTL_STORE)
                 self.another_agent(m)
                 old_home, settings = self.moved(m, harness)
                 before = settings.read_text()
                 agent = m.data / "agents" / harness
-                failed = m.run(harness, *self.args(m, harness), env={"FAKE_FAIL": "systemctl --user restart"},
-                               check=False)
+                failed = m.run(harness, *self.args(m, harness), env=fail, check=False)
                 self.assertNotEqual(failed.returncode, 0)
-                self.assertIn("failing, as asked", failed.stderr)
+                self.assertIn(said, failed.stderr)
                 self.assertIn(f"put back the account home {old_home}", failed.stdout)
                 self.assertEqual(self.store(old_home), "wn-agent", failed.stderr)
                 self.assertEqual(mode(old_home / "accounts/agent/secret.json"), 0o600)
@@ -2685,6 +2712,30 @@ exec {rm} "$@"
                 self.assertEqual(self.store_of(m), "new")
                 self.no_copy(m)
 
+    def test_a_put_back_restores_the_units_the_older_core_ran_under(self):
+        """D-178: the older release's units, Type=exec, under which an older core runs (it never says it is
+        ready, which a Type=notify unit waits for), are put back with that core, and systemd reads them again
+        before the installer says how to start the agent."""
+        m = Machine(self)
+        self.older_store(m)
+        units = [m.units / "marmot-agent-first.service", m.units / "marmot-agent-first-connector.service"]
+        older = {unit: unit.read_text().replace("Type=notify\nNotifyAccess=main\nTimeoutStartSec=120\n", "Type=exec\n")
+                 for unit in units}
+        for unit, text in older.items():
+            unit.write_text(text)
+        m.log.write_text("")
+        failed = m.run(self.HARNESS, *self.store_args(m), env={"FAKE_FAIL": "systemctl --user restart"}, check=False)
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertIn("put back the account home", failed.stdout)
+        for unit, text in older.items():
+            self.assertEqual(unit.read_text(), text, unit.name)
+        calls = m.calls()
+        restart = max(i for i, c in enumerate(calls) if c.startswith("systemctl --user restart"))
+        self.assertIn("systemctl --user daemon-reload", calls[restart:], "systemd reads the units put back")
+        self.no_copy(m)
+        m.run(self.HARNESS, *self.store_args(m))
+        self.assertIn("\nType=notify\n", units[0].read_text())
+
     def test_a_service_that_does_not_stop_stops_the_upgrade_before_the_copy(self):
         """An upgrade whose agent's services are still running, or waiting to start again, once they were
         stopped copies nothing and puts nothing new in: the older core and its store stay as they were."""
@@ -2984,6 +3035,78 @@ exec {rm} "$@"
         said = subprocess.run(["bash", "-c", '. "$1"; sha256_of "$2"', "bash", str(HERE / "lib.sh"), str(core)],
                               capture_output=True, text=True, check=True).stdout
         self.assertEqual(said.strip(), hashlib.sha256(b"a core\n").hexdigest())
+
+class Ready(unittest.TestCase):
+    """A start counts once the core, and Claude Code's connector, say they are ready (D-178): on Linux the core
+    tells systemd (Type=notify), on macOS it makes a file its launcher names, and the connector makes one on
+    both. Until then an upgrade is not ended and its copy of the store is kept; one not ready in time is put
+    back, as any failed start is (D-159)."""
+
+    DARWIN = {"MARMOT_AGENT_OS": "Darwin"}
+    # macOS's stat, as the installer calls it there, on this machine's.
+    BSD_STAT = f"""#!/bin/sh
+[ "$1 $2" = "-f %Lp" ] && exec {shutil.which("stat", path=SYSTEM_PATH)} -c %a "$3"
+exec {shutil.which("stat", path=SYSTEM_PATH)} "$@"
+"""
+
+    def older(self, m: Machine, harness: str, env: dict) -> None:
+        if env.get("MARMOT_AGENT_OS") == "Darwin":
+            m.write(m.bin / "stat", self.BSD_STAT)
+        older = m.dir / "older-core"
+        m.write(older, OLDER_CORE)
+        m.run(harness, *m.args(harness, "--binary", str(older)), env=env)
+
+    def test_the_core_and_the_connector_are_launched_to_say_they_are_ready(self):
+        m = Machine(self)
+        m.run("claude-code", *m.args("claude-code", "--binary", str(m.core), "--name", "helper"))
+        agent = m.data / "agents/helper"
+        core = (m.units / "marmot-agent-helper.service").read_text()
+        for line in ("Type=notify", "NotifyAccess=main", "TimeoutStartSec=120"):
+            self.assertIn(f"\n{line}\n", core)
+        self.assertIn("\nType=exec\n", (m.units / "marmot-agent-helper-connector.service").read_text())
+        self.assertNotIn("MARMOT_AGENT_READY_FILE", (agent / "start").read_text(), "systemd hears it from the core")
+        self.assertIn(f"export MARMOT_AGENT_READY_FILE='{agent}/connector.ready'\n", (agent / "connector").read_text())
+        self.assertTrue((agent / "connector.ready").is_file())
+
+    def test_on_macos_an_upgrade_ends_once_the_core_and_the_connector_are_ready(self):
+        for harness in ("codex", "claude-code"):
+            with self.subTest(harness=harness):
+                m = Machine(self)
+                self.older(m, harness, self.DARWIN)
+                agent = m.data / "agents" / harness
+                out = m.run(harness, *m.args(harness, "--binary", str(m.core)), env=self.DARWIN).stdout
+                self.assertIn(f"export MARMOT_AGENT_READY_FILE='{agent}/core.ready'\n", (agent / "start").read_text())
+                self.assertTrue((agent / "core.ready").is_file())
+                self.assertEqual((harness in SOCKET), (agent / "connector.ready").is_file())
+                self.assertEqual((m.home / ".local/bin/marmot-agent").read_text(), FAKE_CORE)
+                self.assertIn("kept a copy of the agent's account home", out)
+                self.assertFalse((m.data / "upgrade").exists(), "the upgrade ended, its copy of the store with it")
+
+    def test_a_core_or_a_connector_not_ready_in_time_is_a_failed_start(self):
+        uid = os.getuid()
+        for system, harness, launcher, said in (
+                ("Darwin", "codex", "start", "the agent's core did not say it was ready within 1 seconds "
+                                             "(its logs: {agent}/logs/core.log)"),
+                ("Darwin", "claude-code", "connector", "the Claude Code connector did not connect to the agent's "
+                                                       "core within 1 seconds (its logs: {agent}/logs/connector.log)"),
+                ("Linux", "claude-code", "connector", "the Claude Code connector did not connect to the agent's "
+                                                      "core within 1 seconds")):
+            with self.subTest(system=system, harness=harness):
+                m = Machine(self)
+                env = {"MARMOT_AGENT_OS": system}
+                self.older(m, harness, env)
+                agent = m.data / "agents" / harness
+                failed = m.run(harness, *m.args(harness, "--binary", str(m.core)),
+                               env={**env, "FAKE_NOT_READY": launcher, "MARMOT_AGENT_READY_WAIT": "1"}, check=False)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn(said.format(agent=agent), failed.stderr)
+                self.assertEqual((m.home / ".local/bin/marmot-agent").read_text(), OLDER_CORE, failed.stderr)
+                self.assertIn("put back the account home", failed.stdout)
+                self.assertIn(f'the agent "{harness}" is left stopped; start it again with: ', failed.stderr)
+                if system == "Darwin":
+                    self.assertIn(f"launchctl bootstrap gui/{uid} ", failed.stderr)
+                self.assertFalse((m.data / "upgrade").exists())
+
 
 class TwoAgents(unittest.TestCase):
     """Two agents of one gateway harness in one home share the core and the support files, and each

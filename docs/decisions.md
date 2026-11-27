@@ -3667,6 +3667,11 @@ as a service, as Hermes and OpenClaw do. The details above were decided 2026-11-
 owner's instruction to decide minor points: no flag, the import's defaults kept, the work-folder check, the copy of
 the first start and its note, and what a put back says.
 
+The accepted limit ("Accepted limit.") is closed by
+[D-178](#d-178-an-install-counts-a-start-as-done-once-the-core-and-claude-codes-connector-say-they-are-ready): a
+move, and an upgrade, count as done only once the core, and Claude Code's connector, say they are ready. The rest
+stands.
+
 ## D-161 CI no longer runs on pushes to `master`
 
 **Decision.** The `push` to `master` trigger is removed from `.github/workflows/ci.yml`, amending
@@ -4113,3 +4118,46 @@ agent's work. Issue #41 says a local path is never sent; a chat's folder, a path
 (D-101), and that is unchanged.
 
 Decided 2026-11-27. The project owner accepted the recommendation, from issue #41.
+
+## D-178 An install counts a start as done once the core, and Claude Code's connector, say they are ready
+
+**Decision.** The installers wait for the agent to say it is ready before they end an upgrade, drop its copy of the
+store ([D-159](#d-159-an-upgrade-keeps-a-copy-of-the-agents-account-store-and-puts-it-back-with-the-old-core)) or
+note a move done (`moved`,
+[D-160](#d-160-the-coding-installers-take-an-install-moved-over-and-run-it-as-a-service)). This closes the limit
+D-160 accepted, that a move counted as done once the service manager had started the core.
+
+- **Ready.** The core is ready once it has opened the agent's account store and its driver has started: Codex,
+  Pi or an ACP agent has answered its start, or, for a connector or a gateway's plugin, the socket listens. Claude
+  Code's connector is ready once the core has taken its hello. A gateway's plugin is not waited for: the gateway is
+  the person's, and the installer only prints its restart.
+- **How it is said.** On Linux the core's unit is `Type=notify`, with `NotifyAccess=main`: the core sends
+  `READY=1`, systemd's notify protocol, to the socket `NOTIFY_SOCKET` names, a path or an abstract name (`@`), with
+  a few lines over the standard library's `UnixDatagram` and no new dependency. `systemctl --user restart` then
+  returns once the core is ready, and fails if it stops first or is not ready within `TimeoutStartSec`. launchd has
+  no such protocol, so on macOS the core's launcher names a file in the agent's folder, `core.ready`, in
+  `MARMOT_AGENT_READY_FILE`, and the core makes it. The connector's launcher names `connector.ready` the same way,
+  on both systems, and the connector makes it once its hello is taken. The installer removes both files before it
+  starts the services, so only this start counts. A core or connector started by hand, with neither variable set,
+  does as before.
+- **Bounded.** The installer waits up to 120 seconds for each (systemd's start timeout on Linux). A core or a
+  connector that stops, or is not ready in that time, is a failed start: the installer says which one, and where its
+  logs are, and puts back as D-159 and D-160 say: the old core and the copy of the store, the agent's services left
+  stopped, with the command that starts them, or, for a move, disabled and the home as the import left it.
+- **The units go back too.** An older core never says it is ready, so on Linux the agent's units as they were
+  before the upgrade are kept with the copy of its store and put back with it, and systemd reads them again before
+  the installer prints the start command. On macOS the connector is started once the core is ready, as `After=`
+  orders it on Linux.
+
+**Why.** Issue #219, from the review of D-160. The units were `Type=exec`, so `systemctl restart` returned once the
+launcher ran. A core that failed after that, as when an ACP agent's handshake fails, had moved the store forward
+while the installer had already ended the upgrade, dropped the copy and noted the move done; nothing was
+unrecoverable, but the old core could no longer open the store. The core is the one that knows when its store is
+open and its harness started, so it says so, through systemd's own protocol where there is one. Claude Code's
+connector runs as a service of its own, after the core's, and only the hello shows it reached the core. Node cannot
+send systemd's datagram without a native module, and a file serves launchd anyway, so it makes a file on both
+systems. No release of the connector was published before this, so the installer never meets one that does not
+make the file.
+
+Decided 2026-11-27 by the builder; the project owner had agreed to build it. What ready means, the files and the
+two-minute bound were decided by the builder, under the project owner's instruction to decide minor points.

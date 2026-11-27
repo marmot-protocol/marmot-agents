@@ -758,12 +758,14 @@ export interface RunOptions {
   warn: (kind: string) => void;
   /** Makes the MCP server that offers the tool to send a file; the SDK's own by default. */
   fileServer?: FileServer;
+  /** Called once the core has taken the hello: the connector is ready (D-178). */
+  ready?: () => void;
 }
 
 /**
  * Connects to the core of the agent whose home is given, gives the hello, and serves the core until the
- * socket closes. Throws, naming a kind only, when the token cannot be read, the socket cannot be opened
- * or the hello is refused.
+ * socket closes, saying it is ready once the hello is taken. Throws, naming a kind only, when the token
+ * cannot be read, the socket cannot be opened or the hello is refused.
  */
 export async function run(options: RunOptions): Promise<void> {
   let token: string;
@@ -811,6 +813,7 @@ export async function run(options: RunOptions): Promise<void> {
     core.close();
     throw new Error("the core refused the hello");
   }
+  options.ready?.();
   await core.done;
   connector.close();
 }
