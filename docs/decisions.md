@@ -4214,4 +4214,6 @@ the core looked, which the person cannot see. A prompt none of which reached the
 one that arrived while no connector was there, which already waits for the next.
 
 Decided 2026-11-27 by the project owner; how answers and controls are treated was decided by the builder, under
-the project owner's instruction to decide minor points.
+the project owner's instruction to decide minor points. The project owner accepted both on 2026-11-27, and that a prompt which
+waits through repeated restarts of a failing harness tells nobody, for now: issue #44, which lets the owner see
+whether the agent is running, is the fix for that.
