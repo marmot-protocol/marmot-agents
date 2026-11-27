@@ -71,6 +71,11 @@ impl Translator {
                 );
                 self.publish_lists("collaborationMode/list", result, out);
             }
+            // The person's next message answers a question asked in a message once Codex takes
+            // it: one refused, or still on its way, answers nothing (#36).
+            Some("turn/start" | "turn/steer") => {
+                self.close_message_questions(State::Done, "Answered by the next message", out);
+            }
             Some(started @ ("thread/start" | "thread/resume")) => {
                 let Some(settings) = self.read::<messages::Settings>("a reply", result) else {
                     return;

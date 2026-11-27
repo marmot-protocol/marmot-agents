@@ -118,11 +118,14 @@ From `approval_allowed`, bookkeeping left out:
 | --- | --- | --- | --- |
 | A command | `item/commandExecution/requestApproval`, naming the item | `availableDecisions`: `accept`, an object `{acceptWithExecpolicyAmendment: {...}}`, `cancel` | `{decision: ...}` |
 | A file change | `item/fileChange/requestApproval`, naming the item | None listed | `{decision: ...}` |
-| An MCP tool call | `mcpServer/elicitation/request`, marked `codex_approval_kind: "mcp_tool_call"` | None listed; the request says the choice can persist for the session or always | `{action: "accept" or "decline", content: {}}` |
+| An MCP tool call | `mcpServer/elicitation/request`, marked `codex_approval_kind: "mcp_tool_call"` | None listed; `_meta.persist` names how long an approval may last: `session`, `always`, or both in a list | `{action: "accept" or "decline", content: {}}`; an accept that lasts adds `_meta: {persist: "session" or "always"}` |
 
 - **A decision is not always a plain string.** One of the offered decisions is an object.
 - **The list is not complete.** `decline` was not in it, and answering `decline` worked: the item completed
   with status `declined`.
+- **How long an MCP approval lasts is in the reply's `_meta`.** No recording answers with it. Codex 0.169.0's
+  source (`codex-rs/core/src/mcp_tool_call.rs`, read on 2026-11-27) takes `persist: "session"` as approved for
+  the session and `persist: "always"` as remembered in its config, and any other accept as approved once.
 - **An MCP tool call always needs approval.** With the approval policy set to never ask, Codex refused the call
   outright: "MCP tool call requires approval, but approval policy is never".
 
@@ -853,7 +856,7 @@ and no native message is left without a rule. "Not sent" means the driver uses i
 | `task` | Not seen | `system / task_*` |
 | `notice` | `sleep`, `contextCompaction`, `warning`, `model/rerouted` | `system / status` while compacting, `compact_boundary`, `api_retry`, `<local-command-stdout>` |
 | `error` | `error` notification; an error response | A `result` with `is_error` becomes a failed turn |
-| Not sent | Deltas; `userMessage` echo; thread status; token usage; rate limits; moderation metadata; MCP start-up; account; settings; `serverRequest/resolved`; `turn/diff/updated` | `stream_event`; `thinking_tokens`; `rate_limit_event`; `tool_progress`; `command_lifecycle`; `background_tasks_changed`; the compaction summary; title, version-control and code-change notices |
+| Not sent | Deltas; `userMessage` echo; thread status; token usage; rate limits; moderation metadata; MCP start-up; account; settings; `serverRequest/resolved`, unless it closes a request still waiting; `turn/diff/updated` | `stream_event`; `thinking_tokens`; `rate_limit_event`; `tool_progress`; `command_lifecycle`; `background_tasks_changed`; the compaction summary; title, version-control and code-change notices |
 
 ## What this means for the design
 

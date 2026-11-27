@@ -15,7 +15,8 @@ use serde_json::{Value, json};
 pub(super) enum Pending {
     Approval {
         item: String,
-        /// Each choice's id, and the decision Codex takes for it.
+        /// Each choice's id, and the decision Codex takes for it: for an MCP server, the whole
+        /// result it is sent.
         decisions: Vec<(String, Value)>,
         choices: Vec<Choice>,
         /// Where the reply says what was chosen.
@@ -174,22 +175,42 @@ impl Translator {
         let meta = p.meta.unwrap_or_default();
         let approval = meta.codex_approval_kind;
         if approval.as_deref() == Some("mcp_tool_call") {
-            let choices = vec![
-                Choice {
-                    id: "c0".into(),
-                    label: "Allow once".into(),
-                    effect: Effect::Allow,
-                },
-                Choice {
-                    id: "c1".into(),
-                    label: "Deny".into(),
-                    effect: Effect::Deny,
-                },
-            ];
-            let decisions = vec![
-                ("c0".to_string(), Value::from("accept")),
-                ("c1".to_string(), Value::from("decline")),
-            ];
+            // An approval lasts for this call, or for as long as a scope Codex names in `persist`
+            // (#35). A scope the driver does not know is not offered: how long it lasts would be
+            // a guess.
+            let scopes = match meta.persist {
+                Some(Value::String(one)) => vec![one],
+                Some(Value::Array(many)) => many
+                    .into_iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            let accept = json!({"action": "accept", "content": {}});
+            let mut offered = vec![("Allow once", Effect::Allow, accept.clone())];
+            for scope in scopes {
+                let label = match scope.as_str() {
+                    "session" => "Allow for this session",
+                    "always" => "Always allow",
+                    _ => continue,
+                };
+                let mut lasting = accept.clone();
+                lasting["_meta"] = json!({"persist": scope});
+                offered.push((label, Effect::Allow, lasting));
+            }
+            let decline = json!({"action": "decline", "content": null});
+            offered.push(("Deny", Effect::Deny, decline));
+            let mut choices = Vec::new();
+            let mut decisions = Vec::new();
+            for (n, (label, effect, result)) in offered.into_iter().enumerate() {
+                let id = format!("c{n}");
+                choices.push(Choice {
+                    id: id.clone(),
+                    label: label.into(),
+                    effect,
+                });
+                decisions.push((id, result));
+            }
             let item = self.request_item("approval", p.turn_id.as_deref(), id.as_ref());
             if let Some(id) = id {
                 self.asked.insert(
@@ -355,17 +376,24 @@ impl Translator {
                         };
                         (None, Some(chosen.to_string()))
                     }
-                    Reply::Decision | Reply::Action => {
-                        let decision = if replied_by == Reply::Action {
-                            reply.action
-                        } else {
-                            reply.decision
-                        };
+                    Reply::Decision => {
                         let chosen = decisions
                             .iter()
-                            .find(|(_, d)| Some(d) == decision.as_ref())
+                            .find(|(_, d)| Some(d) == reply.decision.as_ref())
                             .map(|(id, _)| id.clone());
-                        (decision, chosen)
+                        (reply.decision, chosen)
+                    }
+                    // The choice is the action and, for an approval that lasts, its scope.
+                    Reply::Action => {
+                        let persist = reply.meta.as_ref().map_or(&Value::Null, |m| &m["persist"]);
+                        let chosen = decisions
+                            .iter()
+                            .find(|(_, r)| {
+                                Some(&r["action"]) == reply.action.as_ref()
+                                    && r["_meta"]["persist"] == *persist
+                            })
+                            .map(|(id, _)| id.clone());
+                        (reply.action, chosen)
                     }
                 };
                 let choice = chosen
@@ -507,10 +535,8 @@ impl Translator {
                     };
                     if *reply == Reply::Decision {
                         json!({"decision": decision})
-                    } else if *decision == "accept" {
-                        json!({"action": decision, "content": {}})
                     } else {
-                        json!({"action": decision, "content": null})
+                        decision.clone()
                     }
                 }
                 // c0 grants for the turn, c1 for the session, c2 grants nothing.

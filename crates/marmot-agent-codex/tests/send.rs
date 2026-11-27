@@ -587,10 +587,11 @@ fn an_approval_closed_at_the_turns_end_takes_no_answer() {
 }
 
 // Codex resolves a request itself, as it does on an interrupt (`approval_unanswered`: the turn
-// completes, and the request is marked resolved), and says so with `serverRequest/resolved`. An
-// answer after that would reach a Codex that no longer waits for it, whatever came first.
+// completes, and the request is marked resolved), and says so with `serverRequest/resolved`. The
+// card closes then, even while the turn goes on: an answer after that would reach a Codex that no
+// longer waits for it, and the turn's end has nothing left to close (#36).
 #[test]
-fn an_approval_codex_resolved_takes_no_answer() {
+fn an_approval_codex_resolved_closes_and_takes_no_answer() {
     let mut translator = Translator::new();
     started(&mut translator);
     let asked = translator.feed(
@@ -601,9 +602,44 @@ fn an_approval_codex_resolved_takes_no_answer() {
         Direction::In,
         r#"{"method": "serverRequest/resolved", "params": {"threadId": "th1", "requestId": 0}}"#,
     );
-    assert!(resolved.is_empty(), "nothing new reaches the chat");
+    let [closed] = &resolved[..] else {
+        panic!("one event closes the card: {resolved:?}");
+    };
+    assert_eq!(closed.header().item, asked[0].header().item);
+    assert_eq!(closed.header().state, State::Cancelled);
+    assert!(closed.native().is_some(), "it carries Codex's word");
     let late = translator.reply(&answer(&asked[0], Given::Choice("c0".into())));
-    assert_eq!(late.unwrap_err().reason, Reason::NotWaiting);
+    assert!(late.is_err(), "a late answer is refused");
+    let ended = translator.feed(
+        Direction::In,
+        r#"{"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t1", "items": [], "status": "completed", "error": null}}}"#,
+    );
+    assert!(
+        ended
+            .iter()
+            .all(|e| e.header().item != asked[0].header().item),
+        "the turn's end does not close it again: {ended:?}"
+    );
+}
+
+// Codex says a request is resolved once it has the answer too (`mcp_tool`). The answer stands.
+#[test]
+fn a_resolution_after_an_answer_changes_nothing() {
+    let mut translator = Translator::new();
+    let asked = translator.feed(
+        Direction::In,
+        r#"{"id": 0, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "c", "command": "ls"}}"#,
+    );
+    let reply = translator
+        .reply(&answer(&asked[0], Given::Choice("c0".into())))
+        .unwrap();
+    let answered = translator.feed(Direction::Out, &reply);
+    assert_eq!(answered[0].header().state, State::Done);
+    let resolved = translator.feed(
+        Direction::In,
+        r#"{"method": "serverRequest/resolved", "params": {"threadId": "th1", "requestId": 0}}"#,
+    );
+    assert!(resolved.is_empty(), "{resolved:?}");
 }
 
 fn turn_started(translator: &mut Translator) {
@@ -741,6 +777,80 @@ fn a_choice_does_what_its_decision_does() {
         .unwrap();
     let offered = json(&command_approval(decisions))["params"]["availableDecisions"][1].clone();
     assert_eq!(json(&allow)["result"], json!({"decision": offered}));
+}
+
+fn mcp_approval(persist: &str) -> String {
+    format!(
+        r#"{{"id": 4, "method": "mcpServer/elicitation/request", "params": {{"threadId": "th1", "turnId": "t1", "serverName": "demo", "mode": "form", "_meta": {{"codex_approval_kind": "mcp_tool_call"{persist}, "tool_name": "define_word"}}, "message": "Allow?", "requestedSchema": {{"type": "object", "properties": {{}}}}}}}}"#
+    )
+}
+
+// An MCP tool approval offers the lasting scopes Codex names in `_meta.persist`, and only those
+// (#35). Each choice sends its scope, the reply records that same choice, and denying grants none.
+#[test]
+fn an_mcp_approval_offers_the_scopes_codex_names() {
+    let once = json!({"action": "accept", "content": {}});
+    let session = json!({"action": "accept", "content": {}, "_meta": {"persist": "session"}});
+    let always = json!({"action": "accept", "content": {}, "_meta": {"persist": "always"}});
+    let deny = json!({"action": "decline", "content": null});
+    let cases = [
+        (
+            r#", "persist": ["session", "always", "forever"]"#,
+            vec![
+                ("Allow once", &once),
+                ("Allow for this session", &session),
+                ("Always allow", &always),
+                ("Deny", &deny),
+            ],
+        ),
+        (
+            r#", "persist": "session""#,
+            vec![
+                ("Allow once", &once),
+                ("Allow for this session", &session),
+                ("Deny", &deny),
+            ],
+        ),
+        (
+            r#", "persist": "always""#,
+            vec![
+                ("Allow once", &once),
+                ("Always allow", &always),
+                ("Deny", &deny),
+            ],
+        ),
+        ("", vec![("Allow once", &once), ("Deny", &deny)]),
+    ];
+    for (persist, offered) in cases {
+        let request = mcp_approval(persist);
+        let mut translator = Translator::new();
+        let events = translator.feed(Direction::In, &request);
+        let Body::Approval(approval) = events[0].body() else {
+            panic!("an approval");
+        };
+        let labels: Vec<&str> = approval.choices.iter().map(|c| c.label.as_str()).collect();
+        let wanted: Vec<&str> = offered.iter().map(|(label, _)| *label).collect();
+        assert_eq!(labels, wanted, "{persist}");
+        for (choice, (label, result)) in approval.choices.iter().zip(&offered) {
+            let mut translator = Translator::new();
+            let events = translator.feed(Direction::In, &request);
+            let reply = translator
+                .reply(&answer(&events[0], Given::Choice(choice.id.clone())))
+                .unwrap();
+            assert_eq!(json(&reply), json!({"id": 4, "result": result}), "{label}");
+            let answered = translator.feed(Direction::Out, &reply);
+            let Body::Approval(approval) = answered[0].body() else {
+                panic!("an approval");
+            };
+            let recorded = approval.answer.as_ref().and_then(|a| a.choice.as_deref());
+            assert_eq!(recorded, Some(choice.id.as_str()), "{label}");
+            let state = match choice.effect {
+                Effect::Allow => State::Done,
+                Effect::Deny => State::Declined,
+            };
+            assert_eq!(answered[0].header().state, state, "{label}");
+        }
+    }
 }
 
 #[test]

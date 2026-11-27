@@ -252,8 +252,6 @@ class Codex(Translator):
             return
         method = m.get("method")
         if out:
-            if method in ("turn/start", "turn/steer"):
-                self.close_message_questions("done", "Answered by the next message")
             if method:
                 self.pending[("c", m.get("id"))] = (method, (self.session, self.turn))  # where it was sent
                 if "id" in m and method in ("turn/start", "thread/compact/start"):
@@ -303,6 +301,14 @@ class Codex(Translator):
                 if self.for_another_thread(p.get("threadId")):
                     return
                 return self.thread_settings(method, p.get("threadSettings") or {}, p)
+            if method == "serverRequest/resolved" and not self.for_another_thread(p.get("threadId")):
+                # Codex waits no longer: the item closes now, though the turn goes on. One already
+                # answered keeps its answer.
+                req = self.pending.pop(("s", p.get("requestId")), None)
+                prev = self.open.get(req["item"]) if req else None
+                if prev is not None:
+                    return self.emit(req["item"], prev["type"], "cancelled", prev["title"], prev["text"], prev["body"],
+                                     method, p, owner=(prev["session"], prev["turn"]))
             return self.skip(method)
         handler = {
             "turn/started": self.turn_started,
@@ -505,8 +511,17 @@ class Codex(Translator):
         """An MCP server asks the user for something. Codex also uses this to approve MCP tool calls."""
         rid, meta = m.get("id"), p.get("_meta") or {}
         if meta.get("codex_approval_kind") == "mcp_tool_call":
-            native_choices = {"c0": "accept", "c1": "decline"}
-            choices = [{"id": "c0", "label": "Allow once", "effect": "allow"}, {"id": "c1", "label": "Deny", "effect": "deny"}]
+            # An approval lasts for this call, or for as long as a scope Codex names in `persist`;
+            # a scope the driver does not know is not offered. Each choice is the whole result sent.
+            persist = meta.get("persist")
+            scopes = [persist] if isinstance(persist, str) else [x for x in persist or [] if isinstance(x, str)]
+            labels = {"session": "Allow for this session", "always": "Always allow"}
+            offered = [("Allow once", "allow", {"action": "accept", "content": {}})]
+            offered += [(labels[x], "allow", {"action": "accept", "content": {}, "_meta": {"persist": x}})
+                        for x in scopes if x in labels]
+            offered.append(("Deny", "deny", {"action": "decline", "content": None}))
+            native_choices = {f"c{n}": result for n, (_, _, result) in enumerate(offered)}
+            choices = [{"id": f"c{n}", "label": label, "effect": effect} for n, (label, effect, _) in enumerate(offered)]
             item = f"approval:{p.get('turnId') or self.turn}:{rid}"
             self.pending[("s", rid)] = {"item": item, "native_choices": native_choices, "choices": choices, "decision_key": "action"}
             # The MCP tool waiting for this approval: the open one with the server and tool it names.
@@ -550,7 +565,12 @@ class Codex(Translator):
                       {**prev["body"], "answer": {"choice": chosen}}, "response to the approval request", result)
         elif prev["type"] == "approval":
             decision = result.get(req.get("decision_key", "decision"))
-            chosen = next((c for c, d in req["native_choices"].items() if d == decision), None)
+            if req.get("decision_key") == "action":  # the action and, for an approval that lasts, its scope
+                persist = (result.get("_meta") or {}).get("persist")
+                chosen = next((c for c, r in req["native_choices"].items()
+                               if r["action"] == decision and (r.get("_meta") or {}).get("persist") == persist), None)
+            else:
+                chosen = next((c for c, d in req["native_choices"].items() if d == decision), None)
             label = next((c["label"] for c in req["choices"] if c["id"] == chosen), str(decision))
             effect = next((c["effect"] for c in req["choices"] if c["id"] == chosen), "deny")
             self.emit(req["item"], "approval", "done" if effect == "allow" else "declined", prev["title"], f"Answered: {label}",
@@ -598,6 +618,9 @@ class Codex(Translator):
             self.models = [x.get("id") for x in result.get("data") or []]
         if method == "collaborationMode/list":
             self.modes = [x.get("mode") for x in result.get("data") or []]
+        if method in ("turn/start", "turn/steer"):
+            # The next message answers a question asked in a message once Codex takes it.
+            self.close_message_questions("done", "Answered by the next message")
         if method in ("model/list", "collaborationMode/list") and self.session:
             return self.thread_settings(f"response to {method}", {}, result)
         if method in ("thread/start", "thread/resume") and isinstance(result.get("thread"), dict):

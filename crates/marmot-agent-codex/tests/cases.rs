@@ -463,28 +463,40 @@ fn question_events(events: &[AgentEvent]) -> Vec<(State, Option<String>, Option<
         .collect()
 }
 
+// The person's next message answers a question asked in a message once Codex takes it: while it
+// is on its way, or after Codex refuses it, the question still waits (#36).
 #[test]
 fn the_next_message_answers_a_question_asked_in_a_message() {
-    let events = feed(&[
-        (Direction::Out, PICK),
-        (Direction::In, &thread("th1")),
-        (Direction::In, TURN_STARTED),
-        (Direction::In, ASKS_IN_A_MESSAGE),
-        (Direction::In, TURN_DONE),
+    let follow_up = |id: u32| {
+        format!(
+            r#"{{"id": {id}, "method": "turn/start", "params": {{"threadId": "th1", "input": []}}}}"#
+        )
+    };
+    let (first, second, th1) = (follow_up(3), follow_up(4), thread("th1"));
+    let refused = r#"{"id": 3, "error": {"code": -32600, "message": "busy"}}"#;
+    let taken = r#"{"id": 4, "result": {"turn": {"id": "t2", "items": [], "status": "inProgress", "error": null}}}"#;
+    // Each question event is in the session and turn it was asked in.
+    let in_t1 = |state| (state, Some("th1".to_string()), Some("t1".to_string()));
+    let steps = [
+        (Direction::Out, PICK, vec![]),
+        (Direction::In, th1.as_str(), vec![]),
+        (Direction::In, TURN_STARTED, vec![]),
         (
-            Direction::Out,
-            r#"{"id": 3, "method": "turn/start", "params": {"threadId": "th1", "input": []}}"#,
+            Direction::In,
+            ASKS_IN_A_MESSAGE,
+            vec![in_t1(State::Waiting)],
         ),
-    ]);
-    let th1 = Some("th1".to_string());
-    let t1 = Some("t1".to_string());
-    assert_eq!(
-        question_events(&events),
-        [
-            (State::Waiting, th1.clone(), t1.clone()),
-            (State::Done, th1, t1)
-        ]
-    );
+        (Direction::In, TURN_DONE, vec![]),
+        (Direction::Out, first.as_str(), vec![]), // on its way
+        (Direction::In, refused, vec![]),
+        (Direction::Out, second.as_str(), vec![]),
+        (Direction::In, taken, vec![in_t1(State::Done)]),
+    ];
+    let mut translator = Translator::new();
+    for (direction, message, questions) in steps {
+        let events = translator.feed(direction, message);
+        assert_eq!(question_events(&events), questions, "{message}");
+    }
 }
 
 #[test]
