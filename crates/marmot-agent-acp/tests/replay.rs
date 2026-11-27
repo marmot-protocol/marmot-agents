@@ -87,11 +87,12 @@ fn replay(path: &Path) -> Vec<AgentEvent> {
                 continue;
             };
             // A streamed message's native message is the list of its chunks' payloads.
-            let parts: Vec<&RawValue> = if native.kind.ends_with("_chunk]") {
-                serde_json::from_str(native.payload.get()).expect("a list of chunks")
-            } else {
-                vec![&*native.payload]
-            };
+            let parts: Vec<&RawValue> =
+                if marmot_agent_conformance::native::is_streamed_kind(&native.kind) {
+                    serde_json::from_str(native.payload.get()).expect("a list of chunks")
+                } else {
+                    vec![&*native.payload]
+                };
             for part in parts {
                 assert!(
                     arrived.contains(part.get()),

@@ -13,6 +13,15 @@ use marmot_agent_events::AgentEvent;
 use serde::de::{Deserialize, Deserializer, IgnoredAny, MapAccess, Visitor};
 use serde_json::value::RawValue;
 
+/// Whether `kind` is one of the ACP streamed-chunk native kinds whose payload is a JSON array of
+/// arrived chunk payloads rather than a single arrived message/field value.
+pub fn is_streamed_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "session/update [agent_message_chunk]" | "session/update [agent_thought_chunk]"
+    )
+}
+
 /// The messages a translator was fed, in order, each as the values a native message may be.
 #[derive(Default)]
 pub struct Arrived {
@@ -42,7 +51,7 @@ impl Arrived {
         };
         let id = event.header().item.as_str();
         let kind = &native.kind;
-        if kind.ends_with("_chunk]") {
+        if is_streamed_kind(kind) {
             let chunks: Vec<&RawValue> =
                 serde_json::from_str(native.payload.get()).map_err(|_| {
                     format!("item {id}: a streamed native message ({kind}) is not a list")
@@ -103,11 +112,47 @@ impl<'de> Deserialize<'de> for Fields {
 mod tests {
     use super::*;
 
-    fn with_native(payload: &str) -> AgentEvent {
+    fn with_native_kind(kind: &str, payload: &str) -> AgentEvent {
+        let kind_json = serde_json::to_string(kind).expect("kind json");
         let event = format!(
-            r#"{{"harness": "h", "item": "notice:1", "seq": 1, "type": "notice", "state": "done", "title": "t", "text": "", "body": {{"kind": "warning"}}, "native": {{"kind": "warning", "payload": {payload}}}}}"#
+            r#"{{"harness": "h", "item": "notice:1", "seq": 1, "type": "notice", "state": "done", "title": "t", "text": "", "body": {{"kind": "warning"}}, "native": {{"kind": {kind_json}, "payload": {payload}}}}}"#
         );
         serde_json::from_str(&event).expect("an event")
+    }
+
+    fn with_native(payload: &str) -> AgentEvent {
+        with_native_kind("warning", payload)
+    }
+
+    #[test]
+    fn non_streamed_kind_ending_in_chunk_bracket_is_not_treated_as_chunk_list() {
+        // Regression for #242: a dynamic command/method name ending in `_chunk]`
+        // (e.g. Pi's `response to get__chunk]`) carries a single native payload, not
+        // an ACP streamed chunk list.
+        let mut arrived = Arrived::default();
+        let msg = r#"{"id":"4","type":"response","command":"get__chunk]","message":"/mcp"}"#;
+        arrived.push(msg);
+        assert_eq!(
+            arrived.check(&with_native_kind("response to get__chunk]", msg), false),
+            Ok(())
+        );
+        // True ACP streamed kinds still require a JSON list of arrived chunks.
+        for streamed in [
+            "session/update [agent_message_chunk]",
+            "session/update [agent_thought_chunk]",
+        ] {
+            assert!(
+                arrived
+                    .check(&with_native_kind(streamed, msg), false)
+                    .is_err(),
+                "{streamed} must still reject a non-list payload"
+            );
+            assert_eq!(
+                arrived.check(&with_native_kind(streamed, &format!("[{msg}]")), false),
+                Ok(()),
+                "{streamed} must accept a list of arrived chunks"
+            );
+        }
     }
 
     #[test]
