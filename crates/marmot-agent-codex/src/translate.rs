@@ -55,7 +55,8 @@ const REQUESTS: &[&str] = &[
 ];
 
 /// Messages Codex sends that never become an event of their own. Some still change what the
-/// driver knows: the settings, the thread, the tokens a turn used (rule 11 of the event model).
+/// driver knows: the settings, the thread, the tokens a turn used (rule 11 of the event model), or
+/// close a request Codex no longer waits on.
 pub const NOT_SENT: &[&str] = &[
     "initialized",
     "thread/started",
@@ -390,9 +391,6 @@ impl Translator {
 
     fn client_sent(&mut self, m: &Envelope<'_>, out: &mut Vec<AgentEvent>) {
         if let Some(method) = &m.method {
-            if matches!(method.as_str(), "turn/start" | "turn/steer") {
-                self.close_message_questions(State::Done, "Answered by the next message", out);
-            }
             if let Some(id) = &m.id {
                 let owner = (self.session.clone(), self.turn.clone());
                 let sent = Sent {
@@ -509,17 +507,29 @@ impl Translator {
                     self.thread_settings(&settings, method, params, out);
                 }
                 "serverRequest/resolved" => {
-                    // Codex waits no longer, so no answer may reach it, even before the turn's
-                    // end closes the item. The item is left to close as it would.
+                    // Codex waits no longer, so the item closes now, though the turn goes on, and
+                    // takes no answer, as one closed at the turn's end (#36). One already answered
+                    // keeps its answer.
                     let Some(p) = self.read::<RequestResolved>(method, params) else {
                         return;
                     };
                     if self.for_another_thread(p.thread_id.as_deref()) {
                         return;
                     }
-                    if let Some(id) = &p.request_id {
-                        self.asked.remove(id);
-                    }
+                    let Some(asked) = p.request_id.and_then(|id| self.asked.get(&id)) else {
+                        return;
+                    };
+                    let (Pending::Approval { item, .. } | Pending::Question { item }) = asked;
+                    let item = item.clone();
+                    let Some(prev) = self.open_event(&item) else {
+                        return;
+                    };
+                    let header = prev.header();
+                    let (title, text) = (header.title.clone(), header.text.clone());
+                    let body = prev.body().clone();
+                    let native = native(method, params);
+                    let state = State::Cancelled;
+                    self.emit_owned(out, owner(&prev), &item, body, state, &title, &text, native);
                 }
                 _ => {}
             }

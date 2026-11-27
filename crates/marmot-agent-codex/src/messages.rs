@@ -328,6 +328,9 @@ pub(crate) struct Elicitation {
 pub(crate) struct ElicitationMeta {
     pub codex_approval_kind: Option<String>,
     pub tool_name: Option<String>,
+    /// For an MCP tool approval: how long an approval may last beyond this call, `"session"` or
+    /// `"always"`, alone or in a list.
+    pub persist: Option<Value>,
 }
 
 #[derive(Default, Deserialize)]
@@ -359,13 +362,16 @@ pub(crate) struct UserOption {
 // -------------------------------------------------------------------------------------- replies
 
 /// The client's reply to an approval request: the decision under `decision`, or for an MCP
-/// server's approval under `action`. A reply to a request for permissions has neither: it grants
-/// `permissions`, for a `scope` of the turn or the session, and an empty grant denies.
+/// server's approval under `action`, with how long an approval lasts under `_meta.persist`. A reply
+/// to a request for permissions has neither: it grants `permissions`, for a `scope` of the turn or
+/// the session, and an empty grant denies.
 #[derive(Default, Deserialize)]
 #[serde(default)]
 pub(crate) struct ApprovalReply {
     pub decision: Option<Value>,
     pub action: Option<Value>,
+    #[serde(rename = "_meta")]
+    pub meta: Option<Value>,
     pub permissions: Option<serde_json::Map<String, Value>>,
     pub scope: Option<String>,
 }

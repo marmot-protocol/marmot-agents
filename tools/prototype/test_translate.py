@@ -105,9 +105,13 @@ class QuestionInAMessage(unittest.TestCase):
     def states(self, *records):
         return [(e["state"], e["session"], e["turn"]) for e in events(*records)]
 
-    def test_the_next_message_answers_it(self):
-        nxt = {"dir": "out", "msg": {"id": 3, "method": "turn/start", "params": {"threadId": "th1", "input": []}}}
-        self.assertEqual(self.states(PICK, thread("th1"), TURN_STARTED, ASKS_IN_A_MESSAGE, TURN_DONE, nxt),
+    def test_the_next_message_answers_it_once_codex_takes_it(self):
+        nxt = lambda rid: {"dir": "out", "msg": {"id": rid, "method": "turn/start", "params": {"threadId": "th1", "input": []}}}  # noqa: E731
+        refused = {"dir": "in", "msg": {"id": 3, "error": {"code": -32600, "message": "busy"}}}
+        taken = {"dir": "in", "msg": {"id": 4, "result": {"turn": {"id": "t2"}}}}
+        asked = (PICK, thread("th1"), TURN_STARTED, ASKS_IN_A_MESSAGE, TURN_DONE)
+        self.assertEqual(self.states(*asked, nxt(3), refused, nxt(4)), [("waiting", "th1", "t1")])
+        self.assertEqual(self.states(*asked, nxt(3), refused, nxt(4), taken),
                          [("waiting", "th1", "t1"), ("done", "th1", "t1")])
 
     def test_a_new_session_leaves_it_unanswered_where_it_was_asked(self):
@@ -210,6 +214,30 @@ class ApprovalChoices(unittest.TestCase):
         self.assertEqual(choices, [("c0", "Allow once", "allow"), ("c1", "Always allow example.org", "allow"),
                                    ("c2", "Always deny example.org", "deny"), ("c4", "Deny and stop", "deny"),
                                    ("c5", "Deny", "deny")])
+
+    def test_an_mcp_approval_offers_the_scopes_codex_names(self):
+        """The Rust driver has the same case, with its replies, in `tests/send.rs`."""
+        request = {"dir": "in", "msg": {"id": 4, "method": "mcpServer/elicitation/request", "params": {
+            "threadId": "th1", "turnId": "t1", "serverName": "demo", "message": "Allow?",
+            "_meta": {"codex_approval_kind": "mcp_tool_call", "persist": ["always", "forever"]}}}}
+        reply = {"dir": "out", "msg": {"id": 4, "result": {"action": "accept", "content": {}, "_meta": {"persist": "always"}}}}
+        codex = translate.Codex()
+        codex.feed(request)
+        choices = [(c["id"], c["label"]) for c in codex.events[-1]["body"]["choices"]]
+        self.assertEqual(choices, [("c0", "Allow once"), ("c1", "Always allow"), ("c2", "Deny")])
+        codex.feed(reply)
+        self.assertEqual((codex.events[-1]["state"], codex.events[-1]["body"]["answer"]), ("done", {"choice": "c1"}))
+
+    def test_an_approval_codex_resolved_closes_before_the_turn_ends(self):
+        request = {"dir": "in", "msg": {"id": 0, "method": "item/commandExecution/requestApproval", "params": {
+            "threadId": "th1", "turnId": "t1", "command": "ls"}}}
+        resolved = {"dir": "in", "msg": {"method": "serverRequest/resolved", "params": {"threadId": "th1", "requestId": 0}}}
+        codex = translate.Codex()
+        for record in (TURN_STARTED, request, resolved, TURN_DONE):
+            codex.feed(record)
+        approvals = [(e["state"], e["native"]["kind"]) for e in codex.events if e["type"] == "approval"]
+        self.assertEqual(approvals, [("waiting", "item/commandExecution/requestApproval (request)"),
+                                     ("cancelled", "serverRequest/resolved")])
 
 
 class ClaudeQuestionAnswer(unittest.TestCase):
