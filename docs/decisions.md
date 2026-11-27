@@ -4382,3 +4382,23 @@ here. ACP v2 lets a prompt be sent in any state; when the driver moves to it, th
 
 Provisional, 2026-11-27. What `mid_turn` an agent reports is seen by apps, so it is the project owner's to
 accept; the builder recommends it.
+
+## D-187 A quote holds the first 2,000 characters of a message
+
+**Decision.** The text of a reply's quote
+([D-185](#d-185-a-replys-quote-is-what-the-chat-shows-now-and-a-message-no-longer-shown-is-quoted-without-its-text))
+is the quoted message's first 2,000 characters. A longer message is cut there, between characters, and the
+quote ends in `…`. The core cuts it, so every harness is handed the same.
+
+**Why.** The whole message was handed over, so each short reply to a long message, such as an agent's own long
+answer, sent all of it to the harness and its model again. The reply needs enough of the message to say which
+one is meant, and the harness that wrote a message usually still holds it. 2,000 characters is the limit of the
+connectors this project replaces, a behaviour to keep
+([#267](https://github.com/marmot-protocol/marmot-agents/issues/267)). A mark in the text, and not a new field,
+keeps the socket's `reply_to` as it is.
+
+**Not covered.** A quote says nothing of the files the quoted message had, so a reply to a message that was
+only a file quotes no text. Naming them would add to a socket message, and is left to its own decision (#267).
+
+Provisional, 2026-11-27. What a harness is handed is seen outside the core, so it is the project owner's to
+accept; the builder recommends it.
