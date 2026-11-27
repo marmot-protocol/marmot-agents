@@ -139,6 +139,10 @@ impl Translator {
             None => src.cli_version.clone(),
         };
         let known = &mut self.known;
+        let thread = src.thread.as_deref().unwrap_or(src);
+        if let Some(name) = &thread.name {
+            known.title.clone_from(name);
+        }
         for (slot, value) in [
             (&mut known.version, version),
             (&mut known.model, src.model.clone()),
@@ -192,6 +196,7 @@ impl Translator {
                 description: None,
             }],
             commands: Vec::new(),
+            title: k.title.clone(),
             ..Session::default()
         };
         if self.subagent.is_some() {

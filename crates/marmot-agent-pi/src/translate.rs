@@ -51,7 +51,6 @@ pub const NOT_SENT: &[(&str, &str)] = &[
     ("entry_appended", "an entry was added to the session file"),
     ("message_update", "partial text and tool arguments"),
     ("tool_execution_update", "partial tool output"),
-    ("session_info_changed", "the session's display name changed"),
     ("auto_retry_end", "a retry ended; the turn says how"),
     (
         "bash_execution_update",
@@ -101,6 +100,8 @@ pub struct Translator {
     models: Option<Vec<String>>,
     levels: Option<Vec<String>>,
     commands: Option<Vec<Command>>,
+    /// The session's name, which is its title (D-177).
+    title: Option<String>,
     /// The driver has asked for everything a session item shows.
     ready: bool,
     /// Extension questions waiting for an answer, by the request's id.
@@ -246,6 +247,7 @@ impl Translator {
                 let model = &data["model"];
                 self.model = model.is_object().then(|| model_name(model));
                 self.thinking = data["thinkingLevel"].as_str().map(String::from);
+                self.title = data["sessionName"].as_str().map(String::from);
             }
             "get_available_models" => {
                 let models = data["models"].as_array().cloned().unwrap_or_default();
@@ -369,6 +371,7 @@ impl Translator {
                 description: Some("Summarise the conversation so far, to free up context".into()),
             }],
             commands: self.commands.clone().unwrap_or_default(),
+            title: self.title.clone(),
             ..Session::default()
         };
         let item = format!("session:{sid}");
@@ -482,6 +485,11 @@ impl Translator {
                     error.unwrap_or_default(),
                     native(t, record),
                 );
+            }
+            // The session was named, or its name cleared, with no `name`.
+            "session_info_changed" => {
+                self.title = m["name"].as_str().map(String::from);
+                self.announce(t, record, out);
             }
             "thinking_level_changed" => {
                 self.thinking = m["level"].as_str().map(String::from);

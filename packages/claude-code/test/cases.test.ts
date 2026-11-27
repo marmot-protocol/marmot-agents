@@ -114,6 +114,54 @@ test("nothing is sent before the session is named, and then commands keep their 
   ]);
 });
 
+// D-177. No recording holds `session_title_changed`; its shape is the one in
+// `docs/reference/data/claude-sdk-message-structures.txt`. A change is an edit, a repeat none.
+test("the session's title is Claude Code's, and one before the init waits for it", () => {
+  const translator = new Translator();
+  const title = (t: string): Line => ({
+    dir: "in",
+    via: "message",
+    msg: { type: "system", subtype: "session_title_changed", session_id: "s1", title: t, uuid: "u" },
+  });
+  assert.deepEqual(feed(translator, title("Fix the build")), []);
+  const events = feed(
+    translator,
+    {
+      dir: "in",
+      via: "message",
+      msg: { type: "system", subtype: "init", session_id: "s1", claude_code_version: "9.9.9", slash_commands: [] },
+    },
+    title("Fix the build"),
+    title("Fix the tests"),
+  );
+  const titles = events.filter((e) => e.type === "session").map((e) => (e.body as Record<string, unknown>)["title"]);
+  assert.deepEqual(titles, ["Fix the build", "Fix the tests"]);
+});
+
+test("a new session takes no title from the one before", () => {
+  const translator = new Translator();
+  const init = (sid: string): Line => ({
+    dir: "in",
+    via: "message",
+    msg: { type: "system", subtype: "init", session_id: sid, claude_code_version: "9.9.9", slash_commands: [] },
+  });
+  const events = feed(
+    translator,
+    init("s1"),
+    {
+      dir: "in",
+      via: "message",
+      msg: { type: "system", subtype: "session_title_changed", session_id: "s1", title: "Old work", uuid: "u" },
+    },
+    { dir: "out", via: "call", msg: { method: "query", options: {} } },
+    init("s2"),
+  );
+  const titles = events
+    .filter((e) => e.type === "session" && e.session === "s2")
+    .map((e) => (e.body as Record<string, unknown>)["title"]);
+  assert.deepEqual(titles, [undefined]);
+});
+
 function ask(translator: Translator, request: string, command: string, suggestions: unknown[] = []): void {
   feed(translator, {
     dir: "in",

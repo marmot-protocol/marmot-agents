@@ -910,3 +910,58 @@ fn work_given_after_a_subagents_turn_started_is_that_turns() {
     let events = sub.feed(Direction::In, &sub_turn("turn/started", "st3"));
     assert_eq!(subject(&events).as_deref(), Some("a2"), "not a1 again");
 }
+
+/// The titles the session items `events` show, in order.
+fn titles(events: &[AgentEvent]) -> Vec<Option<String>> {
+    events
+        .iter()
+        .filter_map(|e| match e.body() {
+            Body::Session(s) => Some(s.title.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+// D-177: a thread's name is the session's title. Codex does not name a thread by itself (0.171.0,
+// checked by hand), so it has one when it was named before it was resumed, or when it is named
+// while it runs, which `thread/name/updated` reports, with null for no name. Another thread's
+// name is not this session's.
+#[test]
+fn a_threads_name_is_the_sessions_title() {
+    let mut translator = Translator::new();
+    let events: Vec<AgentEvent> = [
+        (Direction::Out, r#"{"id": 100, "method": "thread/resume", "params": {}}"#),
+        (
+            Direction::In,
+            r#"{"id": 100, "result": {"thread": {"id": "th1", "cliVersion": "0.171.0", "name": "Fix the build"}}}"#,
+        ),
+        (
+            Direction::In,
+            r#"{"method": "thread/name/updated", "params": {"threadId": "th2", "threadName": "Another thread"}}"#,
+        ),
+        (
+            Direction::In,
+            r#"{"method": "thread/name/updated", "params": {"threadId": "th1", "threadName": "Fix the tests"}}"#,
+        ),
+        (
+            Direction::In,
+            r#"{"method": "thread/settings/updated", "params": {"threadId": "th1", "threadSettings": {"model": "m1"}}}"#,
+        ),
+        (
+            Direction::In,
+            r#"{"method": "thread/name/updated", "params": {"threadId": "th1", "threadName": null}}"#,
+        ),
+    ]
+    .iter()
+    .flat_map(|(direction, message)| translator.feed(*direction, message))
+    .collect();
+    assert_eq!(
+        titles(&events),
+        [
+            Some("Fix the build".into()),
+            Some("Fix the tests".into()),
+            Some("Fix the tests".into()),
+            None
+        ]
+    );
+}

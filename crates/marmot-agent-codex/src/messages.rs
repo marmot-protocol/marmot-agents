@@ -87,6 +87,14 @@ pub(crate) struct RequestResolved {
     pub request_id: Option<Id>,
 }
 
+/// `thread/name/updated`: a thread was named, or its name cleared, which is null.
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub(crate) struct ThreadNameUpdated {
+    pub thread_id: Option<String>,
+    pub thread_name: Option<String>,
+}
+
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub(crate) struct ThreadSettingsUpdated {
@@ -108,8 +116,16 @@ pub(crate) struct Settings {
     pub sandbox: Option<Sandbox>,
     pub collaboration_mode: Option<Mode>,
     pub cli_version: Option<String>,
+    /// In a thread itself, its name, which is null when it has none (D-177). Absent elsewhere.
+    #[serde(deserialize_with = "present")]
+    pub name: Option<Option<String>>,
     /// In a reply, the thread itself, which says the version.
     pub thread: Option<Box<Settings>>,
+}
+
+/// A field that is there, even as null, as against one that is not.
+fn present<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(d).map(Some)
 }
 
 /// An approval policy: a word, or an object whose one key names its kind, such as `granular`.

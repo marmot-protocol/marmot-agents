@@ -113,7 +113,10 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
 - The session item carries the harness's title for the session when it gives one, to every chat; a project
   (label, branch, pull request) comes later, to full-activity chats only
   ([D-177](decisions.md#d-177-the-session-item-carries-the-sessions-title-its-project-comes-later-to-full-activity-chats-only)).
-  Agreed, not built yet.
+  The title is built, and edited as it changes, with no notice: from Claude Code's `session_title_changed`,
+  ACP's `session_info_update` (Goose, Cursor, Antigravity), Codex's thread name and Pi's session name, the last
+  two only when someone names the session. OpenCode, Hermes and OpenClaw give a plugin or client none
+  ([a session's title](reference/harness-messages.md#a-sessions-title)). The project is not built yet.
 - Each connector lists the typed commands that need the right to approve, by every name its harness runs them
   under, and where in a message each counts; the core reads a message as any harness may, and asks for that
   right whenever one could read a listed command ([D-150](decisions.md#d-150-the-core-matches-a-typed-command-as-the-harness-reads-it-failing-towards-asking-for-the-right-to-approve)). A

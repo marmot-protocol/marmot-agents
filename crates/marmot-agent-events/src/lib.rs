@@ -321,13 +321,14 @@ mod tests {
         assert!(serde_json::from_value::<body::Session>(no_version).is_err());
     }
 
-    // D-175 and D-176: the rights read as `"everyone"` or a list of keys, and the rights, the
-    // label and the owner are left out when absent, so an older reader sees the session as
-    // before.
+    // D-175, D-176 and D-177: the rights read as `"everyone"` or a list of keys, and the title,
+    // the rights, the label and the owner are left out when absent, so an older reader sees the
+    // session as before.
     #[test]
     fn a_sessions_rights_are_everyone_or_keys_and_its_new_fields_are_optional() {
         let session = body::Session {
             harness_version: "1".into(),
+            title: Some("Fix the build".into()),
             rights: Some(body::Rights {
                 prompt: body::Holders::Everyone(body::Everyone::Everyone),
                 approve: body::Holders::Members(vec!["ab".into()]),
@@ -337,12 +338,13 @@ mod tests {
             ..body::Session::default()
         };
         let written = json!({"harness_version": "1", "settings": [], "actions": [], "commands": [],
-            "rights": {"prompt": "everyone", "approve": ["ab"]}, "label": "laptop", "owner": "ab"});
+            "title": "Fix the build", "rights": {"prompt": "everyone", "approve": ["ab"]}, "label": "laptop", "owner": "ab"});
         assert_eq!(serde_json::to_value(&session).unwrap(), written);
         assert!(serde_json::from_value::<body::Session>(written).unwrap() == session);
         let older = json!({"harness_version": "1"});
         let read: body::Session = serde_json::from_value(older).unwrap();
-        assert!(read.rights.is_none() && read.label.is_none() && read.owner.is_none());
+        assert!(read.title.is_none() && read.rights.is_none());
+        assert!(read.label.is_none() && read.owner.is_none());
     }
 
     // D-041: the answer to a secret question is never repeated in the item's answer. It cannot

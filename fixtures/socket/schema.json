@@ -2220,6 +2220,13 @@
           "description": "The harness's slash commands.",
           "default": []
         },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The harness's own title for the session, when it gives one (D-177). The driver fills it in,\nand edits the item when it changes."
+        },
         "rights": {
           "anyOf": [
             {
