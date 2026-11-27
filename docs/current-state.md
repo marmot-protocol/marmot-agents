@@ -101,13 +101,16 @@ a decision updates this page in the same change ([D-114](decisions.md#d-114-a-cu
   [D-032](decisions.md#d-032-every-action-needs-one-of-two-rights), [D-039](decisions.md#d-039-controls-need-the-right-to-prompt), [D-043](decisions.md#d-043-a-setting-says-which-right-it-needs)).
 - The session item says, for its chat, who may prompt and who may approve: `everyone`, or the keys of the
   chat's members who hold the right, the owner among them, edited when the members or the settings change
-  ([D-176](decisions.md#d-176-the-session-item-says-who-in-the-chat-may-prompt-and-who-may-approve)). Agreed, not
-  built yet.
-- A member that has sent a session item in a chat is an agent; its messages, answers and controls are not taken
-  unless the owner lists it by key in `prompt`. The agent sends its own first session item when it joins a chat,
-  naming no session, with the owner's optional `label` and owner `p` tag; nothing goes in its public profile
+  ([D-176](decisions.md#d-176-the-session-item-says-who-in-the-chat-may-prompt-and-who-may-approve)).
+- A member that has sent a session item in a chat is an agent; its messages are not prompts, and get no
+  notice, and its answers and controls are refused, unless the owner lists it by key for the right they need.
+  The agent sends its own first session item when it joins a chat, and once to each chat it was already in,
+  naming no session, with the owner's optional `label` and, when `show_owner` is set, the owner's key; nothing
+  goes in its public profile
   ([D-175](decisions.md#d-175-an-agent-sends-its-session-item-when-it-joins-a-chat-and-an-agents-messages-are-not-prompts)).
-  Agreed, not built yet.
+  The owner's key travels as an `owner` field of the session's own fields, not as the `p` tag D-175 names: a
+  provisional choice, for the owner to confirm (see the session row of
+  [the event model](design/event-model.md#what-each-type-carries)).
 - The session item carries the harness's title for the session when it gives one, to every chat; a project
   (label, branch, pull request) comes later, to full-activity chats only
   ([D-177](decisions.md#d-177-the-session-item-carries-the-sessions-title-its-project-comes-later-to-full-activity-chats-only)).

@@ -2219,12 +2219,37 @@
           },
           "description": "The harness's slash commands.",
           "default": []
+        },
+        "rights": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Rights"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Who in the chat may prompt and who may approve (D-176). The core fills it in, not the\ndriver, once it knows who is in the chat."
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The owner's name for this install, such as \"laptop\", when the owner set one (D-175)."
+        },
+        "owner": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The owner's key, in hex, when the owner chose to show it (D-175). Provisional: D-175 has it\nas a `p` tag."
         }
       },
       "required": [
         "harness_version"
       ],
-      "description": "A session with the harness: what an app can set and do in it (D-029, D-030).",
+      "description": "A session with the harness: what an app can set and do in it (D-029, D-030). The first one in\na chat is the core's, sent when the agent joins, and names no session (D-175).",
       "unevaluatedProperties": false
     },
     "Setting": {
@@ -2318,6 +2343,51 @@
       ],
       "description": "One slash command. Its name and its hint are always present. A description is the first thing\nleft out when the item would be too large (D-045).",
       "unevaluatedProperties": false
+    },
+    "Rights": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "$ref": "#/$defs/Holders",
+          "description": "Who may prompt, use controls and answer questions."
+        },
+        "approve": {
+          "$ref": "#/$defs/Holders",
+          "description": "Who may answer approvals and change what the agent may do without asking."
+        }
+      },
+      "required": [
+        "prompt",
+        "approve"
+      ],
+      "description": "Who in a chat may prompt and who may approve (D-032, D-176).",
+      "unevaluatedProperties": false
+    },
+    "Holders": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Everyone",
+          "description": "Everyone in the chat."
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "These members, by their keys in hex: the owner, when in the chat, and those the owner\nlisted who are in it."
+        }
+      ],
+      "description": "Who holds one right in a chat: `\"everyone\"`, or the keys of the chat's members who hold it."
+    },
+    "Everyone": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "everyone",
+          "description": "Everyone in the chat."
+        }
+      ],
+      "description": "The word `everyone`."
     },
     "Native": {
       "type": "object",

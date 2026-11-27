@@ -192,6 +192,7 @@ impl Translator {
                 description: None,
             }],
             commands: Vec::new(),
+            ..Session::default()
         };
         if self.subagent.is_some() {
             return; // a subagent's thread is no session of the chat's (D-117)

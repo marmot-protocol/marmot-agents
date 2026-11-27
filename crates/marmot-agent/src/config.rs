@@ -22,6 +22,9 @@
 //!                                      # the owner's two-person chat with it (D-136).
 //!                                      # `marmot-agent groups <settings>`, with the agent
 //!                                      # stopped, prints each group's id
+//! label = "laptop"                     # tells two installs of one harness apart, shown in the
+//!                                      # chat's session item; none by default (D-175)
+//! show_owner = false                   # true: the session item names the owner's key (D-175)
 //!
 //! [codex]                              # Codex, built in; or, for a connector on the socket,
 //! cwd = "/home/me/work"                # an empty [connector] section in its place
@@ -104,6 +107,13 @@ pub struct Config {
     /// it: those listed, or every chat with `"all"`. None by default (D-136).
     #[serde(default)]
     pub full_activity: FullActivity,
+    /// A name for this install, such as "laptop", shown in each chat's session item to tell two
+    /// installs of one harness apart. None by default (D-175).
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Whether each chat's session item names the owner, by key. Off by default (D-175).
+    #[serde(default)]
+    pub show_owner: bool,
     /// Codex, when the agent is Codex, built in.
     #[serde(default)]
     pub codex: Option<CodexConfig>,
@@ -262,6 +272,9 @@ impl Config {
         }
         if config.name.as_ref().is_some_and(|n| n.trim().is_empty()) {
             return Err(ConfigError::Value("name"));
+        }
+        if config.label.as_ref().is_some_and(|l| l.trim().is_empty()) {
+            return Err(ConfigError::Value("label"));
         }
         let drivers = [
             config.codex.is_some(),

@@ -1567,6 +1567,7 @@ impl Translator {
             settings,
             actions: Vec::new(),
             commands: self.commands.clone(),
+            ..Session::default()
         };
         let item = format!("session:{sid}");
         if self.sessions.get(&item) == Some(&body) {

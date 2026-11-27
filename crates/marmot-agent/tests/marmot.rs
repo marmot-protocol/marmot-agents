@@ -463,7 +463,11 @@ async fn an_items_later_version_is_mdks_edit_of_its_first_event() {
     assert_eq!(again, Ok(edit.clone()), "the same edit");
 
     let kinds = |kind: u64| sent_by_core(&world, &group, kind);
-    assert_eq!(kinds(ITEM_KIND).len(), 1);
+    // Beside the session item the core sent the chat when it joined (D-175).
+    let approvals = (kinds(ITEM_KIND).into_iter())
+        .filter(|m| m.plaintext != "No session has started yet.")
+        .count();
+    assert_eq!(approvals, 1);
     let edits = kinds(EDIT_KIND);
     assert_eq!(edits.len(), 1, "the later version went out once");
     let named: Vec<_> = (edits[0].tags.iter()).filter(|t| t[0] == "e").collect();
@@ -510,7 +514,8 @@ fn sent_by_core(world: &World, group: &GroupKey, kind: u64) -> Vec<marmot_app::A
     sent.into_iter().filter(|m| m.direction == "sent").collect()
 }
 
-/// A direct chat between the person and the agent, with the core stopped once the agent is in it.
+/// A direct chat between the person and the agent, with the core stopped once the agent is in it
+/// and has sent the chat its session item (D-175).
 async fn a_quiet_chat(world: &World) -> GroupKey {
     world.runtime.start().await.unwrap();
     let core = world.start(Echo::new(Arc::new(AtomicUsize::new(0))));
@@ -520,6 +525,8 @@ async fn a_quiet_chat(world: &World) -> GroupKey {
         .await
         .unwrap();
     let group = GroupKey(world.joined(&group).await);
+    let item = marmot_agent::carrier::ITEM_KIND;
+    eventually(|| (!sent_by_core(world, &group, item).is_empty()).then_some(())).await;
     core.stop().await;
     group
 }
@@ -1864,4 +1871,145 @@ async fn a_subagents_words_after_its_task_item_disappeared_go_in_the_main_chat()
         .count();
     assert_eq!(failed, 0, "nothing failed");
     team.stop().await;
+}
+
+// D-175 and D-176 through MDK: a group the agent joins is sent its session item before anyone
+// prompts, naming no session, with who may approve read from MDK's member list; a restart sends it
+// nothing again. A member whose own session item MDK delivers is an agent: its mention is no
+// prompt, though everyone may prompt, while the person's is.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_joined_group_is_sent_its_rights_and_another_agent_is_not_prompted_by() {
+    use marmot_agent::carrier::Item;
+    use marmot_agent::{Sending, Token};
+    use marmot_agent_events::body::{Holders, Session};
+    use marmot_agent_events::{AgentEvent, Header};
+    let world = World::new("prompt = \"everyone\"\n[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let other = world.someone_else().await;
+    let prompts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let core = world.start(Listener {
+        prompts: prompts.clone(),
+    });
+    let named = (world.runtime)
+        .create_group(
+            &world.person,
+            "Team",
+            &[world.agent.clone(), other.clone()],
+            None,
+        )
+        .await
+        .unwrap()
+        .operation
+        .expect("the group is made");
+    let hex = world.joined(&named).await;
+    let session = |items: Vec<(marmot_agent::EventKey, marmot_agent::carrier::Read)>| {
+        (items.into_iter()).find_map(|(_, read)| match read.item.event.body() {
+            Body::Session(s) if read.item.event.header().session.is_none() => Some(s.clone()),
+            _ => None,
+        })
+    };
+    let shown = eventually(|| session(world.items(&hex))).await;
+    let rights = shown.rights.expect("rights shown");
+    assert!(matches!(rights.prompt, Holders::Everyone(_)));
+    assert!(matches!(&rights.approve, Holders::Members(keys) if *keys == [world.person.clone()]));
+    assert_eq!((shown.label, shown.owner), (None, None));
+
+    // The other member's own session item, as its core would send it.
+    let theirs = marmot_agent::marmot::Marmot {
+        label: other.clone(),
+        agent: PubKey(other.clone()),
+        ..world.marmot.clone()
+    };
+    let header = Header {
+        harness: "codex".into(),
+        session: None,
+        turn: None,
+        subagent: None,
+        item: "core-1".into(),
+        seq: 1,
+        state: State::Done,
+        title: "Session".into(),
+        text: "No session has started yet.".into(),
+    };
+    let body = Body::Session(Session {
+        harness_version: "1".into(),
+        ..Session::default()
+    });
+    let item = Sending::Item {
+        key: "theirs".into(),
+        item: Box::new(Item {
+            event: AgentEvent::new(header, body, None).unwrap(),
+            version: 1,
+            first: None,
+            started_by: None,
+            settles: Vec::new(),
+            thread: None,
+        }),
+    };
+    let token = Token {
+        send: "theirs".into(),
+        mdk: "theirs".into(),
+        edits: None,
+        tried_at: None,
+    };
+    let group = GroupKey(hex.clone());
+    eventually(|| {
+        (theirs.invitations().iter())
+            .any(|(g, _)| *g == group)
+            .then_some(())
+    })
+    .await;
+    theirs.decide(&group, true).await.unwrap();
+    let mut sent = None;
+    for _ in 0..3000 {
+        match theirs.send(&group, &item, &token).await {
+            Err(marmot_agent::marmot::SendFailed::Pending(_)) => {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await
+            }
+            done => {
+                sent = Some(done);
+                break;
+            }
+        }
+    }
+    sent.expect("MDK took the send").expect("it went out");
+    let mention = |text: &str| {
+        (
+            text.to_string(),
+            vec![vec!["p".to_string(), world.agent.clone()]],
+        )
+    };
+    let (text, tags) = mention("you, do this");
+    (world.runtime)
+        .send_tagged_text(&other, &named, text, tags)
+        .await
+        .unwrap();
+    let (text, tags) = mention("and you, this");
+    (world.runtime)
+        .send_tagged_text(&world.person, &named, text, tags)
+        .await
+        .unwrap();
+    let prompt = eventually(|| prompts.lock().unwrap().first().cloned()).await;
+    assert_eq!(prompt.text, "and you, this");
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    assert_eq!(
+        prompts.lock().unwrap().len(),
+        1,
+        "the other agent's mention is no prompt"
+    );
+    core.stop().await;
+
+    let core = world.start(Listener {
+        prompts: prompts.clone(),
+    });
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    core.stop().await;
+    assert_eq!(
+        world
+            .sent_by_agent(&hex, marmot_agent::carrier::ITEM_KIND)
+            .len(),
+        1,
+        "one session item, sent once and never edited"
+    );
+    world.runtime.shutdown().await;
 }

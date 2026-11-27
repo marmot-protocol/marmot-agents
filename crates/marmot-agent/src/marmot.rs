@@ -6,7 +6,7 @@
 //! words are chat messages carrying their turn (D-022).
 
 use crate::activity::{FullActivity, owners_chat};
-use crate::carrier::{self, REQUEST_KIND};
+use crate::carrier::{self, EDIT_KIND, ITEM_KIND, REQUEST_KIND};
 use crate::config::Config;
 use crate::conversation::{Heard, HeardQuote, HeardRequest, Sending, Token, Where};
 use crate::files::{Folders, Outgoing};
@@ -16,6 +16,7 @@ use cgka_traits::GroupId;
 use marmot_account::{AccountHome, AccountSummary};
 use marmot_agent_driver::Refusal;
 use marmot_agent_events::TurnId;
+use marmot_agent_events::body::Body;
 use marmot_app::{
     AppError, AppMessageQuery, AppMessageRecord, LocalSendStatus, MarmotApp, MarmotAppConfig,
     MarmotAppEvent, MarmotAppRuntime, MediaUploadAttachmentRequest, MediaUploadRequest,
@@ -165,6 +166,8 @@ pub enum Incoming {
     Heard(Heard),
     /// An answer or a control.
     Asked(HeardRequest),
+    /// A session item another member sent: that member is an agent (D-175).
+    SessionItem(PubKey),
 }
 
 /// The agent's account in MDK.
@@ -310,8 +313,9 @@ impl Faults {
 }
 
 impl Marmot {
-    /// What a message is for the conversation, if anything: a chat message or an answer or a
-    /// control for this agent, from someone else, in a group the agent has accepted. [`NotNow`]
+    /// What a message is for the conversation, if anything: a chat message, an answer or a
+    /// control for this agent, or a session item, from someone else, in a group the agent has
+    /// accepted. [`NotNow`]
     /// when MDK could not say where its group is, or what it quotes, for a passing failure: the
     /// message is read again later, never taken as one that is not for the agent.
     pub async fn incoming(&self, message: Message) -> Result<Option<Incoming>, NotNow> {
@@ -319,12 +323,16 @@ impl Marmot {
             return Ok(None);
         }
         let is_request = message.kind == REQUEST_KIND;
-        if message.kind != CHAT && !is_request {
+        let session_item = is_session_item(&message);
+        if message.kind != CHAT && !is_request && !session_item {
             return Ok(None);
         }
         let Some(chat) = self.place(&message.group).await? else {
             return Ok(None);
         };
+        if session_item {
+            return Ok(Some(Incoming::SessionItem(message.sender)));
+        }
         let author_name = self.name(&message.sender, message.sender_name.clone());
         if is_request {
             let Some((target, asked)) = carrier::read_request(&self.agent, &message.tags) else {
@@ -394,6 +402,23 @@ impl Marmot {
             direct: record.direct_member_ids_hex.is_some(),
             members: state.member_count,
         }))
+    }
+
+    /// The accounts in `group` now, the agent among them, as MDK lists its members. `None` for a
+    /// group MDK no longer has; [`NotNow`] when MDK could not be read.
+    pub async fn members(&self, group: &GroupKey) -> Result<Option<Vec<PubKey>>, NotNow> {
+        let Some(id) = group_id(group) else {
+            return Ok(None);
+        };
+        match self.runtime.group_members(&self.label, &id).await {
+            Ok(members) => Ok(Some(
+                (members.into_iter())
+                    .map(|m| PubKey(m.member_id_hex))
+                    .collect(),
+            )),
+            Err(AppError::UnknownGroup(_) | AppError::GroupRemoved(_)) => Ok(None),
+            Err(_) => Err(NotNow),
+        }
     }
 
     /// The two accounts in `group` now, as MDK keeps them for a direct chat: no name and two
@@ -729,8 +754,9 @@ impl Marmot {
     /// A page of what was stored for a group after `after`, in storage order: at most `limit`
     /// rows, MDK's own paging forward in the order messages arrived here (its
     /// `messages_after_insert_order`), so a message that arrived late with an earlier time is read
-    /// in its place. The page holds the chat messages, answers and controls others sent; its last
-    /// place counts the rows the core does not read too, such as the agent's own.
+    /// in its place. The page holds the chat messages, answers and controls others sent, and the
+    /// session items other agents sent (D-175); its last place counts the rows the core does not
+    /// read too, such as the agent's own and other agents' other items.
     pub fn stored(&self, group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {
         if (self.faults)
             .next(|f| matches!(f, Fault::StoredFails))
@@ -740,7 +766,7 @@ impl Marmot {
         }
         let query = AppMessageQuery {
             group_id_hex: Some(group.as_str().to_string()),
-            kinds: Some(vec![CHAT, REQUEST_KIND]),
+            kinds: Some(vec![CHAT, REQUEST_KIND, ITEM_KIND, EDIT_KIND]),
             limit: Some(limit),
         };
         let rows = (self.runtime)
@@ -751,6 +777,8 @@ impl Marmot {
         let messages = (rows.into_iter())
             .filter(|r| r.direction == "received" && !r.invalidated)
             .map(Message::from)
+            // Of the agent items and edits, the core reads only session items (D-175).
+            .filter(|m| !matches!(m.kind, ITEM_KIND | EDIT_KIND) || is_session_item(m))
             .collect();
         Ok(Page {
             messages,
@@ -784,6 +812,14 @@ enum Taken {
 /// it with a notice (S7).
 fn too_large() -> AppError {
     AppError::InvalidAppMessagePayload("over the size limit".into())
+}
+
+/// Whether `message` is the first event, or an edit, of a session item (D-175). Who sent it is the
+/// reader's to check.
+fn is_session_item(message: &Message) -> bool {
+    matches!(message.kind, ITEM_KIND | EDIT_KIND)
+        && carrier::read_item(message.kind, &message.content, &message.tags)
+            .is_some_and(|read| matches!(read.item.event.body(), Body::Session(_)))
 }
 
 /// The group's id, as MDK takes it.
@@ -850,6 +886,16 @@ pub trait Side: Clone + Send + Sync + 'static {
     /// The two accounts in `group` now, when MDK marks it a two-person chat: no name and two
     /// accounts. `None` for any other group; [`NotNow`] when MDK could not say.
     fn two_people(&self, group: &GroupKey) -> Result<Option<Vec<PubKey>>, NotNow>;
+
+    /// The accounts in `group` now, the agent among them. `None` for a group that is gone, or
+    /// from a stand-in that keeps no members: then the core shows no rights there and sends no
+    /// session item of its own (D-175, D-176). [`NotNow`] when MDK could not say.
+    fn members(
+        &self,
+        _group: &GroupKey,
+    ) -> impl Future<Output = Result<Option<Vec<PubKey>>, NotNow>> + Send {
+        std::future::ready(Ok(None))
+    }
 
     /// A page of what was stored for a group after `after`, in storage order: at most `limit`
     /// rows, of which the page holds what others sent.
@@ -1184,6 +1230,13 @@ impl Side for Marmot {
 
     fn two_people(&self, group: &GroupKey) -> Result<Option<Vec<PubKey>>, NotNow> {
         Marmot::two_people(self, group)
+    }
+
+    fn members(
+        &self,
+        group: &GroupKey,
+    ) -> impl Future<Output = Result<Option<Vec<PubKey>>, NotNow>> + Send {
+        Marmot::members(self, group)
     }
 
     fn stored(&self, group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {

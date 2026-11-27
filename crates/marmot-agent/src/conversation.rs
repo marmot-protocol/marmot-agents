@@ -24,7 +24,10 @@
 //!   owner lists; every other chat is sent its words and what people there need to answer it
 //!   (D-136);
 //! - a subagent's work goes in its thread, under its `task` item, with NIP-22's tags, once that
-//!   item has gone out; with none sent, it goes in the main chat (D-121, D-122, D-133, D-142).
+//!   item has gone out; with none sent, it goes in the main chat (D-121, D-122, D-133, D-142);
+//! - a chat is sent a session item as soon as the agent is in it, and every session item shows
+//!   who of the chat's members may prompt and approve; a member that sent a session item is an
+//!   agent, whose messages are never prompts unless the owner listed it (D-175, D-176).
 
 use crate::activity::{self, FullActivity};
 use crate::carrier::{self, Asked, Item, SETTLES_MAX, Thread, Unreadable};
@@ -35,10 +38,10 @@ use marmot_agent_driver::{
     Action, Answer, Attachment, Capabilities, Chat, ChatId, Control, Emitted, Given, MessageId,
     Person, PersonId, Prompt, Quoted, Reason, Refusal, Reply, RequestId,
 };
-use marmot_agent_events::body::{Body, Notice, NoticeKind, Setting};
+use marmot_agent_events::body::{Body, Notice, NoticeKind, Session, Setting};
 use marmot_agent_events::{AgentEvent, Header, ItemId, SessionId, State, TurnId};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
 /// A request older than this that points at nothing, such as "new session", is dropped (D-028).
@@ -273,6 +276,13 @@ pub struct Saved {
     /// again.
     #[serde(default)]
     kind_1201: bool,
+    /// Each chat's session item now, by the core's chat id: the last one that showed a session
+    /// that has not ended, or else the core's own, sent when the agent joined (D-175).
+    #[serde(default)]
+    current: BTreeMap<String, String>,
+    /// The members of each group that have sent a session item there: other agents (D-175).
+    #[serde(default)]
+    agents: BTreeMap<GroupKey, BTreeSet<PubKey>>,
 }
 
 impl Saved {
@@ -541,11 +551,32 @@ const NOT_SHOWN: &str =
 /// What a request the driver took and that had no effect is settled with (D-087).
 const NO_EFFECT: &str = "The agent took this, but nothing has come of it.";
 
+/// What the core's session items say of the agent beyond the harness's name (D-175).
+#[derive(Clone, Default)]
+pub struct AgentInfo {
+    /// The harness's version, for the session item the core sends before any session.
+    pub version: Option<String>,
+    /// The owner's name for this install, such as "laptop".
+    pub label: Option<String>,
+    /// Whether the session items name the owner.
+    pub show_owner: bool,
+}
+
+/// The title of the session item the core sends when the agent joins a chat (D-175).
+const JOINED_TITLE: &str = "Session";
+
+/// Its text.
+const JOINED_TEXT: &str = "No session has started yet.";
+
 /// The conversation: every rule about people, sessions and items.
 pub struct Conversation {
     agent: PubKey,
     harness: String,
     rights: Rights,
+    info: AgentInfo,
+    /// Who is in each group, as MDK last listed its members: what a session item there shows of
+    /// the rights (D-176). Never saved: read again at each start.
+    members: HashMap<GroupKey, Vec<PubKey>>,
     capabilities: Capabilities,
     /// Which chats, besides the owner's two-person chat, are sent the full activity (D-136).
     activity: FullActivity,
@@ -591,6 +622,8 @@ impl Conversation {
             agent,
             harness: harness.into(),
             rights,
+            info: AgentInfo::default(),
+            members: HashMap::new(),
             capabilities,
             activity: FullActivity::default(),
             owners: HashMap::new(),
@@ -610,6 +643,12 @@ impl Conversation {
     /// two-person chat with it (D-136).
     pub fn with_activity(mut self, activity: FullActivity) -> Self {
         self.activity = activity;
+        self
+    }
+
+    /// Says `info` of the agent in its session items (D-175).
+    pub fn with_info(mut self, info: AgentInfo) -> Self {
+        self.info = info;
         self
     }
 
@@ -699,7 +738,12 @@ impl Conversation {
         }
         let chat = self.chat(&heard.chat);
         let right = needed_for(&heard.text, &self.capabilities.approval_commands);
-        if !self.rights.allows(&heard.author, right) {
+        if !self.holds(&heard.chat.group, &heard.author, right) {
+            // Another agent is told nothing: a notice could start the two answering each other
+            // without end (D-175).
+            if self.is_agent(&heard.chat.group, &heard.author) {
+                return Vec::new();
+            }
             let notice = self.notice(&heard.chat.group, &chat, "not_allowed", not_allowed(right));
             return vec![self.send_notice(
                 &heard.chat.group,
@@ -776,7 +820,7 @@ impl Conversation {
             // What cannot be read cannot say which right it needs, and every action needs one of
             // the two: either is enough to be told why it was not read (D-032, D-140).
             Err(unreadable) => {
-                let holds = |right| self.rights.allows(&heard.author, right);
+                let holds = |right| self.holds(&heard.chat.group, &heard.author, right);
                 if !holds(Right::Prompt) && !holds(Right::Approve) {
                     return self.not_allowed(&heard, &chat, Right::Prompt);
                 }
@@ -794,7 +838,7 @@ impl Conversation {
             Asked::Set { setting, .. } => self.right_to_set(&chat.id.0, setting),
             _ => Right::Prompt,
         };
-        if !self.rights.allows(&heard.author, right) {
+        if !self.holds(&heard.chat.group, &heard.author, right) {
             return self.not_allowed(&heard, &chat, right);
         }
         let target = heard
@@ -822,7 +866,9 @@ impl Conversation {
                 Some(Reason::AlreadyAnswered)
             } else if answering && !waiting {
                 Some(Reason::NotWaiting)
-            } else if !record.open() {
+            } else if !record.open() && !joined_item(record) {
+                // The core's own session item is finished as it is sent, and still offers what
+                // can be set before a session starts (D-175).
                 Some(Reason::NothingToDo)
             } else {
                 None
@@ -1072,6 +1118,13 @@ impl Conversation {
         let Some(group) = self.group_of(&chat) else {
             return Vec::new();
         };
+        let emitted = self.show_rights(&chat, &group, emitted);
+        let key = format!("{chat}/{}", header.item.as_str());
+        // A session that has not ended is the chat's now, as the first one is in place of the
+        // core's own (D-175).
+        if matches!(emitted.event.body(), Body::Session(_)) && header.state != State::Done {
+            self.saved.current.insert(chat.clone(), key.clone());
+        }
         if let (Body::Session(_), Some(session)) = (emitted.event.body(), &header.session) {
             if header.state == State::Done {
                 // The session has ended, as a new session ends the one before: it is no longer
@@ -1091,7 +1144,6 @@ impl Conversation {
             .entry(session.unwrap_or_default())
             .or_insert(0);
         *number = header.seq.max(*number);
-        let key = format!("{chat}/{}", header.item.as_str());
         let started_by = match emitted.event.body() {
             Body::Turn(_) => emitted
                 .prompts
@@ -1419,16 +1471,7 @@ impl Conversation {
     /// The item of `chat` whose next version carries what an item the chat is not sent settles:
     /// its turn, or else the chat's session.
     fn carrier_of(&self, chat: &str, turn: Option<&TurnId>) -> Option<String> {
-        self.turn_item(chat, turn).or_else(|| {
-            let session = self.saved.sessions.get(chat)?;
-            (self.saved.items.iter())
-                .find(|(_, r)| {
-                    r.chat == chat
-                        && matches!(r.last.body(), Body::Session(_))
-                        && r.last.header().session.as_ref() == Some(session)
-                })
-                .map(|(key, _)| key.clone())
-        })
+        (self.turn_item(chat, turn)).or_else(|| self.session_item(chat))
     }
 
     /// The item of `chat` that is the turn `turn`.
@@ -2077,14 +2120,7 @@ impl Conversation {
 
     /// The driver's view of a chat, with the core's id for it (D-036).
     fn chat(&mut self, chat: &Where) -> Chat {
-        let id = match self.saved.chats.get(&chat.group) {
-            Some(id) => id.clone(),
-            None => {
-                let id = self.make_id("c");
-                self.saved.chats.insert(chat.group.clone(), id.clone());
-                id
-            }
-        };
+        let id = self.chat_id(&chat.group);
         let folder = self
             .saved
             .folders
@@ -2095,6 +2131,18 @@ impl Conversation {
             id: ChatId(id),
             group: !chat.direct,
             name: chat.name.clone(),
+        }
+    }
+
+    /// The core's id for a group's chat (D-036).
+    fn chat_id(&mut self, group: &GroupKey) -> String {
+        match self.saved.chats.get(group) {
+            Some(id) => id.clone(),
+            None => {
+                let id = self.make_id("c");
+                self.saved.chats.insert(group.clone(), id.clone());
+                id
+            }
         }
     }
 
@@ -2230,13 +2278,11 @@ impl Conversation {
             });
         let mut session = session.clone();
         session.settings.retain(|s| s.id != FOLDER);
-        session.settings.push(Setting {
-            id: FOLDER.into(),
-            label: LABEL.into(),
-            value: Some(kept.unwrap_or_else(|| now.display().to_string())),
-            options: None,
-            approve: true,
-        });
+        let mut setting = folder_setting(&now);
+        if kept.is_some() {
+            setting.value = kept;
+        }
+        session.settings.push(setting);
         let event = AgentEvent::new(
             header.clone(),
             Body::Session(session),
@@ -2257,6 +2303,157 @@ impl Conversation {
             Right::Approve
         } else {
             Right::Prompt
+        }
+    }
+
+    /// A session item, showing who of the chat's members may prompt and approve, and the owner's
+    /// label and key when the owner set them (D-175, D-176). With the members not yet read, the
+    /// rights the item last showed, if any.
+    fn show_rights(&self, chat: &str, group: &GroupKey, emitted: Emitted) -> Emitted {
+        let Body::Session(session) = emitted.event.body() else {
+            return emitted;
+        };
+        let key = format!("{chat}/{}", emitted.event.header().item.as_str());
+        let mut session = session.clone();
+        self.fill(&mut session, group, self.saved.items.get(&key));
+        let event = AgentEvent::new(
+            emitted.event.header().clone(),
+            Body::Session(session),
+            emitted.event.native().cloned(),
+        )
+        .expect("a session item repeats no secret");
+        Emitted { event, ..emitted }
+    }
+
+    /// Fills in what the core shows in a session item of `group`'s (D-175, D-176), keeping the
+    /// rights `last`, its version before, showed while the chat's members are not known.
+    fn fill(&self, session: &mut Session, group: &GroupKey, last: Option<&Record>) {
+        let before = last.and_then(|r| match r.last.body() {
+            Body::Session(s) => s.rights.clone(),
+            _ => None,
+        });
+        session.rights = (self.members.get(group))
+            .map(|members| self.rights.shown(members))
+            .or(before);
+        session.label = self.info.label.clone();
+        session.owner = (self.info.show_owner).then(|| self.rights.owner.as_str().to_string());
+    }
+
+    /// Who is in `group` now, as MDK lists its members, the agent among them. The chat's session
+    /// item shows who of them may prompt and approve (D-176): a chat with none yet, as one the
+    /// agent has just joined, is sent the core's own now, naming no session (D-175); otherwise
+    /// the chat's current one is edited when what it shows has changed, as when someone who
+    /// holds a right joined or left, or the settings changed since it went out, and only then.
+    pub fn chat_members(&mut self, group: &GroupKey, members: Vec<PubKey>) -> Vec<Act> {
+        self.members.insert(group.clone(), members);
+        let chat = self.chat_id(group);
+        let Some(key) = self.current_session(&chat) else {
+            return self.join(&chat);
+        };
+        // Kept, so a session of a state from before stays the chat's once it ends.
+        self.saved.current.insert(chat.clone(), key.clone());
+        let record = &self.saved.items[&key];
+        let Body::Session(was) = record.last.body() else {
+            return Vec::new();
+        };
+        let mut session = was.clone();
+        if joined_item(record) {
+            // The core's own: what it shows of the settings is the settings now, as a start
+            // after the owner changed them has them (D-175).
+            if let Some(version) = &self.info.version {
+                session.harness_version.clone_from(version);
+            }
+            if let Some(folder) = self.chat_folder(&ChatId(chat.clone())) {
+                session.settings.retain(|s| s.id != FOLDER);
+                session.settings.push(folder_setting(&folder));
+            }
+        }
+        self.fill(&mut session, group, None);
+        if session == *was {
+            return Vec::new();
+        }
+        let event = AgentEvent::new(
+            record.last.header().clone(),
+            Body::Session(session),
+            record.last.native().cloned(),
+        )
+        .expect("a session item repeats no secret");
+        let group = record.group.clone();
+        self.saved.items.get_mut(&key).expect("found").last = event.clone();
+        self.queue_versions(&key, &group, event, Vec::new(), None)
+    }
+
+    /// The session item the core sends a chat it has none for: the harness and its version, the
+    /// chat's folder and its rights, and no session (D-175). It is finished as it is sent, so
+    /// nothing closes it when the driver stops; the first session's item takes its place.
+    fn join(&mut self, chat: &str) -> Vec<Act> {
+        let header = Header {
+            harness: self.harness.clone(),
+            session: None,
+            turn: None,
+            subagent: None,
+            item: ItemId(self.make_id("core")),
+            seq: 1,
+            state: State::Done,
+            title: JOINED_TITLE.into(),
+            text: JOINED_TEXT.into(),
+        };
+        let body = Body::Session(Session {
+            harness_version: self.info.version.clone().unwrap_or_default(),
+            ..Session::default()
+        });
+        let event = AgentEvent::new(header, body, None).expect("a session item repeats no secret");
+        let key = format!("{chat}/{}", event.header().item.as_str());
+        self.saved.current.insert(chat.to_string(), key);
+        self.emitted(Emitted {
+            event,
+            chat: Some(ChatId(chat.to_string())),
+            prompts: Vec::new(),
+            settles: Vec::new(),
+        })
+    }
+
+    /// The chat's session item now: the one the core noted, or, in a state from before it noted
+    /// one, the item of the chat's session.
+    fn current_session(&self, chat: &str) -> Option<String> {
+        (self.saved.current.get(chat))
+            .filter(|key| self.saved.items.contains_key(*key))
+            .cloned()
+            .or_else(|| self.session_item(chat))
+    }
+
+    /// The item of the chat's session, while it has one to resume.
+    fn session_item(&self, chat: &str) -> Option<String> {
+        let session = self.saved.sessions.get(chat)?;
+        (self.saved.items.iter())
+            .find(|(_, r)| {
+                r.chat == chat
+                    && matches!(r.last.body(), Body::Session(_))
+                    && r.last.header().session.as_ref() == Some(session)
+            })
+            .map(|(key, _)| key.clone())
+    }
+
+    /// A member of `group` sent a session item there: another agent, unless it is the owner, who
+    /// is never one (D-175).
+    pub fn agent_seen(&mut self, group: &GroupKey, member: &PubKey) {
+        if *member != self.agent && *member != self.rights.owner {
+            (self.saved.agents.entry(group.clone()).or_default()).insert(member.clone());
+        }
+    }
+
+    /// Whether `person` is another agent in `group`: one that sent a session item there (D-175).
+    fn is_agent(&self, group: &GroupKey, person: &PubKey) -> bool {
+        (self.saved.agents.get(group)).is_some_and(|agents| agents.contains(person))
+    }
+
+    /// Whether `person` holds `right` in `group`. Another agent holds one only when the owner
+    /// listed it by key, whatever else the settings give (D-175).
+    fn holds(&self, group: &GroupKey, person: &PubKey, right: Right) -> bool {
+        if self.is_agent(group, person) {
+            self.rights.lists(person, right)
+        } else {
+            self.rights.allows(person, right)
         }
     }
 
@@ -2306,8 +2503,9 @@ impl Conversation {
     }
 
     /// Whether a finished item may be forgotten: not when it is open, nor when it is its chat's
-    /// session, which a stop closes and the next prompt resumes (D-065, D-070), nor while a
-    /// version of it waits to be sent (it is among `queued`).
+    /// session, which a stop closes and the next prompt resumes (D-065, D-070), nor when it is
+    /// the chat's session item now, which a change of rights edits (D-176), nor while a version
+    /// of it waits to be sent (it is among `queued`).
     fn may_forget(&self, key: &str, queued: &HashSet<String>) -> bool {
         let Some(record) = self.saved.items.get(key) else {
             return true;
@@ -2315,7 +2513,8 @@ impl Conversation {
         let session = matches!(record.last.body(), Body::Session(_))
             && record.last.header().session.is_some()
             && self.saved.sessions.get(&record.chat) == record.last.header().session.as_ref();
-        !record.open() && !session && !queued.contains(key)
+        let current = self.saved.current.get(&record.chat).map(String::as_str) == Some(key);
+        !record.open() && !session && !current && !queued.contains(key)
     }
 
     /// Closes every open item as interrupted.
@@ -2420,6 +2619,23 @@ impl Conversation {
         let what = notice_item(event, about, settles);
         self.queue(group, what, None)
     }
+}
+
+/// The chat's folder setting, showing `folder`, which needs the right to approve (D-101).
+fn folder_setting(folder: &std::path::Path) -> Setting {
+    Setting {
+        id: FOLDER.into(),
+        label: LABEL.into(),
+        value: Some(folder.display().to_string()),
+        options: None,
+        approve: true,
+    }
+}
+
+/// Whether `record` is the session item the core sends a chat on joining, which names no session
+/// (D-175).
+fn joined_item(record: &Record) -> bool {
+    matches!(record.last.body(), Body::Session(_)) && record.last.header().session.is_none()
 }
 
 /// A notice of the core's own, to send: the first and only version of an item of its own.

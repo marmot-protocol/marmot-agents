@@ -6,8 +6,8 @@ use marmot_agent::carrier::{self, Asked, AskedReply, Item, Unreadable};
 use marmot_agent::chat_folder::FolderRule;
 use marmot_agent::conversation::EFFECT_LIMIT_SECS;
 use marmot_agent::{
-    Act, Conversation, EventKey, GroupKey, Heard, HeardQuote, HeardRequest, PubKey, Rights, Saved,
-    Sending, Token, Where, Who,
+    Act, AgentInfo, Conversation, EventKey, GroupKey, Heard, HeardQuote, HeardRequest, PubKey,
+    Rights, Saved, Sending, Token, Where, Who,
 };
 use marmot_agent_driver::{
     Action, ApprovalCommand, Capabilities, ChatId, Emitted, FilesIn, Given, MidTurn, Position,
@@ -408,6 +408,7 @@ fn session_item(approve_sandbox: bool) -> body::Session {
         }],
         actions: Vec::new(),
         commands: Vec::new(),
+        ..body::Session::default()
     }
 }
 
@@ -2073,6 +2074,7 @@ fn commands_item(count: usize, name: usize, hint: usize, description: usize) -> 
                 hint: "h".repeat(hint),
             })
             .collect(),
+        ..body::Session::default()
     };
     Item {
         event: event("s", State::Running, Body::Session(session)),
@@ -3033,6 +3035,334 @@ fn what_stands_in_for_a_dropped_send_fits_when_the_session_id_does_not() {
     assert_eq!(close.event.header().session, None);
     assert_eq!(close.event.header().turn, None);
     assert!(then.iter().any(|i| reason(i).as_deref() == Some("failed")));
+}
+
+// ------------------------------------------------------------------- agents in a chat
+
+const OTHER: &str = "other-agent-key";
+
+fn keys(of: &[&str]) -> Vec<PubKey> {
+    of.iter().map(|k| PubKey::from(*k)).collect()
+}
+
+fn members(of: &[&str]) -> Vec<String> {
+    of.iter().map(|k| (*k).to_string()).collect()
+}
+
+/// The session body an item carries.
+fn session_of(item: &Item) -> body::Session {
+    match item.event.body() {
+        Body::Session(session) => session.clone(),
+        other => panic!("not a session item: {other:?}"),
+    }
+}
+
+/// The rights a session item shows, as lists, `None` for everyone.
+fn rights_shown(item: &Item) -> (Option<Vec<String>>, Option<Vec<String>>) {
+    let rights = session_of(item).rights.expect("rights shown");
+    let list = |holders: body::Holders| match holders {
+        body::Holders::Everyone(_) => None,
+        body::Holders::Members(keys) => Some(keys),
+    };
+    (list(rights.prompt), list(rights.approve))
+}
+
+fn with_rights(prompt: Who, approve: Who, saved: Saved) -> Conversation {
+    let rights = Rights {
+        owner: PubKey::from(OWNER),
+        prompt,
+        approve,
+    };
+    Conversation::new(PubKey::from(AGENT), "codex", rights, capabilities(), saved)
+}
+
+// D-175: the chat the agent joins is sent a session item at once, before anyone prompts: the
+// harness and its version, the chat's folder and its rights, and no session. It is finished, so a
+// stop closes nothing. It goes once: the same members read again send nothing.
+#[test]
+fn a_chat_the_agent_joins_is_sent_a_session_item_naming_no_session() {
+    let layout = layout();
+    let mut talk = moving(&layout, None, Saved::default()).with_info(AgentInfo {
+        version: Some("0.169.0".into()),
+        ..AgentInfo::default()
+    });
+    let everyone = keys(&[AGENT, OWNER, FRIEND, STRANGER]);
+    let (group, _, item) = the_item(&mut talk, |t| {
+        t.chat_members(&GroupKey::from("g-group"), everyone.clone())
+    });
+    assert_eq!(group, GroupKey::from("g-group"));
+    let header = item.event.header();
+    assert_eq!(
+        (header.session.as_ref(), header.turn.as_ref()),
+        (None, None)
+    );
+    assert_eq!(
+        (header.harness.as_str(), header.state),
+        ("codex", State::Done)
+    );
+    let session = session_of(&item);
+    assert_eq!(session.harness_version, "0.169.0");
+    assert_eq!(
+        folder_shown(&item).unwrap().value,
+        Some(layout.work.display().to_string())
+    );
+    assert_eq!(
+        rights_shown(&item),
+        (Some(members(&[OWNER, FRIEND])), Some(members(&[OWNER])))
+    );
+    assert_eq!((session.label, session.owner), (None, None));
+    assert!(
+        talk.chat_members(&GroupKey::from("g-group"), everyone)
+            .is_empty()
+    );
+    assert!(talk.ended().is_empty());
+}
+
+// D-175 and D-101: the core's session item offers the chat's folder before any session, so a
+// `set` that names it acts, and starts the session there; a start whose settings name another
+// folder shows that one.
+#[test]
+fn the_cores_session_item_offers_the_chats_folder_now() {
+    let layout = layout();
+    let g = GroupKey::from("g-direct");
+    let mut talk = moving(&layout, None, Saved::default());
+    let (_, key, _) = the_item(&mut talk, |t| t.chat_members(&g, keys(&[AGENT, OWNER])));
+    talk.sent(&key, EventKey::from(ES));
+    let deeper = layout.work.join("a");
+    let set = set_folder("r1", OWNER, Some(ES), deeper.to_str().unwrap());
+    let acts = talk.asked(set);
+    assert!(
+        matches!(acts.as_slice(), [Act::Control(c)] if matches!(&c.action, Action::NewSession { chat, session: None } if chat.folder.as_ref() == Some(&deeper))),
+        "{acts:?}"
+    );
+
+    let mut fresh = moving(&layout, None, Saved::default());
+    let (_, key, _) = the_item(&mut fresh, |t| t.chat_members(&g, keys(&[AGENT, OWNER])));
+    fresh.sent(&key, EventKey::from(ES));
+    let rule = FolderRule::new(&deeper, None, &layout.home);
+    let mut moved = conversation(fresh.saved().clone()).with_folders(rule);
+    let (_, again, edit) = the_item(&mut moved, |t| t.chat_members(&g, keys(&[AGENT, OWNER])));
+    assert_eq!((again, edit.version), (key, 2));
+    assert_eq!(
+        folder_shown(&edit).unwrap().value,
+        Some(deeper.display().to_string())
+    );
+}
+
+// D-176: each list is cut to the chat's members, the owner first, and someone the owner trusts
+// elsewhere is not named; the chat's session item is edited when that changes, and only then.
+#[test]
+fn the_rights_shown_are_cut_to_the_members_and_edited_when_they_change() {
+    let mut talk = conversation(Saved::default());
+    let g = GroupKey::from("g-group");
+    let (_, key, first) = the_item(&mut talk, |t| t.chat_members(&g, keys(&[FRIEND, AGENT])));
+    assert_eq!(
+        rights_shown(&first),
+        (Some(members(&[FRIEND])), Some(Vec::new()))
+    );
+    talk.sent(&key, EventKey::from(ES));
+    assert!(
+        talk.chat_members(&g, keys(&[AGENT, STRANGER, FRIEND]))
+            .is_empty()
+    );
+    let (_, again, edit) = the_item(&mut talk, |t| {
+        t.chat_members(&g, keys(&[AGENT, FRIEND, OWNER]))
+    });
+    assert_eq!(again, key);
+    assert_eq!(
+        (edit.version, edit.first.clone()),
+        (2, Some(EventKey::from(ES)))
+    );
+    assert_eq!(
+        rights_shown(&edit),
+        (Some(members(&[OWNER, FRIEND])), Some(members(&[OWNER])))
+    );
+
+    let mut open = with_rights(Who::Everyone, Who::Everyone, Saved::default());
+    let (_, _, item) = the_item(&mut open, |t| t.chat_members(&g, keys(&[AGENT])));
+    assert_eq!(rights_shown(&item), (None, None));
+}
+
+// D-175: the first session's item takes the place of the core's own: it shows the rights too, and
+// a change of members edits it, not the core's. Its folder setting still needs the right to
+// approve, as the core's did (D-043).
+#[test]
+fn the_first_session_takes_the_place_of_the_cores_session_item() {
+    let mut talk = conversation(Saved::default());
+    let g = GroupKey::from("g-direct");
+    let (_, joined, _) = the_item(&mut talk, |t| t.chat_members(&g, keys(&[AGENT, OWNER])));
+    talk.sent(&joined, EventKey::from(ES));
+    let prompt = the_prompt(talk.heard(heard(direct(), "e1", OWNER, "hello")));
+    let real = event("s", State::Running, Body::Session(session_item(true)));
+    let item = sent(&mut talk, &prompt.chat.id.0, real, "es");
+    assert_eq!(
+        rights_shown(&item),
+        (Some(members(&[OWNER])), Some(members(&[OWNER])))
+    );
+    let (_, key, edit) = the_item(&mut talk, |t| {
+        t.chat_members(&g, keys(&[AGENT, OWNER, FRIEND]))
+    });
+    assert_ne!(key, joined);
+    assert_eq!(edit.first, Some(EventKey::from("es")));
+    assert_eq!(edit.event.header().session, Some(SessionId::from("th1")));
+    assert_eq!(
+        rights_shown(&edit),
+        (Some(members(&[OWNER, FRIEND])), Some(members(&[OWNER])))
+    );
+    let set = request(
+        direct(),
+        "r1",
+        FRIEND,
+        Some("es"),
+        Asked::Set {
+            setting: "sandbox".into(),
+            value: "x".into(),
+        },
+    );
+    assert!(is_refused(
+        &the_item(&mut talk, |t| t.asked(set)).2,
+        "not_allowed"
+    ));
+}
+
+// D-175 and D-176: what a chat was sent is kept across a restart, so a start sends it nothing
+// again; a start with other settings edits what it shows.
+#[test]
+fn a_restart_sends_the_session_item_again_only_when_the_settings_changed() {
+    let g = GroupKey::from("g-group");
+    let mut talk = conversation(Saved::default());
+    let (_, key, _) = the_item(&mut talk, |t| t.chat_members(&g, keys(&[AGENT, OWNER])));
+    talk.sent(&key, EventKey::from(ES));
+    let saved = talk.saved().clone();
+    assert!(
+        conversation(saved.clone())
+            .chat_members(&g, keys(&[AGENT, OWNER]))
+            .is_empty()
+    );
+    let mut changed = with_rights(Who::Owner, Who::Everyone, saved);
+    let (_, again, edit) = the_item(&mut changed, |t| t.chat_members(&g, keys(&[AGENT, OWNER])));
+    assert_eq!((again, edit.version), (key, 2));
+    assert_eq!(rights_shown(&edit), (Some(members(&[OWNER])), None));
+}
+
+// D-175: a chat the agent was in before this core, with a session, has that session's item
+// edited to show the rights, and is sent no second one.
+#[test]
+fn a_chat_from_before_has_its_session_item_edited() {
+    let (mut talk, prompt) = started();
+    let real = event("s", State::Running, Body::Session(session_item(false)));
+    sent(&mut talk, &prompt.chat.id.0, real, "es");
+    let mut before = serde_json::to_value(talk.saved()).unwrap();
+    before.as_object_mut().unwrap().remove("current");
+    let mut talk = conversation(serde_json::from_value(before).unwrap());
+    let g = GroupKey::from("g-direct");
+    let (_, _, edit) = the_item(&mut talk, |t| t.chat_members(&g, keys(&[AGENT, OWNER])));
+    assert_eq!(
+        (edit.first.clone(), edit.version),
+        (Some(EventKey::from("es")), 2)
+    );
+    assert!(session_of(&edit).rights.is_some());
+}
+
+// D-175: a member that sent a session item is an agent. Its messages are not prompts, even with
+// the right to prompt given to everyone, and it is told nothing, so two agents never start
+// answering each other. The owner is never one.
+#[test]
+fn another_agents_message_is_no_prompt_and_is_not_answered() {
+    let mut talk = with_rights(Who::Everyone, Who::Everyone, Saved::default());
+    let g = GroupKey::from("g-group");
+    talk.agent_seen(&g, &PubKey::from(OTHER));
+    talk.agent_seen(&g, &PubKey::from(OWNER));
+    let mut mention = heard(group(), "e1", OTHER, "please run this");
+    mention.mentions_agent = true;
+    assert!(talk.heard(mention).is_empty());
+    assert!(
+        talk.heard(heard(
+            Where {
+                group: g.clone(),
+                ..direct()
+            },
+            "e2",
+            OTHER,
+            "hi"
+        ))
+        .is_empty()
+    );
+    let mut owner = heard(group(), "e3", OWNER, "go");
+    owner.mentions_agent = true;
+    the_prompt(talk.heard(owner));
+    // In another chat it has sent nothing in, it is anyone.
+    let mut elsewhere = heard(direct(), "e4", OTHER, "hello");
+    elsewhere.mentions_agent = true;
+    the_prompt(talk.heard(elsewhere));
+}
+
+// D-175: an agent the owner lists by key may prompt, so the owner can point one agent at another;
+// a typed approval from it still needs it listed for that right, and is passed over silently.
+#[test]
+fn an_agent_the_owner_lists_may_prompt() {
+    let mut talk = with_rights(Who::People(keys(&[OTHER])), Who::Everyone, Saved::default());
+    let g = GroupKey::from("g-group");
+    talk.agent_seen(&g, &PubKey::from(OTHER));
+    let mut mention = heard(group(), "e1", OTHER, "review this");
+    mention.mentions_agent = true;
+    assert_eq!(the_prompt(talk.heard(mention)).text, "review this");
+    let mut typed = heard(group(), "e2", OTHER, "/approve");
+    typed.mentions_agent = true;
+    assert!(talk.heard(typed).is_empty());
+}
+
+// D-175 and D-028: an answer or a control from an agent the owner did not list for the right it
+// needs is refused as not allowed, as anyone's is, since every request is settled; one from a
+// person goes on to be checked against its item.
+#[test]
+fn an_agents_request_is_refused_unless_it_is_listed() {
+    let mut talk = with_rights(Who::Everyone, Who::Everyone, Saved::default());
+    let g = GroupKey::from("g-group");
+    talk.agent_seen(&g, &PubKey::from(OTHER));
+    let choice = |event, author| {
+        request(
+            group(),
+            event,
+            author,
+            Some(ES),
+            Asked::Choice {
+                choice: "allow".into(),
+            },
+        )
+    };
+    assert!(is_refused(
+        &the_item(&mut talk, |t| t.asked(choice("r1", OTHER))).2,
+        "not_allowed"
+    ));
+    assert!(is_refused(
+        &the_item(&mut talk, |t| t.asked(choice("r2", STRANGER))).2,
+        "unknown_item"
+    ));
+    let mut listed = with_rights(Who::Everyone, Who::People(keys(&[OTHER])), Saved::default());
+    listed.agent_seen(&g, &PubKey::from(OTHER));
+    assert!(is_refused(
+        &the_item(&mut listed, |t| t.asked(choice("r3", OTHER))).2,
+        "unknown_item"
+    ));
+}
+
+// D-175: the label and the owner are shown only when the owner sets them.
+#[test]
+fn the_label_and_the_owner_are_shown_only_when_set() {
+    let g = GroupKey::from("g-group");
+    let info = AgentInfo {
+        version: None,
+        label: Some("laptop".into()),
+        show_owner: true,
+    };
+    let mut talk = conversation(Saved::default()).with_info(info);
+    let session = session_of(&the_item(&mut talk, |t| t.chat_members(&g, keys(&[AGENT]))).2);
+    assert_eq!(session.label.as_deref(), Some("laptop"));
+    assert_eq!(session.owner.as_deref(), Some(OWNER));
+    let mut plain = conversation(Saved::default());
+    let session = session_of(&the_item(&mut plain, |t| t.chat_members(&g, keys(&[AGENT]))).2);
+    assert_eq!((session.label, session.owner), (None, None));
 }
 
 // ---------------------------------------------------------------------------------- folders

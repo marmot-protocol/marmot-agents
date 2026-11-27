@@ -31,7 +31,7 @@ pub mod socket;
 
 pub use activity::FullActivity;
 pub use conversation::{
-    Act, Conversation, Heard, HeardQuote, HeardRequest, Saved, Sending, Token, Where,
+    Act, AgentInfo, Conversation, Heard, HeardQuote, HeardRequest, Saved, Sending, Token, Where,
 };
 pub use keys::{EventKey, GroupKey, PubKey};
 pub use rights::{Right, Rights, Who};

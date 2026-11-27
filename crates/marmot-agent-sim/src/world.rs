@@ -1360,6 +1360,7 @@ impl World {
             settings: Vec::new(),
             actions: Vec::new(),
             commands: Vec::new(),
+            ..Session::default()
         });
         self.send_event(
             &script,

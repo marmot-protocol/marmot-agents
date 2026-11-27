@@ -54,7 +54,10 @@ published, leave it out: the script then downloads `marmot-agent` from the lates
 or arm64 or macOS on Apple silicon, and checks it against the release's `SHA256SUMS`; until then that download
 fails. The script makes the agent's identity and prints its public key, for you to
 invite it from White Noise, and runs it as a service of your account: systemd `--user` on Linux, launchd on
-macOS. Only you may prompt it or approve what it does until you change its settings. Its reasoning, tools, plans and
+macOS. Only you may prompt it or approve what it does until you change its settings; each chat's session item,
+sent as soon as the agent joins, says who there may, and in its settings `label = "laptop"` names the install
+there and `show_owner = true` names you, by key
+([D-175](docs/decisions.md#d-175-an-agent-sends-its-session-item-when-it-joins-a-chat-and-an-agents-messages-are-not-prompts), [D-176](docs/decisions.md#d-176-the-session-item-says-who-in-the-chat-may-prompt-and-who-may-approve)). Its reasoning, tools, plans and
 notices go only to your two-person chat with it: a group is sent its words, its turns, what it asks and its
 errors, unless you list the group's id as `full_activity` in its settings, or set `full_activity = "all"`
 ([D-136](docs/decisions.md#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)).

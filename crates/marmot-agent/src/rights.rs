@@ -2,6 +2,7 @@
 
 use crate::keys::PubKey;
 use marmot_agent_driver::{ApprovalCommand, Position};
+use marmot_agent_events::body;
 use serde::{Deserialize, Serialize};
 
 /// Who holds a right. The owner always does.
@@ -43,14 +44,49 @@ impl Rights {
         if *person == self.owner {
             return true;
         }
-        let who = match right {
-            Right::Prompt => &self.prompt,
-            Right::Approve => &self.approve,
-        };
-        match who {
+        match self.who(right) {
             Who::Owner => false,
             Who::People(people) => people.contains(person),
             Who::Everyone => true,
+        }
+    }
+
+    /// Whether the owner listed `person` by key for `right`: the only way another agent holds one
+    /// (D-175).
+    pub fn lists(&self, person: &PubKey, right: Right) -> bool {
+        matches!(self.who(right), Who::People(people) if people.contains(person))
+    }
+
+    /// Who of `members`, a chat's, holds each right, as the chat's session item shows it (D-176):
+    /// everyone, or the owner and the people listed, those of them in the chat alone, the owner
+    /// first.
+    pub fn shown(&self, members: &[PubKey]) -> body::Rights {
+        let holders = |right| match self.who(right) {
+            Who::Everyone => body::Holders::Everyone(body::Everyone::Everyone),
+            Who::Owner => body::Holders::Members(self.present(&[], members)),
+            Who::People(people) => body::Holders::Members(self.present(people, members)),
+        };
+        body::Rights {
+            prompt: holders(Right::Prompt),
+            approve: holders(Right::Approve),
+        }
+    }
+
+    /// The owner and `people`, once each, in that order, those of them among `members`.
+    fn present(&self, people: &[PubKey], members: &[PubKey]) -> Vec<String> {
+        let mut present: Vec<String> = Vec::new();
+        for person in std::iter::once(&self.owner).chain(people) {
+            if members.contains(person) && !present.iter().any(|p| p == person.as_str()) {
+                present.push(person.as_str().to_string());
+            }
+        }
+        present
+    }
+
+    fn who(&self, right: Right) -> &Who {
+        match right {
+            Right::Prompt => &self.prompt,
+            Right::Approve => &self.approve,
         }
     }
 }

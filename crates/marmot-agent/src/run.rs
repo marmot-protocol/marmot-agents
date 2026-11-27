@@ -29,7 +29,7 @@
 
 use crate::chat_folder::FolderRule;
 use crate::config::Config;
-use crate::conversation::{Act, Conversation, Saved, Sending};
+use crate::conversation::{Act, AgentInfo, Conversation, Saved, Sending};
 use crate::files::Folders;
 use crate::keys::{EventKey, GroupKey};
 use crate::marmot::{
@@ -468,6 +468,9 @@ pub struct Core<D: Driver, M: Side = Marmot> {
     early: Option<(Output, u64)>,
     /// Whether the driver has ended: the loop ends, and nothing more is read for it.
     ended: bool,
+    /// Whether the chats' members are to be read again, as MDK could not list them last time
+    /// ([`Core::show_rights`]).
+    members_again: bool,
     /// Faults put back for the simulator, to show its checks find them: none in use.
     #[cfg(feature = "sim-bugs")]
     bugs: Bugs,
@@ -515,7 +518,12 @@ impl<D: Driver, M: Side> Core<D, M> {
             driver.capabilities(),
             kept.conversation,
         )
-        .with_activity(config.full_activity.clone());
+        .with_activity(config.full_activity.clone())
+        .with_info(AgentInfo {
+            version: driver.harness().version,
+            label: config.label.clone(),
+            show_owner: config.show_owner,
+        });
         // A driver that works in a folder of its own lets each chat move it (D-101).
         let folder = driver.folder();
         if let Some(folder) = &folder {
@@ -552,6 +560,7 @@ impl<D: Driver, M: Side> Core<D, M> {
             first: 0,
             early: None,
             ended: false,
+            members_again: false,
             #[cfg(feature = "sim-bugs")]
             bugs: Bugs::default(),
         })
@@ -733,6 +742,9 @@ impl<D: Driver, M: Side> Core<D, M> {
             match woke {
                 Woke::Tick => {
                     self.settle_overdue().await?;
+                    if self.members_again {
+                        self.show_rights().await?;
+                    }
                     // MDK can store a message with no notice, as one imported: every group is
                     // read from its mark now and then, unless a catch-up waits to list them.
                     if self.listing.is_none() {
@@ -928,8 +940,34 @@ impl<D: Driver, M: Side> Core<D, M> {
             // A mark left for an invitation not accepted is never read: only accepted groups are.
             joined |= self.marmot.decide(&group, allowed).await && allowed;
         }
+        // A group joined, or one whose members changed, is shown its rights before anything
+        // stored in it is read (D-175, D-176).
+        self.show_rights().await?;
         if joined {
             self.catch_up().await?;
+        }
+        Ok(())
+    }
+
+    /// Hands the conversation who is in each group now, so each chat's session item shows who
+    /// may prompt and approve there: sent now to a chat that has none, as one just joined, and
+    /// edited where that changed (D-175, D-176). On a start, on a group's change, and on the
+    /// tick after MDK could not say.
+    async fn show_rights(&mut self) -> Result<(), Unsaved> {
+        let Ok(groups) = self.marmot.groups() else {
+            self.members_again = true;
+            return Ok(());
+        };
+        self.members_again = false;
+        for group in groups {
+            match self.marmot.members(&group).await {
+                Ok(Some(members)) => {
+                    let acts = self.conversation.chat_members(&group, members);
+                    self.carry_out(acts).await?;
+                }
+                Ok(None) => {}
+                Err(NotNow) => self.members_again = true,
+            }
         }
         Ok(())
     }
@@ -1212,6 +1250,10 @@ impl<D: Driver, M: Side> Core<D, M> {
         let acts = match self.marmot.incoming(message).await {
             Ok(Some(Incoming::Heard(heard))) => self.conversation.heard(heard),
             Ok(Some(Incoming::Asked(asked))) => self.conversation.asked(asked),
+            Ok(Some(Incoming::SessionItem(member))) => {
+                self.conversation.agent_seen(&group, &member);
+                Vec::new()
+            }
             Ok(None) => Vec::new(),
             Err(NotNow) => {
                 self.read_later(&group);
