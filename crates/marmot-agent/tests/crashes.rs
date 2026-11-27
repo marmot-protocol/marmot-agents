@@ -290,7 +290,11 @@ async fn nothing_is_sent_that_was_not_saved_first() {
         })
         .unwrap();
     let stopped = core.stops_within(20).await;
-    assert!(chat.items().is_empty(), "nothing was sent");
+    // The chat holds only the session item the core sent when it joined (D-175).
+    let turns = (chat.items().into_iter())
+        .filter(|(_, read)| matches!(read.item.event.body(), Body::Turn(_)))
+        .count();
+    assert_eq!(turns, 0, "nothing was sent");
     assert!(stopped, "the core stops when it cannot save");
     assert!(failed.load(SeqCst), "the save that failed was the send's");
     assert!(core.ended().await.is_err(), "it says it could not save");

@@ -369,6 +369,7 @@ impl Translator {
                 description: Some("Summarise the conversation so far, to free up context".into()),
             }],
             commands: self.commands.clone().unwrap_or_default(),
+            ..Session::default()
         };
         let item = format!("session:{sid}");
         let shown = serde_json::to_value(&session).unwrap_or(Value::Null);

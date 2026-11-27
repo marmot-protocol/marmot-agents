@@ -5,7 +5,7 @@
 
 use crate::schedule::{Outcome, ReadStep};
 use crate::world::{CHAT, COMMENT, EDIT, Kept, Landing, RefusedSend, World, describe};
-use marmot_agent::carrier::{self, REQUEST_KIND};
+use marmot_agent::carrier::{self, ITEM_KIND, REQUEST_KIND};
 use marmot_agent::files::Outgoing;
 use marmot_agent::marmot::{
     FileFailed, Incoming, Live, Message, NotNow, Outcome as Asked, Page, SendFailed, Side,
@@ -45,13 +45,13 @@ pub struct SimEvents;
 
 impl SimSide {
     /// A page of what MDK stored for a chat after `after`: at most `limit` rows of its chat
-    /// messages and requests, the agent's own too, in storage order, as MDK's
+    /// messages, requests, agent items and edits, the agent's own too, in storage order, as MDK's
     /// `messages_after_insert_order` gives them. The page holds what others sent.
     fn page(world: &World, chat: usize, after: i64, limit: usize) -> Page {
         let group = world.chats[chat].group.clone();
         let mut rows: Vec<&crate::world::Row> = (world.rows.iter())
             .filter(|r| r.chat == chat && r.order > after)
-            .filter(|r| r.kind == CHAT || r.kind == REQUEST_KIND)
+            .filter(|r| [CHAT, REQUEST_KIND, ITEM_KIND, EDIT].contains(&r.kind))
             .collect();
         rows.sort_by_key(|r| r.order);
         rows.truncate(limit);
@@ -199,6 +199,11 @@ impl Side for SimSide {
         Ok(world
             .chat_of(group)
             .map(|_| vec![world.agent.clone(), world.owner.clone()]))
+    }
+
+    /// Every chat of a simulation has the agent and the owner in it.
+    async fn members(&self, group: &GroupKey) -> Result<Option<Vec<PubKey>>, NotNow> {
+        self.two_people(group)
     }
 
     fn stored(&self, group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {

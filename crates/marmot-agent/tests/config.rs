@@ -188,6 +188,28 @@ fn defaults_for_white_noise_and_pi_program() {
     assert_eq!(pi.args, vec!["--sandbox"]);
 }
 
+// The install's label and showing the owner are off unless the settings set them; a label of
+// nothing but spaces is refused (D-175).
+#[test]
+fn the_label_and_showing_the_owner_are_off_by_default() {
+    let plain = Config::parse(&settings(HEX, "\"owner\"", "")).unwrap();
+    assert_eq!((plain.label, plain.show_owner), (None, false));
+    let text = settings(HEX, "\"owner\"", "").replace(
+        "[connector]",
+        "label = \"laptop\"\nshow_owner = true\n[connector]",
+    );
+    let set = Config::parse(&text).unwrap();
+    assert_eq!(
+        (set.label.as_deref(), set.show_owner),
+        (Some("laptop"), true)
+    );
+    let blank = settings(HEX, "\"owner\"", "").replace("[connector]", "label = \" \"\n[connector]");
+    assert!(matches!(
+        Config::parse(&blank),
+        Err(ConfigError::Value("label"))
+    ));
+}
+
 // Every Codex sandbox and approval policy word maps to its setting, and an unknown word is
 // refused naming the setting.
 #[test]

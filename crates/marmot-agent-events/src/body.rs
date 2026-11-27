@@ -585,8 +585,9 @@ pub struct Error {
 
 // ------------------------------------------------------------------------------------- session
 
-/// A session with the harness: what an app can set and do in it (D-029, D-030).
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A session with the harness: what an app can set and do in it (D-029, D-030). The first one in
+/// a chat is the core's, sent when the agent joins, and names no session (D-175).
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Session {
     /// The version of the harness (D-030). A driver that is not told it supplies it (D-044).
@@ -600,6 +601,48 @@ pub struct Session {
     /// The harness's slash commands.
     #[serde(default)]
     pub commands: Vec<Command>,
+    /// Who in the chat may prompt and who may approve (D-176). The core fills it in, not the
+    /// driver, once it knows who is in the chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rights: Option<Rights>,
+    /// The owner's name for this install, such as "laptop", when the owner set one (D-175).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// The owner's key, in hex, when the owner chose to show it (D-175). Provisional: D-175 has it
+    /// as a `p` tag.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+}
+
+/// Who in a chat may prompt and who may approve (D-032, D-176).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct Rights {
+    /// Who may prompt, use controls and answer questions.
+    pub prompt: Holders,
+    /// Who may answer approvals and change what the agent may do without asking.
+    pub approve: Holders,
+}
+
+/// Who holds one right in a chat: `"everyone"`, or the keys of the chat's members who hold it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(untagged)]
+pub enum Holders {
+    /// Everyone in the chat.
+    Everyone(Everyone),
+    /// These members, by their keys in hex: the owner, when in the chat, and those the owner
+    /// listed who are in it.
+    Members(Vec<String>),
+}
+
+/// The word `everyone`.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum Everyone {
+    /// Everyone in the chat.
+    Everyone,
 }
 
 /// One setting of a session.
@@ -675,6 +718,8 @@ crate::opaque_debug!(
     Notice,
     Error,
     Session,
+    Rights,
+    Holders,
     Setting,
     Action,
     Command
