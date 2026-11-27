@@ -4062,7 +4062,7 @@ accepted both on 2026-11-27.
   it work. Answers and controls from it are refused the same way. A member running one of today's connectors
   sends no session item and is not recognised; the rights still apply to it as to anyone.
 - **Two optional fields, set by the owner, off by default.** A `label` that tells two installs of one harness
-  apart ("laptop", "server"), and the owner, as a `p` tag, for an owner who wants the chat to see whose agent it
+  apart ("laptop", "server"), and the owner, as a `p` tag ([replaced by D-179](#d-179-the-owner-shown-in-a-session-item-is-a-field-of-the-item-not-a-p-tag): a field of the item), for an owner who wants the chat to see whose agent it
   is. Both are sent only inside the chat, in the session item. Nothing about the agent goes in its public profile:
   the profile flag [Q-08](open-questions.md#q-08-how-do-several-agent-identities-run-together) proposed is
   dropped.
@@ -4161,3 +4161,17 @@ make the file.
 
 Decided 2026-11-27 by the builder; the project owner had agreed to build it. What ready means, the files and the
 two-minute bound were decided by the builder, under the project owner's instruction to decide minor points.
+
+## D-179 The owner shown in a session item is a field of the item, not a `p` tag
+
+**Decision.** When the owner sets `show_owner`, the owner's key travels as an `owner` field of the `session`
+item's own fields. This replaces the `p` tag that
+[D-175](#d-175-an-agent-sends-its-session-item-when-it-joins-a-chat-and-an-agents-messages-are-not-prompts)
+names for it; the rest of D-175 stands.
+
+**Why.** MDK does not pass an item's other tags on to apps, while an app reads every field of a session item.
+And `p` already names the agent, on a kind 1202 request and on an item in a subagent's thread
+([D-142](#d-142-how-subagent-threads-are-built)), so a second meaning on one kind would be read wrongly.
+
+Decided 2026-11-27. The builder found it while building D-175, and the project owner accepted the
+recommendation.
