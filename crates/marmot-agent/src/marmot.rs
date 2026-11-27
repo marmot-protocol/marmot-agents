@@ -755,8 +755,8 @@ impl Marmot {
     /// rows, MDK's own paging forward in the order messages arrived here (its
     /// `messages_after_insert_order`), so a message that arrived late with an earlier time is read
     /// in its place. The page holds the chat messages, answers and controls others sent, and the
-    /// agent items and edits, of which the core reads only other agents' session items (D-175);
-    /// its last place counts the rows the core does not read too, such as the agent's own.
+    /// session items other agents sent (D-175); its last place counts the rows the core does not
+    /// read too, such as the agent's own and other agents' other items.
     pub fn stored(&self, group: &GroupKey, after: i64, limit: usize) -> Result<Page, NotNow> {
         if (self.faults)
             .next(|f| matches!(f, Fault::StoredFails))
@@ -777,6 +777,8 @@ impl Marmot {
         let messages = (rows.into_iter())
             .filter(|r| r.direction == "received" && !r.invalidated)
             .map(Message::from)
+            // Of the agent items and edits, the core reads only session items (D-175).
+            .filter(|m| !matches!(m.kind, ITEM_KIND | EDIT_KIND) || is_session_item(m))
             .collect();
         Ok(Page {
             messages,

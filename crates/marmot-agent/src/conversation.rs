@@ -866,7 +866,9 @@ impl Conversation {
                 Some(Reason::AlreadyAnswered)
             } else if answering && !waiting {
                 Some(Reason::NotWaiting)
-            } else if !record.open() {
+            } else if !record.open() && !joined_item(record) {
+                // The core's own session item is finished as it is sent, and still offers what
+                // can be set before a session starts (D-175).
                 Some(Reason::NothingToDo)
             } else {
                 None
@@ -2276,13 +2278,11 @@ impl Conversation {
             });
         let mut session = session.clone();
         session.settings.retain(|s| s.id != FOLDER);
-        session.settings.push(Setting {
-            id: FOLDER.into(),
-            label: LABEL.into(),
-            value: Some(kept.unwrap_or_else(|| now.display().to_string())),
-            options: None,
-            approve: true,
-        });
+        let mut setting = folder_setting(&now);
+        if kept.is_some() {
+            setting.value = kept;
+        }
+        session.settings.push(setting);
         let event = AgentEvent::new(
             header.clone(),
             Body::Session(session),
@@ -2350,11 +2350,24 @@ impl Conversation {
         let Some(key) = self.current_session(&chat) else {
             return self.join(&chat);
         };
+        // Kept, so a session of a state from before stays the chat's once it ends.
+        self.saved.current.insert(chat.clone(), key.clone());
         let record = &self.saved.items[&key];
         let Body::Session(was) = record.last.body() else {
             return Vec::new();
         };
         let mut session = was.clone();
+        if joined_item(record) {
+            // The core's own: what it shows of the settings is the settings now, as a start
+            // after the owner changed them has them (D-175).
+            if let Some(version) = &self.info.version {
+                session.harness_version.clone_from(version);
+            }
+            if let Some(folder) = self.chat_folder(&ChatId(chat.clone())) {
+                session.settings.retain(|s| s.id != FOLDER);
+                session.settings.push(folder_setting(&folder));
+            }
+        }
         self.fill(&mut session, group, None);
         if session == *was {
             return Vec::new();
@@ -2606,6 +2619,23 @@ impl Conversation {
         let what = notice_item(event, about, settles);
         self.queue(group, what, None)
     }
+}
+
+/// The chat's folder setting, showing `folder`, which needs the right to approve (D-101).
+fn folder_setting(folder: &std::path::Path) -> Setting {
+    Setting {
+        id: FOLDER.into(),
+        label: LABEL.into(),
+        value: Some(folder.display().to_string()),
+        options: None,
+        approve: true,
+    }
+}
+
+/// Whether `record` is the session item the core sends a chat on joining, which names no session
+/// (D-175).
+fn joined_item(record: &Record) -> bool {
+    matches!(record.last.body(), Body::Session(_)) && record.last.header().session.is_none()
 }
 
 /// A notice of the core's own, to send: the first and only version of an item of its own.

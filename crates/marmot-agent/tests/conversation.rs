@@ -3118,6 +3118,37 @@ fn a_chat_the_agent_joins_is_sent_a_session_item_naming_no_session() {
     assert!(talk.ended().is_empty());
 }
 
+// D-175 and D-101: the core's session item offers the chat's folder before any session, so a
+// `set` that names it acts, and starts the session there; a start whose settings name another
+// folder shows that one.
+#[test]
+fn the_cores_session_item_offers_the_chats_folder_now() {
+    let layout = layout();
+    let g = GroupKey::from("g-direct");
+    let mut talk = moving(&layout, None, Saved::default());
+    let (_, key, _) = the_item(&mut talk, |t| t.chat_members(&g, keys(&[AGENT, OWNER])));
+    talk.sent(&key, EventKey::from(ES));
+    let deeper = layout.work.join("a");
+    let set = set_folder("r1", OWNER, Some(ES), deeper.to_str().unwrap());
+    let acts = talk.asked(set);
+    assert!(
+        matches!(acts.as_slice(), [Act::Control(c)] if matches!(&c.action, Action::NewSession { chat, session: None } if chat.folder.as_ref() == Some(&deeper))),
+        "{acts:?}"
+    );
+
+    let mut fresh = moving(&layout, None, Saved::default());
+    let (_, key, _) = the_item(&mut fresh, |t| t.chat_members(&g, keys(&[AGENT, OWNER])));
+    fresh.sent(&key, EventKey::from(ES));
+    let rule = FolderRule::new(&deeper, None, &layout.home);
+    let mut moved = conversation(fresh.saved().clone()).with_folders(rule);
+    let (_, again, edit) = the_item(&mut moved, |t| t.chat_members(&g, keys(&[AGENT, OWNER])));
+    assert_eq!((again, edit.version), (key, 2));
+    assert_eq!(
+        folder_shown(&edit).unwrap().value,
+        Some(deeper.display().to_string())
+    );
+}
+
 // D-176: each list is cut to the chat's members, the owner first, and someone the owner trusts
 // elsewhere is not named; the chat's session item is edited when that changes, and only then.
 #[test]
