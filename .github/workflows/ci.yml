@@ -335,9 +335,11 @@ jobs:
       matrix:
         include:
           - part: core
+            slug: core
             packages: -p marmot-agent
             cache: rust-test-core
           - part: drivers and the rest
+            slug: drivers-and-the-rest
             packages: --workspace --exclude marmot-agent --exclude marmot-agent-sim
             cache: rust-test-rest
     steps:
@@ -351,14 +353,27 @@ jobs:
           cache: ${{ matrix.cache }}
           skip_fallback: ${{ inputs.save_caches == true && 'true' || 'false' }}
 
+      - uses: ./.github/actions/nextest
+
       - if: matrix.part == 'core'
         uses: ./.github/actions/harnesses
 
       - name: Build the tests
-        run: cargo test --locked --all-features ${{ matrix.packages }} --no-run
+        run: cargo nextest run --locked --all-features ${{ matrix.packages }} --no-run
 
       - name: Tests
-        run: cargo test --locked --all-features ${{ matrix.packages }}
+        run: |
+          cargo nextest run --locked --all-features --profile ci ${{ matrix.packages }}
+          cargo test --doc --locked --all-features ${{ matrix.packages }}
+
+      - name: Upload JUnit test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: junit-rust-tests-${{ matrix.slug }}-attempt-${{ github.run_attempt }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
       - if: (github.event_name == 'workflow_dispatch' || inputs.save_caches == true) && steps.rust.outputs.hit != 'true'
         uses: ./.github/actions/rust
@@ -388,8 +403,10 @@ jobs:
           cache: rust-simulator
           skip_fallback: ${{ inputs.save_caches == true && 'true' || 'false' }}
 
+      - uses: ./.github/actions/nextest
+
       - name: Build the simulator's tests
-        run: cargo test --locked --release -p marmot-agent-sim --all-features --no-run
+        run: cargo nextest run --locked --release -p marmot-agent-sim --all-features --no-run
 
       - name: The simulator's tests, with the seeds
         # Each family of the gate runs this many schedules from seed 0; the bug switches and the
@@ -398,7 +415,16 @@ jobs:
         # left; the job's own limit would cancel the job instead.
         env:
           MARMOT_AGENT_SIM_RUNS: ${{ needs.changes.outputs.full == 'true' && '200' || '20' }}
-        run: timeout --kill-after=30s 4m cargo test --locked --release -p marmot-agent-sim --all-features
+        run: timeout --kill-after=30s 4m cargo nextest run --locked --release -p marmot-agent-sim --all-features --profile ci
+
+      - name: Upload JUnit test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: junit-simulator-attempt-${{ github.run_attempt }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Keep the schedules and capsules of a failed run
         # Each failure leaves a capsule that replays it (crates/marmot-agent-sim/README.md); a run
@@ -448,14 +474,25 @@ jobs:
       # install/openclaw.sh needs Node 24 on the machine, and the runner has an older one.
       - uses: ./.github/actions/node
 
+      - uses: ./.github/actions/nextest
+
       - name: Build the tests
-        run: cargo test --locked --all-features -p "${MOVE_OVER_PACKAGE}" --test import_gateways --no-run
+        run: cargo nextest run --locked --all-features -p "${MOVE_OVER_PACKAGE}" --test import_gateways --no-run
 
       - name: Hermes and OpenClaw installs move over
         # One scenario at a time: the gateways share the runner's network.
         run: >
-          cargo test --locked --all-features -p "${MOVE_OVER_PACKAGE}" --test import_gateways
-          -- --ignored --nocapture --test-threads=1
+          cargo nextest run --locked --all-features --profile ci -p "${MOVE_OVER_PACKAGE}"
+          --test import_gateways --run-ignored ignored-only --test-threads 1 --no-capture
+
+      - name: Upload JUnit test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: junit-move-over-tests-docker-attempt-${{ github.run_attempt }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
   conformance-socket:
     name: Conformance (socket)
@@ -478,6 +515,8 @@ jobs:
           # none of its own.
           cache: rust-test-core
 
+      - uses: ./.github/actions/nextest
+
       - uses: ./.github/actions/node
 
       - uses: ./.github/actions/python
@@ -488,10 +527,19 @@ jobs:
           npm ci --prefix packages/openclaw
 
       - name: Build the test
-        run: cargo test --locked --all-features -p marmot-agent --test conformance_socket --no-run
+        run: cargo nextest run --locked --all-features -p marmot-agent --test conformance_socket --no-run
 
       - name: Each connector runs the conformance scenarios over the socket
-        run: cargo test --locked --all-features -p marmot-agent --test conformance_socket -- --ignored
+        run: cargo nextest run --locked --all-features --profile ci -p marmot-agent --test conformance_socket --run-ignored ignored-only
+
+      - name: Upload JUnit test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: junit-conformance-socket-attempt-${{ github.run_attempt }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
 
   kani:
     name: Kani proofs
@@ -555,10 +603,10 @@ jobs:
           persist-credentials: false
 
       - name: The prototype handles what no recording holds
-        run: python3 -m unittest discover -s tools/prototype -p 'test_*.py'
+        run: python3 tools/ci/unittest_junit.py --junit "${RUNNER_TEMP}/junit/prototype.xml" -s tools/prototype -p 'test_*.py'
 
       - name: The model double reads and writes each wire format
-        run: python3 -m unittest discover -s tools/model_double -p 'test_*.py'
+        run: python3 tools/ci/unittest_junit.py --junit "${RUNNER_TEMP}/junit/model-double.xml" -s tools/model_double -p 'test_*.py'
 
       # A report, not a check (D-127): a cassette older than 14 days is a warning here. It fails only
       # the nightly run, which runs the same script with --strict (nightly.yml).
@@ -599,6 +647,15 @@ jobs:
       - name: The Hermes plugin's expected events are what the prototype writes
         run: python3 tools/prototype/translate.py --expected fixtures/recordings/hermes --check
 
+      - name: Upload JUnit test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: junit-recordings-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/junit/
+          if-no-files-found: ignore
+          retention-days: 14
+
   typescript:
     name: TypeScript (${{ matrix.package }})
     runs-on: ubuntu-24.04
@@ -624,7 +681,21 @@ jobs:
         run: npm run check
 
       - name: The translator replays every recording, and the transport runs against fakes
-        run: npm test
+        run: |
+          mkdir -p "${RUNNER_TEMP}/junit"
+          node --test \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=junit --test-reporter-destination="${RUNNER_TEMP}/junit/typescript.xml" \
+            "test/*.test.ts"
+
+      - name: Upload JUnit test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: junit-typescript-${{ matrix.package }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/junit/
+          if-no-files-found: ignore
+          retention-days: 14
 
   python:
     name: Python
@@ -644,7 +715,7 @@ jobs:
       - name: The Hermes plugin replays every recording, and its transport runs against fakes
         run: |
           python3 --version
-          python3 -m unittest discover -s tests
+          python3 ../tools/ci/unittest_junit.py --junit "${RUNNER_TEMP}/junit/hermes.xml" -s tests
 
       - name: Track versions and socket protocol compatibility
         working-directory: .
@@ -660,7 +731,16 @@ jobs:
 
       - name: Release planner tests
         working-directory: .
-        run: python3 -m unittest discover -s tools/release -p 'test_*.py'
+        run: python3 tools/ci/unittest_junit.py --junit "${RUNNER_TEMP}/junit/release.xml" -s tools/release -p 'test_*.py'
+
+      - name: Upload JUnit test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: junit-python-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/junit/
+          if-no-files-found: ignore
+          retention-days: 14
 
   shellcheck:
     name: ShellCheck
@@ -706,7 +786,16 @@ jobs:
 
       - name: Each install script runs against a throwaway home, with stand-ins for what it calls
         # Each test named as it runs, so a run cut short says where, and the ten slowest at the end.
-        run: python3 -m unittest discover -v --durations 10 -s install -p 'test_*.py'
+        run: python3 tools/ci/unittest_junit.py --junit "${RUNNER_TEMP}/junit/install.xml" -v --durations 10 -s install -p 'test_*.py'
+
+      - name: Upload JUnit test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: junit-install-scripts-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/junit/
+          if-no-files-found: ignore
+          retention-days: 14
 
   models:
     name: TLA+ models (${{ matrix.part }})
@@ -858,7 +947,16 @@ jobs:
             python
 
       - name: The gate's own check passes its tests
-        run: python3 -m unittest discover -s tools/ci -p 'test_*.py'
+        run: python3 tools/ci/unittest_junit.py --junit "${RUNNER_TEMP}/junit/ci-tools.xml" -s tools/ci -p 'test_*.py'
+
+      - name: Upload JUnit test results
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: junit-ci-passed-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/junit/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Every job the tier expects ran and passed
         # `[fast]`: fast Team PR gate only. `[slow]`: non-fast runs (external PR, ci:full, dispatch,

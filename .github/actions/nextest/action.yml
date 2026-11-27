@@ -1,0 +1,26 @@
+# The one pinned cargo-nextest release CI uses for Rust JUnit test reporting (D-171, #184).
+name: Nextest
+description: Install the pinned cargo-nextest binary, checked against its SHA-256 checksum, and put it on the PATH.
+runs:
+  using: composite
+  steps:
+    - name: Install cargo-nextest
+      # To move to another release, change the version and the checksum together: the checksum is
+      # the `digest` of cargo-nextest-<version>-x86_64-unknown-linux-gnu.tar.gz on the release
+      # page of nextest-rs/nextest.
+      shell: bash
+      env:
+        NEXTEST_VERSION: 0.9.148
+        NEXTEST_SHA256: 223ba936714cc861a9cdedad5a8eb664dfdd69d6fbdf6cea6aa8184f523290dc
+      run: |
+        set -euo pipefail
+        name="cargo-nextest-${NEXTEST_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+        url="https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-${NEXTEST_VERSION}/${name}"
+        mkdir -p "${RUNNER_TEMP}/nextest"
+        curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+          --output "${RUNNER_TEMP}/${name}" "${url}"
+        echo "${NEXTEST_SHA256}  ${RUNNER_TEMP}/${name}" | sha256sum --check
+        tar -xzf "${RUNNER_TEMP}/${name}" -C "${RUNNER_TEMP}/nextest"
+        rm -f "${RUNNER_TEMP}/${name}"
+        echo "${RUNNER_TEMP}/nextest" >> "${GITHUB_PATH}"
+        "${RUNNER_TEMP}/nextest/cargo-nextest" --version

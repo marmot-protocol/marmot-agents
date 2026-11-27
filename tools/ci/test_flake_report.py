@@ -1,11 +1,15 @@
-"""Tests for flake_report.py, the flaky job tracker (D-143)."""
+"""Tests for flake_report.py, the flaky job and test tracker (D-143, D-171)."""
 
+import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
+import zipfile
 
+import bisect_agent
 import flake_report
 import passed
 from flake_report import (GitHub, ListingTooLong, StateError, code, fit, job_names, read_state,
@@ -27,17 +31,42 @@ def job(id, name, attempt, conclusion, started="2026-11-20T10:00:00Z"):
             "started_at": started}
 
 
-def run(id, attempt, status="completed", event="pull_request", created="2026-11-20T09:00:00Z"):
-    return {"id": id, "run_attempt": attempt, "status": status, "event": event,
+def run(id, attempt, status="completed", event="pull_request", created="2026-11-20T09:00:00Z",
+        head_repo=None, repo_obj=None):
+    data = {"id": id, "run_attempt": attempt, "status": status, "event": event,
             "created_at": created}
+    if head_repo is not None:
+        data["head_repository"] = head_repo
+    if repo_obj is not None:
+        data["repository"] = repo_obj
+    return data
+
+
+def trusted_run(id, attempt, status="completed", event="pull_request", created="2026-11-20T09:00:00Z"):
+    repo_obj = {"id": 42, "full_name": REPO, "fork": False}
+    return run(id, attempt, status=status, event=event, created=created,
+               head_repo=repo_obj, repo_obj=repo_obj)
+
+
+def make_zip(files):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, content in files.items():
+            zf.writestr(name, content)
+    return buf.getvalue()
 
 
 class FakeGitHub:
-    """Runs and jobs as GitHub would give them, counting the runs whose jobs were listed."""
+    """Runs, jobs and artifacts as GitHub would give them, tracking API calls."""
 
-    def __init__(self, runs, jobs):
+    def __init__(self, runs, jobs, artifacts=None, artifact_zips=None, repo=REPO):
+        self.repo = repo
         self._runs, self._jobs = runs, jobs
+        self._artifacts = artifacts or {}
+        self._artifact_zips = artifact_zips or {}
         self.jobs_listed = []
+        self.artifacts_listed = []
+        self.artifacts_downloaded = []
 
     def runs(self, workflow, since):
         return [r for r in self._runs.get(workflow, []) if r["created_at"][:10] >= since]
@@ -48,6 +77,20 @@ class FakeGitHub:
         if isinstance(jobs, Exception):
             raise jobs
         return jobs
+
+    def artifacts(self, run):
+        self.artifacts_listed.append(run)
+        items = self._artifacts.get(run, [])
+        if isinstance(items, Exception):
+            raise items
+        return items
+
+    def artifact_zip(self, artifact_id):
+        self.artifacts_downloaded.append(artifact_id)
+        data = self._artifact_zips[artifact_id]
+        if isinstance(data, Exception):
+            raise data
+        return data
 
 
 def empty():
@@ -379,12 +422,14 @@ class State(unittest.TestCase):
         start = flake_report.STATE_START
         for body in ("", " \n", "written by hand",
                      good.replace(start, "<!-- flake-tracker-stat"),
-                     good.replace('"version":1', '"version":0'),
+                     good.replace('"version":2', '"version":0'),
+                     good.replace('"version":2', '"version":3'),
                      good.replace('"jobs":[', '"jobs":[}'),
                      good + "\nand a line written after it\n",
                      f"{start}\n{{}}\n-->\n",
                      good.replace('"count":1', '"count":"1"'),
-                     good.replace('"count":1', '"count":1,"extra":0')):
+                     good.replace('"count":1', '"count":1,"extra":0'),
+                     good.replace('"tests":[]', '"tests":[{"bad":1}]')):
             with self.subTest(body=body[-80:]), self.assertRaises(StateError):
                 read_state(body)
 
@@ -495,7 +540,6 @@ class Main(unittest.TestCase):
         status, body = self.main(github)
         self.assertEqual(status, 0)
         self.assertIn("| `Rust tests (core)` | 1 | 1 | merge queue 1 |", body)
-        self.assertIn("#184", body)
         status, again = self.main(github, previous=body)
         self.assertEqual((status, again), (0, body), "counted once")
 
@@ -508,6 +552,355 @@ class Main(unittest.TestCase):
                 status, body = self.main(github, previous=previous)
                 self.assertNotEqual(status, 0)
                 self.assertIsNone(body)
+
+
+def test_entry(test, count, last, workflow="ci.yml", job_name="Rust tests (core)"):
+    return {"workflow": workflow, "job": job_name, "test": test, "count": count,
+            "first": "2026-01-01", "last": last, "days": {last: count},
+            "events": {"push": count}, "latest": [1, 2, f"{last}T00:00:00Z"]}
+
+
+class JUnitAndTests(unittest.TestCase):
+    """Machine-readable JUnit test-name extraction, security guards and v1 state upgrade (D-171)."""
+
+    NEXTEST_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="nextest-run" tests="3" skipped="0" failures="1" errors="0">
+  <testsuite name="marmot-agent::marmot" tests="3" skipped="0" errors="0" failures="1">
+    <testcase name="passes_cleanly" classname="marmot-agent::marmot" time="0.01"/>
+    <testcase name="reconnect_retries" classname="marmot-agent::marmot" time="0.20">
+      <failure message="SECRET_PANIC_MSG" type="test failure">SECRET_BACKTRACE_LINE</failure>
+      <system-out>SECRET_STDOUT_LINE</system-out>
+      <system-err>SECRET_STDERR_LINE</system-err>
+    </testcase>
+  </testsuite>
+</testsuites>
+"""
+
+    NODE_JUNIT_XML = b"""<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+  <testsuite name="outer suite" tests="2" failures="1" errors="0" skipped="0">
+    <testcase name="passes" classname="outer suite" file="/tmp/secret/path.ts"/>
+    <testcase name="nested fails" classname="outer suite" file="/tmp/secret/path.ts" failure="SECRET_ATTR">
+      <failure type="testCodeFailure" message="SECRET_NODE_MSG">SECRET_NODE_STACK</failure>
+    </testcase>
+  </testsuite>
+  <testcase name="a file given as `.` keeps `..`" classname="test" file="/tmp/secret/path.ts">
+    <failure type="testCodeFailure" message="SECRET_TOP_MSG">SECRET_TOP_STACK</failure>
+  </testcase>
+</testsuites>
+"""
+
+    PYTHON_JUNIT_XML = b"""<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+  <testsuite name="python/tests" tests="2" failures="1" errors="1" skipped="0">
+    <testcase classname="test_adapter.AdapterTests" name="test_reconnect" time="0.02">
+      <failure type="failure"/>
+    </testcase>
+    <testcase classname="test_adapter.AdapterTests" name="test_boom" time="0.01">
+      <error type="error"/>
+    </testcase>
+  </testsuite>
+</testsuites>
+"""
+
+    def test_v1_state_from_live_issue_upgrades_cleanly_to_v2_and_keeps_bisect_agent_compatible(self):
+        v1_state = {
+            "version": 1,
+            "runs": {
+                "45260553016": {"attempt": 2, "counted": [137993839025], "created": "2026-11-23"},
+            },
+            "jobs": [
+                {
+                    "workflow": "ci.yml",
+                    "job": "Rust tests (drivers and the rest)",
+                    "count": 2,
+                    "first": "2026-11-23",
+                    "last": "2026-11-23",
+                    "days": {"2026-11-23": 2},
+                    "events": {"pull_request": 2},
+                    "latest": [45260553016, 137993839025, "2026-11-23T20:38:54Z"],
+                }
+            ],
+        }
+        v1_body = "# Flaky job tracker\n\n" + flake_report.write_state(v1_state)
+        upgraded = read_state(v1_body)
+        self.assertEqual(upgraded["version"], flake_report.STATE_VERSION)
+        self.assertEqual(upgraded["jobs"], v1_state["jobs"])
+        self.assertEqual(upgraded["runs"], v1_state["runs"])
+        self.assertEqual(upgraded["tests"], [])
+        rendered = render(upgraded, "2026-11-27", 100, REPO)
+        self.assertEqual(read_state(rendered), upgraded)
+        self.assertEqual(
+            bisect_agent.parse_flake_tracker_jobs(rendered),
+            {"Rust tests (drivers and the rest)"},
+        )
+
+    def test_extracts_failed_tests_from_nextest_node_and_python_without_leaking_output(self):
+        rust_zip = make_zip({"junit.xml": self.NEXTEST_XML})
+        node_zip = make_zip({"typescript.xml": self.NODE_JUNIT_XML})
+        py_zip = make_zip({"hermes.xml": self.PYTHON_JUNIT_XML})
+        github = FakeGitHub(
+            {"ci.yml": [trusted_run(1, 2)]},
+            {1: [job(10, "Rust tests (core)", 1, "failure"),
+                 job(11, "Rust tests (core)", 2, "success"),
+                 job(12, "TypeScript (claude-code)", 1, "failure"),
+                 job(13, "TypeScript (claude-code)", 2, "success"),
+                 job(14, "Python", 1, "failure"),
+                 job(15, "Python", 2, "success")]},
+            artifacts={1: [
+                {"id": 101, "name": "junit-rust-tests-core-attempt-1", "expired": False,
+                 "size_in_bytes": len(rust_zip)},
+                {"id": 102, "name": "junit-typescript-claude-code-attempt-1", "expired": False,
+                 "size_in_bytes": len(node_zip)},
+                {"id": 103, "name": "junit-python-attempt-1", "expired": False,
+                 "size_in_bytes": len(py_zip)},
+            ]},
+            artifact_zips={101: rust_zip, 102: node_zip, 103: py_zip},
+        )
+        state = empty()
+        collect(github, state, "2026-11-10", workflows=("ci.yml",))
+        tests = sorted((t["job"], t["test"], t["count"]) for t in state["tests"])
+        self.assertEqual(tests, [
+            ("Python", "test_adapter.AdapterTests::test_boom", 1),
+            ("Python", "test_adapter.AdapterTests::test_reconnect", 1),
+            ("Rust tests (core)", "marmot-agent::marmot::reconnect_retries", 1),
+            ("TypeScript (claude-code)", "a file given as `.` keeps `..`", 1),
+            ("TypeScript (claude-code)", "outer suite::nested fails", 1),
+        ])
+        body = render(state, "2026-11-24", 100, REPO)
+        for secret in ("SECRET_PANIC_MSG", "SECRET_BACKTRACE_LINE", "SECRET_STDOUT_LINE",
+                       "SECRET_STDERR_LINE", "SECRET_ATTR", "SECRET_NODE_MSG",
+                       "SECRET_NODE_STACK", "SECRET_TOP_MSG", "SECRET_TOP_STACK", "/tmp/secret"):
+            self.assertNotIn(secret, body)
+        self.assertIn("## Flaky tests", body)
+        self.assertIn("## Flaky jobs", body)
+        self.assertIn("`marmot-agent::marmot::reconnect_retries`", body)
+        self.assertIn("`` a file given as `.` keeps `..` ``", body)
+        self.assertEqual(read_state(body), state)
+
+    def test_canary_called_job_maps_to_same_junit_artifact_slug(self):
+        rust_zip = make_zip({"junit.xml": self.NEXTEST_XML})
+        github = FakeGitHub(
+            {"canary.yml": [trusted_run(5, 2, event="schedule")]},
+            {5: [job(50, "CI / Rust tests (core)", 1, "failure"),
+                 job(51, "CI / Rust tests (core)", 2, "success")]},
+            artifacts={5: [
+                {"id": 501, "name": "junit-rust-tests-core-attempt-1", "expired": False,
+                 "size_in_bytes": len(rust_zip)},
+            ]},
+            artifact_zips={501: rust_zip},
+        )
+        state = empty()
+        collect(github, state, "2026-11-10", workflows=("canary.yml",))
+        self.assertEqual(
+            [(t["workflow"], t["job"], t["test"], t["count"]) for t in state["tests"]],
+            [("canary.yml", "CI / Rust tests (core)", "marmot-agent::marmot::reconnect_retries", 1)],
+        )
+
+    def test_fork_pr_and_untrusted_job_never_download_or_parse_junit_artifacts(self):
+        evil_zip = make_zip({"junit.xml": self.NEXTEST_XML})
+        fork_run = run(
+            1, 2, event="pull_request",
+            head_repo={"id": 999, "full_name": "attacker/name", "fork": True},
+            repo_obj={"id": 42, "full_name": REPO, "fork": False},
+        )
+        deleted_fork_run = run(2, 2, event="pull_request", head_repo=None)
+        untrusted_job_run = trusted_run(3, 2, event="pull_request")
+        github = FakeGitHub(
+            {"ci.yml": [fork_run, deleted_fork_run, untrusted_job_run]},
+            {1: [job(10, "Python", 1, "failure"), job(11, "Python", 2, "success")],
+             2: [job(20, "Python", 1, "failure"), job(21, "Python", 2, "success")],
+             3: [job(30, "Not on default branch", 1, "failure"),
+                 job(31, "Not on default branch", 2, "success")]},
+            artifacts={
+                1: [{"id": 1, "name": "junit-python-attempt-1", "expired": False, "size_in_bytes": len(evil_zip)}],
+                2: [{"id": 2, "name": "junit-python-attempt-1", "expired": False, "size_in_bytes": len(evil_zip)}],
+                3: [{"id": 3, "name": "junit-not-on-default-branch-attempt-1", "expired": False, "size_in_bytes": len(evil_zip)}],
+            },
+            artifact_zips={1: evil_zip, 2: evil_zip, 3: evil_zip},
+        )
+        state = empty()
+        collect(github, state, "2026-11-10", workflows=("ci.yml",))
+        self.assertEqual(github.artifacts_listed, [])
+        self.assertEqual(github.artifacts_downloaded, [])
+        self.assertEqual(state["tests"], [])
+        self.assertEqual(counted(state), [
+            ("ci.yml", flake_report.NOT_ON_DEFAULT_BRANCH, 1),
+            ("ci.yml", "Python", 2),
+        ])
+
+    def test_missing_expired_unreadable_and_malformed_artifacts_fall_back_gracefully(self):
+        github = FakeGitHub(
+            {"ci.yml": [trusted_run(1, 2), trusted_run(2, 2), trusted_run(3, 2), trusted_run(4, 2)]},
+            {1: [job(10, "Python", 1, "failure"), job(11, "Python", 2, "success")],
+             2: [job(20, "Python", 1, "failure"), job(21, "Python", 2, "success")],
+             3: [job(30, "Python", 1, "failure"), job(31, "Python", 2, "success")],
+             4: [job(40, "Python", 1, "failure"), job(41, "Python", 2, "success")]},
+            artifacts={
+                1: [],  # missing artifact (e.g. crashed/timed out before upload)
+                2: [{"id": 201, "name": "junit-python-attempt-1", "expired": True, "size_in_bytes": 100}],
+                3: [{"id": 301, "name": "junit-python-attempt-1", "expired": False, "size_in_bytes": 100}],
+                4: [{"id": 401, "name": "junit-python-attempt-1", "expired": False, "size_in_bytes": 100}],
+            },
+            artifact_zips={
+                301: subprocess.CalledProcessError(1, ["gh", "api"]),
+                401: b"not a zip at all",
+            },
+        )
+        state = empty()
+        collect(github, state, "2026-11-10", workflows=("ci.yml",))
+        self.assertEqual(counted(state), [("ci.yml", "Python", 4)])
+        self.assertEqual(state["tests"], [])
+        self.assertNotIn(201, github.artifacts_downloaded)
+
+    def test_dtd_entity_zip_bomb_and_control_char_defenses(self):
+        # 1. DTD / XXE rejection (case-insensitive)
+        for bad_xml in (
+            b'<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY x "a">]><testsuites/>',
+            b'<!doctype testsuites><testsuites/>',
+            b'<!ENTITY boom "x"><testsuites/>',
+        ):
+            with self.assertRaises(flake_report.MalformedArtifact):
+                flake_report.parse_junit_xml(bad_xml)
+
+        # 2. Oversized archive rejected before parsing
+        with self.assertRaises(flake_report.MalformedArtifact):
+            flake_report.extract_failed_tests(b"x" * (flake_report.MAX_ARTIFACT_ZIP_BYTES + 1))
+
+        # 3. High-ratio zip bomb exceeding decompressed byte budget
+        big_xml = b"<testsuites>" + (b" " * (flake_report.MAX_XML_FILE_BYTES + 64)) + b"</testsuites>"
+        bomb = make_zip({"bomb.xml": big_xml})
+        self.assertLess(len(bomb), flake_report.MAX_ARTIFACT_ZIP_BYTES)
+        with self.assertRaises(flake_report.MalformedArtifact):
+            flake_report.extract_failed_tests(bomb)
+
+        # 4. Too many XML files in one archive
+        many = make_zip({f"t{i}.xml": b"<testsuites/>" for i in range(flake_report.MAX_XML_FILES + 1)})
+        with self.assertRaises(flake_report.MalformedArtifact):
+            flake_report.extract_failed_tests(many)
+
+        # 5. Control chars / oversized test names are ignored, valid ones kept
+        mixed_xml = (
+            b'<testsuites><testsuite name="s">'
+            b'<testcase classname="mod" name="good_test"><failure/></testcase>'
+            b'<testcase classname="mod" name="bad&#10;test"><failure/></testcase>'
+            b'<testcase classname="mod" name="bad&#9;tab"><failure/></testcase>'
+            b'<testcase classname="mod" name="bad&#x7f;del"><failure/></testcase>'
+            b'<testcase classname="mod" name="' + (b"a" * 300) + b'"><failure/></testcase>'
+            b'</testsuite></testsuites>'
+        )
+        self.assertEqual(flake_report.parse_junit_xml(mixed_xml), ["mod::good_test"])
+        self.assertIsNone(flake_report.format_test_name("mod", "bad\x1b[31m"))
+
+        # 6. Metadata size_in_bytes over cap prevents download altogether
+        github = FakeGitHub(
+            {"ci.yml": [trusted_run(1, 2)]},
+            {1: [job(10, "Python", 1, "failure"), job(11, "Python", 2, "success")]},
+            artifacts={1: [
+                {"id": 901, "name": "junit-python-attempt-1", "expired": False,
+                 "size_in_bytes": flake_report.MAX_ARTIFACT_ZIP_BYTES + 1},
+            ]},
+            artifact_zips={901: make_zip({"a.xml": self.PYTHON_JUNIT_XML})},
+        )
+        state = empty()
+        collect(github, state, "2026-11-10", workflows=("ci.yml",))
+        self.assertEqual(github.artifacts_downloaded, [])
+        self.assertEqual(state["tests"], [])
+        self.assertEqual(counted(state), [("ci.yml", "Python", 1)])
+
+    def test_whole_suite_outage_above_cap_skips_test_attribution_without_losing_job_count(self):
+        cases = "".join(
+            f'<testcase classname="pkg" name="t_{i}"><failure/></testcase>'
+            for i in range(flake_report.MAX_TESTS_PER_ATTEMPT + 1)
+        )
+        outage_zip = make_zip({"junit.xml": f"<testsuites><testsuite>{cases}</testsuite></testsuites>".encode()})
+        github = FakeGitHub(
+            {"ci.yml": [trusted_run(1, 2)]},
+            {1: [job(10, "Python", 1, "failure"), job(11, "Python", 2, "success")]},
+            artifacts={1: [
+                {"id": 1, "name": "junit-python-attempt-1", "expired": False, "size_in_bytes": len(outage_zip)},
+            ]},
+            artifact_zips={1: outage_zip},
+        )
+        state = empty()
+        collect(github, state, "2026-11-10", workflows=("ci.yml",))
+        self.assertEqual(counted(state), [("ci.yml", "Python", 1)])
+        self.assertEqual(state["tests"], [])
+
+    def test_multi_attempt_flake_reads_each_attempts_junit_artifact_once(self):
+        z1 = make_zip({"junit.xml": b'<testsuites><testsuite><testcase classname="p" name="a"><failure/></testcase></testsuite></testsuites>'})
+        z2 = make_zip({"junit.xml": b'<testsuites><testsuite><testcase classname="p" name="b"><failure/></testcase></testsuite></testsuites>'})
+        github = FakeGitHub(
+            {"ci.yml": [trusted_run(1, 3)]},
+            {1: [job(10, "Python", 1, "failure", "2026-11-20T10:00:00Z"),
+                 job(11, "Python", 2, "failure", "2026-11-20T11:00:00Z"),
+                 job(12, "Python", 3, "success", "2026-11-20T12:00:00Z")]},
+            artifacts={1: [
+                {"id": 1, "name": "junit-python-attempt-1", "expired": False, "size_in_bytes": len(z1)},
+                {"id": 2, "name": "junit-python-attempt-2", "expired": False, "size_in_bytes": len(z2)},
+            ]},
+            artifact_zips={1: z1, 2: z2},
+        )
+        state = empty()
+        collect(github, state, "2026-11-10", workflows=("ci.yml",))
+        self.assertEqual(counted(state), [("ci.yml", "Python", 2)])
+        self.assertEqual(
+            sorted((t["test"], t["count"], t["latest"][1]) for t in state["tests"]),
+            [("p::a", 1, 10), ("p::b", 1, 11)],
+        )
+
+    def test_fit_trims_tests_and_jobs_tables_without_dropping_state(self):
+        state = empty()
+        state["jobs"] = [entry("Python", 2, "2026-11-20")]
+        state["tests"] = [
+            test_entry(f"crate::mod::flaky_test_{n:04}_" + "x" * 40, 1 + n % 3, f"2026-11-{1 + n % 20:02}")
+            for n in range(180)
+        ]
+        body = fit(state, "2026-11-24", REPO)
+        self.assertLessEqual(len(body), flake_report.MAX_BODY)
+        self.assertEqual(read_state(body), state)
+        self.assertIn("more tests are counted and left out of the table", body)
+
+    def test_workflow_junit_artifact_names_match_tracker_contract(self):
+        # Every junit-*-attempt-${{ github.run_attempt }} artifact uploaded in ci.yml and nightly.yml
+        # must match flake_report.artifact_name() for a trusted job in that workflow.
+        pat = re.compile(r"name:\s*(junit-[^\s]+)-attempt-\$\{\{\s*github\.run_attempt\s*\}\}")
+        for wf in ("ci.yml", "nightly.yml"):
+            with open(os.path.join(WORKFLOWS, wf), encoding="utf-8") as f:
+                text = f.read()
+            expected_prefixes = {
+                flake_report.artifact_name(j, 1).removesuffix("-attempt-1")
+                for j in TRUSTED[wf]
+            }
+            found = pat.findall(text)
+            self.assertTrue(found, f"{wf} should upload JUnit artifacts")
+            for raw in found:
+                if "${{" in raw:
+                    # Expand matrix placeholders for known matrix jobs (rust-tests, typescript)
+                    if raw == "junit-rust-tests-${{":
+                        continue
+                    continue
+                self.assertIn(raw, expected_prefixes, f"{wf} uploads unexpected JUnit artifact {raw!r}")
+        # Also verify matrix-expanded artifact names explicitly in ci.yml
+        with open(os.path.join(WORKFLOWS, "ci.yml"), encoding="utf-8") as f:
+            ci_text = f.read()
+        self.assertIn("junit-rust-tests-${{ matrix.slug }}-attempt-${{ github.run_attempt }}", ci_text)
+        self.assertIn("junit-typescript-${{ matrix.package }}-attempt-${{ github.run_attempt }}", ci_text)
+        for job_name in (
+            "Rust tests (core)",
+            "Rust tests (drivers and the rest)",
+            "Simulator",
+            "Move-over tests (Docker)",
+            "Conformance (socket)",
+            "Recordings",
+            "TypeScript (claude-code)",
+            "TypeScript (openclaw)",
+            "Python",
+            "Install scripts",
+            "CI passed",
+        ):
+            self.assertIn(job_name, TRUSTED["ci.yml"])
+            self.assertTrue(flake_report.artifact_name(job_name, 1).startswith("junit-"))
 
 
 if __name__ == "__main__":

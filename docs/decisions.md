@@ -3923,3 +3923,44 @@ ACP driver keeps maintenance small while fixing the three real-session differenc
 account tier, and local paths out of committed recordings (#235).
 
 Decided 2026-11-26 (requested in #235).
+
+## D-171 The flaky tracker names individual tests from machine-readable JUnit results
+
+**Decision.** Extending [D-143](#d-143-one-issue-tracks-the-ci-jobs-that-flake), CI writes machine-readable JUnit
+XML results for its Rust, TypeScript and Python test jobs and uploads them on failure (`if: failure()`) under
+deterministic attempt-scoped artifact names (`junit-<job-slug>-attempt-<N>`):
+
+- **Rust** (`ci.yml` and `nightly.yml` test jobs): `cargo-nextest` (pinned by version and SHA-256 checksum in
+  `.github/actions/nextest`, configured in `.config/nextest.toml` under `[profile.ci]` with `fail-fast = false`,
+  `store-success-output = false`, `store-failure-output = false`; `cargo test --doc` still runs beside it so
+  doctests remain covered).
+- **TypeScript** (`TypeScript (claude-code)` and `TypeScript (openclaw)`): Node 24's built-in
+  `--test-reporter=junit` alongside `spec` to stdout.
+- **Python** (`Recordings`, `Python`, `Install scripts`, `CI passed`): a standard-library runner
+  (`tools/ci/unittest_junit.py`) writing only `<testcase>` identifiers (`classname`, `name`, `time`) and empty
+  `<failure/>` / `<error/>` markers, with zero extra dependencies.
+
+Uploading only `if: failure()` adds zero upload overhead to passing runs, including the ~60s Fast Team PR gate
+([D-169](#d-169-team-pull-requests-use-a-fast-static-gate-backed-by-hourly-canary-and-the-bisect-agent)).
+
+`tools/ci/flake_report.py` reads those artifacts for newly counted flaky jobs and adds a `## Flaky tests` table
+above `## Flaky jobs` in the same "Flaky job tracker" issue (keeping the issue title and `state["jobs"]` layout
+unchanged for `tools/ci/bisect_agent.py`, and upgrading persisted `version: 1` state to `version: 2` on read):
+
+- **Privacy and log isolation:** it still reads no job logs and never reads or publishes test stdout, stderr,
+  stack traces, or `<failure>` / `<error>` messages — only structured `<testcase>` `classname` and `name` values
+  for cases with a `<failure>` or `<error>` child element.
+- **Trust boundary:** JUnit artifacts are downloaded and parsed only for runs whose `head_repository` is this
+  repository itself (never fork pull requests, because TypeScript tests use prose names) and whose job name is
+  trusted on the default branch. Fork PR runs still count in `## Flaky jobs` as before.
+- **Defense in depth and graceful fallback:** artifact archives are bounded by download size, XML entry count,
+  and actual streaming decompressed byte count; XML containing `<!DOCTYPE` or `<!ENTITY` is rejected before
+  parsing; test names with control characters or over 240 characters are ignored; attempts with more than 25
+  distinct failing tests skip individual test attribution (whole-suite/infra outage); and missing, expired,
+  oversized, unreadable, or malformed artifacts fall back to counting the job without test names.
+
+**Why.** Follow-up requested in [#184](https://github.com/marmot-protocol/marmot-agents/issues/184) when D-143 was
+decided: naming the exact failing test from machine-readable JUnit results tells builders which test to stress and
+fix without ever pulling test stdout/stderr or untrusted fork-PR text into the public issue.
+
+Decided 2026-11-27 (follow-up #184 to D-143).

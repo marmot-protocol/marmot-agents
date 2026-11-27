@@ -1,10 +1,11 @@
 name: Flaky tests
 
-# The flaky job tracker (D-143): one open issue, "Flaky job tracker", that ranks the CI jobs that
-# failed and passed when they were run again, on pull requests, in hourly canary, and in the
-# nightly runs. tools/ci/flake_report.py lists the runs of the last 14 days that were run again
-# and the jobs of each attempt, and keeps what it counted in the issue's body, so nothing is stored
-# anywhere else. It reads no log: which test flaked is for machine-readable results to say (#184).
+# The flaky job and test tracker (D-143, D-171): one open issue, "Flaky job tracker", that ranks
+# the CI jobs and individual tests that failed and passed when they were run again, on pull
+# requests, in hourly canary, and in the nightly runs. tools/ci/flake_report.py lists the runs of
+# the last 14 days that were run again and the jobs of each attempt, reads JUnit XML artifacts on
+# trusted same-repository runs (never logs, stdout, stderr, or failure messages, and never fork
+# artifacts), and keeps what it counted in the issue's body, so nothing is stored anywhere else.
 # It runs after each run of CI, Canary or Nightly that was itself a rerun, once a day in case one
 # was missed, and by hand. If no tracker is open, it opens one; closing the issue starts a new count.
 #

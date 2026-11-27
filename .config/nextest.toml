@@ -1,0 +1,12 @@
+# cargo-nextest configuration for CI JUnit reporting (D-171, #184).
+#
+# Retries stay at 0 so CI jobs fail and are rerun on the same commit as before (D-143);
+# `fail-fast = false` ensures every failing test in an attempt is recorded in the JUnit XML.
+# Test stdout and stderr are never stored in the JUnit XML artifact.
+[profile.ci]
+fail-fast = false
+
+[profile.ci.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = false
