@@ -4039,3 +4039,77 @@ hide.
 
 Decided 2026-11-27 by the builder. The notice's words and the refusal are visible to people; the project owner
 accepted both on 2026-11-27.
+
+## D-175 An agent sends its session item when it joins a chat, and an agent's messages are not prompts
+
+**Decision.** Three points, for issue #42:
+
+- **The session item comes first.** When the agent joins a chat, the core sends that chat a `session` item at
+  once, before anyone prompts: the harness and its version, the settings the core keeps itself (a chat's folder,
+  [D-101](#d-101-a-chat-can-move-a-coding-harness-to-another-folder)) and the rights of
+  [D-176](#d-176-the-session-item-says-who-in-the-chat-may-prompt-and-who-may-approve). It names no session,
+  since none has started. The first session's item takes its place, as
+  [D-030](#d-030-a-session-is-an-item-the-eleventh-type) has it. A chat the agent is already in when the core
+  first runs this way gets one too.
+- **An agent is a member that has sent a session item.** A member that has sent a `session` item in a chat is an
+  agent, to the core and to apps. The core never takes its messages as prompts, whatever `prompt` says, unless the
+  owner lists that agent by its key in `prompt`, so that an agent the owner points at another one can still give
+  it work. Answers and controls from it are refused the same way. A member running one of today's connectors
+  sends no session item and is not recognised; the rights still apply to it as to anyone.
+- **Two optional fields, set by the owner, off by default.** A `label` that tells two installs of one harness
+  apart ("laptop", "server"), and the owner, as a `p` tag, for an owner who wants the chat to see whose agent it
+  is. Both are sent only inside the chat, in the session item. Nothing about the agent goes in its public profile:
+  the profile flag [Q-08](open-questions.md#q-08-how-do-several-agent-identities-run-together) proposed is
+  dropped.
+
+**Why.** Today an app learns that a member is an agent only at its first turn, so it cannot mark the agent or
+offer its commands before then. A public profile flag would publish which accounts are agents, and often whose,
+to anyone, and proves nothing, since anyone can set it. The session item is already inside the encrypted chat and
+sent by the agent itself. Today only the default rights keep two agents from answering each other: with
+`prompt = "everyone"` in a group, two agents that reply to each other could go on without end (inferred from
+[D-075](#d-075-in-a-group-the-agent-answers-when-mentioned-or-replied-to-in-a-direct-chat-always), not tested).
+
+Decided 2026-11-27. The project owner accepted the recommendation, from issue #42.
+
+## D-176 The session item says who in the chat may prompt and who may approve
+
+**Decision.** The `session` item carries the chat's two rights
+([D-032](#d-032-every-action-needs-one-of-two-rights)): for each, `everyone`, or the keys of the chat's members
+who hold it, the owner among them. The rights are set once for the agent
+([D-073](#d-073-standing-settings-live-in-a-configuration-file)), so the core cuts each list down to the chat's
+members before it sends it, and edits the item when the chat's members change or the settings do. Someone the
+owner trusts elsewhere is never named in a chat they are not in. Approval items stay as they are: an app reads
+who may answer one from the chat's session item. Changing the rights from the chat stays open
+([Q-10](open-questions.md#q-10-how-are-permissions-changed-from-the-chat)).
+
+**Why.** An app learns who may prompt or approve only when someone tries and is refused. With the rights in the
+chat, it can grey out the agent for someone who may not prompt it, and show who an approval waits for where its
+buttons would only be refused (issue #43). With the default, the owner alone, every member of the chat can now
+read which key is the owner's. They learn it anyway the first time they are refused; the owner accepted that it
+is now stated.
+
+Decided 2026-11-27. The project owner accepted the recommendation, from issue #43, including what it shows the
+chat about the owner.
+
+## D-177 The session item carries the session's title; its project comes later, to full-activity chats only
+
+**Decision.** The `session` item gets a `title`, the harness's own title for the session, filled by the driver
+when the harness gives one, and edited when it changes, as a setting is
+([D-046](#d-046-a-setting-change-is-an-edit-and-a-notice-only-when-nobody-asked-for-it)). Claude Code
+(`session_title_changed`), Goose, Cursor and Antigravity (ACP's `session_info_update`) give one; OpenCode does
+not; Codex's thread name and the gateways' session titles are to be checked against each harness when this is
+built. A title goes to every chat: it sums up what was said in that chat.
+
+A `project` (a label the owner maps from a folder, the branch, and a pull request's address) is built later, as a
+second step, and goes only to chats sent the agent's full activity
+([D-136](#d-136-for-the-pilot-the-agents-full-activity-goes-only-to-the-owners-two-person-chat-unless-the-owner-lists-the-group)),
+since a branch name can say more than a group should see. Only Claude Code and Codex report a branch.
+
+**Why.** A long-lived chat holds many sessions, and only the session knows what the current work is. With a
+title an app can show a chat's topic without anyone renaming the group, which
+[D-042](#d-042-an-agent-may-act-in-its-own-chat-and-may-not-change-a-group-or-the-account) rules out for agents
+anyway (issue #41). The project is wanted but not needed first, and its branch belongs with the rest of the
+agent's work. Issue #41 says a local path is never sent; a chat's folder, a path, already is, as a setting
+(D-101), and that is unchanged.
+
+Decided 2026-11-27. The project owner accepted the recommendation, from issue #41.

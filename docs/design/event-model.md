@@ -127,7 +127,7 @@ Only the fields in `body` differ.
 | `task` | `kind`, `description`, `subject`, and `usage` once known |
 | `notice` | `kind`: `compaction`, `waiting`, `retry`, `warning`, `model_changed`, `command_output`, and `refused`, which the core sends ([D-077](../decisions.md#d-077-a-refused-notice-says-why-something-was-not-acted-on)) |
 | `error` | What was being attempted, and the harness's error code |
-| `session` | `settings`: each with an `id`, a `label`, its `value`, the `options` it accepts when the harness says, and whether changing it needs the right to approve. `actions`: each with an `id`, a `label` and a `description`. `commands`: each with a `name`, a `description` and a `hint` |
+| `session` | `settings`: each with an `id`, a `label`, its `value`, the `options` it accepts when the harness says, and whether changing it needs the right to approve. `actions`: each with an `id`, a `label` and a `description`. `commands`: each with a `name`, a `description` and a `hint`. `rights`: who in the chat may `prompt` and who may `approve`, each `everyone` or members' keys ([D-176](../decisions.md#d-176-the-session-item-says-who-in-the-chat-may-prompt-and-who-may-approve)). `title`, when the harness gives one ([D-177](../decisions.md#d-177-the-session-item-carries-the-sessions-title-its-project-comes-later-to-full-activity-chats-only)). The owner's optional `label`, and a `p` tag for the owner when the owner chooses ([D-175](../decisions.md#d-175-an-agent-sends-its-session-item-when-it-joins-a-chat-and-an-agents-messages-are-not-prompts)). The first one in a chat is sent when the agent joins, and names no session |
 
 ## Answers and controls
 
