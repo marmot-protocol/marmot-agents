@@ -7,7 +7,7 @@ use marmot_agent::chat_folder::FolderRule;
 use marmot_agent::conversation::EFFECT_LIMIT_SECS;
 use marmot_agent::{
     Act, Conversation, EventKey, GroupKey, Heard, HeardQuote, HeardRequest, PubKey, Rights, Saved,
-    Sending, Where, Who,
+    Sending, Token, Where, Who,
 };
 use marmot_agent_driver::{
     Action, ApprovalCommand, Capabilities, ChatId, Emitted, FilesIn, Given, MidTurn, Position,
@@ -547,8 +547,14 @@ fn unknown_repeated_and_late_requests() {
         "unknown_item"
     ));
     assert!(talk.asked(unknown).is_empty());
-    let mut late = request(direct(), "r2", OWNER, None, Asked::NewSession);
-    late.age_secs = 6 * 60;
+    let mut on_time = request(direct(), "r2", OWNER, None, Asked::NewSession);
+    on_time.age_secs = 300;
+    assert!(matches!(
+        talk.asked(on_time).as_slice(),
+        [Act::Control(c)] if matches!(c.action, Action::NewSession { .. })
+    ));
+    let mut late = request(direct(), "r3", OWNER, None, Asked::NewSession);
+    late.age_secs = 301;
     assert!(talk.asked(late).is_empty());
 }
 
@@ -4703,4 +4709,47 @@ fn a_notice_that_settles_a_control_reaches_a_group() {
 
     let alone = emitted(&chat, event("n2", State::Done, refusal));
     assert!(!goes_out(&mut talk, &chat, alone.event));
+}
+
+// What `Sending` and `Token` print for debugging names the shape and nothing it holds (D-071).
+#[test]
+fn sending_and_token_debug_name_the_shape_and_omit_values() {
+    let item = Sending::Item {
+        key: "secret-key".into(),
+        item: Box::new(Item {
+            event: event("secret-item", State::Running, turn()),
+            version: 3,
+            first: Some(EventKey::from("secret-first")),
+            started_by: Some(EventKey::from("secret-started")),
+            settles: vec![EventKey::from("secret-settles")],
+            thread: None,
+        }),
+    };
+    let shown = format!("{item:?}");
+    assert!(shown.starts_with("Item { event: AgentEvent {"), "{shown}");
+    assert!(shown.ends_with(", version: 3, .. }"), "{shown}");
+    assert!(!shown.contains("secret-"), "{shown}");
+
+    let words = |edit| Sending::Words {
+        key: "secret-key".into(),
+        text: "secret-text".into(),
+        turn: None,
+        remark: false,
+        edit,
+        settles: vec![EventKey::from("secret-settles")],
+        thread: None,
+    };
+    assert_eq!(format!("{:?}", words(None)), "Words { edit: false, .. }");
+    assert_eq!(
+        format!("{:?}", words(Some(EventKey::from("secret-edit")))),
+        "Words { edit: true, .. }"
+    );
+
+    let token = Token {
+        send: "secret-send".into(),
+        mdk: "secret-mdk".into(),
+        edits: Some("secret-edits".into()),
+        tried_at: Some(42),
+    };
+    assert_eq!(format!("{token:?}"), "Token { .. }");
 }

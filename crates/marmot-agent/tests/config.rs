@@ -2,6 +2,7 @@
 
 use marmot_agent::config::{Config, ConfigError};
 use marmot_agent::{FullActivity, GroupKey, PubKey, Who};
+use marmot_agent_codex::{ApprovalPolicy, Sandbox};
 
 // NIP-19's own example.
 const NPUB: &str = "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg";
@@ -160,4 +161,93 @@ fn the_groups_sent_full_activity_are_listed_or_all() {
         );
         assert!(Config::parse(&text).is_err(), "{wrong}");
     }
+}
+
+// White Noise relays are on by default, and Pi runs as `pi` when the settings omit `program`
+// (D-073).
+#[test]
+fn defaults_for_white_noise_and_pi_program() {
+    let text = format!("home = \"/unused\"\nrelays = []\nowner = \"{HEX}\"\n[pi]\ncwd = \"/w\"\n");
+    let config = Config::parse(&text).unwrap();
+    assert!(config.white_noise, "white_noise is on by default");
+    let pi = config.pi_setup().expect("pi setup");
+    assert_eq!(pi.program, "pi");
+    assert!(pi.args.is_empty());
+    assert_eq!(pi.cwd, std::path::Path::new("/w"));
+
+    let custom = format!(
+        "home = \"/unused\"\nrelays = []\nowner = \"{HEX}\"\nwhite_noise = false\n\
+         [pi]\nprogram = \"/opt/pi.sh\"\nargs = [\"--sandbox\"]\ncwd = \"/w\"\n"
+    );
+    let config = Config::parse(&custom).unwrap();
+    assert!(!config.white_noise);
+    let pi = config.pi_setup().expect("pi setup");
+    assert_eq!(pi.program, "/opt/pi.sh");
+    assert_eq!(pi.args, vec!["--sandbox"]);
+}
+
+// Every Codex sandbox and approval policy word maps to its setting, and an unknown word is
+// refused naming the setting.
+#[test]
+fn codex_setup_maps_sandbox_and_approval_policy() {
+    let parse = |extra: &str| {
+        let text = format!(
+            "home = \"/unused\"\nrelays = []\nowner = \"{HEX}\"\n[codex]\ncwd = \"/w\"\n{extra}"
+        );
+        Config::parse(&text)
+    };
+
+    let default = parse("").unwrap().setup().unwrap();
+    assert_eq!(default.sandbox, Sandbox::WorkspaceWrite);
+    assert_eq!(default.approval_policy, ApprovalPolicy::OnRequest);
+
+    for (word, expected) in [
+        ("read-only", Sandbox::ReadOnly),
+        ("workspace-write", Sandbox::WorkspaceWrite),
+        ("danger-full-access", Sandbox::DangerFullAccess),
+    ] {
+        let setup = parse(&format!("sandbox = \"{word}\"\n"))
+            .unwrap()
+            .setup()
+            .unwrap();
+        assert_eq!(setup.sandbox, expected, "{word}");
+    }
+    assert!(matches!(
+        parse("sandbox = \"wide-open\"\n"),
+        Err(ConfigError::Value("codex.sandbox"))
+    ));
+
+    for (word, expected) in [
+        ("untrusted", ApprovalPolicy::Untrusted),
+        ("on-failure", ApprovalPolicy::OnFailure),
+        ("on-request", ApprovalPolicy::OnRequest),
+        ("never", ApprovalPolicy::Never),
+    ] {
+        let setup = parse(&format!("approval_policy = \"{word}\"\n"))
+            .unwrap()
+            .setup()
+            .unwrap();
+        assert_eq!(setup.approval_policy, expected, "{word}");
+    }
+    assert!(matches!(
+        parse("approval_policy = \"always\"\n"),
+        Err(ConfigError::Value("codex.approval_policy"))
+    ));
+}
+
+// A settings error explains why it failed without printing any path or value (D-071).
+#[test]
+fn config_error_display_explains_the_failure_without_values() {
+    assert_eq!(
+        ConfigError::Unreadable(std::io::ErrorKind::NotFound).to_string(),
+        "the settings file could not be read (entity not found)"
+    );
+    assert_eq!(
+        ConfigError::Invalid.to_string(),
+        "the settings file is not valid"
+    );
+    assert_eq!(
+        ConfigError::Value("owner").to_string(),
+        "the setting `owner` has a value it does not take"
+    );
 }
