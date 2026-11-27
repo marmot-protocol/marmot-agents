@@ -34,7 +34,8 @@ harness_check() {
     }
     local version
     # Hermes prints its release after a v, and a date beside it; a checkout without tags says vunknown.
-    version=$("$HERMES" --version 2>/dev/null | sed -n 's/.*[[:space:]]v\([0-9][0-9.]*[0-9]\).*/\1/p' | head -n 1)
+    version=$("$HERMES" --version 2>/dev/null | sed -n 's/.*[[:space:]]v\([0-9][0-9.]*[0-9]\).*/\1/p' | head -n 1) ||
+        version=""
     if ! "$HERMES" --version >/dev/null 2>&1; then
         missing "a working Hermes" "hermes --version failed. $HERMES_HOW"
         return 0
@@ -158,7 +159,8 @@ harness_summary() {
 }
 
 # Takes out of the person's Hermes what the install added: the plugin, its platform, and the
-# MARMOT_ALLOW_ALL_USERS it set. Only if the platform names this agent.
+# MARMOT_ALLOW_ALL_USERS it set. Only if the platform names this agent. The platform goes last, so that
+# a run again after one that failed part way still finds the Hermes this agent's, and takes out the rest.
 harness_uninstall() {
     HERMES=$(program_path hermes) || {
         warn "hermes is not on PATH: remove the marmot plugin and platform from your Hermes yourself"
@@ -171,7 +173,6 @@ harness_uninstall() {
         return 0
     fi
     say "removing the Marmot plugin and its platform from your Hermes"
-    act "$HERMES" config unset platforms.marmot
     if [ -f "$MA_AGENT_DIR/hermes-allow-all" ]; then
         local before
         before=$(cat "$MA_AGENT_DIR/hermes-allow-all")
@@ -182,14 +183,18 @@ harness_uninstall() {
         fi
         act rm -f "$MA_AGENT_DIR/hermes-allow-all"
     fi
-    act "$HERMES" plugins disable marmot
+    # Hermes refuses to disable a plugin it does not have, as when a run before took ours out.
     config=$("$HERMES" config path 2>/dev/null) || config=""
     case $config in
         /*/config.yaml)
             PLUGIN=$(dirname "$config")/plugins/marmot
-            if ours "$PLUGIN"; then act rm -rf "$PLUGIN"; fi
+            if ours "$PLUGIN"; then
+                act "$HERMES" plugins disable marmot
+                act rm -rf "$PLUGIN"
+            fi
             ;;
     esac
+    act "$HERMES" config unset platforms.marmot
     say "Restart your Hermes gateway for it to drop the plugin: hermes gateway restart"
 }
 

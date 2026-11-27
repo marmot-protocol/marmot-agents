@@ -309,7 +309,8 @@ version_below() {
 # its driver was built and recorded against is reported, not refused: it may work.
 check_version() {
     local program=$1 tested=$2 how=$3 version
-    version=$(version_of "$program")
+    # One that fails says no version: under pipefail its status would end the run here, saying nothing.
+    version=$(version_of "$program") || version=""
     if [ -z "$version" ]; then
         missing "a working $HARNESS_TITLE" "$program --version failed or printed no version. $how"
         return 0

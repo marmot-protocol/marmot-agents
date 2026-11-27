@@ -201,10 +201,11 @@ def valid():
                      f"must not have additional properties: {sorted(extra)}")
 
 
-def fail(command):
-    """A command made to fail, as FAKE_OPENCLAW_FAIL names it."""
-    if os.environ.get("FAKE_OPENCLAW_FAIL") == command:
-        sys.exit(f"the openclaw stand-in fails {command}, as asked")
+def fail():
+    """A command made to fail, as FAKE_OPENCLAW_FAIL names it by its first words."""
+    want = os.environ.get("FAKE_OPENCLAW_FAIL", "").split()
+    if want and args[:len(want)] == want:
+        sys.exit(f"the openclaw stand-in fails {' '.join(want)}, as asked")
 
 
 if args == ["--version"]:
@@ -222,6 +223,7 @@ elif args[:2] == ["config", "get"]:
 elif args[:2] == ["config", "set"]:
     note()
     valid()
+    fail()
     c = load()
     parent, last = walk(c, args[2], make=True)
     parent[last] = json.loads(args[3]) if "--strict-json" in args else args[3]
@@ -232,6 +234,7 @@ elif args[:2] == ["config", "set"]:
 elif args[:2] == ["config", "unset"]:
     note()
     valid()
+    fail()
     c = load()
     parent, last = walk(c, args[2])
     if parent is None or last not in parent:
@@ -264,7 +267,7 @@ elif args[:2] == ["plugins", "install"]:
     note()
     valid()
     shutil.rmtree(plugin, ignore_errors=True)
-    fail("plugins install")
+    fail()
     plugin.mkdir(parents=True)
     (plugin / "package.json").write_text(json.dumps({"name": "marmot-agent-openclaw"}))
     shutil.copy(args[-1], plugin / "packed.tgz")
@@ -283,6 +286,7 @@ elif args[:2] == ["plugins", "inspect"]:
         sys.exit(1)
 elif args[:2] == ["plugins", "uninstall"]:
     note()
+    fail()
     shutil.rmtree(plugin, ignore_errors=True)
     c = load()
     c.get("channels", {}).pop("marmot", None)
@@ -322,8 +326,12 @@ def env_key(line):
 
 
 def note():
+    """Logs a command that changes something, then fails it if FAKE_HERMES_FAIL names it by its first words."""
     with open(os.environ["FAKE_LOG"], "a") as log:
         log.write("hermes " + " ".join(args) + "\n")
+    want = os.environ.get("FAKE_HERMES_FAIL", "").split()
+    if want and args[:len(want)] == want:
+        sys.exit(f"the hermes stand-in fails {' '.join(want)}, as asked")
 
 
 def walk(c, path, make=False):
@@ -390,8 +398,6 @@ elif args[:2] == ["config", "unset"]:
         save(c)
 elif args[:2] in (["plugins", "enable"], ["plugins", "disable"]):
     note()
-    if os.environ.get("FAKE_HERMES_FAIL") == " ".join(args[:2]):
-        sys.exit(f"the hermes stand-in fails {' '.join(args[:2])}, as asked")
     if os.environ.get("FAKE_HERMES_KILL") == " ".join(args[:2]):
         # The installer killed outright as it waits on this command.
         os.kill(os.getppid(), signal.SIGKILL)
@@ -937,6 +943,49 @@ class Install(unittest.TestCase):
                 value = line.split("=", 1)[1].strip()
                 self.assertEqual((m.home / ".hermes/.env").read_text(), f"MARMOT_ALLOW_ALL_USERS={value}\n")
 
+    def test_a_hermes_uninstall_that_failed_part_way_is_finished_by_a_run_again(self):
+        """Each step of the uninstall made to fail in turn, a run again takes out the rest (#89). The platform,
+        whose home marks the Hermes as this agent's, goes last: once it went first, a failure after it left the
+        plugin, and MARMOT_ALLOW_ALL_USERS, for no later run to take out."""
+        for step in ("config unset MARMOT_ALLOW_ALL_USERS", "plugins disable", "config unset platforms.marmot"):
+            with self.subTest(step=step):
+                m = Machine(self)
+                hermes = m.home / ".hermes"
+                hermes.mkdir()
+                (hermes / ".env").write_text("THEIR_KEY=x\n")
+                m.run("hermes", *m.args("hermes", "--binary", str(m.core), "--no-service"))
+                failed = m.run("hermes", "--uninstall", env={"FAKE_HERMES_FAIL": step}, check=False)
+                self.assertNotEqual(failed.returncode, 0, failed.stdout)
+                m.run("hermes", "--uninstall")
+                config = json.loads((hermes / "config.yaml").read_text())
+                self.assertNotIn("marmot", config["platforms"])
+                self.assertNotIn("marmot", config["plugins"]["enabled"])
+                self.assertEqual((hermes / ".env").read_text(), "THEIR_KEY=x\n")
+                self.assertFalse((hermes / "plugins/marmot").exists())
+                self.assertFalse((m.data / "agents/hermes/hermes-allow-all").exists())
+
+    @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
+    def test_an_openclaw_uninstall_that_failed_part_way_is_finished_by_a_run_again(self):
+        """Each step of the uninstall made to fail in turn, a run again takes out the rest (#89, #92). The
+        plugin's uninstall, which takes out the channel whose home marks the OpenClaw as this agent's, goes
+        last: once it went first, a failure after it left the approvals the install switched on."""
+        for step in ("config unset approvals.exec", "plugins uninstall"):
+            with self.subTest(step=step):
+                m = Machine(self)
+                state = m.home / ".openclaw"
+                state.mkdir()
+                mine = {"channels": {"telegram": {"enabled": True}}}
+                (state / "openclaw.json").write_text(json.dumps(mine))
+                m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--no-service"))
+                failed = m.run("openclaw", "--uninstall", env={"FAKE_OPENCLAW_FAIL": step}, check=False)
+                self.assertNotEqual(failed.returncode, 0, failed.stdout)
+                m.run("openclaw", "--uninstall")
+                config = json.loads((state / "openclaw.json").read_text())
+                self.assertEqual(config["channels"], mine["channels"])
+                self.assertNotIn("exec", config.get("approvals", {}))
+                self.assertFalse((state / "extensions/marmot").exists())
+                self.assertFalse((m.data / "agents/openclaw/openclaw-approvals").exists())
+
     @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
     def test_openclaw(self):
         """Our plugin goes into the person's own OpenClaw, and comes out again; the rest of it is theirs."""
@@ -991,6 +1040,18 @@ class Install(unittest.TestCase):
         (state / "openclaw.json").write_text(json.dumps({"approvals": {"exec": off}}))
         m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--no-service"))
         self.assertTrue(json.loads((state / "openclaw.json").read_text())["approvals"]["exec"]["enabled"])
+        m.run("openclaw", "--uninstall")
+        self.assertEqual(json.loads((state / "openclaw.json").read_text())["approvals"]["exec"], off)
+        # The same with its keys in another order, as a tool that rewrites the file may leave them, is still the
+        # setting the install wrote, and is put back (#92).
+        m = Machine(self)
+        state = m.home / ".openclaw"
+        state.mkdir()
+        (state / "openclaw.json").write_text(json.dumps({"approvals": {"exec": off}}))
+        m.run("openclaw", *m.args("openclaw", "--binary", str(m.core), "--no-service"))
+        config = json.loads((state / "openclaw.json").read_text())
+        config["approvals"]["exec"] = dict(reversed(config["approvals"]["exec"].items()))
+        (state / "openclaw.json").write_text(json.dumps(config))
         m.run("openclaw", "--uninstall")
         self.assertEqual(json.loads((state / "openclaw.json").read_text())["approvals"]["exec"], off)
 
@@ -1070,6 +1131,19 @@ class Install(unittest.TestCase):
                        env={"FAKE_OPENCLAW_VERSION": "2026.10.10"}, check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing: OpenClaw 2026.11.5 or later", result.stderr)
+
+    def test_a_harness_whose_version_fails_is_named(self):
+        """A --version that fails is reported as a missing prerequisite, not an installer that ends saying
+        nothing (#92): under pipefail its status used to end the run at the assignment."""
+        for harness, missing in (("pi", "missing: a working Pi"), ("hermes", "missing: a working Hermes"),
+                                 ("openclaw", "missing: OpenClaw 2026.11.5 or later")):
+            with self.subTest(harness=harness):
+                m = Machine(self)
+                m.write(m.bin / harness, '#!/bin/sh\necho "v1.0.0"\nexit 3\n')
+                result = m.run(harness, *m.args(harness, "--binary", str(m.core)), check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(missing, result.stderr)
+                self.assertEqual(m.calls(), [])
 
     def test_model_options_go_with_a_container(self):
         m = Machine(self)
@@ -1520,18 +1594,23 @@ class Boundaries(unittest.TestCase):
 
     @unittest.skipUnless(REAL_NODE, "the OpenClaw installer reads JSON with node")
     def test_an_openclaw_plugin_found_in_a_load_path_counts(self):
-        """OpenClaw loads a plugin from plugins.load.paths with no install record, in place of one it installed."""
-        m = Machine(self)
-        found = m.home / "plugins/marmot"
-        found.mkdir(parents=True)
-        (found / "package.json").write_text(json.dumps({"name": "@marmot-protocol/openclaw-marmot"}))
-        (m.home / ".openclaw").mkdir()
-        (m.home / ".openclaw/openclaw.json").write_text(json.dumps({"plugins": {"load": {"paths": [str(found)]}}}))
-        self.imported(m, "openclaw", "OpenClaw")
-        result = self.refused(m, "openclaw", *m.args("openclaw", "--binary", str(m.core), "--replace-plugin"),
-                              message="plugins.load.paths")
-        self.assertIn(str(found), result.stderr)
-        self.assertEqual(m.calls(), [])
+        """OpenClaw loads a plugin from plugins.load.paths with no install record, in place of one it installed;
+        also a checkout of ours, by its package name, which would stay in place of the one installed (#92)."""
+        for package in ("@marmot-protocol/openclaw-marmot", "marmot-agent-openclaw"):
+            with self.subTest(package=package):
+                m = Machine(self)
+                found = m.home / "plugins/marmot"
+                found.mkdir(parents=True)
+                (found / "package.json").write_text(json.dumps({"name": package}))
+                (m.home / ".openclaw").mkdir()
+                (m.home / ".openclaw/openclaw.json").write_text(
+                    json.dumps({"plugins": {"load": {"paths": [str(found)]}}}))
+                self.imported(m, "openclaw", "OpenClaw")
+                result = self.refused(m, "openclaw",
+                                      *m.args("openclaw", "--binary", str(m.core), "--replace-plugin"),
+                                      message="plugins.load.paths")
+                self.assertIn(str(found), result.stderr)
+                self.assertEqual(m.calls(), [])
 
     def test_one_gateway_serves_one_agent(self):
         m = Machine(self)
