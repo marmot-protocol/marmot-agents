@@ -507,18 +507,20 @@ impl Translator {
                     self.thread_settings(&settings, method, params, out);
                 }
                 "serverRequest/resolved" => {
-                    // Codex waits no longer, so no answer may reach it, and the item closes now,
-                    // though the turn goes on (#36). One already answered keeps its answer.
+                    // Codex waits no longer, so the item closes now, though the turn goes on, and
+                    // takes no answer, as one closed at the turn's end (#36). One already answered
+                    // keeps its answer.
                     let Some(p) = self.read::<RequestResolved>(method, params) else {
                         return;
                     };
                     if self.for_another_thread(p.thread_id.as_deref()) {
                         return;
                     }
-                    let Some(asked) = p.request_id.and_then(|id| self.asked.remove(&id)) else {
+                    let Some(asked) = p.request_id.and_then(|id| self.asked.get(&id)) else {
                         return;
                     };
                     let (Pending::Approval { item, .. } | Pending::Question { item }) = asked;
+                    let item = item.clone();
                     let Some(prev) = self.open_event(&item) else {
                         return;
                     };

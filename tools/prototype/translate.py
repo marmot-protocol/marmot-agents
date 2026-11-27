@@ -304,11 +304,12 @@ class Codex(Translator):
             if method == "serverRequest/resolved" and not self.for_another_thread(p.get("threadId")):
                 # Codex waits no longer: the item closes now, though the turn goes on. One already
                 # answered keeps its answer.
-                req = self.pending.pop(("s", p.get("requestId")), None)
+                req = self.pending.get(("s", p.get("requestId")))
                 prev = self.open.get(req["item"]) if req else None
                 if prev is not None:
+                    native = NO_NATIVE if has_secret(prev) else p  # D-056
                     return self.emit(req["item"], prev["type"], "cancelled", prev["title"], prev["text"], prev["body"],
-                                     method, p, owner=(prev["session"], prev["turn"]))
+                                     method, native, owner=(prev["session"], prev["turn"]))
             return self.skip(method)
         handler = {
             "turn/started": self.turn_started,
@@ -514,7 +515,7 @@ class Codex(Translator):
             # An approval lasts for this call, or for as long as a scope Codex names in `persist`;
             # a scope the driver does not know is not offered. Each choice is the whole result sent.
             persist = meta.get("persist")
-            scopes = [persist] if isinstance(persist, str) else [x for x in persist or [] if isinstance(x, str)]
+            scopes = [persist] if isinstance(persist, str) else [x for x in persist if isinstance(x, str)] if isinstance(persist, list) else []
             labels = {"session": "Allow for this session", "always": "Always allow"}
             offered = [("Allow once", "allow", {"action": "accept", "content": {}})]
             offered += [(labels[x], "allow", {"action": "accept", "content": {}, "_meta": {"persist": x}})

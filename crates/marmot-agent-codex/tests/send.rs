@@ -609,7 +609,7 @@ fn an_approval_codex_resolved_closes_and_takes_no_answer() {
     assert_eq!(closed.header().state, State::Cancelled);
     assert!(closed.native().is_some(), "it carries Codex's word");
     let late = translator.reply(&answer(&asked[0], Given::Choice("c0".into())));
-    assert!(late.is_err(), "a late answer is refused");
+    assert_eq!(late.unwrap_err().reason, Reason::NotWaiting);
     let ended = translator.feed(
         Direction::In,
         r#"{"method": "turn/completed", "params": {"threadId": "th1", "turn": {"id": "t1", "items": [], "status": "completed", "error": null}}}"#,
@@ -626,6 +626,7 @@ fn an_approval_codex_resolved_closes_and_takes_no_answer() {
 #[test]
 fn a_resolution_after_an_answer_changes_nothing() {
     let mut translator = Translator::new();
+    started(&mut translator);
     let asked = translator.feed(
         Direction::In,
         r#"{"id": 0, "method": "item/commandExecution/requestApproval", "params": {"threadId": "th1", "turnId": "t1", "itemId": "c", "command": "ls"}}"#,
@@ -824,6 +825,7 @@ fn an_mcp_approval_offers_the_scopes_codex_names() {
     for (persist, offered) in cases {
         let request = mcp_approval(persist);
         let mut translator = Translator::new();
+        started(&mut translator);
         let events = translator.feed(Direction::In, &request);
         let Body::Approval(approval) = events[0].body() else {
             panic!("an approval");
@@ -833,6 +835,7 @@ fn an_mcp_approval_offers_the_scopes_codex_names() {
         assert_eq!(labels, wanted, "{persist}");
         for (choice, (label, result)) in approval.choices.iter().zip(&offered) {
             let mut translator = Translator::new();
+            started(&mut translator);
             let events = translator.feed(Direction::In, &request);
             let reply = translator
                 .reply(&answer(&events[0], Given::Choice(choice.id.clone())))
