@@ -57,10 +57,7 @@ fn every_expected_event_is_read_whole() {
                     .unwrap_or_else(|e| panic!("{at}: the item types cannot read it: {e}"));
                 let again: Value = serde_json::to_value(&event).expect("written again");
                 let was: Value = serde_json::from_str(line).expect("JSON");
-                // OpenClaw's carry fields the types do not have, which the core drops (issue #68).
-                if !path.components().any(|c| c.as_os_str() == "openclaw") {
-                    assert_eq!(again, was, "{at}: read and written again, it differs");
-                }
+                assert_eq!(again, was, "{at}: read and written again, it differs");
                 read += 1;
             }
         }
