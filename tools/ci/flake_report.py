@@ -603,7 +603,7 @@ def _failed_tests_for_job(github, run_artifacts, run_id, job):
     try:
         archive = github.artifact_zip(chosen["id"])
         return extract_failed_tests(archive)
-    except (subprocess.CalledProcessError, MalformedArtifact, OSError, ValueError) as error:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, MalformedArtifact, OSError, ValueError) as error:
         print(f"warning: could not read JUnit artifact {chosen.get('id')} for run {run_id}: {error}",
               file=sys.stderr)
         return []
@@ -666,7 +666,7 @@ def collect(github, state, since, trusted, repo, workflows=WORKFLOWS):
                     and any(job["name"] in trusted_jobs for job in new_flaky)):
                 try:
                     run_artifacts = github.artifacts(run["id"])
-                except (subprocess.CalledProcessError, ListingTooLong, OSError, ValueError) as error:
+                except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ListingTooLong, OSError, ValueError) as error:
                     print(f"warning: could not list artifacts for run {run['id']}: {error}",
                           file=sys.stderr)
                     run_artifacts = []

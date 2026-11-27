@@ -157,6 +157,40 @@ class BrokenSetup(unittest.TestCase):
         self.assertEqual(proc.returncode, 5)
         self.assertTrue(junit.is_file())
 
+    def test_stop_test_clears_record_lookup_so_reused_ids_cannot_collide(self):
+        import io
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("unittest_junit", SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        class Dummy(unittest.TestCase):
+            def test_pass(self):
+                pass
+
+            def test_other(self):
+                pass
+
+        result = mod.JUnitTextTestResult(io.StringIO(), True, 0)
+        first = Dummy("test_pass")
+        result.startTest(first)
+        result.stopTest(first)
+        self.assertEqual(result._records, {})
+        self.assertEqual(result._started, {})
+        self.assertEqual(len(result.junit_cases), 1)
+        self.assertEqual(result.junit_cases[0]["status"], "passed")
+
+        # Even if a later object had the same id() as an active or finished test,
+        # addError without startTest creates its own record instead of mutating `first`.
+        second = Dummy("test_other")
+        result._records[id(second)] = (first, result.junit_cases[0])
+        result.addError(second, (RuntimeError, RuntimeError("boom"), None))
+        self.assertEqual(result.junit_cases[0]["status"], "passed")
+        self.assertEqual(len(result.junit_cases), 2)
+        self.assertEqual(result.junit_cases[1]["name"], "test_other")
+        self.assertEqual(result.junit_cases[1]["status"], "error")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -48,33 +48,38 @@ class JUnitTextTestResult(unittest.TextTestResult):
         except TypeError:
             super().__init__(stream, descriptions, verbosity)
         self._started: dict[int, float] = {}
-        self._records: dict[int, dict] = {}
+        self._records: dict[int, tuple[object, dict]] = {}
         self.junit_cases: list[dict] = []
 
-    def _record_for(self, test) -> dict:
-        key = id(test)
-        record = self._records.get(key)
-        if record is None:
-            classname, name = _test_identity(test)
-            record = {
-                "classname": classname,
-                "name": name,
-                "time": 0.0,
-                "status": "passed",
-            }
-            self._records[key] = record
-            self.junit_cases.append(record)
+    def _new_record(self, test) -> dict:
+        classname, name = _test_identity(test)
+        record = {
+            "classname": classname,
+            "name": name,
+            "time": 0.0,
+            "status": "passed",
+        }
+        self.junit_cases.append(record)
         return record
 
+    def _record_for(self, test) -> dict:
+        entry = self._records.get(id(test))
+        if entry is not None and entry[0] is test:
+            return entry[1]
+        return self._new_record(test)
+
     def startTest(self, test):
-        self._started[id(test)] = time.monotonic()
-        self._record_for(test)
+        key = id(test)
+        self._started[key] = time.monotonic()
+        self._records[key] = (test, self._new_record(test))
         super().startTest(test)
 
     def stopTest(self, test):
-        started = self._started.pop(id(test), None)
-        if started is not None:
-            self._record_for(test)["time"] = max(0.0, time.monotonic() - started)
+        key = id(test)
+        started = self._started.pop(key, None)
+        entry = self._records.pop(key, None)
+        if started is not None and entry is not None and entry[0] is test:
+            entry[1]["time"] = max(0.0, time.monotonic() - started)
         super().stopTest(test)
 
     def addError(self, test, err):

@@ -770,6 +770,26 @@ class JUnitAndTests(unittest.TestCase):
         self.assertEqual(state["tests"], [])
         self.assertNotIn(201, github.artifacts_downloaded)
 
+    def test_artifact_timeouts_fall_back_to_job_counts(self):
+        github = FakeGitHub(
+            {"ci.yml": [trusted_run(1, 2), trusted_run(2, 2)]},
+            {
+                1: [job(10, "Python", 1, "failure"), job(11, "Python", 2, "success")],
+                2: [job(20, "Python", 1, "failure"), job(21, "Python", 2, "success")],
+            },
+            artifacts={
+                1: subprocess.TimeoutExpired(["gh", "api"], 300),
+                2: [{"id": 201, "name": "junit-python-attempt-1", "expired": False, "size_in_bytes": 100}],
+            },
+            artifact_zips={
+                201: subprocess.TimeoutExpired(["gh", "api"], 300),
+            },
+        )
+        state = empty()
+        collect(github, state, "2026-11-10", workflows=("ci.yml",))
+        self.assertEqual(counted(state), [("ci.yml", "Python", 2)])
+        self.assertEqual(state["tests"], [])
+
     def test_dtd_entity_zip_bomb_and_control_char_defenses(self):
         # 1. DTD / XXE rejection (case-insensitive, and UTF-16 encodings)
         utf16_dtd = (
