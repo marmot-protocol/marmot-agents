@@ -202,8 +202,8 @@ approve, interrupt or change settings.
 ### 8. A message sent during a turn is still a message
 
 Steering is not a control. A chat message that arrives while a turn is running is a prompt like any other. What
-happens to it depends on the harness: Codex can fold it into the running turn, Hermes does so by itself, Claude
-Code ends the turn and starts another, and OpenClaw holds it until the turn ends.
+happens to it depends on the harness: Codex, Pi and OpenCode can fold it into the running turn, Hermes does so by
+itself, Claude Code ends the turn and starts another, and OpenClaw holds it until the turn ends.
 
 The core keeps no queue of its own. It passes the message on at once, and the harness does what it does
 natively ([D-040](../decisions.md#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness)). Each

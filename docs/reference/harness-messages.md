@@ -13,8 +13,8 @@ how each message relates to the proposed [event model](../design/event-model.md)
 | [`data/claude-sdk-message-structures.txt`](data/claude-sdk-message-structures.txt) | The structure of 176,652 Claude Agent SDK messages from four days of real use on one developer's machine | Counts and field names only. No content was read or kept |
 | Codex's generated protocol schema | `codex app-server generate-json-schema`, codex-cli 0.169.0 | The list of methods |
 | Codex's generated protocol schema, again | The same, codex-cli 0.171.0, read on 2026-11-23 | The fields for subagents that no recording holds, in [what 0.171.0's schema adds](#subagents) |
-| [`fixtures/recordings/acp/opencode`](../../fixtures/recordings/README.md#acp-opencode) | 12 scripted sessions with OpenCode 2.3.2 over ACP, recorded on 2026-11-21 | Read in full, for the [ACP section](#acp-opencode) only |
-| [`fixtures/recordings/acp/goose`](../../fixtures/recordings/README.md#acp-goose) | The same 12 with Goose 1.59.2, in a container, and `restart_mid_turn`, recorded on 2026-11-21 | Read in full, for the [Goose section](#acp-goose) only |
+| [`fixtures/recordings/acp/opencode`](../../fixtures/recordings/README.md#acp-opencode) | 13 scripted sessions with OpenCode 2.3.2 over ACP, recorded on 2026-11-21 (`steer` on 2026-11-27) | Read in full, for the [ACP section](#acp-opencode) only |
+| [`fixtures/recordings/acp/goose`](../../fixtures/recordings/README.md#acp-goose) | The 12 of 2026-11-21 with Goose 1.59.2, in a container, and `restart_mid_turn`, recorded on 2026-11-21 | Read in full, for the [Goose section](#acp-goose) only |
 | [`fixtures/recordings/acp/cursor`](../../fixtures/recordings/README.md#acp-cursor) | 11 of them with the Cursor Agent CLI 2026.11.19, recorded on 2026-11-21 | Read in full, for the [Cursor section](#acp-cursor) only |
 | [`tools/prototype/translate.py`](../../tools/prototype/translate.py) | A prototype that turns every recording into proposed agent events, except the subagent recordings: it follows one thread, and showing several is the Codex driver's transport's work ([D-117](../decisions.md#d-117-codexs-subagents-are-switched-on-and-shown-flat-in-the-chat-that-started-them)) | To check that nothing is left without a home |
 
@@ -398,8 +398,9 @@ In real use, background-task messages are about 7 per turn.
 
 ## ACP: OpenCode
 
-Read on 2026-11-21 from the twelve recordings in
-[`fixtures/recordings/acp/opencode`](../../fixtures/recordings/acp/opencode), made that day with
+Read on 2026-11-21 from the twelve recordings then in
+[`fixtures/recordings/acp/opencode`](../../fixtures/recordings/acp/opencode), and on 2026-11-27 from `steer`,
+[below](#a-message-during-a-turn), made those days with
 [`tools/record/record_acp.py`](../../tools/record/record_acp.py) against OpenCode 2.3.2 (`opencode acp`, ACP
 protocol version 1) and the free model `opencode/deepseek-v4.1-flash-free`, with no account. The recorder plays
 an ACP client that can neither read or write files nor run terminals, so OpenCode does both itself. What was
@@ -555,6 +556,20 @@ recorded.
   and `additionalDirectories`, `promptCapabilities` with `image` and `embeddedContext`, MCP over HTTP, and in
   `_meta` `steering: {supported: true}` and `opencode/child-session-updates`.
 
+### A message during a turn
+
+Seen in `steer`, recorded on 2026-11-27. OpenCode's own method `_session/steering` is a request with
+`sessionId` and `prompt`, the content blocks of a `session/prompt`.
+
+- **While a turn ran** (a command was sleeping), the reply came 17 ms later: `{"outcome": "injected"}`. Nothing
+  echoed the message, no `user_message_chunk` and no other update. The command ran to its end, the agent's one
+  message answered both the first prompt and the steered one, and the reply to the first `session/prompt` ended
+  the turn as `end_turn`. So the message joined the turn, and the turn is still the first prompt's.
+- **With no turn running**, the reply was `{"outcome": "promptRequired", "reason": "noRunningTurn"}`, and
+  nothing else followed: OpenCode starts no turn for a steer.
+- A second `session/prompt` during a turn was not sent in any recording; that OpenCode refuses one was read in
+  its source ([harness interfaces](harness-interfaces.md#opencode)).
+
 ### Where ACP falls short of what the chat needs
 
 - **Who sent a message.** A prompt is content blocks and nothing else. It has no sender and no chat. The core
@@ -572,7 +587,8 @@ recorded.
   allows, so the translators guess from the category that `mode` needs the right to approve.
 - **Resume.** Standard and cheap with `session/resume`. `session/load` replays everything, which the driver must
   recognise and drop.
-- **Steering.** Not standard; OpenCode offers it only as an extension.
+- **Steering.** Not standard; OpenCode offers it only as an extension, which the driver uses
+  ([above](#a-message-during-a-turn)).
 - **Ending a session.** Nothing says a session is over.
 
 ## ACP: Goose

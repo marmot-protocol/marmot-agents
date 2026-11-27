@@ -337,7 +337,7 @@ for permission. What the recordings show is in
 | Version | OpenCode 2.3.2 |
 | Model | `opencode/deepseek-v4.1-flash-free`, a free model that needs no account: the cheapest that worked |
 | Account | None. The agent ran with a throwaway home folder, so it read none of the machine's settings, skills or sign-ins |
-| Recorded on | 2026-11-21 |
+| Recorded on | 2026-11-21; `steer` on 2026-11-27, with the same OpenCode and model |
 | Recorder | [`tools/record/record_acp.py`](../../tools/record/record_acp.py) |
 
 | Scenario | What it exercises | As scripted? |
@@ -349,6 +349,7 @@ for permission. What the recordings show is in
 | `approval_allowed` | A command needs approval; allowed once | yes |
 | `approval_denied` | A command needs approval; rejected | yes; the rejection ended the turn, as `cancelled` |
 | `interrupt` | The client cancels a turn while a command runs | yes |
+| `steer` | A message sent while a command runs, with OpenCode's `_session/steering`, and once more after the turn | yes; the first joined the turn, and the second was not taken |
 | `question` | The agent asks a multiple-choice question with its question tool | yes, once the client said it can show forms |
 | `plan` | The agent is asked to keep a to-do list | no list: OpenCode 2.3.2 has no to-do tool, and said so |
 | `new_session` | A second session on the same connection, without resuming the first | yes |
@@ -364,7 +365,7 @@ was not kept.
 
 ## ACP: Goose
 
-The same twelve scenarios, recorded the same way, with Goose in a throwaway container, and `restart_mid_turn`. What they show is in
+The twelve scenarios of 2026-11-21, recorded the same way, with Goose in a throwaway container, and `restart_mid_turn`. What they show is in
 [`docs/reference/harness-messages.md`](../../docs/reference/harness-messages.md#acp-goose).
 
 | | |

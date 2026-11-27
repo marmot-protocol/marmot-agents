@@ -50,6 +50,8 @@ enum Purpose {
     Plain,
     /// A prompt: the turn it starts responds to this message.
     Prompt(MessageId),
+    /// A prompt sent into this running turn with the agent's steering extension.
+    Steer(MessageId, String),
     /// A control, settled by its effect or by the agent refusing it.
     Control(RequestId),
     /// A setting changed: settled by the agent's reply, whatever it changed.
@@ -130,6 +132,10 @@ pub struct Acp {
     starting: HashMap<String, MessageId>,
     /// The prompts each running turn responds to.
     prompts: HashMap<(ChatId, String), Vec<MessageId>>,
+    /// Whether the agent takes a message into a running turn (`_session/steering`, which
+    /// OpenCode announces in `initialize`), and the ids of those it said it took.
+    steers: bool,
+    steered: HashSet<String>,
     /// Messages for a session no chat has yet, each with that session, as it was found by its
     /// name or its tool call, kept while a session is being picked.
     early: Vec<(String, String)>,
@@ -243,6 +249,8 @@ impl Acp {
             requests: HashMap::new(),
             starting: HashMap::new(),
             prompts: HashMap::new(),
+            steers: false,
+            steered: HashSet::new(),
             early: Vec::new(),
             ready: Ready::default(),
             gone: false,
@@ -307,6 +315,7 @@ impl Acp {
         acp.version = result["agentInfo"]["version"].as_str().map(String::from);
         acp.load = result["agentCapabilities"]["loadSession"].as_bool() == Some(true);
         acp.resume = result["agentCapabilities"]["sessionCapabilities"]["resume"].is_object();
+        acp.steers = result["_meta"]["steering"]["supported"].as_bool() == Some(true);
         let name = result["agentInfo"]["name"].as_str().unwrap_or_default();
         let is_antigravity = name.eq_ignore_ascii_case("Antigravity ACP Server");
         // OpenCode, Goose and Cursor declare `mcpCapabilities.http: true`; Antigravity 1.5.18
@@ -666,6 +675,18 @@ impl Acp {
                     self.starting.remove(id); // no turn will start
                 }
             }
+            // A prompt joins a running turn only once the agent says it took it. Taken, it is
+            // never sent again, even when the turn's end was read first and no longer names it.
+            Purpose::Steer(prompt, turn) => {
+                if message["result"]["outcome"] == "injected"
+                    && let Some(id) = &id
+                {
+                    self.steered.insert(id.clone());
+                    if let Some(prompts) = self.prompts.get_mut(&(chat.clone(), turn)) {
+                        prompts.push(prompt);
+                    }
+                }
+            }
             // The agent refused a control: the event the refusal makes settles it, unless its
             // effect already did.
             Purpose::Control(request) => {
@@ -841,6 +862,7 @@ impl Acp {
         }
         self.requests.clear();
         self.starting.clear();
+        self.steered.clear();
         self.early.clear();
     }
 }
@@ -1043,6 +1065,41 @@ impl Acp {
         Ok(())
     }
 
+    /// Sends a prompt into the chat's running turn (`mid_turn: fold`), and waits for the agent's
+    /// word on it. False when no turn is running, or the agent did not take it: its turn had just
+    /// ended, or it refused. The prompt then goes as any other. So does a slash command, which
+    /// OpenCode reads as plain text when steered, and a message for a turn being stopped, which
+    /// would end with the turn.
+    async fn steer(&mut self, chat: &ChatId, prompt: &Prompt) -> Result<bool, Refusal> {
+        if prompt.text.starts_with('/') || self.cancelling.contains(chat) {
+            return Ok(false);
+        }
+        let translator = self.translator(chat);
+        let Some(turn) = translator.and_then(Translator::turn).map(String::from) else {
+            return Ok(false);
+        };
+        let session = translator.and_then(Translator::session).map(String::from);
+        if prompt.session.is_some()
+            && prompt.session.as_ref().map(|s| s.as_str()) != session.as_deref()
+        {
+            return Ok(false);
+        }
+        let params =
+            json!({"sessionId": session, "prompt": [{"type": "text", "text": text(prompt)}]});
+        let purpose = Purpose::Steer(prompt.message.clone(), turn);
+        let id = (self.request(chat, "_session/steering", params, purpose)).await?;
+        let deadline = Instant::now() + self.patience;
+        while self.requests.contains_key(&id) {
+            if !self.read_until(deadline).await {
+                // The agent may have taken it, or may yet: nothing more is read from it, so a
+                // prompt the core is told failed is never answered (D-066).
+                self.end();
+                return Err(Refusal::new(Reason::Failed));
+            }
+        }
+        Ok(self.steered.remove(&id))
+    }
+
     /// Cancels the chat's turn: tells the agent nobody will answer what it is waiting on, then
     /// asks it to stop (ACP's `session/cancel`).
     async fn cancel(&mut self, chat: &ChatId) -> Result<(), Refusal> {
@@ -1085,8 +1142,13 @@ impl Driver for Acp {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             interrupt: true,
-            // ACP v1 has no message during a turn: the driver cancels the turn, then prompts.
-            mid_turn: MidTurn::Restart,
+            // ACP v1 has no message during a turn: the driver cancels the turn, then prompts,
+            // unless the agent takes one with its steering extension.
+            mid_turn: if self.steers {
+                MidTurn::Fold
+            } else {
+                MidTurn::Restart
+            },
             sessions: Sessions::Core,
             resume: self.resume || self.load,
             approvals: true,
@@ -1119,6 +1181,9 @@ impl Driver for Acp {
         }
         self.chat(&chat);
         self.picked(&chat).await?;
+        if self.steers && self.steer(&chat, &prompt).await? {
+            return Ok(());
+        }
         // A message during a turn restarts it (`mid_turn: restart`). A turn waiting on the core's
         // word on a file cannot end while the core waits here for it to: the chat is busy.
         if self.translator(&chat).and_then(Translator::turn).is_some() {

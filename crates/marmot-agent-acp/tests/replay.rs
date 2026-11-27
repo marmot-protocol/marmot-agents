@@ -28,7 +28,7 @@ struct Marker {
 
 /// Each agent recorded over ACP, and how many recordings it has.
 const AGENTS: &[(&str, usize)] = &[
-    ("opencode", 12),
+    ("opencode", 13),
     ("goose", 13),
     ("cursor", 11),
     ("antigravity", 11),

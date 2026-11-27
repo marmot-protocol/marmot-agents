@@ -16,6 +16,8 @@ research.
   "Libraries" were checked that day: OpenCode 2.3.2 was driven over `opencode acp` by a recorder, and the
   crate was built into this workspace. What OpenCode sent is in
   [`harness-messages.md`](harness-messages.md#acp-opencode).
+- **OpenCode's steering extension was read and run on 2026-11-27**, for OpenCode 2.3.2: its ACP code at tag
+  `v2.3.2` (`packages/cli/src/acp/agent.ts` and `turn.ts`), and the `steer` recording.
 - **Codex was read again on 2026-11-19.** The Codex entry, its two rows under "Libraries" and the whole of
   [Codex: which library to build on](#codex-which-library-to-build-on) are from that day, and that section
   says how each fact was checked. Three candidate libraries were built and run on this machine.
@@ -110,7 +112,9 @@ Read again on 2026-11-19. The newest release is 0.170.0 (2026-11-18). The record
   token usage in the reply to `session/prompt`.
 - **ACP lacks:** plan updates (none found in source, and 2.3.2 has no to-do tool at all); undo and redo. A second
   prompt during a turn is an error; steering exists only as an extension, which `initialize` announces in
-  `_meta.steering`. Subagent sessions are flattened into the parent (not checked). A form question is asked only
+  `_meta.steering`: the request `_session/steering`, with `sessionId` and `prompt`, answered `{"outcome":
+  "injected"}`, or `{"outcome": "promptRequired", "reason": "noRunningTurn"}` when no turn is running, and it
+  never starts a turn. Its source calls it an interim extension, until ACP has steering of its own. Subagent sessions are flattened into the parent (not checked). A form question is asked only
   if the client declares the `elicitation` capability. A command's exit code is only in `rawOutput`.
 
 ### Pi

@@ -68,7 +68,7 @@ harness-specific extensions, or is missing. So:
 - **A harness gets a native driver** when it matters enough that losing features is not acceptable, or when its
   ACP support is poor. That is Codex, Claude Code and Pi.
 - **Everything else uses the ACP driver.** Where a harness needs something the standard lacks, the ACP driver
-  gets a small "flavour" for it, as Goose does for steering.
+  gets a small "flavour" for it, as OpenCode has for a message sent during a turn.
 
 Because all drivers sit behind the same trait, a harness can move from ACP to a native driver later without any
 change above the driver.
@@ -476,7 +476,9 @@ cwd = "/home/me/work"
   the values of the options chosen, and typed text in the question's free-text field.
 - **Interrupt** answers the requests still waiting as cancelled, as ACP asks, then sends `session/cancel`;
   until the turn ends, a request the agent makes is answered as cancelled at once. A message sent during a
-  turn does the same, waits up to a minute for the turn to end, then prompts (`restart`). **New
+  turn does the same, waits up to a minute for the turn to end, then prompts (`restart`); to an agent that
+  announces steering it is sent with `_session/steering` and the turn goes on (`fold`), and it goes the first
+  way only if the agent did not take it, if it is a slash command, or if the turn is being stopped. **New
   session** sends `session/new`, only when no turn is running. **`set`** sends `session/set_config_option`, and is settled by its reply, even one that changed nothing.
 - **Item ids** of tools, approvals and questions name the session as well as the agent's tool-call id, which
   is the agent's own for one session; so an answer can only reach the chat whose request it names.
@@ -522,7 +524,9 @@ cwd = "/home/me/work"
   installer writes `send_files = false` there, and it has no tool; on the host it has. What each agent does was read in its source or seen on the wire
   ([harness interfaces](../reference/harness-interfaces.md#mcp-servers-from-the-client-over-acp)).
 
-Its capabilities: it can interrupt; a message during a turn restarts it; the core names the sessions, which
+Its capabilities: it can interrupt; a message during a turn restarts it, or joins it (`fold`) when the agent
+announces steering, as OpenCode does
+([D-186](../decisions.md#d-186-the-acp-driver-sends-a-message-during-a-turn-with-the-agents-steering-extension-when-it-announces-one)); the core names the sessions, which
 can be resumed when the agent can load or resume them; approvals come to the chat; no approval commands; no
 files passed to the agent ([D-083](../decisions.md#d-083-the-core-passes-no-files-to-a-harness-yet)).
 

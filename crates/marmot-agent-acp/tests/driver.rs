@@ -4,8 +4,8 @@
 
 use marmot_agent_acp::Acp;
 use marmot_agent_driver::{
-    Action, Answer, Chat, Control, Driver, Emitted, Given, Output, Person, Prompt, Refusal,
-    RequestId,
+    Action, Answer, Chat, Control, Driver, Emitted, Given, MidTurn, Output, Person, Prompt,
+    Refusal, RequestId,
 };
 use marmot_agent_events::{Body, State};
 use serde_json::{Value, json};
@@ -742,4 +742,200 @@ async fn a_message_naming_only_its_tool_call_before_the_session_is_picked_reache
     }
     agent.await.unwrap();
     assert!(planned, "the to-do list reaches the chat as its plan");
+}
+
+/// A stand-in that says, as OpenCode does, that it takes a message into a running turn.
+async fn connected_steering() -> (Acp, Stand) {
+    let (driver_side, stand_side) = tokio::io::duplex(1 << 16);
+    let (read, write) = tokio::io::split(stand_side);
+    let mut stand = Stand {
+        lines: BufReader::new(read).lines(),
+        out: write,
+    };
+    let (driver_read, driver_write) = tokio::io::split(driver_side);
+    let greeting = tokio::spawn(async move {
+        let hello = stand.next().await;
+        let agent = json!({"protocolVersion": 1, "agentCapabilities": {"loadSession": true},
+                           "_meta": {"steering": {"supported": true}},
+                           "agentInfo": {"name": "Stand In", "version": "1.0.0"}});
+        stand.reply(&hello, agent).await;
+        stand
+    });
+    let acp = Acp::connect(driver_read, driver_write, "/work/demo", "standin")
+        .await
+        .unwrap();
+    (acp, greeting.await.unwrap())
+}
+
+/// #269. An agent that announces steering is sent a message that comes during a turn with
+/// `_session/steering`, and the turn goes on: nothing is cancelled, and the turn names both
+/// prompts once the agent has said it took the second. An agent that announces nothing has its
+/// turn restarted, as before.
+#[tokio::test]
+async fn a_message_during_a_turn_joins_it_when_the_agent_takes_steering() {
+    let (plain, _stand) = connected().await;
+    assert_eq!(plain.capabilities().mid_turn, MidTurn::Restart);
+    let (mut acp, mut stand) = connected_steering().await;
+    assert_eq!(acp.capabilities().mid_turn, MidTurn::Fold);
+    let agent = tokio::spawn(async move {
+        let new = stand.next().await;
+        stand.reply(&new, json!({"sessionId": "s1"})).await;
+        let first = stand.next().await;
+        let steer = stand.next().await;
+        assert_eq!(steer["method"], "_session/steering");
+        assert_eq!(steer["params"]["sessionId"], "s1");
+        assert_eq!(steer["params"]["prompt"][0]["text"], "again");
+        stand.reply(&steer, json!({"outcome": "injected"})).await;
+        stand.reply(&first, json!({"stopReason": "end_turn"})).await;
+        stand
+    });
+    acp.prompt(prompt_in("c-1", "m-1", None)).await.unwrap();
+    let again = Prompt {
+        text: "again".into(),
+        ..prompt_in("c-1", "m-2", None)
+    };
+    acp.prompt(again).await.unwrap();
+    let ended = loop {
+        let e = event(&mut acp).await;
+        if matches!(e.event.body(), Body::Turn(_)) && e.event.header().state == State::Done {
+            break e;
+        }
+    };
+    assert_eq!(ended.prompts, vec!["m-1".into(), "m-2".into()]);
+    agent.await.unwrap();
+}
+
+/// A steer the agent does not take, because its turn had just ended, goes as a prompt of its own:
+/// the message is not lost, and it starts the next turn.
+#[tokio::test]
+async fn a_steer_the_agent_does_not_take_goes_as_a_prompt() {
+    let (mut acp, mut stand) = connected_steering().await;
+    let agent = tokio::spawn(async move {
+        let new = stand.next().await;
+        stand.reply(&new, json!({"sessionId": "s1"})).await;
+        let first = stand.next().await;
+        let steer = stand.next().await;
+        assert_eq!(steer["method"], "_session/steering");
+        let idle = json!({"outcome": "promptRequired", "reason": "noRunningTurn"});
+        stand.reply(&steer, idle).await;
+        stand.reply(&first, json!({"stopReason": "end_turn"})).await;
+        let mut next = stand.next().await;
+        if next["method"] == "session/cancel" {
+            next = stand.next().await; // of a turn already over: nothing to stop
+        }
+        assert_eq!(next["method"], "session/prompt");
+        assert_eq!(next["params"]["prompt"][0]["text"], "again");
+        stand.reply(&next, json!({"stopReason": "end_turn"})).await;
+        stand
+    });
+    acp.prompt(prompt_in("c-1", "m-1", None)).await.unwrap();
+    let again = Prompt {
+        text: "again".into(),
+        ..prompt_in("c-1", "m-2", None)
+    };
+    acp.prompt(again).await.unwrap();
+    let mut turns = Vec::new();
+    while turns.len() < 2 {
+        let e = event(&mut acp).await;
+        if matches!(e.event.body(), Body::Turn(_)) && e.event.header().state == State::Done {
+            turns.push(e.prompts);
+        }
+    }
+    assert_eq!(turns, vec![vec!["m-1".into()], vec!["m-2".into()]]);
+    agent.await.unwrap();
+}
+
+/// Steering is for words. OpenCode reads a steered message as plain text and runs no command
+/// from it, and a turn already being stopped would end with the message in it: a slash command,
+/// and a message that comes after a Stop, restart the turn as they would without steering.
+#[tokio::test]
+async fn a_command_and_a_message_after_a_stop_are_not_steered() {
+    for (text, stopped) in [("/compact", false), ("again", true)] {
+        let (mut acp, mut stand) = connected_steering().await;
+        let agent = tokio::spawn(async move {
+            let new = stand.next().await;
+            stand.reply(&new, json!({"sessionId": "s1"})).await;
+            let first = stand.next().await;
+            let cancel = stand.next().await;
+            assert_eq!(cancel["method"], "session/cancel", "{text}");
+            if stopped {
+                let again = stand.next().await;
+                assert_eq!(again["method"], "session/cancel", "{text}");
+            }
+            let cancelled = json!({"stopReason": "cancelled"});
+            stand.reply(&first, cancelled).await;
+            let second = stand.next().await;
+            assert_eq!(second["method"], "session/prompt", "{text}");
+            assert_eq!(second["params"]["prompt"][0]["text"], text);
+            stand
+        });
+        acp.prompt(prompt_in("c-1", "m-1", None)).await.unwrap();
+        if stopped {
+            let turn = loop {
+                let e = event(&mut acp).await;
+                if let Some(turn) = e.event.header().turn.clone() {
+                    break turn;
+                }
+            };
+            let stop = Control {
+                request: RequestId::from("r-1"),
+                by: person(),
+                action: Action::Interrupt {
+                    turn,
+                    subagent: None,
+                },
+            };
+            acp.control(stop).await.unwrap();
+        }
+        let next = Prompt {
+            text: text.into(),
+            ..prompt_in("c-1", "m-2", None)
+        };
+        acp.prompt(next).await.unwrap();
+        agent.await.unwrap();
+    }
+}
+
+/// A steer the agent took is never handed to it again, even when the turn's end is read before
+/// the agent's word on the steer.
+#[tokio::test]
+async fn a_steer_taken_as_its_turn_ends_is_not_sent_again() {
+    let (mut acp, mut stand) = connected_steering().await;
+    let agent = tokio::spawn(async move {
+        let new = stand.next().await;
+        stand.reply(&new, json!({"sessionId": "s1"})).await;
+        let first = stand.next().await;
+        let steer = stand.next().await;
+        assert_eq!(steer["method"], "_session/steering");
+        stand.reply(&first, json!({"stopReason": "end_turn"})).await;
+        stand.reply(&steer, json!({"outcome": "injected"})).await;
+        stand.hears_nothing(300).await;
+        stand
+    });
+    acp.prompt(prompt_in("c-1", "m-1", None)).await.unwrap();
+    acp.prompt(prompt_in("c-1", "m-2", None)).await.unwrap();
+    agent.await.unwrap();
+}
+
+/// A steer the agent never answers may have been taken or not, and the driver has told the core
+/// it failed: the connection ends, so a late answer changes nothing (D-066).
+#[tokio::test]
+async fn a_steer_never_answered_ends_the_connection() {
+    let (mut acp, mut stand) = connected_steering().await;
+    let agent = tokio::spawn(async move {
+        let new = stand.next().await;
+        stand.reply(&new, json!({"sessionId": "s1"})).await;
+        let _first = stand.next().await;
+        let steer = stand.next().await;
+        (stand, steer)
+    });
+    acp.prompt(prompt_in("c-1", "m-1", None)).await.unwrap();
+    acp.set_patience(Duration::from_millis(200));
+    let refused = acp.prompt(prompt_in("c-1", "m-2", None)).await;
+    assert!(refused.is_err());
+    let (mut stand, steer) = agent.await.unwrap();
+    assert_eq!(steer["method"], "_session/steering");
+    stand.reply(&steer, json!({"outcome": "injected"})).await;
+    let refused = acp.prompt(prompt_in("c-1", "m-3", None)).await;
+    assert_eq!(refused.unwrap_err(), Refusal::ended());
 }

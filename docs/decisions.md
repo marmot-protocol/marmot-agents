@@ -4355,3 +4355,30 @@ the quote it was read with. And what a harness was handed before the deletion st
 
 Decided 2026-11-27. The builder recommended it, and the project owner accepted keeping the author and chose
 the wording for a deleted message.
+
+## D-186 The ACP driver sends a message during a turn with the agent's steering extension, when it announces one
+
+**Decision.** An ACP agent that announces steering in `initialize` (`_meta.steering.supported`, as OpenCode
+does) is sent a message that arrives during a turn with `_session/steering`, and the driver reports `mid_turn:
+fold` for it. The turn goes on, and names that message among the prompts it responds to once the agent has said
+it took it. When the agent says it did not, because its turn had just ended, or refuses, the message goes as a
+prompt of its own, as before. So do a slash command, which OpenCode reads as plain text when it is steered, and
+a message that comes while the turn is being stopped. An agent that announces nothing keeps `restart`: the
+driver cancels the turn, then prompts.
+
+**Why.** ACP v1 has no message during a turn, so the driver cancelled the running turn for every agent. In a
+group that lets a second person's message cut off the first person's turn
+([D-040](#d-040-a-message-sent-during-a-turn-goes-straight-to-the-harness)). OpenCode offers the fold at its
+terminal, and the aim is as much from the chat as the terminal gives
+([D-011](#d-011-full-control-from-the-phone)). The extension is on the interface the driver already
+speaks, so no second interface to OpenCode is needed
+([D-006](#d-006-prefer-official-interfaces-and-libraries)). It was seen running in the `steer` recording
+(OpenCode 2.3.2, 2026-11-27), and the request came from
+[#269](https://github.com/marmot-protocol/marmot-agents/issues/269).
+
+**The cost.** The extension is OpenCode's own and its source calls it interim, until ACP has steering. The
+driver uses it only when it is announced, so an OpenCode that drops it goes back to `restart` with no change
+here. ACP v2 lets a prompt be sent in any state; when the driver moves to it, this entry is replaced.
+
+Provisional, 2026-11-27. What `mid_turn` an agent reports is seen by apps, so it is the project owner's to
+accept; the builder recommends it.
