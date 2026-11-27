@@ -569,6 +569,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          LABEL: nightly-failure
           NEEDS: ${{ toJSON(needs) }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SHA: ${{ needs.resolve.outputs.sha || github.sha }}
@@ -603,7 +604,9 @@ jobs:
               gh issue comment "${number}" --body "${body}"
               echo "Added to #${number}: ${title}"
             else
-              gh issue create --title "${title}" --body "${body}
+              gh label create "${LABEL}" --force --color d93f0b \
+                --description "Automated issue opened when a nightly CI job fails"
+              gh issue create --title "${title}" --label "${LABEL}" --body "${body}
 
           This issue is opened by .github/workflows/nightly.yml, which adds a comment each night the job fails again. Close it once the job passes."
               echo "Opened: ${title}"
