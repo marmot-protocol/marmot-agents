@@ -42,6 +42,17 @@ pub struct Connection {
     write: OwnedWriteHalf,
 }
 
+impl Connection {
+    /// Stops reading for good, with the connection held open: what the core writes to it from
+    /// now on fails, with none of it written, while its reading sees the connection as open.
+    pub fn deaf(self) -> std::os::unix::net::UnixStream {
+        let read = self.lines.into_inner().into_inner();
+        let stream = read.reunite(self.write).unwrap().into_std().unwrap();
+        stream.shutdown(std::net::Shutdown::Read).unwrap();
+        stream
+    }
+}
+
 /// Connects, gives `hello`, and gives back the core's answer to it.
 pub async fn connect(socket: &Path, hello: Value) -> (Value, Connection) {
     let stream = UnixStream::connect(socket).await.unwrap();

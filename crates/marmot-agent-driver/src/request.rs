@@ -326,8 +326,8 @@ pub struct Refusal {
     /// not delivered, and is still never sent again (D-037, D-129).
     pub unanswered: bool,
     /// The driver has ended, as when its connection or its harness is gone, and none of the
-    /// request reached it. A prompt the core handed on without seeing that the driver had ended
-    /// was never given, and waits for the next driver (D-139).
+    /// request reached it. A prompt refused so was never given, and waits for the next driver; an
+    /// answer or a control is settled with the refusal (D-139, D-180).
     pub ended: bool,
 }
 

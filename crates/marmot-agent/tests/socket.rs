@@ -281,13 +281,20 @@ struct Away {
     endpoint: Endpoint,
     token: String,
     hex: String,
+    group: cgka_traits::GroupId,
     stop: oneshot::Sender<()>,
     task: tokio::task::JoinHandle<Result<(), String>>,
 }
 
 impl Away {
     async fn new() -> Self {
-        use marmot_agent::GroupKey;
+        let away = Self::started().await;
+        away.store_three().await;
+        away
+    }
+
+    /// [`Away::new`] before the three prompts are stored.
+    async fn started() -> Self {
         let world = World::new("name = \"Script\"\n[connector]\n").await;
         world.runtime.start().await.unwrap();
         let home = tempfile::tempdir().unwrap();
@@ -327,32 +334,34 @@ impl Away {
         world.words(&hex, "echo: zero").await;
         first.abort();
         let _ = first.await;
+        Self {
+            world,
+            endpoint,
+            token,
+            hex,
+            group,
+            stop,
+            task,
+        }
+    }
 
-        // Three prompts arrive while no connector is there, and are stored.
+    /// Three prompts arrive, and are stored.
+    async fn store_three(&self) {
         for text in ["one", "two", "three"] {
-            world
-                .runtime
-                .send_message(&world.person, &group, text.as_bytes().to_vec())
+            (self.world.runtime)
+                .send_message(&self.world.person, &self.group, text.as_bytes().to_vec())
                 .await
                 .unwrap();
         }
-        let key = GroupKey(hex.clone());
+        let key = marmot_agent::GroupKey(self.hex.clone());
         eventually(|| {
-            let page = world.marmot.stored(&key, 0, 1000).ok()?;
+            let page = self.world.marmot.stored(&key, 0, 1000).ok()?;
             page.messages
                 .iter()
                 .any(|m| m.content == "three")
                 .then_some(())
         })
         .await;
-        Self {
-            world,
-            endpoint,
-            token,
-            hex,
-            stop,
-            task,
-        }
     }
 
     /// Runs a connector with `script` until it goes, and gives the prompts it was given.
@@ -366,11 +375,17 @@ impl Away {
     /// An echoing connector is given "two" and "three", once each and nothing else, and the
     /// notices the chat was told that a prompt was or may not have been passed on, by then.
     async fn next_given_the_rest(self) -> Vec<String> {
+        self.next_given(&["two", "three"]).await
+    }
+
+    /// An echoing connector is given `rest`, once each and nothing else, and the notices the chat
+    /// was told that a prompt was or may not have been passed on, by then.
+    async fn next_given(self, rest: &[&str]) -> Vec<String> {
         let (_, stream) = connect(&self.endpoint.socket, &self.token).await;
         let heard = Heard::default();
         let next = tokio::spawn(connector::run(stream, Script::Echo, "next", heard.clone()));
         self.world.words(&self.hex, "echo: three").await;
-        assert_eq!(*heard.lock().unwrap(), ["two", "three"]);
+        assert_eq!(*heard.lock().unwrap(), rest);
         let notices = (self.world.items(&self.hex).into_iter())
             .map(|(_, read)| read.item.event.header().text.clone())
             .filter(|text| text.contains("passed to the agent"))
@@ -413,4 +428,21 @@ async fn prompts_refused_by_a_gone_connector_while_its_output_is_held_go_to_the_
     assert_eq!(away.connector(Script::Burst, "burst").await, ["one"]);
     let notices = away.next_given_the_rest().await;
     assert!(notices.is_empty(), "nobody is told: {notices:?}");
+}
+
+// A connector whose connection goes in the moment after the core looked whether it had anything,
+// so the look saw nothing: the prompt the core hands it next is refused with none of it written.
+// That prompt was never given, as when output the core held hid the end, so its mark stays
+// before it: the next connector is given it and the two after, once each, and nobody is told
+// that any was not passed (D-180). The connector here stops reading once greeted, so the core's
+// write fails while its reading still sees the connection open.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_prompt_refused_by_a_connector_gone_after_the_core_looked_goes_to_the_next() {
+    let away = Away::started().await;
+    let (_, stream) = connect(&away.endpoint.socket, &away.token).await;
+    let deaf = stream.deaf();
+    away.store_three().await;
+    let notices = away.next_given(&["one", "two", "three"]).await;
+    assert!(notices.is_empty(), "nobody is told: {notices:?}");
+    drop(deaf);
 }

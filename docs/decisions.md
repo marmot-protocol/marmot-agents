@@ -2510,6 +2510,9 @@ connection to it was lost before it answered. It is not sent again." A prompt th
 refused, is still told it was not passed to the agent. Either way it is never sent again
 ([D-037](#d-037-a-prompt-is-delivered-at-most-once)).
 
+Replaced in part by [D-180](#d-180-a-prompt-a-driver-refuses-as-having-ended-waits-for-the-next-driver-whenever-the-core-handed-it-on): a prompt the connector never got because the driver had ended waits for the next
+driver, and nobody is told.
+
 **Why.** The connector may have handed the prompt to the harness before the connection went, and the harness
 may run it (the `prompt-in-flight` counterexample of `formal/tla/SocketProtocol.md`). The core cannot tell the
 two apart, so "not delivered" would be wrong when the agent then answers.
@@ -2831,6 +2834,8 @@ was saved past it, so no later connector got it, though none had been tried. Wha
 there already waits for the next one; this is the same. The core sees that a driver has ended by asking for its
 next event without waiting, before each message it reads. A connection that goes after that look and before the
 prompt is written still has that one prompt told as not passed. Issue #135.
+
+Replaced in part by [D-180](#d-180-a-prompt-a-driver-refuses-as-having-ended-waits-for-the-next-driver-whenever-the-core-handed-it-on): such a prompt, none of which was written, waits for the next driver too.
 
 Decided 2026-11-23 by the builder, under the project owner's instruction to decide minor points.
 
@@ -4175,3 +4180,38 @@ And `p` already names the agent, on a kind 1202 request and on an item in a suba
 
 Decided 2026-11-27. The builder found it while building D-175, and the project owner accepted the
 recommendation.
+
+## D-180 A prompt a driver refuses as having ended waits for the next driver, whenever the core handed it on
+
+**Decision.** When a driver refuses a prompt saying it has ended and none of the prompt reached it
+(`Refusal::ended`: a connector whose connection is gone, or to which nothing of the prompt could be written; Codex
+or an ACP agent whose harness is gone), the prompt was never given, whatever the core saw when it last looked
+whether the driver had anything for it. Nobody is told, its read mark stays before it, the core reads nothing more
+for that driver and ends as for any driver that ends, and the next driver is given it once: the next connector
+on the socket, or the core started again with a new harness. This replaces the sentence of
+[D-139](#d-139-prompts-a-driver-that-ended-was-never-given-wait-for-the-next-driver) that a connection that goes
+after the core's look and before the prompt is written still has that prompt told as not passed, and, for such a
+prompt, the part of [D-129](#d-129-a-prompt-whose-answer-a-dropped-connection-lost-is-told-as-perhaps-not-delivered)
+that says a prompt the connector never got is told it was not passed.
+
+- **What stays.** A prompt of which any part was written, or that the connector or the harness had, is told as
+  D-129 says and never sent again ([D-037](#d-037-a-prompt-is-delivered-at-most-once)). A prompt no connection
+  could carry, as one over the size a message may have, is refused as failed and told, never as ended, so it does
+  not pass from one connector to the next without end.
+- **Answers and controls are still settled.** A driver that refuses an answer or a control as having ended has its
+  refusal shown, once, as before ([D-028](#d-028-an-answer-or-a-control-is-a-request-and-the-agents-reply-settles-it)):
+  what an answer answers, and the turn a Stop stops, belong to the driver that ended and are closed with it
+  ([D-058](#d-058-the-driver-trait-and-the-capability-flags),
+  [D-070](#d-070-a-restart-closes-the-turn-as-interrupted)), so the next driver could only refuse them; and a
+  request that names no item and is more than five minutes old is dropped with no reply
+  ([D-140](#d-140-an-answer-or-a-control-the-agent-cannot-read-is-refused)), so one kept for a connector that
+  comes later might never be settled at all. The person can press again.
+
+**Why.** Issue #257 and pull request #265 made a prompt refused so wait only when the driver had output ready,
+which hid its end from the core's look; when the look was clear, a connection that dropped in the moment after it
+still had the prompt told as not passed, and the person had to send it again. The two cases differ only in when
+the core looked, which the person cannot see. A prompt none of which reached the driver is in the same place as
+one that arrived while no connector was there, which already waits for the next.
+
+Decided 2026-11-27 by the project owner; how answers and controls are treated was decided by the builder, under
+the project owner's instruction to decide minor points.
