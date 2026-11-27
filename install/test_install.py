@@ -348,6 +348,8 @@ def walk(c, path, make=False):
 if args == ["--version"]:
     print(f"Hermes Agent v{os.environ.get('FAKE_HERMES_VERSION', '0.23.2')} (2026.9.24) · stable")
 elif args[:2] == ["config", "path"]:
+    if os.environ.get("FAKE_HERMES_FAIL") == "config path":
+        sys.exit("the hermes stand-in fails config path, as asked")
     print(config)
 elif args[:2] == ["config", "env-path"]:
     print(env)
@@ -947,7 +949,8 @@ class Install(unittest.TestCase):
         """Each step of the uninstall made to fail in turn, a run again takes out the rest (#89). The platform,
         whose home marks the Hermes as this agent's, goes last: once it went first, a failure after it left the
         plugin, and MARMOT_ALLOW_ALL_USERS, for no later run to take out."""
-        for step in ("config unset MARMOT_ALLOW_ALL_USERS", "plugins disable", "config unset platforms.marmot"):
+        for step in ("config path", "config unset MARMOT_ALLOW_ALL_USERS", "plugins disable",
+                     "config unset platforms.marmot"):
             with self.subTest(step=step):
                 m = Machine(self)
                 hermes = m.home / ".hermes"

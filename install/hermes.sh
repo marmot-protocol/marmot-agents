@@ -172,6 +172,12 @@ harness_uninstall() {
         say "your Hermes does not connect to this agent; it is left as it is"
         return 0
     fi
+    # Where our plugin is, before anything changes: without it the platform would go and leave the plugin.
+    config=$("$HERMES" config path 2>/dev/null) || config=""
+    case $config in
+        /*/config.yaml) PLUGIN=$(dirname "$config")/plugins/marmot ;;
+        *) die "hermes config path named no config.yaml, so this cannot find our plugin in your Hermes: run this again once it does" ;;
+    esac
     say "removing the Marmot plugin and its platform from your Hermes"
     if [ -f "$MA_AGENT_DIR/hermes-allow-all" ]; then
         local before
@@ -184,16 +190,10 @@ harness_uninstall() {
         act rm -f "$MA_AGENT_DIR/hermes-allow-all"
     fi
     # Hermes refuses to disable a plugin it does not have, as when a run before took ours out.
-    config=$("$HERMES" config path 2>/dev/null) || config=""
-    case $config in
-        /*/config.yaml)
-            PLUGIN=$(dirname "$config")/plugins/marmot
-            if ours "$PLUGIN"; then
-                act "$HERMES" plugins disable marmot
-                act rm -rf "$PLUGIN"
-            fi
-            ;;
-    esac
+    if ours "$PLUGIN"; then
+        act "$HERMES" plugins disable marmot
+        act rm -rf "$PLUGIN"
+    fi
     act "$HERMES" config unset platforms.marmot
     say "Restart your Hermes gateway for it to drop the plugin: hermes gateway restart"
 }

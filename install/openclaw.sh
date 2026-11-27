@@ -67,7 +67,7 @@ harness_check() {
     elif [ "${found%% *}" = found ]; then
         # A plugin OpenClaw loads from a folder it is pointed at wins over one it installed, a checkout of
         # ours too.
-        missing "room for our Marmot plugin" "Your OpenClaw loads another plugin called marmot ($package) from" \
+        missing "room for our Marmot plugin" "Your OpenClaw loads a plugin called marmot ($package) from" \
             "${found#* }, a folder its settings point it at (plugins.load.paths), and it would load that" \
             "one in place of ours. Take that folder out of plugins.load.paths (moving the install over" \
             "first if it is today's connector, docs/move.md), then run this again."
