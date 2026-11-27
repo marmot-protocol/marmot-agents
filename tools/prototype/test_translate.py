@@ -7,8 +7,8 @@ The recordings are the test of the prototype, and `translate.py --check` runs th
 covers cases that were never recorded: a Codex question marked secret, a question asked in a message
 that outlives its turn, a translator that follows one thread, Claude Code's answer to a question with
 several choices or with typed text, what Claude Code's client learns before the session has an id, an
-ACP message streamed with no id, and for Pi, a prompt sent as a turn ends and a new session an extension
-cancels.
+ACP message streamed with no id, for Pi, a prompt sent as a turn ends and a new session an extension
+cancels, and for Hermes, a direct chat's approval while another chat's turn runs.
 The messages below are written by hand, in the shapes the recordings have: for Codex, the shape
 `item/tool/requestUserInput` has in `fixtures/recordings/codex/plan_mode.jsonl`; for Claude Code, the
 shapes in `fixtures/recordings/claude/question.jsonl` and `early_info.jsonl`; for Pi, the shapes in
@@ -500,3 +500,26 @@ class PiCancelledNewSession(unittest.TestCase):
         [error] = pi.events
         self.assertEqual((error["type"], error["state"], error["body"]), ("error", "failed", {"request": "new_session"}))
         self.assertEqual(pi.session, "s1")
+
+
+def hermes_turn_start(message: str, chat_type: str, chat: str, user: str) -> dict:
+    source = {"chat_id": chat, "chat_type": chat_type, "user_id": user}
+    return {"dir": "in", "via": "hook", "msg": {"method": "on_processing_start", "params": {
+        "event": {"message_id": message, "text": "hi", "source": source}}}}
+
+
+class HermesDirectChatApproval(unittest.TestCase):
+    """Hermes names a direct chat's session after the chat alone, `agent:main:<platform>:dm:<chat>`, as the
+    plugin's `names_session` knows (#171). An approval of that session that arrives while a newer turn of
+    another chat runs belongs to the direct chat's turn, not the latest."""
+
+    def test_the_approval_goes_to_the_direct_chats_turn(self):
+        hermes = translate.Hermes()
+        for record in [hermes_turn_start("m-1", "dm", "c-1", "u-1"),
+                       hermes_turn_start("m-2", "group", "g-1", "u-2"),
+                       {"dir": "in", "via": "hook", "msg": {"method": "_send_exec_approval_prompt", "params": {"prompt": {
+                           "session_key": "agent:main:recorder:dm:c-1", "command": "ls", "request_id": "r-1",
+                           "actions": [["Allow Once", "once", "primary"], ["Deny", "deny", "danger"]]}}}}]:
+            hermes.feed(record)
+        [approval] = [e for e in hermes.events if e["type"] == "approval"]
+        self.assertEqual((approval["session"], approval["turn"]), ("dm:c-1:u-1", "m-1"))
