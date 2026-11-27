@@ -990,14 +990,17 @@ does, and feeds it to the chat's translator:
 
 The core decides who may prompt and approve, as for every harness
 ([D-084](../decisions.md#d-084-the-core-decides-first-and-a-gateway-allows-what-the-core-lets-through)), and
-Hermes is set up to take whatever reaches it: every user is allowed, anyone in a chat may answer an approval,
-and `/new` is not confirmed a second time. Provisionally, Hermes's approval mode is `manual`, so a command
-Hermes flags is always put to a person, never decided by a second model.
+Hermes lets every user through. In the container, Hermes is also set up so that anyone in a chat may answer an
+approval and `/new` is not confirmed a second time, and, provisionally, its approval mode is `manual`, so a
+command Hermes flags is always put to a person, never decided by a second model. A person's own Hermes keeps its
+own approval mode and who may answer its approvals (above): in Hermes's default mode, `smart`, a second model
+may approve a flagged command without asking the chat
+([`hermes-messages.md`](../reference/hermes-messages.md)).
 
 Its capabilities: it can interrupt; a message sent during a turn is folded into it (`fold`); Hermes keeps its
-own sessions, and they survive a restart; approvals come to the chat; it takes no files yet. Its approval
-commands, each counted at the start of a message, are `/approve`, `/deny`, `/yolo`, `/approvals`, `/memory`,
-`/skills`, `/codex-runtime` and `/codex_runtime`, each name Hermes runs a command under
+own sessions, and they survive a restart; the approvals Hermes puts to a person come to the chat; it takes no
+files yet. Its approval commands, each counted at the start of a message, are `/approve`, `/deny`, `/yolo`,
+`/approvals`, `/memory`, `/skills`, `/codex-runtime` and `/codex_runtime`, each name Hermes runs a command under
 ([D-150](../decisions.md#d-150-the-core-matches-a-typed-command-as-the-harness-reads-it-failing-towards-asking-for-the-right-to-approve)).
 
 ## Adding a harness

@@ -112,7 +112,11 @@ There is no release of `marmot-agent` yet: build it from a checkout first, as th
    and takes the old plugin's own settings out of the gateway's (for OpenClaw, its socket, account and sender
    policy, which OpenClaw would refuse once the new plugin is in). The gateway may keep running while it does. Then
    restart the gateway. Without settings in the agent's folder, `--replace-plugin` stops before changing
-   anything. The move is done once the core runs as a service. If the installer fails before that, or is
+   anything. If your OpenClaw loads the old plugin from a folder its settings point it at
+   (`plugins.load.paths`), as a checkout of it does, take that folder out of `plugins.load.paths` before you
+   run the installer, once the import has stopped the old services: OpenClaw would load it in place of the
+   new one, so the installer refuses it, even with `--replace-plugin`. A plugin OpenClaw installed itself, as
+   today's installer puts it in, is replaced as above. The move is done once the core runs as a service. If the installer fails before that, or is
    stopped (Ctrl-C, or a `TERM`), it puts the gateway's settings and the old plugin back from those copies
    before it ends, and says so; run it again once what failed is fixed. It notes the copies in
    `plugin-change` in the agent's folder until the move is done, so if it is killed outright, run it
@@ -298,7 +302,9 @@ installer, such as `install/codex.sh --uninstall --name <name>` (`<name>` is the
 default). For Claude Code that removes the connector's service too. For Hermes and OpenClaw it also takes our
 plugin and its settings out of the gateway, and gives up a move the installer left unfinished: it removes
 `plugin-change` from the agent's folder, so that no later run puts the copies back over what the gateway has by
-then. If you put the gateway back by hand without `--uninstall`, delete `plugin-change` yourself. If you started
+then. If `--uninstall` fails part way, run it again once what failed is fixed: it takes the gateway's platform
+or channel, which names the agent, out last, so a run again still finds the rest. If you put the gateway back by
+hand without `--uninstall`, delete `plugin-change` yourself. If you started
 the core yourself, with `marmot-agent run`, stop it.
 
 For Hermes and OpenClaw, then put the gateway back as it was from the copies the installer kept before the move,

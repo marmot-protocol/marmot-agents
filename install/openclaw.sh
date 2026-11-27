@@ -41,7 +41,7 @@ harness_check() {
     }
     OPENCLAW_FOUND=1
     local version
-    version=$(version_of "$OPENCLAW")
+    version=$(version_of "$OPENCLAW") || version=""
     if [ -z "$version" ] || version_below "$version" "$OPENCLAW_LEAST"; then
         missing "OpenClaw $OPENCLAW_LEAST or later" "This is OpenClaw ${version:-of an unknown version}. $OPENCLAW_HOW"
         return 0
@@ -64,15 +64,16 @@ harness_check() {
     package=$(plugin_package "${found#* }")
     if [ -z "$found" ]; then
         :
-    elif [ "$package" = "$OUR_PACKAGE" ]; then
-        # Ours, as an earlier install put it in: an update replaces it.
-        if [ "${found%% *}" = installed ]; then OUR_FOLDER=${found#* }; fi
     elif [ "${found%% *}" = found ]; then
-        # A plugin OpenClaw loads from a folder it is pointed at wins over one it installed.
-        missing "room for our Marmot plugin" "Your OpenClaw loads another plugin called marmot ($package) from" \
+        # A plugin OpenClaw loads from a folder it is pointed at wins over one it installed, a checkout of
+        # ours too.
+        missing "room for our Marmot plugin" "Your OpenClaw loads a plugin called marmot ($package) from" \
             "${found#* }, a folder its settings point it at (plugins.load.paths), and it would load that" \
             "one in place of ours. Take that folder out of plugins.load.paths (moving the install over" \
             "first if it is today's connector, docs/move.md), then run this again."
+    elif [ "$package" = "$OUR_PACKAGE" ]; then
+        # Ours, as an earlier install put it in: an update replaces it.
+        OUR_FOLDER=${found#* }
     else
         if [ "$REPLACE_PLUGIN" -eq 1 ]; then
             OLD_PLUGIN=${found#* }
@@ -303,7 +304,9 @@ harness_summary() {
 }
 
 # Takes out of the person's OpenClaw what the install added: the plugin and its channel, and the
-# approvals setting, if it is still the one the install wrote. Only if the channel names this agent.
+# approvals setting, if it is still the one the install wrote. Only if the channel names this agent. The
+# plugin goes last, and the channel with it, so that a run again after one that failed part way still
+# finds the OpenClaw this agent's, and takes out the rest.
 harness_uninstall() {
     OPENCLAW=$(program_path openclaw) || {
         warn "openclaw is not on PATH: remove the marmot plugin from your OpenClaw yourself (openclaw plugins uninstall marmot)"
@@ -315,15 +318,15 @@ harness_uninstall() {
         return 0
     fi
     say "removing the Marmot plugin and its channel from your OpenClaw"
-    act "$OPENCLAW" plugins uninstall --force marmot
     if [ -f "$MA_AGENT_DIR/openclaw-approvals" ]; then
         local before now
         before=$(cat "$MA_AGENT_DIR/openclaw-approvals")
+        # The same as ours whatever the order of its keys, which a tool that rewrites the file may change.
         now=$(oc_get approvals.exec --json | "$NODE" -e '
             let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
-              try { process.stdout.write(JSON.stringify(JSON.parse(s))); } catch {}
-            });' 2>/dev/null || true)
-        if [ "$now" = "$OUR_APPROVALS" ]; then
+              try { if (require("util").isDeepStrictEqual(JSON.parse(s), JSON.parse(process.argv[1]))) process.stdout.write("ours"); } catch {}
+            });' "$OUR_APPROVALS" 2>/dev/null || true)
+        if [ "$now" = ours ]; then
             if [ -n "$before" ]; then
                 act "$OPENCLAW" config set approvals.exec "$before" --strict-json
             else
@@ -332,6 +335,7 @@ harness_uninstall() {
         fi
         act rm -f "$MA_AGENT_DIR/openclaw-approvals"
     fi
+    act "$OPENCLAW" plugins uninstall --force marmot
     say "Restart your OpenClaw gateway for it to drop the plugin: openclaw gateway restart"
 }
 
