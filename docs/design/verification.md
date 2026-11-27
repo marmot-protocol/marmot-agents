@@ -4,8 +4,8 @@ Status: the approach is decided
 ([D-093](../decisions.md#d-093-the-core-and-the-drivers-are-verified-in-layers-with-tla-models-at-the-top)), and
 so is the CI budget ([D-094](../decisions.md#d-094-ci-on-a-pull-request-stays-under-15-minutes-and-the-rest-runs-nightly)),
 on 2026-11-21, and CI's tiers ([D-169](../decisions.md#d-169-team-pull-requests-use-a-fast-static-gate-backed-by-hourly-canary-and-the-bisect-agent), replacing [D-130](../decisions.md#d-130-ci-runs-in-three-tiers-with-one-required-check)),
-updated on 2026-11-26, and the flaky job tracker
-([D-143](../decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake)), on 2026-11-24. The property list, the models and the layers below are the plan; their details are internal and
+updated on 2026-11-26, and the flaky job and test tracker
+([D-143](../decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake), [D-171](../decisions.md#d-171-the-flaky-tracker-names-individual-tests-from-machine-readable-junit-results)), updated on 2026-11-27. The property list, the models and the layers below are the plan; their details are internal and
 change as the work goes. It comes from reading all the code after M3 and the M4 work in progress, and from how MDK
 tests itself (its simulator, its TLA+ and Tamarin models, and its testing rules). Under
 [first, fix what is known](#first-fix-what-is-known), the behaviour the fixes made visible is provisional: built,
@@ -674,21 +674,32 @@ Rows marked "planned" are not built yet.
 ### Flaky tests
 
 A job that fails in one attempt of a run and passes when it is run again, on the same commit, is flaky, and one
-issue, "Flaky job tracker", counts them ([D-143](../decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake)).
+issue, "Flaky job tracker", counts both the jobs and the individual tests
+([D-143](../decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake),
+[D-171](../decisions.md#d-171-the-flaky-tracker-names-individual-tests-from-machine-readable-junit-results)).
 `tools/ci/flake_report.py` lists the runs of the last 14 days that were run again, and the jobs of each attempt,
 and counts each job that failed, or timed out, and then passed, by its workflow and name; the `CI passed` gate
 counts only when every other job's latest result up to its attempt passed. A job's name is shown only if the
 default branch's workflow files name a job so, since a pull request's CI runs the pull request's own workflow; any
-other is counted under one label. The issue ranks them by flakes in the last 30 days, then in all, with where they
-happened, when they were first and last seen and a link to the latest job. It reads no log, since a log holds what
-the tests printed too: which test in a job flaked is in the job's log behind the link, and naming it in the issue
-waits for CI to write machine-readable results
-([#184](https://github.com/marmot-protocol/marmot-agents/issues/184)). The script keeps its counts in the comment
-that ends the issue's body, so a job is counted once however often it runs; when that comment cannot be read, the
-body is empty, or the comment no longer fits, the run fails and the issue is left as it was. A job that failed in
-every attempt is not counted until a rerun passes. To fix a flake, start from the job's log, make the test fail on
-purpose under load (many copies at once, or the process stopped for a moment again and again), and fix what it
-waits on, not its timeout.
+other is counted under one label.
+
+To name individual flaky tests without reading job logs, CI's Rust jobs run through pinned `cargo-nextest`
+(`.config/nextest.toml`, `.github/actions/nextest`), TypeScript jobs use Node 24's built-in `--test-reporter=junit`
+alongside `spec`, and Python unittest jobs run through `tools/ci/unittest_junit.py` (stdlib-only). Each test job
+uploads its JUnit XML only `if: failure()` under `junit-<job-slug>-attempt-<N>`, adding no upload cost to passing
+runs. For flaky jobs on trusted same-repository runs (never fork pull requests), `flake_report.py` downloads that
+attempt's artifact with strict zip-bomb and DTD/ENTITY limits and extracts only `<testcase>` `classname` and `name`
+values from failing cases — never stdout, stderr, stack traces, or failure messages. Missing, expired, oversized,
+or malformed artifacts fall back gracefully to counting the job without test names.
+
+The issue ranks both tests (`## Flaky tests`) and jobs (`## Flaky jobs`) by flakes in the last 30 days, then in
+all, with where they happened, when they were first and last seen and a link to the latest job. The script keeps
+its counts in the comment that ends the issue's body (upgrading version 1 state to version 2 automatically), so a
+job is counted once however often it runs; when that comment cannot be read, the body is empty, or the comment no
+longer fits, the run fails and the issue is left as it was. A job that failed in every attempt is not counted until
+a rerun passes. To fix a flake, start from the named test and the job's log, make the test fail on purpose under
+load (many copies at once, or the process stopped for a moment again and again), and fix what it waits on, not its
+timeout.
 
 ## In what order
 

@@ -1,22 +1,25 @@
 name: Flaky tests
 
-# The flaky job tracker (D-143): one open issue, "Flaky job tracker", that ranks the CI jobs that
-# failed and passed when they were run again, on pull requests, in hourly canary, and in the
-# nightly runs. tools/ci/flake_report.py lists the runs of the last 14 days that were run again
-# and the jobs of each attempt, and keeps what it counted in the issue's body, so nothing is stored
-# anywhere else. It reads no log: which test flaked is for machine-readable results to say (#184).
+# The flaky job and test tracker (D-143, D-171): one open issue, "Flaky job tracker", that ranks
+# the CI jobs and individual tests that failed and passed when they were run again, on pull
+# requests, in hourly canary, and in the nightly runs. tools/ci/flake_report.py lists the runs of
+# the last 14 days that were run again and the jobs of each attempt, reads JUnit XML artifacts on
+# trusted same-repository runs (never logs, stdout, stderr, or failure messages, and never fork
+# artifacts), and keeps what it counted in the issue's body, so nothing is stored anywhere else.
 # It runs after each run of CI, Canary or Nightly that was itself a rerun, once a day in case one
 # was missed, and by hand. If no tracker is open, it opens one; closing the issue starts a new count.
 #
 # Rules for this file, as for ci.yml: every action is pinned to a commit, no secret is used, and
-# the token holds what this job needs and nothing more: to list the runs and their jobs, and to
-# write the one issue. It runs the default branch's code only, never a pull request's or another
-# branch's, even when started by hand. Only a job's workflow and name, counts, days, the kinds of
-# run and a link reach the issue, each name shown as code, and a name only if the default branch's
-# workflow files name a job so: a pull request's CI runs its own ci.yml, which can name a job
-# anything, so any other name is counted under one label and never kept. It edits only an open
-# issue it opened itself and labelled `flaky-tracker`; any other issue is left alone. A tracker whose state is mangled is
-# still found by its label, and the run fails, rather than open a second one.
+# the token holds what this job needs and nothing more: to list runs, jobs and JUnit artifacts,
+# download trusted JUnit artifacts, and write the one issue. It runs the default branch's code
+# only, never a pull request's or another branch's, even when started by hand. Only a job's
+# workflow and name, individual failing test names from trusted same-repository JUnit artifacts,
+# counts, days, the kinds of run and a link reach the issue, each name shown as code. A job name
+# is kept only if the default branch's workflow files name a job so: a pull request's CI runs its
+# own ci.yml, which can name a job anything, so any other name is counted under one label and
+# never kept, and fork PR JUnit artifacts are never downloaded. It edits only an open issue it
+# opened itself and labelled `flaky-tracker`; any other issue is left alone. A tracker whose state
+# is mangled is still found by its label, and the run fails, rather than open a second one.
 on:
   workflow_run:
     workflows:

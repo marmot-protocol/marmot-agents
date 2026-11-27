@@ -435,12 +435,13 @@ targets for musl, where the sanitizer does not work. On another machine give its
 An input that makes a target fail is written under `crates/marmot-agent-fuzz/artifacts/`, which git ignores.
 Never commit one as it is: make it a test, as small as it can be, the way the property tests' cases are kept.
 
-The same command tests `tools/ci/flake_report.py`, the script of the flaky job tracker
-([D-143](docs/decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake)); check its workflow,
-`.github/workflows/flake-report.yml`, with actionlint. It counts jobs and reads no log; naming the tests waits
-for machine-readable results ([#184](https://github.com/marmot-protocol/marmot-agents/issues/184)). The workflow
-runs only from `master`; once it is there, `gh workflow run flake-report.yml` brings the tracker up to date by
-hand, and opens it if none is open.
+The same command tests `tools/ci/flake_report.py`, the script of the flaky job and test tracker
+([D-143](docs/decisions.md#d-143-one-issue-tracks-the-ci-jobs-that-flake),
+[D-171](docs/decisions.md#d-171-the-flaky-tracker-names-individual-tests-from-machine-readable-junit-results));
+check its workflow, `.github/workflows/flake-report.yml`, with actionlint. It counts flaky jobs and names
+individual failing tests from JUnit XML artifacts on trusted same-repository runs, reading no job logs, stdout,
+stderr, or failure messages. The workflow runs only from `master`; once it is there,
+`gh workflow run flake-report.yml` brings the tracker up to date by hand, and opens it if none is open.
 
 For any change under `formal/` or `tools/tla/`, or to the code a model follows (the core for `CoreLifecycle`,
 `formal/tla/README.md`; the core's socket and the Claude Code, OpenClaw and Hermes connectors for
