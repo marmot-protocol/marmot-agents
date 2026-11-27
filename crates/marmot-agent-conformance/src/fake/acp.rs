@@ -3,7 +3,8 @@
 //!
 //! It comes in three flavours where the recorded agents differ:
 //!
-//! - **OpenCode** offers `session/resume`, which replays nothing.
+//! - **OpenCode** offers `session/resume`, which replays nothing, and takes a message into a running
+//!   turn with `_session/steering`.
 //! - **Goose** offers only `session/load`, which replays the session, numbers its sessions by day
 //!   and a counter, says in `_meta.goose.activeRunId` when it runs something, and carries on by
 //!   itself, after a load, with a turn a crash cut off, until it is cancelled.
@@ -440,6 +441,7 @@ impl Protocol for Acp {
                     Flavor::OpenCode => json!({"protocolVersion": 1,
                         "agentCapabilities": {"loadSession": true, "sessionCapabilities": {"resume": {}},
                             "mcpCapabilities": {"http": true, "sse": false}},
+                        "_meta": {"steering": {"supported": true}},
                         "agentInfo": {"name": "opencode", "version": "0.0.0-fake"}}),
                     Flavor::Goose => json!({"protocolVersion": 1,
                         "agentCapabilities": {"loadSession": true, "sessionCapabilities": {},
@@ -524,6 +526,21 @@ impl Protocol for Acp {
                     return Self::refuse(id, out); // no such session, or busy
                 }
                 self.prompt(id, &session, &text, out);
+            }
+            // OpenCode's extension: a message for a running turn, which goes on with it. With no
+            // turn running it takes nothing, and says to prompt.
+            "_session/steering" if self.flavor == Flavor::OpenCode => {
+                if !matches!(self.sessions.get(&session), Some(Some(_))) {
+                    let idle = json!({"outcome": "promptRequired", "reason": "noRunningTurn"});
+                    return Self::reply(id, idle, out);
+                }
+                let text = params["prompt"][0]["text"].as_str().unwrap_or_default();
+                heard.push(Heard::Prompt {
+                    session: session.clone(),
+                    text: text.to_string(),
+                    refused: false,
+                });
+                Self::reply(id, json!({"outcome": "injected"}), out);
             }
             "session/cancel" => {
                 heard.push(Heard::Control {

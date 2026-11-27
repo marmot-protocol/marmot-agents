@@ -331,6 +331,24 @@ def interrupt(a: Agent, cwd: str):
     a.wait_response(rid, timeout=60)
 
 
+def steer(a: Agent, cwd: str):
+    """A message is sent while a command is running, with the agent's own steering extension (OpenCode's
+    `_session/steering`), and then once more after the turn has ended."""
+    a.initialize()
+    s = a.new_session(cwd)
+    rid, mark = a.start_prompt(s, "Run `sleep 20` and then tell me it finished.")
+    a.wait_for(lambda m: update_of(m, "tool_call") is not None
+               or (update_of(m, "tool_call_update") or {}).get("status") == "in_progress",
+               timeout=120, start=mark)
+    time.sleep(2)
+    more = [{"type": "text", "text": "When it has finished, also tell me what 2 + 2 is."}]
+    a.request("_session/steering", {"sessionId": s, "prompt": more})
+    a.wait_response(rid, timeout=TURN_TIMEOUT)
+    # No turn is running now: what the agent says to a steer it cannot take.
+    a.request("_session/steering", {"sessionId": s, "prompt": [{"type": "text", "text": "And 3 + 3?"}]})
+    time.sleep(5)
+
+
 def question(a: Agent, cwd: str):
     """The agent is asked to put a multiple-choice question to the user with its question tool. The client
     says it can show forms, which OpenCode needs before it asks."""
@@ -417,6 +435,7 @@ SCENARIOS = {
         approval_allowed,
         approval_denied,
         interrupt,
+        steer,
         question,
         failing_command,
         new_session,

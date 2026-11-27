@@ -1244,6 +1244,10 @@ class Acp(Translator):
             self.emit(f"turn:{self.turn}", "turn", "running", "Working", body={"started_by": "user"},
                       native_kind="(none: ACP says nothing when a turn starts)")
             return self.skip("client: session/prompt")
+        if method == "_session/steering":
+            # OpenCode's extension: the message joins the running turn, and nothing echoes it.
+            self.control("(message during a turn)", "_session/steering")
+            return self.skip("client: _session/steering")
         if method == "session/cancel":
             self.cancelled = True
             self.control("interrupt", "session/cancel")

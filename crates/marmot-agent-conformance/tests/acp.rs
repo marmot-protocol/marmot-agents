@@ -216,9 +216,9 @@ async fn replays_recordings() {
     }
 }
 
-// A prompt handed to the agent twice is caught. The driver restarts a running turn for a prompt
-// that comes during it (`mid_turn: restart`), so the agent takes both copies; one it refused would
-// count as well (`tests/fake.rs`).
+// A prompt handed to the agent twice is caught. The driver sends a prompt that comes during a turn
+// into it (`mid_turn: fold`, with OpenCode's steering), so the agent takes both copies; one it
+// refused would count as well (`tests/fake.rs`).
 #[tokio::test]
 async fn a_prompt_twice_is_caught() {
     use marmot_agent_conformance::faults::{self, Fault};
