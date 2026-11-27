@@ -267,39 +267,42 @@ async fn a_named_group_of_two_is_a_group_and_a_restart_repeats_nothing() {
     world.runtime.shutdown().await;
 }
 
-// A long chat is not throttled by the test relay: MDK's mock relay takes 60 events a minute from
-// each connection by default, and a scenario that sends more must not stall on it, as MDK's own
-// harness relay does not.
+// The test relay accepts more than nostr-relay-builder's default 60 events a minute on one
+// connection (`common::relay`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_long_chat_is_not_throttled_by_the_test_relay() {
-    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
-    let prompts = Arc::new(AtomicUsize::new(0));
-    world.runtime.start().await.unwrap();
-    let core = world.start(Echo::new(prompts.clone()));
-    let group = world
-        .runtime
-        .start_direct_conversation(&world.person, &world.agent)
-        .await
-        .unwrap();
-    let group_hex = world.joined(&group).await;
-    // Each prompt makes three events: the turn, the words, and the turn again, 150 in all. On the
-    // throttled relay this took about three minutes; without the limit, a few seconds.
-    let chat = async {
-        for n in 0..50 {
-            let text = format!("n{n}");
-            world
-                .runtime
-                .send_message(&world.person, &group, text.into_bytes())
-                .await
-                .unwrap();
-            world.words(&group_hex, &format!("echo: n{n}")).await;
-        }
-    };
-    tokio::time::timeout(std::time::Duration::from_secs(60), chat)
-        .await
-        .expect("throttled: the chat took over a minute");
-    core.stop().await;
-    world.runtime.shutdown().await;
+async fn the_test_relay_takes_more_than_60_events_a_minute_on_one_connection() {
+    use futures_util::{SinkExt, StreamExt};
+    use nostr_relay_builder::prelude::{ClientMessage, EventBuilder, JsonUtil, Keys, RelayMessage};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let relay = common::relay().await;
+    let url = relay.url().await.to_string();
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    let keys = Keys::generate();
+    for n in 0..150 {
+        let event = EventBuilder::text_note(format!("n{n}"))
+            .sign_with_keys(&keys)
+            .unwrap();
+        let frame = Message::Text(ClientMessage::event(event.clone()).as_json().into());
+        ws.send(frame).await.unwrap();
+        let reply = loop {
+            match ws.next().await.expect("relay replied").unwrap() {
+                Message::Text(text) => match RelayMessage::from_json(text.as_bytes()).unwrap() {
+                    ok @ RelayMessage::Ok { .. } => break ok,
+                    _ => continue,
+                },
+                Message::Ping(_) | Message::Pong(_) => continue,
+                other => panic!("unexpected frame: {other:?}"),
+            }
+        };
+        assert!(
+            matches!(
+                &reply,
+                RelayMessage::Ok { event_id, status: true, .. } if *event_id == event.id
+            ),
+            "relay rejected event {n}: {reply:?}"
+        );
+    }
 }
 
 // A send tried again under the token MDK keeps it under gives back the event it made and sends
@@ -1744,6 +1747,9 @@ async fn a_subagents_words_after_its_task_item_disappeared_go_in_the_main_chat()
     team.emit("turn", None, State::Running, turn_body(), "Working");
     team.emit("task:a", None, State::Running, task_body(), "look around");
     let task = eventually(|| team.row_of(&person, "task:a")).await;
+    // Only once MDK is done with it: a send MDK still has queued could go out again after the
+    // sweep deletes its token (#96).
+    team.world.nothing_queued().await;
     // The task item's time comes, for the agent: MDK's sweep takes the clock it is given.
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
     let later = (now.unwrap().as_secs() + 3600) * 1000;
