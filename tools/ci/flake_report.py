@@ -52,6 +52,7 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 import zipfile
+import zlib
 
 TITLE = "Flaky job tracker"
 WORKFLOWS = ("ci.yml", "canary.yml", "nightly.yml")
@@ -80,7 +81,7 @@ MAX_TEST_NAME_LEN = 240
 # An attempt where more than this many distinct tests failed is treated as a whole-suite or runner
 # outage: the job is counted, and individual test names are skipped to avoid flooding state.
 MAX_TESTS_PER_ATTEMPT = 25
-DTD_PATTERN = re.compile(rb"<!(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
+DTD_PATTERN = re.compile(r"<!(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
 CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 FAILURE_TAGS = frozenset({"failure", "error"})
 TOP = 100
@@ -366,14 +367,21 @@ def parse_junit_xml(data):
     """Extract sorted failing test names from one JUnit XML report.
 
     Reads only `<testcase>` `classname` and `name` when a `<failure>` or `<error>` child exists.
-    Never reads stdout, stderr, stack traces, or failure messages. Rejects DTD/ENTITY declarations.
+    Never reads stdout, stderr, stack traces, or failure messages. Requires valid UTF-8 and
+    rejects DTD/ENTITY declarations before parsing.
     """
     if len(data) > MAX_XML_FILE_BYTES:
         raise MalformedArtifact("JUnit XML exceeds size limit")
-    if DTD_PATTERN.search(data):
+    if b"\x00" in data:
+        raise MalformedArtifact("JUnit XML must be valid UTF-8")
+    try:
+        text = data.decode("utf-8").lstrip("\ufeff")
+    except UnicodeDecodeError:
+        raise MalformedArtifact("JUnit XML must be valid UTF-8") from None
+    if DTD_PATTERN.search(text):
         raise MalformedArtifact("JUnit XML must not contain DTD or ENTITY declarations")
     try:
-        root = ET.fromstring(data)
+        root = ET.fromstring(text)
     except ET.ParseError as error:
         raise MalformedArtifact(f"invalid JUnit XML: {error}") from None
     if root.tag not in ("testsuites", "testsuite"):
@@ -408,8 +416,11 @@ def extract_failed_tests(archive):
                 raise MalformedArtifact("too many XML files in artifact")
             remaining = MAX_XML_TOTAL_BYTES - total_bytes
             budget = min(MAX_XML_FILE_BYTES, remaining)
-            with bundle.open(member, "r") as handle:
-                data = handle.read(budget + 1)
+            try:
+                with bundle.open(member, "r") as handle:
+                    data = handle.read(budget + 1)
+            except (zipfile.BadZipFile, NotImplementedError, zlib.error, RuntimeError, EOFError) as error:
+                raise MalformedArtifact(f"unreadable artifact zip member: {error}") from None
             if len(data) > budget:
                 raise MalformedArtifact("decompressed JUnit XML exceeds size limit")
             total_bytes += len(data)
@@ -629,7 +640,7 @@ def flaked(jobs):
     return out
 
 
-def collect(github, state, since, trusted, workflows=WORKFLOWS, repo=None):
+def collect(github, state, since, trusted, repo, workflows=WORKFLOWS):
     """Adds what the runs since `since` (a date) show to `state`, naming only the jobs whose names
     are in `trusted`, each workflow's from the default branch, and naming individual tests from
     JUnit XML artifacts on trusted runs.
@@ -638,7 +649,6 @@ def collect(github, state, since, trusted, workflows=WORKFLOWS, repo=None):
     read, so the next pass reads it again. Missing, expired or malformed JUnit artifacts fall back
     gracefully to counting the job without test names.
     """
-    repo_name = repo if repo is not None else getattr(github, "repo", None)
     for workflow in workflows:
         trusted_jobs = trusted.get(workflow, ())
         for run in github.runs(workflow, since):
@@ -652,7 +662,7 @@ def collect(github, state, since, trusted, workflows=WORKFLOWS, repo=None):
             counted = set(kept["counted"])
             new_flaky = [job for job in flaked(github.jobs(run["id"])) if job["id"] not in counted]
             run_artifacts = None
-            if (new_flaky and is_trusted_run(run, repo_name)
+            if (new_flaky and is_trusted_run(run, repo)
                     and any(job["name"] in trusted_jobs for job in new_flaky)):
                 try:
                     run_artifacts = github.artifacts(run["id"])
@@ -730,10 +740,9 @@ def seen_on(events):
     return ", ".join(f"{name} {n}" for name, n in sorted(named))
 
 
-def render(state, today, top, repo, test_top=None):
+def render(state, today, top, repo):
     job_table = rows(state, today)
     tests_table = test_rows(state, today)
-    test_limit = top if test_top is None else test_top
     lines = [
         f"# {TITLE}",
         "",
@@ -756,15 +765,15 @@ def render(state, today, top, repo, test_top=None):
             "| Last seen | Last job |",
             "| ---: | --- | --- | --- | ---: | ---: | --- | --- | --- | --- |",
         ]
-        for rank, (entry, last_month) in enumerate(tests_table[:test_limit], 1):
+        for rank, (entry, last_month) in enumerate(tests_table[:top], 1):
             run, job, _ = entry["latest"]
             link = f"[job](https://github.com/{repo}/actions/runs/{run}/job/{job})"
             lines.append(
                 f"| {rank} | {code(entry['test'])} | {code(entry['workflow'])} | "
                 f"{code(entry['job'])} | {last_month} | {entry['count']} | "
                 f"{seen_on(entry['events'])} | {entry['first']} | {entry['last']} | {link} |")
-        if len(tests_table) > test_limit:
-            lines += ["", f"{len(tests_table) - test_limit} more tests are counted and left out of the table."]
+        if len(tests_table) > top:
+            lines += ["", f"{len(tests_table) - top} more tests are counted and left out of the table."]
 
     lines += ["", "## Flaky jobs"]
     if not job_table:
@@ -793,17 +802,14 @@ def fit(state, today, repo, top=TOP):
 
     Raises StateError when it does not fit even with no table rows.
     """
-    job_top = top
-    test_top = top
     while True:
-        body = render(state, today, job_top, repo, test_top=test_top)
+        body = render(state, today, top, repo)
         if len(body) <= MAX_BODY:
             return body
-        if job_top == 0 and test_top == 0:
+        if top == 0:
             raise StateError(f"what the tracker keeps is {len(body)} characters, more than an "
                              f"issue holds ({MAX_BODY})")
-        job_top = max(0, job_top - 10)
-        test_top = max(0, test_top - 10)
+        top = max(0, top - 10)
 
 
 def main(argv=None, github=None):
@@ -827,7 +833,7 @@ def main(argv=None, github=None):
     try:
         trusted = trusted_names(args.workflows)
         state = read_state(previous)
-        collect(github or GitHub(args.repo), state, since, trusted, repo=args.repo)
+        collect(github or GitHub(args.repo), state, since, trusted, args.repo)
         prune(state, today)
         body = fit(state, today, args.repo)
     except (InventoryError, StateError) as error:

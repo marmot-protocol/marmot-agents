@@ -23,7 +23,7 @@ TRUSTED = flake_report.trusted_names(WORKFLOWS)
 
 
 def collect(github, state, since, workflows=flake_report.WORKFLOWS):
-    flake_report.collect(github, state, since, TRUSTED, workflows)
+    flake_report.collect(github, state, since, TRUSTED, REPO, workflows)
 
 
 def job(id, name, attempt, conclusion, started="2026-11-20T10:00:00Z"):
@@ -730,35 +730,60 @@ class JUnitAndTests(unittest.TestCase):
         ])
 
     def test_missing_expired_unreadable_and_malformed_artifacts_fall_back_gracefully(self):
+        # Corrupted CRC zip member (raises zipfile.BadZipFile during read)
+        good_zip = bytearray(make_zip({"junit.xml": self.PYTHON_JUNIT_XML}))
+        # Flip a byte inside the compressed payload (right after local header + filename)
+        idx = good_zip.index(b"junit.xml") + len(b"junit.xml")
+        good_zip[idx] ^= 0xFF
+        bad_crc_zip = bytes(good_zip)
+
+        # Unsupported compression method (99 -> raises NotImplementedError during open/read)
+        unsupported_zip = bytearray(make_zip({"junit.xml": self.PYTHON_JUNIT_XML}))
+        # Local file header compression method is at bytes 8..10; central dir method at PK\x01\x02 + 10..12
+        unsupported_zip[8:10] = (99).to_bytes(2, "little")
+        cd = unsupported_zip.index(b"PK\x01\x02")
+        unsupported_zip[cd + 10:cd + 12] = (99).to_bytes(2, "little")
+        unsupported_zip = bytes(unsupported_zip)
+
         github = FakeGitHub(
-            {"ci.yml": [trusted_run(1, 2), trusted_run(2, 2), trusted_run(3, 2), trusted_run(4, 2)]},
-            {1: [job(10, "Python", 1, "failure"), job(11, "Python", 2, "success")],
-             2: [job(20, "Python", 1, "failure"), job(21, "Python", 2, "success")],
-             3: [job(30, "Python", 1, "failure"), job(31, "Python", 2, "success")],
-             4: [job(40, "Python", 1, "failure"), job(41, "Python", 2, "success")]},
+            {"ci.yml": [trusted_run(i, 2) for i in range(1, 7)]},
+            {i: [job(i * 10, "Python", 1, "failure"), job(i * 10 + 1, "Python", 2, "success")]
+             for i in range(1, 7)},
             artifacts={
                 1: [],  # missing artifact (e.g. crashed/timed out before upload)
                 2: [{"id": 201, "name": "junit-python-attempt-1", "expired": True, "size_in_bytes": 100}],
                 3: [{"id": 301, "name": "junit-python-attempt-1", "expired": False, "size_in_bytes": 100}],
                 4: [{"id": 401, "name": "junit-python-attempt-1", "expired": False, "size_in_bytes": 100}],
+                5: [{"id": 501, "name": "junit-python-attempt-1", "expired": False, "size_in_bytes": len(bad_crc_zip)}],
+                6: [{"id": 601, "name": "junit-python-attempt-1", "expired": False, "size_in_bytes": len(unsupported_zip)}],
             },
             artifact_zips={
                 301: subprocess.CalledProcessError(1, ["gh", "api"]),
                 401: b"not a zip at all",
+                501: bad_crc_zip,
+                601: unsupported_zip,
             },
         )
         state = empty()
         collect(github, state, "2026-11-10", workflows=("ci.yml",))
-        self.assertEqual(counted(state), [("ci.yml", "Python", 4)])
+        self.assertEqual(counted(state), [("ci.yml", "Python", 6)])
         self.assertEqual(state["tests"], [])
         self.assertNotIn(201, github.artifacts_downloaded)
 
     def test_dtd_entity_zip_bomb_and_control_char_defenses(self):
-        # 1. DTD / XXE rejection (case-insensitive)
+        # 1. DTD / XXE rejection (case-insensitive, and UTF-16 encodings)
+        utf16_dtd = (
+            '<?xml version="1.0" encoding="utf-16"?>'
+            '<!DOCTYPE testsuites [<!ENTITY x "expanded">]>'
+            '<testsuites><testsuite><testcase classname="m" name="&x;"><failure/></testcase></testsuite></testsuites>'
+        )
         for bad_xml in (
             b'<?xml version="1.0"?><!DOCTYPE foo [<!ENTITY x "a">]><testsuites/>',
             b'<!doctype testsuites><testsuites/>',
             b'<!ENTITY boom "x"><testsuites/>',
+            utf16_dtd.encode("utf-16"),
+            utf16_dtd.encode("utf-16-le"),
+            utf16_dtd.encode("utf-16-be"),
         ):
             with self.assertRaises(flake_report.MalformedArtifact):
                 flake_report.parse_junit_xml(bad_xml)
@@ -876,9 +901,6 @@ class JUnitAndTests(unittest.TestCase):
             self.assertTrue(found, f"{wf} should upload JUnit artifacts")
             for raw in found:
                 if "${{" in raw:
-                    # Expand matrix placeholders for known matrix jobs (rust-tests, typescript)
-                    if raw == "junit-rust-tests-${{":
-                        continue
                     continue
                 self.assertIn(raw, expected_prefixes, f"{wf} uploads unexpected JUnit artifact {raw!r}")
         # Also verify matrix-expanded artifact names explicitly in ci.yml

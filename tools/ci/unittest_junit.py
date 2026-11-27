@@ -195,7 +195,11 @@ def main(argv: list[str] | None = None) -> int:
     elapsed = max(0.0, time.monotonic() - start)
     suite_name = os.path.normpath(args.start_directory)
     write_junit(args.junit, suite_name, result.junit_cases, elapsed)
-    return 0 if result.wasSuccessful() else 1
+    if not result.wasSuccessful():
+        return 1
+    if result.testsRun == 0 and not result.skipped:
+        return 5
+    return 0
 
 
 if __name__ == "__main__":

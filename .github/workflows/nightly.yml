@@ -176,28 +176,19 @@ jobs:
       - uses: ./.github/actions/nextest
 
       - name: Build the property tests
-        run: |
-          cargo nextest run --locked --all-features -p marmot-agent --test properties --no-run
-          cargo nextest run --locked --all-features -p marmot-agent-conformance --test translators --no-run
+        run: cargo nextest run --locked --all-features -p marmot-agent -p marmot-agent-conformance --test properties --test translators --no-run
 
       - name: The properties, at 10,000 cases each
         run: |
-          set -uo pipefail
           echo "${PROPTEST_CASES} cases of each property." | tee -a "${GITHUB_STEP_SUMMARY}"
-          mkdir -p "${RUNNER_TEMP}/junit"
-          status=0
-          cargo nextest run --locked --all-features --profile ci -p marmot-agent --test properties || status=$?
-          [ -f target/nextest/ci/junit.xml ] && mv target/nextest/ci/junit.xml "${RUNNER_TEMP}/junit/properties-core.xml"
-          cargo nextest run --locked --all-features --profile ci -p marmot-agent-conformance --test translators || status=$?
-          [ -f target/nextest/ci/junit.xml ] && mv target/nextest/ci/junit.xml "${RUNNER_TEMP}/junit/properties-translators.xml"
-          exit "${status}"
+          cargo nextest run --locked --all-features --profile ci -p marmot-agent -p marmot-agent-conformance --test properties --test translators
 
       - name: Upload JUnit test results
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: junit-property-tests-at-high-counts-attempt-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/junit/
+          path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 30
 

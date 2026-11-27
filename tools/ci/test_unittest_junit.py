@@ -143,6 +143,20 @@ class BrokenSetup(unittest.TestCase):
         root_el = ET.fromstring(junit.read_text(encoding="utf-8"))
         self.assertEqual(root_el.find("testsuite").get("tests"), "1")
 
+    def test_empty_discovery_exits_five_like_python_unittest(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        junit = root / "junit.xml"
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT), "--junit", str(junit), "-s", str(root), "-p", "test_*.py"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 5)
+        self.assertTrue(junit.is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
