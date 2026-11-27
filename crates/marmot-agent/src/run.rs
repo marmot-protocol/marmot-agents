@@ -1001,9 +1001,9 @@ impl<D: Driver, M: Side> Core<D, M> {
     /// ([`Core::behind`]). When MDK cannot be read, or a message in it cannot, the group waits to
     /// be read again from its mark; when it was read, it waits no more. A group with no mark
     /// starts where [`Core::start_of`] says. When the driver has given something meanwhile, the
-    /// group is read on from its mark after the loop has taken it in its turn, so neither waits
-    /// behind the other for long; once the driver has ended, nothing more is read, and the next
-    /// driver reads on from the mark (D-139).
+    /// group is read on from its mark after the loop has taken it in its turn, but each read
+    /// reads one message at least, so neither waits behind the other for long; once the driver
+    /// has ended, nothing more is read, and the next driver reads on from the mark (D-139).
     async fn catch_up_group(&mut self, group: GroupKey) -> Result<(), Unsaved> {
         self.behind.remove(&group);
         let mark = match self.read.get(&group) {
@@ -1024,8 +1024,9 @@ impl<D: Driver, M: Side> Core<D, M> {
         for (handed, message) in page.messages.into_iter().enumerate() {
             // A driver that has ended is handed nothing more, and no mark moves past what it was
             // never given: the core ends, and the next driver is given it, once (D-139). What it
-            // gave meanwhile is taken in its turn of the loop, and this group's turn comes after.
-            if handed == READS || self.driver_ready().await {
+            // gave meanwhile is taken in its turn of the loop, and this group's turn comes after,
+            // once one message is read: a driver that always has more does not hold it up (#167).
+            if handed == READS || (self.driver_ready().await && (handed > 0 || self.ended)) {
                 // The rest of the page is read again from the mark next turn.
                 self.read_through(&group);
                 self.behind.insert(group);
@@ -2027,6 +2028,28 @@ mod tests {
         .await;
         assert_eq!(read, (1..=20).collect::<Vec<i64>>());
         assert_eq!(told, 50, "the whole burst");
+    }
+
+    // A driver that keeps output ready does not hold up what was stored: each turn the catch-up
+    // has reads at least one stored message, so all of them are read while most of a long burst
+    // still waits, each within a round of the loop's waits (#167).
+    #[tokio::test(start_paused = true)]
+    async fn a_driver_that_keeps_output_ready_does_not_hold_up_the_catch_up() {
+        let (read, told) = catch_up_with_a_burst(20, 1000, |read| {
+            Box::pin(std::future::poll_fn(move |cx| {
+                if read.lock().unwrap().len() == 20 {
+                    return Poll::Ready(());
+                }
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }))
+        })
+        .await;
+        assert_eq!(read, (1..=20).collect::<Vec<i64>>());
+        assert!(
+            told <= 20 * WAITS as u32,
+            "{told} of the burst went before the 20 stored messages"
+        );
     }
 
     /// Uploads a small file from a folder of its own to `side`, and says how it went and how long
