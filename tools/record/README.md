@@ -71,8 +71,10 @@ python3 tools/record/scrub.py "$work/raw" fixtures/recordings \
   --map "$work/demo=/work/demo" --map "$work=/work/tmp" --map "$HOME=/home/user"
 ```
 
-Give the most specific path first. The scrubber exits with an error if anything that looks private is left in
-its output. A clean exit is necessary, not sufficient: read the diff before you commit.
+Give the most specific path first. The scrubber checks every key and value of its output before it writes any
+of it. If anything that looks private is left, it writes nothing and exits with an error that names the file,
+the line and the kind of thing it found, never the thing itself. A clean exit is necessary, not sufficient: read
+the diff before you commit.
 
 ## Look at what you recorded
 
@@ -108,7 +110,11 @@ tools/record/hermes/record.sh tools/record/hermes/scenarios/simple.json out/simp
   platform, such as `on_session_reset` and `pre_command`. The scenarios recorded on 2026-11-17 register none.
 - **Reasoning effort.** Hermes asks the model for `medium` by default, and some endpoints refuse values they do
   not offer. The container sets `high`; override it with `REASONING_EFFORT`.
-- **To see why a run failed**, set `RECORD_LOG` to a file. The gateway's own log is written there.
+- **To see why a run failed**, set `RECORD_LOG` to a file. The gateway's own log is written there, without any
+  line that holds the key.
+- **Only a finished run is written.** If the container fails, or the scenario never reaches its end, the
+  recorder exits with an error and leaves the output file as it was. The recording, the log and the folder the
+  container writes into are readable by you alone.
 
 Scrub the output like any other recording, with the files in a folder named `hermes`.
 
@@ -147,7 +153,11 @@ tools/record/openclaw/record.sh tools/record/openclaw/scenarios/simple.json out/
 - **The defaults ask for everything.** The container switches on OpenClaw's tool summaries, reasoning and
   block streaming, which are all off in a fresh OpenClaw. `tool_call_plain` records the same request with them
   off.
-- **To see why a run failed**, set `RECORD_LOG` to a file. The gateway's own log is written there.
+- **To see why a run failed**, set `RECORD_LOG` to a file. The gateway's own log is written there, without any
+  line that holds the key.
+- **Only a finished run is written.** If the container fails, or the scenario never reaches its end, the
+  recorder exits with an error and leaves the output file as it was. The recording, the log and the folder the
+  container writes into are readable by you alone.
 
 Scrub the output like any other recording, with the files in a folder named `openclaw`.
 

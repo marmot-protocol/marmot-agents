@@ -7,8 +7,9 @@ Usage:
 `<raw-dir>` holds one folder per harness (`codex`, `claude`, `hermes`, `openclaw`, `pi`), each with `*.jsonl`
 files as written by the recorders, and `acp`, which holds one such folder per ACP agent, such as
 `acp/opencode`, and `cassettes`, which holds one folder per harness of the model double's cassettes
-(`tools/model_double`), each line scrubbed whole. The same tree is written to `<out-dir>`. The script then scans its own output and exits with an error
-if anything that looks private is left.
+(`tools/model_double`), each line scrubbed whole. The same tree is written to `<out-dir>`, but only once all of
+it passes a check of every key and value: if anything that looks private is left, nothing is written, and the
+script exits with an error that names the file, the line and what kind of thing it found, never the thing.
 
 What it does:
 
@@ -79,7 +80,7 @@ class Scrubber:
 
     def walk(self, v, key=None):
         if isinstance(v, dict):
-            return {k: self.walk(x, k) for k, x in v.items()}
+            return {self.text(k): self.walk(x, k) for k, x in v.items()}
         if isinstance(v, list):
             return [self.walk(x, key) for x in v]
         if isinstance(v, str):
@@ -107,7 +108,7 @@ class Scrubber:
             msg = antigravity_scrub(msg)
         def homes(v):
             if isinstance(v, dict):
-                return {k: homes(x) for k, x in v.items()}
+                return {homes(k): homes(x) for k, x in v.items()}
             if isinstance(v, list):
                 return [homes(x) for x in v]
             if isinstance(v, str):
@@ -148,6 +149,17 @@ class Scrubber:
             if "apiKeySource" in msg:
                 msg["apiKeySource"] = "redacted"
         return self.walk(msg)
+
+    def findings(self, text: str):
+        """The kinds of private detail left in `text`."""
+        for word, _ in self.words:
+            if re.search(rf"(?<![A-Za-z0-9]){re.escape(word)}(?![A-Za-z0-9])", text):
+                yield "the user or host name"
+        if any(old in text for old, _ in self.maps):
+            yield "a mapped path"
+        for kind, pattern in SUSPECT.items():
+            if any(m.group(0) not in ALLOWED for m in pattern.finditer(text)):
+                yield kind
 
 
 # Cursor's own slash commands, as `cursor-agent` 2026.11.19 lists them: its built-in skills
@@ -200,15 +212,17 @@ MACHINE_UPTIME = re.compile(r"system \d+[dhms](?: \d+[dhms])*")
 ACP_HOME = re.compile(r"acp-home-[A-Za-z0-9_]+")  # the ACP recorder's throwaway home folder
 OPENCODE_OUTPUT = re.compile(r"(opencode/shell)/[0-9a-f]{16,}/sh_[A-Za-z0-9]+\.out")
 
-SUSPECT = re.compile(
-    r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}"  # an e-mail address
-    r"|/home/(?!user\b)[A-Za-z0-9_.-]+"  # a home directory other than the placeholder
-    r"|/Users/[A-Za-z0-9_.-]+"
-    r"|/mnt/|/tmp/claude|/private/var"
-    r"|claude\.ai [A-Z]"  # a connected account's MCP server name
-    r"|acp-home-"  # the ACP recorder's throwaway home folder, by its generated name
-    r"|synced-[0-9a-f]{8}-"  # a Cursor command named after account and organisation ids
-)
+# What looks private, by the name a diagnostic gives it. A diagnostic never quotes what it found.
+SUSPECT = {kind: re.compile(pattern) for kind, pattern in {
+    "an e-mail address": r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[A-Za-z]{2,}",
+    # A home folder other than the placeholder.
+    "a home folder": r"/home/(?!user\b)[A-Za-z0-9_.-]+|/Users/[A-Za-z0-9_.-]+",
+    "a local path": r"/mnt/|/tmp/claude|/private/var",
+    "a connected account's MCP server name": r"claude\.ai [A-Z]",
+    # The ACP recorder's throwaway home folder, by its generated name.
+    "the ACP recorder's home folder": r"acp-home-",
+    "a Cursor command named after account and organisation ids": r"synced-[0-9a-f]{8}-",
+}.items()}
 
 
 # Public, generic addresses that harnesses mention in their own text.
@@ -216,14 +230,16 @@ ALLOWED = {"noreply@anthropic.com"}
 
 
 def strings(v):
+    """Every string in `v`, keys included, each with whether it is a key."""
     if isinstance(v, dict):
-        for x in v.values():
+        for k, x in v.items():
+            yield k, True
             yield from strings(x)
     elif isinstance(v, list):
         for x in v:
             yield from strings(x)
     elif isinstance(v, str):
-        yield v
+        yield v, False
 
 
 def _acp_chunk_text(rec: dict) -> tuple[str | None, str | None]:
@@ -280,6 +296,7 @@ def main() -> int:
     maps = [tuple(m.split("=", 1)) for m in args.map]
     s = Scrubber(maps)
     problems = 0
+    batch = []  # (path, text) for each output file, written only once the whole batch passes
     for harness in ("codex", "claude", "hermes", "openclaw", "acp", "pi", "cassettes"):
         if not (args.raw / harness).is_dir():
             continue
@@ -287,13 +304,15 @@ def main() -> int:
         pattern = "*/*.jsonl" if harness in ("acp", "cassettes") else "*.jsonl"
         for src in sorted((args.raw / harness).glob(pattern)):
             rel = src.relative_to(args.raw / harness)
-            (args.out / harness / rel.parent).mkdir(parents=True, exist_ok=True)
             lines = []
-            parsed = [json.loads(line) for line in filter(str.strip, src.read_text(encoding="utf-8").split("\n"))]
+            # Split on newlines alone: a message may hold U+2028 and the like, which `splitlines` splits on.
+            # Each record keeps its line number, for the diagnostics.
+            content = src.read_text(encoding="utf-8")
+            numbered = [(n, line) for n, line in enumerate(content.split("\n"), 1) if line.strip()]
+            parsed = [json.loads(line) for _, line in numbered]
             if harness == "acp":
                 scrub_split_chunks(parsed, s)
-            # Split on newlines alone: a message may hold U+2028 and the like, which `splitlines` splits on.
-            for rec in parsed:
+            for (number, _), rec in zip(numbered, parsed):
                 kept_as_is = {}
                 if harness == "cassettes":
                     # A cassette's line is not a message: the whole line is scrubbed and checked, except the
@@ -308,24 +327,20 @@ def main() -> int:
                     rec["msg"] = getattr(s, harness)(rec["msg"])
                 kept = {**kept_as_is, **rec["msg"]} if harness == "cassettes" else rec
                 lines.append(json.dumps(kept, ensure_ascii=False, sort_keys=False))
-                for text in strings(rec["msg"]):
-                    for word, _ in s.words:
-                        if re.search(rf"(?<![A-Za-z0-9]){re.escape(word)}(?![A-Za-z0-9])", text):
-                            problems += 1
-                            print(f"LEFT BEHIND in {harness}/{rel}: the user or host name", file=sys.stderr)
-                    for old, _ in s.maps:
-                        if old in text:
-                            problems += 1
-                            print(f"LEFT BEHIND in {harness}/{rel}: a mapped path", file=sys.stderr)
-                    m = next((x for x in SUSPECT.finditer(text) if x.group(0) not in ALLOWED), None)
-                    if m:
+                # Everything written is checked, except a cassette header's own fields (`rec` leaves them out).
+                for text, is_key in strings(rec):
+                    for kind in s.findings(text):
                         problems += 1
-                        print(f"LEFT BEHIND in {harness}/{rel}: {m.group(0)[:60]}", file=sys.stderr)
-            (args.out / harness / rel).write_text("\n".join(lines) + "\n", encoding="utf-8")
+                        where = ", in a key" if is_key else ""
+                        print(f"LEFT BEHIND in {harness}/{rel} line {number}: {kind}{where}", file=sys.stderr)
+            batch.append((args.out / harness / rel, "\n".join(lines) + "\n"))
             print(f"{harness}/{rel}: {len(lines)} messages")
     if problems:
-        print(f"{problems} problem(s). Do not commit this output.", file=sys.stderr)
+        print(f"{problems} problem(s). Nothing was written.", file=sys.stderr)
         return 1
+    for path, text in batch:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
     return 0
 
 
