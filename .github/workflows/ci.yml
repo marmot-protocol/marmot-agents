@@ -605,7 +605,10 @@ jobs:
       - name: The prototype handles what no recording holds
         run: python3 tools/ci/unittest_junit.py --junit "${RUNNER_TEMP}/junit/prototype.xml" -s tools/prototype -p 'test_*.py'
 
-      - name: The scrubber and the gateway recorders write nothing that failed
+      # The Claude recorder's tests run it under Node 24, and the runner has an older one.
+      - uses: ./.github/actions/node
+
+      - name: The scrubber and the recorders write nothing that failed
         run: python3 tools/ci/unittest_junit.py --junit "${RUNNER_TEMP}/junit/record.xml" -s tools/record -p 'test_*.py'
 
       - name: The model double reads and writes each wire format

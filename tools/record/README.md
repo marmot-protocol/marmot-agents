@@ -58,6 +58,13 @@ python3 tools/record/record_acp.py approval_allowed "$work/demo" "$work/raw/acp/
   --agent "$PWD/tools/goose/goose-acp.sh <model-key-file>"
 ```
 
+Only a finished run is written. While a recorder runs, it writes into a folder of its own beside the output
+file, which you alone can read, and it moves the recording over the output file, readable by you alone, once
+the scenario has finished. If the scenario fails, the recorder gives up waiting, or you stop it with Ctrl-C, it
+exits with an error and leaves the output file as it was. An error the harness itself ends with is part of some
+scenarios, such as Claude Code's `bad_model`, and is kept. A recorder killed any other way can leave its folder
+behind; delete it.
+
 Reset the demo project between scenarios, because some of them edit it:
 
 ```sh

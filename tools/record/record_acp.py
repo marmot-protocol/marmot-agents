@@ -42,6 +42,7 @@ import threading
 import time
 from pathlib import Path
 
+import publish_recording
 import tests_env
 
 TURN_TIMEOUT = 240
@@ -473,17 +474,20 @@ def main():
         # For an agent without OpenCode's configuration: ask before every tool. Goose's wrapper reads it.
         **({"RECORD_ASK": "1"} if getattr(f, "ask", False) else {}),
     }
-    a = Agent(args.output, shlex.split(command), env, cwd)
     try:
-        f(a, cwd)
-        time.sleep(1.0)  # let trailing notifications arrive
-        print(f"{args.scenario}: ok")
-    except Exception as e:  # noqa: BLE001 - report and keep what was recorded
-        print(f"{args.scenario}: FAILED: {type(e).__name__}: {e}")
+        with publish_recording.recording(args.output) as raw:
+            a = Agent(raw, shlex.split(command), env, cwd)
+            try:
+                f(a, cwd)
+                time.sleep(1.0)  # let trailing notifications arrive
+            except Exception as e:  # noqa: BLE001 - report it; nothing is written
+                sys.exit(f"{args.scenario}: FAILED: {type(e).__name__}: {e}; nothing was written")
+            finally:
+                a.close()
     finally:
-        a.close()
         if not args.home:
             shutil.rmtree(home, ignore_errors=True)
+    print(f"{args.scenario}: ok")
 
 
 if __name__ == "__main__":

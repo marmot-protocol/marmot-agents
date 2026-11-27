@@ -18,8 +18,8 @@
  */
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { createWriteStream, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { createWriteStream, mkdtempSync, openSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 type Msg = Record<string, any>;
@@ -349,13 +349,23 @@ async function main() {
     process.exit(2);
   }
 
-  const file = createWriteStream(out, { encoding: "utf-8" });
+  // Written owner-only in an owner-only folder beside the destination, and renamed over it only once the
+  // scenario has finished, so a run that fails or is interrupted leaves the destination as it was.
+  const work = mkdtempSync(join(dirname(out), `.${basename(out)}.`));
+  const raw = join(work, basename(out));
+  const discard = () => rmSync(work, { recursive: true, force: true });
+  process.once("SIGINT", () => {
+    discard();
+    process.exit(130);
+  });
+  const file = createWriteStream(raw, { fd: openSync(raw, "wx", 0o600), encoding: "utf-8" });
   const t0 = performance.now();
   const record = (dir: "in" | "out", via: string, msg: Msg) =>
     file.write(JSON.stringify({ t: Math.round(performance.now() - t0), dir, via, msg }) + "\n");
 
   let sessionId: string | undefined;
   let status = "ok";
+  let timedOut = false;
 
   const runQuery = async (promptList: Prompt[], extra: Msg) => {
     const inbox = new Inbox();
@@ -406,6 +416,7 @@ async function main() {
     const ctx: Ctx = { q, abort, inbox, record, state: {} };
 
     const timer = setTimeout(() => {
+      timedOut = true;
       record("out", "call", { method: "timeout" });
       inbox.close();
       q.interrupt?.().catch(() => {});
@@ -413,12 +424,19 @@ async function main() {
 
     // Reading starts before the first prompt, so that anything the harness says unasked is recorded
     // at the moment it arrives.
+    // An error of the scenario's own step, kept apart from one the harness ends the query with.
+    let failed: { error: unknown } | undefined;
     const reading = (async () => {
       try {
         for await (const m of q) {
           record("in", "message", m as Msg);
           if ((m as Msg).session_id) sessionId = (m as Msg).session_id;
-          if (scenario.onMessage) await scenario.onMessage(m as Msg, ctx);
+          try {
+            if (scenario.onMessage) await scenario.onMessage(m as Msg, ctx);
+          } catch (error) {
+            failed = { error };
+            break;
+          }
           if ((m as Msg).type === "result" && !pushNext()) inbox.close();
         }
       } catch (e: any) {
@@ -430,12 +448,25 @@ async function main() {
     pushNext();
     await reading;
     clearTimeout(timer);
+    if (failed) throw failed.error;
   };
 
-  await runQuery(scenario.prompts, {});
-  if (scenario.resumeWith) await runQuery(scenario.resumeWith, { resume: sessionId });
-  if (scenario.thenNew) await runQuery(scenario.thenNew, {});
-  await new Promise((r) => file.end(r));
+  // An error the harness ends a query with is part of what some scenarios record; the recorder giving up
+  // on one, or an error of the scenario's own step or of the recorder, is not.
+  try {
+    await runQuery(scenario.prompts, {});
+    if (scenario.resumeWith && !timedOut) await runQuery(scenario.resumeWith, { resume: sessionId });
+    if (scenario.thenNew && !timedOut) await runQuery(scenario.thenNew, {});
+    await new Promise((r) => file.end(r));
+    if (timedOut) {
+      console.error(`${name}: FAILED: timed out; nothing was written`);
+      process.exitCode = 1;
+      return;
+    }
+    renameSync(raw, out);
+  } finally {
+    discard();
+  }
   console.log(`${name}: ${status}`);
 }
 
