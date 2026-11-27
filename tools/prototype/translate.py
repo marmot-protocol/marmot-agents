@@ -813,7 +813,7 @@ class Claude(Translator):
                         # Claude Code sends nothing to say the earlier session is over.
                         if self.session_key:
                             self.end_session(self.session_key, "a new session was started")
-                        self.session = self.session_key = self.version = None
+                        self.session = self.session_key = self.version = self.title = None
                         self.settings, self.commands = {}, []
                 elif method == "setPermissionMode":
                     self.control("set permission mode", "setPermissionMode()")

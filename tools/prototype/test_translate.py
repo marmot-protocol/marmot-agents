@@ -312,6 +312,18 @@ class ClaudeSessionItem(unittest.TestCase):
         titles = [e["body"].get("title") for e in claude.events if e["type"] == "session"]
         self.assertEqual(titles, ["Fix the build", "Fix the tests"])
 
+    def test_a_new_session_takes_no_title_from_the_one_before(self):
+        claude = translate.Claude()
+        init = lambda sid: {"dir": "in", "via": "message", "msg": {
+            "type": "system", "subtype": "init", "session_id": sid, "claude_code_version": "9.9.9", "slash_commands": []}}
+        claude.feed(init("s1"))
+        claude.feed({"dir": "in", "via": "message", "msg": {
+            "type": "system", "subtype": "session_title_changed", "session_id": "s1", "title": "Old work", "uuid": "u"}})
+        claude.feed({"dir": "out", "via": "call", "msg": {"method": "query", "options": {}}})
+        claude.feed(init("s2"))
+        self.assertEqual([e["body"].get("title") for e in claude.events if e["type"] == "session" and e["session"] == "s2"],
+                         [None])
+
 
 class ClaudeApprovals(unittest.TestCase):
     """A reply settles the approval it answers, by the callback's request id when the driver recorded

@@ -416,7 +416,7 @@ export class Translator {
         if (method === "query" && !("resume" in object(m["options"]))) {
           // Claude Code sends nothing to say the earlier session is over.
           if (this.sessionKey) this.endSession(this.sessionKey, "a new session was started");
-          this.session = this.sessionKey = this.version = null;
+          this.session = this.sessionKey = this.version = this.title = null;
           this.settings = {};
           this.commands = [];
         }
