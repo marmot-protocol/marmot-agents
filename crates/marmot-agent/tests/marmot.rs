@@ -267,79 +267,34 @@ async fn a_named_group_of_two_is_a_group_and_a_restart_repeats_nothing() {
     world.runtime.shutdown().await;
 }
 
-// A long chat is not throttled by the test relay: MDK's mock relay takes 60 events a minute from
-// each connection by default, and a scenario that sends more must not stall on it, as MDK's own
-// harness relay does not. Tested directly on one connection to `common::relay()` rather than
-// behind a wall-clock timeout on a full chat, which failed under heavy load even when the relay
-// never throttled a single event (#96).
+// The test relay accepts more than nostr-relay-builder's default 60 events a minute on one
+// connection (`common::relay`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_long_chat_is_not_throttled_by_the_test_relay() {
+async fn the_test_relay_takes_more_than_60_events_a_minute_on_one_connection() {
+    use futures_util::{SinkExt, StreamExt};
     use nostr_relay_builder::prelude::{ClientMessage, EventBuilder, JsonUtil, Keys, RelayMessage};
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::TcpStream;
+    use tokio_tungstenite::tungstenite::Message;
 
     let relay = common::relay().await;
     let url = relay.url().await.to_string();
-    let addr = url.strip_prefix("ws://").expect("a ws:// relay address");
-    let mut stream = BufReader::new(TcpStream::connect(addr).await.unwrap());
-    let upgrade = format!(
-        "GET / HTTP/1.1\r\nHost: {addr}\r\nUpgrade: websocket\r\n\
-         Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
-         Sec-WebSocket-Version: 13\r\n\r\n"
-    );
-    stream.write_all(upgrade.as_bytes()).await.unwrap();
-    let mut line = String::new();
-    stream.read_line(&mut line).await.unwrap();
-    assert!(line.starts_with("HTTP/1.1 101 "), "upgraded: {line}");
-    loop {
-        line.clear();
-        stream.read_line(&mut line).await.unwrap();
-        if line == "\r\n" || line.is_empty() {
-            break;
-        }
-    }
-
-    // More than nostr-relay-builder's default 60 events/minute on one connection.
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
     let keys = Keys::generate();
     for n in 0..150 {
         let event = EventBuilder::text_note(format!("n{n}"))
             .sign_with_keys(&keys)
             .unwrap();
-        let json = ClientMessage::event(event.clone()).as_json();
-        let bytes = json.as_bytes();
-        assert!(bytes.len() <= usize::from(u16::MAX));
-        let mut frame = Vec::with_capacity(bytes.len() + 8);
-        frame.push(0x81);
-        if bytes.len() < 126 {
-            frame.push(0x80 | bytes.len() as u8);
-        } else {
-            frame.push(0x80 | 126);
-            frame.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
-        }
-        frame.extend_from_slice(&[0, 0, 0, 0]);
-        frame.extend_from_slice(bytes);
-        stream.write_all(&frame).await.unwrap();
-
-        let mut head = [0u8; 2];
-        stream.read_exact(&mut head).await.unwrap();
-        assert_eq!(head[0], 0x81, "unfragmented text frame");
-        assert_eq!(head[1] & 0x80, 0, "server frames are unmasked");
-        let len = match head[1] & 0x7f {
-            126 => {
-                let mut ext = [0u8; 2];
-                stream.read_exact(&mut ext).await.unwrap();
-                usize::from(u16::from_be_bytes(ext))
+        let frame = Message::Text(ClientMessage::event(event.clone()).as_json().into());
+        ws.send(frame).await.unwrap();
+        let reply = loop {
+            match ws.next().await.expect("relay replied").unwrap() {
+                Message::Text(text) => match RelayMessage::from_json(text.as_bytes()).unwrap() {
+                    ok @ RelayMessage::Ok { .. } => break ok,
+                    _ => continue,
+                },
+                Message::Ping(_) | Message::Pong(_) => continue,
+                other => panic!("unexpected frame: {other:?}"),
             }
-            127 => {
-                let mut ext = [0u8; 8];
-                stream.read_exact(&mut ext).await.unwrap();
-                usize::try_from(u64::from_be_bytes(ext)).unwrap()
-            }
-            n => usize::from(n),
         };
-        let mut payload = vec![0u8; len];
-        stream.read_exact(&mut payload).await.unwrap();
-        let reply = RelayMessage::from_json(&payload).unwrap();
         assert!(
             matches!(
                 &reply,

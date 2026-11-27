@@ -47,6 +47,8 @@ schemars = "1"
 marmot-agent-events = { path = "../marmot-agent-events", features = ["schema"] }
 # MDK's test relay, and its storage settings for tests.
 nostr-relay-builder = "0.44"
+tokio-tungstenite = "0.28"
+futures-util = "0.3"
 storage-sqlite = { git = "https://github.com/marmot-protocol/mdk.git", rev = "bea7b400b78f3ec6d1abb3894d1d8162bdf409da", features = ["test-support"] }
 tempfile = "3"
 # The import test runs today's connector, wn-agent, from MDK at the same revision, and speaks to

@@ -3095,6 +3095,7 @@ dependencies = [
  "agent-control",
  "bech32 0.12.0",
  "cgka-traits",
+ "futures-util",
  "getrandom 0.3.4",
  "hex",
  "marmot-account",
@@ -3116,6 +3117,7 @@ dependencies = [
  "storage-sqlite",
  "tempfile",
  "tokio",
+ "tokio-tungstenite 0.28.0",
  "toml",
 ]
 
