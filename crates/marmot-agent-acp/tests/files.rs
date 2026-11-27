@@ -390,6 +390,7 @@ async fn a_call_that_names_no_session_goes_to_the_chat_of_its_token() {
         reason: Reason::NotAllowed,
         detail: Some("the file is not in a folder files may be sent from.".into()),
         unanswered: false,
+        ended: false,
     };
     acp.file_sent(file.id, Err(refused)).await;
     let result = call.await.unwrap();

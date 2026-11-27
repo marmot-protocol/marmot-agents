@@ -202,6 +202,7 @@ fn s8_requests_print_nothing_they_carry() -> Result<(), TestCaseError> {
         reason: Reason::Invalid,
         detail: Some(mark(25)),
         unanswered: false,
+        ended: false,
     };
     assert_quiet("Refusal", format!("{refusal:?}"))?;
     for asked in [

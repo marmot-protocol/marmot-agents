@@ -350,7 +350,7 @@ impl SocketDriver {
     /// Sends a request and waits for its response, holding back the events read meanwhile
     /// (D-058). A connection that drops, or a connector that has not taken the request in time,
     /// refuses it as failed and is given up: a prompt is then perhaps not delivered, and never
-    /// sent again (D-037, D-129). The time is for writing the request and answering it both, so a
+    /// sent again (D-037, D-129). One gone before any of it is written refuses it as ended. The time is for writing the request and answering it both, so a
     /// connector that stops reading cannot hold the core either. A request whose effect an event
     /// read meanwhile showed was taken all the same: the event settles an answer or a control, or
     /// names a prompt as its turn's (D-147).
@@ -364,12 +364,12 @@ impl SocketDriver {
         };
         let mut shown = false;
         if self.gone {
-            return Err(Refusal::new(Reason::Failed));
+            return Err(Refusal::ended());
         }
         let deadline = tokio::time::Instant::now() + self.answer_within;
         self.answer_duplicates(deadline).await;
         if self.gone {
-            return Err(Refusal::new(Reason::Failed));
+            return Err(Refusal::ended());
         }
         self.next_id += 1;
         let id = self.next_id;
@@ -386,9 +386,14 @@ impl SocketDriver {
         };
         match write_line(&mut self.writer, &message, deadline).await {
             Ok(()) => {}
-            Err(Unwritten::Nothing) => {
+            // As before the request: no next driver could be given it either.
+            Err(Unwritten::Unwritable) => {
                 self.gone = true;
                 return Err(Refusal::new(Reason::Failed));
+            }
+            Err(Unwritten::Nothing) => {
+                self.gone = true;
+                return Err(Refusal::ended());
             }
             Err(Unwritten::Part) => {
                 self.gone = true;
@@ -472,6 +477,7 @@ impl SocketDriver {
                     reason: Reason::Invalid,
                     detail: Some("Another file with this request's id is still being sent.".into()),
                     unanswered: false,
+                    ended: false,
                 },
             );
             if write_line(&mut self.writer, &message, deadline)
@@ -674,6 +680,8 @@ impl Driver for SocketDriver {
 /// Why a message was not written whole.
 #[derive(Debug)]
 enum Unwritten {
+    /// None of it, since no connection could carry it: too long, or not a message.
+    Unwritable,
     /// None of it: the connector cannot have it.
     Nothing,
     /// Part of it, perhaps all but the line's end: the connector may read it as whole.
@@ -689,10 +697,10 @@ async fn write_line(
     deadline: tokio::time::Instant,
 ) -> Result<(), Unwritten> {
     let Ok(mut line) = serde_json::to_string(message) else {
-        return Err(Unwritten::Nothing);
+        return Err(Unwritten::Unwritable);
     };
     if line.len() > MAX_MESSAGE {
-        return Err(Unwritten::Nothing);
+        return Err(Unwritten::Unwritable);
     }
     line.push('\n');
     let bytes = line.as_bytes();
@@ -736,6 +744,7 @@ fn refusal(error: &Value) -> Refusal {
         reason,
         detail: data["detail"].as_str().map(String::from),
         unanswered: false,
+        ended: false,
     }
 }
 
@@ -875,6 +884,25 @@ mod tests {
         assert!(!driver.request(a_prompt()).await.unwrap_err().unanswered);
         let mut seen = vec![0u8; 1024];
         let _ = connector.read(&mut seen).await;
+    }
+
+    // A request too long for any connection is refused as failed, not as by a connector that went:
+    // the next could not be given it either, so it does not wait for one (#257).
+    #[tokio::test]
+    async fn a_request_too_long_to_write_is_not_refused_as_ended() {
+        let (core, mut connector) = UnixStream::pair().unwrap();
+        connector
+            .write_all(hello(json!(TOKEN)).as_bytes())
+            .await
+            .unwrap();
+        let mut driver = greeted(core).await;
+        let mut long = a_prompt();
+        if let wire::CoreRequest::Prompt(params) = &mut long {
+            params.text = "x".repeat(MAX_MESSAGE);
+        }
+        let result = driver.request(long).await.unwrap_err();
+        assert_eq!(result, Refusal::new(Reason::Failed));
+        drop(connector);
     }
 
     // A connector that stops reading cannot hold the core: a request bigger than the socket can
@@ -1133,6 +1161,7 @@ mod tests {
             reason: Reason::NotAllowed,
             detail: Some("The file is outside the folders.".into()),
             unanswered: false,
+            ended: false,
         };
         driver.file_sent(asked[1].id.clone(), Err(refusal)).await;
         let sent: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();

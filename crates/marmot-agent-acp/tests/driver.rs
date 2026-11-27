@@ -4,7 +4,8 @@
 
 use marmot_agent_acp::Acp;
 use marmot_agent_driver::{
-    Action, Answer, Chat, Control, Driver, Emitted, Given, Output, Person, Prompt, RequestId,
+    Action, Answer, Chat, Control, Driver, Emitted, Given, Output, Person, Prompt, Refusal,
+    RequestId,
 };
 use marmot_agent_events::{Body, State};
 use serde_json::{Value, json};
@@ -555,7 +556,8 @@ async fn cursors_to_do_list_reaches_the_chat_of_its_tool_call() {
 }
 
 /// A session request the agent never answers fails the prompt and ends the connection, so a late
-/// reply cannot install a session.
+/// reply cannot install a session. A prompt after that is refused as by a driver that has ended
+/// (D-139).
 #[tokio::test]
 async fn a_session_request_never_answered_ends_the_connection() {
     let (mut acp, mut stand) = connected().await;
@@ -569,7 +571,8 @@ async fn a_session_request_never_answered_ends_the_connection() {
         acp.next_event().await.is_none(),
         "no session from the late reply"
     );
-    assert!(acp.prompt(prompt_in("c-1", "m-2", None)).await.is_err());
+    let refused = acp.prompt(prompt_in("c-1", "m-2", None)).await;
+    assert_eq!(refused.unwrap_err(), Refusal::ended());
 }
 
 /// A request id may be spelled with escapes: `"\u0061"` is the id `"a"`. The driver must know

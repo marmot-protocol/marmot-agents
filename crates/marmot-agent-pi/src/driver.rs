@@ -872,6 +872,7 @@ impl Pi {
                 reason: Reason::Invalid,
                 detail: Some("it was not given a path.".into()),
                 unanswered: false,
+                ended: false,
             });
             let reply = file_reply(&dialog, &refused);
             let _ = self.send(chat, None, &reply); // a Pi that has gone needs no answer
@@ -973,6 +974,7 @@ impl Pi {
                     reason: Reason::Failed,
                     detail: Some(HISTORY_GONE.into()),
                     unanswered: false,
+                    ended: false,
                 });
             }
             started = (self.spawn(chat, Some(&resume), Resume::Create, folder)).await;

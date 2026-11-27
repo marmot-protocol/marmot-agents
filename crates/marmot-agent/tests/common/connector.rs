@@ -17,7 +17,14 @@ pub enum Script {
     Vanish,
     /// Goes as soon as it reads a prompt, before it answers: the prompt may have reached it.
     Drop,
+    /// Starts a turn for a prompt and says a burst of things in it, then goes before it answers:
+    /// the core still holds most of what it read when the connection is gone.
+    Burst,
 }
+
+/// How many things [`Script::Burst`] says before it goes: more than the core's loop takes before
+/// it reads a stored message again.
+pub const BURST: usize = 20;
 
 /// The texts of the prompts a scripted connector was given, oldest first.
 pub type Heard = Arc<Mutex<Vec<String>>>;
@@ -64,7 +71,8 @@ pub async fn run(connection: Connection, script: Script, name: &str, heard: Hear
             heard.lock().unwrap().push(text);
             return;
         }
-        if request.get("id").is_some() {
+        let answers = !matches!(script, Script::Burst) || request["method"] != "prompt";
+        if request.get("id").is_some() && answers {
             send(
                 &mut write,
                 json!({"jsonrpc": "2.0", "id": request["id"], "result": {}}),
@@ -95,6 +103,17 @@ pub async fn run(connection: Connection, script: Script, name: &str, heard: Hear
         );
         send(&mut write, running).await;
         if let Script::Vanish = script {
+            return;
+        }
+        if let Script::Burst = script {
+            for said in 0..BURST {
+                let item = format!("{name}-said{turns}-{said}");
+                send(
+                    &mut write,
+                    event(item, "message", "done", format!("{said}"), json!({})),
+                )
+                .await;
+            }
             return;
         }
         let words = format!("echo: {text}");

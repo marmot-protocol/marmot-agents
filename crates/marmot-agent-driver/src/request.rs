@@ -325,6 +325,10 @@ pub struct Refusal {
     /// goes before it answers: the harness may have it. A prompt refused so is told as perhaps
     /// not delivered, and is still never sent again (D-037, D-129).
     pub unanswered: bool,
+    /// The driver has ended, as when its connection or its harness is gone, and none of the
+    /// request reached it. A prompt the core handed on without seeing that the driver had ended
+    /// was never given, and waits for the next driver (D-139).
+    pub ended: bool,
 }
 
 impl Refusal {
@@ -334,6 +338,15 @@ impl Refusal {
             reason,
             detail: None,
             unanswered: false,
+            ended: false,
+        }
+    }
+
+    /// The refusal of a driver that has ended, of a request none of which reached it.
+    pub fn ended() -> Self {
+        Self {
+            ended: true,
+            ..Self::new(Reason::Failed)
         }
     }
 }

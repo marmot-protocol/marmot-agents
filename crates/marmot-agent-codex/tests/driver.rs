@@ -4,7 +4,7 @@
 
 use marmot_agent_codex::{Codex, Sandbox, Setup};
 use marmot_agent_driver::{
-    Action, Answer, Chat, Control, Driver, Emitted, Given, Output, Person, Prompt, Reason,
+    Action, Answer, Chat, Control, Driver, Emitted, Given, Output, Person, Prompt, Reason, Refusal,
 };
 use marmot_agent_events::{Body, State};
 use serde_json::{Value, json};
@@ -290,7 +290,11 @@ async fn when_codex_stops_its_turn_is_closed_and_no_more_events_come() {
         .prompt(prompt("m-3", "still there?"))
         .await
         .unwrap_err();
-    assert_eq!(refused.reason, Reason::Failed);
+    assert_eq!(
+        refused,
+        Refusal::ended(),
+        "refused as by a driver that has ended (D-139)"
+    );
 }
 
 /// Against a real Codex, signed in on this machine. It uses a little of the account's usage, so

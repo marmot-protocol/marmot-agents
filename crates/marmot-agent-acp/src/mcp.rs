@@ -276,6 +276,7 @@ impl rmcp::ServerHandler for Handler {
                 reason: Reason::Invalid,
                 detail: Some("there is no such tool.".into()),
                 unanswered: false,
+                ended: false,
             };
             return Ok(result(&Err(refused)).into());
         }

@@ -975,6 +975,7 @@ impl Conversation {
                         reason: Reason::NotSupported,
                         detail: Some("A secret answer is taken only in a two-person chat. Answer it at the terminal.".into()),
                         unanswered: false,
+                        ended: false,
                     });
                 }
                 let replies = questions

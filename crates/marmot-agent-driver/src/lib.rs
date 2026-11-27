@@ -445,6 +445,7 @@ mod tests {
             reason: Reason::Failed,
             detail: Some("could not read /home/alice/secret.txt".into()),
             unanswered: false,
+            ended: false,
         };
         shows(&format!("{refusal:?}"), &["Failed"], &["secret.txt"]);
 
