@@ -4380,8 +4380,7 @@ speaks, so no second interface to OpenCode is needed
 driver uses it only when it is announced, so an OpenCode that drops it goes back to `restart` with no change
 here. ACP v2 lets a prompt be sent in any state; when the driver moves to it, this entry is replaced.
 
-Provisional, 2026-11-27. What `mid_turn` an agent reports is seen by apps, so it is the project owner's to
-accept; the builder recommends it.
+Decided 2026-11-27. The builder recommended it, as what apps see, and the project owner accepted it that day.
 
 ## D-187 A quote holds the first 2,000 characters of a message
 
@@ -4400,5 +4399,5 @@ keeps the socket's `reply_to` as it is.
 **Not covered.** A quote says nothing of the files the quoted message had, so a reply to a message that was
 only a file quotes no text. Naming them would add to a socket message, and is left to its own decision (#267).
 
-Provisional, 2026-11-27. What a harness is handed is seen outside the core, so it is the project owner's to
-accept; the builder recommends it.
+Decided 2026-11-27. The builder recommended it, as what a harness is handed, and the project owner accepted it
+that day.

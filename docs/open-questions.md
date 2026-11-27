@@ -194,6 +194,9 @@ The rough shape, not decided:
 - **Who answers.** Decided: in a direct chat always, in a group only when mentioned or replied to
   ([D-075](decisions.md#d-075-in-a-group-the-agent-answers-when-mentioned-or-replied-to-in-a-direct-chat-always)).
 - **No loops.** Agents must not answer each other, and several must not answer at once.
+- **Handing a chat over.** One agent having the floor in a group, and a handoff to another, as the connectors
+  being replaced tried it: input, with what went wrong there, is in
+  [issue 268](https://github.com/marmot-protocol/marmot-agents/issues/268).
 - **The owner is not a required link.** Nothing forces an agent to state whose it is. An owner who wants to can
   say so in the agent's profile, for example "Max's Codex" in its name or description.
 
