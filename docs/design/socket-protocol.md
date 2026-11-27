@@ -310,7 +310,8 @@ hello it cannot read, such as a `folder` that is not a whole path.
 
 **`prompt`**: `message`, `text`, `chat` (`id`, `group`, `name`, and `folder` when the chat chose one),
 `sender` (`id`, `name`), `attachments` (`path`, `name`, `media_type`), and when there are any, `reply_to`
-(`message`, `text`, `author`) and `session`. `folder` is a whole path, links resolved: the connector starts
+(`message`, `text`, `author`) and `session`. The `text` is what the chat shows now, and `[this message was deleted]`
+or `[this message is not available]` for a message it no longer shows ([D-185](../decisions.md#d-185-a-replys-quote-is-what-the-chat-shows-now-and-a-message-no-longer-shown-is-quoted-without-its-text)). `folder` is a whole path, links resolved: the connector starts
 the chat's next session there, and leaves a running one where it is (provisional, D-101).
 
 **`answer`**: `request`, `item`, `by` (`id`, `name`) and `given`: `{"choice": <id>}` for an approval, or

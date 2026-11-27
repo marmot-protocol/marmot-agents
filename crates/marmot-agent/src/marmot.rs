@@ -28,6 +28,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// The kind of a chat message.
 const CHAT: u64 = 9;
+/// What a quote says in place of a message its author deleted (D-185).
+const QUOTE_DELETED: &str = "[this message was deleted]";
+/// And in place of one the chat no longer shows for another reason.
+const QUOTE_GONE: &str = "[this message is not available]";
 
 /// Opens the account home the settings name: its accounts, and MDK's app and runtime on it.
 /// This is what first opens the store, which MDK upgrades forward only. MDK holds the home for as
@@ -441,7 +445,7 @@ impl Marmot {
 
     /// The message a chat message replies to: the first `e` tag, read from storage. `None` when
     /// it replies to nothing, or to a message not stored here; [`NotNow`] when storage could not be
-    /// read.
+    /// read. A message the chat no longer shows is quoted by its author alone (D-185).
     fn quoted(&self, message: &Message) -> Result<Option<HeardQuote>, NotNow> {
         let Some(target) = (message.tags.iter())
             .find(|t| t.len() >= 2 && t[0] == "e")
@@ -456,12 +460,23 @@ impl Marmot {
         let Some(record) = record else {
             return Ok(None);
         };
-        let author = PubKey(record.sender.clone());
+        // The stored event keeps its first text for good. What the chat shows now is in MDK's
+        // timeline: the text as last edited, and none once the message is deleted or invalidated.
+        let shown = self
+            .runtime
+            .message_target(&self.label, message.group.as_str(), &target)
+            .map_err(|_| NotNow)?;
+        let text = match shown {
+            Some(shown) if shown.deleted => QUOTE_DELETED.to_owned(),
+            Some(shown) if !shown.invalidated => shown.plaintext,
+            _ => QUOTE_GONE.to_owned(),
+        };
+        let author = PubKey(record.sender);
         Ok(Some(HeardQuote {
             event: EventKey(target),
             author_name: self.name(&author, None),
             author,
-            text: record.plaintext,
+            text,
         }))
     }
 

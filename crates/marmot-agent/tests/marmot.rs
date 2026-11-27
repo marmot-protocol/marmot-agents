@@ -1117,6 +1117,72 @@ async fn a_reply_to_the_agent_in_a_group_quotes_what_it_replies_to() {
     world.runtime.shutdown().await;
 }
 
+// #266. A reply's quote is what the chat shows now, not what was first sent: once its author has
+// deleted the message, the harness is told who wrote it and that it is gone, never its text, and
+// an edited message is quoted as edited.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_quote_of_a_deleted_message_has_no_text_and_an_edited_one_its_new_text() {
+    let world = World::new("[codex]\ncwd = \"/unused\"\n").await;
+    world.runtime.start().await.unwrap();
+    let prompts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let core = world.start(Listener {
+        prompts: prompts.clone(),
+    });
+    let chat = world
+        .runtime
+        .start_direct_conversation(&world.person, &world.agent)
+        .await
+        .unwrap();
+    let group = world.joined(&chat).await;
+    let heard = |n: usize| {
+        let prompts = prompts.clone();
+        eventually(move || prompts.lock().unwrap().get(n).cloned())
+    };
+    let said = |text: &'static str| async {
+        let sent = (world.runtime)
+            .send_message(&world.person, &chat, text.as_bytes().to_vec())
+            .await
+            .unwrap();
+        sent.message_ids[0].clone()
+    };
+    let shown = |id: String| {
+        (world.runtime)
+            .message_target(&world.marmot.label, &group, &id)
+            .unwrap()
+    };
+
+    let regretted = said("words to take back").await;
+    heard(0).await;
+    (world.runtime)
+        .delete_message(&world.person, &chat, &regretted)
+        .await
+        .unwrap();
+    eventually(|| shown(regretted.clone()).filter(|m| m.deleted)).await;
+    (world.runtime)
+        .reply_to_message(&world.person, &chat, &regretted, "about that")
+        .await
+        .unwrap();
+    let quoted = heard(1).await.reply_to.expect("the quote");
+    assert_eq!(quoted.text, "[this message was deleted]");
+    assert_eq!(quoted.author.id, heard(0).await.sender.id, "who wrote it");
+
+    let reworded = said("first wording").await;
+    heard(2).await;
+    (world.runtime)
+        .edit_message(&world.person, &chat, &reworded, "second wording")
+        .await
+        .unwrap();
+    eventually(|| shown(reworded.clone()).filter(|m| m.plaintext == "second wording")).await;
+    (world.runtime)
+        .reply_to_message(&world.person, &chat, &reworded, "and that")
+        .await
+        .unwrap();
+    let quoted = heard(3).await.reply_to.expect("the quote");
+    assert_eq!(quoted.text, "second wording");
+    core.stop().await;
+    world.runtime.shutdown().await;
+}
+
 // An edit whose token names no edits, as the core gives one for words an older core sent without
 // a token, goes out as MDK's plain edit of the message: the person sees the new text in the
 // message's place.

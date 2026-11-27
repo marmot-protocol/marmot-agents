@@ -4327,3 +4327,31 @@ to change: it rejects a whole item that holds a value it does not know (issue #2
 
 Decided 2026-11-27. The project owner decided. The draft is opened in the Marmot repository after this is
 recorded; until the Marmot repository accepts it, the definition there is a proposal.
+
+## D-185 A reply's quote is what the chat shows now, and a message no longer shown is quoted without its text
+
+**Decision.** When a prompt replies to a message, the core reads the quote from MDK's timeline, which holds what
+the chat shows now, when it takes the prompt from MDK:
+
+- a message that was edited is quoted as last edited;
+- a message its author deleted is quoted by its author alone, and its text is `[this message was deleted]`;
+- a message that MDK invalidated, or that the timeline no longer holds, is quoted the same way, with the text
+  `[this message is not available]`.
+
+The harness is never handed what such a message said. A reply to such a message of the agent's is still a reply
+to the agent
+([D-075](#d-075-in-a-group-the-agent-answers-when-mentioned-or-replied-to-in-a-direct-chat-always)). The
+socket's `reply_to` keeps its shape, and no driver or connector changes.
+
+**Why.** The core read the quote from the stored event, which keeps a message's first text for good. A person
+who deleted a message, and anyone replying to it later, had its text handed to the harness and its model again
+([#266](https://github.com/marmot-protocol/marmot-agents/issues/266), shown by a test). The connectors this
+project replaces already left the text out, a behaviour to keep. Keeping the author tells the agent who is
+being answered, which the chat still shows. Fixed words in the text's place, and not a new field, keep every
+harness's reading of a quote as it is.
+
+**Not covered.** A quote is read once. A prompt the core holds after that, for a connector that is away, keeps
+the quote it was read with. And what a harness was handed before the deletion stays in its session.
+
+Decided 2026-11-27. The builder recommended it, and the project owner accepted keeping the author and chose
+the wording for a deleted message.
